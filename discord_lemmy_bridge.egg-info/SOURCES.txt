@@ -1,0 +1,7 @@
+README.md
+pyproject.toml
+discord_lemmy_bridge.egg-info/PKG-INFO
+discord_lemmy_bridge.egg-info/SOURCES.txt
+discord_lemmy_bridge.egg-info/dependency_links.txt
+discord_lemmy_bridge.egg-info/requires.txt
+discord_lemmy_bridge.egg-info/top_level.txt

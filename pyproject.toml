@@ -1,0 +1,19 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "discord-lemmy-bridge"
+version = "0.1.0"
+description = "Discord forum to Lemmy community bridge"
+requires-python = ">=3.12"
+dependencies = [
+  "alembic>=1.14.0",
+  "discord.py>=2.5.0",
+  "httpx>=0.28.0",
+  "pydantic-settings>=2.8.0",
+  "sqlalchemy>=2.0.38",
+]
+
+[tool.setuptools]
+py-modules = []
