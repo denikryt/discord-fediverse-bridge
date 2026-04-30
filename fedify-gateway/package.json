@@ -4,11 +4,11 @@
   "version": "0.1.0",
   "type": "module",
   "scripts": {
-    "dev": "tsx watch src/server.ts",
-    "start": "tsx src/server.ts",
+    "dev": "node --env-file=.env ./node_modules/.bin/tsx watch src/server.ts",
+    "start": "node --env-file=.env ./node_modules/.bin/tsx src/server.ts",
     "check": "tsc --noEmit",
-    "verify:python-contract": "tsx src/verify-python-contract.ts",
-    "follow-community": "tsx src/follow-community-cli.ts"
+    "verify:python-contract": "node --env-file=.env ./node_modules/.bin/tsx src/verify-python-contract.ts",
+    "follow-community": "node --env-file=.env ./node_modules/.bin/tsx src/follow-community-cli.ts"
   },
   "dependencies": {
     "@fedify/fedify": "^2.2.0",
