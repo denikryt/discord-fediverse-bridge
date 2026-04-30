@@ -1,1 +1,6 @@
 .venv/
+notes/
+plans/
+bridge.db
+.env
+discord_lemmy_bridge.egg-info
