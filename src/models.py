@@ -23,6 +23,7 @@ class PostLink(Base):
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
     lemmy_post_id: Mapped[int] = mapped_column(Integer, nullable=False)
+    lemmy_post_ap_id: Mapped[str | None] = mapped_column(String(512), nullable=True)
     discord_forum_thread_id: Mapped[int] = mapped_column(Integer, nullable=False)
     discord_starter_message_id: Mapped[int | None] = mapped_column(Integer, nullable=True)
     direction: Mapped[str] = mapped_column(String(32), nullable=False)
@@ -38,6 +39,8 @@ class CommentLink(Base):
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
     lemmy_comment_id: Mapped[int] = mapped_column(Integer, nullable=False)
+    lemmy_comment_ap_id: Mapped[str | None] = mapped_column(String(512), nullable=True)
+    lemmy_parent_comment_ap_id: Mapped[str | None] = mapped_column(String(512), nullable=True)
     lemmy_post_id: Mapped[int] = mapped_column(Integer, nullable=False)
     discord_forum_thread_id: Mapped[int] = mapped_column(Integer, nullable=False)
     discord_message_id: Mapped[int] = mapped_column(Integer, nullable=False)
@@ -45,10 +48,14 @@ class CommentLink(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, nullable=False)
 
 
-class SyncState(Base):
-    __tablename__ = "sync_state"
+class ActivityPubEventReceipt(Base):
+    __tablename__ = "activitypub_event_receipts"
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
-    key: Mapped[str] = mapped_column(String(128), unique=True, nullable=False)
-    value: Mapped[str] = mapped_column(String(1024), nullable=False)
+    delivery_id: Mapped[str] = mapped_column(String(128), unique=True, nullable=False)
+    event_type: Mapped[str] = mapped_column(String(64), nullable=False)
+    object_ap_id: Mapped[str] = mapped_column(String(512), nullable=False)
+    status: Mapped[str] = mapped_column(String(32), nullable=False)
+    detail: Mapped[str | None] = mapped_column(String(1024), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, nullable=False)
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, onupdate=utcnow, nullable=False)

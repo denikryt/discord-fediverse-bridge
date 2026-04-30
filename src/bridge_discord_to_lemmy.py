@@ -26,9 +26,11 @@ async def sync_forum_thread_to_lemmy(
 
     payload = await lemmy.create_post(community_id=community_id, name=title, body=body)
     post_id = int(payload["post_view"]["post"]["id"])
+    post_ap_id = payload["post_view"]["post"].get("ap_id")
 
     database.create_post_link(
         lemmy_post_id=post_id,
+        lemmy_post_ap_id=post_ap_id,
         discord_forum_thread_id=thread.id,
         discord_starter_message_id=starter_message.id,
         direction="discord_to_lemmy",
@@ -59,14 +61,20 @@ async def sync_thread_message_to_lemmy_comment(
     if database.has_comment_link_for_discord_message(message.id):
         logger.debug("Ignoring Discord message %s because it was already synced", message.id)
         return None
+    if post_link.lemmy_post_id is None:
+        logger.warning("Cannot create Lemmy comment for Discord message %s because mapped post has no numeric Lemmy ID", message.id)
+        return None
 
     author_name = message.author.display_name or message.author.name
     body = format_discord_body_for_lemmy(author_name, message.content, bridge_prefix)
     payload = await lemmy.create_comment(post_id=post_link.lemmy_post_id, content=body)
     comment_id = int(payload["comment_view"]["comment"]["id"])
+    comment_ap_id = payload["comment_view"]["comment"].get("ap_id")
 
     database.create_comment_link(
         lemmy_comment_id=comment_id,
+        lemmy_comment_ap_id=comment_ap_id,
+        lemmy_parent_comment_ap_id=None,
         lemmy_post_id=post_link.lemmy_post_id,
         discord_forum_thread_id=message.channel.id,
         discord_message_id=message.id,

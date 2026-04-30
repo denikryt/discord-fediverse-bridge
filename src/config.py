@@ -11,9 +11,12 @@ class Settings(BaseSettings):
     lemmy_username_or_email: str = Field(alias="LEMMY_USERNAME_OR_EMAIL")
     lemmy_password: str = Field(alias="LEMMY_PASSWORD")
     lemmy_community_name: str = Field(alias="LEMMY_COMMUNITY_NAME")
+    lemmy_community_actor_id: str = Field(alias="LEMMY_COMMUNITY_ACTOR_ID")
 
     database_url: str = Field(default="sqlite:///./bridge.db", alias="DATABASE_URL")
-    poll_interval_seconds: int = Field(default=5, alias="POLL_INTERVAL_SECONDS")
+    internal_http_host: str = Field(default="127.0.0.1", alias="INTERNAL_HTTP_HOST")
+    internal_http_port: int = Field(default=8080, alias="INTERNAL_HTTP_PORT")
+    fedify_shared_secret: str = Field(alias="FEDIFY_SHARED_SECRET")
     bridge_display_prefix: str = Field(default="[bridge]", alias="BRIDGE_DISPLAY_PREFIX")
     log_level: str = Field(default="INFO", alias="LOG_LEVEL")
 

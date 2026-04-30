@@ -1,46 +1,29 @@
 from __future__ import annotations
 
 import logging
-from typing import Any
 
 import discord
 
+from .activitypub_models import ActivityPubEvent
 from .db import Database
 from .formatting import format_lemmy_comment_for_discord, format_lemmy_post_for_discord, format_thread_title_for_discord, normalize_text
 
 logger = logging.getLogger(__name__)
 
 
-def _get_creator_name(item: dict[str, Any]) -> str:
-    creator = item.get("creator") or {}
-    return creator.get("name") or creator.get("display_name") or "unknown"
-
-
-def _get_post_data(item: dict[str, Any]) -> dict[str, Any]:
-    return item.get("post") or {}
-
-
-def _get_comment_data(item: dict[str, Any]) -> dict[str, Any]:
-    return item.get("comment") or {}
-
-
-async def create_discord_thread_for_lemmy_post(
+async def create_discord_thread_for_activitypub_post(
     *,
     database: Database,
     forum_channel: discord.ForumChannel,
-    post_item: dict[str, Any],
-    lemmy_base_url: str,
+    event: ActivityPubEvent,
 ) -> int:
-    post = _get_post_data(post_item)
-    creator_name = _get_creator_name(post_item)
-    post_id = int(post["id"])
-    title = format_thread_title_for_discord(post.get("name") or "Untitled Lemmy Post")
-    url = f"{lemmy_base_url}/post/{post_id}"
+    post = event.object
+    title = format_thread_title_for_discord(post.title or "Untitled Lemmy Post")
     body = format_lemmy_post_for_discord(
-        creator_name,
-        post.get("name") or "Untitled Lemmy Post",
-        normalize_text(post.get("body")),
-        url,
+        post.author_name,
+        post.title or "Untitled Lemmy Post",
+        normalize_text(post.body_markdown),
+        post.url,
     )
 
     result = await forum_channel.create_thread(name=title, content=body)
@@ -59,36 +42,34 @@ async def create_discord_thread_for_lemmy_post(
             raise RuntimeError("Discord create_thread did not return a starter message") from exc
 
     database.create_post_link(
-        lemmy_post_id=post_id,
+        lemmy_post_id=post.lemmy_id,
+        lemmy_post_ap_id=post.ap_id,
         discord_forum_thread_id=thread.id,
         discord_starter_message_id=message.id,
         direction="lemmy_to_discord",
     )
-    logger.info("Created Discord forum thread %s from Lemmy post %s", thread.id, post_id)
+    logger.info("Created Discord forum thread %s from ActivityPub post %s", thread.id, post.ap_id)
     return thread.id
 
 
-async def create_discord_message_for_lemmy_comment(
+async def create_discord_message_for_activitypub_comment(
     *,
     database: Database,
     thread: discord.Thread,
-    comment_item: dict[str, Any],
-    lemmy_base_url: str,
+    event: ActivityPubEvent,
 ) -> int:
-    comment = _get_comment_data(comment_item)
-    creator_name = _get_creator_name(comment_item)
-    comment_id = int(comment["id"])
-    post_id = int(comment["post_id"])
-    url = f"{lemmy_base_url}/comment/{comment_id}"
-    body = format_lemmy_comment_for_discord(creator_name, normalize_text(comment.get("content")), url)
+    comment = event.object
+    body = format_lemmy_comment_for_discord(comment.author_name, normalize_text(comment.body_markdown), comment.url)
     message = await thread.send(body)
 
     database.create_comment_link(
-        lemmy_comment_id=comment_id,
-        lemmy_post_id=post_id,
+        lemmy_comment_id=comment.lemmy_id,
+        lemmy_comment_ap_id=comment.ap_id,
+        lemmy_parent_comment_ap_id=comment.parent_ap_id,
+        lemmy_post_id=comment.post_lemmy_id or 0,
         discord_forum_thread_id=thread.id,
         discord_message_id=message.id,
         direction="lemmy_to_discord",
     )
-    logger.info("Created Discord message %s from Lemmy comment %s", message.id, comment_id)
+    logger.info("Created Discord message %s from ActivityPub comment %s", message.id, comment.ap_id)
     return message.id

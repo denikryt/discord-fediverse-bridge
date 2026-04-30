@@ -10,9 +10,11 @@ requires-python = ">=3.12"
 dependencies = [
   "alembic>=1.14.0",
   "discord.py>=2.5.0",
+  "fastapi>=0.115.0",
   "httpx>=0.28.0",
   "pydantic-settings>=2.8.0",
   "sqlalchemy>=2.0.38",
+  "uvicorn>=0.34.0",
 ]
 
 [tool.setuptools]

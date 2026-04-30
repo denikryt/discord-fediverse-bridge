@@ -2,11 +2,15 @@ from __future__ import annotations
 
 import asyncio
 
+import uvicorn
+
 from .config import Settings
 from .db import Database
 from .discord_bot import BridgeBot
+from .http_api import create_http_app
 from .lemmy_client import LemmyClient
 from .logging_setup import configure_logging
+from .runtime import Runtime
 
 
 async def main() -> None:
@@ -29,8 +33,32 @@ async def main() -> None:
         lemmy=lemmy,
         lemmy_community_id=lemmy_community_id,
     )
-    async with bot:
-        await bot.start(settings.discord_token)
+    runtime = Runtime(
+        settings=settings,
+        database=database,
+        lemmy=lemmy,
+        bot=bot,
+    )
+    http_app = create_http_app(runtime)
+    http_server = uvicorn.Server(
+        uvicorn.Config(
+            http_app,
+            host=settings.internal_http_host,
+            port=settings.internal_http_port,
+            log_level=settings.log_level.lower(),
+        )
+    )
+
+    async def run_bot() -> None:
+        async with bot:
+            await bot.start(settings.discord_token)
+
+    async def run_http_server() -> None:
+        await http_server.serve()
+
+    async with asyncio.TaskGroup() as task_group:
+        task_group.create_task(run_bot(), name="discord-bot")
+        task_group.create_task(run_http_server(), name="internal-http-server")
 
 
 if __name__ == "__main__":

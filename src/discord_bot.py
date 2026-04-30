@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import logging
 
 import discord
@@ -8,7 +9,6 @@ from .bridge_discord_to_lemmy import sync_forum_thread_to_lemmy, sync_thread_mes
 from .config import Settings
 from .db import Database
 from .lemmy_client import LemmyClient
-from .poller import LemmyPoller
 
 logger = logging.getLogger(__name__)
 
@@ -32,7 +32,7 @@ class BridgeBot(discord.Client):
         self.lemmy = lemmy
         self.lemmy_community_id = lemmy_community_id
         self.forum_channel: discord.ForumChannel | None = None
-        self.poller: LemmyPoller | None = None
+        self.bridge_ready = asyncio.Event()
 
     async def on_ready(self) -> None:
         channel = self.get_channel(self.settings.discord_forum_channel_id)
@@ -42,22 +42,10 @@ class BridgeBot(discord.Client):
             raise RuntimeError(f"Configured channel {self.settings.discord_forum_channel_id} is not a Discord forum channel")
 
         self.forum_channel = channel
-        if self.poller is None:
-            self.poller = LemmyPoller(
-                database=self.database,
-                lemmy=self.lemmy,
-                forum_channel=channel,
-                lemmy_base_url=self.settings.normalized_lemmy_base_url,
-                community_id=self.lemmy_community_id,
-                community_name=self.settings.lemmy_community_name,
-                poll_interval_seconds=self.settings.poll_interval_seconds,
-            )
-            self.poller.start()
+        self.bridge_ready.set()
         logger.info("Bridge bot is ready as %s", self.user)
 
     async def close(self) -> None:
-        if self.poller is not None:
-            await self.poller.stop()
         await self.lemmy.close()
         await super().close()
 
@@ -118,3 +106,20 @@ class BridgeBot(discord.Client):
         except discord.HTTPException:
             logger.exception("Failed to fetch starter message for thread %s", thread.id)
             return None
+
+    async def wait_until_bridge_ready(self) -> None:
+        await self.bridge_ready.wait()
+
+    def require_forum_channel(self) -> discord.ForumChannel:
+        if self.forum_channel is None:
+            raise RuntimeError("Discord forum channel is not initialized yet")
+        return self.forum_channel
+
+    async def get_thread_by_id(self, thread_id: int) -> discord.Thread:
+        cached = self.get_channel(thread_id)
+        if isinstance(cached, discord.Thread):
+            return cached
+        channel = await self.fetch_channel(thread_id)
+        if not isinstance(channel, discord.Thread):
+            raise RuntimeError(f"Mapped Discord thread {thread_id} was not found")
+        return channel

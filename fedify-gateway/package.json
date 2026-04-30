@@ -1,0 +1,25 @@
+{
+  "name": "discord-lemmy-bridge-fedify-gateway",
+  "private": true,
+  "version": "0.1.0",
+  "type": "module",
+  "scripts": {
+    "dev": "tsx watch src/server.ts",
+    "start": "tsx src/server.ts",
+    "check": "tsc --noEmit",
+    "verify:python-contract": "tsx src/verify-python-contract.ts",
+    "follow-community": "tsx src/follow-community-cli.ts"
+  },
+  "dependencies": {
+    "@fedify/fedify": "^2.2.0",
+    "@fedify/hono": "^2.2.0",
+    "@fedify/vocab": "^2.2.0",
+    "@hono/node-server": "^1.19.6",
+    "hono": "^4.12.16"
+  },
+  "devDependencies": {
+    "@types/node": "^24.9.0",
+    "tsx": "^4.20.6",
+    "typescript": "^5.9.3"
+  }
+}
