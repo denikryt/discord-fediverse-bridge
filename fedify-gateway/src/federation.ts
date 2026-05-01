@@ -6,6 +6,7 @@ import {
 import { Announce, Create, Endpoints, Follow } from "@fedify/vocab";
 import { Service } from "@fedify/vocab";
 
+import { getRawActivity } from "./activitypub-raw-cache.js";
 import type { GatewayContextData } from "./config.js";
 import { FileKeyStore } from "./key-store.js";
 import { normalizeCreateActivity, normalizeCreateActivityFromJson } from "./normalize.js";
@@ -15,6 +16,7 @@ export function createGatewayFederation(
   config: GatewayContextData,
   keyStore: FileKeyStore,
 ) {
+  const isDebug = config.logLevel === "debug";
   const federation = createFederation<GatewayContextData>({
     origin: config.fedifyOrigin,
     kv: new MemoryKvStore(),
@@ -56,26 +58,31 @@ export function createGatewayFederation(
     .setInboxListeners("/actors/{identifier}/inbox", "/inbox")
     .withIdempotency("per-inbox")
     .on(Create, async (_ctx, activity) => {
-      console.log("[Fedify] Received Create activity");
+      if (isDebug) {
+        console.log("[Fedify][debug] Received direct Create activity");
+      }
       const event = await normalizeCreateActivity(activity);
       if (event == null) {
-        console.log("[Fedify] normalizeCreateActivity returned null");
+        if (isDebug) {
+          console.log("[Fedify][debug] normalizeCreateActivity returned null");
+        }
         return;
       }
-      console.log("[Fedify] Normalized event:", {
-        event_type: event.event_type,
-        community_actor_id: event.community_actor_id,
-        config_community_actor_id: config.communityActorId,
-      });
       if (
         config.communityActorId &&
         event.community_actor_id !== config.communityActorId
       ) {
-        console.log("[Fedify] Event community does not match configured community, skipping");
+        if (isDebug) {
+          console.log("[Fedify][debug] Event community does not match configured community, skipping");
+        }
         return;
       }
 
-      console.log("[Fedify] Delivering event to Python bridge...");
+      console.log("[Fedify] Delivering event", {
+        eventType: event.event_type,
+        deliveryId: event.delivery_id,
+        objectId: event.object.ap_id,
+      });
       await deliverEventToPythonBridge(
         config.pythonBridgeEventsUrl,
         config.pythonBridgeSharedSecret,
@@ -83,16 +90,17 @@ export function createGatewayFederation(
       );
     })
     .on(Announce, async (ctx, activity) => {
-      console.log("[Fedify] Received Announce activity");
-
       try {
-        const rawJson = ctx.data.activitypubRawJson;
+        const announceId = activity.id?.href ?? null;
+        const cachedRaw = announceId ? getRawActivity(announceId) : null;
+        const rawJson = cachedRaw?.rawJson ?? ctx.data.activitypubRawJson;
+        const rawBodySha256 = cachedRaw?.rawBodySha256 ?? ctx.data.activitypubRawBodySha256;
         const rawRecord =
           typeof rawJson === "object" && rawJson !== null
             ? (rawJson as Record<string, unknown>)
             : null;
 
-        if (rawRecord) {
+        if (rawRecord && isDebug) {
           const rawObject =
             typeof rawRecord.object === "object" && rawRecord.object !== null
               ? (rawRecord.object as Record<string, unknown>)
@@ -103,9 +111,9 @@ export function createGatewayFederation(
             rawObject.object !== null
               ? (rawObject.object as Record<string, unknown>)
               : null;
-          console.log("[Fedify] Raw Announce shape:", {
+          console.log("[Fedify][debug] Raw Announce shape:", {
             announceId: typeof rawRecord.id === "string" ? rawRecord.id : null,
-            bodySha256: ctx.data.activitypubRawBodySha256 ?? null,
+            bodySha256: rawBodySha256 ?? null,
             keys: Object.keys(rawRecord),
             objectType:
               rawObject && typeof rawObject.type === "string"
@@ -123,8 +131,8 @@ export function createGatewayFederation(
                 ? nestedObject.type
                 : null,
           });
-        } else {
-          console.log("[Fedify] Raw Announce shape: no object payload");
+        } else if (isDebug) {
+          console.log("[Fedify][debug] Raw Announce shape: no object payload");
         }
 
         if (
@@ -135,36 +143,55 @@ export function createGatewayFederation(
           rawRecord.object.type === "Create"
         ) {
           const createActivity = rawRecord.object;
-          console.log("[Fedify] Got Create activity from raw JSON");
 
           const event = normalizeCreateActivityFromJson(createActivity);
           if (event == null) {
-            console.log("[Fedify] normalizeCreateActivityFromJson returned null");
+            if (isDebug) {
+              console.log("[Fedify][debug] normalizeCreateActivityFromJson returned null");
+            }
             return;
           }
-
-          console.log("[Fedify] Normalized event:", {
-            event_type: event.event_type,
-            community_actor_id: event.community_actor_id,
-          });
 
           if (
             config.communityActorId &&
             event.community_actor_id !== config.communityActorId
           ) {
-            console.log("[Fedify] Event community does not match, skipping");
+            if (isDebug) {
+              console.log("[Fedify][debug] Event community does not match, skipping");
+            }
             return;
           }
 
-          console.log("[Fedify] Delivering event to Python bridge...");
+          const createRecord = createActivity as Record<string, unknown>;
+          const nestedObject =
+            typeof createRecord.object === "object" && createRecord.object !== null
+              ? (createRecord.object as Record<string, unknown>)
+              : null;
+          console.log("[Fedify] Delivering event", {
+            announceId: typeof rawRecord.id === "string" ? rawRecord.id : null,
+            createId:
+              typeof createRecord.id === "string" ? createRecord.id : event.delivery_id,
+            eventType: event.event_type,
+            kind: event.object.kind,
+            objectId:
+              nestedObject && typeof nestedObject.id === "string"
+                ? nestedObject.id
+                : event.object.ap_id,
+          });
           await deliverEventToPythonBridge(
             config.pythonBridgeEventsUrl,
             config.pythonBridgeSharedSecret,
             event,
           );
-          console.log("[Fedify] Event delivered successfully");
+          console.log("[Fedify] Event delivered", {
+            deliveryId: event.delivery_id,
+            kind: event.object.kind,
+            objectId: event.object.ap_id,
+          });
         } else {
-          console.log("[Fedify] Could not find Create in Announce.object from raw JSON");
+          if (isDebug) {
+            console.log("[Fedify][debug] Could not find Create in Announce.object from raw JSON");
+          }
         }
       } catch (error) {
         console.error("[Fedify] Error processing Announce:", error instanceof Error ? error.message : error);

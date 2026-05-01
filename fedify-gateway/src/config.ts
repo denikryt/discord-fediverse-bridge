@@ -10,6 +10,7 @@ export interface GatewayConfig {
   port: number;
   pythonBridgeEventsUrl: string;
   pythonBridgeSharedSecret: string;
+  logLevel: "info" | "debug";
 }
 
 export interface GatewayContextData extends GatewayConfig {
@@ -37,6 +38,7 @@ function parsePort(value: string | undefined, fallback: number): number {
 }
 
 export function loadConfig(): GatewayConfig {
+  const logLevel = process.env.FEDIFY_LOG_LEVEL === "debug" ? "debug" : "info";
   return {
     actorIdentifier: process.env.FEDIFY_ACTOR_IDENTIFIER ?? "bridge",
     actorName: process.env.FEDIFY_ACTOR_NAME ?? "Discord Lemmy Bridge Gateway",
@@ -51,5 +53,6 @@ export function loadConfig(): GatewayConfig {
       process.env.PYTHON_BRIDGE_EVENTS_URL ??
       "http://127.0.0.1:8080/internal/activitypub/events",
     pythonBridgeSharedSecret: requireEnv("PYTHON_BRIDGE_SHARED_SECRET"),
+    logLevel,
   };
 }

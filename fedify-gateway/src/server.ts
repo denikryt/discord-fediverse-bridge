@@ -4,6 +4,7 @@ import { serve } from "@hono/node-server";
 import { federation as fedifyMiddleware } from "@fedify/hono";
 import { Hono } from "hono";
 
+import { storeRawActivity } from "./activitypub-raw-cache.js";
 import { type GatewayContextData, loadConfig } from "./config.js";
 import { createGatewayFederation } from "./federation.js";
 import { FileKeyStore } from "./key-store.js";
@@ -14,6 +15,7 @@ const keyStore = new FileKeyStore(config.keyStorePath);
 const fedify = createGatewayFederation(config, keyStore);
 
 const app = new Hono();
+const isDebug = config.logLevel === "debug";
 
 app.get("/healthz", (context) => {
   return context.json({ status: "ok" });
@@ -55,22 +57,50 @@ app.use(async (context, next) => {
         object && typeof object.object === "object" && object.object !== null
           ? (object.object as Record<string, unknown>)
           : null;
-      console.log("[HTTP] Inbox payload summary:", {
+      console.log("[HTTP] Inbox activity:", {
         type: typeof parsed.type === "string" ? parsed.type : null,
         id: typeof parsed.id === "string" ? parsed.id : null,
         objectType: object && typeof object.type === "string" ? object.type : null,
-        objectId: object && typeof object.id === "string" ? object.id : null,
         nestedObjectType:
           nestedObject && typeof nestedObject.type === "string"
             ? nestedObject.type
             : null,
-        nestedObjectId:
-          nestedObject && typeof nestedObject.id === "string"
-            ? nestedObject.id
-            : null,
       });
-    } catch (error) {
-      console.log("[HTTP] Inbox payload summary failed:", error instanceof Error ? error.message : String(error));
+    } catch {
+      // Keep request path resilient even if body parsing fails.
+    }
+    if (isDebug) {
+      try {
+        const rawBody = await context.req.raw.clone().text();
+        const parsed = JSON.parse(rawBody) as Record<string, unknown>;
+        const object =
+          typeof parsed.object === "object" && parsed.object !== null
+            ? (parsed.object as Record<string, unknown>)
+            : null;
+        const nestedObject =
+          object && typeof object.object === "object" && object.object !== null
+            ? (object.object as Record<string, unknown>)
+            : null;
+        console.log("[HTTP][debug] Inbox payload summary:", {
+          type: typeof parsed.type === "string" ? parsed.type : null,
+          id: typeof parsed.id === "string" ? parsed.id : null,
+          objectType: object && typeof object.type === "string" ? object.type : null,
+          objectId: object && typeof object.id === "string" ? object.id : null,
+          nestedObjectType:
+            nestedObject && typeof nestedObject.type === "string"
+              ? nestedObject.type
+              : null,
+          nestedObjectId:
+            nestedObject && typeof nestedObject.id === "string"
+              ? nestedObject.id
+              : null,
+        });
+      } catch (error) {
+        console.log(
+          "[HTTP][debug] Inbox payload summary failed:",
+          error instanceof Error ? error.message : String(error),
+        );
+      }
     }
   }
 
@@ -93,6 +123,18 @@ app.use(
         const rawBody = await context.req.raw.clone().text();
         activitypubRawBodySha256 = createHash("sha256").update(rawBody).digest("hex");
         activitypubRawJson = JSON.parse(rawBody);
+        if (
+          typeof activitypubRawJson === "object" &&
+          activitypubRawJson !== null &&
+          "id" in activitypubRawJson &&
+          typeof activitypubRawJson.id === "string"
+        ) {
+          storeRawActivity(
+            activitypubRawJson.id,
+            activitypubRawJson,
+            activitypubRawBodySha256,
+          );
+        }
       } catch {
         activitypubRawJson = undefined;
       }
