@@ -5,6 +5,8 @@ export async function deliverEventToPythonBridge(
   sharedSecret: string,
   event: BridgeEvent,
 ): Promise<void> {
+  // The Python bridge is the single downstream consumer, so this helper owns
+  // the authenticated POST contract and its diagnostic logging.
   const isDebug = process.env.FEDIFY_LOG_LEVEL === "debug";
   const body = JSON.stringify(event);
   console.log("[Bridge] Sending event:", {

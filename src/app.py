@@ -14,6 +14,8 @@ from .runtime import Runtime
 
 
 async def main() -> None:
+    # Build the full runtime once and then run both long-lived entry points
+    # against the same shared state.
     settings = Settings()
     configure_logging(settings.log_level)
 
@@ -50,6 +52,7 @@ async def main() -> None:
     )
 
     async def run_bot() -> None:
+        # The Discord client owns connection startup/shutdown through its async context.
         async with bot:
             await bot.start(settings.discord_token)
 
@@ -57,6 +60,7 @@ async def main() -> None:
         await http_server.serve()
 
     async with asyncio.TaskGroup() as task_group:
+        # Both tasks are mandatory for the bridge to function, so they share one lifecycle.
         task_group.create_task(run_bot(), name="discord-bot")
         task_group.create_task(run_http_server(), name="internal-http-server")
 

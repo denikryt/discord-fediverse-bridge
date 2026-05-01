@@ -14,6 +14,8 @@ logger = logging.getLogger(__name__)
 
 
 class BridgeBot(discord.Client):
+    # BridgeBot owns the Discord-side event loop and forwards only the forum
+    # channel/thread activity that belongs to this bridge instance.
     def __init__(
         self,
         *,
@@ -35,6 +37,8 @@ class BridgeBot(discord.Client):
         self.bridge_ready = asyncio.Event()
 
     async def on_ready(self) -> None:
+        # Resolve the configured forum channel once and treat its presence as
+        # the signal that inbound ActivityPub events may start using Discord.
         channel = self.get_channel(self.settings.discord_forum_channel_id)
         if channel is None:
             channel = await self.fetch_channel(self.settings.discord_forum_channel_id)
@@ -50,6 +54,7 @@ class BridgeBot(discord.Client):
         await super().close()
 
     async def on_thread_create(self, thread: discord.Thread) -> None:
+        # Only user-created forum threads should fan out into Lemmy posts.
         if self.forum_channel is None:
             return
         if thread.parent_id != self.forum_channel.id:
@@ -76,6 +81,8 @@ class BridgeBot(discord.Client):
         )
 
     async def on_message(self, message: discord.Message) -> None:
+        # Only plain user messages inside mapped forum threads are candidates
+        # for Lemmy comment creation.
         if self.user and message.author.id == self.user.id:
             return
         if message.author.bot:
@@ -93,6 +100,8 @@ class BridgeBot(discord.Client):
         )
 
     async def _fetch_starter_message(self, thread: discord.Thread) -> discord.Message | None:
+        # Discord APIs are inconsistent here, so we try the direct starter
+        # message path first and then fall back to oldest history.
         if thread.starter_message is not None:
             return thread.starter_message
         try:

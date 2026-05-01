@@ -12,6 +12,8 @@ import {
 } from "./normalize.js";
 import { deliverEventToPythonBridge } from "./python-bridge.js";
 
+// This script locks the contract between the Node gateway and the Python
+// bridge by verifying both normalization paths and HTTP delivery shape.
 const gatewayDir = dirname(fileURLToPath(import.meta.url));
 const repositoryRoot = resolve(gatewayDir, "..", "..");
 const pythonExecutable = resolve(repositoryRoot, ".venv", "bin", "python");
@@ -92,6 +94,8 @@ async function main(): Promise<void> {
 }
 
 async function verifyHttpDelivery(event: NonNullable<Awaited<ReturnType<typeof normalizeCreateActivity>>>) {
+  // Use a local ephemeral server so the gateway-side HTTP helper can be tested
+  // without a running Python process.
   let receivedBody = "";
   let receivedAuth = "";
   let receivedDeliveryId = "";
@@ -135,6 +139,8 @@ async function verifyHttpDelivery(event: NonNullable<Awaited<ReturnType<typeof n
 function validateWithPythonSchema(
   event: NonNullable<Awaited<ReturnType<typeof normalizeCreateActivity>>>,
 ): void {
+  // Final validation delegates to the real Python Pydantic model so both
+  // runtimes agree on the accepted event schema.
   const result = spawnSync(
     pythonExecutable,
     [

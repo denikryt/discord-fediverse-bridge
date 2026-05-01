@@ -7,6 +7,8 @@ from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 
 class ActivityPubObject(BaseModel):
+    # This is the normalized object shape that the Python bridge accepts from
+    # the Fedify gateway, regardless of raw ActivityPub vocabulary details.
     model_config = ConfigDict(extra="forbid")
 
     ap_id: str
@@ -23,6 +25,8 @@ class ActivityPubObject(BaseModel):
 
 
 class ActivityPubEvent(BaseModel):
+    # Event validation keeps the internal HTTP contract strict so malformed or
+    # mismatched gateway payloads fail before side effects happen.
     model_config = ConfigDict(extra="forbid")
 
     event_type: Literal["post.created", "comment.created"]
@@ -34,6 +38,8 @@ class ActivityPubEvent(BaseModel):
 
     @model_validator(mode="after")
     def validate_event_shape(self) -> "ActivityPubEvent":
+        # The event type and object kind must stay in sync because downstream
+        # handlers branch on that contract instead of re-inspecting payloads.
         if self.event_type == "post.created" and self.object.kind != "post":
             raise ValueError("post.created requires object.kind='post'")
         if self.event_type == "comment.created" and self.object.kind != "comment":

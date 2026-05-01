@@ -17,6 +17,8 @@ export function createGatewayFederation(
   config: GatewayContextData,
   keyStore: FileKeyStore,
 ) {
+  // The federation definition keeps protocol-specific concerns in one place so
+  // the rest of the gateway can stay focused on normalization and delivery.
   const isDebug = config.logLevel === "debug";
   const federation = createFederation<GatewayContextData>({
     origin: config.fedifyOrigin,
@@ -30,6 +32,8 @@ export function createGatewayFederation(
         return null;
       }
 
+      // The bridge presents itself as a Service actor because it is an
+      // application endpoint rather than a human user account.
       return new Service({
         id: ctx.getActorUri(identifier),
         preferredUsername: identifier,
@@ -62,6 +66,8 @@ export function createGatewayFederation(
       if (isDebug) {
         console.log("[Fedify][debug] Received direct Create activity");
       }
+      // Direct Create handling is the happy path when the remote server does
+      // not wrap local objects inside Announce.
       const event = await normalizeCreateActivity(activity);
       if (event == null) {
         logDebug(isDebug, "normalizeCreateActivity returned null");
@@ -83,6 +89,8 @@ export function createGatewayFederation(
     })
     .on(Announce, async (ctx, activity) => {
       try {
+        // Lemmy commonly sends Announce(Create(...)), so this path unwraps the
+        // nested Create using the cached raw inbox payload.
         const announceEnvelope = getAnnounceEnvelope(ctx, activity.id?.href ?? null);
 
         logAnnounceDebug(isDebug, announceEnvelope);
@@ -134,6 +142,8 @@ async function deliverNormalizedEvent(
   event: BridgeEvent,
   logContext: Record<string, unknown>,
 ): Promise<void> {
+  // All successful normalization funnels through one delivery path so logging
+  // and Python-bridge auth stay consistent across Create and Announce.
   console.log("[Fedify] Delivering event", logContext);
   await deliverEventToPythonBridge(
     config.pythonBridgeEventsUrl,
@@ -164,6 +174,8 @@ function getAnnounceEnvelope(
   rawRecord: Record<string, unknown> | null;
   rawBodySha256: string | undefined;
 } {
+  // Prefer the payload stored at HTTP-ingest time because queued handler
+  // execution may no longer have the original request-local body attached.
   const cachedRaw = announceId ? getRawActivity(announceId) : null;
   const rawJson = cachedRaw?.rawJson ?? ctx.data.activitypubRawJson;
   return {

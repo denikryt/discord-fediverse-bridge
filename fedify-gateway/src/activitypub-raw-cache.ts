@@ -4,11 +4,15 @@ type RawEntry = {
   storedAt: number;
 };
 
+// Announce handling may happen after the original HTTP request context is gone,
+// so we keep a short-lived lookup from activity id to raw inbox payload.
 const rawByActivityId = new Map<string, RawEntry>();
 const MAX_ENTRIES = 512;
 const TTL_MS = 15 * 60 * 1000;
 
 function prune(now: number): void {
+  // Keep the cache bounded in both age and entry count so it stays a transient
+  // delivery aid rather than a growing process store.
   for (const [activityId, entry] of rawByActivityId) {
     if (now - entry.storedAt > TTL_MS) {
       rawByActivityId.delete(activityId);

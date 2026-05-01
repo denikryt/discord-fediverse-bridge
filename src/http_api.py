@@ -12,6 +12,8 @@ logger = logging.getLogger(__name__)
 
 
 def create_http_app(runtime: Runtime) -> FastAPI:
+    # The internal API is intentionally small: one healthcheck plus one trusted
+    # event-ingest endpoint from the Fedify gateway.
     app = FastAPI(title="discord-lemmy-bridge-internal-api")
 
     @app.get("/healthz")
@@ -24,6 +26,8 @@ def create_http_app(runtime: Runtime) -> FastAPI:
         authorization: str | None = Header(default=None),
         x_bridge_delivery_id: str | None = Header(default=None),
     ) -> dict[str, str]:
+        # Authenticate and deduplicate before touching Discord so gateway
+        # retries remain safe.
         _validate_internal_auth(runtime, authorization)
         _validate_delivery_header(x_bridge_delivery_id, event.delivery_id)
 
@@ -58,6 +62,8 @@ def _validate_delivery_header(x_bridge_delivery_id: str | None, delivery_id: str
 
 
 def _begin_event_processing(runtime: Runtime, event: ActivityPubEvent) -> dict[str, str] | None:
+    # Receipt state is the source of truth for idempotency across duplicate and
+    # retry deliveries from the gateway.
     existing = runtime.database.get_event_receipt(event.delivery_id)
     if existing is None:
         runtime.database.create_event_receipt(

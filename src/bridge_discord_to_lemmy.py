@@ -20,6 +20,8 @@ async def sync_forum_thread_to_lemmy(
     thread: discord.Thread,
     starter_message: discord.Message,
 ) -> int:
+    # The first user message in a forum thread becomes the Lemmy post body so
+    # thread creation and post creation stay aligned.
     author_name = starter_message.author.display_name or starter_message.author.name
     title = format_thread_title_for_discord(thread.name)
     body = format_discord_body_for_lemmy(author_name, starter_message.content, bridge_prefix)
@@ -46,6 +48,8 @@ async def sync_thread_message_to_lemmy_comment(
     bridge_prefix: str,
     message: discord.Message,
 ) -> int | None:
+    # Message sync is guarded by local mappings so we never create orphaned or
+    # duplicate Lemmy comments.
     if not isinstance(message.channel, discord.Thread):
         return None
 

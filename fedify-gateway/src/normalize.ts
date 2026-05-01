@@ -10,6 +10,8 @@ import type { BridgeEvent } from "./types.js";
 export async function normalizeCreateActivity(
   activity: Create,
 ): Promise<BridgeEvent | null> {
+  // Typed Fedify objects are preferred when available because they already
+  // resolve some vocabulary details for us.
   const object = await activity.getObject({ suppressError: true });
   if (object == null) {
     return null;
@@ -29,6 +31,8 @@ export async function normalizeCreateActivity(
 export function normalizeCreateActivityFromJson(
   activity: unknown,
 ): BridgeEvent | null {
+  // Raw JSON normalization is the fallback for wrapped Announce payloads where
+  // the typed Fedify object path is not reliable enough for nested Create.
   if (!isRecord(activity) || activity.type !== "Create") {
     return null;
   }
@@ -152,6 +156,8 @@ function resolveCommunityActorId(object: ActivityObject): string {
 }
 
 async function resolvePostApId(note: Note): Promise<string | null> {
+  // Lemmy comments may reply directly to a post or to another comment, so walk
+  // the reply chain until the owning post can be identified.
   const replyTargetId = note.replyTargetId?.href;
   if (!replyTargetId) {
     return null;

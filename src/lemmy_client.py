@@ -16,6 +16,8 @@ class LemmyAPIError(RuntimeError):
 
 
 class LemmyClient:
+    # LemmyClient hides authentication, retry, and error-shape quirks of the
+    # Lemmy API behind a small async interface used by the bridge.
     def __init__(self, base_url: str, username_or_email: str, password: str) -> None:
         self.base_url = base_url.rstrip("/")
         self.username_or_email = username_or_email
@@ -32,6 +34,8 @@ class LemmyClient:
         await self.client.aclose()
 
     async def login(self) -> None:
+        # Login also loads the current user because later bridge flows rely on
+        # stable numeric/user identity.
         response = await self._request_with_retry(
             "POST",
             "/api/v3/user/login",
@@ -186,6 +190,8 @@ class LemmyClient:
         operation_name: str,
         **kwargs: Any,
     ) -> httpx.Response:
+        # Lemmy rate-limits and occasionally times out on repeated test traffic,
+        # so client calls share one conservative retry policy.
         backoff_seconds = [0, 10, 30, 60]
 
         for attempt, delay in enumerate(backoff_seconds, start=1):
@@ -215,6 +221,8 @@ class LemmyClient:
 
     @staticmethod
     def _raise_for_status_with_lemmy_error(response: httpx.Response, message: str) -> None:
+        # Lemmy reports many API failures as JSON error payloads with 4xx
+        # status codes, so preserve that semantic error code for callers.
         if response.is_success:
             return
         try:

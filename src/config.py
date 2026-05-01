@@ -3,6 +3,8 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
 class Settings(BaseSettings):
+    # Settings centralize the bridge contract with its environment so both the
+    # bot runtime and the internal HTTP API read the same values.
     model_config = SettingsConfigDict(env_file=".env", env_file_encoding="utf-8", extra="ignore")
 
     discord_token: str = Field(alias="DISCORD_TOKEN")
@@ -22,4 +24,6 @@ class Settings(BaseSettings):
 
     @property
     def normalized_lemmy_base_url(self) -> str:
+        # Keep one canonical base URL shape so API path joins do not depend on
+        # whether the env var had a trailing slash.
         return str(self.lemmy_base_url).rstrip("/")

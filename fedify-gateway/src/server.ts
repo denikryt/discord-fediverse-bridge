@@ -10,6 +10,8 @@ import { createGatewayFederation } from "./federation.js";
 import { FileKeyStore } from "./key-store.js";
 import { followCommunity } from "./federation-outbound.js";
 
+// server.ts owns the operator-facing HTTP surface of the gateway: health,
+// manual follow, inbox logging, and Fedify middleware wiring.
 const config = loadConfig();
 const keyStore = new FileKeyStore(config.keyStorePath);
 const fedify = createGatewayFederation(config, keyStore);
@@ -22,6 +24,8 @@ app.get("/healthz", (context) => {
 });
 
 app.post("/follow-community", async (context) => {
+  // This endpoint exists as an operational bootstrap path until follow logic
+  // is driven from the bot itself.
   const { communityActorUrl } = await context.req.json();
 
   if (!communityActorUrl || typeof communityActorUrl !== "string") {
@@ -45,6 +49,8 @@ app.use(async (context, next) => {
   const path = context.req.path;
 
   if (method === "POST" && path === "/inbox") {
+    // Always log a compact inbox summary because federation debugging depends
+    // on knowing whether the gateway saw Page/Create/Note traffic at all.
     console.log(`[HTTP] POST /inbox from ${context.req.header("user-agent")}`);
     const payloadSummary = await readInboxPayloadSummary(context);
     if (payloadSummary != null) {
@@ -71,6 +77,8 @@ app.use(async (context, next) => {
 
 app.use(
   fedifyMiddleware(fedify, async (context): Promise<GatewayContextData> => {
+    // The middleware attaches raw inbox data only where Announce recovery may
+    // need it later in the Fedify processing pipeline.
     const activitypubRequestData = await buildActivityPubRequestData(context);
     return { ...config, ...activitypubRequestData };
   }),
@@ -121,6 +129,8 @@ async function buildActivityPubRequestData(
       .digest("hex");
 
     if (hasStringId(activitypubRawJson)) {
+      // Cache by activity id so queued Announce handling can recover the exact
+      // payload that originally hit /inbox.
       storeRawActivity(
         activitypubRawJson.id,
         activitypubRawJson,
@@ -144,6 +154,8 @@ function isInboxPost(method: string, url: string): boolean {
 function summarizeInboxPayload(
   parsed: Record<string, unknown>,
 ): InboxPayloadSummary {
+  // The summary intentionally keeps only the fields needed to distinguish
+  // post/comment and wrapped/unwrapped ActivityPub shapes in logs.
   const object = asRecord(parsed.object);
   const nestedObject = asRecord(object?.object);
   return {

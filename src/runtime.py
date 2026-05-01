@@ -10,6 +10,8 @@ from .lemmy_client import LemmyClient
 
 @dataclass(slots=True)
 class Runtime:
+    # Runtime groups the shared long-lived services that request handlers and
+    # Discord callbacks need to access without rebuilding them.
     settings: Settings
     database: Database
     lemmy: LemmyClient

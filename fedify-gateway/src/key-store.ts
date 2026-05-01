@@ -15,6 +15,8 @@ interface StoredKeyPair {
 type StoredKeys = Record<string, StoredKeyPair>;
 
 export class FileKeyStore {
+  // The gateway uses one simple file-backed key store so actor keys survive
+  // restarts without requiring external infrastructure.
   constructor(private readonly path: string) {}
 
   async getOrCreate(identifier: string): Promise<CryptoKeyPair> {

@@ -9,6 +9,8 @@ from .models import ActivityPubEventReceipt, Base, CommentLink, PostLink
 
 
 class Database:
+    # Database is a small repository-style wrapper that keeps bridge code away
+    # from session management and direct ORM details.
     def __init__(self, url: str) -> None:
         connect_args = {"check_same_thread": False} if url.startswith("sqlite") else {}
         self.engine = create_engine(url, future=True, connect_args=connect_args)
@@ -20,6 +22,8 @@ class Database:
 
     @contextmanager
     def session(self) -> Session:
+        # Every public DB operation uses the same commit/rollback discipline so
+        # callers do not need to care about transaction cleanup.
         session = self.session_factory()
         try:
             yield session
@@ -126,6 +130,8 @@ class Database:
             receipt.detail = detail
 
     def _ensure_legacy_schema_compatibility(self) -> None:
+        # Existing local SQLite files may predate ActivityPub AP-ID columns, so
+        # the bridge upgrades the minimal schema in place on startup.
         inspector = inspect(self.engine)
         post_columns = {column["name"] for column in inspector.get_columns("post_links")}
         comment_columns = {column["name"] for column in inspector.get_columns("comment_links")}

@@ -1,5 +1,7 @@
 import process from "node:process";
 
+// This CLI is a thin operator tool for issuing a one-off follow request to the
+// running local gateway.
 const GATEWAY_URL = process.env.GATEWAY_URL ?? "http://localhost:3000";
 const communityActorUrl = process.argv[2];
 

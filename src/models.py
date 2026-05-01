@@ -15,6 +15,8 @@ class Base(DeclarativeBase):
 
 
 class PostLink(Base):
+    # PostLink records the one-to-one bridge mapping between a Lemmy post and
+    # the Discord forum thread created for it.
     __tablename__ = "post_links"
     __table_args__ = (
         UniqueConstraint("lemmy_post_id"),
@@ -31,6 +33,8 @@ class PostLink(Base):
 
 
 class CommentLink(Base):
+    # CommentLink preserves message-level deduplication and parent context for
+    # comment sync in both directions.
     __tablename__ = "comment_links"
     __table_args__ = (
         UniqueConstraint("lemmy_comment_id"),
@@ -49,6 +53,8 @@ class CommentLink(Base):
 
 
 class ActivityPubEventReceipt(Base):
+    # Receipts make inbound ActivityPub processing idempotent across retries,
+    # duplicates, and partial failures.
     __tablename__ = "activitypub_event_receipts"
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)

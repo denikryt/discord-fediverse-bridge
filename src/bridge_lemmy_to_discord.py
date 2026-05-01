@@ -17,6 +17,8 @@ async def create_discord_thread_for_activitypub_post(
     forum_channel: discord.ForumChannel,
     event: ActivityPubEvent,
 ) -> int:
+    # Posts become forum threads plus a starter message, and both IDs are
+    # persisted because later comment sync needs the thread mapping.
     post = event.object
     title = format_thread_title_for_discord(post.title or "Untitled Lemmy Post")
     body = format_lemmy_post_for_discord(
@@ -36,6 +38,8 @@ async def create_discord_thread_for_activitypub_post(
     if thread is None:
         raise RuntimeError("Discord create_thread did not return a thread object")
     if message is None:
+        # Some discord.py variants do not hand back the starter message, so we
+        # recover it immediately before persisting the mapping.
         try:
             message = await thread.fetch_message(thread.id)
         except discord.HTTPException as exc:
@@ -58,6 +62,7 @@ async def create_discord_message_for_activitypub_comment(
     thread: discord.Thread,
     event: ActivityPubEvent,
 ) -> int:
+    # Comments are always appended to an existing mapped Discord thread.
     comment = event.object
     body = format_lemmy_comment_for_discord(comment.author_name, normalize_text(comment.body_markdown), comment.url)
     message = await thread.send(body)

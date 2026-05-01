@@ -8,6 +8,8 @@ DISCORD_THREAD_NAME_LIMIT = 100
 
 
 def truncate(text: str, limit: int) -> str:
+    # Truncation keeps bridge-generated output valid for the destination
+    # platform without silently blowing past hard limits.
     text = text.strip()
     if len(text) <= limit:
         return text
@@ -15,6 +17,8 @@ def truncate(text: str, limit: int) -> str:
 
 
 def normalize_text(text: str | None) -> str:
+    # Normalize mixed HTML/plain-text input into a predictable string before
+    # formatting cross-platform messages.
     if not text:
         return ""
     return unescape(text).strip()

@@ -1,6 +1,8 @@
 import process from "node:process";
 
 export interface GatewayConfig {
+  // GatewayConfig is the runtime contract between the Node gateway process and
+  // the deployment environment around it.
   actorIdentifier: string;
   actorName: string;
   actorSummary: string;
@@ -14,6 +16,8 @@ export interface GatewayConfig {
 }
 
 export interface GatewayContextData extends GatewayConfig {
+  // Raw request data is attached only for inbox requests where Announce payload
+  // recovery may need the original JSON body.
   activitypubRawJson?: unknown;
   activitypubRawBodySha256?: string;
 }
@@ -38,6 +42,8 @@ function parsePort(value: string | undefined, fallback: number): number {
 }
 
 export function loadConfig(): GatewayConfig {
+  // Defaults keep local development ergonomic while still failing fast for the
+  // secrets and origins that define federation identity.
   const logLevel = process.env.FEDIFY_LOG_LEVEL === "debug" ? "debug" : "info";
   return {
     actorIdentifier: process.env.FEDIFY_ACTOR_IDENTIFIER ?? "bridge",

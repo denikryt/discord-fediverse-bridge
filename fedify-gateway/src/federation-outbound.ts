@@ -8,10 +8,13 @@ export async function followCommunity(
   config: GatewayConfig,
   communityActorUrl: string,
 ): Promise<void> {
+  // Outbound follow is kept explicit and separate from inbound delivery so the
+  // gateway can be pointed at a known community actor before bot commands exist.
   const ctx = federation.createContext(new URL(config.fedifyOrigin), config);
   const actorUri = ctx.getActorUri(config.actorIdentifier);
 
-  // Get community's inbox by fetching its actor object
+  // Fetch the remote actor first because Follow delivery needs both the actor
+  // id and its concrete inbox endpoint.
   const communityResponse = await fetch(communityActorUrl, {
     headers: {
       Accept: "application/activity+json",
@@ -34,7 +37,8 @@ export async function followCommunity(
     throw new Error("Community actor does not have an id");
   }
 
-  // Create Follow activity with required id field
+  // Build a unique Follow id locally so retries and remote logs can refer to a
+  // concrete outbound activity URL.
   const follow = new Follow({
     id: new URL(
       `${config.fedifyOrigin}activities/follow/${Date.now()}/${Math.random().toString(36).slice(2)}`,
@@ -50,7 +54,8 @@ export async function followCommunity(
     followId: follow.id?.toString(),
   });
 
-  // Send signed request to inbox
+  // Fedify signs and delivers the activity; this helper only prepares the
+  // target identity and object URLs.
   await ctx.sendActivity(
     { username: config.actorIdentifier },
     { id: new URL(communityId), inboxId: new URL(inboxUrl) },

@@ -12,11 +12,14 @@ logger = logging.getLogger(__name__)
 
 @dataclass(slots=True)
 class HandlerResult:
+    # Handlers return explicit processing status so HTTP receipts can record
+    # whether the event was processed, skipped, or retried later.
     status: str
     detail: str
 
 
 async def dispatch_activitypub_event(event: ActivityPubEvent, runtime: Runtime) -> HandlerResult:
+    # Keep dispatch explicit so supported inbound event types stay obvious.
     if event.event_type == "post.created":
         return await handle_post_created(event, runtime)
     if event.event_type == "comment.created":
@@ -25,6 +28,8 @@ async def dispatch_activitypub_event(event: ActivityPubEvent, runtime: Runtime) 
 
 
 async def handle_post_created(event: ActivityPubEvent, runtime: Runtime) -> HandlerResult:
+    # The bridge is intentionally single-community for now, so foreign events
+    # are skipped before any Discord lookup or write.
     if event.community_actor_id != runtime.settings.lemmy_community_actor_id:
         return HandlerResult(status="skipped", detail="community actor mismatch")
 
@@ -51,6 +56,8 @@ async def handle_comment_created(event: ActivityPubEvent, runtime: Runtime) -> H
 
     post_link = runtime.database.get_post_link_by_lemmy_post_ap_id(event.object.post_ap_id or "")
     if post_link is None:
+        # Comment delivery is only safe after the parent post has already been
+        # mapped to a Discord thread.
         logger.info("Skipping ActivityPub comment %s because post %s is not mapped yet", event.object.ap_id, event.object.post_ap_id)
         return HandlerResult(status="skipped", detail="parent post is not mapped")
 
