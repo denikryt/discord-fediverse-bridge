@@ -104,7 +104,7 @@ export function createGatewayFederation(
           return;
         }
 
-        const event = normalizeCreateActivityFromJson(createRecord);
+        const event = await normalizeCreateActivityFromJson(createRecord);
         if (event == null) {
           logDebug(isDebug, "normalizeCreateActivityFromJson returned null");
           return;

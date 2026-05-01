@@ -62,10 +62,16 @@ async def create_discord_message_for_activitypub_comment(
     thread: discord.Thread,
     event: ActivityPubEvent,
 ) -> int:
-    # Comments are always appended to an existing mapped Discord thread.
+    # Comments are appended to an existing mapped Discord thread and use a
+    # Discord reply when the Lemmy parent comment is already mapped locally.
     comment = event.object
     body = format_lemmy_comment_for_discord(comment.author_name, normalize_text(comment.body_markdown), comment.url)
-    message = await thread.send(body)
+    parent_message = await resolve_parent_discord_message(
+        database=database,
+        thread=thread,
+        parent_comment_ap_id=comment.parent_ap_id,
+    )
+    message = await thread.send(body, reference=parent_message)
 
     database.create_comment_link(
         lemmy_comment_id=comment.lemmy_id,
@@ -78,3 +84,41 @@ async def create_discord_message_for_activitypub_comment(
     )
     logger.info("Created Discord message %s from ActivityPub comment %s", message.id, comment.ap_id)
     return message.id
+
+
+async def resolve_parent_discord_message(
+    *,
+    database: Database,
+    thread: discord.Thread,
+    parent_comment_ap_id: str | None,
+) -> discord.Message | None:
+    # Reply threading is best-effort: if the parent comment is unknown or the
+    # mapped Discord message can no longer be fetched, fall back to a plain
+    # thread message instead of dropping the comment.
+    if not parent_comment_ap_id:
+        return None
+
+    parent_link = database.get_comment_link_by_lemmy_comment_ap_id(parent_comment_ap_id)
+    if parent_link is None:
+        logger.debug(
+            "No Discord parent mapping found for Lemmy parent comment %s",
+            parent_comment_ap_id,
+        )
+        return None
+
+    if parent_link.discord_forum_thread_id != thread.id:
+        logger.debug(
+            "Mapped parent comment %s belongs to another Discord thread, skipping reply linkage",
+            parent_comment_ap_id,
+        )
+        return None
+
+    try:
+        return await thread.fetch_message(parent_link.discord_message_id)
+    except discord.HTTPException:
+        logger.warning(
+            "Failed to fetch Discord parent message %s for Lemmy parent comment %s",
+            parent_link.discord_message_id,
+            parent_comment_ap_id,
+        )
+        return None

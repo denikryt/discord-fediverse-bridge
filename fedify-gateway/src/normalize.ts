@@ -28,9 +28,9 @@ export async function normalizeCreateActivity(
   return null;
 }
 
-export function normalizeCreateActivityFromJson(
+export async function normalizeCreateActivityFromJson(
   activity: unknown,
-): BridgeEvent | null {
+): Promise<BridgeEvent | null> {
   // Raw JSON normalization is the fallback for wrapped Announce payloads where
   // the typed Fedify object path is not reliable enough for nested Create.
   if (!isRecord(activity) || activity.type !== "Create") {
@@ -47,7 +47,7 @@ export function normalizeCreateActivityFromJson(
   }
 
   if (object.type === "Note") {
-    return normalizeCommentActivityFromJson(activity, object);
+    return await normalizeCommentActivityFromJson(activity, object);
   }
 
   return null;
@@ -224,17 +224,17 @@ function normalizePostActivityFromJson(
   };
 }
 
-function normalizeCommentActivityFromJson(
+async function normalizeCommentActivityFromJson(
   activity: Record<string, unknown>,
   object: Record<string, unknown>,
-): BridgeEvent {
+): Promise<BridgeEvent> {
   const apId = requireString(object.id, "comment object id");
   const replyTarget = asString(object.inReplyTo) ?? asString(object.replyTarget);
   if (!replyTarget) {
     throw new Error(`Comment ${apId} is missing inReplyTo`);
   }
 
-  const postApId = resolvePostApIdFromJson(replyTarget);
+  const postApId = await resolvePostApIdFromJson(replyTarget);
   if (!postApId) {
     throw new Error(`Could not resolve post AP ID for comment ${apId}`);
   }
@@ -297,11 +297,32 @@ function resolveAuthorNameFromJson(
   return lastPathSegment(actorId);
 }
 
-function resolvePostApIdFromJson(replyTarget: string): string | null {
+async function resolvePostApIdFromJson(
+  replyTarget: string,
+  visited: Set<string> = new Set(),
+): Promise<string | null> {
   if (isLemmyPath(replyTarget, "post")) {
     return replyTarget;
   }
-  return null;
+  if (!isLemmyPath(replyTarget, "comment")) {
+    return null;
+  }
+  if (visited.has(replyTarget)) {
+    return null;
+  }
+  visited.add(replyTarget);
+
+  const parentRecord = await fetchActivityObject(replyTarget);
+  if (parentRecord == null) {
+    return null;
+  }
+
+  const nextReplyTarget =
+    asString(parentRecord.inReplyTo) ?? asString(parentRecord.replyTarget);
+  if (!nextReplyTarget) {
+    return null;
+  }
+  return await resolvePostApIdFromJson(nextReplyTarget, visited);
 }
 
 function resolveObjectUrl(object: ActivityObject): string | null {
@@ -366,6 +387,25 @@ function normalizeStringArray(value: unknown): string[] {
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null;
+}
+
+async function fetchActivityObject(
+  objectId: string,
+): Promise<Record<string, unknown> | null> {
+  try {
+    const response = await fetch(objectId, {
+      headers: {
+        Accept: "application/activity+json",
+      },
+    });
+    if (!response.ok) {
+      return null;
+    }
+    const payload = (await response.json()) as unknown;
+    return asRecord(payload);
+  } catch {
+    return null;
+  }
 }
 
 function parseRequiredLemmyNumericId(value: string, kind: "post" | "comment"): number {

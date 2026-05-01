@@ -79,6 +79,10 @@ class Database:
         with self.session() as session:
             return session.scalar(select(CommentLink).where(CommentLink.lemmy_comment_ap_id == lemmy_comment_ap_id))
 
+    def get_comment_link_by_discord_message_id(self, discord_message_id: int) -> CommentLink | None:
+        with self.session() as session:
+            return session.scalar(select(CommentLink).where(CommentLink.discord_message_id == discord_message_id))
+
     def create_comment_link(
         self,
         *,

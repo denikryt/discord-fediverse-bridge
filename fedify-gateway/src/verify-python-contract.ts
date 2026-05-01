@@ -62,7 +62,7 @@ async function main(): Promise<void> {
   assert.ok(postEvent);
   assert.ok(commentEvent);
 
-  const announceWrappedComment = normalizeCreateActivityFromJson({
+  const announceWrappedComment = await normalizeCreateActivityFromJson({
     id: "https://forum.example/activities/announce/comment-1",
     type: "Create",
     actor: "https://forum.example/u/alice",
