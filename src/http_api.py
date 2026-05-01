@@ -25,46 +25,20 @@ def create_http_app(runtime: Runtime) -> FastAPI:
         x_bridge_delivery_id: str | None = Header(default=None),
     ) -> dict[str, str]:
         _validate_internal_auth(runtime, authorization)
-        if x_bridge_delivery_id is None:
-            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Missing X-Bridge-Delivery-Id header")
-        if x_bridge_delivery_id != event.delivery_id:
-            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Delivery ID header does not match payload")
+        _validate_delivery_header(x_bridge_delivery_id, event.delivery_id)
 
-        existing = runtime.database.get_event_receipt(event.delivery_id)
-        if existing is not None:
-            if existing.status == "in_progress":
-                raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="Delivery is already in progress")
-            if existing.status in {"processed", "skipped"}:
-                return {"status": "duplicate", "detail": existing.detail or existing.status}
-            runtime.database.update_event_receipt(
-                delivery_id=event.delivery_id,
-                status="in_progress",
-                detail="retrying failed delivery",
-            )
-        else:
-            runtime.database.create_event_receipt(
-                delivery_id=event.delivery_id,
-                event_type=event.event_type,
-                object_ap_id=event.object.ap_id,
-                status="in_progress",
-            )
+        duplicate_response = _begin_event_processing(runtime, event)
+        if duplicate_response is not None:
+            return duplicate_response
 
         try:
             result = await dispatch_activitypub_event(event, runtime)
         except Exception as exc:
-            runtime.database.update_event_receipt(
-                delivery_id=event.delivery_id,
-                status="failed",
-                detail=str(exc),
-            )
+            _mark_event_failed(runtime, event.delivery_id, str(exc))
             logger.exception("ActivityPub event handling failed for delivery %s", event.delivery_id)
             raise
 
-        runtime.database.update_event_receipt(
-            delivery_id=event.delivery_id,
-            status=result.status,
-            detail=result.detail,
-        )
+        _finish_event_processing(runtime, event.delivery_id, result.status, result.detail)
         return {"status": result.status, "detail": result.detail}
 
     return app
@@ -74,3 +48,50 @@ def _validate_internal_auth(runtime: Runtime, authorization: str | None) -> None
     expected = f"Bearer {runtime.settings.fedify_shared_secret}"
     if authorization != expected:
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid internal authorization")
+
+
+def _validate_delivery_header(x_bridge_delivery_id: str | None, delivery_id: str) -> None:
+    if x_bridge_delivery_id is None:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Missing X-Bridge-Delivery-Id header")
+    if x_bridge_delivery_id != delivery_id:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Delivery ID header does not match payload")
+
+
+def _begin_event_processing(runtime: Runtime, event: ActivityPubEvent) -> dict[str, str] | None:
+    existing = runtime.database.get_event_receipt(event.delivery_id)
+    if existing is None:
+        runtime.database.create_event_receipt(
+            delivery_id=event.delivery_id,
+            event_type=event.event_type,
+            object_ap_id=event.object.ap_id,
+            status="in_progress",
+        )
+        return None
+
+    if existing.status == "in_progress":
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="Delivery is already in progress")
+    if existing.status in {"processed", "skipped"}:
+        return {"status": "duplicate", "detail": existing.detail or existing.status}
+
+    runtime.database.update_event_receipt(
+        delivery_id=event.delivery_id,
+        status="in_progress",
+        detail="retrying failed delivery",
+    )
+    return None
+
+
+def _finish_event_processing(runtime: Runtime, delivery_id: str, status_value: str, detail: str) -> None:
+    runtime.database.update_event_receipt(
+        delivery_id=delivery_id,
+        status=status_value,
+        detail=detail,
+    )
+
+
+def _mark_event_failed(runtime: Runtime, delivery_id: str, detail: str) -> None:
+    runtime.database.update_event_receipt(
+        delivery_id=delivery_id,
+        status="failed",
+        detail=detail,
+    )

@@ -46,61 +46,19 @@ app.use(async (context, next) => {
 
   if (method === "POST" && path === "/inbox") {
     console.log(`[HTTP] POST /inbox from ${context.req.header("user-agent")}`);
-    try {
-      const rawBody = await context.req.raw.clone().text();
-      const parsed = JSON.parse(rawBody) as Record<string, unknown>;
-      const object =
-        typeof parsed.object === "object" && parsed.object !== null
-          ? (parsed.object as Record<string, unknown>)
-          : null;
-      const nestedObject =
-        object && typeof object.object === "object" && object.object !== null
-          ? (object.object as Record<string, unknown>)
-          : null;
+    const payloadSummary = await readInboxPayloadSummary(context);
+    if (payloadSummary != null) {
       console.log("[HTTP] Inbox activity:", {
-        type: typeof parsed.type === "string" ? parsed.type : null,
-        id: typeof parsed.id === "string" ? parsed.id : null,
-        objectType: object && typeof object.type === "string" ? object.type : null,
-        nestedObjectType:
-          nestedObject && typeof nestedObject.type === "string"
-            ? nestedObject.type
-            : null,
+        type: payloadSummary.type,
+        id: payloadSummary.id,
+        objectType: payloadSummary.objectType,
+        nestedObjectType: payloadSummary.nestedObjectType,
       });
-    } catch {
-      // Keep request path resilient even if body parsing fails.
-    }
-    if (isDebug) {
-      try {
-        const rawBody = await context.req.raw.clone().text();
-        const parsed = JSON.parse(rawBody) as Record<string, unknown>;
-        const object =
-          typeof parsed.object === "object" && parsed.object !== null
-            ? (parsed.object as Record<string, unknown>)
-            : null;
-        const nestedObject =
-          object && typeof object.object === "object" && object.object !== null
-            ? (object.object as Record<string, unknown>)
-            : null;
-        console.log("[HTTP][debug] Inbox payload summary:", {
-          type: typeof parsed.type === "string" ? parsed.type : null,
-          id: typeof parsed.id === "string" ? parsed.id : null,
-          objectType: object && typeof object.type === "string" ? object.type : null,
-          objectId: object && typeof object.id === "string" ? object.id : null,
-          nestedObjectType:
-            nestedObject && typeof nestedObject.type === "string"
-              ? nestedObject.type
-              : null,
-          nestedObjectId:
-            nestedObject && typeof nestedObject.id === "string"
-              ? nestedObject.id
-              : null,
-        });
-      } catch (error) {
-        console.log(
-          "[HTTP][debug] Inbox payload summary failed:",
-          error instanceof Error ? error.message : String(error),
-        );
+      if (isDebug) {
+        console.log("[HTTP][debug] Inbox payload summary:", payloadSummary);
       }
+    } else if (isDebug) {
+      console.log("[HTTP][debug] Inbox payload summary failed");
     }
   }
 
@@ -113,38 +71,8 @@ app.use(async (context, next) => {
 
 app.use(
   fedifyMiddleware(fedify, async (context): Promise<GatewayContextData> => {
-    let activitypubRawJson: unknown;
-    let activitypubRawBodySha256: string | undefined;
-    const method = context.req.raw.method;
-    const pathname = new URL(context.req.raw.url).pathname;
-
-    if (method === "POST" && pathname === "/inbox") {
-      try {
-        const rawBody = await context.req.raw.clone().text();
-        activitypubRawBodySha256 = createHash("sha256").update(rawBody).digest("hex");
-        activitypubRawJson = JSON.parse(rawBody);
-        if (
-          typeof activitypubRawJson === "object" &&
-          activitypubRawJson !== null &&
-          "id" in activitypubRawJson &&
-          typeof activitypubRawJson.id === "string"
-        ) {
-          storeRawActivity(
-            activitypubRawJson.id,
-            activitypubRawJson,
-            activitypubRawBodySha256,
-          );
-        }
-      } catch {
-        activitypubRawJson = undefined;
-      }
-    }
-
-    return {
-      ...config,
-      activitypubRawJson,
-      activitypubRawBodySha256,
-    };
+    const activitypubRequestData = await buildActivityPubRequestData(context);
+    return { ...config, ...activitypubRequestData };
   }),
 );
 
@@ -156,3 +84,101 @@ serve({
 console.log(
   `Fedify gateway listening on ${config.fedifyOrigin} (port ${config.port}) and forwarding to ${config.pythonBridgeEventsUrl}`,
 );
+
+interface InboxPayloadSummary {
+  type: string | null;
+  id: string | null;
+  objectType: string | null;
+  objectId: string | null;
+  nestedObjectType: string | null;
+  nestedObjectId: string | null;
+}
+
+async function readInboxPayloadSummary(
+  context: RawRequestContext,
+): Promise<InboxPayloadSummary | null> {
+  try {
+    const rawBody = await context.req.raw.clone().text();
+    const parsed = JSON.parse(rawBody) as Record<string, unknown>;
+    return summarizeInboxPayload(parsed);
+  } catch {
+    return null;
+  }
+}
+
+async function buildActivityPubRequestData(
+  context: RawRequestContext,
+): Promise<Pick<GatewayContextData, "activitypubRawJson" | "activitypubRawBodySha256">> {
+  if (!isInboxPost(context.req.raw.method, context.req.raw.url)) {
+    return {};
+  }
+
+  try {
+    const rawBody = await context.req.raw.clone().text();
+    const activitypubRawJson = JSON.parse(rawBody);
+    const activitypubRawBodySha256 = createHash("sha256")
+      .update(rawBody)
+      .digest("hex");
+
+    if (hasStringId(activitypubRawJson)) {
+      storeRawActivity(
+        activitypubRawJson.id,
+        activitypubRawJson,
+        activitypubRawBodySha256,
+      );
+    }
+
+    return {
+      activitypubRawJson,
+      activitypubRawBodySha256,
+    };
+  } catch {
+    return {};
+  }
+}
+
+function isInboxPost(method: string, url: string): boolean {
+  return method === "POST" && new URL(url).pathname === "/inbox";
+}
+
+function summarizeInboxPayload(
+  parsed: Record<string, unknown>,
+): InboxPayloadSummary {
+  const object = asRecord(parsed.object);
+  const nestedObject = asRecord(object?.object);
+  return {
+    type: asString(parsed.type),
+    id: asString(parsed.id),
+    objectType: asString(object?.type),
+    objectId: asString(object?.id),
+    nestedObjectType: asString(nestedObject?.type),
+    nestedObjectId: asString(nestedObject?.id),
+  };
+}
+
+function asRecord(value: unknown): Record<string, unknown> | null {
+  return typeof value === "object" && value !== null
+    ? (value as Record<string, unknown>)
+    : null;
+}
+
+function asString(value: unknown): string | null {
+  return typeof value === "string" ? value : null;
+}
+
+function hasStringId(
+  value: unknown,
+): value is Record<"id", string> & Record<string, unknown> {
+  return (
+    typeof value === "object" &&
+    value !== null &&
+    "id" in value &&
+    typeof value.id === "string"
+  );
+}
+
+interface RawRequestContext {
+  req: {
+    raw: Request;
+  };
+}

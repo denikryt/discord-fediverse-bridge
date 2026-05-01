@@ -11,6 +11,7 @@ import type { GatewayContextData } from "./config.js";
 import { FileKeyStore } from "./key-store.js";
 import { normalizeCreateActivity, normalizeCreateActivityFromJson } from "./normalize.js";
 import { deliverEventToPythonBridge } from "./python-bridge.js";
+import type { BridgeEvent } from "./types.js";
 
 export function createGatewayFederation(
   config: GatewayContextData,
@@ -63,138 +64,62 @@ export function createGatewayFederation(
       }
       const event = await normalizeCreateActivity(activity);
       if (event == null) {
-        if (isDebug) {
-          console.log("[Fedify][debug] normalizeCreateActivity returned null");
-        }
+        logDebug(isDebug, "normalizeCreateActivity returned null");
         return;
       }
-      if (
-        config.communityActorId &&
-        event.community_actor_id !== config.communityActorId
-      ) {
-        if (isDebug) {
-          console.log("[Fedify][debug] Event community does not match configured community, skipping");
-        }
+      if (shouldSkipCommunityEvent(event, config.communityActorId)) {
+        logDebug(
+          isDebug,
+          "Event community does not match configured community, skipping",
+        );
         return;
       }
 
-      console.log("[Fedify] Delivering event", {
-        eventType: event.event_type,
+      await deliverNormalizedEvent(config, event, {
         deliveryId: event.delivery_id,
+        eventType: event.event_type,
         objectId: event.object.ap_id,
       });
-      await deliverEventToPythonBridge(
-        config.pythonBridgeEventsUrl,
-        config.pythonBridgeSharedSecret,
-        event,
-      );
     })
     .on(Announce, async (ctx, activity) => {
       try {
-        const announceId = activity.id?.href ?? null;
-        const cachedRaw = announceId ? getRawActivity(announceId) : null;
-        const rawJson = cachedRaw?.rawJson ?? ctx.data.activitypubRawJson;
-        const rawBodySha256 = cachedRaw?.rawBodySha256 ?? ctx.data.activitypubRawBodySha256;
-        const rawRecord =
-          typeof rawJson === "object" && rawJson !== null
-            ? (rawJson as Record<string, unknown>)
-            : null;
+        const announceEnvelope = getAnnounceEnvelope(ctx, activity.id?.href ?? null);
 
-        if (rawRecord && isDebug) {
-          const rawObject =
-            typeof rawRecord.object === "object" && rawRecord.object !== null
-              ? (rawRecord.object as Record<string, unknown>)
-              : null;
-          const nestedObject =
-            rawObject &&
-            typeof rawObject.object === "object" &&
-            rawObject.object !== null
-              ? (rawObject.object as Record<string, unknown>)
-              : null;
-          console.log("[Fedify][debug] Raw Announce shape:", {
-            announceId: typeof rawRecord.id === "string" ? rawRecord.id : null,
-            bodySha256: rawBodySha256 ?? null,
-            keys: Object.keys(rawRecord),
-            objectType:
-              rawObject && typeof rawObject.type === "string"
-                ? rawObject.type
-                : typeof rawRecord.object,
-            objectKeys: rawObject ? Object.keys(rawObject) : null,
-            createId:
-              rawObject && typeof rawObject.id === "string" ? rawObject.id : null,
-            nestedObjectId:
-              nestedObject && typeof nestedObject.id === "string"
-                ? nestedObject.id
-                : null,
-            nestedObjectType:
-              nestedObject && typeof nestedObject.type === "string"
-                ? nestedObject.type
-                : null,
-          });
-        } else if (isDebug) {
-          console.log("[Fedify][debug] Raw Announce shape: no object payload");
-        }
+        logAnnounceDebug(isDebug, announceEnvelope);
 
-        if (
-          rawRecord &&
-          typeof rawRecord.object === "object" &&
-          rawRecord.object !== null &&
-          "type" in rawRecord.object &&
-          rawRecord.object.type === "Create"
-        ) {
-          const createActivity = rawRecord.object;
-
-          const event = normalizeCreateActivityFromJson(createActivity);
-          if (event == null) {
-            if (isDebug) {
-              console.log("[Fedify][debug] normalizeCreateActivityFromJson returned null");
-            }
-            return;
-          }
-
-          if (
-            config.communityActorId &&
-            event.community_actor_id !== config.communityActorId
-          ) {
-            if (isDebug) {
-              console.log("[Fedify][debug] Event community does not match, skipping");
-            }
-            return;
-          }
-
-          const createRecord = createActivity as Record<string, unknown>;
-          const nestedObject =
-            typeof createRecord.object === "object" && createRecord.object !== null
-              ? (createRecord.object as Record<string, unknown>)
-              : null;
-          console.log("[Fedify] Delivering event", {
-            announceId: typeof rawRecord.id === "string" ? rawRecord.id : null,
-            createId:
-              typeof createRecord.id === "string" ? createRecord.id : event.delivery_id,
-            eventType: event.event_type,
-            kind: event.object.kind,
-            objectId:
-              nestedObject && typeof nestedObject.id === "string"
-                ? nestedObject.id
-                : event.object.ap_id,
-          });
-          await deliverEventToPythonBridge(
-            config.pythonBridgeEventsUrl,
-            config.pythonBridgeSharedSecret,
-            event,
+        const createRecord = extractCreateRecord(announceEnvelope.rawRecord);
+        if (createRecord == null) {
+          logDebug(
+            isDebug,
+            "Could not find Create in Announce.object from raw JSON",
           );
-          console.log("[Fedify] Event delivered", {
-            deliveryId: event.delivery_id,
-            kind: event.object.kind,
-            objectId: event.object.ap_id,
-          });
-        } else {
-          if (isDebug) {
-            console.log("[Fedify][debug] Could not find Create in Announce.object from raw JSON");
-          }
+          return;
         }
+
+        const event = normalizeCreateActivityFromJson(createRecord);
+        if (event == null) {
+          logDebug(isDebug, "normalizeCreateActivityFromJson returned null");
+          return;
+        }
+
+        if (shouldSkipCommunityEvent(event, config.communityActorId)) {
+          logDebug(isDebug, "Event community does not match, skipping");
+          return;
+        }
+
+        const nestedObject = asRecord(createRecord.object);
+        await deliverNormalizedEvent(config, event, {
+          announceId: announceEnvelope.announceId,
+          createId: asString(createRecord.id) ?? event.delivery_id,
+          eventType: event.event_type,
+          kind: event.object.kind,
+          objectId: asString(nestedObject?.id) ?? event.object.ap_id,
+        });
       } catch (error) {
-        console.error("[Fedify] Error processing Announce:", error instanceof Error ? error.message : error);
+        console.error(
+          "[Fedify] Error processing Announce:",
+          error instanceof Error ? error.message : error,
+        );
       }
     })
     .on(Follow, async () => {
@@ -202,4 +127,103 @@ export function createGatewayFederation(
     });
 
   return federation;
+}
+
+async function deliverNormalizedEvent(
+  config: GatewayContextData,
+  event: BridgeEvent,
+  logContext: Record<string, unknown>,
+): Promise<void> {
+  console.log("[Fedify] Delivering event", logContext);
+  await deliverEventToPythonBridge(
+    config.pythonBridgeEventsUrl,
+    config.pythonBridgeSharedSecret,
+    event,
+  );
+  console.log("[Fedify] Event delivered", {
+    deliveryId: event.delivery_id,
+    kind: event.object.kind,
+    objectId: event.object.ap_id,
+  });
+}
+
+function shouldSkipCommunityEvent(
+  event: BridgeEvent,
+  communityActorId: string | null,
+): boolean {
+  return Boolean(
+    communityActorId && event.community_actor_id !== communityActorId,
+  );
+}
+
+function getAnnounceEnvelope(
+  ctx: { data: GatewayContextData },
+  announceId: string | null,
+): {
+  announceId: string | null;
+  rawRecord: Record<string, unknown> | null;
+  rawBodySha256: string | undefined;
+} {
+  const cachedRaw = announceId ? getRawActivity(announceId) : null;
+  const rawJson = cachedRaw?.rawJson ?? ctx.data.activitypubRawJson;
+  return {
+    announceId,
+    rawRecord: asRecord(rawJson),
+    rawBodySha256:
+      cachedRaw?.rawBodySha256 ?? ctx.data.activitypubRawBodySha256,
+  };
+}
+
+function logAnnounceDebug(
+  isDebug: boolean,
+  announceEnvelope: {
+    announceId: string | null;
+    rawRecord: Record<string, unknown> | null;
+    rawBodySha256: string | undefined;
+  },
+): void {
+  if (!isDebug) {
+    return;
+  }
+  const { rawRecord, rawBodySha256 } = announceEnvelope;
+  if (rawRecord == null) {
+    console.log("[Fedify][debug] Raw Announce shape: no object payload");
+    return;
+  }
+
+  const rawObject = asRecord(rawRecord.object);
+  const nestedObject = asRecord(rawObject?.object);
+  console.log("[Fedify][debug] Raw Announce shape:", {
+    announceId: asString(rawRecord.id),
+    bodySha256: rawBodySha256 ?? null,
+    keys: Object.keys(rawRecord),
+    objectType: asString(rawObject?.type) ?? typeof rawRecord.object,
+    objectKeys: rawObject ? Object.keys(rawObject) : null,
+    createId: asString(rawObject?.id),
+    nestedObjectId: asString(nestedObject?.id),
+    nestedObjectType: asString(nestedObject?.type),
+  });
+}
+
+function extractCreateRecord(
+  rawRecord: Record<string, unknown> | null,
+): Record<string, unknown> | null {
+  const rawObject = asRecord(rawRecord?.object);
+  return rawObject?.type === "Create" ? rawObject : null;
+}
+
+function asRecord(value: unknown): Record<string, unknown> | null {
+  return typeof value === "object" && value !== null
+    ? (value as Record<string, unknown>)
+    : null;
+}
+
+function asString(value: unknown): string | null {
+  return typeof value === "string" ? value : null;
+}
+
+function logDebug(isDebug: boolean, message: string): void {
+  if (isDebug) {
+    console.log(`[Fedify][debug] ${message}`);
+  }
 }
