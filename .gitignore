@@ -7,3 +7,5 @@ discord_lemmy_bridge.egg-info
 __pycache__
 fedify-gateway/node_modules/
 dev/
+AGENTS.md
+*sqlite3

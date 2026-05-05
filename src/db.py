@@ -5,7 +5,7 @@ from contextlib import contextmanager
 from sqlalchemy import create_engine, inspect, select, text
 from sqlalchemy.orm import Session, sessionmaker
 
-from .models import ActivityPubEventReceipt, Base, CommentLink, PostLink
+from .models import ActivityPubEventReceipt, Base, ChannelCommunitySubscription, CommentLink, PostLink
 
 
 class Database:
@@ -132,6 +132,55 @@ class Database:
                 raise RuntimeError(f"Missing receipt for delivery {delivery_id}")
             receipt.status = status
             receipt.detail = detail
+
+    def get_subscription_by_channel(self, discord_channel_id: int) -> ChannelCommunitySubscription | None:
+        # Each channel maps to at most one community, so this is a point lookup.
+        with self.session() as session:
+            return session.scalar(select(ChannelCommunitySubscription).where(ChannelCommunitySubscription.discord_channel_id == discord_channel_id))
+
+    def get_subscriptions_by_community(self, lemmy_community_actor_id: str) -> list[ChannelCommunitySubscription]:
+        # Used by inbound event handlers to find all Discord channels that should
+        # receive posts/comments from a given Lemmy community.
+        with self.session() as session:
+            return list(session.scalars(select(ChannelCommunitySubscription).where(ChannelCommunitySubscription.lemmy_community_actor_id == lemmy_community_actor_id)))
+
+    def get_all_subscriptions(self) -> list[ChannelCommunitySubscription]:
+        # Ordered by creation time so the /list-subscriptions command shows a
+        # stable, predictable list.
+        with self.session() as session:
+            return list(session.scalars(select(ChannelCommunitySubscription).order_by(ChannelCommunitySubscription.created_at)))
+
+    def create_subscription(
+        self,
+        *,
+        discord_channel_id: int,
+        lemmy_community_actor_id: str,
+        lemmy_community_name: str | None,
+        lemmy_community_id: int | None,
+    ) -> ChannelCommunitySubscription:
+        # Callers are responsible for checking uniqueness before calling this;
+        # the DB UNIQUE constraint on discord_channel_id is the final safety net
+        # and will raise IntegrityError if a duplicate is attempted.
+        with self.session() as session:
+            sub = ChannelCommunitySubscription(
+                discord_channel_id=discord_channel_id,
+                lemmy_community_actor_id=lemmy_community_actor_id,
+                lemmy_community_name=lemmy_community_name,
+                lemmy_community_id=lemmy_community_id,
+            )
+            session.add(sub)
+            session.flush()
+            return sub
+
+    def delete_subscription(self, discord_channel_id: int) -> bool:
+        # Returns False when no subscription exists so callers can give a
+        # meaningful response without a separate existence check.
+        with self.session() as session:
+            sub = session.scalar(select(ChannelCommunitySubscription).where(ChannelCommunitySubscription.discord_channel_id == discord_channel_id))
+            if sub is None:
+                return False
+            session.delete(sub)
+            return True
 
     def _ensure_legacy_schema_compatibility(self) -> None:
         # Existing local SQLite files may predate ActivityPub AP-ID columns, so

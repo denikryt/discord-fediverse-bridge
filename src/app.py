@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import logging
 
 import uvicorn
 
@@ -11,6 +12,48 @@ from .http_api import create_http_app
 from .lemmy_client import LemmyClient
 from .logging_setup import configure_logging
 from .runtime import Runtime
+
+logger = logging.getLogger(__name__)
+
+
+async def _seed_legacy_subscription(settings: Settings, database: Database, lemmy: LemmyClient) -> None:
+    # Backward-compat migration: if the old single-pair env vars are still set,
+    # insert a subscription row on the first startup so existing deployments keep
+    # working without requiring a manual /subscribe-channel call.
+    # The check is idempotent — it does nothing if the subscription already exists.
+    channel_id = settings.discord_forum_channel_id
+    actor_id = settings.lemmy_community_actor_id
+    community_name = settings.lemmy_community_name
+
+    if channel_id is None or actor_id is None:
+        return
+
+    existing = database.get_subscription_by_channel(channel_id)
+    if existing is not None:
+        return
+
+    numeric_id: int | None = None
+    if community_name:
+        try:
+            numeric_id = await lemmy.resolve_community_id(name=community_name)
+        except Exception:
+            # A resolution failure is not fatal — the subscription is still created
+            # without a numeric ID. Outbound posts from this channel will be skipped
+            # until the subscription is recreated with a valid community.
+            logger.warning("Could not resolve legacy community ID for name '%s'", community_name)
+
+    database.create_subscription(
+        discord_channel_id=channel_id,
+        lemmy_community_actor_id=actor_id,
+        lemmy_community_name=community_name,
+        lemmy_community_id=numeric_id,
+    )
+    logger.info(
+        "Created default subscription from legacy config: channel %s -> %s. "
+        "You can remove DISCORD_FORUM_CHANNEL_ID, LEMMY_COMMUNITY_NAME, and LEMMY_COMMUNITY_ACTOR_ID from your .env.",
+        channel_id,
+        actor_id,
+    )
 
 
 async def main() -> None:
@@ -28,12 +71,12 @@ async def main() -> None:
         settings.lemmy_password,
     )
     await lemmy.login()
-    lemmy_community_id = await lemmy.resolve_community_id(name=settings.lemmy_community_name)
+    await _seed_legacy_subscription(settings, database, lemmy)
+
     bot = BridgeBot(
         settings=settings,
         database=database,
         lemmy=lemmy,
-        lemmy_community_id=lemmy_community_id,
     )
     runtime = Runtime(
         settings=settings,

@@ -65,3 +65,18 @@ class ActivityPubEventReceipt(Base):
     detail: Mapped[str | None] = mapped_column(String(1024), nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, nullable=False)
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, onupdate=utcnow, nullable=False)
+
+
+class ChannelCommunitySubscription(Base):
+    # ChannelCommunitySubscription binds one Discord forum channel to one Lemmy
+    # community. The numeric community ID is stored so outbound posts can use
+    # the REST API without an extra round-trip on every thread creation.
+    __tablename__ = "channel_community_subscriptions"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    discord_channel_id: Mapped[int] = mapped_column(Integer, nullable=False, unique=True)
+    lemmy_community_actor_id: Mapped[str] = mapped_column(String(512), nullable=False)
+    lemmy_community_name: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    lemmy_community_id: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, nullable=False)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, onupdate=utcnow, nullable=False)

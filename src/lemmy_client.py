@@ -148,6 +148,19 @@ class LemmyClient:
         payload = response.json()
         return payload.get("posts", [])
 
+    async def list_communities(self, *, limit: int = 50, type_: str = "All") -> list[dict[str, Any]]:
+        # Returns community_view dicts; each contains community.actor_id,
+        # community.name, community.id, and community.title.
+        response = await self._request_with_retry(
+            "GET",
+            "/api/v3/community/list",
+            params={"limit": limit, "type_": type_, "sort": "TopAll"},
+            headers=self._headers(optional=True),
+            error_message="Listing Lemmy communities failed",
+            operation_name="Lemmy list communities",
+        )
+        return response.json().get("communities", [])
+
     async def list_comments(
         self,
         *,

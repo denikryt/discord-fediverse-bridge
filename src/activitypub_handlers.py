@@ -28,36 +28,55 @@ async def dispatch_activitypub_event(event: ActivityPubEvent, runtime: Runtime) 
 
 
 async def handle_post_created(event: ActivityPubEvent, runtime: Runtime) -> HandlerResult:
-    # The bridge is intentionally single-community for now, so foreign events
-    # are skipped before any Discord lookup or write.
-    if event.community_actor_id != runtime.settings.lemmy_community_actor_id:
-        return HandlerResult(status="skipped", detail="community actor mismatch")
+    # Skip posts authored by our own bridge bot — they were created outbound
+    # from Discord and will be federated back by Lemmy, which would cause a
+    # duplicate Discord thread for the same content.
+    if runtime.lemmy.person_name and event.actor_id.rstrip("/").endswith(f"/u/{runtime.lemmy.person_name}"):
+        return HandlerResult(status="skipped", detail="authored by bridge bot, skipping echo")
+
+    # Route to every Discord channel subscribed to this community. In practice
+    # there is usually one subscription, but the schema allows more.
+    subscriptions = runtime.database.get_subscriptions_by_community(event.community_actor_id)
+    if not subscriptions:
+        return HandlerResult(status="skipped", detail="no subscriptions for this community")
 
     await runtime.bot.wait_until_bridge_ready()
-    forum_channel = runtime.bot.require_forum_channel()
+    # Dedup guard: if the AP ID is already linked, another delivery already
+    # processed this post successfully.
     if runtime.database.get_post_link_by_lemmy_post_ap_id(event.object.ap_id) is not None:
         return HandlerResult(status="skipped", detail="post already linked")
 
-    await create_discord_thread_for_activitypub_post(
-        database=runtime.database,
-        forum_channel=forum_channel,
-        event=event,
-    )
+    for subscription in subscriptions:
+        forum_channel = await runtime.bot.fetch_forum_channel(subscription.discord_channel_id)
+        await create_discord_thread_for_activitypub_post(
+            database=runtime.database,
+            forum_channel=forum_channel,
+            event=event,
+        )
     return HandlerResult(status="processed", detail="post created")
 
 
 async def handle_comment_created(event: ActivityPubEvent, runtime: Runtime) -> HandlerResult:
-    if event.community_actor_id != runtime.settings.lemmy_community_actor_id:
-        return HandlerResult(status="skipped", detail="community actor mismatch")
+    # Skip comments authored by the bridge bot itself — same echo-loop reason
+    # as in handle_post_created.
+    if runtime.lemmy.person_name and event.actor_id.rstrip("/").endswith(f"/u/{runtime.lemmy.person_name}"):
+        return HandlerResult(status="skipped", detail="authored by bridge bot, skipping echo")
+
+    # Skip early if no channel is subscribed to this community — avoids DB
+    # writes for irrelevant communities.
+    subscriptions = runtime.database.get_subscriptions_by_community(event.community_actor_id)
+    if not subscriptions:
+        return HandlerResult(status="skipped", detail="no subscriptions for this community")
 
     await runtime.bot.wait_until_bridge_ready()
     if runtime.database.get_comment_link_by_lemmy_comment_ap_id(event.object.ap_id) is not None:
         return HandlerResult(status="skipped", detail="comment already linked")
 
+    # Comments are routed through their parent post link, which already carries
+    # the correct discord_forum_thread_id. If the post arrived out of order or
+    # was never processed, skip and let the caller decide whether to retry.
     post_link = runtime.database.get_post_link_by_lemmy_post_ap_id(event.object.post_ap_id or "")
     if post_link is None:
-        # Comment delivery is only safe after the parent post has already been
-        # mapped to a Discord thread.
         logger.info("Skipping ActivityPub comment %s because post %s is not mapped yet", event.object.ap_id, event.object.post_ap_id)
         return HandlerResult(status="skipped", detail="parent post is not mapped")
 

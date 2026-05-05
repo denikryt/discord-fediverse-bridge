@@ -8,12 +8,15 @@ class Settings(BaseSettings):
     model_config = SettingsConfigDict(env_file=".env", env_file_encoding="utf-8", extra="ignore")
 
     discord_token: str = Field(alias="DISCORD_TOKEN")
-    discord_forum_channel_id: int = Field(alias="DISCORD_FORUM_CHANNEL_ID")
     lemmy_base_url: HttpUrl = Field(alias="LEMMY_BASE_URL")
     lemmy_username_or_email: str = Field(alias="LEMMY_USERNAME_OR_EMAIL")
     lemmy_password: str = Field(alias="LEMMY_PASSWORD")
-    lemmy_community_name: str = Field(alias="LEMMY_COMMUNITY_NAME")
-    lemmy_community_actor_id: str = Field(alias="LEMMY_COMMUNITY_ACTOR_ID")
+
+    # Legacy single-pair config — if both are set, a default subscription is
+    # created in the DB on first startup so existing deployments keep working.
+    discord_forum_channel_id: int | None = Field(default=None, alias="DISCORD_FORUM_CHANNEL_ID")
+    lemmy_community_name: str | None = Field(default=None, alias="LEMMY_COMMUNITY_NAME")
+    lemmy_community_actor_id: str | None = Field(default=None, alias="LEMMY_COMMUNITY_ACTOR_ID")
 
     database_url: str = Field(default="sqlite:///./bridge.db", alias="DATABASE_URL")
     internal_http_host: str = Field(default="127.0.0.1", alias="INTERNAL_HTTP_HOST")
