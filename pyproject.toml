@@ -17,5 +17,27 @@ dependencies = [
   "uvicorn>=0.34.0",
 ]
 
+[project.optional-dependencies]
+dev = [
+  "pytest>=8.0.0",
+  "pytest-asyncio>=0.23.0",
+]
+
 [tool.setuptools]
 py-modules = []
+
+[tool.setuptools.packages.find]
+include = ["src*"]
+
+[tool.pytest.ini_options]
+# Test discovery adds the vendored package root explicitly so framework and app
+# tests both import the same in-repo discordops package during local runs.
+pythonpath = [
+  ".",
+  "packages/discordops",
+]
+testpaths = [
+  "tests",
+  "packages/discordops/tests",
+]
+asyncio_mode = "auto"

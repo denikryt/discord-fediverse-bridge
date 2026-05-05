@@ -4,15 +4,18 @@ import logging
 
 import discord
 from discord import app_commands
-from sqlalchemy.exc import IntegrityError
+from discordops import run_operation_definition_async
 
 from ..db import Database
 from ..lemmy_client import LemmyClient
+from ..operations import SubscribeInput, subscribe_operation
 
 logger = logging.getLogger(__name__)
 
 
 def register(tree: app_commands.CommandTree, database: Database, lemmy: LemmyClient) -> None:
+    # The registered slash command stays focused on Discord parsing and Lemmy
+    # lookup, while the operation layer owns subscription policy.
     @tree.command(name="subscribe-channel", description="Subscribe a forum channel to a Lemmy community")
     @app_commands.describe(channel="Forum channel to subscribe", community="Lemmy community")
     @app_commands.autocomplete(community=_community_autocomplete(lemmy))
@@ -22,18 +25,8 @@ def register(tree: app_commands.CommandTree, database: Database, lemmy: LemmyCli
         channel: discord.ForumChannel,
         community: str,
     ) -> None:
-        # Each channel maps to exactly one community; reject early if it already
-        # has a subscription rather than letting the DB constraint fail.
-        existing = database.get_subscription_by_channel(channel.id)
-        if existing is not None:
-            await interaction.response.send_message(
-                f"Channel {channel.mention} is already subscribed to **{existing.lemmy_community_name or existing.lemmy_community_actor_id}**. "
-                "Use `/unsubscribe-channel` first.",
-                ephemeral=True,
-            )
-            return
-
-        # community value from autocomplete is "actor_id|name|numeric_id"
+        # The autocomplete payload encodes both the actor ID and the numeric
+        # community ID so successful selections avoid a second Lemmy round-trip.
         actor_id, community_name, community_id_str = _parse_community_value(community)
         numeric_id: int | None = int(community_id_str) if community_id_str else None
 
@@ -50,27 +43,27 @@ def register(tree: app_commands.CommandTree, database: Database, lemmy: LemmyCli
                 )
                 return
 
-        try:
-            database.create_subscription(
-                discord_channel_id=channel.id,
-                lemmy_community_actor_id=actor_id,
-                lemmy_community_name=community_name,
-                lemmy_community_id=numeric_id,
-            )
-        except IntegrityError:
-            await interaction.response.send_message(
-                f"Channel {channel.mention} already has a subscription.",
-                ephemeral=True,
-            )
-            return
-
-        await interaction.response.send_message(
-            f"Subscribed {channel.mention} to **{community_name or actor_id}**.",
+        # Once Discord parsing and Lemmy lookup are finished, the operation owns
+        # duplicate checks, DB mutation, and result message selection.
+        result = await run_operation_definition_async(
+            subscribe_operation,
+            SubscribeInput(
+                database=database,
+                channel_id=channel.id,
+                channel_mention=channel.mention,
+                actor_id=actor_id,
+                community_name=community_name or None,
+                numeric_id=numeric_id,
+            ),
         )
-        logger.info("Subscribed channel %s to community %s", channel.id, actor_id)
+        await interaction.response.send_message(result.message, ephemeral=not result.applied)
+        if result.applied:
+            logger.info("Subscribed channel %s to community %s", channel.id, actor_id)
 
 
 def _community_autocomplete(lemmy: LemmyClient):
+    # Autocomplete keeps the existing compact encoding so the command handler
+    # can recover actor ID, short name, and numeric ID from one selection.
     async def autocomplete(
         interaction: discord.Interaction,
         current: str,

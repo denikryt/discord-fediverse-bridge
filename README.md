@@ -47,8 +47,12 @@ The three legacy variables (`DISCORD_FORUM_CHANNEL_ID`, `LEMMY_COMMUNITY_NAME`, 
 ```bash
 python3 -m venv .venv
 source .venv/bin/activate
-pip install -e .
+pip install -e packages/discordops
+pip install -e .[dev]
 ```
+
+`discordops` is vendored as a standalone subproject under `packages/discordops`, so
+local development installs it as its own editable package before the app itself.
 
 ## Run
 

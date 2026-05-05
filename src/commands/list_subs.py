@@ -1,24 +1,29 @@
 from __future__ import annotations
 
-import logging
-
 import discord
 from discord import app_commands
+from discordops import run_operation_definition_async
 
 from ..db import Database
-
-logger = logging.getLogger(__name__)
+from ..operations import ListSubscriptionsInput, list_subscriptions_operation
 
 
 def register(tree: app_commands.CommandTree, database: Database) -> None:
+    # The registered slash command delegates empty-state policy to the
+    # operation layer and keeps Discord embed rendering in the adapter.
     @tree.command(name="list-subscriptions", description="List all active channel-community subscriptions")
     async def list_subscriptions(interaction: discord.Interaction) -> None:
-        subscriptions = database.get_all_subscriptions()
-
-        if not subscriptions:
-            await interaction.response.send_message("No active subscriptions.", ephemeral=True)
+        # The operation determines whether the list is empty; the command keeps
+        # ownership of Discord embed rendering for successful responses.
+        result = await run_operation_definition_async(
+            list_subscriptions_operation,
+            ListSubscriptionsInput(database=database),
+        )
+        if not result.applied:
+            await interaction.response.send_message(result.message, ephemeral=True)
             return
 
+        subscriptions = result.extra_kwargs["subscriptions"] if result.extra_kwargs is not None else []
         lines = []
         for sub in subscriptions:
             # Use channel mention so Discord renders it as a clickable link.

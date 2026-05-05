@@ -1,0 +1,1 @@
+"""OperationResult type tests."""
