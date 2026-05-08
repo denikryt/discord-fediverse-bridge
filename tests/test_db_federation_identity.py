@@ -28,6 +28,7 @@ def test_create_all_builds_stage_2_federation_tables(tmp_path: Path) -> None:
 
     assert "users" in table_names
     assert "message_mappings" in table_names
+    assert "published_activity_objects" in table_names
     assert "remote_actors" in table_names
     assert "channel_community_subscriptions" in table_names
     assert "post_links" in table_names
@@ -161,3 +162,32 @@ def test_remote_actor_upsert_refreshes_existing_record_without_duplicates(tmp_pa
     assert loaded.inbox_url == f"{actor_url}/inbox-v2"
     assert loaded.shared_inbox_url == f"https://{LEMMY_WORLD_DOMAIN}/inbox-v2"
     assert loaded.public_key_pem == "public-key-v2"
+
+
+def test_published_activity_objects_can_be_loaded_by_canonical_object_id(
+    tmp_path: Path,
+) -> None:
+    """Published AP objects must stay addressable by their canonical object URL."""
+    database = _database(tmp_path)
+    object_id = f"https://{BRIDGE_HOST_DOMAIN}/users/alice/post/555"
+
+    created = database.create_published_activity_object(
+        actor_username="alice",
+        actor_url=f"https://{BRIDGE_HOST_DOMAIN}/users/alice",
+        community_actor_url=f"https://{LEMMY_WORLD_DOMAIN}/c/hackers",
+        activity_id=f"https://{BRIDGE_HOST_DOMAIN}/users/alice/activities/create/post/555",
+        object_id=object_id,
+        kind="post",
+        title="Stored bridge post",
+        body_markdown="hello from discord",
+        in_reply_to_object_id=None,
+        discord_channel_id=123,
+        discord_message_id=555,
+    )
+
+    loaded = database.get_published_activity_object_by_object_id(object_id)
+
+    assert loaded is not None
+    assert loaded.id == created.id
+    assert loaded.kind == "post"
+    assert loaded.title == "Stored bridge post"

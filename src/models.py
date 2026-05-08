@@ -173,6 +173,40 @@ class MessageMapping(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, nullable=False)
 
 
+class PublishedActivityObject(Base):
+    """Persist one gateway-published ActivityPub object for later resolution."""
+
+    # PublishedActivityObject is the durable source of truth for local AP
+    # object URLs. Reply-chain resolution and canonical object routes rely on
+    # this table instead of transient in-memory caches.
+    __tablename__ = "published_activity_objects"
+    __table_args__ = (
+        UniqueConstraint("activity_id"),
+        UniqueConstraint("object_id"),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    actor_username: Mapped[str] = mapped_column(String(255), nullable=False)
+    actor_url: Mapped[str] = mapped_column(String(512), nullable=False)
+    community_actor_url: Mapped[str] = mapped_column(String(512), nullable=False)
+    activity_id: Mapped[str] = mapped_column(String(512), nullable=False)
+    object_id: Mapped[str] = mapped_column(String(512), nullable=False)
+    kind: Mapped[str] = mapped_column(String(32), nullable=False)
+    title: Mapped[str | None] = mapped_column(String(512), nullable=True)
+    body_markdown: Mapped[str] = mapped_column(String, nullable=False)
+    in_reply_to_object_id: Mapped[str | None] = mapped_column(
+        String(512), nullable=True
+    )
+    discord_channel_id: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    discord_message_id: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    published_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=utcnow, nullable=False
+    )
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=utcnow, nullable=False
+    )
+
+
 class RemoteActor(Base):
     """Cache remote actor metadata needed for verification and delivery."""
 

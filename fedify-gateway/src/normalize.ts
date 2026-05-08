@@ -5,6 +5,7 @@ import { Note } from "@fedify/vocab";
 import { Page } from "@fedify/vocab";
 import { type Object as ActivityObject } from "@fedify/vocab";
 
+import { loadPublishedActivityObjectByObjectIdForDatabaseUrl } from "./db.js";
 import type { BridgeEvent } from "./types.js";
 
 export async function normalizeCreateActivity(
@@ -93,9 +94,8 @@ async function normalizeCommentActivity(
     throw new Error(`Comment ${apId} is missing inReplyTo/replyTarget`);
   }
 
-  const parentApId = isLemmyPath(replyTargetId, "comment") ? replyTargetId : null;
-  const postApId = await resolvePostApId(object);
-  if (!postApId) {
+  const replyContext = await resolveReplyChainContext(replyTargetId);
+  if (!replyContext.postApId) {
     throw new Error(`Could not resolve post AP ID for comment ${apId}`);
   }
 
@@ -114,9 +114,12 @@ async function normalizeCommentActivity(
       body_markdown: resolveMarkdownBody(object),
       kind: "comment",
       lemmy_id: parseRequiredLemmyNumericId(apId, "comment"),
-      parent_ap_id: parentApId,
-      post_ap_id: postApId,
-      post_lemmy_id: parseRequiredLemmyNumericId(postApId, "post"),
+      parent_ap_id: replyContext.parentApId,
+      post_ap_id: replyContext.postApId,
+      post_lemmy_id: parseReplyTargetPostNumericId(
+        replyContext.postApId,
+        replyContext.postSource,
+      ),
       published_at: publishedAt,
       title: null,
       url,
@@ -153,35 +156,6 @@ function resolveCommunityActorId(object: ActivityObject): string {
     throw new Error("Could not resolve community actor id from ActivityPub object");
   }
   return community;
-}
-
-async function resolvePostApId(note: Note): Promise<string | null> {
-  // Lemmy comments may reply directly to a post or to another comment, so walk
-  // the reply chain until the owning post can be identified.
-  const replyTargetId = note.replyTargetId?.href;
-  if (!replyTargetId) {
-    return null;
-  }
-  if (isLemmyPath(replyTargetId, "post")) {
-    return replyTargetId;
-  }
-
-  const replyTarget = await note.getReplyTarget({
-    suppressError: true,
-    crossOrigin: "trust",
-  });
-  if (replyTarget == null) {
-    return null;
-  }
-
-  if (replyTarget instanceof Note) {
-    return await resolvePostApId(replyTarget);
-  }
-  const targetId = requireUrl(replyTarget.id, "reply target id");
-  if (isLemmyPath(targetId, "post")) {
-    return targetId;
-  }
-  return null;
 }
 
 function resolveMarkdownBody(object: ActivityObject): string | null {
@@ -234,8 +208,8 @@ async function normalizeCommentActivityFromJson(
     throw new Error(`Comment ${apId} is missing inReplyTo`);
   }
 
-  const postApId = await resolvePostApIdFromJson(replyTarget);
-  if (!postApId) {
+  const replyContext = await resolveReplyChainContext(replyTarget);
+  if (!replyContext.postApId) {
     throw new Error(`Could not resolve post AP ID for comment ${apId}`);
   }
 
@@ -253,9 +227,12 @@ async function normalizeCommentActivityFromJson(
       body_markdown: resolveMarkdownBodyFromJson(object),
       kind: "comment",
       lemmy_id: parseRequiredLemmyNumericId(apId, "comment"),
-      parent_ap_id: isLemmyPath(replyTarget, "comment") ? replyTarget : null,
-      post_ap_id: postApId,
-      post_lemmy_id: parseRequiredLemmyNumericId(postApId, "post"),
+      parent_ap_id: replyContext.parentApId,
+      post_ap_id: replyContext.postApId,
+      post_lemmy_id: parseReplyTargetPostNumericId(
+        replyContext.postApId,
+        replyContext.postSource,
+      ),
       published_at: publishedAt,
       title: null,
       url: asString(object.url) ?? apId,
@@ -297,40 +274,87 @@ function resolveAuthorNameFromJson(
   return lastPathSegment(actorId);
 }
 
-async function resolvePostApIdFromJson(
+async function resolveReplyChainContext(
   replyTarget: string,
   visited: Set<string> = new Set(),
-): Promise<string | null> {
-  // Fast path: Lemmy post URL — no fetch needed.
-  if (isLemmyPath(replyTarget, "post")) {
-    return replyTarget;
-  }
-
+): Promise<{
+  postApId: string | null;
+  parentApId: string | null;
+  postSource: "local" | "remote";
+}> {
   // Guard against cycles.
   if (visited.has(replyTarget)) {
-    return null;
+    return { postApId: null, parentApId: null, postSource: "remote" };
   }
   visited.add(replyTarget);
 
-  // Fetch the parent object — it may be a Page (post) or Note (comment) on any
-  // domain including our own gateway, so we check the type rather than the path.
+  const storedObject = await loadStoredActivityObject(replyTarget);
+  if (storedObject != null) {
+    if (storedObject.kind === "post") {
+      return {
+        postApId: storedObject.objectId,
+        parentApId: null,
+        postSource: "local",
+      };
+    }
+    if (!storedObject.inReplyToObjectId) {
+      return {
+        postApId: null,
+        parentApId: storedObject.objectId,
+        postSource: "local",
+      };
+    }
+    const nestedContext = await resolveReplyChainContext(
+      storedObject.inReplyToObjectId,
+      visited,
+    );
+    return {
+      postApId: nestedContext.postApId,
+      parentApId: storedObject.objectId,
+      postSource: nestedContext.postSource,
+    };
+  }
+
+  // Fast path: Lemmy post URL — no fetch needed once local object lookup has
+  // already had the chance to claim gateway-owned paths first.
+  if (isLemmyPath(replyTarget, "post")) {
+    return { postApId: replyTarget, parentApId: null, postSource: "remote" };
+  }
+
+  // Remote fallback keeps reply resolution working for non-local objects that
+  // are not stored in our own shared database.
   const parentRecord = await fetchActivityObject(replyTarget);
   if (parentRecord == null) {
-    return null;
+    return { postApId: null, parentApId: null, postSource: "remote" };
   }
 
-  // Page or Article means the parent is a post regardless of its domain.
   if (parentRecord.type === "Page" || parentRecord.type === "Article") {
-    return asString(parentRecord.id);
+    return {
+      postApId: asString(parentRecord.id),
+      parentApId: null,
+      postSource: "remote",
+    };
   }
 
-  // Note means the parent is a comment — keep walking up the chain.
   const nextReplyTarget =
     asString(parentRecord.inReplyTo) ?? asString(parentRecord.replyTarget);
   if (!nextReplyTarget) {
-    return null;
+    return {
+      postApId: null,
+      parentApId: isCommentLikeReplyTarget(replyTarget, parentRecord)
+        ? replyTarget
+        : null,
+      postSource: "remote",
+    };
   }
-  return await resolvePostApIdFromJson(nextReplyTarget, visited);
+  const nestedContext = await resolveReplyChainContext(nextReplyTarget, visited);
+  return {
+    postApId: nestedContext.postApId,
+    parentApId: isCommentLikeReplyTarget(replyTarget, parentRecord)
+      ? replyTarget
+      : nestedContext.parentApId,
+    postSource: nestedContext.postSource,
+  };
 }
 
 function resolveObjectUrl(object: ActivityObject): string | null {
@@ -416,13 +440,64 @@ async function fetchActivityObject(
   }
 }
 
-function parseRequiredLemmyNumericId(value: string, kind: "post" | "comment"): number {
+async function loadStoredActivityObject(objectId: string): Promise<{
+  kind: "post" | "comment";
+  objectId: string;
+  inReplyToObjectId: string | null;
+} | null> {
+  // Local objects are resolved from the shared DB first so reply chains remain
+  // valid even when no HTTP route or in-memory state is available yet.
+  const databaseUrl = process.env.DATABASE_URL ?? "sqlite:///./bridge.db";
+  const row = await loadPublishedActivityObjectByObjectIdForDatabaseUrl(
+    databaseUrl,
+    objectId,
+  );
+  if (row == null) {
+    return null;
+  }
+  return {
+    kind: row.kind,
+    objectId: row.objectId,
+    inReplyToObjectId: row.inReplyToObjectId,
+  };
+}
+
+function isCommentLikeReplyTarget(
+  replyTarget: string,
+  parentRecord: Record<string, unknown>,
+): boolean {
+  return isLemmyPath(replyTarget, "comment") || parentRecord.type === "Note";
+}
+
+function parseReplyTargetPostNumericId(
+  postApId: string,
+  postSource: "local" | "remote",
+): number {
+  if (postSource === "local") {
+    return 0;
+  }
+  const parsed = tryParseLemmyNumericId(postApId, "post");
+  return parsed ?? 0;
+}
+
+function tryParseLemmyNumericId(
+  value: string,
+  kind: "post" | "comment",
+): number | null {
   const pattern = new RegExp(`/${kind}/(\\d+)(?:$|/)`);
   const match = pattern.exec(new URL(value).pathname);
   if (!match) {
-    throw new Error(`Could not parse Lemmy ${kind} numeric id from ${value}`);
+    return null;
   }
   return Number.parseInt(match[1], 10);
+}
+
+function parseRequiredLemmyNumericId(value: string, kind: "post" | "comment"): number {
+  const parsed = tryParseLemmyNumericId(value, kind);
+  if (parsed == null) {
+    throw new Error(`Could not parse Lemmy ${kind} numeric id from ${value}`);
+  }
+  return parsed;
 }
 
 function isLemmyPath(value: string, kind: "post" | "comment"): boolean {

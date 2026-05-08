@@ -18,6 +18,23 @@ export interface RegisteredUserRow {
   privateKeyPem: string;
 }
 
+export interface PublishedActivityObjectRow {
+  // The durable object row contains enough data to reconstruct a local Page or
+  // Note without relying on the original publish process still being in memory.
+  actorUsername: string;
+  actorUrl: string;
+  communityActorUrl: string;
+  activityId: string;
+  objectId: string;
+  kind: "post" | "comment";
+  title: string | null;
+  bodyMarkdown: string;
+  inReplyToObjectId: string | null;
+  publishedAt: string;
+  discordChannelId: number | null;
+  discordMessageId: number | null;
+}
+
 let sqlJsPromise: Promise<SqlJsStatic> | null = null;
 
 export async function loadRegisteredUserByUsername(
@@ -64,10 +81,58 @@ export async function loadRegisteredUserByUsername(
   }
 }
 
+export async function loadPublishedActivityObjectByObjectId(
+  config: GatewayConfig,
+  objectId: string,
+): Promise<PublishedActivityObjectRow | null> {
+  // Object lookups always read the latest SQLite snapshot so a gateway restart
+  // is not required before newly published objects become resolvable.
+  let database: Database;
+  try {
+    database = await openConfiguredDatabase(config);
+  } catch (error) {
+    if (isMissingSqliteStorageError(error)) {
+      return null;
+    }
+    throw error;
+  }
+  try {
+    return loadPublishedActivityObjectFromDatabase(database, objectId);
+  } finally {
+    database.close();
+  }
+}
+
+export async function loadPublishedActivityObjectByObjectIdForDatabaseUrl(
+  databaseUrl: string,
+  objectId: string,
+): Promise<PublishedActivityObjectRow | null> {
+  // Normalize.ts reads by exact object URL outside the main server bootstrap,
+  // so this helper accepts a bare DATABASE_URL instead of a full config object.
+  let database: Database;
+  try {
+    database = await openDatabaseUrl(databaseUrl);
+  } catch (error) {
+    if (isMissingSqliteStorageError(error)) {
+      return null;
+    }
+    throw error;
+  }
+  try {
+    return loadPublishedActivityObjectFromDatabase(database, objectId);
+  } finally {
+    database.close();
+  }
+}
+
 async function openConfiguredDatabase(
   config: GatewayConfig,
 ): Promise<Database> {
-  const filePath = resolveSqliteFilePath(config.databaseUrl);
+  return await openDatabaseUrl(config.databaseUrl);
+}
+
+async function openDatabaseUrl(databaseUrl: string): Promise<Database> {
+  const filePath = resolveSqliteFilePath(databaseUrl);
   const sqlJs = await getSqlJs();
   const bytes = await readFile(filePath);
   return new sqlJs.Database(bytes);
@@ -103,4 +168,95 @@ function asString(value: unknown): string {
     throw new Error("Expected a string column value from the shared database");
   }
   return value;
+}
+
+function asNullableString(value: unknown): string | null {
+  if (value == null) {
+    return null;
+  }
+  return asString(value);
+}
+
+function asNullableNumber(value: unknown): number | null {
+  if (value == null) {
+    return null;
+  }
+  if (typeof value !== "number") {
+    throw new Error("Expected a numeric column value from the shared database");
+  }
+  return value;
+}
+
+function loadPublishedActivityObjectFromDatabase(
+  database: Database,
+  objectId: string,
+): PublishedActivityObjectRow | null {
+  let statement;
+  try {
+    statement = database.prepare(`
+      SELECT
+        actor_username,
+        actor_url,
+        community_actor_url,
+        activity_id,
+        object_id,
+        kind,
+        title,
+        body_markdown,
+        in_reply_to_object_id,
+        published_at,
+        discord_channel_id,
+        discord_message_id
+      FROM published_activity_objects
+      WHERE object_id = ?
+      LIMIT 1
+    `);
+  } catch (error) {
+    if (isMissingPublishedObjectsTableError(error)) {
+      return null;
+    }
+    throw error;
+  }
+  try {
+    statement.bind([objectId]);
+    if (!statement.step()) {
+      return null;
+    }
+    const row = statement.getAsObject() as Record<string, unknown>;
+    const kind = asString(row.kind);
+    if (kind !== "post" && kind !== "comment") {
+      throw new Error(`Unsupported published object kind: ${kind}`);
+    }
+    return {
+      actorUsername: asString(row.actor_username),
+      actorUrl: asString(row.actor_url),
+      communityActorUrl: asString(row.community_actor_url),
+      activityId: asString(row.activity_id),
+      objectId: asString(row.object_id),
+      kind,
+      title: asNullableString(row.title),
+      bodyMarkdown: asString(row.body_markdown),
+      inReplyToObjectId: asNullableString(row.in_reply_to_object_id),
+      publishedAt: asString(row.published_at),
+      discordChannelId: asNullableNumber(row.discord_channel_id),
+      discordMessageId: asNullableNumber(row.discord_message_id),
+    };
+  } finally {
+    statement.free();
+  }
+}
+
+function isMissingSqliteStorageError(error: unknown): boolean {
+  return (
+    error instanceof Error &&
+    "code" in error &&
+    error.code === "ENOENT"
+  );
+}
+
+function isMissingPublishedObjectsTableError(error: unknown): boolean {
+  return (
+    error instanceof Error &&
+    error.message.includes("no such table: published_activity_objects")
+  );
 }

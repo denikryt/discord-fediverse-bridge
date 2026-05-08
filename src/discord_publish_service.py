@@ -115,6 +115,21 @@ class DiscordPublishService:
             discord_channel_id=getattr(thread, "parent_id"),
             discord_message_id=getattr(starter_message, "id"),
         )
+        # The durable object store lets the gateway later serve this exact AP
+        # object back to Lemmy when reply chains reference its canonical URL.
+        self.database.create_published_activity_object(
+            actor_username=user.activitypub_username,
+            actor_url=user.actor_url,
+            community_actor_url=subscription.lemmy_community_actor_id,
+            activity_id=publish_result.activity_id,
+            object_id=publish_result.object_id,
+            kind="post",
+            title=title,
+            body_markdown=body,
+            in_reply_to_object_id=None,
+            discord_channel_id=getattr(thread, "parent_id"),
+            discord_message_id=getattr(starter_message, "id"),
+        )
         logger.info(
             "Published Discord thread %s starter %s via AP actor %s",
             getattr(thread, "id"),
@@ -202,6 +217,21 @@ class DiscordPublishService:
             object_id=publish_result.object_id,
             actor_url=user.actor_url,
             community_actor_url=subscription.lemmy_community_actor_id,
+            discord_channel_id=getattr(thread, "parent_id"),
+            discord_message_id=getattr(message, "id"),
+        )
+        # Store the published comment body and parent object so local gateway
+        # URLs can be resolved without relying on transient HTTP state later.
+        self.database.create_published_activity_object(
+            actor_username=user.activitypub_username,
+            actor_url=user.actor_url,
+            community_actor_url=subscription.lemmy_community_actor_id,
+            activity_id=publish_result.activity_id,
+            object_id=publish_result.object_id,
+            kind="comment",
+            title=None,
+            body_markdown=body,
+            in_reply_to_object_id=target.reply_target_object_id,
             discord_channel_id=getattr(thread, "parent_id"),
             discord_message_id=getattr(message, "id"),
         )

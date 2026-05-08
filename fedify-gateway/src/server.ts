@@ -15,8 +15,10 @@ import {
   loadUserActorIdentity,
 } from "./actor-store.js";
 import { type GatewayContextData, loadConfig } from "./config.js";
+import { loadPublishedActivityObjectByObjectId } from "./db.js";
 import { createGatewayFederation } from "./federation.js";
 import { followCommunity, publishContent } from "./federation-outbound.js";
+import { buildPublishedActivityObjectJson } from "./published-objects.js";
 import type { PublishContentRequest } from "./types.js";
 
 // server.ts owns the operator-facing HTTP surface of the gateway: health,
@@ -77,6 +79,22 @@ app.get("/users/:username/followers", async (context) => {
       new URL(`/users/${username}/followers`, config.fedifyOrigin),
     ).toJsonLd(),
   );
+});
+
+app.get("/users/:username/post/:objectId", async (context) => {
+  const object = await loadPublishedObjectForRequest(context.req.path);
+  if (object == null || object.kind !== "post") {
+    return context.json({ error: "published post not found" }, 404);
+  }
+  return activityJsonResponse(buildPublishedActivityObjectJson(object));
+});
+
+app.get("/users/:username/comment/:objectId", async (context) => {
+  const object = await loadPublishedObjectForRequest(context.req.path);
+  if (object == null || object.kind !== "comment") {
+    return context.json({ error: "published comment not found" }, 404);
+  }
+  return activityJsonResponse(buildPublishedActivityObjectJson(object));
 });
 
 app.get("/actors/:identifier/outbox", async (context) => {
@@ -312,9 +330,18 @@ function activityJsonResponse(payload: unknown): Response {
   return new Response(JSON.stringify(payload), {
     status: 200,
     headers: {
-    "Content-Type": "application/activity+json",
+      "Content-Type": "application/activity+json",
     },
   });
+}
+
+async function loadPublishedObjectForRequest(
+  requestPath: string,
+) {
+  // Route lookup uses the exact canonical object URL, which keeps restart
+  // behavior deterministic and avoids rebuilding object IDs from fragments.
+  const objectUrl = new URL(requestPath, config.fedifyOrigin).href;
+  return await loadPublishedActivityObjectByObjectId(config, objectUrl);
 }
 
 function hasValidInternalAuthorization(

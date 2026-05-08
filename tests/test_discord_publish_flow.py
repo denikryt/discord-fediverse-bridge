@@ -131,6 +131,9 @@ async def test_thread_starter_from_registered_user_publishes_and_persists_mappin
 
     post_link = database.get_post_link_by_thread_id(thread.id)
     mapping = database.get_message_mapping_by_discord_message_id(starter_message.id)
+    stored_object = database.get_published_activity_object_by_object_id(
+        post_object_url
+    )
 
     assert result.status == "published"
     assert result.reason == "published"
@@ -139,6 +142,9 @@ async def test_thread_starter_from_registered_user_publishes_and_persists_mappin
     assert post_link.lemmy_post_ap_id == post_object_url
     assert mapping is not None
     assert mapping.activity_id == post_activity_url
+    assert stored_object is not None
+    assert stored_object.kind == "post"
+    assert stored_object.in_reply_to_object_id is None
 
 
 @pytest.mark.asyncio
@@ -199,6 +205,9 @@ async def test_thread_message_from_registered_user_publishes_as_comment(
 
     comment_link = database.get_comment_link_by_discord_message_id(message.id)
     mapping = database.get_message_mapping_by_discord_message_id(message.id)
+    stored_object = database.get_published_activity_object_by_object_id(
+        comment_object_url
+    )
 
     assert result.status == "published"
     assert result.reason == "published"
@@ -207,6 +216,9 @@ async def test_thread_message_from_registered_user_publishes_as_comment(
     assert comment_link.lemmy_comment_ap_id == comment_object_url
     assert mapping is not None
     assert mapping.object_id == comment_object_url
+    assert stored_object is not None
+    assert stored_object.kind == "comment"
+    assert stored_object.in_reply_to_object_id == post_object_url
 
 
 @pytest.mark.asyncio
@@ -254,7 +266,12 @@ async def test_thread_reply_uses_parent_comment_object_id_when_available(
     await service.publish_thread_message(message=message)
 
     request = fedify_gateway.publish_content.await_args.args[0]
+    stored_object = database.get_published_activity_object_by_object_id(
+        f"https://{BRIDGE_HOST_DOMAIN}/users/alice/objects/comment/2"
+    )
     assert request.in_reply_to_object_id == parent_comment_object_url
+    assert stored_object is not None
+    assert stored_object.in_reply_to_object_id == parent_comment_object_url
 
 
 @pytest.mark.asyncio
