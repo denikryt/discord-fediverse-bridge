@@ -9,6 +9,7 @@ from .config import Settings
 from .db import Database
 from .discord_bot import BridgeBot
 from .discord_oauth_client import DiscordOAuthClient
+from .discord_publish_service import DiscordPublishService
 from .fedify_gateway_client import FedifyGatewayClient
 from .http_api import create_http_app
 from .lemmy_client import LemmyClient
@@ -70,6 +71,11 @@ async def main() -> None:
 
     fedify_gateway = FedifyGatewayClient(settings)
     discord_oauth_client = DiscordOAuthClient(settings)
+    discord_publish_service = DiscordPublishService(
+        database=database,
+        fedify_gateway=fedify_gateway,
+        bridge_prefix=settings.bridge_display_prefix,
+    )
     registration_service = RegistrationService(
         database=database,
         base_url=settings.normalized_public_bridge_base_url,
@@ -86,6 +92,7 @@ async def main() -> None:
         settings=settings,
         database=database,
         fedify_gateway=fedify_gateway,
+        discord_publish_service=discord_publish_service,
         lemmy=lemmy,
     )
     runtime = Runtime(
@@ -94,6 +101,7 @@ async def main() -> None:
         lemmy=lemmy,
         fedify_gateway=fedify_gateway,
         discord_oauth_client=discord_oauth_client,
+        discord_publish_service=discord_publish_service,
         registration_service=registration_service,
         bot=bot,
     )

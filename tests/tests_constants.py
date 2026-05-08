@@ -1,8 +1,8 @@
 """Shared test domains used to build stable fake ActivityPub URLs."""
 
-# The constants live outside `tests/` so pytest does not need the project test
-# directory to become an import package, which would conflict with vendored
-# `discordops` tests collected in the same run.
+# The file lives under `tests/` so all test-only helpers stay together, but it
+# remains a plain module rather than a package import target to avoid
+# reintroducing pytest import-path conflicts with vendored test suites.
 LEMMY_EXAMPLE_DOMAIN = "lemmy.example"
 LEMMY_WORLD_DOMAIN = "lemmy.world"
 BRIDGE_EXAMPLE_DOMAIN = "bridge.example"

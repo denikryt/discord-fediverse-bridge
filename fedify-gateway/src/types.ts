@@ -39,3 +39,18 @@ export interface FollowAcceptedEvent {
 }
 
 export type InternalBridgeEvent = BridgeContentEvent | FollowAcceptedEvent;
+
+export interface PublishContentRequest {
+  actorUsername: string;
+  communityActorUrl: string;
+  kind: "post" | "comment";
+  title: string | null;
+  bodyMarkdown: string;
+  inReplyToObjectId: string | null;
+}
+
+export interface PublishContentResult {
+  activityId: string;
+  objectId: string;
+  communityActorUrl: string;
+}

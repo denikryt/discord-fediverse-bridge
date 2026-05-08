@@ -6,6 +6,7 @@ from .config import Settings
 from .db import Database
 from .discord_bot import BridgeBot
 from .discord_oauth_client import DiscordOAuthClient
+from .discord_publish_service import DiscordPublishService
 from .fedify_gateway_client import FedifyGatewayClient
 from .lemmy_client import LemmyClient
 from .registration_service import RegistrationService
@@ -20,5 +21,6 @@ class Runtime:
     lemmy: LemmyClient
     fedify_gateway: FedifyGatewayClient
     discord_oauth_client: DiscordOAuthClient
+    discord_publish_service: DiscordPublishService
     registration_service: RegistrationService
     bot: BridgeBot

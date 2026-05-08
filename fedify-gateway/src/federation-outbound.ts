@@ -1,6 +1,7 @@
-import { Follow } from "@fedify/vocab";
+import { Create, Follow, Note, Page, Source } from "@fedify/vocab";
 import type { Federation } from "@fedify/fedify";
 import type { GatewayConfig } from "./config.js";
+import type { PublishContentRequest, PublishContentResult } from "./types.js";
 
 export interface FollowCommunityResult {
   communityActorUrl: string;
@@ -73,4 +74,141 @@ export async function followCommunity(
     communityInboxUrl: inboxUrl,
     followActivityId: follow.id?.href ?? follow.id?.toString() ?? "",
   };
+}
+
+export async function publishContent(
+  federation: Federation<GatewayConfig>,
+  config: GatewayConfig,
+  request: PublishContentRequest,
+): Promise<PublishContentResult> {
+  // Publish delivery mirrors follow delivery: Python decides policy, while the
+  // gateway owns the signed ActivityPub delivery from the local actor.
+  const ctx = federation.createContext(new URL(config.fedifyOrigin), config);
+  const actorUri = buildUserActorUri(config, request.actorUsername);
+  const { communityId, inboxUrl } = await fetchRemoteCommunity(
+    request.communityActorUrl,
+  );
+  const builtCreate = buildPublishCreateActivity(config, request, communityId);
+  const activity = builtCreate.activity;
+  const objectId = builtCreate.objectId;
+  const activityId = builtCreate.activityId;
+
+  console.log("[Publish] Sending user-authored Create activity:", {
+    actorUsername: request.actorUsername,
+    actorUri: actorUri.toString(),
+    kind: request.kind,
+    communityId,
+    inboxUrl,
+    activityId: activityId.toString(),
+    objectId: objectId.toString(),
+  });
+
+  await ctx.sendActivity(
+    { username: request.actorUsername },
+    { id: new URL(communityId), inboxId: new URL(inboxUrl) },
+    activity,
+  );
+
+  return {
+    activityId: activityId.href,
+    objectId: objectId.href,
+    communityActorUrl: communityId,
+  };
+}
+
+export function buildPublishCreateActivity(
+  config: GatewayConfig,
+  request: PublishContentRequest,
+  resolvedCommunityId?: string,
+) {
+  const actorUri = buildUserActorUri(config, request.actorUsername);
+  const objectNumericId = Date.now();
+  const objectId = new URL(
+    `/users/${request.actorUsername}/${request.kind}/${objectNumericId}`,
+    config.fedifyOrigin,
+  );
+  const activityId = new URL(
+    `/users/${request.actorUsername}/activities/create/${request.kind}/${Date.now()}-${Math.random().toString(36).slice(2)}`,
+    config.fedifyOrigin,
+  );
+  const communityId = resolvedCommunityId ?? request.communityActorUrl;
+  const object = buildPublishObject(request, actorUri, objectId, communityId);
+  return {
+    actorUri,
+    activityId,
+    objectId,
+    activity: new Create({
+      id: activityId,
+      actor: actorUri,
+      object,
+    }),
+  };
+}
+
+function buildUserActorUri(config: GatewayConfig, actorUsername: string): URL {
+  return new URL(`/users/${actorUsername}`, config.fedifyOrigin);
+}
+
+function buildPublishObject(
+  request: PublishContentRequest,
+  actorUri: URL,
+  objectId: URL,
+  communityId: string,
+) {
+  const source = new Source({
+    content: request.bodyMarkdown,
+    mediaType: "text/markdown",
+  });
+
+  if (request.kind === "post") {
+    return new Page({
+      id: objectId,
+      name: request.title ?? "Untitled Discord Post",
+      attribution: actorUri,
+      audience: new URL(communityId),
+      source,
+      url: objectId,
+    });
+  }
+
+  if (request.inReplyToObjectId == null) {
+    throw new Error("Comment publish requires inReplyToObjectId");
+  }
+  return new Note({
+    id: objectId,
+    attribution: actorUri,
+    audience: new URL(communityId),
+    source,
+    replyTarget: new URL(request.inReplyToObjectId),
+    url: objectId,
+  });
+}
+
+async function fetchRemoteCommunity(
+  communityActorUrl: string,
+): Promise<{ communityId: string; inboxUrl: string }> {
+  // Both follow and publish need the remote actor's canonical id and inbox, so
+  // the fetch/validation logic is shared here instead of being repeated.
+  const communityResponse = await fetch(communityActorUrl, {
+    headers: {
+      Accept: "application/activity+json",
+    },
+  });
+  if (!communityResponse.ok) {
+    throw new Error(
+      `Failed to fetch community actor: ${communityResponse.status}`,
+    );
+  }
+  const communityActor = await communityResponse.json();
+  const inboxUrl = communityActor.inbox;
+  const communityId = communityActor.id;
+
+  if (!inboxUrl) {
+    throw new Error("Community actor does not have an inbox");
+  }
+  if (!communityId) {
+    throw new Error("Community actor does not have an id");
+  }
+
+  return { communityId, inboxUrl };
 }

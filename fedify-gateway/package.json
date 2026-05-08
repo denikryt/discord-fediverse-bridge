@@ -8,6 +8,7 @@
     "start": "node --env-file=.env ./node_modules/.bin/tsx src/server.ts",
     "check": "tsc --noEmit",
     "verify:actor-layer": "node --env-file=.env ./node_modules/.bin/tsx tests/verify-actor-layer.ts",
+    "verify:publish-contract": "node --env-file=.env ./node_modules/.bin/tsx tests/verify-publish-contract.ts",
     "verify:python-contract": "node --env-file=.env ./node_modules/.bin/tsx tests/verify-python-contract.ts",
     "follow-community": "node --env-file=.env ./node_modules/.bin/tsx src/follow-community-cli.ts"
   },

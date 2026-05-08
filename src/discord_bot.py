@@ -6,9 +6,9 @@ import logging
 import discord
 from discord import app_commands
 
-from .bridge_discord_to_lemmy import sync_forum_thread_to_lemmy, sync_thread_message_to_lemmy_comment
 from .config import Settings
 from .db import Database
+from .discord_publish_service import DiscordPublishService
 from .fedify_gateway_client import FedifyGatewayClient
 from .lemmy_client import LemmyClient
 
@@ -24,6 +24,7 @@ class BridgeBot(discord.Client):
         settings: Settings,
         database: Database,
         fedify_gateway: FedifyGatewayClient,
+        discord_publish_service: DiscordPublishService,
         lemmy: LemmyClient,
     ) -> None:
         intents = discord.Intents.default()
@@ -34,6 +35,7 @@ class BridgeBot(discord.Client):
         self.settings = settings
         self.database = database
         self.fedify_gateway = fedify_gateway
+        self.discord_publish_service = discord_publish_service
         self.lemmy = lemmy
         self.tree = app_commands.CommandTree(self)
         self.bridge_ready = asyncio.Event()
@@ -75,11 +77,6 @@ class BridgeBot(discord.Client):
             return
         if self.user and thread.owner_id == self.user.id:
             return
-        # lemmy_community_id can be None if the subscription was created before
-        # the community was successfully resolved (e.g. legacy migration failure).
-        if subscription.lemmy_community_id is None:
-            logger.warning("Subscription for channel %s has no resolved community ID, skipping thread %s", thread.parent_id, thread.id)
-            return
 
         # In-memory fast-path: if this session already processed the thread,
         # skip before acquiring any lock or hitting the DB.
@@ -105,15 +102,12 @@ class BridgeBot(discord.Client):
             if starter_message.author.bot:
                 return
 
-            await sync_forum_thread_to_lemmy(
-                database=self.database,
-                lemmy=self.lemmy,
-                community_id=subscription.lemmy_community_id,
-                bridge_prefix=self.settings.bridge_display_prefix,
+            result = await self.discord_publish_service.publish_thread_starter(
                 thread=thread,
                 starter_message=starter_message,
             )
-            self._synced_threads.add(thread.id)
+            if result.status == "published":
+                self._synced_threads.add(thread.id)
 
     async def on_message(self, message: discord.Message) -> None:
         # Only messages in threads inside subscribed channels are forwarded.
@@ -130,10 +124,7 @@ class BridgeBot(discord.Client):
         if subscription is None:
             return
 
-        await sync_thread_message_to_lemmy_comment(
-            database=self.database,
-            lemmy=self.lemmy,
-            bridge_prefix=self.settings.bridge_display_prefix,
+        await self.discord_publish_service.publish_thread_message(
             message=message,
         )
 

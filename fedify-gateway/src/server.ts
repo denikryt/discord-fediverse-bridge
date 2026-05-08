@@ -16,7 +16,8 @@ import {
 } from "./actor-store.js";
 import { type GatewayContextData, loadConfig } from "./config.js";
 import { createGatewayFederation } from "./federation.js";
-import { followCommunity } from "./federation-outbound.js";
+import { followCommunity, publishContent } from "./federation-outbound.js";
+import type { PublishContentRequest } from "./types.js";
 
 // server.ts owns the operator-facing HTTP surface of the gateway: health,
 // manual follow, inbox logging, and Fedify middleware wiring.
@@ -123,6 +124,61 @@ app.post("/follow-community", async (context) => {
 
   try {
     const result = await followCommunity(fedify, config, communityActorUrl);
+    return context.json(result);
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    return context.json({ error: message }, { status: 500 });
+  }
+});
+
+app.post("/publish", async (context) => {
+  // Python owns the Discord-side publish policy, while this endpoint owns the
+  // signed user-actor Create delivery through Fedify.
+  if (
+    !hasValidInternalAuthorization(
+      context.req.header("Authorization") ?? null,
+    )
+  ) {
+    return context.json({ error: "invalid authorization" }, { status: 401 });
+  }
+
+  const payload = (await context.req.json()) as Partial<PublishContentRequest>;
+  if (
+    typeof payload.actorUsername !== "string" ||
+    typeof payload.communityActorUrl !== "string" ||
+    (payload.kind !== "post" && payload.kind !== "comment") ||
+    typeof payload.bodyMarkdown !== "string"
+  ) {
+    return context.json(
+      {
+        error:
+          "actorUsername, communityActorUrl, kind, and bodyMarkdown are required",
+      },
+      { status: 400 },
+    );
+  }
+  if (payload.kind === "comment" && typeof payload.inReplyToObjectId !== "string") {
+    return context.json(
+      { error: "comment publish requires inReplyToObjectId" },
+      { status: 400 },
+    );
+  }
+
+  try {
+    const result = await publishContent(fedify, config, {
+      actorUsername: payload.actorUsername,
+      communityActorUrl: payload.communityActorUrl,
+      kind: payload.kind,
+      title:
+        typeof payload.title === "string" && payload.title.length > 0
+          ? payload.title
+          : null,
+      bodyMarkdown: payload.bodyMarkdown,
+      inReplyToObjectId:
+        typeof payload.inReplyToObjectId === "string"
+          ? payload.inReplyToObjectId
+          : null,
+    });
     return context.json(result);
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);

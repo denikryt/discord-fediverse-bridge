@@ -1,4 +1,4 @@
-"""Internal HTTP client for bridge-to-gateway follow lifecycle calls."""
+"""Internal HTTP client for bridge-to-gateway federation operations."""
 
 from __future__ import annotations
 
@@ -19,8 +19,29 @@ class FollowCommunityResult:
     follow_activity_id: str
 
 
+@dataclass(slots=True)
+class PublishContentRequest:
+    # The Python bridge decides actor ownership and reply context, then passes
+    # the normalized publish intent to the gateway for signed AP delivery.
+    actor_username: str
+    community_actor_url: str
+    kind: str
+    title: str | None
+    body_markdown: str
+    in_reply_to_object_id: str | None
+
+
+@dataclass(slots=True)
+class PublishContentResult:
+    # The returned IDs are the canonical AP identifiers Python must persist for
+    # dedup and later inbound loop suppression.
+    activity_id: str
+    object_id: str
+    community_actor_url: str
+
+
 class FedifyGatewayClient:
-    """Call the local Fedify gateway for follow lifecycle operations."""
+    """Call the local Fedify gateway for follow and publish operations."""
 
     # The Python bridge owns moderator-facing subscription policy, but the
     # actual Follow delivery is delegated to the gateway because it owns the
@@ -49,4 +70,28 @@ class FedifyGatewayClient:
             community_actor_url=payload["communityActorUrl"],
             community_inbox_url=payload["communityInboxUrl"],
             follow_activity_id=payload["followActivityId"],
+        )
+
+    async def publish_content(
+        self, request: PublishContentRequest
+    ) -> PublishContentResult:
+        """Trigger one gateway-side user-authored Create delivery."""
+        response = await self._client.post(
+            "/publish",
+            headers={"Authorization": f"Bearer {self._shared_secret}"},
+            json={
+                "actorUsername": request.actor_username,
+                "communityActorUrl": request.community_actor_url,
+                "kind": request.kind,
+                "title": request.title,
+                "bodyMarkdown": request.body_markdown,
+                "inReplyToObjectId": request.in_reply_to_object_id,
+            },
+        )
+        response.raise_for_status()
+        payload = response.json()
+        return PublishContentResult(
+            activity_id=payload["activityId"],
+            object_id=payload["objectId"],
+            community_actor_url=payload["communityActorUrl"],
         )
