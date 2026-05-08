@@ -6,6 +6,7 @@ from unittest.mock import Mock
 from discordops import run_operation_definition
 
 from src.operations import ListSubscriptionsInput, list_subscriptions_operation
+from tests.constants import LEMMY_EXAMPLE_DOMAIN
 
 
 def test_list_subscriptions_operation_rejects_empty_state() -> None:
@@ -31,7 +32,7 @@ def test_list_subscriptions_operation_returns_embed_payload_data() -> None:
         SimpleNamespace(
             discord_channel_id=111,
             lemmy_community_name="hackers",
-            lemmy_community_actor_id="https://lemmy.example/c/hackers",
+            lemmy_community_actor_id=f"https://{LEMMY_EXAMPLE_DOMAIN}/c/hackers",
         ),
     ]
     database = Mock()

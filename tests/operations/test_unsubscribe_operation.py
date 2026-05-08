@@ -6,6 +6,7 @@ from unittest.mock import Mock
 from discordops import run_operation_definition
 
 from src.operations import UnsubscribeInput, unsubscribe_operation
+from tests.constants import LEMMY_EXAMPLE_DOMAIN
 
 
 def test_unsubscribe_operation_rejects_missing_subscription() -> None:
@@ -35,7 +36,7 @@ def test_unsubscribe_operation_deletes_existing_subscription() -> None:
     database = Mock()
     database.get_subscription_by_channel.return_value = SimpleNamespace(
         lemmy_community_name="hackers",
-        lemmy_community_actor_id="https://lemmy.example/c/hackers",
+        lemmy_community_actor_id=f"https://{LEMMY_EXAMPLE_DOMAIN}/c/hackers",
     )
     database.delete_subscription.return_value = True
 

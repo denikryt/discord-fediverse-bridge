@@ -5,6 +5,7 @@ from types import SimpleNamespace
 import pytest
 
 from src.commands import unsubscribe
+from tests.constants import LEMMY_EXAMPLE_DOMAIN
 
 
 @pytest.mark.asyncio
@@ -13,7 +14,7 @@ async def test_unsubscribe_channel_success(command_tree, interaction, forum_chan
     # only deletes after confirming the mapping exists.
     database.get_subscription_by_channel.return_value = SimpleNamespace(
         lemmy_community_name="hackers",
-        lemmy_community_actor_id="https://lemmy.example/c/hackers",
+        lemmy_community_actor_id=f"https://{LEMMY_EXAMPLE_DOMAIN}/c/hackers",
     )
 
     unsubscribe.register(command_tree, database)

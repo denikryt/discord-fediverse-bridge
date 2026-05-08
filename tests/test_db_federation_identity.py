@@ -7,6 +7,10 @@ from pathlib import Path
 from sqlalchemy import inspect
 
 from src.db import Database
+from tests.constants import (
+    BRIDGE_HOST_DOMAIN,
+    LEMMY_WORLD_DOMAIN,
+)
 
 
 def _database(tmp_path: Path) -> Database:
@@ -33,21 +37,22 @@ def test_create_all_builds_stage_2_federation_tables(tmp_path: Path) -> None:
 def test_registered_user_can_be_created_and_loaded_by_all_identity_keys(tmp_path: Path) -> None:
     """User ownership records must resolve by Discord ID, username, and actor URL."""
     database = _database(tmp_path)
+    actor_url = f"https://{BRIDGE_HOST_DOMAIN}/users/alice"
 
     created = database.create_user(
         discord_user_id="1234567890",
         activitypub_username="alice",
-        actor_url="https://discord-bridge.example.com/users/alice",
-        inbox_url="https://discord-bridge.example.com/users/alice/inbox",
-        outbox_url="https://discord-bridge.example.com/users/alice/outbox",
-        followers_url="https://discord-bridge.example.com/users/alice/followers",
+        actor_url=actor_url,
+        inbox_url=f"{actor_url}/inbox",
+        outbox_url=f"{actor_url}/outbox",
+        followers_url=f"{actor_url}/followers",
         public_key_pem="public-key",
         private_key_pem="private-key",
     )
 
     by_discord_id = database.get_user_by_discord_user_id("1234567890")
     by_username = database.get_user_by_activitypub_username("alice")
-    by_actor_url = database.get_user_by_actor_url("https://discord-bridge.example.com/users/alice")
+    by_actor_url = database.get_user_by_actor_url(actor_url)
 
     assert created.activitypub_username == "alice"
     assert by_discord_id is not None
@@ -61,57 +66,61 @@ def test_registered_user_can_be_created_and_loaded_by_all_identity_keys(tmp_path
 def test_subscription_follow_state_is_persisted_for_existing_subscription(tmp_path: Path) -> None:
     """Subscription rows must carry federation follow metadata for later stages."""
     database = _database(tmp_path)
+    community_actor_url = f"https://{LEMMY_WORLD_DOMAIN}/c/hackers"
     database.create_subscription(
         discord_channel_id=777,
-        lemmy_community_actor_id="https://lemmy.world/c/hackers",
+        lemmy_community_actor_id=community_actor_url,
         lemmy_community_name="hackers",
         lemmy_community_id=42,
-        community_handle="!hackers@lemmy.world",
-        community_inbox_url="https://lemmy.world/c/hackers/inbox",
-        follow_activity_id="https://discord-bridge.example.com/activities/follow-1",
+        community_handle=f"!hackers@{LEMMY_WORLD_DOMAIN}",
+        community_inbox_url=f"{community_actor_url}/inbox",
+        follow_activity_id=f"https://{BRIDGE_HOST_DOMAIN}/activities/follow-1",
         status="accepted",
     )
 
     subscription = database.get_subscription_by_channel(777)
 
     assert subscription is not None
-    assert subscription.community_handle == "!hackers@lemmy.world"
-    assert subscription.community_inbox_url == "https://lemmy.world/c/hackers/inbox"
-    assert subscription.follow_activity_id == "https://discord-bridge.example.com/activities/follow-1"
+    assert subscription.community_handle == f"!hackers@{LEMMY_WORLD_DOMAIN}"
+    assert subscription.community_inbox_url == f"{community_actor_url}/inbox"
+    assert subscription.follow_activity_id == f"https://{BRIDGE_HOST_DOMAIN}/activities/follow-1"
     assert subscription.status == "accepted"
 
     database.update_subscription_follow_state(
         discord_channel_id=777,
-        community_inbox_url="https://lemmy.world/inbox/updated",
-        follow_activity_id="https://discord-bridge.example.com/activities/follow-2",
+        community_inbox_url=f"https://{LEMMY_WORLD_DOMAIN}/inbox/updated",
+        follow_activity_id=f"https://{BRIDGE_HOST_DOMAIN}/activities/follow-2",
         status="pending",
     )
 
     updated = database.get_subscription_by_channel(777)
 
     assert updated is not None
-    assert updated.community_inbox_url == "https://lemmy.world/inbox/updated"
-    assert updated.follow_activity_id == "https://discord-bridge.example.com/activities/follow-2"
+    assert updated.community_inbox_url == f"https://{LEMMY_WORLD_DOMAIN}/inbox/updated"
+    assert updated.follow_activity_id == f"https://{BRIDGE_HOST_DOMAIN}/activities/follow-2"
     assert updated.status == "pending"
 
 
 def test_message_mapping_lookup_supports_dedup_keys_used_by_bridge(tmp_path: Path) -> None:
     """Generic message mappings must be queryable by both activity and object IDs."""
     database = _database(tmp_path)
+    actor_url = f"https://{BRIDGE_HOST_DOMAIN}/users/alice"
+    activity_id = f"https://{BRIDGE_HOST_DOMAIN}/activities/555"
+    object_id = f"https://{BRIDGE_HOST_DOMAIN}/objects/555"
 
     created = database.create_message_mapping(
         source_platform="discord",
         source_id="discord-message-555",
-        activity_id="https://discord-bridge.example.com/activities/555",
-        object_id="https://discord-bridge.example.com/objects/555",
-        actor_url="https://discord-bridge.example.com/users/alice",
-        community_actor_url="https://lemmy.world/c/hackers",
+        activity_id=activity_id,
+        object_id=object_id,
+        actor_url=actor_url,
+        community_actor_url=f"https://{LEMMY_WORLD_DOMAIN}/c/hackers",
         discord_channel_id=123,
         discord_message_id=555,
     )
 
-    by_activity = database.get_message_mapping_by_activity_id("https://discord-bridge.example.com/activities/555")
-    by_object = database.get_message_mapping_by_object_id("https://discord-bridge.example.com/objects/555")
+    by_activity = database.get_message_mapping_by_activity_id(activity_id)
+    by_object = database.get_message_mapping_by_object_id(object_id)
     by_discord_message = database.get_message_mapping_by_discord_message_id(555)
 
     assert created.source_platform == "discord"
@@ -126,28 +135,29 @@ def test_message_mapping_lookup_supports_dedup_keys_used_by_bridge(tmp_path: Pat
 def test_remote_actor_upsert_refreshes_existing_record_without_duplicates(tmp_path: Path) -> None:
     """Remote actor cache rows should update in place when the actor is refetched."""
     database = _database(tmp_path)
+    actor_url = f"https://{LEMMY_WORLD_DOMAIN}/u/alice"
 
     first = database.upsert_remote_actor(
-        actor_url="https://lemmy.world/u/alice",
+        actor_url=actor_url,
         preferred_username="alice",
-        inbox_url="https://lemmy.world/u/alice/inbox",
-        shared_inbox_url="https://lemmy.world/inbox",
+        inbox_url=f"{actor_url}/inbox",
+        shared_inbox_url=f"https://{LEMMY_WORLD_DOMAIN}/inbox",
         public_key_pem="public-key-v1",
     )
     second = database.upsert_remote_actor(
-        actor_url="https://lemmy.world/u/alice",
+        actor_url=actor_url,
         preferred_username="alice-renamed",
-        inbox_url="https://lemmy.world/u/alice/inbox-v2",
-        shared_inbox_url="https://lemmy.world/inbox-v2",
+        inbox_url=f"{actor_url}/inbox-v2",
+        shared_inbox_url=f"https://{LEMMY_WORLD_DOMAIN}/inbox-v2",
         public_key_pem="public-key-v2",
     )
 
-    loaded = database.get_remote_actor_by_actor_url("https://lemmy.world/u/alice")
+    loaded = database.get_remote_actor_by_actor_url(actor_url)
 
     assert first.id == second.id
     assert loaded is not None
     assert loaded.id == first.id
     assert loaded.preferred_username == "alice-renamed"
-    assert loaded.inbox_url == "https://lemmy.world/u/alice/inbox-v2"
-    assert loaded.shared_inbox_url == "https://lemmy.world/inbox-v2"
+    assert loaded.inbox_url == f"{actor_url}/inbox-v2"
+    assert loaded.shared_inbox_url == f"https://{LEMMY_WORLD_DOMAIN}/inbox-v2"
     assert loaded.public_key_pem == "public-key-v2"

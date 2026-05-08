@@ -6,6 +6,7 @@ import discord
 import pytest
 
 from src.commands import list_subs
+from tests.constants import LEMMY_EXAMPLE_DOMAIN
 
 
 @pytest.mark.asyncio
@@ -30,16 +31,18 @@ async def test_list_subscriptions_rejects_empty_state(command_tree, interaction,
 async def test_list_subscriptions_returns_embed_with_expected_items(command_tree, interaction, database):
     # The adapter is responsible for presentation, so the test checks the embed
     # contract the user sees rather than internal list-building details.
+    hackers_actor_url = f"https://{LEMMY_EXAMPLE_DOMAIN}/c/hackers"
+    void_actor_url = f"https://{LEMMY_EXAMPLE_DOMAIN}/c/void"
     database.get_all_subscriptions.return_value = [
         SimpleNamespace(
             discord_channel_id=111,
             lemmy_community_name="hackers",
-            lemmy_community_actor_id="https://lemmy.example/c/hackers",
+            lemmy_community_actor_id=hackers_actor_url,
         ),
         SimpleNamespace(
             discord_channel_id=222,
             lemmy_community_name=None,
-            lemmy_community_actor_id="https://lemmy.example/c/void",
+            lemmy_community_actor_id=void_actor_url,
         ),
     ]
 
@@ -54,6 +57,6 @@ async def test_list_subscriptions_returns_embed_with_expected_items(command_tree
     assert isinstance(embed, discord.Embed)
     assert embed.title == "Active Subscriptions"
     assert "• <#111> → **hackers**" in embed.description
-    assert "• <#222> → **https://lemmy.example/c/void**" in embed.description
+    assert f"• <#222> → **{void_actor_url}**" in embed.description
     assert embed.footer.text == "2 subscription(s)"
     assert send_call.kwargs["ephemeral"] is True

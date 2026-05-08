@@ -5,6 +5,7 @@ from types import SimpleNamespace
 import pytest
 
 from src.commands import subscribe
+from tests.constants import BRIDGE_EXAMPLE_DOMAIN, LEMMY_EXAMPLE_DOMAIN
 
 
 @pytest.mark.asyncio
@@ -14,12 +15,13 @@ async def test_subscribe_channel_success(
     # A successful subscription should resolve the community, send a real
     # bridge Follow, persist the pending lifecycle state, and return the
     # moderator-facing pending message.
+    community_actor_url = f"https://{LEMMY_EXAMPLE_DOMAIN}/c/hackers"
     database.get_subscription_by_channel.return_value = None
     lemmy.resolve_community_id.return_value = 777
     fedify_gateway.follow_community.return_value = SimpleNamespace(
-        community_actor_url="https://lemmy.example/c/hackers",
-        community_inbox_url="https://lemmy.example/c/hackers/inbox",
-        follow_activity_id="https://bridge.example/activities/follow/1",
+        community_actor_url=community_actor_url,
+        community_inbox_url=f"{community_actor_url}/inbox",
+        follow_activity_id=f"https://{BRIDGE_EXAMPLE_DOMAIN}/activities/follow/1",
     )
 
     subscribe.register(command_tree, database, lemmy, fedify_gateway)
@@ -28,24 +30,22 @@ async def test_subscribe_channel_success(
     await command.callback(
         interaction,
         forum_channel,
-        "https://lemmy.example/c/hackers|hackers|",
+        f"{community_actor_url}|hackers|",
     )
 
     database.get_subscription_by_channel.assert_called_once_with(forum_channel.id)
     lemmy.resolve_community_id.assert_awaited_once_with(name="hackers")
     database.create_subscription.assert_called_once_with(
         discord_channel_id=forum_channel.id,
-        lemmy_community_actor_id="https://lemmy.example/c/hackers",
+        lemmy_community_actor_id=community_actor_url,
         lemmy_community_name="hackers",
         lemmy_community_id=777,
-        community_handle="!hackers@lemmy.example",
-        community_inbox_url="https://lemmy.example/c/hackers/inbox",
-        follow_activity_id="https://bridge.example/activities/follow/1",
+        community_handle=f"!hackers@{LEMMY_EXAMPLE_DOMAIN}",
+        community_inbox_url=f"{community_actor_url}/inbox",
+        follow_activity_id=f"https://{BRIDGE_EXAMPLE_DOMAIN}/activities/follow/1",
         status="pending",
     )
-    fedify_gateway.follow_community.assert_awaited_once_with(
-        "https://lemmy.example/c/hackers"
-    )
+    fedify_gateway.follow_community.assert_awaited_once_with(community_actor_url)
     send_call = interaction.response.send_message.await_args
     assert send_call.args == (
         "Sent a bridge follow for <#12345> -> **hackers**. Waiting for federation acceptance.",
@@ -61,9 +61,9 @@ async def test_subscribe_channel_rejects_duplicate_accepted(
     # ephemeral message that the channel is already active.
     database.get_subscription_by_channel.return_value = SimpleNamespace(
         status="accepted",
-        community_handle="!hackers@lemmy.example",
+        community_handle=f"!hackers@{LEMMY_EXAMPLE_DOMAIN}",
         lemmy_community_name="hackers",
-        lemmy_community_actor_id="https://lemmy.example/c/hackers",
+        lemmy_community_actor_id=f"https://{LEMMY_EXAMPLE_DOMAIN}/c/hackers",
     )
 
     subscribe.register(command_tree, database, lemmy, fedify_gateway)
@@ -72,14 +72,14 @@ async def test_subscribe_channel_rejects_duplicate_accepted(
     await command.callback(
         interaction,
         forum_channel,
-        "https://lemmy.example/c/hackers|hackers|777",
+        f"https://{LEMMY_EXAMPLE_DOMAIN}/c/hackers|hackers|777",
     )
 
     database.create_subscription.assert_not_called()
     lemmy.resolve_community_id.assert_not_awaited()
     fedify_gateway.follow_community.assert_not_awaited()
     interaction.response.send_message.assert_awaited_once_with(
-        "Channel <#12345> is already subscribed to **!hackers@lemmy.example**.",
+        f"Channel <#12345> is already subscribed to **!hackers@{LEMMY_EXAMPLE_DOMAIN}**.",
         ephemeral=True,
     )
 
@@ -92,9 +92,9 @@ async def test_subscribe_channel_rejects_duplicate_pending(
     # moderator that federation acceptance is still outstanding.
     database.get_subscription_by_channel.return_value = SimpleNamespace(
         status="pending",
-        community_handle="!hackers@lemmy.example",
+        community_handle=f"!hackers@{LEMMY_EXAMPLE_DOMAIN}",
         lemmy_community_name="hackers",
-        lemmy_community_actor_id="https://lemmy.example/c/hackers",
+        lemmy_community_actor_id=f"https://{LEMMY_EXAMPLE_DOMAIN}/c/hackers",
     )
 
     subscribe.register(command_tree, database, lemmy, fedify_gateway)
@@ -103,13 +103,13 @@ async def test_subscribe_channel_rejects_duplicate_pending(
     await command.callback(
         interaction,
         forum_channel,
-        "https://lemmy.example/c/hackers|hackers|777",
+        f"https://{LEMMY_EXAMPLE_DOMAIN}/c/hackers|hackers|777",
     )
 
     database.create_subscription.assert_not_called()
     fedify_gateway.follow_community.assert_not_awaited()
     interaction.response.send_message.assert_awaited_once_with(
-        "Channel <#12345> is still waiting for **!hackers@lemmy.example** to accept the bridge follow.",
+        f"Channel <#12345> is still waiting for **!hackers@{LEMMY_EXAMPLE_DOMAIN}** to accept the bridge follow.",
         ephemeral=True,
     )
 
@@ -134,7 +134,7 @@ async def test_subscribe_channel_rejects_when_community_resolution_fails(
     await command.callback(
         interaction,
         forum_channel,
-        "https://lemmy.example/c/hackers|hackers|",
+        f"https://{LEMMY_EXAMPLE_DOMAIN}/c/hackers|hackers|",
     )
 
     database.create_subscription.assert_not_called()
@@ -150,6 +150,7 @@ async def test_subscribe_channel_marks_failed_when_follow_dispatch_fails(
 ):
     # Follow dispatch failures must create a failed subscription row so retries
     # are explicit instead of leaving a fake pending state behind.
+    community_actor_url = f"https://{LEMMY_EXAMPLE_DOMAIN}/c/hackers"
     database.get_subscription_by_channel.return_value = None
     lemmy.resolve_community_id.return_value = 777
     fedify_gateway.follow_community.side_effect = RuntimeError("boom")
@@ -160,15 +161,15 @@ async def test_subscribe_channel_marks_failed_when_follow_dispatch_fails(
     await command.callback(
         interaction,
         forum_channel,
-        "https://lemmy.example/c/hackers|hackers|",
+        f"{community_actor_url}|hackers|",
     )
 
     database.create_subscription.assert_called_once_with(
         discord_channel_id=forum_channel.id,
-        lemmy_community_actor_id="https://lemmy.example/c/hackers",
+        lemmy_community_actor_id=community_actor_url,
         lemmy_community_name="hackers",
         lemmy_community_id=777,
-        community_handle="!hackers@lemmy.example",
+        community_handle=f"!hackers@{LEMMY_EXAMPLE_DOMAIN}",
         community_inbox_url=None,
         follow_activity_id=None,
         status="failed",
@@ -185,16 +186,17 @@ async def test_subscribe_channel_retries_failed_subscription(
 ):
     # Failed subscriptions are retriable. The old failed row is removed before
     # the new pending attempt is written.
+    community_actor_url = f"https://{LEMMY_EXAMPLE_DOMAIN}/c/hackers"
     database.get_subscription_by_channel.return_value = SimpleNamespace(
         status="failed",
-        community_handle="!hackers@lemmy.example",
+        community_handle=f"!hackers@{LEMMY_EXAMPLE_DOMAIN}",
         lemmy_community_name="hackers",
-        lemmy_community_actor_id="https://lemmy.example/c/hackers",
+        lemmy_community_actor_id=community_actor_url,
     )
     fedify_gateway.follow_community.return_value = SimpleNamespace(
-        community_actor_url="https://lemmy.example/c/hackers",
-        community_inbox_url="https://lemmy.example/c/hackers/inbox",
-        follow_activity_id="https://bridge.example/activities/follow/2",
+        community_actor_url=community_actor_url,
+        community_inbox_url=f"{community_actor_url}/inbox",
+        follow_activity_id=f"https://{BRIDGE_EXAMPLE_DOMAIN}/activities/follow/2",
     )
 
     subscribe.register(command_tree, database, lemmy, fedify_gateway)
@@ -203,17 +205,17 @@ async def test_subscribe_channel_retries_failed_subscription(
     await command.callback(
         interaction,
         forum_channel,
-        "https://lemmy.example/c/hackers|hackers|777",
+        f"{community_actor_url}|hackers|777",
     )
 
     database.delete_subscription.assert_called_once_with(forum_channel.id)
     database.create_subscription.assert_called_once_with(
         discord_channel_id=forum_channel.id,
-        lemmy_community_actor_id="https://lemmy.example/c/hackers",
+        lemmy_community_actor_id=community_actor_url,
         lemmy_community_name="hackers",
         lemmy_community_id=777,
-        community_handle="!hackers@lemmy.example",
-        community_inbox_url="https://lemmy.example/c/hackers/inbox",
-        follow_activity_id="https://bridge.example/activities/follow/2",
+        community_handle=f"!hackers@{LEMMY_EXAMPLE_DOMAIN}",
+        community_inbox_url=f"{community_actor_url}/inbox",
+        follow_activity_id=f"https://{BRIDGE_EXAMPLE_DOMAIN}/activities/follow/2",
         status="pending",
     )
