@@ -1,14 +1,28 @@
+"""Repository helpers for bridge routing, identity, and federation state."""
+
 from __future__ import annotations
 
 from contextlib import contextmanager
 
-from sqlalchemy import create_engine, inspect, select, text
+from sqlalchemy import create_engine, select
 from sqlalchemy.orm import Session, sessionmaker
 
-from .models import ActivityPubEventReceipt, Base, ChannelCommunitySubscription, CommentLink, PostLink
+from .models import (
+    ActivityPubEventReceipt,
+    Base,
+    ChannelCommunitySubscription,
+    CommentLink,
+    MessageMapping,
+    PostLink,
+    RemoteActor,
+    User,
+    utcnow,
+)
 
 
 class Database:
+    """Wrap ORM access behind intent-specific repository methods."""
+
     # Database is a small repository-style wrapper that keeps bridge code away
     # from session management and direct ORM details.
     def __init__(self, url: str) -> None:
@@ -17,11 +31,12 @@ class Database:
         self.session_factory = sessionmaker(self.engine, expire_on_commit=False, class_=Session)
 
     def create_all(self) -> None:
+        """Create the full clean-schema set required by the current codebase."""
         Base.metadata.create_all(self.engine)
-        self._ensure_legacy_schema_compatibility()
 
     @contextmanager
     def session(self) -> Session:
+        """Yield one transactional session with uniform cleanup semantics."""
         # Every public DB operation uses the same commit/rollback discipline so
         # callers do not need to care about transaction cleanup.
         session = self.session_factory()
@@ -35,14 +50,17 @@ class Database:
             session.close()
 
     def get_post_link_by_thread_id(self, discord_thread_id: int) -> PostLink | None:
+        """Load the post-link row for one Discord thread, if it exists."""
         with self.session() as session:
             return session.scalar(select(PostLink).where(PostLink.discord_forum_thread_id == discord_thread_id))
 
     def get_post_link_by_lemmy_post_id(self, lemmy_post_id: int) -> PostLink | None:
+        """Load the post-link row for one numeric Lemmy post ID."""
         with self.session() as session:
             return session.scalar(select(PostLink).where(PostLink.lemmy_post_id == lemmy_post_id))
 
     def get_post_link_by_lemmy_post_ap_id(self, lemmy_post_ap_id: str) -> PostLink | None:
+        """Load the post-link row for one ActivityPub Lemmy post ID."""
         with self.session() as session:
             return session.scalar(select(PostLink).where(PostLink.lemmy_post_ap_id == lemmy_post_ap_id))
 
@@ -55,6 +73,7 @@ class Database:
         discord_starter_message_id: int | None,
         direction: str,
     ) -> PostLink:
+        """Persist the thread-level mapping created by the existing bridge."""
         with self.session() as session:
             link = PostLink(
                 lemmy_post_id=lemmy_post_id,
@@ -68,18 +87,22 @@ class Database:
             return link
 
     def has_comment_link_for_discord_message(self, discord_message_id: int) -> bool:
+        """Return whether one Discord message is already mapped as a comment."""
         with self.session() as session:
             return session.scalar(select(CommentLink.id).where(CommentLink.discord_message_id == discord_message_id)) is not None
 
     def has_comment_link_for_lemmy_comment(self, lemmy_comment_id: int) -> bool:
+        """Return whether one Lemmy comment is already mapped into Discord."""
         with self.session() as session:
             return session.scalar(select(CommentLink.id).where(CommentLink.lemmy_comment_id == lemmy_comment_id)) is not None
 
     def get_comment_link_by_lemmy_comment_ap_id(self, lemmy_comment_ap_id: str) -> CommentLink | None:
+        """Load the comment-link row for one ActivityPub comment ID."""
         with self.session() as session:
             return session.scalar(select(CommentLink).where(CommentLink.lemmy_comment_ap_id == lemmy_comment_ap_id))
 
     def get_comment_link_by_discord_message_id(self, discord_message_id: int) -> CommentLink | None:
+        """Load the comment-link row for one Discord message ID."""
         with self.session() as session:
             return session.scalar(select(CommentLink).where(CommentLink.discord_message_id == discord_message_id))
 
@@ -94,6 +117,7 @@ class Database:
         discord_message_id: int,
         direction: str,
     ) -> CommentLink:
+        """Persist the message-level mapping created by the existing bridge."""
         with self.session() as session:
             link = CommentLink(
                 lemmy_comment_id=lemmy_comment_id,
@@ -109,10 +133,12 @@ class Database:
             return link
 
     def get_event_receipt(self, delivery_id: str) -> ActivityPubEventReceipt | None:
+        """Load the receipt row for one inbound delivery ID."""
         with self.session() as session:
             return session.scalar(select(ActivityPubEventReceipt).where(ActivityPubEventReceipt.delivery_id == delivery_id))
 
     def create_event_receipt(self, *, delivery_id: str, event_type: str, object_ap_id: str, status: str, detail: str | None = None) -> ActivityPubEventReceipt:
+        """Create the receipt row that gates idempotent event processing."""
         with self.session() as session:
             receipt = ActivityPubEventReceipt(
                 delivery_id=delivery_id,
@@ -126,6 +152,7 @@ class Database:
             return receipt
 
     def update_event_receipt(self, *, delivery_id: str, status: str, detail: str | None = None) -> None:
+        """Update one inbound delivery receipt after processing progresses."""
         with self.session() as session:
             receipt = session.scalar(select(ActivityPubEventReceipt).where(ActivityPubEventReceipt.delivery_id == delivery_id))
             if receipt is None:
@@ -134,17 +161,20 @@ class Database:
             receipt.detail = detail
 
     def get_subscription_by_channel(self, discord_channel_id: int) -> ChannelCommunitySubscription | None:
+        """Load the single community subscription owned by one Discord channel."""
         # Each channel maps to at most one community, so this is a point lookup.
         with self.session() as session:
             return session.scalar(select(ChannelCommunitySubscription).where(ChannelCommunitySubscription.discord_channel_id == discord_channel_id))
 
     def get_subscriptions_by_community(self, lemmy_community_actor_id: str) -> list[ChannelCommunitySubscription]:
+        """Load every Discord channel subscribed to one Lemmy community actor."""
         # Used by inbound event handlers to find all Discord channels that should
         # receive posts/comments from a given Lemmy community.
         with self.session() as session:
             return list(session.scalars(select(ChannelCommunitySubscription).where(ChannelCommunitySubscription.lemmy_community_actor_id == lemmy_community_actor_id)))
 
     def get_all_subscriptions(self) -> list[ChannelCommunitySubscription]:
+        """Return all subscription rows in stable creation order."""
         # Ordered by creation time so the /list-subscriptions command shows a
         # stable, predictable list.
         with self.session() as session:
@@ -157,7 +187,12 @@ class Database:
         lemmy_community_actor_id: str,
         lemmy_community_name: str | None,
         lemmy_community_id: int | None,
+        community_handle: str | None = None,
+        community_inbox_url: str | None = None,
+        follow_activity_id: str | None = None,
+        status: str = "pending",
     ) -> ChannelCommunitySubscription:
+        """Create one channel-to-community subscription row with follow state."""
         # Callers are responsible for checking uniqueness before calling this;
         # the DB UNIQUE constraint on discord_channel_id is the final safety net
         # and will raise IntegrityError if a duplicate is attempted.
@@ -167,12 +202,43 @@ class Database:
                 lemmy_community_actor_id=lemmy_community_actor_id,
                 lemmy_community_name=lemmy_community_name,
                 lemmy_community_id=lemmy_community_id,
+                community_handle=community_handle,
+                community_inbox_url=community_inbox_url,
+                follow_activity_id=follow_activity_id,
+                status=status,
             )
             session.add(sub)
             session.flush()
             return sub
 
+    def update_subscription_follow_state(
+        self,
+        *,
+        discord_channel_id: int,
+        community_inbox_url: str | None,
+        follow_activity_id: str | None,
+        status: str,
+    ) -> None:
+        """Update the federation follow state for one existing subscription."""
+        # Follow state lives on the subscription row because later stages need a
+        # single source of truth for whether the bridge is pending/accepted.
+        with self.session() as session:
+            subscription = session.scalar(
+                select(ChannelCommunitySubscription).where(
+                    ChannelCommunitySubscription.discord_channel_id
+                    == discord_channel_id
+                )
+            )
+            if subscription is None:
+                raise RuntimeError(
+                    f"Missing subscription for Discord channel {discord_channel_id}"
+                )
+            subscription.community_inbox_url = community_inbox_url
+            subscription.follow_activity_id = follow_activity_id
+            subscription.status = status
+
     def delete_subscription(self, discord_channel_id: int) -> bool:
+        """Delete one channel subscription if it exists."""
         # Returns False when no subscription exists so callers can give a
         # meaningful response without a separate existence check.
         with self.session() as session:
@@ -182,28 +248,153 @@ class Database:
             session.delete(sub)
             return True
 
-    def _ensure_legacy_schema_compatibility(self) -> None:
-        # Existing local SQLite files may predate ActivityPub AP-ID columns, so
-        # the bridge upgrades the minimal schema in place on startup.
-        inspector = inspect(self.engine)
-        post_columns = {column["name"] for column in inspector.get_columns("post_links")}
-        comment_columns = {column["name"] for column in inspector.get_columns("comment_links")}
+    def create_user(
+        self,
+        *,
+        discord_user_id: str,
+        activitypub_username: str,
+        actor_url: str,
+        inbox_url: str,
+        outbox_url: str,
+        followers_url: str,
+        public_key_pem: str,
+        private_key_pem: str,
+    ) -> User:
+        """Create the shared identity record for one registered Discord user."""
+        with self.session() as session:
+            user = User(
+                discord_user_id=discord_user_id,
+                activitypub_username=activitypub_username,
+                actor_url=actor_url,
+                inbox_url=inbox_url,
+                outbox_url=outbox_url,
+                followers_url=followers_url,
+                public_key_pem=public_key_pem,
+                private_key_pem=private_key_pem,
+            )
+            session.add(user)
+            session.flush()
+            return user
 
-        statements: list[str] = []
-        if "lemmy_post_ap_id" not in post_columns:
-            statements.append("ALTER TABLE post_links ADD COLUMN lemmy_post_ap_id VARCHAR(512)")
-        if "lemmy_comment_ap_id" not in comment_columns:
-            statements.append("ALTER TABLE comment_links ADD COLUMN lemmy_comment_ap_id VARCHAR(512)")
-        if "lemmy_parent_comment_ap_id" not in comment_columns:
-            statements.append("ALTER TABLE comment_links ADD COLUMN lemmy_parent_comment_ap_id VARCHAR(512)")
+    def get_user_by_discord_user_id(self, discord_user_id: str) -> User | None:
+        """Load the registered user that owns one Discord account ID."""
+        with self.session() as session:
+            return session.scalar(
+                select(User).where(User.discord_user_id == discord_user_id)
+            )
 
-        index_statements = [
-            "CREATE UNIQUE INDEX IF NOT EXISTS ix_post_links_lemmy_post_ap_id ON post_links (lemmy_post_ap_id)",
-            "CREATE UNIQUE INDEX IF NOT EXISTS ix_comment_links_lemmy_comment_ap_id ON comment_links (lemmy_comment_ap_id)",
-        ]
+    def get_user_by_activitypub_username(
+        self, activitypub_username: str
+    ) -> User | None:
+        """Load the registered user that owns one local AP username."""
+        with self.session() as session:
+            return session.scalar(
+                select(User).where(
+                    User.activitypub_username == activitypub_username
+                )
+            )
 
-        with self.engine.begin() as connection:
-            for statement in statements:
-                connection.execute(text(statement))
-            for statement in index_statements:
-                connection.execute(text(statement))
+    def get_user_by_actor_url(self, actor_url: str) -> User | None:
+        """Load the registered user that owns one actor URL."""
+        with self.session() as session:
+            return session.scalar(select(User).where(User.actor_url == actor_url))
+
+    def create_message_mapping(
+        self,
+        *,
+        source_platform: str,
+        source_id: str,
+        activity_id: str,
+        object_id: str,
+        actor_url: str,
+        community_actor_url: str,
+        discord_channel_id: int | None,
+        discord_message_id: int | None,
+    ) -> MessageMapping:
+        """Create the generic dedup record used by later AP publish flows."""
+        with self.session() as session:
+            mapping = MessageMapping(
+                source_platform=source_platform,
+                source_id=source_id,
+                activity_id=activity_id,
+                object_id=object_id,
+                actor_url=actor_url,
+                community_actor_url=community_actor_url,
+                discord_channel_id=discord_channel_id,
+                discord_message_id=discord_message_id,
+            )
+            session.add(mapping)
+            session.flush()
+            return mapping
+
+    def get_message_mapping_by_activity_id(
+        self, activity_id: str
+    ) -> MessageMapping | None:
+        """Load a generic mapping row by ActivityPub activity ID."""
+        with self.session() as session:
+            return session.scalar(
+                select(MessageMapping).where(MessageMapping.activity_id == activity_id)
+            )
+
+    def get_message_mapping_by_object_id(
+        self, object_id: str
+    ) -> MessageMapping | None:
+        """Load a generic mapping row by ActivityPub object ID."""
+        with self.session() as session:
+            return session.scalar(
+                select(MessageMapping).where(MessageMapping.object_id == object_id)
+            )
+
+    def get_message_mapping_by_discord_message_id(
+        self, discord_message_id: int
+    ) -> MessageMapping | None:
+        """Load a generic mapping row by Discord message ID."""
+        with self.session() as session:
+            return session.scalar(
+                select(MessageMapping).where(
+                    MessageMapping.discord_message_id == discord_message_id
+                )
+            )
+
+    def upsert_remote_actor(
+        self,
+        *,
+        actor_url: str,
+        preferred_username: str | None,
+        inbox_url: str,
+        shared_inbox_url: str | None,
+        public_key_pem: str,
+    ) -> RemoteActor:
+        """Insert or refresh one cached remote actor record in place."""
+        # Remote actor fetches are repeatable, so this method updates the
+        # mutable addressing and key fields instead of creating duplicates.
+        with self.session() as session:
+            actor = session.scalar(
+                select(RemoteActor).where(RemoteActor.actor_url == actor_url)
+            )
+            if actor is None:
+                actor = RemoteActor(
+                    actor_url=actor_url,
+                    preferred_username=preferred_username,
+                    inbox_url=inbox_url,
+                    shared_inbox_url=shared_inbox_url,
+                    public_key_pem=public_key_pem,
+                )
+                session.add(actor)
+                session.flush()
+                return actor
+
+            actor.preferred_username = preferred_username
+            actor.inbox_url = inbox_url
+            actor.shared_inbox_url = shared_inbox_url
+            actor.public_key_pem = public_key_pem
+            actor.last_fetched_at = utcnow()
+            session.flush()
+            return actor
+
+    def get_remote_actor_by_actor_url(self, actor_url: str) -> RemoteActor | None:
+        """Load the cached record for one remote ActivityPub actor."""
+        with self.session() as session:
+            return session.scalar(
+                select(RemoteActor).where(RemoteActor.actor_url == actor_url)
+            )
