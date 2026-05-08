@@ -1,89 +1,63 @@
 #!/bin/bash
-# nginx setup script for bot-test.nachitima.com
+# Installs both nginx configs and issues SSL certs.
+#   nginx.conf   -> GATEWAY_DOMAIN (fedify gateway, port 3000)
+#   bridge.conf  -> BRIDGE_DOMAIN  (python bridge,  port 8081)
 
 set -e
 
-DOMAIN="bot-test.nachitima.com"
-NGINX_CONF="/etc/nginx/sites-available/${DOMAIN}"
-NGINX_ENABLED="/etc/nginx/sites-enabled/${DOMAIN}"
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+ENV_FILE="$SCRIPT_DIR/.env"
 
-echo "Setting up nginx for $DOMAIN..."
+if [[ ! -f "$ENV_FILE" ]]; then
+    echo "Error: $ENV_FILE not found" >&2
+    exit 1
+fi
 
-# Step 1: Create nginx config with HTTP only (for certbot validation)
-echo "Step 1: Creating nginx config..."
-sudo tee "$NGINX_CONF" > /dev/null << 'EOF'
+# shellcheck disable=SC2046
+export $(grep -E '^(GATEWAY_DOMAIN|BRIDGE_DOMAIN)=' "$ENV_FILE" | xargs)
+
+if [[ -z "$GATEWAY_DOMAIN" || -z "$BRIDGE_DOMAIN" ]]; then
+    echo "Error: GATEWAY_DOMAIN and BRIDGE_DOMAIN must be set in .env" >&2
+    exit 1
+fi
+
+EMAIL=$(git config user.email 2>/dev/null || echo "admin@example.com")
+
+install_site() {
+    local domain="$1"
+    local conf_src="$2"
+    local conf_dst="/etc/nginx/sites-available/${domain}"
+
+    echo "--- Installing $domain ---"
+
+    # Write HTTP-only stub so certbot can complete its challenge
+    sudo tee "$conf_dst" > /dev/null << NGINX
 server {
     listen 80;
-    server_name bot-test.nachitima.com;
-
+    server_name ${domain};
     location / {
-        proxy_pass http://localhost:3000;
-        proxy_set_header Host $host;
-        proxy_set_header X-Real-IP $remote_addr;
-        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
-        proxy_set_header X-Forwarded-Proto $scheme;
-        proxy_http_version 1.1;
-        proxy_set_header Connection "";
-        proxy_buffering off;
+        proxy_pass http://127.0.0.1:1;
     }
 }
-EOF
+NGINX
 
-# Step 2: Enable site
-echo "Step 2: Enabling nginx site..."
-sudo ln -sf "$NGINX_CONF" "$NGINX_ENABLED"
+    sudo ln -sf "$conf_dst" "/etc/nginx/sites-enabled/${domain}"
+    sudo nginx -t
+    sudo systemctl reload nginx
 
-# Step 3: Test nginx config
-echo "Step 3: Testing nginx config..."
-sudo nginx -t
+    sudo certbot certonly --nginx -d "$domain" --non-interactive --agree-tos -m "$EMAIL"
 
-# Step 4: Reload nginx
-echo "Step 4: Reloading nginx..."
-sudo systemctl reload nginx
-
-# Step 5: Get SSL certificate with certbot
-echo "Step 5: Getting SSL certificate..."
-sudo certbot certonly --nginx -d "$DOMAIN" --non-interactive --agree-tos -m $(git config user.email || echo "admin@example.com")
-
-# Step 6: Update nginx config with SSL
-echo "Step 6: Updating nginx config with SSL..."
-sudo tee "$NGINX_CONF" > /dev/null << 'EOF'
-server {
-    listen 80;
-    server_name bot-test.nachitima.com;
-
-    return 301 https://$server_name$request_uri;
+    # Replace stub with the real config that has SSL directives
+    sudo cp "$conf_src" "$conf_dst"
+    sudo nginx -t
+    sudo systemctl reload nginx
+    echo "✓ $domain ready"
 }
 
-server {
-    listen 443 ssl http2;
-    server_name bot-test.nachitima.com;
+install_site "$GATEWAY_DOMAIN" "$SCRIPT_DIR/nginx.conf"
+install_site "$BRIDGE_DOMAIN"  "$SCRIPT_DIR/bridge.conf"
 
-    ssl_certificate /etc/letsencrypt/live/bot-test.nachitima.com/fullchain.pem;
-    ssl_certificate_key /etc/letsencrypt/live/bot-test.nachitima.com/privkey.pem;
-
-    ssl_protocols TLSv1.2 TLSv1.3;
-    ssl_ciphers HIGH:!aNULL:!MD5;
-    ssl_prefer_server_ciphers on;
-
-    location / {
-        proxy_pass http://localhost:3000;
-        proxy_set_header Host $host;
-        proxy_set_header X-Real-IP $remote_addr;
-        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
-        proxy_set_header X-Forwarded-Proto $scheme;
-        proxy_http_version 1.1;
-        proxy_set_header Connection "";
-        proxy_buffering off;
-        proxy_request_buffering off;
-    }
-}
-EOF
-
-# Step 7: Test and reload nginx
-echo "Step 7: Testing and reloading nginx with SSL..."
-sudo nginx -t
-sudo systemctl reload nginx
-
-echo "✓ nginx setup complete!"
-echo "Gateway is now accessible at https://$DOMAIN"
+echo ""
+echo "Both sites are up. Update .env in the project root:"
+echo "  PUBLIC_BRIDGE_BASE_URL=https://${BRIDGE_DOMAIN}"
+echo "  DISCORD_OAUTH_REDIRECT_URI=https://${BRIDGE_DOMAIN}/auth/discord/callback"
