@@ -202,6 +202,7 @@ class Database:
         community_handle: str | None = None,
         community_inbox_url: str | None = None,
         follow_activity_id: str | None = None,
+        initiated_by_discord_user_id: str | None = None,
         status: str = "pending",
     ) -> ChannelCommunitySubscription:
         """Create one channel-to-community subscription row with follow state."""
@@ -217,6 +218,7 @@ class Database:
                 community_handle=community_handle,
                 community_inbox_url=community_inbox_url,
                 follow_activity_id=follow_activity_id,
+                initiated_by_discord_user_id=initiated_by_discord_user_id,
                 status=status,
             )
             session.add(sub)

@@ -49,6 +49,7 @@ async def test_follow_accept_event_marks_pending_subscription_accepted(
     database = _database(tmp_path)
     lemmy_actor_url = f"https://{LEMMY_EXAMPLE_DOMAIN}/c/hackers"
     follow_activity_id = f"https://{BRIDGE_EXAMPLE_DOMAIN}/activities/follow/1"
+    dm_user = SimpleNamespace(send=AsyncMock())
     database.create_subscription(
         discord_channel_id=123,
         lemmy_community_actor_id=lemmy_actor_url,
@@ -57,15 +58,14 @@ async def test_follow_accept_event_marks_pending_subscription_accepted(
         community_handle=f"!hackers@{LEMMY_EXAMPLE_DOMAIN}",
         community_inbox_url=f"{lemmy_actor_url}/inbox",
         follow_activity_id=follow_activity_id,
+        initiated_by_discord_user_id="1234567890",
         status="pending",
     )
     runtime = SimpleNamespace(
         database=database,
         lemmy=SimpleNamespace(),
         bot=SimpleNamespace(
-            fetch_forum_channel=AsyncMock(
-                return_value=SimpleNamespace(send=AsyncMock())
-            )
+            fetch_user=AsyncMock(return_value=dm_user),
         ),
     )
     event = FollowLifecycleEvent(
@@ -84,9 +84,10 @@ async def test_follow_accept_event_marks_pending_subscription_accepted(
     assert result.detail == "subscription accepted and channel notified"
     assert subscription is not None
     assert subscription.status == "accepted"
-    runtime.bot.fetch_forum_channel.assert_awaited_once_with(123)
-    runtime.bot.fetch_forum_channel.return_value.send.assert_awaited_once_with(
-        "Bridge follow for **!hackers@lemmy.example** was accepted. This channel is now federated."
+    runtime.bot.fetch_user.assert_awaited_once_with(1234567890)
+    dm_user.send.assert_awaited_once_with(
+        "Your bridge follow for **!hackers@lemmy.example** was accepted. "
+        "<#123> is now federated."
     )
 
 

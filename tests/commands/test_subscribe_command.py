@@ -16,6 +16,7 @@ async def test_subscribe_channel_success(
     # bridge Follow, persist the pending lifecycle state, and return the
     # moderator-facing pending message.
     community_actor_url = f"https://{LEMMY_EXAMPLE_DOMAIN}/c/hackers"
+    database.get_user_by_discord_user_id.return_value = SimpleNamespace(id=1)
     database.get_subscription_by_channel.return_value = None
     lemmy.resolve_community_id.return_value = 777
     fedify_gateway.follow_community.return_value = SimpleNamespace(
@@ -43,6 +44,7 @@ async def test_subscribe_channel_success(
         community_handle=f"!hackers@{LEMMY_EXAMPLE_DOMAIN}",
         community_inbox_url=f"{community_actor_url}/inbox",
         follow_activity_id=f"https://{BRIDGE_EXAMPLE_DOMAIN}/activities/follow/1",
+        initiated_by_discord_user_id="1234567890",
         status="pending",
     )
     fedify_gateway.follow_community.assert_awaited_once_with(community_actor_url)
@@ -187,6 +189,7 @@ async def test_subscribe_channel_retries_failed_subscription(
     # Failed subscriptions are retriable. The old failed row is removed before
     # the new pending attempt is written.
     community_actor_url = f"https://{LEMMY_EXAMPLE_DOMAIN}/c/hackers"
+    database.get_user_by_discord_user_id.return_value = SimpleNamespace(id=1)
     database.get_subscription_by_channel.return_value = SimpleNamespace(
         status="failed",
         community_handle=f"!hackers@{LEMMY_EXAMPLE_DOMAIN}",
@@ -217,5 +220,6 @@ async def test_subscribe_channel_retries_failed_subscription(
         community_handle=f"!hackers@{LEMMY_EXAMPLE_DOMAIN}",
         community_inbox_url=f"{community_actor_url}/inbox",
         follow_activity_id=f"https://{BRIDGE_EXAMPLE_DOMAIN}/activities/follow/2",
+        initiated_by_discord_user_id="1234567890",
         status="pending",
     )

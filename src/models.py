@@ -94,6 +94,7 @@ class ChannelCommunitySubscription(Base):
     community_handle: Mapped[str | None] = mapped_column(String(255), nullable=True)
     community_inbox_url: Mapped[str | None] = mapped_column(String(512), nullable=True)
     follow_activity_id: Mapped[str | None] = mapped_column(String(512), nullable=True)
+    initiated_by_discord_user_id: Mapped[str | None] = mapped_column(String(64), nullable=True)
     status: Mapped[str] = mapped_column(String(32), nullable=False, default="pending")
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, nullable=False)
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, onupdate=utcnow, nullable=False)

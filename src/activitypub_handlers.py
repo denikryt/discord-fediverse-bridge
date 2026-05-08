@@ -118,14 +118,23 @@ async def handle_follow_accepted(
     )
 
     try:
-        forum_channel = await runtime.bot.fetch_forum_channel(
-            subscription.discord_channel_id
+        community_label = (
+            subscription.community_handle
+            or subscription.lemmy_community_name
+            or subscription.lemmy_community_actor_id
         )
-        # The notification is best-effort: routing must not depend on Discord
-        # message delivery after the subscription is already accepted.
-        await forum_channel.send(
-            f"Bridge follow for **{subscription.community_handle or subscription.lemmy_community_name or subscription.lemmy_community_actor_id}** was accepted. This channel is now federated."
-        )
+        # Notify via DM to the user who ran /subscribe-channel.
+        if subscription.initiated_by_discord_user_id is not None:
+            user = await runtime.bot.fetch_user(int(subscription.initiated_by_discord_user_id))
+            await user.send(
+                f"Your bridge follow for **{community_label}** was accepted. "
+                f"<#{subscription.discord_channel_id}> is now federated."
+            )
+        else:
+            logger.warning(
+                "No initiator recorded for subscription %s, skipping DM notification",
+                subscription.discord_channel_id,
+            )
     except Exception:
         logger.exception(
             "Could not send follow acceptance notification for channel %s",

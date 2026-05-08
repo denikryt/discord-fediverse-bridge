@@ -42,8 +42,11 @@ def command_tree() -> RecordingTree:
 @pytest.fixture
 def interaction() -> AsyncMock:
     # The response mock is the main contract surface these command tests verify.
+    # user.id is set to a stable string so commands that record the initiator
+    # (e.g. subscribe-channel) get a deterministic value rather than an AsyncMock.
     mock_interaction = AsyncMock()
     mock_interaction.response.send_message = AsyncMock()
+    mock_interaction.user.id = "1234567890"
     return mock_interaction
 
 

@@ -31,6 +31,15 @@ def register(
         channel: discord.ForumChannel,
         community: str,
     ) -> None:
+        # Reject unregistered users early — subscribing requires a bridge actor
+        # so that published messages can be attributed to a real ActivityPub identity.
+        if database.get_user_by_discord_user_id(str(interaction.user.id)) is None:
+            await interaction.response.send_message(
+                "You must register with the bridge before subscribing a channel. Use `/register` first.",
+                ephemeral=True,
+            )
+            return
+
         # The autocomplete payload encodes both the actor ID and the numeric
         # community ID so successful selections avoid a second Lemmy round-trip.
         actor_id, community_name, community_id_str = _parse_community_value(community)
@@ -97,6 +106,7 @@ def register(
             community_handle=community_handle,
             community_inbox_url=follow_result.community_inbox_url,
             follow_activity_id=follow_result.follow_activity_id,
+            initiated_by_discord_user_id=str(interaction.user.id),
             status="pending",
         )
         await interaction.response.send_message(
