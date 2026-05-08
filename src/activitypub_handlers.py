@@ -159,4 +159,9 @@ def _is_discord_originated_echo(event: ActivityPubEvent, runtime: Runtime) -> bo
         return True
     if runtime.database.get_message_mapping_by_activity_id(event.delivery_id) is not None:
         return True
+    # Lemmy re-wraps our outbound activities in an Announce with a new ap_id, so
+    # the object_id check above misses the echo. If the actor is one of our own
+    # registered users, the activity originated here and must be suppressed.
+    if runtime.database.get_user_by_actor_url(event.actor_id) is not None:
+        return True
     return False

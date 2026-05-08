@@ -301,22 +301,30 @@ async function resolvePostApIdFromJson(
   replyTarget: string,
   visited: Set<string> = new Set(),
 ): Promise<string | null> {
+  // Fast path: Lemmy post URL — no fetch needed.
   if (isLemmyPath(replyTarget, "post")) {
     return replyTarget;
   }
-  if (!isLemmyPath(replyTarget, "comment")) {
-    return null;
-  }
+
+  // Guard against cycles.
   if (visited.has(replyTarget)) {
     return null;
   }
   visited.add(replyTarget);
 
+  // Fetch the parent object — it may be a Page (post) or Note (comment) on any
+  // domain including our own gateway, so we check the type rather than the path.
   const parentRecord = await fetchActivityObject(replyTarget);
   if (parentRecord == null) {
     return null;
   }
 
+  // Page or Article means the parent is a post regardless of its domain.
+  if (parentRecord.type === "Page" || parentRecord.type === "Article") {
+    return asString(parentRecord.id);
+  }
+
+  // Note means the parent is a comment — keep walking up the chain.
   const nextReplyTarget =
     asString(parentRecord.inReplyTo) ?? asString(parentRecord.replyTarget);
   if (!nextReplyTarget) {

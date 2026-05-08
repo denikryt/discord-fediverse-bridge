@@ -7,7 +7,7 @@
     "dev": "node --env-file=.env ./node_modules/.bin/tsx watch src/server.ts",
     "start": "node --env-file=.env ./node_modules/.bin/tsx src/server.ts",
     "check": "tsc --noEmit",
-    "test": "node --env-file=.env ./node_modules/.bin/tsx tests/verify-actor-layer.ts && node --env-file=.env ./node_modules/.bin/tsx tests/verify-publish-contract.ts && node --env-file=.env ./node_modules/.bin/tsx tests/verify-python-contract.ts && node --env-file=.env ./node_modules/.bin/tsx tests/verify-accept-follow.ts && node --env-file=.env ./node_modules/.bin/tsx tests/verify-discord-to-lemmy-publish.ts",
+    "test": "node --env-file=.env ./node_modules/.bin/tsx tests/verify-actor-layer.ts && node --env-file=.env ./node_modules/.bin/tsx tests/verify-publish-contract.ts && node --env-file=.env ./node_modules/.bin/tsx tests/verify-python-contract.ts && node --env-file=.env ./node_modules/.bin/tsx tests/verify-accept-follow.ts && node --env-file=.env ./node_modules/.bin/tsx tests/verify-discord-to-lemmy-publish.ts && node --env-file=.env ./node_modules/.bin/tsx tests/verify-normalize-reply-chain.ts",
     "follow-community": "node --env-file=.env ./node_modules/.bin/tsx src/follow-community-cli.ts",
     "generate-keys": "./node_modules/.bin/tsx src/generate-keys.ts",
     "generate-keys:force": "./node_modules/.bin/tsx src/generate-keys.ts --force"

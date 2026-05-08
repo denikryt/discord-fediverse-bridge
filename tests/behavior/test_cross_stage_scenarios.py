@@ -246,6 +246,64 @@ async def test_register_subscribe_accept_publish_then_echo_is_suppressed(
 
 
 @pytest.mark.asyncio
+async def test_lemmy_announce_of_local_post_is_suppressed_via_actor_check(
+    tmp_path: Path,
+) -> None:
+    """Lemmy Announce wraps our outbound post with a new ap_id — suppress via actor_id check.
+
+    When Lemmy announces our Create(Page) back to us, it generates a new activity id,
+    so the delivery_id and object_id lookups both miss. The actor_id check (is this one
+    of our registered users?) must catch the echo.
+    """
+    database = _database(tmp_path)
+    client = TestClient(create_http_app(_registration_runtime(database)))
+    _register_user(client, database, username="alice")
+
+    community_actor_url = f"https://{LEMMY_EXAMPLE_DOMAIN}/c/hackers"
+    object_id = f"https://{BRIDGE_HOST_DOMAIN}/users/alice/post/9999"
+    actor_url = f"https://{BRIDGE_HOST_DOMAIN}/users/alice"
+
+    # Simulate Lemmy Announce: delivery_id and object_id are new Lemmy-generated ids,
+    # but actor_id is our own registered user.
+    lemmy_rewritten_event = ActivityPubEvent.model_validate(
+        {
+            "event_type": "post.created",
+            "delivery_id": f"https://{LEMMY_EXAMPLE_DOMAIN}/activities/announce/create/abc123",
+            "occurred_at": "2026-05-08T10:00:00Z",
+            "community_actor_id": community_actor_url,
+            "actor_id": actor_url,
+            "object": {
+                "ap_id": f"https://{LEMMY_EXAMPLE_DOMAIN}/post/999",
+                "kind": "post",
+                "lemmy_id": 999,
+                "post_ap_id": None,
+                "post_lemmy_id": None,
+                "parent_ap_id": None,
+                "title": "Rewritten by Lemmy",
+                "body_markdown": "hello",
+                "url": object_id,
+                "published_at": "2026-05-08T10:00:00Z",
+                "author_name": "alice",
+            },
+        }
+    )
+
+    runtime = SimpleNamespace(
+        database=database,
+        lemmy=SimpleNamespace(),
+        bot=SimpleNamespace(
+            wait_until_bridge_ready=AsyncMock(),
+            fetch_forum_channel=AsyncMock(),
+        ),
+    )
+    result = await dispatch_activitypub_event(lemmy_rewritten_event, runtime)
+
+    assert result.status == "skipped"
+    assert result.detail == "discord-originated echo"
+    runtime.bot.fetch_forum_channel.assert_not_awaited()
+
+
+@pytest.mark.asyncio
 async def test_failed_subscribe_retry_then_accept_allows_publish(
     tmp_path: Path,
     command_tree,
