@@ -194,7 +194,7 @@ async def test_register_subscribe_accept_publish_then_echo_is_suppressed(
         _follow_accept_event(follow_activity_id),
         SimpleNamespace(
             database=database,
-            lemmy=SimpleNamespace(person_name=None),
+            lemmy=SimpleNamespace(),
             bot=SimpleNamespace(),
         ),
     )
@@ -221,7 +221,7 @@ async def test_register_subscribe_accept_publish_then_echo_is_suppressed(
 
     echo_runtime = SimpleNamespace(
         database=database,
-        lemmy=SimpleNamespace(person_name=None),
+        lemmy=SimpleNamespace(),
         bot=SimpleNamespace(
             wait_until_bridge_ready=AsyncMock(),
             fetch_forum_channel=AsyncMock(),
@@ -298,7 +298,7 @@ async def test_failed_subscribe_retry_then_accept_allows_publish(
         _follow_accept_event(follow_activity_id),
         SimpleNamespace(
             database=database,
-            lemmy=SimpleNamespace(person_name=None),
+            lemmy=SimpleNamespace(),
             bot=SimpleNamespace(),
         ),
     )

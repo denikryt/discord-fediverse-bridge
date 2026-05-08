@@ -186,7 +186,7 @@ async def test_follow_accepted_event_promotes_pending_subscription_to_accepted(
     )
     runtime = SimpleNamespace(
         database=database,
-        lemmy=SimpleNamespace(person_name=None),
+        lemmy=SimpleNamespace(),
         bot=SimpleNamespace(),
     )
     event = FollowLifecycleEvent(

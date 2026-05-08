@@ -1,108 +1,122 @@
 # Fedify Gateway Setup
 
-## Prerequisites
+## What This Process Does
 
-- Node.js 20+
-- nginx
-- certbot (for SSL certificates)
-- Public domain with DNS configured
-- Gateway running in background
+`fedify-gateway` is the public ActivityPub edge for the project.
 
-## Step 1: Start the Gateway
+It is responsible for:
+
+- local actor documents and WebFinger
+- signed outbound `Follow`
+- signed outbound user-authored `Create`
+- inbound federation intake
+- forwarding normalized events to the Python bridge
+
+## Required Env
+
+Env template: `fedify-gateway/.env.example`
+
+Required:
+
+- `FEDIFY_ORIGIN`
+- `PYTHON_BRIDGE_SHARED_SECRET`
+
+Common:
+
+- `FEDIFY_PORT`
+- `PYTHON_BRIDGE_EVENTS_URL`
+- `FEDIFY_ACTOR_IDENTIFIER`
+- `FEDIFY_ACTOR_NAME`
+- `FEDIFY_ACTOR_SUMMARY`
+
+## Example Env
+
+```env
+FEDIFY_ORIGIN=https://bot-test.nachitima.com/
+FEDIFY_PORT=3000
+DATABASE_URL=sqlite:///../bridge.db
+PYTHON_BRIDGE_EVENTS_URL=http://127.0.0.1:8081/internal/activitypub/events
+PYTHON_BRIDGE_SHARED_SECRET=change-me
+FEDIFY_ACTOR_IDENTIFIER=bridge
+FEDIFY_ACTOR_NAME=Discord Lemmy Bridge Gateway
+FEDIFY_ACTOR_SUMMARY=Receives ActivityPub activities from Lemmy and forwards normalized events to the Python bridge.
+```
+
+## Start
 
 ```bash
 cd fedify-gateway
-
-FEDIFY_ORIGIN=https://bot-test.nachitima.com/ \
-PYTHON_BRIDGE_EVENTS_URL=http://127.0.0.1:8080/internal/activitypub/events \
-PYTHON_BRIDGE_SHARED_SECRET=your-secret-key \
-npx tsx src/server.ts &
+npm install
+npm run start
 ```
 
-Or with `.env` file:
-```bash
-npm start &
-```
-
-## Step 2: Configure nginx
-
-Run the setup script (requires sudo):
+For local development:
 
 ```bash
-./nginx-setup.sh
+npm run dev
 ```
 
-This script will:
-1. Create nginx configuration
-2. Enable the site
-3. Obtain SSL certificate from Let's Encrypt
-4. Reload nginx with SSL
+## Health Check
 
-Alternatively, run manually:
+Local:
 
 ```bash
-sudo cp nginx.conf /etc/nginx/sites-available/bot-test.nachitima.com
-sudo ln -s /etc/nginx/sites-available/bot-test.nachitima.com /etc/nginx/sites-enabled/
-sudo nginx -t
-sudo systemctl reload nginx
-
-# Get SSL certificate
-sudo certbot certonly --nginx -d bot-test.nachitima.com
-
-# Update nginx config with SSL
-# (uncomment SSL lines in nginx.conf)
-sudo nginx -t
-sudo systemctl reload nginx
+curl http://127.0.0.1:3000/healthz
 ```
 
-## Step 3: Test the Gateway
+Behind nginx:
 
-Check health endpoint:
 ```bash
 curl https://bot-test.nachitima.com/healthz
 ```
 
 Expected response:
+
 ```json
 {"status":"ok"}
 ```
 
-## Step 4: Subscribe to a Community
+## Nginx
+
+Files:
+
+- `nginx.conf`
+- `nginx-setup.sh`
+
+## Manual Follow Check
+
+The internal follow endpoint requires the shared secret:
 
 ```bash
-curl -X POST https://bot-test.nachitima.com/follow-community \
+curl -X POST http://127.0.0.1:3000/follow-community \
+  -H "Authorization: Bearer change-me" \
   -H "Content-Type: application/json" \
-  -d '{"communityActorUrl": "https://forum.nu31.space/c/discord_bridge_test"}'
+  -d '{"communityActorUrl":"https://lemmy.example/c/general"}'
 ```
 
-Expected response:
-```json
-{"success":true}
-```
+## Publish Check
 
-## Troubleshooting
+The internal publish endpoint also requires the shared secret:
 
-### nginx won't reload
 ```bash
-sudo nginx -t  # Check for syntax errors
+curl -X POST http://127.0.0.1:3000/publish \
+  -H "Authorization: Bearer change-me" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "actorUsername":"alice",
+    "communityActorUrl":"https://lemmy.example/c/general",
+    "kind":"post",
+    "title":"Hello from bridge",
+    "bodyMarkdown":"test body",
+    "inReplyToObjectId":null
+  }'
 ```
 
-### SSL certificate issues
-```bash
-sudo certbot renew --dry-run  # Test renewal
-```
+## Verification Scripts
 
-### Gateway not accessible
 ```bash
-curl http://localhost:3000/healthz  # Check if gateway is running
-sudo systemctl status nginx  # Check nginx status
-```
-
-### Check logs
-```bash
-# nginx error log
-sudo tail -f /var/log/nginx/error.log
-
-# Gateway logs
-tail -f /tmp/gateway.log
+npm run check
+npm run verify:actor-layer
+npm run verify:python-contract
+npm run verify:publish-contract
 ```

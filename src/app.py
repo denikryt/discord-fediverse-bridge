@@ -20,46 +20,6 @@ from .runtime import Runtime
 logger = logging.getLogger(__name__)
 
 
-async def _seed_legacy_subscription(settings: Settings, database: Database, lemmy: LemmyClient) -> None:
-    # Backward-compat migration: if the old single-pair env vars are still set,
-    # insert a subscription row on the first startup so existing deployments keep
-    # working without requiring a manual /subscribe-channel call.
-    # The check is idempotent — it does nothing if the subscription already exists.
-    channel_id = settings.discord_forum_channel_id
-    actor_id = settings.lemmy_community_actor_id
-    community_name = settings.lemmy_community_name
-
-    if channel_id is None or actor_id is None:
-        return
-
-    existing = database.get_subscription_by_channel(channel_id)
-    if existing is not None:
-        return
-
-    numeric_id: int | None = None
-    if community_name:
-        try:
-            numeric_id = await lemmy.resolve_community_id(name=community_name)
-        except Exception:
-            # A resolution failure is not fatal — the subscription is still created
-            # without a numeric ID. Outbound posts from this channel will be skipped
-            # until the subscription is recreated with a valid community.
-            logger.warning("Could not resolve legacy community ID for name '%s'", community_name)
-
-    database.create_subscription(
-        discord_channel_id=channel_id,
-        lemmy_community_actor_id=actor_id,
-        lemmy_community_name=community_name,
-        lemmy_community_id=numeric_id,
-    )
-    logger.info(
-        "Created default subscription from legacy config: channel %s -> %s. "
-        "You can remove DISCORD_FORUM_CHANNEL_ID, LEMMY_COMMUNITY_NAME, and LEMMY_COMMUNITY_ACTOR_ID from your .env.",
-        channel_id,
-        actor_id,
-    )
-
-
 async def main() -> None:
     # Build the full runtime once and then run both long-lived entry points
     # against the same shared state.
@@ -80,13 +40,7 @@ async def main() -> None:
         database=database,
         base_url=settings.normalized_public_bridge_base_url,
     )
-    lemmy = LemmyClient(
-        settings.normalized_lemmy_base_url,
-        settings.lemmy_username_or_email,
-        settings.lemmy_password,
-    )
-    await lemmy.login()
-    await _seed_legacy_subscription(settings, database, lemmy)
+    lemmy = LemmyClient(settings.normalized_lemmy_base_url)
 
     bot = BridgeBot(
         settings=settings,

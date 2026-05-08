@@ -36,11 +36,6 @@ async def dispatch_activitypub_event(
 
 
 async def handle_post_created(event: ActivityPubEvent, runtime: Runtime) -> HandlerResult:
-    # Skip posts authored by our own bridge bot — they were created outbound
-    # from Discord and will be federated back by Lemmy, which would cause a
-    # duplicate Discord thread for the same content.
-    if runtime.lemmy.person_name and event.actor_id.rstrip("/").endswith(f"/u/{runtime.lemmy.person_name}"):
-        return HandlerResult(status="skipped", detail="authored by bridge bot, skipping echo")
     if _is_discord_originated_echo(event, runtime):
         return HandlerResult(status="skipped", detail="discord-originated echo")
 
@@ -67,10 +62,6 @@ async def handle_post_created(event: ActivityPubEvent, runtime: Runtime) -> Hand
 
 
 async def handle_comment_created(event: ActivityPubEvent, runtime: Runtime) -> HandlerResult:
-    # Skip comments authored by the bridge bot itself — same echo-loop reason
-    # as in handle_post_created.
-    if runtime.lemmy.person_name and event.actor_id.rstrip("/").endswith(f"/u/{runtime.lemmy.person_name}"):
-        return HandlerResult(status="skipped", detail="authored by bridge bot, skipping echo")
     if _is_discord_originated_echo(event, runtime):
         return HandlerResult(status="skipped", detail="discord-originated echo")
 

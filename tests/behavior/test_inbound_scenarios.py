@@ -122,7 +122,7 @@ def test_accepted_subscription_inbound_post_creates_discord_thread_and_receipt(
     runtime = SimpleNamespace(
         settings=SimpleNamespace(fedify_shared_secret="secret"),
         database=database,
-        lemmy=SimpleNamespace(person_name=None),
+        lemmy=SimpleNamespace(),
         bot=SimpleNamespace(
             wait_until_bridge_ready=AsyncMock(),
             fetch_forum_channel=AsyncMock(return_value=forum_channel),
@@ -167,7 +167,7 @@ def test_accepted_subscription_inbound_comment_creates_discord_message_and_recei
     runtime = SimpleNamespace(
         settings=SimpleNamespace(fedify_shared_secret="secret"),
         database=database,
-        lemmy=SimpleNamespace(person_name=None),
+        lemmy=SimpleNamespace(),
         bot=SimpleNamespace(
             wait_until_bridge_ready=AsyncMock(),
             get_thread_by_id=AsyncMock(return_value=thread),
@@ -203,7 +203,7 @@ async def test_no_accepted_subscription_inbound_post_is_skipped(
     database = _database(tmp_path)
     runtime = SimpleNamespace(
         database=database,
-        lemmy=SimpleNamespace(person_name=None),
+        lemmy=SimpleNamespace(),
         bot=SimpleNamespace(
             wait_until_bridge_ready=AsyncMock(),
             fetch_forum_channel=AsyncMock(),
@@ -237,7 +237,7 @@ def test_duplicate_delivery_id_returns_idempotent_duplicate_without_side_effects
     runtime = SimpleNamespace(
         settings=SimpleNamespace(fedify_shared_secret="secret"),
         database=database,
-        lemmy=SimpleNamespace(person_name=None),
+        lemmy=SimpleNamespace(),
         bot=SimpleNamespace(
             wait_until_bridge_ready=AsyncMock(),
             fetch_forum_channel=AsyncMock(return_value=forum_channel),
@@ -286,7 +286,7 @@ async def test_discord_originated_echo_is_skipped_without_creating_duplicate(
     )
     runtime = SimpleNamespace(
         database=database,
-        lemmy=SimpleNamespace(person_name=None),
+        lemmy=SimpleNamespace(),
         bot=SimpleNamespace(
             wait_until_bridge_ready=AsyncMock(),
             fetch_forum_channel=AsyncMock(),
@@ -314,7 +314,7 @@ def test_comment_before_parent_mapping_becomes_deferred_then_retries_processed(
     runtime = SimpleNamespace(
         settings=SimpleNamespace(fedify_shared_secret="secret"),
         database=database,
-        lemmy=SimpleNamespace(person_name=None),
+        lemmy=SimpleNamespace(),
         bot=SimpleNamespace(
             wait_until_bridge_ready=AsyncMock(),
             get_thread_by_id=AsyncMock(return_value=thread),
@@ -371,7 +371,7 @@ def test_discord_target_failure_marks_inbound_receipt_failed(
     runtime = SimpleNamespace(
         settings=SimpleNamespace(fedify_shared_secret="secret"),
         database=database,
-        lemmy=SimpleNamespace(person_name=None),
+        lemmy=SimpleNamespace(),
         bot=SimpleNamespace(
             wait_until_bridge_ready=AsyncMock(),
             fetch_forum_channel=AsyncMock(

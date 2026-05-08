@@ -1,82 +1,151 @@
 # Discord-Lemmy Bridge
 
-Python bridge that syncs content between Discord forum channels and Lemmy communities.
+Python bridge plus a separate Fedify gateway that sync Discord forum threads with Lemmy communities.
 
-Subscriptions are managed dynamically via Discord slash commands — any number of forum channels can be bridged to Lemmy communities at runtime without restarting the bot.
+## Processes
 
-## What is synced
+The project runs as two processes:
 
-- Discord forum thread → Lemmy post
-- Discord message inside a forum thread → Lemmy comment
-- Lemmy post → Discord forum thread + starter message (via Fedify HTTP intake)
-- Lemmy comment → Discord message inside the mapped forum thread
+1. `Python bridge`
+   - Discord bot
+   - internal FastAPI server
+   - registration backend
+   - subscription state and message mappings in SQLite
 
-Only create events are synced. Edits, deletes, attachments, and vote sync are not implemented.
+2. `fedify-gateway`
+   - ActivityPub protocol edge
+   - local actor documents and WebFinger
+   - outbound `Follow` and `Create`
+   - inbound federation intake forwarded to Python
+
+## What Is Synced
+
+- Discord forum thread starter -> ActivityPub post
+- Discord message inside a mapped thread -> ActivityPub comment
+- inbound ActivityPub post -> Discord forum thread + starter message
+- inbound ActivityPub comment -> Discord thread message
+
+Only create flows are implemented. Edits, deletes, attachments, and vote sync are not implemented.
 
 ## Requirements
 
 - Python 3.12+
-- A Discord bot with **message content intent** enabled and **applications.commands** scope
-- A dedicated Lemmy user for the bridge
-- A running Fedify gateway (for Lemmy → Discord direction)
+- Node.js 20+
+- a Discord bot with `message content intent` enabled
+- a public Lemmy instance URL
+- a running `fedify-gateway`
 
-## Configuration
+## Python Bridge Env
 
-Copy `.env.example` to `.env` and fill in:
+Env template: `.env.example`
 
-| Variable | Required | Description |
-|---|---|---|
-| `DISCORD_TOKEN` | yes | Discord bot token |
-| `LEMMY_BASE_URL` | yes | Base URL of the Lemmy instance, e.g. `https://lemmy.ml` |
-| `LEMMY_USERNAME_OR_EMAIL` | yes | Bridge bot Lemmy account |
-| `LEMMY_PASSWORD` | yes | Bridge bot Lemmy password |
-| `FEDIFY_SHARED_SECRET` | yes | Shared secret for internal HTTP communication with the Fedify gateway |
-| `DISCORD_FORUM_CHANNEL_ID` | no | Legacy: channel ID of a single forum channel to subscribe on first startup |
-| `LEMMY_COMMUNITY_NAME` | no | Legacy: short community name for the above channel, e.g. `general` |
-| `LEMMY_COMMUNITY_ACTOR_ID` | no | Legacy: ActivityPub actor ID for the above community |
-| `DATABASE_URL` | no | SQLite path or other SQLAlchemy URL, defaults to `sqlite:///./bridge.db` |
-| `INTERNAL_HTTP_HOST` | no | Host for the internal HTTP server, defaults to `127.0.0.1` |
-| `INTERNAL_HTTP_PORT` | no | Port for the internal HTTP server, defaults to `8080` |
-| `BRIDGE_DISPLAY_PREFIX` | no | Prefix added to bridged messages, defaults to `[bridge]` |
-| `LOG_LEVEL` | no | Logging level, defaults to `INFO` |
+Required:
 
-The three legacy variables (`DISCORD_FORUM_CHANNEL_ID`, `LEMMY_COMMUNITY_NAME`, `LEMMY_COMMUNITY_ACTOR_ID`) create a default subscription on first startup so existing deployments continue working. They can be removed from `.env` after the first run.
+- `DISCORD_TOKEN`
+- `LEMMY_BASE_URL`
+- `FEDIFY_SHARED_SECRET`
+
+Common:
+
+- `FEDIFY_GATEWAY_URL`
+- `INTERNAL_HTTP_HOST`
+- `INTERNAL_HTTP_PORT`
+- `PUBLIC_BRIDGE_BASE_URL`
+
+Needed only for web registration:
+
+- `DISCORD_OAUTH_CLIENT_ID`
+- `DISCORD_OAUTH_CLIENT_SECRET`
+- `DISCORD_OAUTH_REDIRECT_URI`
+
+## Gateway Env
+
+Env template: `fedify-gateway/.env.example`
+
+Required:
+
+- `FEDIFY_ORIGIN`
+- `PYTHON_BRIDGE_SHARED_SECRET`
+
+Common:
+
+- `PYTHON_BRIDGE_EVENTS_URL`
+- `FEDIFY_PORT`
 
 ## Install
+
+Python:
 
 ```bash
 python3 -m venv .venv
 source .venv/bin/activate
 pip install -e vendor/discordops
-pip install -e .[dev]
+pip install -e '.[dev]'
 ```
 
-`discordops` is vendored as a standalone subproject under `vendor/discordops`, so
-local development installs it as its own editable package before the app itself.
+Gateway:
+
+```bash
+cd fedify-gateway
+npm install
+```
 
 ## Run
 
+Start the gateway in one terminal:
+
 ```bash
+cd fedify-gateway
+npm run start
+```
+
+Start the Python bridge in another terminal:
+
+```bash
+source .venv/bin/activate
 python -m src.app
 ```
 
-## Managing subscriptions
+## Tests
 
-Subscriptions link a Discord forum channel to a Lemmy community. All commands require the **Manage Channels** permission.
+Python test suite:
 
-| Command | Description |
-|---|---|
-| `/subscribe-channel` | Subscribe a forum channel to a Lemmy community. The community list is fetched from the configured Lemmy instance. |
-| `/unsubscribe-channel` | Remove a channel's subscription. |
-| `/list-subscriptions` | Show all active channel-community pairs. |
+```bash
+source .venv/bin/activate
+.venv/bin/pytest -q
+```
 
-Each forum channel can have at most one subscription.
+Gateway checks:
 
-## Architecture
+```bash
+cd fedify-gateway
+npm run check
+npm run verify:actor-layer
+npm run verify:python-contract
+npm run verify:publish-contract
+```
 
-The bridge runs two concurrent processes in one Python instance:
+## Registration
 
-- **Discord bot** — handles outbound sync (Discord → Lemmy) and slash commands
-- **Internal HTTP server** — receives normalized events from the Fedify gateway for inbound sync (Lemmy → Discord)
+Routes served by the Python bridge:
 
-Subscriptions and message mappings are persisted in SQLite (or any SQLAlchemy-compatible database).
+- `GET /register`
+- `GET /auth/discord/start`
+- `GET /auth/discord/callback`
+- `POST /register/complete`
+- `GET /register/success`
+
+## Commands
+
+- `/register`
+- `/subscribe-channel`
+- `/unsubscribe-channel`
+- `/list-subscriptions`
+
+## Nginx
+
+The repository includes:
+
+- `fedify-gateway/nginx.conf`
+- `fedify-gateway/nginx-setup.sh`
+- `fedify-gateway/SETUP.md`

@@ -9,14 +9,6 @@ class Settings(BaseSettings):
 
     discord_token: str = Field(alias="DISCORD_TOKEN")
     lemmy_base_url: HttpUrl = Field(alias="LEMMY_BASE_URL")
-    lemmy_username_or_email: str = Field(alias="LEMMY_USERNAME_OR_EMAIL")
-    lemmy_password: str = Field(alias="LEMMY_PASSWORD")
-
-    # Legacy single-pair config — if both are set, a default subscription is
-    # created in the DB on first startup so existing deployments keep working.
-    discord_forum_channel_id: int | None = Field(default=None, alias="DISCORD_FORUM_CHANNEL_ID")
-    lemmy_community_name: str | None = Field(default=None, alias="LEMMY_COMMUNITY_NAME")
-    lemmy_community_actor_id: str | None = Field(default=None, alias="LEMMY_COMMUNITY_ACTOR_ID")
 
     database_url: str = Field(default="sqlite:///./bridge.db", alias="DATABASE_URL")
     fedify_gateway_url: HttpUrl = Field(default="http://127.0.0.1:3000", alias="FEDIFY_GATEWAY_URL")
