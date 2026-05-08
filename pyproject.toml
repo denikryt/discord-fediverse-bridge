@@ -34,10 +34,10 @@ include = ["src*"]
 # tests both import the same in-repo discordops package during local runs.
 pythonpath = [
   ".",
-  "packages/discordops",
+  "vendor/discordops",
 ]
 testpaths = [
   "tests",
-  "packages/discordops/tests",
+  "vendor/discordops/tests",
 ]
 asyncio_mode = "auto"
