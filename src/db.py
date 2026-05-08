@@ -495,6 +495,15 @@ class Database:
         with self.session() as session:
             return session.scalar(select(User).where(User.actor_url == actor_url))
 
+    def list_users(self) -> list[User]:
+        """Return all registered users in stable creation order."""
+        # User identity export needs a deterministic ordering so repeated dumps
+        # can be diffed and restored without hidden row-order changes.
+        with self.session() as session:
+            return list(
+                session.scalars(select(User).order_by(User.created_at, User.id))
+            )
+
     def create_message_mapping(
         self,
         *,
