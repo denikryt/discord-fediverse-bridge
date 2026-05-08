@@ -139,6 +139,8 @@ export function buildPublishCreateActivity(
   );
   const communityId = resolvedCommunityId ?? request.communityActorUrl;
   const object = buildPublishObject(request, actorUri, objectId, communityId);
+  const PUBLIC = new URL("https://www.w3.org/ns/activitystreams#Public");
+  const community = new URL(resolvedCommunityId ?? request.communityActorUrl);
   return {
     actorUri,
     activityId,
@@ -147,6 +149,8 @@ export function buildPublishCreateActivity(
       id: activityId,
       actor: actorUri,
       object,
+      tos: [PUBLIC, community],
+      ccs: [actorUri],
     }),
   };
 }
@@ -166,12 +170,17 @@ function buildPublishObject(
     mediaType: "text/markdown",
   });
 
+  const PUBLIC = new URL("https://www.w3.org/ns/activitystreams#Public");
+  const community = new URL(communityId);
+
   if (request.kind === "post") {
     return new Page({
       id: objectId,
       name: request.title ?? "Untitled Discord Post",
       attribution: actorUri,
-      audience: new URL(communityId),
+      audience: community,
+      tos: [PUBLIC, community],
+      ccs: [actorUri],
       source,
       url: objectId,
     });
@@ -183,7 +192,9 @@ function buildPublishObject(
   return new Note({
     id: objectId,
     attribution: actorUri,
-    audience: new URL(communityId),
+    audience: community,
+    tos: [PUBLIC, community],
+    ccs: [actorUri],
     source,
     replyTarget: new URL(request.inReplyToObjectId),
     url: objectId,

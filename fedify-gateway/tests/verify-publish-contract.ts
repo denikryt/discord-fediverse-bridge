@@ -58,6 +58,31 @@ async function main(): Promise<void> {
   assert.equal(commentEvent.event_type, "comment.created");
   assert.equal(commentEvent.object.post_ap_id, `${TEST_ORIGIN}users/alice/post/123`);
 
+  // Lemmy requires `to` to contain the community and AS#Public so it can route
+  // the activity. Verify via JSON-LD serialization to avoid HTTP dereferences.
+  const PUBLIC_SHORT = "as:Public";
+  const postBuilt = buildPublishCreateActivity(TEST_CONFIG, postRequest, TEST_COMMUNITY_URL);
+  const commentBuilt = buildPublishCreateActivity(TEST_CONFIG, commentRequest, TEST_COMMUNITY_URL);
+
+  const toList = (v: unknown): string[] =>
+    Array.isArray(v) ? v.map(String) : v != null ? [String(v)] : [];
+
+  const postJson = await postBuilt.activity.toJsonLd() as any;
+  const postTos = toList(postJson.to);
+  const postCcs = toList(postJson.cc);
+  const postObjectTos = toList(postJson.object?.to);
+
+  assert.ok(postTos.includes(PUBLIC_SHORT), "Create.to must include as:Public");
+  assert.ok(postTos.includes(TEST_COMMUNITY_URL), "Create.to must include community");
+  assert.ok(postCcs.includes(`${TEST_ORIGIN}users/alice`), "Create.cc must include actor");
+  assert.ok(postObjectTos.includes(PUBLIC_SHORT), "Page.to must include as:Public");
+  assert.ok(postObjectTos.includes(TEST_COMMUNITY_URL), "Page.to must include community");
+
+  const commentJson = await commentBuilt.activity.toJsonLd() as any;
+  const commentTos = toList(commentJson.to);
+  assert.ok(commentTos.includes(PUBLIC_SHORT), "Comment Create.to must include as:Public");
+  assert.ok(commentTos.includes(TEST_COMMUNITY_URL), "Comment Create.to must include community");
+
   console.log("verify:publish-contract passed");
 }
 
