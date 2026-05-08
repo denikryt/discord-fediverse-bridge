@@ -21,6 +21,7 @@ class Settings(BaseSettings):
     registration_session_cookie_name: str = Field(default="bridge_registration_session", alias="REGISTRATION_SESSION_COOKIE_NAME")
     registration_session_ttl_seconds: int = Field(default=3600, alias="REGISTRATION_SESSION_TTL_SECONDS")
     fedify_shared_secret: str = Field(alias="FEDIFY_SHARED_SECRET")
+    fedify_origin: HttpUrl = Field(default="http://127.0.0.1:3000", alias="FEDIFY_ORIGIN")
     bridge_display_prefix: str = Field(default="[bridge]", alias="BRIDGE_DISPLAY_PREFIX")
     log_level: str = Field(default="INFO", alias="LOG_LEVEL")
 
@@ -32,6 +33,8 @@ class Settings(BaseSettings):
 
     @property
     def normalized_public_bridge_base_url(self) -> str:
-        # Registration and actor URLs must use one stable public origin so the
-        # bot, FastAPI backend, and Fedify gateway all advertise the same URLs.
         return str(self.public_bridge_base_url).rstrip("/")
+
+    @property
+    def normalized_fedify_origin(self) -> str:
+        return str(self.fedify_origin).rstrip("/")

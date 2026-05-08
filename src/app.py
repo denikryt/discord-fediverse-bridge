@@ -38,7 +38,7 @@ async def main() -> None:
     )
     registration_service = RegistrationService(
         database=database,
-        base_url=settings.normalized_public_bridge_base_url,
+        base_url=settings.normalized_fedify_origin,
     )
     lemmy = LemmyClient(settings.normalized_lemmy_base_url)
 

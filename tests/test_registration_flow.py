@@ -50,13 +50,14 @@ def _runtime(tmp_path: Path) -> SimpleNamespace:
     database = _database(tmp_path)
     settings = SimpleNamespace(
         fedify_shared_secret="test-secret",
-        normalized_public_bridge_base_url="https://discord-bridge.example.com",
+        normalized_public_bridge_base_url="https://bridge.example.com",
+        normalized_fedify_origin="https://gateway.example.com",
         registration_session_cookie_name="bridge_registration_session",
         registration_session_ttl_seconds=3600,
     )
     registration_service = RegistrationService(
         database=database,
-        base_url=settings.normalized_public_bridge_base_url,
+        base_url=settings.normalized_fedify_origin,
         keypair_generator=lambda: ("test-public-key", "test-private-key"),
     )
     return SimpleNamespace(
@@ -166,10 +167,10 @@ def test_register_complete_creates_user_with_urls_and_keys(tmp_path: Path) -> No
     assert response.headers["location"] == "/register/success"
     assert created is not None
     assert created.discord_user_id == "1234567890"
-    assert created.actor_url == "https://discord-bridge.example.com/users/alice"
-    assert created.inbox_url == "https://discord-bridge.example.com/users/alice/inbox"
-    assert created.outbox_url == "https://discord-bridge.example.com/users/alice/outbox"
-    assert created.followers_url == "https://discord-bridge.example.com/users/alice/followers"
+    assert created.actor_url == "https://gateway.example.com/users/alice"
+    assert created.inbox_url == "https://gateway.example.com/users/alice/inbox"
+    assert created.outbox_url == "https://gateway.example.com/users/alice/outbox"
+    assert created.followers_url == "https://gateway.example.com/users/alice/followers"
     assert created.public_key_pem == "test-public-key"
     assert created.private_key_pem == "test-private-key"
 
@@ -229,10 +230,10 @@ def test_register_complete_rejects_duplicate_username(tmp_path: Path) -> None:
     database.create_user(
         discord_user_id="existing-user",
         activitypub_username="alice",
-        actor_url="https://discord-bridge.example.com/users/alice",
-        inbox_url="https://discord-bridge.example.com/users/alice/inbox",
-        outbox_url="https://discord-bridge.example.com/users/alice/outbox",
-        followers_url="https://discord-bridge.example.com/users/alice/followers",
+        actor_url="https://gateway.example.com/users/alice",
+        inbox_url="https://gateway.example.com/users/alice/inbox",
+        outbox_url="https://gateway.example.com/users/alice/outbox",
+        followers_url="https://gateway.example.com/users/alice/followers",
         public_key_pem="public-key",
         private_key_pem="private-key",
     )
@@ -265,10 +266,10 @@ def test_register_complete_returns_existing_user_for_duplicate_discord_id(
     database.create_user(
         discord_user_id="1234567890",
         activitypub_username="alice",
-        actor_url="https://discord-bridge.example.com/users/alice",
-        inbox_url="https://discord-bridge.example.com/users/alice/inbox",
-        outbox_url="https://discord-bridge.example.com/users/alice/outbox",
-        followers_url="https://discord-bridge.example.com/users/alice/followers",
+        actor_url="https://gateway.example.com/users/alice",
+        inbox_url="https://gateway.example.com/users/alice/inbox",
+        outbox_url="https://gateway.example.com/users/alice/outbox",
+        followers_url="https://gateway.example.com/users/alice/followers",
         public_key_pem="public-key",
         private_key_pem="private-key",
     )
@@ -300,10 +301,10 @@ def test_register_page_shows_existing_registration_for_repeat_user(tmp_path: Pat
     database.create_user(
         discord_user_id="1234567890",
         activitypub_username="alice",
-        actor_url="https://discord-bridge.example.com/users/alice",
-        inbox_url="https://discord-bridge.example.com/users/alice/inbox",
-        outbox_url="https://discord-bridge.example.com/users/alice/outbox",
-        followers_url="https://discord-bridge.example.com/users/alice/followers",
+        actor_url="https://gateway.example.com/users/alice",
+        inbox_url="https://gateway.example.com/users/alice/inbox",
+        outbox_url="https://gateway.example.com/users/alice/outbox",
+        followers_url="https://gateway.example.com/users/alice/followers",
         public_key_pem="public-key",
         private_key_pem="private-key",
     )
@@ -322,8 +323,8 @@ def test_register_page_shows_existing_registration_for_repeat_user(tmp_path: Pat
 
     assert response.status_code == 200
     assert "Already registered" in response.text
-    assert "@alice@discord-bridge.example.com" in response.text
-    assert "https://discord-bridge.example.com/users/alice" in response.text
+    assert "@alice@gateway.example.com" in response.text
+    assert "https://gateway.example.com/users/alice" in response.text
 
 
 def test_register_success_page_shows_created_handle(tmp_path: Path) -> None:
@@ -349,5 +350,23 @@ def test_register_success_page_shows_created_handle(tmp_path: Path) -> None:
     response = client.get("/register/success")
 
     assert response.status_code == 200
-    assert "@alice@discord-bridge.example.com" in response.text
-    assert "https://discord-bridge.example.com/users/alice" in response.text
+    assert "@alice@gateway.example.com" in response.text
+    assert "https://gateway.example.com/users/alice" in response.text
+
+
+def test_actor_urls_use_fedify_origin_not_bridge_url() -> None:
+    """Actor URLs must point to the fedify gateway domain, not the bridge web domain."""
+    service = RegistrationService(
+        database=None,  # type: ignore[arg-type]
+        base_url="https://gateway.example.com",
+        keypair_generator=lambda: ("pub", "priv"),
+    )
+
+    actor_url, inbox_url, outbox_url, followers_url = service.build_actor_urls("alice")
+
+    assert actor_url == "https://gateway.example.com/users/alice"
+    assert inbox_url == "https://gateway.example.com/users/alice/inbox"
+    assert outbox_url == "https://gateway.example.com/users/alice/outbox"
+    assert followers_url == "https://gateway.example.com/users/alice/followers"
+    # bridge web domain must not appear in any actor URL
+    assert "bridge" not in actor_url

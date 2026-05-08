@@ -103,11 +103,17 @@ export async function publishContent(
     objectId: objectId.toString(),
   });
 
-  await ctx.sendActivity(
-    { username: request.actorUsername },
-    { id: new URL(communityId), inboxId: new URL(inboxUrl) },
-    activity,
-  );
+  try {
+    await ctx.sendActivity(
+      { username: request.actorUsername },
+      { id: new URL(communityId), inboxId: new URL(inboxUrl) },
+      activity,
+    );
+    console.log("[Publish] sendActivity completed successfully");
+  } catch (err) {
+    console.error("[Publish] sendActivity failed:", err);
+    throw err;
+  }
 
   return {
     activityId: activityId.href,
