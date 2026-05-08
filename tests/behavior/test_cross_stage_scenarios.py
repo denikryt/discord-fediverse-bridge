@@ -195,7 +195,11 @@ async def test_register_subscribe_accept_publish_then_echo_is_suppressed(
         SimpleNamespace(
             database=database,
             lemmy=SimpleNamespace(),
-            bot=SimpleNamespace(),
+            bot=SimpleNamespace(
+                fetch_forum_channel=AsyncMock(
+                    return_value=SimpleNamespace(send=AsyncMock())
+                )
+            ),
         ),
     )
     accepted_subscription = database.get_subscription_by_channel(forum_channel.id)

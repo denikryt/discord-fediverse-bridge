@@ -42,6 +42,27 @@ FEDIFY_ACTOR_NAME=Discord Lemmy Bridge Gateway
 FEDIFY_ACTOR_SUMMARY=Receives ActivityPub activities from Lemmy and forwards normalized events to the Python bridge.
 ```
 
+## Persistent Signing Keys
+
+The gateway signs all outbound ActivityPub requests (Follow, Create) with an RSA key pair.
+If no keys are configured, a fresh in-memory pair is generated on every restart — remote servers
+that cached the old public key will reject the new signatures.
+
+Generate a persistent pair and write it to `fedify-gateway/.env` in one command:
+
+```bash
+npm run generate-keys
+```
+
+This adds `FEDIFY_BRIDGE_PRIVATE_KEY_JWK_JSON` and `FEDIFY_BRIDGE_PUBLIC_KEY_JWK_JSON` to `fedify-gateway/.env`.
+Run it once; subsequent calls are a no-op unless you need to regenerate:
+
+```bash
+npm run generate-keys:force
+```
+
+Restart the gateway after running the script.
+
 ## Start
 
 ```bash

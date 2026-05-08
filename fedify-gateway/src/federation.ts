@@ -167,9 +167,10 @@ export function createGatewayFederation(
       return;
     })
     .on(Accept, async (ctx, activity) => {
+      const activityId = activity.id?.href ?? null;
       const event = buildFollowAcceptedEvent(
         ctx.data,
-        activity.id?.href ?? null,
+        activityId,
       );
       if (event == null) {
         logDebug(isDebug, "Accept did not contain a follow activity id");
@@ -292,9 +293,12 @@ function buildFollowAcceptedEvent(
   data: GatewayContextData,
   fallbackDeliveryId: string | null,
 ): FollowAcceptedEvent | null {
-  // Follow acceptance does not carry content-object fields, so it gets its
-  // own normalization path from the raw Accept payload.
-  const rawRecord = asRecord(data.activitypubRawJson);
+  // activitypubRawJson is populated only when Fedify middleware and Hono share
+  // the same request body read. When it is missing (Fedify re-dispatches from
+  // its internal queue), fall back to the raw-activity cache keyed by id.
+  const rawJson = data.activitypubRawJson
+    ?? (fallbackDeliveryId != null ? getRawActivity(fallbackDeliveryId)?.rawJson : undefined);
+  const rawRecord = asRecord(rawJson);
   const actorId = asString(rawRecord?.actor);
   const objectValue = rawRecord?.object;
   const objectRecord = asRecord(objectValue);

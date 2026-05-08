@@ -96,7 +96,9 @@ async def handle_follow_accepted(
     event: FollowLifecycleEvent, runtime: Runtime
 ) -> HandlerResult:
     # Follow acceptance is pure subscription-state mutation, so it does not
-    # touch Discord directly. It only marks the pending subscription active.
+    # touch Discord directly for routing state, but we still try to notify the
+    # target forum channel after acceptance so moderators see the result in the
+    # same place where they issued the subscribe command.
     subscription = runtime.database.get_subscription_by_follow_activity_id(
         event.object.follow_activity_id
     )
@@ -114,7 +116,30 @@ async def handle_follow_accepted(
     runtime.database.mark_subscription_accepted_by_follow_activity_id(
         event.object.follow_activity_id
     )
-    return HandlerResult(status="processed", detail="subscription accepted")
+
+    try:
+        forum_channel = await runtime.bot.fetch_forum_channel(
+            subscription.discord_channel_id
+        )
+        # The notification is best-effort: routing must not depend on Discord
+        # message delivery after the subscription is already accepted.
+        await forum_channel.send(
+            f"Bridge follow for **{subscription.community_handle or subscription.lemmy_community_name or subscription.lemmy_community_actor_id}** was accepted. This channel is now federated."
+        )
+    except Exception:
+        logger.exception(
+            "Could not send follow acceptance notification for channel %s",
+            subscription.discord_channel_id,
+        )
+        return HandlerResult(
+            status="processed",
+            detail="subscription accepted; notification failed",
+        )
+
+    return HandlerResult(
+        status="processed",
+        detail="subscription accepted and channel notified",
+    )
 
 
 def _is_discord_originated_echo(event: ActivityPubEvent, runtime: Runtime) -> bool:

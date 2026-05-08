@@ -5,6 +5,7 @@ from __future__ import annotations
 from datetime import UTC, datetime
 from pathlib import Path
 from types import SimpleNamespace
+from unittest.mock import AsyncMock
 
 import pytest
 
@@ -61,7 +62,11 @@ async def test_follow_accept_event_marks_pending_subscription_accepted(
     runtime = SimpleNamespace(
         database=database,
         lemmy=SimpleNamespace(),
-        bot=SimpleNamespace(),
+        bot=SimpleNamespace(
+            fetch_forum_channel=AsyncMock(
+                return_value=SimpleNamespace(send=AsyncMock())
+            )
+        ),
     )
     event = FollowLifecycleEvent(
         event_type="follow.accepted",
@@ -76,9 +81,13 @@ async def test_follow_accept_event_marks_pending_subscription_accepted(
     subscription = database.get_subscription_by_channel(123)
 
     assert result.status == "processed"
-    assert result.detail == "subscription accepted"
+    assert result.detail == "subscription accepted and channel notified"
     assert subscription is not None
     assert subscription.status == "accepted"
+    runtime.bot.fetch_forum_channel.assert_awaited_once_with(123)
+    runtime.bot.fetch_forum_channel.return_value.send.assert_awaited_once_with(
+        "Bridge follow for **!hackers@lemmy.example** was accepted. This channel is now federated."
+    )
 
 
 def test_only_accepted_subscriptions_are_routed_for_inbound_community_events(

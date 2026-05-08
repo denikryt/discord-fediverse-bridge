@@ -5,6 +5,7 @@ from __future__ import annotations
 from datetime import UTC, datetime
 from pathlib import Path
 from types import SimpleNamespace
+from unittest.mock import AsyncMock
 
 import pytest
 
@@ -173,6 +174,7 @@ async def test_follow_accepted_event_promotes_pending_subscription_to_accepted(
 ) -> None:
     """A matching Accept(Follow) should activate the subscription for routing."""
     database = _database(tmp_path)
+    forum_channel = SimpleNamespace(send=AsyncMock())
     follow_activity_id = f"https://{BRIDGE_EXAMPLE_DOMAIN}/activities/follow/1"
     database.create_subscription(
         discord_channel_id=12345,
@@ -187,7 +189,9 @@ async def test_follow_accepted_event_promotes_pending_subscription_to_accepted(
     runtime = SimpleNamespace(
         database=database,
         lemmy=SimpleNamespace(),
-        bot=SimpleNamespace(),
+        bot=SimpleNamespace(
+            fetch_forum_channel=AsyncMock(return_value=forum_channel),
+        ),
     )
     event = FollowLifecycleEvent(
         event_type="follow.accepted",
@@ -204,3 +208,6 @@ async def test_follow_accepted_event_promotes_pending_subscription_to_accepted(
     assert result.status == "processed"
     assert subscription is not None
     assert subscription.status == "accepted"
+    forum_channel.send.assert_awaited_once_with(
+        "Bridge follow for **!hackers@lemmy.example** was accepted. This channel is now federated."
+    )
