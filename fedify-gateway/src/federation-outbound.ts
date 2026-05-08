@@ -1,3 +1,4 @@
+import { Temporal } from "@js-temporal/polyfill";
 import { Create, Follow, Note, Page, Source } from "@fedify/vocab";
 import type { Federation } from "@fedify/fedify";
 import type { GatewayConfig } from "./config.js";
@@ -172,6 +173,8 @@ function buildPublishObject(
 
   const PUBLIC = new URL("https://www.w3.org/ns/activitystreams#Public");
   const community = new URL(communityId);
+  const published = Temporal.Now.instant();
+  const htmlContent = markdownToHtml(request.bodyMarkdown);
 
   if (request.kind === "post") {
     return new Page({
@@ -182,6 +185,8 @@ function buildPublishObject(
       tos: [PUBLIC, community],
       ccs: [actorUri],
       source,
+      content: htmlContent,
+      published,
       url: objectId,
     });
   }
@@ -196,9 +201,18 @@ function buildPublishObject(
     tos: [PUBLIC, community],
     ccs: [actorUri],
     source,
+    content: htmlContent,
+    published,
     replyTarget: new URL(request.inReplyToObjectId),
     url: objectId,
   });
+}
+
+function markdownToHtml(markdown: string): string {
+  return markdown
+    .split(/\n\n+/)
+    .map((p) => `<p>${p.trim().replace(/\n/g, "<br>")}</p>`)
+    .join("\n");
 }
 
 async function fetchRemoteCommunity(
