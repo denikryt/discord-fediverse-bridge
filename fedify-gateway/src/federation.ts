@@ -169,6 +169,7 @@ export function createGatewayFederation(
     .on(Accept, async (ctx, activity) => {
       const activityId = activity.id?.href ?? null;
       const event = buildFollowAcceptedEvent(
+        activity,
         ctx.data,
         activityId,
       );
@@ -289,21 +290,24 @@ function logDebug(isDebug: boolean, message: string): void {
   }
 }
 
-function buildFollowAcceptedEvent(
+export function buildFollowAcceptedEvent(
+  activity: Accept,
   data: GatewayContextData,
   fallbackDeliveryId: string | null,
 ): FollowAcceptedEvent | null {
-  // activitypubRawJson is populated only when Fedify middleware and Hono share
-  // the same request body read. When it is missing (Fedify re-dispatches from
-  // its internal queue), fall back to the raw-activity cache keyed by id.
+  // The typed Accept activity is the source of truth for follow lifecycle
+  // events. Raw JSON exists only as a fallback because Hono/Fedify request
+  // body handling can be unavailable when the internal queue re-dispatches.
   const rawJson = data.activitypubRawJson
     ?? (fallbackDeliveryId != null ? getRawActivity(fallbackDeliveryId)?.rawJson : undefined);
   const rawRecord = asRecord(rawJson);
-  const actorId = asString(rawRecord?.actor);
+  const actorId = activity.actorId?.href ?? asString(rawRecord?.actor);
   const objectValue = rawRecord?.object;
   const objectRecord = asRecord(objectValue);
   const followActivityId =
-    asString(objectValue) ?? asString(objectRecord?.id);
+    activity.objectId?.href
+    ?? asString(objectValue)
+    ?? asString(objectRecord?.id);
   if (actorId == null || followActivityId == null) {
     return null;
   }
@@ -311,7 +315,8 @@ function buildFollowAcceptedEvent(
     actor_id: actorId,
     community_actor_id: actorId,
     delivery_id:
-      asString(rawRecord?.id)
+      activity.id?.href
+      ?? asString(rawRecord?.id)
       ?? fallbackDeliveryId
       ?? `follow-accepted:${followActivityId}`,
     event_type: "follow.accepted",

@@ -26,7 +26,10 @@
 import assert from "node:assert/strict";
 import { createServer } from "node:http";
 
+import { Accept } from "@fedify/vocab";
+
 import { storeRawActivity } from "../src/activitypub-raw-cache.js";
+import { buildFollowAcceptedEvent } from "../src/federation.js";
 import { deliverEventToPythonBridge } from "../src/python-bridge.js";
 import type { FollowAcceptedEvent } from "../src/types.js";
 
@@ -37,6 +40,8 @@ const TEST_SHARED_SECRET = "secret";
 const FOLLOW_ACTIVITY_ID = `${TEST_ORIGIN}activities/follow/123/abc`;
 const ACCEPT_ACTIVITY_ID = `${LEMMY_ORIGIN}activities/accept/xyz-001`;
 const COMMUNITY_ACTOR_ID = `${LEMMY_ORIGIN}c/general`;
+const STALE_ANNOUNCE_ID = `${LEMMY_ORIGIN}activities/announce/create/stale-001`;
+const STALE_COMMENT_ACTIVITY_ID = `${TEST_ORIGIN}users/alice/activities/create/comment/stale-001`;
 
 /**
  * The Accept payload as Lemmy sends it: object is the full Follow object,
@@ -55,8 +60,26 @@ const ACCEPT_PAYLOAD = {
   },
 };
 
+const STALE_ANNOUNCE_PAYLOAD = {
+  "@context": "https://www.w3.org/ns/activitystreams",
+  id: STALE_ANNOUNCE_ID,
+  type: "Announce",
+  actor: COMMUNITY_ACTOR_ID,
+  object: {
+    id: STALE_COMMENT_ACTIVITY_ID,
+    type: "Create",
+    actor: `${TEST_ORIGIN}users/alice`,
+    object: {
+      id: `${TEST_ORIGIN}users/alice/comment/200`,
+      type: "Note",
+      inReplyTo: `${TEST_ORIGIN}users/alice/post/100`,
+    },
+  },
+};
+
 async function main(): Promise<void> {
   await testCacheFallbackExtractsFollowId();
+  await testTypedAcceptWinsOverStaleRawPayload();
   await testDeliveryShapeMatchesPythonContract();
   console.log("Accept(Follow) -> follow.accepted path verification passed");
 }
@@ -103,6 +126,48 @@ async function testCacheFallbackExtractsFollowId(): Promise<void> {
     followActivityId,
     FOLLOW_ACTIVITY_ID,
     "follow_activity_id must be extracted from nested object.id in cached payload",
+  );
+}
+
+/**
+ * Verifies the invariant that follow.accepted is extracted from the current
+ * Accept(Follow) activity even if ctx.data still carries stale raw JSON from a
+ * previous inbox event.
+ *
+ * This matches the true correctness contract: delivery_id must come from the
+ * current Accept.id and follow_activity_id must come from Accept.object.
+ */
+async function testTypedAcceptWinsOverStaleRawPayload(): Promise<void> {
+  const staleData = {
+    activitypubRawJson: STALE_ANNOUNCE_PAYLOAD,
+  } as Parameters<typeof buildFollowAcceptedEvent>[1];
+  const activity = new Accept({
+    id: new URL(ACCEPT_ACTIVITY_ID),
+    actor: new URL(COMMUNITY_ACTOR_ID),
+    object: new URL(FOLLOW_ACTIVITY_ID),
+  });
+
+  const event = buildFollowAcceptedEvent(
+    activity,
+    staleData,
+    ACCEPT_ACTIVITY_ID,
+  );
+
+  assert.ok(event, "Accept(Follow) must still produce an event");
+  assert.equal(
+    event.delivery_id,
+    ACCEPT_ACTIVITY_ID,
+    "delivery_id must come from the current Accept activity",
+  );
+  assert.equal(
+    event.object.follow_activity_id,
+    FOLLOW_ACTIVITY_ID,
+    "follow_activity_id must come from the current Accept.object",
+  );
+  assert.equal(
+    event.actor_id,
+    COMMUNITY_ACTOR_ID,
+    "actor_id must come from the current Accept.actor",
   );
 }
 
