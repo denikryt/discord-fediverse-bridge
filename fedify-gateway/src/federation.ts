@@ -3,19 +3,26 @@ import {
   InProcessMessageQueue,
   MemoryKvStore,
 } from "@fedify/fedify";
-import { Announce, Create, Endpoints, Follow } from "@fedify/vocab";
-import { Service } from "@fedify/vocab";
+import { Announce, Create, Follow } from "@fedify/vocab";
 
 import { getRawActivity } from "./activitypub-raw-cache.js";
+import {
+  buildBridgeServiceActor,
+  buildUserPersonActor,
+} from "./actors.js";
+import {
+  getBridgeActorIdentity,
+  hasLocalActor,
+  loadActorKeyPair,
+  loadUserActorIdentity,
+} from "./actor-store.js";
 import type { GatewayContextData } from "./config.js";
-import { FileKeyStore } from "./key-store.js";
 import { normalizeCreateActivity, normalizeCreateActivityFromJson } from "./normalize.js";
 import { deliverEventToPythonBridge } from "./python-bridge.js";
 import type { BridgeEvent } from "./types.js";
 
 export function createGatewayFederation(
   config: GatewayContextData,
-  keyStore: FileKeyStore,
 ) {
   // The federation definition keeps protocol-specific concerns in one place so
   // the rest of the gateway can stay focused on normalization and delivery.
@@ -28,39 +35,62 @@ export function createGatewayFederation(
 
   federation
     .setActorDispatcher("/actors/{identifier}", async (ctx, identifier) => {
-      if (identifier !== config.actorIdentifier) {
+      const sharedInboxId = ctx.getInboxUri();
+
+      if (identifier === config.actorIdentifier) {
+        const bridgeIdentity = getBridgeActorIdentity(config);
+        const bridgeKeys = await ctx.getActorKeyPairs(identifier);
+        return buildBridgeServiceActor(
+          bridgeIdentity,
+          sharedInboxId,
+          bridgeKeys,
+        );
+      }
+
+      const userIdentity = await loadUserActorIdentity(config, identifier);
+      if (userIdentity == null) {
         return null;
       }
 
-      // The bridge presents itself as a Service actor because it is an
-      // application endpoint rather than a human user account.
-      return new Service({
-        id: ctx.getActorUri(identifier),
-        preferredUsername: identifier,
-        name: config.actorName,
-        summary: config.actorSummary,
-        inbox: ctx.getInboxUri(identifier),
-        outbox: new URL(`${config.fedifyOrigin}actors/${identifier}/outbox`),
-        endpoints: new Endpoints({
-          sharedInbox: ctx.getInboxUri(),
-        }),
-        publicKeys: (await ctx.getActorKeyPairs(identifier)).map(
-          (keyPair) => keyPair.cryptographicKey,
-        ),
-      });
+      // User actors remain Person objects even though the actor dispatcher path
+      // is shared with the bridge actor. Their canonical IDs come from the
+      // Python-owned registration records in the shared database.
+      return buildUserPersonActor(
+        userIdentity,
+        sharedInboxId,
+        await ctx.getActorKeyPairs(identifier),
+      );
     })
     .setKeyPairsDispatcher(async (_ctx, identifier) => {
-      if (identifier !== config.actorIdentifier) {
+      const keyPair = await loadActorKeyPair(config, identifier);
+      if (keyPair == null) {
         return [];
       }
-      return [await keyStore.getOrCreate(identifier)];
+      return [keyPair];
     })
     .mapHandle(async (_ctx, username) => {
-      return username === config.actorIdentifier ? username : null;
+      if (!(await hasLocalActor(config, username))) {
+        return null;
+      }
+      return username;
+    })
+    .mapAlias(async (_ctx, resource) => {
+      if (
+        resource.href ===
+        new URL(`/actors/${config.actorIdentifier}`, config.fedifyOrigin).href
+      ) {
+        return { identifier: config.actorIdentifier };
+      }
+
+      const username = parseUserAlias(resource, config.fedifyOrigin);
+      if (username == null || !(await hasLocalActor(config, username))) {
+        return null;
+      }
+      return { username };
     });
 
   federation
-    .setInboxListeners("/actors/{identifier}/inbox", "/inbox")
+    .setInboxListeners("/users/{identifier}/inbox", "/inbox")
     .withIdempotency("per-inbox")
     .on(Create, async (_ctx, activity) => {
       if (isDebug) {
@@ -238,4 +268,19 @@ function logDebug(isDebug: boolean, message: string): void {
   if (isDebug) {
     console.log(`[Fedify][debug] ${message}`);
   }
+}
+
+function parseUserAlias(resource: URL, origin: string): string | null {
+  // User aliases are limited to the canonical `/users/{username}` surface so
+  // the manual user-actor routes and Fedify alias resolution stay consistent.
+  const resourceOrigin = new URL(origin);
+  if (resource.origin !== resourceOrigin.origin) {
+    return null;
+  }
+
+  const parts = resource.pathname.split("/").filter(Boolean);
+  if (parts.length !== 2 || parts[0] !== "users") {
+    return null;
+  }
+  return parts[1];
 }

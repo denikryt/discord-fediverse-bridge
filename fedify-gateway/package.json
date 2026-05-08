@@ -7,7 +7,8 @@
     "dev": "node --env-file=.env ./node_modules/.bin/tsx watch src/server.ts",
     "start": "node --env-file=.env ./node_modules/.bin/tsx src/server.ts",
     "check": "tsc --noEmit",
-    "verify:python-contract": "node --env-file=.env ./node_modules/.bin/tsx src/verify-python-contract.ts",
+    "verify:actor-layer": "node --env-file=.env ./node_modules/.bin/tsx tests/verify-actor-layer.ts",
+    "verify:python-contract": "node --env-file=.env ./node_modules/.bin/tsx tests/verify-python-contract.ts",
     "follow-community": "node --env-file=.env ./node_modules/.bin/tsx src/follow-community-cli.ts"
   },
   "dependencies": {
@@ -15,10 +16,12 @@
     "@fedify/hono": "^2.2.0",
     "@fedify/vocab": "^2.2.0",
     "@hono/node-server": "^1.19.6",
-    "hono": "^4.12.16"
+    "hono": "^4.12.16",
+    "sql.js": "^1.14.1"
   },
   "devDependencies": {
     "@types/node": "^24.9.0",
+    "@types/sql.js": "^1.4.11",
     "tsx": "^4.20.6",
     "typescript": "^5.9.3"
   }

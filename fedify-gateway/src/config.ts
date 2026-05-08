@@ -6,9 +6,11 @@ export interface GatewayConfig {
   actorIdentifier: string;
   actorName: string;
   actorSummary: string;
+  bridgePrivateKeyJwkJson: string | null;
+  bridgePublicKeyJwkJson: string | null;
   communityActorId: string | null;
+  databaseUrl: string;
   fedifyOrigin: string;
-  keyStorePath: string;
   port: number;
   pythonBridgeEventsUrl: string;
   pythonBridgeSharedSecret: string;
@@ -51,9 +53,13 @@ export function loadConfig(): GatewayConfig {
     actorSummary:
       process.env.FEDIFY_ACTOR_SUMMARY ??
       "Receives ActivityPub activities from Lemmy and forwards normalized events to the Python bridge.",
+    bridgePrivateKeyJwkJson:
+      process.env.FEDIFY_BRIDGE_PRIVATE_KEY_JWK_JSON ?? null,
+    bridgePublicKeyJwkJson:
+      process.env.FEDIFY_BRIDGE_PUBLIC_KEY_JWK_JSON ?? null,
     communityActorId: process.env.LEMMY_COMMUNITY_ACTOR_ID ?? null,
+    databaseUrl: process.env.DATABASE_URL ?? "sqlite:///../bridge.db",
     fedifyOrigin: requireEnv("FEDIFY_ORIGIN"),
-    keyStorePath: process.env.FEDIFY_KEY_STORE_PATH ?? "./data/actor-keys.json",
     port: parsePort(process.env.FEDIFY_PORT, 3000),
     pythonBridgeEventsUrl:
       process.env.PYTHON_BRIDGE_EVENTS_URL ??

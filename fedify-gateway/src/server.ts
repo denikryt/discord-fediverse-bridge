@@ -5,22 +5,101 @@ import { federation as fedifyMiddleware } from "@fedify/hono";
 import { Hono } from "hono";
 
 import { storeRawActivity } from "./activitypub-raw-cache.js";
+import {
+  buildEmptyOrderedCollection,
+  buildUserPersonActor,
+} from "./actors.js";
+import {
+  getBridgeActorIdentity,
+  hasLocalActor,
+  loadUserActorIdentity,
+} from "./actor-store.js";
 import { type GatewayContextData, loadConfig } from "./config.js";
 import { createGatewayFederation } from "./federation.js";
-import { FileKeyStore } from "./key-store.js";
 import { followCommunity } from "./federation-outbound.js";
 
 // server.ts owns the operator-facing HTTP surface of the gateway: health,
 // manual follow, inbox logging, and Fedify middleware wiring.
 const config = loadConfig();
-const keyStore = new FileKeyStore(config.keyStorePath);
-const fedify = createGatewayFederation(config, keyStore);
+const fedify = createGatewayFederation(config);
 
 const app = new Hono();
 const isDebug = config.logLevel === "debug";
 
 app.get("/healthz", (context) => {
   return context.json({ status: "ok" });
+});
+
+app.get("/.well-known/webfinger", async (context) => {
+  const resource = context.req.query("resource");
+  if (!resource) {
+    return context.json({ error: "resource query parameter is required" }, 400);
+  }
+
+  const webFingerDocument = await buildWebFingerDocument(resource);
+  if (webFingerDocument == null) {
+    return context.json({ error: "resource not found" }, 404);
+  }
+  return context.newResponse(JSON.stringify(webFingerDocument), 200, {
+    "Content-Type": "application/jrd+json",
+  });
+});
+
+app.get("/users/:username", async (context) => {
+  const username = context.req.param("username");
+  const actor = await buildRegisteredUserActorDocument(username);
+  if (actor == null) {
+    return context.json({ error: "user actor not found" }, 404);
+  }
+  return activityJsonResponse(await actor.toJsonLd());
+});
+
+app.get("/users/:username/outbox", async (context) => {
+  const username = context.req.param("username");
+  if (!(await hasLocalActor(config, username))) {
+    return context.json({ error: "user actor not found" }, 404);
+  }
+  return activityJsonResponse(
+    await buildEmptyOrderedCollection(
+      new URL(`/users/${username}/outbox`, config.fedifyOrigin),
+    ).toJsonLd(),
+  );
+});
+
+app.get("/users/:username/followers", async (context) => {
+  const username = context.req.param("username");
+  if (!(await hasLocalActor(config, username))) {
+    return context.json({ error: "user actor not found" }, 404);
+  }
+  return activityJsonResponse(
+    await buildEmptyOrderedCollection(
+      new URL(`/users/${username}/followers`, config.fedifyOrigin),
+    ).toJsonLd(),
+  );
+});
+
+app.get("/actors/:identifier/outbox", async (context) => {
+  const identifier = context.req.param("identifier");
+  if (!(await hasLocalActor(config, identifier))) {
+    return context.json({ error: "actor not found" }, 404);
+  }
+  return activityJsonResponse(
+    await buildEmptyOrderedCollection(
+      new URL(`/actors/${identifier}/outbox`, config.fedifyOrigin),
+    ).toJsonLd(),
+  );
+});
+
+app.get("/actors/:identifier/followers", async (context) => {
+  const identifier = context.req.param("identifier");
+  if (!(await hasLocalActor(config, identifier))) {
+    return context.json({ error: "actor not found" }, 404);
+  }
+  return activityJsonResponse(
+    await buildEmptyOrderedCollection(
+      new URL(`/actors/${identifier}/followers`, config.fedifyOrigin),
+    ).toJsonLd(),
+  );
 });
 
 app.post("/follow-community", async (context) => {
@@ -92,6 +171,88 @@ serve({
 console.log(
   `Fedify gateway listening on ${config.fedifyOrigin} (port ${config.port}) and forwarding to ${config.pythonBridgeEventsUrl}`,
 );
+
+async function buildWebFingerDocument(
+  resource: string,
+): Promise<Record<string, unknown> | null> {
+  // The manual WebFinger route preserves the canonical `/users/{username}`
+  // surface even though Fedify itself only supports one actor dispatcher path.
+  const localHost = new URL(config.fedifyOrigin).host;
+  const bridgeIdentity = getBridgeActorIdentity(config);
+
+  if (resource === `acct:${config.actorIdentifier}@${localHost}`) {
+    return {
+      subject: resource,
+      aliases: [bridgeIdentity.actorId.href],
+      links: [
+        {
+          rel: "self",
+          type: "application/activity+json",
+          href: bridgeIdentity.actorId.href,
+        },
+      ],
+    };
+  }
+
+  const username = parseLocalAcctResource(resource, localHost);
+  if (username == null) {
+    return null;
+  }
+
+  const userIdentity = await loadUserActorIdentity(config, username);
+  if (userIdentity == null) {
+    return null;
+  }
+
+  return {
+    subject: resource,
+    aliases: [userIdentity.actorId.href],
+    links: [
+      {
+        rel: "self",
+        type: "application/activity+json",
+        href: userIdentity.actorId.href,
+      },
+    ],
+  };
+}
+
+async function buildRegisteredUserActorDocument(username: string) {
+  const userIdentity = await loadUserActorIdentity(config, username);
+  if (userIdentity == null) {
+    return null;
+  }
+  const context = fedify.createContext(new URL(config.fedifyOrigin), config);
+  return buildUserPersonActor(
+    userIdentity,
+    new URL("/inbox", config.fedifyOrigin),
+    await context.getActorKeyPairs(username),
+  );
+}
+
+function parseLocalAcctResource(
+  resource: string,
+  localHost: string,
+): string | null {
+  if (!resource.startsWith("acct:")) {
+    return null;
+  }
+  const handle = resource.slice("acct:".length);
+  const parts = handle.split("@");
+  if (parts.length !== 2 || parts[0].length === 0 || parts[1] !== localHost) {
+    return null;
+  }
+  return parts[0];
+}
+
+function activityJsonResponse(payload: unknown): Response {
+  return new Response(JSON.stringify(payload), {
+    status: 200,
+    headers: {
+    "Content-Type": "application/activity+json",
+    },
+  });
+}
 
 interface InboxPayloadSummary {
   type: string | null;

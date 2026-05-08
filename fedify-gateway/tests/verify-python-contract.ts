@@ -9,52 +9,62 @@ import { Create, Note, Page, Person, Source } from "@fedify/vocab";
 import {
   normalizeCreateActivity,
   normalizeCreateActivityFromJson,
-} from "./normalize.js";
-import { deliverEventToPythonBridge } from "./python-bridge.js";
+} from "../src/normalize.js";
+import { deliverEventToPythonBridge } from "../src/python-bridge.js";
+
+const TEST_ORIGIN = "https://forum.example/";
+const TEST_ACTOR_URL = `${TEST_ORIGIN}u/alice`;
+const TEST_COMMUNITY_URL = `${TEST_ORIGIN}c/general`;
+const TEST_POST_ACTIVITY_URL = `${TEST_ORIGIN}activities/create/post-1`;
+const TEST_COMMENT_ACTIVITY_URL = `${TEST_ORIGIN}activities/create/comment-1`;
+const TEST_POST_URL = `${TEST_ORIGIN}post/123`;
+const TEST_COMMENT_URL = `${TEST_ORIGIN}comment/456`;
+const TEST_SHARED_SECRET = "secret";
 
 // This script locks the contract between the Node gateway and the Python
 // bridge by verifying both normalization paths and HTTP delivery shape.
-const gatewayDir = dirname(fileURLToPath(import.meta.url));
-const repositoryRoot = resolve(gatewayDir, "..", "..");
+const testsDir = dirname(fileURLToPath(import.meta.url));
+const gatewayDir = resolve(testsDir, "..");
+const repositoryRoot = resolve(gatewayDir, "..");
 const pythonExecutable = resolve(repositoryRoot, ".venv", "bin", "python");
 
 async function main(): Promise<void> {
   const actor = new Person({
-    id: new URL("https://forum.example/u/alice"),
+    id: new URL(TEST_ACTOR_URL),
     preferredUsername: "alice",
     name: "Alice",
   });
 
   const postEvent = await normalizeCreateActivity(
     new Create({
-      id: new URL("https://forum.example/activities/create/post-1"),
+      id: new URL(TEST_POST_ACTIVITY_URL),
       actor,
       object: new Page({
-        id: new URL("https://forum.example/post/123"),
+        id: new URL(TEST_POST_URL),
         name: "Bridge test post",
-        audience: new URL("https://forum.example/c/general"),
+        audience: new URL(TEST_COMMUNITY_URL),
         source: new Source({
           content: "hello from page",
           mediaType: "text/markdown",
         }),
-        url: new URL("https://forum.example/post/123"),
+        url: new URL(TEST_POST_URL),
       }),
     }),
   );
 
   const commentEvent = await normalizeCreateActivity(
     new Create({
-      id: new URL("https://forum.example/activities/create/comment-1"),
+      id: new URL(TEST_COMMENT_ACTIVITY_URL),
       actor,
       object: new Note({
-        id: new URL("https://forum.example/comment/456"),
-        audience: new URL("https://forum.example/c/general"),
+        id: new URL(TEST_COMMENT_URL),
+        audience: new URL(TEST_COMMUNITY_URL),
         source: new Source({
           content: "hello from note",
           mediaType: "text/markdown",
         }),
-        replyTarget: new URL("https://forum.example/post/123"),
-        url: new URL("https://forum.example/comment/456"),
+        replyTarget: new URL(TEST_POST_URL),
+        url: new URL(TEST_COMMENT_URL),
       }),
     }),
   );
@@ -63,28 +73,25 @@ async function main(): Promise<void> {
   assert.ok(commentEvent);
 
   const announceWrappedComment = await normalizeCreateActivityFromJson({
-    id: "https://forum.example/activities/announce/comment-1",
+    id: `${TEST_ORIGIN}activities/announce/comment-1`,
     type: "Create",
-    actor: "https://forum.example/u/alice",
+    actor: TEST_ACTOR_URL,
     object: {
-      id: "https://forum.example/comment/456",
+      id: TEST_COMMENT_URL,
       type: "Note",
-      audience: "https://forum.example/c/general",
+      audience: TEST_COMMUNITY_URL,
       source: {
         content: "hello from note",
         mediaType: "text/markdown",
       },
-      inReplyTo: "https://forum.example/post/123",
-      url: "https://forum.example/comment/456",
+      inReplyTo: TEST_POST_URL,
+      url: TEST_COMMENT_URL,
     },
   });
 
   assert.ok(announceWrappedComment);
   assert.equal(announceWrappedComment.event_type, "comment.created");
-  assert.equal(
-    announceWrappedComment.object.post_ap_id,
-    "https://forum.example/post/123",
-  );
+  assert.equal(announceWrappedComment.object.post_ap_id, TEST_POST_URL);
 
   await verifyHttpDelivery(commentEvent);
   validateWithPythonSchema(postEvent);
@@ -93,7 +100,9 @@ async function main(): Promise<void> {
   console.log("Fedify -> Python contract verification passed");
 }
 
-async function verifyHttpDelivery(event: NonNullable<Awaited<ReturnType<typeof normalizeCreateActivity>>>) {
+async function verifyHttpDelivery(
+  event: NonNullable<Awaited<ReturnType<typeof normalizeCreateActivity>>>,
+) {
   // Use a local ephemeral server so the gateway-side HTTP helper can be tested
   // without a running Python process.
   let receivedBody = "";
@@ -113,7 +122,9 @@ async function verifyHttpDelivery(event: NonNullable<Awaited<ReturnType<typeof n
     });
   });
 
-  await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", () => resolve()));
+  await new Promise<void>((resolve) =>
+    server.listen(0, "127.0.0.1", () => resolve()),
+  );
   const address = server.address();
   if (address == null || typeof address === "string") {
     throw new Error("Could not determine verification server address");
@@ -122,7 +133,7 @@ async function verifyHttpDelivery(event: NonNullable<Awaited<ReturnType<typeof n
   try {
     await deliverEventToPythonBridge(
       `http://127.0.0.1:${address.port}/internal/activitypub/events`,
-      "secret",
+      TEST_SHARED_SECRET,
       event,
     );
   } finally {
@@ -131,7 +142,7 @@ async function verifyHttpDelivery(event: NonNullable<Awaited<ReturnType<typeof n
     );
   }
 
-  assert.equal(receivedAuth, "Bearer secret");
+  assert.equal(receivedAuth, `Bearer ${TEST_SHARED_SECRET}`);
   assert.equal(receivedDeliveryId, event.delivery_id);
   assert.deepEqual(JSON.parse(receivedBody), event);
 }

@@ -1,7 +1,6 @@
 import { Follow } from "@fedify/vocab";
 import type { Federation } from "@fedify/fedify";
 import type { GatewayConfig } from "./config.js";
-import { FileKeyStore } from "./key-store.js";
 
 export async function followCommunity(
   federation: Federation<GatewayConfig>,
