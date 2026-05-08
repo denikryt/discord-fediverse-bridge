@@ -6,7 +6,7 @@ import discord
 import pytest
 
 from src.commands import list_subs
-from tests.constants import LEMMY_EXAMPLE_DOMAIN
+from tests_constants import LEMMY_EXAMPLE_DOMAIN
 
 
 @pytest.mark.asyncio

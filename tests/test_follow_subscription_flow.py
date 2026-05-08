@@ -11,7 +11,7 @@ import pytest
 from src.activitypub_handlers import dispatch_activitypub_event
 from src.activitypub_models import FollowLifecycleEvent
 from src.db import Database
-from tests.constants import BRIDGE_EXAMPLE_DOMAIN, LEMMY_EXAMPLE_DOMAIN
+from tests_constants import BRIDGE_EXAMPLE_DOMAIN, LEMMY_EXAMPLE_DOMAIN
 
 
 def _database(tmp_path: Path) -> Database:

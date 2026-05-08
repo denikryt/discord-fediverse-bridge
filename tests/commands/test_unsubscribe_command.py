@@ -5,7 +5,7 @@ from types import SimpleNamespace
 import pytest
 
 from src.commands import unsubscribe
-from tests.constants import LEMMY_EXAMPLE_DOMAIN
+from tests_constants import LEMMY_EXAMPLE_DOMAIN
 
 
 @pytest.mark.asyncio

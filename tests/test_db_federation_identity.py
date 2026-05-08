@@ -7,7 +7,7 @@ from pathlib import Path
 from sqlalchemy import inspect
 
 from src.db import Database
-from tests.constants import (
+from tests_constants import (
     BRIDGE_HOST_DOMAIN,
     LEMMY_WORLD_DOMAIN,
 )

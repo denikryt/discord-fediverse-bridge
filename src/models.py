@@ -125,6 +125,27 @@ class User(Base):
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, onupdate=utcnow, nullable=False)
 
 
+class RegistrationSession(Base):
+    """Persist one browser-side registration flow across Discord redirects."""
+
+    # RegistrationSession keeps only the state needed to safely resume the
+    # OAuth-based web flow after Discord redirects the browser back here.
+    __tablename__ = "registration_sessions"
+    __table_args__ = (UniqueConstraint("session_token"),)
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    session_token: Mapped[str] = mapped_column(String(255), nullable=False)
+    oauth_state: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    discord_user_id: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    discord_username: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    discord_avatar_url: Mapped[str | None] = mapped_column(String(512), nullable=True)
+    activitypub_username: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    status: Mapped[str] = mapped_column(String(32), nullable=False, default="started")
+    expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, nullable=False)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, onupdate=utcnow, nullable=False)
+
+
 class MessageMapping(Base):
     """Store generic dedup and source mapping for ActivityPub bridge traffic."""
 

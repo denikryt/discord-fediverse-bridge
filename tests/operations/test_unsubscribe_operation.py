@@ -6,7 +6,7 @@ from unittest.mock import Mock
 from discordops import run_operation_definition
 
 from src.operations import UnsubscribeInput, unsubscribe_operation
-from tests.constants import LEMMY_EXAMPLE_DOMAIN
+from tests_constants import LEMMY_EXAMPLE_DOMAIN
 
 
 def test_unsubscribe_operation_rejects_missing_subscription() -> None:

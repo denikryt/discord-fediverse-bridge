@@ -6,7 +6,7 @@ from unittest.mock import Mock
 from discordops import run_operation_definition
 
 from src.operations import ListSubscriptionsInput, list_subscriptions_operation
-from tests.constants import LEMMY_EXAMPLE_DOMAIN
+from tests_constants import LEMMY_EXAMPLE_DOMAIN
 
 
 def test_list_subscriptions_operation_rejects_empty_state() -> None:

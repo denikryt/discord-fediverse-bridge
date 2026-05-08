@@ -8,10 +8,12 @@ import uvicorn
 from .config import Settings
 from .db import Database
 from .discord_bot import BridgeBot
+from .discord_oauth_client import DiscordOAuthClient
 from .fedify_gateway_client import FedifyGatewayClient
 from .http_api import create_http_app
 from .lemmy_client import LemmyClient
 from .logging_setup import configure_logging
+from .registration_service import RegistrationService
 from .runtime import Runtime
 
 logger = logging.getLogger(__name__)
@@ -67,6 +69,11 @@ async def main() -> None:
     database.create_all()
 
     fedify_gateway = FedifyGatewayClient(settings)
+    discord_oauth_client = DiscordOAuthClient(settings)
+    registration_service = RegistrationService(
+        database=database,
+        base_url=settings.normalized_public_bridge_base_url,
+    )
     lemmy = LemmyClient(
         settings.normalized_lemmy_base_url,
         settings.lemmy_username_or_email,
@@ -86,6 +93,8 @@ async def main() -> None:
         database=database,
         lemmy=lemmy,
         fedify_gateway=fedify_gateway,
+        discord_oauth_client=discord_oauth_client,
+        registration_service=registration_service,
         bot=bot,
     )
     http_app = create_http_app(runtime)

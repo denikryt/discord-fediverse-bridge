@@ -7,7 +7,7 @@ from discordops import run_operation_definition
 from sqlalchemy.exc import IntegrityError
 
 from src.operations import SubscribeInput, subscribe_operation
-from tests.constants import LEMMY_EXAMPLE_DOMAIN
+from tests_constants import LEMMY_EXAMPLE_DOMAIN
 
 
 def test_subscribe_operation_rejects_duplicates() -> None:
