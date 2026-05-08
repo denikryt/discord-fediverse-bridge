@@ -351,6 +351,13 @@ def _begin_event_processing(
         raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="Delivery is already in progress")
     if existing.status in {"processed", "skipped"}:
         return {"status": "duplicate", "detail": existing.detail or existing.status}
+    if existing.status == "deferred":
+        runtime.database.update_event_receipt(
+            delivery_id=event.delivery_id,
+            status="in_progress",
+            detail="retrying deferred delivery",
+        )
+        return None
 
     runtime.database.update_event_receipt(
         delivery_id=event.delivery_id,

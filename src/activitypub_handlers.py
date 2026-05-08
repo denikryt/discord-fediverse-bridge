@@ -41,6 +41,8 @@ async def handle_post_created(event: ActivityPubEvent, runtime: Runtime) -> Hand
     # duplicate Discord thread for the same content.
     if runtime.lemmy.person_name and event.actor_id.rstrip("/").endswith(f"/u/{runtime.lemmy.person_name}"):
         return HandlerResult(status="skipped", detail="authored by bridge bot, skipping echo")
+    if _is_discord_originated_echo(event, runtime):
+        return HandlerResult(status="skipped", detail="discord-originated echo")
 
     # Route to every Discord channel subscribed to this community. In practice
     # there is usually one subscription, but the schema allows more.
@@ -69,6 +71,8 @@ async def handle_comment_created(event: ActivityPubEvent, runtime: Runtime) -> H
     # as in handle_post_created.
     if runtime.lemmy.person_name and event.actor_id.rstrip("/").endswith(f"/u/{runtime.lemmy.person_name}"):
         return HandlerResult(status="skipped", detail="authored by bridge bot, skipping echo")
+    if _is_discord_originated_echo(event, runtime):
+        return HandlerResult(status="skipped", detail="discord-originated echo")
 
     # Skip early if no channel is subscribed to this community — avoids DB
     # writes for irrelevant communities.
@@ -86,7 +90,7 @@ async def handle_comment_created(event: ActivityPubEvent, runtime: Runtime) -> H
     post_link = runtime.database.get_post_link_by_lemmy_post_ap_id(event.object.post_ap_id or "")
     if post_link is None:
         logger.info("Skipping ActivityPub comment %s because post %s is not mapped yet", event.object.ap_id, event.object.post_ap_id)
-        return HandlerResult(status="skipped", detail="parent post is not mapped")
+        return HandlerResult(status="deferred", detail="parent post is not mapped yet")
 
     resolved_thread = await runtime.bot.get_thread_by_id(post_link.discord_forum_thread_id)
     await create_discord_message_for_activitypub_comment(
@@ -120,3 +124,14 @@ async def handle_follow_accepted(
         event.object.follow_activity_id
     )
     return HandlerResult(status="processed", detail="subscription accepted")
+
+
+def _is_discord_originated_echo(event: ActivityPubEvent, runtime: Runtime) -> bool:
+    """Return whether an inbound AP event matches a prior Discord-originated publish."""
+    # Outbound Discord publishes persist both activity_id and object_id, so
+    # inbound loop suppression checks both keys before any Discord fanout.
+    if runtime.database.get_message_mapping_by_object_id(event.object.ap_id) is not None:
+        return True
+    if runtime.database.get_message_mapping_by_activity_id(event.delivery_id) is not None:
+        return True
+    return False
