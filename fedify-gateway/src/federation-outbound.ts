@@ -2,11 +2,17 @@ import { Follow } from "@fedify/vocab";
 import type { Federation } from "@fedify/fedify";
 import type { GatewayConfig } from "./config.js";
 
+export interface FollowCommunityResult {
+  communityActorUrl: string;
+  communityInboxUrl: string;
+  followActivityId: string;
+}
+
 export async function followCommunity(
   federation: Federation<GatewayConfig>,
   config: GatewayConfig,
   communityActorUrl: string,
-): Promise<void> {
+): Promise<FollowCommunityResult> {
   // Outbound follow is kept explicit and separate from inbound delivery so the
   // gateway can be pointed at a known community actor before bot commands exist.
   const ctx = federation.createContext(new URL(config.fedifyOrigin), config);
@@ -62,4 +68,9 @@ export async function followCommunity(
   );
 
   console.log("[Follow] Successfully sent Follow activity");
+  return {
+    communityActorUrl: communityId,
+    communityInboxUrl: inboxUrl,
+    followActivityId: follow.id?.href ?? follow.id?.toString() ?? "",
+  };
 }

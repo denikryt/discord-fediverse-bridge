@@ -19,6 +19,7 @@ class Settings(BaseSettings):
     lemmy_community_actor_id: str | None = Field(default=None, alias="LEMMY_COMMUNITY_ACTOR_ID")
 
     database_url: str = Field(default="sqlite:///./bridge.db", alias="DATABASE_URL")
+    fedify_gateway_url: HttpUrl = Field(default="http://127.0.0.1:3000", alias="FEDIFY_GATEWAY_URL")
     internal_http_host: str = Field(default="127.0.0.1", alias="INTERNAL_HTTP_HOST")
     internal_http_port: int = Field(default=8080, alias="INTERNAL_HTTP_PORT")
     fedify_shared_secret: str = Field(alias="FEDIFY_SHARED_SECRET")

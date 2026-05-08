@@ -9,6 +9,7 @@ from discord import app_commands
 from .bridge_discord_to_lemmy import sync_forum_thread_to_lemmy, sync_thread_message_to_lemmy_comment
 from .config import Settings
 from .db import Database
+from .fedify_gateway_client import FedifyGatewayClient
 from .lemmy_client import LemmyClient
 
 logger = logging.getLogger(__name__)
@@ -22,6 +23,7 @@ class BridgeBot(discord.Client):
         *,
         settings: Settings,
         database: Database,
+        fedify_gateway: FedifyGatewayClient,
         lemmy: LemmyClient,
     ) -> None:
         intents = discord.Intents.default()
@@ -31,6 +33,7 @@ class BridgeBot(discord.Client):
         super().__init__(intents=intents)
         self.settings = settings
         self.database = database
+        self.fedify_gateway = fedify_gateway
         self.lemmy = lemmy
         self.tree = app_commands.CommandTree(self)
         self.bridge_ready = asyncio.Event()
@@ -45,7 +48,7 @@ class BridgeBot(discord.Client):
         # setup_hook runs before the bot connects, making it the right place to
         # register slash commands and sync the tree with Discord.
         from .commands import list_subs, subscribe, unsubscribe
-        subscribe.register(self.tree, self.database, self.lemmy)
+        subscribe.register(self.tree, self.database, self.lemmy, self.fedify_gateway)
         unsubscribe.register(self.tree, self.database)
         list_subs.register(self.tree, self.database)
         await self.tree.sync()
@@ -57,6 +60,7 @@ class BridgeBot(discord.Client):
         logger.info("Bridge bot is ready as %s", self.user)
 
     async def close(self) -> None:
+        await self.fedify_gateway.close()
         await self.lemmy.close()
         await super().close()
 

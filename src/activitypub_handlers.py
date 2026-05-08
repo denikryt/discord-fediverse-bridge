@@ -3,7 +3,11 @@ from __future__ import annotations
 import logging
 from dataclasses import dataclass
 
-from .activitypub_models import ActivityPubEvent
+from .activitypub_models import (
+    ActivityPubEvent,
+    BridgeGatewayEvent,
+    FollowLifecycleEvent,
+)
 from .bridge_lemmy_to_discord import create_discord_message_for_activitypub_comment, create_discord_thread_for_activitypub_post
 from .runtime import Runtime
 
@@ -18,12 +22,16 @@ class HandlerResult:
     detail: str
 
 
-async def dispatch_activitypub_event(event: ActivityPubEvent, runtime: Runtime) -> HandlerResult:
+async def dispatch_activitypub_event(
+    event: BridgeGatewayEvent, runtime: Runtime
+) -> HandlerResult:
     # Keep dispatch explicit so supported inbound event types stay obvious.
     if event.event_type == "post.created":
         return await handle_post_created(event, runtime)
     if event.event_type == "comment.created":
         return await handle_comment_created(event, runtime)
+    if event.event_type == "follow.accepted":
+        return await handle_follow_accepted(event, runtime)
     raise RuntimeError(f"Unsupported event type: {event.event_type}")
 
 
@@ -87,3 +95,28 @@ async def handle_comment_created(event: ActivityPubEvent, runtime: Runtime) -> H
         event=event,
     )
     return HandlerResult(status="processed", detail="comment created")
+
+
+async def handle_follow_accepted(
+    event: FollowLifecycleEvent, runtime: Runtime
+) -> HandlerResult:
+    # Follow acceptance is pure subscription-state mutation, so it does not
+    # touch Discord directly. It only marks the pending subscription active.
+    subscription = runtime.database.get_subscription_by_follow_activity_id(
+        event.object.follow_activity_id
+    )
+    if subscription is None:
+        logger.info(
+            "Skipping follow acceptance for unknown follow activity %s",
+            event.object.follow_activity_id,
+        )
+        return HandlerResult(
+            status="skipped", detail="follow activity is not mapped"
+        )
+    if subscription.status == "accepted":
+        return HandlerResult(status="skipped", detail="subscription already accepted")
+
+    runtime.database.mark_subscription_accepted_by_follow_activity_id(
+        event.object.follow_activity_id
+    )
+    return HandlerResult(status="processed", detail="subscription accepted")

@@ -105,6 +105,13 @@ app.get("/actors/:identifier/followers", async (context) => {
 app.post("/follow-community", async (context) => {
   // This endpoint exists as an operational bootstrap path until follow logic
   // is driven from the bot itself.
+  if (
+    !hasValidInternalAuthorization(
+      context.req.header("Authorization") ?? null,
+    )
+  ) {
+    return context.json({ error: "invalid authorization" }, { status: 401 });
+  }
   const { communityActorUrl } = await context.req.json();
 
   if (!communityActorUrl || typeof communityActorUrl !== "string") {
@@ -115,8 +122,8 @@ app.post("/follow-community", async (context) => {
   }
 
   try {
-    await followCommunity(fedify, config, communityActorUrl);
-    return context.json({ success: true });
+    const result = await followCommunity(fedify, config, communityActorUrl);
+    return context.json(result);
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
     return context.json({ error: message }, { status: 500 });
@@ -252,6 +259,15 @@ function activityJsonResponse(payload: unknown): Response {
     "Content-Type": "application/activity+json",
     },
   });
+}
+
+function hasValidInternalAuthorization(
+  authorizationHeader: string | null,
+): boolean {
+  return (
+    authorizationHeader
+    === `Bearer ${config.pythonBridgeSharedSecret}`
+  );
 }
 
 interface InboxPayloadSummary {

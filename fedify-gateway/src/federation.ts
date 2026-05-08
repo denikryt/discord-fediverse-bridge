@@ -3,7 +3,7 @@ import {
   InProcessMessageQueue,
   MemoryKvStore,
 } from "@fedify/fedify";
-import { Announce, Create, Follow } from "@fedify/vocab";
+import { Accept, Announce, Create, Follow } from "@fedify/vocab";
 
 import { getRawActivity } from "./activitypub-raw-cache.js";
 import {
@@ -19,7 +19,10 @@ import {
 import type { GatewayContextData } from "./config.js";
 import { normalizeCreateActivity, normalizeCreateActivityFromJson } from "./normalize.js";
 import { deliverEventToPythonBridge } from "./python-bridge.js";
-import type { BridgeEvent } from "./types.js";
+import type {
+  BridgeContentEvent,
+  FollowAcceptedEvent,
+} from "./types.js";
 
 export function createGatewayFederation(
   config: GatewayContextData,
@@ -162,6 +165,22 @@ export function createGatewayFederation(
     })
     .on(Follow, async () => {
       return;
+    })
+    .on(Accept, async (ctx, activity) => {
+      const event = buildFollowAcceptedEvent(
+        ctx.data,
+        activity.id?.href ?? null,
+      );
+      if (event == null) {
+        logDebug(isDebug, "Accept did not contain a follow activity id");
+        return;
+      }
+
+      await deliverNormalizedEvent(config, event, {
+        deliveryId: event.delivery_id,
+        eventType: event.event_type,
+        followActivityId: event.object.follow_activity_id,
+      });
     });
 
   return federation;
@@ -169,7 +188,7 @@ export function createGatewayFederation(
 
 async function deliverNormalizedEvent(
   config: GatewayContextData,
-  event: BridgeEvent,
+  event: BridgeContentEvent | FollowAcceptedEvent,
   logContext: Record<string, unknown>,
 ): Promise<void> {
   // All successful normalization funnels through one delivery path so logging
@@ -182,13 +201,12 @@ async function deliverNormalizedEvent(
   );
   console.log("[Fedify] Event delivered", {
     deliveryId: event.delivery_id,
-    kind: event.object.kind,
-    objectId: event.object.ap_id,
+    eventType: event.event_type,
   });
 }
 
 function shouldSkipCommunityEvent(
-  event: BridgeEvent,
+  event: BridgeContentEvent | FollowAcceptedEvent,
   communityActorId: string | null,
 ): boolean {
   return Boolean(
@@ -268,6 +286,36 @@ function logDebug(isDebug: boolean, message: string): void {
   if (isDebug) {
     console.log(`[Fedify][debug] ${message}`);
   }
+}
+
+function buildFollowAcceptedEvent(
+  data: GatewayContextData,
+  fallbackDeliveryId: string | null,
+): FollowAcceptedEvent | null {
+  // Follow acceptance does not carry content-object fields, so it gets its
+  // own normalization path from the raw Accept payload.
+  const rawRecord = asRecord(data.activitypubRawJson);
+  const actorId = asString(rawRecord?.actor);
+  const objectValue = rawRecord?.object;
+  const objectRecord = asRecord(objectValue);
+  const followActivityId =
+    asString(objectValue) ?? asString(objectRecord?.id);
+  if (actorId == null || followActivityId == null) {
+    return null;
+  }
+  return {
+    actor_id: actorId,
+    community_actor_id: actorId,
+    delivery_id:
+      asString(rawRecord?.id)
+      ?? fallbackDeliveryId
+      ?? `follow-accepted:${followActivityId}`,
+    event_type: "follow.accepted",
+    object: {
+      follow_activity_id: followActivityId,
+    },
+    occurred_at: new Date().toISOString(),
+  };
 }
 
 function parseUserAlias(resource: URL, origin: string): string | null {

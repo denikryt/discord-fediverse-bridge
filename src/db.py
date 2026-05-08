@@ -168,11 +168,20 @@ class Database:
             return session.scalar(select(ChannelCommunitySubscription).where(ChannelCommunitySubscription.discord_channel_id == discord_channel_id))
 
     def get_subscriptions_by_community(self, lemmy_community_actor_id: str) -> list[ChannelCommunitySubscription]:
-        """Load every Discord channel subscribed to one Lemmy community actor."""
-        # Used by inbound event handlers to find all Discord channels that should
-        # receive posts/comments from a given Lemmy community.
+        """Load every accepted Discord subscription for one Lemmy community."""
+        # Inbound routing only uses subscriptions that completed the Follow ->
+        # Accept lifecycle. Pending/failed rows are visible to moderator flows
+        # but must not fan out remote content into Discord.
         with self.session() as session:
-            return list(session.scalars(select(ChannelCommunitySubscription).where(ChannelCommunitySubscription.lemmy_community_actor_id == lemmy_community_actor_id)))
+            return list(
+                session.scalars(
+                    select(ChannelCommunitySubscription).where(
+                        ChannelCommunitySubscription.lemmy_community_actor_id
+                        == lemmy_community_actor_id,
+                        ChannelCommunitySubscription.status == "accepted",
+                    )
+                )
+            )
 
     def get_all_subscriptions(self) -> list[ChannelCommunitySubscription]:
         """Return all subscription rows in stable creation order."""
@@ -216,6 +225,7 @@ class Database:
         self,
         *,
         discord_channel_id: int,
+        community_handle: str | None = None,
         community_inbox_url: str | None,
         follow_activity_id: str | None,
         status: str,
@@ -234,9 +244,43 @@ class Database:
                 raise RuntimeError(
                     f"Missing subscription for Discord channel {discord_channel_id}"
                 )
+            subscription.community_handle = community_handle
             subscription.community_inbox_url = community_inbox_url
             subscription.follow_activity_id = follow_activity_id
             subscription.status = status
+
+    def get_subscription_by_follow_activity_id(
+        self, follow_activity_id: str
+    ) -> ChannelCommunitySubscription | None:
+        """Load the subscription row that owns one outbound Follow activity."""
+        with self.session() as session:
+            return session.scalar(
+                select(ChannelCommunitySubscription).where(
+                    ChannelCommunitySubscription.follow_activity_id
+                    == follow_activity_id
+                )
+            )
+
+    def mark_subscription_accepted_by_follow_activity_id(
+        self, follow_activity_id: str
+    ) -> ChannelCommunitySubscription:
+        """Mark one subscription as accepted after Lemmy confirms the follow."""
+        # Matching by follow activity ID makes the Accept handler idempotent and
+        # avoids guessing based only on community actor or channel.
+        with self.session() as session:
+            subscription = session.scalar(
+                select(ChannelCommunitySubscription).where(
+                    ChannelCommunitySubscription.follow_activity_id
+                    == follow_activity_id
+                )
+            )
+            if subscription is None:
+                raise RuntimeError(
+                    f"Missing subscription for follow activity {follow_activity_id}"
+                )
+            subscription.status = "accepted"
+            session.flush()
+            return subscription
 
     def delete_subscription(self, discord_channel_id: int) -> bool:
         """Delete one channel subscription if it exists."""

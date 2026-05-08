@@ -3,6 +3,7 @@ import process from "node:process";
 // This CLI is a thin operator tool for issuing a one-off follow request to the
 // running local gateway.
 const GATEWAY_URL = process.env.GATEWAY_URL ?? "http://localhost:3000";
+const SHARED_SECRET = process.env.PYTHON_BRIDGE_SHARED_SECRET;
 const communityActorUrl = process.argv[2];
 
 if (!communityActorUrl) {
@@ -14,6 +15,9 @@ if (!communityActorUrl) {
 const response = await fetch(`${GATEWAY_URL}/follow-community`, {
   method: "POST",
   headers: {
+    ...(SHARED_SECRET
+      ? { Authorization: `Bearer ${SHARED_SECRET}` }
+      : {}),
     "Content-Type": "application/json",
   },
   body: JSON.stringify({ communityActorUrl }),

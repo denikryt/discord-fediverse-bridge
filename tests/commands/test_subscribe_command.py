@@ -8,13 +8,21 @@ from src.commands import subscribe
 
 
 @pytest.mark.asyncio
-async def test_subscribe_channel_success(command_tree, interaction, forum_channel, database, lemmy):
-    # A successful subscription should resolve the community ID when needed,
-    # write one DB row, and send a public confirmation message.
+async def test_subscribe_channel_success(
+    command_tree, interaction, forum_channel, database, lemmy, fedify_gateway
+):
+    # A successful subscription should resolve the community, send a real
+    # bridge Follow, persist the pending lifecycle state, and return the
+    # moderator-facing pending message.
     database.get_subscription_by_channel.return_value = None
     lemmy.resolve_community_id.return_value = 777
+    fedify_gateway.follow_community.return_value = SimpleNamespace(
+        community_actor_url="https://lemmy.example/c/hackers",
+        community_inbox_url="https://lemmy.example/c/hackers/inbox",
+        follow_activity_id="https://bridge.example/activities/follow/1",
+    )
 
-    subscribe.register(command_tree, database, lemmy)
+    subscribe.register(command_tree, database, lemmy, fedify_gateway)
 
     command = command_tree.commands["subscribe-channel"]
     await command.callback(
@@ -30,22 +38,35 @@ async def test_subscribe_channel_success(command_tree, interaction, forum_channe
         lemmy_community_actor_id="https://lemmy.example/c/hackers",
         lemmy_community_name="hackers",
         lemmy_community_id=777,
+        community_handle="!hackers@lemmy.example",
+        community_inbox_url="https://lemmy.example/c/hackers/inbox",
+        follow_activity_id="https://bridge.example/activities/follow/1",
+        status="pending",
+    )
+    fedify_gateway.follow_community.assert_awaited_once_with(
+        "https://lemmy.example/c/hackers"
     )
     send_call = interaction.response.send_message.await_args
-    assert send_call.args == ("Subscribed <#12345> to **hackers**.",)
+    assert send_call.args == (
+        "Sent a bridge follow for <#12345> -> **hackers**. Waiting for federation acceptance.",
+    )
     assert send_call.kwargs.get("ephemeral", False) is False
 
 
 @pytest.mark.asyncio
-async def test_subscribe_channel_rejects_duplicate(command_tree, interaction, forum_channel, database, lemmy):
-    # Duplicate subscriptions stay read-only and tell the user which community
-    # already owns the channel mapping.
+async def test_subscribe_channel_rejects_duplicate_accepted(
+    command_tree, interaction, forum_channel, database, lemmy, fedify_gateway
+):
+    # Accepted subscriptions do not trigger a second Follow and return an
+    # ephemeral message that the channel is already active.
     database.get_subscription_by_channel.return_value = SimpleNamespace(
+        status="accepted",
+        community_handle="!hackers@lemmy.example",
         lemmy_community_name="hackers",
         lemmy_community_actor_id="https://lemmy.example/c/hackers",
     )
 
-    subscribe.register(command_tree, database, lemmy)
+    subscribe.register(command_tree, database, lemmy, fedify_gateway)
 
     command = command_tree.commands["subscribe-channel"]
     await command.callback(
@@ -56,8 +77,39 @@ async def test_subscribe_channel_rejects_duplicate(command_tree, interaction, fo
 
     database.create_subscription.assert_not_called()
     lemmy.resolve_community_id.assert_not_awaited()
+    fedify_gateway.follow_community.assert_not_awaited()
     interaction.response.send_message.assert_awaited_once_with(
-        "Channel <#12345> is already subscribed to **hackers**. Use `/unsubscribe-channel` first.",
+        "Channel <#12345> is already subscribed to **!hackers@lemmy.example**.",
+        ephemeral=True,
+    )
+
+
+@pytest.mark.asyncio
+async def test_subscribe_channel_rejects_duplicate_pending(
+    command_tree, interaction, forum_channel, database, lemmy, fedify_gateway
+):
+    # Pending subscriptions do not trigger a second Follow and tell the
+    # moderator that federation acceptance is still outstanding.
+    database.get_subscription_by_channel.return_value = SimpleNamespace(
+        status="pending",
+        community_handle="!hackers@lemmy.example",
+        lemmy_community_name="hackers",
+        lemmy_community_actor_id="https://lemmy.example/c/hackers",
+    )
+
+    subscribe.register(command_tree, database, lemmy, fedify_gateway)
+
+    command = command_tree.commands["subscribe-channel"]
+    await command.callback(
+        interaction,
+        forum_channel,
+        "https://lemmy.example/c/hackers|hackers|777",
+    )
+
+    database.create_subscription.assert_not_called()
+    fedify_gateway.follow_community.assert_not_awaited()
+    interaction.response.send_message.assert_awaited_once_with(
+        "Channel <#12345> is still waiting for **!hackers@lemmy.example** to accept the bridge follow.",
         ephemeral=True,
     )
 
@@ -69,13 +121,14 @@ async def test_subscribe_channel_rejects_when_community_resolution_fails(
     forum_channel,
     database,
     lemmy,
+    fedify_gateway,
 ):
     # Manual text input can omit the numeric ID, so a Lemmy resolution failure
     # must stop the flow before any DB mutation is attempted.
     database.get_subscription_by_channel.return_value = None
     lemmy.resolve_community_id.side_effect = RuntimeError("boom")
 
-    subscribe.register(command_tree, database, lemmy)
+    subscribe.register(command_tree, database, lemmy, fedify_gateway)
 
     command = command_tree.commands["subscribe-channel"]
     await command.callback(
@@ -88,4 +141,79 @@ async def test_subscribe_channel_rejects_when_community_resolution_fails(
     interaction.response.send_message.assert_awaited_once_with(
         "Could not resolve the Lemmy community ID. Please try again.",
         ephemeral=True,
+    )
+
+
+@pytest.mark.asyncio
+async def test_subscribe_channel_marks_failed_when_follow_dispatch_fails(
+    command_tree, interaction, forum_channel, database, lemmy, fedify_gateway
+):
+    # Follow dispatch failures must create a failed subscription row so retries
+    # are explicit instead of leaving a fake pending state behind.
+    database.get_subscription_by_channel.return_value = None
+    lemmy.resolve_community_id.return_value = 777
+    fedify_gateway.follow_community.side_effect = RuntimeError("boom")
+
+    subscribe.register(command_tree, database, lemmy, fedify_gateway)
+
+    command = command_tree.commands["subscribe-channel"]
+    await command.callback(
+        interaction,
+        forum_channel,
+        "https://lemmy.example/c/hackers|hackers|",
+    )
+
+    database.create_subscription.assert_called_once_with(
+        discord_channel_id=forum_channel.id,
+        lemmy_community_actor_id="https://lemmy.example/c/hackers",
+        lemmy_community_name="hackers",
+        lemmy_community_id=777,
+        community_handle="!hackers@lemmy.example",
+        community_inbox_url=None,
+        follow_activity_id=None,
+        status="failed",
+    )
+    interaction.response.send_message.assert_awaited_once_with(
+        "Could not subscribe <#12345> to **hackers** because the bridge Follow request failed.",
+        ephemeral=True,
+    )
+
+
+@pytest.mark.asyncio
+async def test_subscribe_channel_retries_failed_subscription(
+    command_tree, interaction, forum_channel, database, lemmy, fedify_gateway
+):
+    # Failed subscriptions are retriable. The old failed row is removed before
+    # the new pending attempt is written.
+    database.get_subscription_by_channel.return_value = SimpleNamespace(
+        status="failed",
+        community_handle="!hackers@lemmy.example",
+        lemmy_community_name="hackers",
+        lemmy_community_actor_id="https://lemmy.example/c/hackers",
+    )
+    fedify_gateway.follow_community.return_value = SimpleNamespace(
+        community_actor_url="https://lemmy.example/c/hackers",
+        community_inbox_url="https://lemmy.example/c/hackers/inbox",
+        follow_activity_id="https://bridge.example/activities/follow/2",
+    )
+
+    subscribe.register(command_tree, database, lemmy, fedify_gateway)
+
+    command = command_tree.commands["subscribe-channel"]
+    await command.callback(
+        interaction,
+        forum_channel,
+        "https://lemmy.example/c/hackers|hackers|777",
+    )
+
+    database.delete_subscription.assert_called_once_with(forum_channel.id)
+    database.create_subscription.assert_called_once_with(
+        discord_channel_id=forum_channel.id,
+        lemmy_community_actor_id="https://lemmy.example/c/hackers",
+        lemmy_community_name="hackers",
+        lemmy_community_id=777,
+        community_handle="!hackers@lemmy.example",
+        community_inbox_url="https://lemmy.example/c/hackers/inbox",
+        follow_activity_id="https://bridge.example/activities/follow/2",
+        status="pending",
     )

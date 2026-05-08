@@ -12,7 +12,7 @@ export interface BridgeObject {
   url: string;
 }
 
-export interface BridgeEvent {
+export interface BridgeContentEvent {
   actor_id: string;
   community_actor_id: string;
   delivery_id: string;
@@ -20,3 +20,22 @@ export interface BridgeEvent {
   object: BridgeObject;
   occurred_at: string;
 }
+
+// BridgeEvent stays as the content-event alias so the existing normalization
+// pipeline keeps its current naming while follow lifecycle uses a separate type.
+export type BridgeEvent = BridgeContentEvent;
+
+export interface FollowLifecycleObject {
+  follow_activity_id: string;
+}
+
+export interface FollowAcceptedEvent {
+  actor_id: string;
+  community_actor_id: string;
+  delivery_id: string;
+  event_type: "follow.accepted";
+  object: FollowLifecycleObject;
+  occurred_at: string;
+}
+
+export type InternalBridgeEvent = BridgeContentEvent | FollowAcceptedEvent;

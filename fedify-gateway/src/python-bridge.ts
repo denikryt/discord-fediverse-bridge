@@ -1,9 +1,9 @@
-import type { BridgeEvent } from "./types.js";
+import type { InternalBridgeEvent } from "./types.js";
 
 export async function deliverEventToPythonBridge(
   eventsUrl: string,
   sharedSecret: string,
-  event: BridgeEvent,
+  event: InternalBridgeEvent,
 ): Promise<void> {
   // The Python bridge is the single downstream consumer, so this helper owns
   // the authenticated POST contract and its diagnostic logging.
@@ -13,8 +13,7 @@ export async function deliverEventToPythonBridge(
     url: eventsUrl,
     deliveryId: event.delivery_id,
     eventType: event.event_type,
-    kind: event.object.kind,
-    objectApId: event.object.ap_id,
+    objectId: describeEventObject(event),
   });
   if (isDebug) {
     console.log("[Bridge][debug] Event payload:", body);
@@ -65,9 +64,17 @@ export async function deliverEventToPythonBridge(
   }
   console.log("[Bridge] Event delivered:", {
     deliveryId: event.delivery_id,
-    kind: event.object.kind,
-    objectApId: event.object.ap_id,
+    objectId: describeEventObject(event),
     resultStatus: parsedResponse?.status ?? "ok",
     resultDetail: parsedResponse?.detail ?? null,
   });
+}
+
+function describeEventObject(event: InternalBridgeEvent): string {
+  // Content events and follow lifecycle events do not share the same object
+  // shape, so logging narrows them to one stable identifier string.
+  if (event.event_type === "follow.accepted") {
+    return event.object.follow_activity_id;
+  }
+  return event.object.ap_id;
 }

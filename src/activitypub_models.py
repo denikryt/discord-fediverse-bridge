@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from datetime import datetime
-from typing import Literal
+from typing import Annotated, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
@@ -49,3 +49,30 @@ class ActivityPubEvent(BaseModel):
         if self.event_type == "comment.created" and self.object.post_lemmy_id is None:
             raise ValueError("comment.created requires object.post_lemmy_id")
         return self
+
+
+class FollowLifecycleObject(BaseModel):
+    # Follow lifecycle events carry state-transition identifiers, not content
+    # payloads, so they stay separate from the post/comment object contract.
+    model_config = ConfigDict(extra="forbid")
+
+    follow_activity_id: str
+
+
+class FollowLifecycleEvent(BaseModel):
+    # Follow acceptance is a different class of internal bridge event from
+    # content fanout, so it gets its own typed shape and validation rules.
+    model_config = ConfigDict(extra="forbid")
+
+    event_type: Literal["follow.accepted"]
+    delivery_id: str
+    occurred_at: datetime
+    community_actor_id: str
+    actor_id: str
+    object: FollowLifecycleObject
+
+
+BridgeGatewayEvent = Annotated[
+    ActivityPubEvent | FollowLifecycleEvent,
+    Field(discriminator="event_type"),
+]

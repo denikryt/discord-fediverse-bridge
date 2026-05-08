@@ -1,21 +1,27 @@
 from __future__ import annotations
 
 import logging
+from urllib.parse import urlparse
 
 import discord
 from discord import app_commands
-from discordops import run_operation_definition_async
 
 from ..db import Database
+from ..fedify_gateway_client import FedifyGatewayClient
 from ..lemmy_client import LemmyClient
-from ..operations import SubscribeInput, subscribe_operation
 
 logger = logging.getLogger(__name__)
 
 
-def register(tree: app_commands.CommandTree, database: Database, lemmy: LemmyClient) -> None:
+def register(
+    tree: app_commands.CommandTree,
+    database: Database,
+    lemmy: LemmyClient,
+    fedify_gateway: FedifyGatewayClient,
+) -> None:
     # The registered slash command stays focused on Discord parsing and Lemmy
-    # lookup, while the operation layer owns subscription policy.
+    # lookup, while the command itself owns the Follow lifecycle because the
+    # final moderator response depends on gateway dispatch success/failure.
     @tree.command(name="subscribe-channel", description="Subscribe a forum channel to a Lemmy community")
     @app_commands.describe(channel="Forum channel to subscribe", community="Lemmy community")
     @app_commands.autocomplete(community=_community_autocomplete(lemmy))
@@ -43,22 +49,61 @@ def register(tree: app_commands.CommandTree, database: Database, lemmy: LemmyCli
                 )
                 return
 
-        # Once Discord parsing and Lemmy lookup are finished, the operation owns
-        # duplicate checks, DB mutation, and result message selection.
-        result = await run_operation_definition_async(
-            subscribe_operation,
-            SubscribeInput(
-                database=database,
-                channel_id=channel.id,
-                channel_mention=channel.mention,
-                actor_id=actor_id,
-                community_name=community_name or None,
-                numeric_id=numeric_id,
-            ),
+        community_handle = _build_community_handle(actor_id, community_name or None)
+        existing = database.get_subscription_by_channel(channel.id)
+        if existing is not None and existing.status == "accepted":
+            await interaction.response.send_message(
+                f"Channel {channel.mention} is already subscribed to **{_community_label(existing)}**.",
+                ephemeral=True,
+            )
+            return
+        if existing is not None and existing.status == "pending":
+            await interaction.response.send_message(
+                f"Channel {channel.mention} is still waiting for **{_community_label(existing)}** to accept the bridge follow.",
+                ephemeral=True,
+            )
+            return
+
+        if existing is not None and existing.status == "failed":
+            # Failed rows are retriable. Removing the old row keeps the DB
+            # uniqueness rule simple before we write the new lifecycle attempt.
+            database.delete_subscription(channel.id)
+
+        try:
+            follow_result = await fedify_gateway.follow_community(actor_id)
+        except Exception:
+            logger.exception("Failed to send follow for community %s", actor_id)
+            database.create_subscription(
+                discord_channel_id=channel.id,
+                lemmy_community_actor_id=actor_id,
+                lemmy_community_name=community_name or None,
+                lemmy_community_id=numeric_id,
+                community_handle=community_handle,
+                community_inbox_url=None,
+                follow_activity_id=None,
+                status="failed",
+            )
+            await interaction.response.send_message(
+                f"Could not subscribe {channel.mention} to **{community_name or actor_id}** because the bridge Follow request failed.",
+                ephemeral=True,
+            )
+            return
+
+        database.create_subscription(
+            discord_channel_id=channel.id,
+            lemmy_community_actor_id=actor_id,
+            lemmy_community_name=community_name or None,
+            lemmy_community_id=numeric_id,
+            community_handle=community_handle,
+            community_inbox_url=follow_result.community_inbox_url,
+            follow_activity_id=follow_result.follow_activity_id,
+            status="pending",
         )
-        await interaction.response.send_message(result.message, ephemeral=not result.applied)
-        if result.applied:
-            logger.info("Subscribed channel %s to community %s", channel.id, actor_id)
+        await interaction.response.send_message(
+            f"Sent a bridge follow for {channel.mention} -> **{community_name or actor_id}**. Waiting for federation acceptance.",
+            ephemeral=False,
+        )
+        logger.info("Sent bridge follow for channel %s to community %s", channel.id, actor_id)
 
 
 def _community_autocomplete(lemmy: LemmyClient):
@@ -106,3 +151,19 @@ def _parse_community_value(value: str) -> tuple[str, str, str]:
     name = parts[1] if len(parts) > 1 else ""
     numeric_id_str = parts[2] if len(parts) > 2 else ""
     return actor_id, name, numeric_id_str
+
+
+def _build_community_handle(actor_id: str, community_name: str | None) -> str:
+    # The local DB stores a human-readable handle so duplicate and lifecycle
+    # messages can use the same label even before another Lemmy round-trip.
+    parsed = urlparse(actor_id)
+    hostname = parsed.hostname
+    if community_name and hostname:
+        return f"!{community_name}@{hostname}"
+    return actor_id
+
+
+def _community_label(subscription: object) -> str:
+    return getattr(subscription, "community_handle", None) or getattr(
+        subscription, "lemmy_community_name", None
+    ) or getattr(subscription, "lemmy_community_actor_id")

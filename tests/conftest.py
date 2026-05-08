@@ -61,3 +61,8 @@ def database() -> Mock:
 @pytest.fixture
 def lemmy() -> AsyncMock:
     return AsyncMock()
+
+
+@pytest.fixture
+def fedify_gateway() -> AsyncMock:
+    return AsyncMock()

@@ -5,7 +5,7 @@ import logging
 from fastapi import FastAPI, Header, HTTPException, status
 
 from .activitypub_handlers import dispatch_activitypub_event
-from .activitypub_models import ActivityPubEvent
+from .activitypub_models import BridgeGatewayEvent
 from .runtime import Runtime
 
 logger = logging.getLogger(__name__)
@@ -22,7 +22,7 @@ def create_http_app(runtime: Runtime) -> FastAPI:
 
     @app.post("/internal/activitypub/events")
     async def receive_activitypub_event(
-        event: ActivityPubEvent,
+        event: BridgeGatewayEvent,
         authorization: str | None = Header(default=None),
         x_bridge_delivery_id: str | None = Header(default=None),
     ) -> dict[str, str]:
@@ -61,7 +61,9 @@ def _validate_delivery_header(x_bridge_delivery_id: str | None, delivery_id: str
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Delivery ID header does not match payload")
 
 
-def _begin_event_processing(runtime: Runtime, event: ActivityPubEvent) -> dict[str, str] | None:
+def _begin_event_processing(
+    runtime: Runtime, event: BridgeGatewayEvent
+) -> dict[str, str] | None:
     # Receipt state is the source of truth for idempotency across duplicate and
     # retry deliveries from the gateway.
     existing = runtime.database.get_event_receipt(event.delivery_id)
@@ -69,7 +71,7 @@ def _begin_event_processing(runtime: Runtime, event: ActivityPubEvent) -> dict[s
         runtime.database.create_event_receipt(
             delivery_id=event.delivery_id,
             event_type=event.event_type,
-            object_ap_id=event.object.ap_id,
+            object_ap_id=_event_object_id(event),
             status="in_progress",
         )
         return None
@@ -85,6 +87,14 @@ def _begin_event_processing(runtime: Runtime, event: ActivityPubEvent) -> dict[s
         detail="retrying failed delivery",
     )
     return None
+
+
+def _event_object_id(event: BridgeGatewayEvent) -> str:
+    # Receipt tracking needs one stable object identifier even though follow
+    # lifecycle events do not carry post/comment objects.
+    if event.event_type == "follow.accepted":
+        return event.object.follow_activity_id
+    return event.object.ap_id
 
 
 def _finish_event_processing(runtime: Runtime, delivery_id: str, status_value: str, detail: str) -> None:
