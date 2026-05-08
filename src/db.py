@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from collections.abc import Iterator
 from contextlib import contextmanager
 
 from sqlalchemy import create_engine, select
@@ -35,7 +36,7 @@ class Database:
         Base.metadata.create_all(self.engine)
 
     @contextmanager
-    def session(self) -> Session:
+    def session(self) -> Iterator[Session]:
         """Yield one transactional session with uniform cleanup semantics."""
         # Every public DB operation uses the same commit/rollback discipline so
         # callers do not need to care about transaction cleanup.
