@@ -250,6 +250,7 @@ def test_failed_inbound_discord_fanout_marks_receipt_failed(tmp_path: Path) -> N
             wait_until_bridge_ready=AsyncMock(),
             fetch_forum_channel=AsyncMock(
                 return_value=SimpleNamespace(
+                    id=100,
                     create_thread=AsyncMock(side_effect=RuntimeError("discord create failed"))
                 )
             ),
@@ -282,6 +283,7 @@ def test_duplicate_inbound_delivery_returns_duplicate_without_side_effects(
     database = _database(tmp_path)
     _accepted_subscription(database)
     forum_channel = SimpleNamespace(
+        id=100,
         create_thread=AsyncMock(
             return_value=SimpleNamespace(
                 thread=SimpleNamespace(id=200),

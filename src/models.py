@@ -19,19 +19,21 @@ class Base(DeclarativeBase):
 
 
 class PostLink(Base):
-    """Map one Lemmy post to one Discord forum thread for runtime routing."""
+    """Map one Lemmy post copy to one Discord forum thread for runtime routing."""
 
-    # PostLink records the one-to-one bridge mapping between a Lemmy post and
-    # the Discord forum thread created for it.
+    # PostLink records one Discord delivery target for a Lemmy post. A remote
+    # community may fan out into several subscribed Discord forum channels, so
+    # one Lemmy post can now own several PostLink rows at once.
     __tablename__ = "post_links"
     __table_args__ = (
-        UniqueConstraint("lemmy_post_id"),
+        UniqueConstraint("lemmy_post_id", "discord_forum_channel_id"),
         UniqueConstraint("discord_forum_thread_id"),
     )
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
     lemmy_post_id: Mapped[int] = mapped_column(Integer, nullable=False)
     lemmy_post_ap_id: Mapped[str | None] = mapped_column(String(512), nullable=True)
+    discord_forum_channel_id: Mapped[int | None] = mapped_column(Integer, nullable=True)
     discord_forum_thread_id: Mapped[int] = mapped_column(Integer, nullable=False)
     discord_starter_message_id: Mapped[int | None] = mapped_column(Integer, nullable=True)
     direction: Mapped[str] = mapped_column(String(32), nullable=False)
@@ -39,13 +41,14 @@ class PostLink(Base):
 
 
 class CommentLink(Base):
-    """Map one Lemmy comment to one Discord message for runtime routing."""
+    """Map one Lemmy comment copy to one Discord message for runtime routing."""
 
     # CommentLink preserves message-level deduplication and parent context for
-    # comment sync in both directions.
+    # comment sync in both directions. One remote comment may fan out into
+    # several Discord threads, so uniqueness is per target thread/message.
     __tablename__ = "comment_links"
     __table_args__ = (
-        UniqueConstraint("lemmy_comment_id"),
+        UniqueConstraint("lemmy_comment_id", "discord_forum_thread_id"),
         UniqueConstraint("discord_message_id"),
     )
 

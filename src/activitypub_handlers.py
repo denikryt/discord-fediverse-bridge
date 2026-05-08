@@ -36,6 +36,7 @@ async def dispatch_activitypub_event(
 
 
 async def handle_post_created(event: ActivityPubEvent, runtime: Runtime) -> HandlerResult:
+    """Fan out one inbound post into every accepted Discord subscription target."""
     if _is_discord_originated_echo(event, runtime):
         return HandlerResult(status="skipped", detail="discord-originated echo")
 
@@ -46,22 +47,36 @@ async def handle_post_created(event: ActivityPubEvent, runtime: Runtime) -> Hand
         return HandlerResult(status="skipped", detail="no subscriptions for this community")
 
     await runtime.bot.wait_until_bridge_ready()
-    # Dedup guard: if the AP ID is already linked, another delivery already
-    # processed this post successfully.
-    if runtime.database.get_post_link_by_lemmy_post_ap_id(event.object.ap_id) is not None:
+    existing_links = runtime.database.get_post_links_by_lemmy_post_ap_id(event.object.ap_id)
+    # If every accepted subscription target already has a local thread copy for
+    # this post, the delivery is a duplicate and should not create more threads.
+    if len(existing_links) >= len(subscriptions):
         return HandlerResult(status="skipped", detail="post already linked")
 
+    created_any = False
     for subscription in subscriptions:
+        # Multi-channel fanout must treat each subscribed forum channel as its
+        # own delivery target. A retry should skip targets that already have a
+        # thread copy for the same remote post.
+        if runtime.database.get_post_link_by_lemmy_post_ap_id_and_channel_id(
+            event.object.ap_id,
+            subscription.discord_channel_id,
+        ) is not None:
+            continue
         forum_channel = await runtime.bot.fetch_forum_channel(subscription.discord_channel_id)
         await create_discord_thread_for_activitypub_post(
             database=runtime.database,
             forum_channel=forum_channel,
             event=event,
         )
+        created_any = True
+    if not created_any:
+        return HandlerResult(status="skipped", detail="post already linked")
     return HandlerResult(status="processed", detail="post created")
 
 
 async def handle_comment_created(event: ActivityPubEvent, runtime: Runtime) -> HandlerResult:
+    """Fan out one inbound comment into every mapped Discord thread copy."""
     if _is_discord_originated_echo(event, runtime):
         return HandlerResult(status="skipped", detail="discord-originated echo")
 
@@ -72,23 +87,37 @@ async def handle_comment_created(event: ActivityPubEvent, runtime: Runtime) -> H
         return HandlerResult(status="skipped", detail="no subscriptions for this community")
 
     await runtime.bot.wait_until_bridge_ready()
-    if runtime.database.get_comment_link_by_lemmy_comment_ap_id(event.object.ap_id) is not None:
-        return HandlerResult(status="skipped", detail="comment already linked")
 
     # Comments are routed through their parent post link, which already carries
     # the correct discord_forum_thread_id. If the post arrived out of order or
     # was never processed, skip and let the caller decide whether to retry.
-    post_link = runtime.database.get_post_link_by_lemmy_post_ap_id(event.object.post_ap_id or "")
-    if post_link is None:
+    post_links = runtime.database.get_post_links_by_lemmy_post_ap_id(event.object.post_ap_id or "")
+    if not post_links:
         logger.info("Skipping ActivityPub comment %s because post %s is not mapped yet", event.object.ap_id, event.object.post_ap_id)
         return HandlerResult(status="deferred", detail="parent post is not mapped yet")
 
-    resolved_thread = await runtime.bot.get_thread_by_id(post_link.discord_forum_thread_id)
-    await create_discord_message_for_activitypub_comment(
-        database=runtime.database,
-        thread=resolved_thread,
-        event=event,
-    )
+    existing_comment_links = runtime.database.get_comment_links_by_lemmy_comment_ap_id(event.object.ap_id)
+    delivered_thread_ids = {
+        link.discord_forum_thread_id for link in existing_comment_links
+    }
+    # A duplicate delivery should stop only when every mapped local thread
+    # already has its own copy of the remote comment.
+    if len(delivered_thread_ids) >= len(post_links):
+        return HandlerResult(status="skipped", detail="comment already linked")
+
+    created_any = False
+    for post_link in post_links:
+        if post_link.discord_forum_thread_id in delivered_thread_ids:
+            continue
+        resolved_thread = await runtime.bot.get_thread_by_id(post_link.discord_forum_thread_id)
+        await create_discord_message_for_activitypub_comment(
+            database=runtime.database,
+            thread=resolved_thread,
+            event=event,
+        )
+        created_any = True
+    if not created_any:
+        return HandlerResult(status="skipped", detail="comment already linked")
     return HandlerResult(status="processed", detail="comment created")
 
 

@@ -17,6 +17,7 @@ async def create_discord_thread_for_activitypub_post(
     forum_channel: discord.ForumChannel,
     event: ActivityPubEvent,
 ) -> int:
+    """Create one Discord forum-thread copy for an inbound ActivityPub post."""
     # Posts become forum threads plus a starter message, and both IDs are
     # persisted because later comment sync needs the thread mapping.
     post = event.object
@@ -48,6 +49,7 @@ async def create_discord_thread_for_activitypub_post(
     database.create_post_link(
         lemmy_post_id=post.lemmy_id,
         lemmy_post_ap_id=post.ap_id,
+        discord_forum_channel_id=forum_channel.id,
         discord_forum_thread_id=thread.id,
         discord_starter_message_id=message.id,
         direction="lemmy_to_discord",
@@ -62,6 +64,7 @@ async def create_discord_message_for_activitypub_comment(
     thread: discord.Thread,
     event: ActivityPubEvent,
 ) -> int:
+    """Create one Discord message copy for an inbound ActivityPub comment."""
     # Comments are appended to an existing mapped Discord thread and use a
     # Discord reply when the Lemmy parent comment is already mapped locally.
     comment = event.object
@@ -92,21 +95,26 @@ async def resolve_parent_discord_message(
     thread: discord.Thread,
     parent_comment_ap_id: str | None,
 ) -> discord.Message | None:
+    """Resolve the thread-local parent Discord message for one inbound comment."""
     # Reply threading is best-effort: if the parent comment is unknown or the
     # mapped Discord message can no longer be fetched, fall back to a plain
     # thread message instead of dropping the comment.
     if not parent_comment_ap_id:
         return None
 
-    parent_link = database.get_comment_link_by_lemmy_comment_ap_id(parent_comment_ap_id)
-    if parent_link is None:
+    parent_links = database.get_comment_links_by_lemmy_comment_ap_id(parent_comment_ap_id)
+    if not parent_links:
         logger.debug(
             "No Discord parent mapping found for Lemmy parent comment %s",
             parent_comment_ap_id,
         )
         return None
 
-    if parent_link.discord_forum_thread_id != thread.id:
+    parent_link = next(
+        (link for link in parent_links if link.discord_forum_thread_id == thread.id),
+        None,
+    )
+    if parent_link is None:
         logger.debug(
             "Mapped parent comment %s belongs to another Discord thread, skipping reply linkage",
             parent_comment_ap_id,

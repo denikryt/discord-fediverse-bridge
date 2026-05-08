@@ -8,11 +8,13 @@ from unittest.mock import AsyncMock
 
 import pytest
 from fastapi.testclient import TestClient
+from sqlalchemy import select
 
 from src.activitypub_handlers import dispatch_activitypub_event
 from src.activitypub_models import ActivityPubEvent
 from src.db import Database
 from src.http_api import create_http_app
+from src.models import CommentLink, PostLink
 from tests_constants import BRIDGE_HOST_DOMAIN, LEMMY_EXAMPLE_DOMAIN
 
 
@@ -33,6 +35,20 @@ def _accepted_subscription(database: Database) -> None:
         community_handle=f"!hackers@{LEMMY_EXAMPLE_DOMAIN}",
         community_inbox_url=f"https://{LEMMY_EXAMPLE_DOMAIN}/c/hackers/inbox",
         follow_activity_id=f"https://{BRIDGE_HOST_DOMAIN}/activities/follow/1",
+        status="accepted",
+    )
+
+
+def _accepted_subscription_for_channel(database: Database, *, channel_id: int) -> None:
+    """Insert one accepted subscription row for a specific Discord forum channel."""
+    database.create_subscription(
+        discord_channel_id=channel_id,
+        lemmy_community_actor_id=f"https://{LEMMY_EXAMPLE_DOMAIN}/c/hackers",
+        lemmy_community_name="hackers",
+        lemmy_community_id=42,
+        community_handle=f"!hackers@{LEMMY_EXAMPLE_DOMAIN}",
+        community_inbox_url=f"https://{LEMMY_EXAMPLE_DOMAIN}/c/hackers/inbox",
+        follow_activity_id=f"https://{BRIDGE_HOST_DOMAIN}/activities/follow/{channel_id}",
         status="accepted",
     )
 
@@ -112,6 +128,7 @@ def test_accepted_subscription_inbound_post_creates_discord_thread_and_receipt(
     database = _database(tmp_path)
     _accepted_subscription(database)
     forum_channel = SimpleNamespace(
+        id=100,
         create_thread=AsyncMock(
             return_value=SimpleNamespace(
                 thread=SimpleNamespace(id=200),
@@ -144,6 +161,114 @@ def test_accepted_subscription_inbound_post_creates_discord_thread_and_receipt(
     assert post_link is not None
     assert receipt is not None
     assert receipt.status == "processed"
+
+
+def test_inbound_post_and_comment_fan_out_to_all_accepted_subscriptions(
+    tmp_path: Path,
+) -> None:
+    """One inbound post/comment pair should create copies in every subscribed forum."""
+    database = _database(tmp_path)
+    _accepted_subscription_for_channel(database, channel_id=100)
+    _accepted_subscription_for_channel(database, channel_id=101)
+    forum_channel_a = SimpleNamespace(
+        id=100,
+        create_thread=AsyncMock(
+            return_value=SimpleNamespace(
+                thread=SimpleNamespace(id=200),
+                message=SimpleNamespace(id=300),
+            )
+        )
+    )
+    forum_channel_b = SimpleNamespace(
+        id=101,
+        create_thread=AsyncMock(
+            return_value=SimpleNamespace(
+                thread=SimpleNamespace(id=201),
+                message=SimpleNamespace(id=301),
+            )
+        )
+    )
+    thread_a = SimpleNamespace(
+        id=200,
+        send=AsyncMock(return_value=SimpleNamespace(id=900)),
+        fetch_message=AsyncMock(),
+    )
+    thread_b = SimpleNamespace(
+        id=201,
+        send=AsyncMock(return_value=SimpleNamespace(id=901)),
+        fetch_message=AsyncMock(),
+    )
+
+    async def _fetch_forum_channel(channel_id: int) -> object:
+        """Return the fake forum channel that belongs to the requested subscription."""
+        if channel_id == 100:
+            return forum_channel_a
+        if channel_id == 101:
+            return forum_channel_b
+        raise AssertionError(f"Unexpected forum channel lookup {channel_id}")
+
+    async def _get_thread_by_id(thread_id: int) -> object:
+        """Return the fake mirrored thread for the requested Discord thread ID."""
+        if thread_id == 200:
+            return thread_a
+        if thread_id == 201:
+            return thread_b
+        raise AssertionError(f"Unexpected thread lookup {thread_id}")
+
+    runtime = SimpleNamespace(
+        settings=SimpleNamespace(fedify_shared_secret="secret"),
+        database=database,
+        lemmy=SimpleNamespace(),
+        bot=SimpleNamespace(
+            wait_until_bridge_ready=AsyncMock(),
+            fetch_forum_channel=AsyncMock(side_effect=_fetch_forum_channel),
+            get_thread_by_id=AsyncMock(side_effect=_get_thread_by_id),
+        ),
+    )
+    client = TestClient(create_http_app(runtime), raise_server_exceptions=False)
+    post_event = _post_event(
+        object_id=f"https://{LEMMY_EXAMPLE_DOMAIN}/post/777",
+        delivery_id=f"https://{LEMMY_EXAMPLE_DOMAIN}/activities/create/post/777",
+    )
+    comment_event = _comment_event(
+        object_id=f"https://{LEMMY_EXAMPLE_DOMAIN}/comment/777",
+        post_ap_id=post_event.object.ap_id,
+        delivery_id=f"https://{LEMMY_EXAMPLE_DOMAIN}/activities/create/comment/777",
+    )
+
+    post_response = client.post(
+        "/internal/activitypub/events",
+        headers=_event_headers(post_event.delivery_id),
+        json=post_event.model_dump(mode="json"),
+    )
+    comment_response = client.post(
+        "/internal/activitypub/events",
+        headers=_event_headers(comment_event.delivery_id),
+        json=comment_event.model_dump(mode="json"),
+    )
+
+    with database.session() as session:
+        post_links = list(
+            session.scalars(
+                select(PostLink).where(PostLink.lemmy_post_ap_id == post_event.object.ap_id)
+            )
+        )
+        comment_links = list(
+            session.scalars(
+                select(CommentLink).where(
+                    CommentLink.lemmy_comment_ap_id == comment_event.object.ap_id
+                )
+            )
+        )
+
+    assert post_response.status_code == 200
+    assert post_response.json()["status"] == "processed"
+    assert comment_response.status_code == 200
+    assert comment_response.json()["status"] == "processed"
+    assert {link.discord_forum_thread_id for link in post_links} == {200, 201}
+    assert {link.discord_forum_thread_id for link in comment_links} == {200, 201}
+    assert thread_a.send.await_count == 1
+    assert thread_b.send.await_count == 1
 
 
 def test_accepted_subscription_inbound_comment_creates_discord_message_and_receipt(
@@ -227,6 +352,7 @@ def test_duplicate_delivery_id_returns_idempotent_duplicate_without_side_effects
     database = _database(tmp_path)
     _accepted_subscription(database)
     forum_channel = SimpleNamespace(
+        id=100,
         create_thread=AsyncMock(
             return_value=SimpleNamespace(
                 thread=SimpleNamespace(id=200),
@@ -376,6 +502,7 @@ def test_discord_target_failure_marks_inbound_receipt_failed(
             wait_until_bridge_ready=AsyncMock(),
             fetch_forum_channel=AsyncMock(
                 return_value=SimpleNamespace(
+                    id=100,
                     create_thread=AsyncMock(side_effect=RuntimeError("discord create failed"))
                 )
             ),

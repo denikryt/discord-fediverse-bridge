@@ -45,18 +45,33 @@ class DiscordOAuthClient:
 
     async def exchange_code_for_access_token(self, code: str) -> str:
         """Exchange one OAuth callback code for a Discord access token."""
+        # Discord's OAuth2 docs show token exchange using HTTP Basic auth with
+        # client id/secret as credentials. Using the documented shape keeps the
+        # bridge aligned with the public contract and avoids ambiguous token
+        # endpoint failures.
         response = await self._client.post(
             "https://discord.com/api/oauth2/token",
             data={
-                "client_id": self.settings.discord_oauth_client_id,
-                "client_secret": self.settings.discord_oauth_client_secret,
                 "grant_type": "authorization_code",
                 "code": code,
                 "redirect_uri": self.settings.discord_oauth_redirect_uri,
             },
             headers={"content-type": "application/x-www-form-urlencoded"},
+            auth=(
+                self.settings.discord_oauth_client_id,
+                self.settings.discord_oauth_client_secret,
+            ),
         )
-        response.raise_for_status()
+        try:
+            response.raise_for_status()
+        except httpx.HTTPStatusError as exc:
+            # Surface Discord's response body so misconfigured redirect URIs,
+            # invalid codes, and application-level failures are diagnosable
+            # from bridge logs instead of collapsing into a generic 500 only.
+            detail = response.text.strip() or response.reason_phrase
+            raise RuntimeError(
+                f"Discord token exchange failed: {response.status_code} {detail}"
+            ) from exc
         payload = response.json()
         access_token = payload.get("access_token")
         if not isinstance(access_token, str) or not access_token:
