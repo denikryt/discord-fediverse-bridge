@@ -13,6 +13,7 @@ from fastapi.testclient import TestClient
 from src.activitypub_handlers import dispatch_activitypub_event
 from src.activitypub_models import ActivityPubEvent, FollowLifecycleEvent
 from src.commands import subscribe
+from src.community_sync.runtime import CommunityRuntime
 from src.db import Database
 from src.discord_publish_service import DiscordPublishService
 from src.fedify_gateway_client import PublishContentResult
@@ -73,6 +74,15 @@ def _registration_runtime(database: Database) -> SimpleNamespace:
         base_url=settings.normalized_public_bridge_base_url,
         keypair_generator=lambda: ("test-public-key", "test-private-key"),
     )
+    publish_service = DiscordPublishService(
+        database=database,
+        fedify_gateway=AsyncMock(),
+        bridge_prefix="[bridge]",
+    )
+    community_runtime = CommunityRuntime(
+        database=database,
+        discord_publish_service=publish_service,
+    )
     return SimpleNamespace(
         settings=settings,
         database=database,
@@ -81,6 +91,7 @@ def _registration_runtime(database: Database) -> SimpleNamespace:
         lemmy=SimpleNamespace(),
         fedify_gateway=SimpleNamespace(),
         bot=SimpleNamespace(),
+        community_runtime=community_runtime,
     )
 
 
@@ -223,12 +234,21 @@ async def test_register_subscribe_accept_publish_then_echo_is_suppressed(
         starter_message=_starter_message(),
     )
 
+    echo_publish_service = DiscordPublishService(
+        database=database,
+        fedify_gateway=AsyncMock(),
+        bridge_prefix="[bridge]",
+    )
     echo_runtime = SimpleNamespace(
         database=database,
         lemmy=SimpleNamespace(),
         bot=SimpleNamespace(
             wait_until_bridge_ready=AsyncMock(),
             fetch_forum_channel=AsyncMock(),
+        ),
+        community_runtime=CommunityRuntime(
+            database=database,
+            discord_publish_service=echo_publish_service,
         ),
     )
     echo_result = await dispatch_activitypub_event(
@@ -288,12 +308,21 @@ async def test_lemmy_announce_of_local_post_is_suppressed_via_actor_check(
         }
     )
 
+    announce_publish_service = DiscordPublishService(
+        database=database,
+        fedify_gateway=AsyncMock(),
+        bridge_prefix="[bridge]",
+    )
     runtime = SimpleNamespace(
         database=database,
         lemmy=SimpleNamespace(),
         bot=SimpleNamespace(
             wait_until_bridge_ready=AsyncMock(),
             fetch_forum_channel=AsyncMock(),
+        ),
+        community_runtime=CommunityRuntime(
+            database=database,
+            discord_publish_service=announce_publish_service,
         ),
     )
     result = await dispatch_activitypub_event(lemmy_rewritten_event, runtime)

@@ -210,6 +210,88 @@ class PublishedActivityObject(Base):
     )
 
 
+class CommunityThreadGroup(Base):
+    """Map one canonical source thread event to all its Discord delivery targets."""
+
+    # CommunityThreadGroup is the Phase 2+ replacement for PostLink. It records
+    # the canonical source event (AP IDs, source channel/thread) and lets each
+    # subscribed channel own a separate CommunityThreadGroupDelivery row.
+    __tablename__ = "community_thread_groups"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    community_actor_id: Mapped[str] = mapped_column(String(512), nullable=False)
+    source_channel_id: Mapped[int] = mapped_column(Integer, nullable=False)
+    source_thread_id: Mapped[int] = mapped_column(Integer, nullable=False, unique=True)
+    source_starter_message_id: Mapped[int] = mapped_column(Integer, nullable=False)
+    ap_activity_id: Mapped[str | None] = mapped_column(String(512), nullable=True)
+    ap_object_id: Mapped[str | None] = mapped_column(String(512), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, nullable=False)
+
+
+class CommunityThreadGroupDelivery(Base):
+    """Record one per-channel Discord delivery for a CommunityThreadGroup."""
+
+    # Each subscribed channel gets its own delivery row so fanout and retry
+    # logic can track which channels received the thread and which still need it.
+    # UNIQUE(thread_group_id, discord_channel_id) ensures one delivery per channel per group.
+    __tablename__ = "community_thread_group_deliveries"
+    __table_args__ = (
+        UniqueConstraint("thread_group_id", "discord_channel_id"),
+        UniqueConstraint("discord_thread_id"),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    thread_group_id: Mapped[int] = mapped_column(Integer, nullable=False)
+    discord_channel_id: Mapped[int] = mapped_column(Integer, nullable=False)
+    discord_thread_id: Mapped[int] = mapped_column(Integer, nullable=False)
+    discord_starter_message_id: Mapped[int] = mapped_column(Integer, nullable=False)
+    # "source" for the originating channel; "mirror" for fanout delivery targets.
+    role: Mapped[str] = mapped_column(String(32), nullable=False)
+
+
+class CommunityMessageGroup(Base):
+    """Map one canonical source message event to all its Discord delivery targets."""
+
+    # CommunityMessageGroup is the Phase 2+ replacement for CommentLink. It
+    # records the canonical source message (AP IDs, source context) and lets
+    # each delivery channel own a CommunityMessageGroupDelivery row.
+    __tablename__ = "community_message_groups"
+    __table_args__ = (UniqueConstraint("source_message_id"),)
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    community_actor_id: Mapped[str] = mapped_column(String(512), nullable=False)
+    thread_group_id: Mapped[int] = mapped_column(Integer, nullable=False)
+    source_channel_id: Mapped[int] = mapped_column(Integer, nullable=False)
+    source_thread_id: Mapped[int] = mapped_column(Integer, nullable=False)
+    source_message_id: Mapped[int] = mapped_column(Integer, nullable=False)
+    ap_activity_id: Mapped[str | None] = mapped_column(String(512), nullable=True)
+    ap_object_id: Mapped[str | None] = mapped_column(String(512), nullable=True)
+    # FK to another CommunityMessageGroup if this message is a reply.
+    parent_message_group_id: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, nullable=False)
+
+
+class CommunityMessageGroupDelivery(Base):
+    """Record one per-channel Discord delivery for a CommunityMessageGroup."""
+
+    # Each delivery channel gets its own row so fanout and retry logic can track
+    # which threads received the message.
+    # UNIQUE(message_group_id, discord_channel_id) ensures one delivery per channel per group.
+    __tablename__ = "community_message_group_deliveries"
+    __table_args__ = (
+        UniqueConstraint("message_group_id", "discord_channel_id"),
+        UniqueConstraint("discord_message_id"),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    message_group_id: Mapped[int] = mapped_column(Integer, nullable=False)
+    discord_channel_id: Mapped[int] = mapped_column(Integer, nullable=False)
+    discord_thread_id: Mapped[int] = mapped_column(Integer, nullable=False)
+    discord_message_id: Mapped[int] = mapped_column(Integer, nullable=False)
+    # "source" for the originating channel; "mirror" for fanout delivery targets.
+    role: Mapped[str] = mapped_column(String(32), nullable=False)
+
+
 class RemoteActor(Base):
     """Cache remote actor metadata needed for verification and delivery."""
 

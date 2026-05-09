@@ -6,9 +6,9 @@ import logging
 import discord
 from discord import app_commands
 
+from .community_sync.runtime import CommunityRuntime
 from .config import Settings
 from .db import Database
-from .discord_publish_service import DiscordPublishService
 from .fedify_gateway_client import FedifyGatewayClient
 from .lemmy_client import LemmyClient
 
@@ -16,17 +16,21 @@ logger = logging.getLogger(__name__)
 
 
 class BridgeBot(discord.Client):
+    """Own the Discord-side event loop and forward forum channel/thread activity through CommunityRuntime."""
+
     # BridgeBot owns the Discord-side event loop and forwards forum channel/thread
-    # activity to Lemmy based on persisted subscriptions.
+    # activity to Lemmy based on persisted subscriptions. All publish decisions
+    # go through CommunityRuntime rather than DiscordPublishService directly.
     def __init__(
         self,
         *,
         settings: Settings,
         database: Database,
         fedify_gateway: FedifyGatewayClient,
-        discord_publish_service: DiscordPublishService,
+        community_runtime: CommunityRuntime,
         lemmy: LemmyClient,
     ) -> None:
+        """Initialise the bot with shared services and Discord intent configuration."""
         intents = discord.Intents.default()
         intents.guilds = True
         intents.messages = True
@@ -35,7 +39,7 @@ class BridgeBot(discord.Client):
         self.settings = settings
         self.database = database
         self.fedify_gateway = fedify_gateway
-        self.discord_publish_service = discord_publish_service
+        self.community_runtime = community_runtime
         self.lemmy = lemmy
         self.tree = app_commands.CommandTree(self)
         self.bridge_ready = asyncio.Event()
@@ -102,7 +106,7 @@ class BridgeBot(discord.Client):
             if starter_message.author.bot:
                 return
 
-            result = await self.discord_publish_service.publish_thread_starter(
+            result = await self.community_runtime.handle_discord_thread_create(
                 thread=thread,
                 starter_message=starter_message,
             )
@@ -124,7 +128,7 @@ class BridgeBot(discord.Client):
         if subscription is None:
             return
 
-        await self.discord_publish_service.publish_thread_message(
+        await self.community_runtime.handle_discord_message(
             message=message,
         )
 

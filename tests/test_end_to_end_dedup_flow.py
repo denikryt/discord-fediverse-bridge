@@ -11,7 +11,9 @@ from fastapi.testclient import TestClient
 
 from src.activitypub_handlers import dispatch_activitypub_event
 from src.activitypub_models import ActivityPubEvent
+from src.community_sync.runtime import CommunityRuntime
 from src.db import Database
+from src.discord_publish_service import DiscordPublishService
 from src.http_api import create_http_app
 from tests_constants import BRIDGE_HOST_DOMAIN, LEMMY_EXAMPLE_DOMAIN
 
@@ -21,6 +23,20 @@ def _database(tmp_path: Path) -> Database:
     database = Database(f"sqlite:///{tmp_path / 'bridge-stage7.db'}")
     database.create_all()
     return database
+
+
+def _community_runtime(database: Database) -> CommunityRuntime:
+    """Build a real CommunityRuntime for inbound routing scenarios.
+
+    DiscordPublishService is not called for inbound events, so it is
+    constructed with a stub gateway.
+    """
+    publish_service = DiscordPublishService(
+        database=database,
+        fedify_gateway=AsyncMock(),
+        bridge_prefix="[bridge]",
+    )
+    return CommunityRuntime(database=database, discord_publish_service=publish_service)
 
 
 def _accepted_subscription(database: Database) -> None:
@@ -120,6 +136,7 @@ async def test_inbound_post_with_discord_originated_mapping_is_skipped_as_echo(
             wait_until_bridge_ready=AsyncMock(),
             fetch_forum_channel=AsyncMock(),
         ),
+        community_runtime=_community_runtime(database),
     )
 
     result = await dispatch_activitypub_event(
@@ -156,6 +173,7 @@ async def test_inbound_comment_with_discord_originated_mapping_is_skipped_as_ech
             wait_until_bridge_ready=AsyncMock(),
             get_thread_by_id=AsyncMock(),
         ),
+        community_runtime=_community_runtime(database),
     )
 
     result = await dispatch_activitypub_event(
@@ -190,6 +208,7 @@ def test_out_of_order_comment_receipt_becomes_deferred_and_retries_successfully(
                 )
             ),
         ),
+        community_runtime=_community_runtime(database),
     )
     client = TestClient(create_http_app(runtime), raise_server_exceptions=False)
     event = _comment_event(
@@ -255,6 +274,7 @@ def test_failed_inbound_discord_fanout_marks_receipt_failed(tmp_path: Path) -> N
                 )
             ),
         ),
+        community_runtime=_community_runtime(database),
     )
     client = TestClient(create_http_app(runtime), raise_server_exceptions=False)
     event = _post_event(
@@ -299,6 +319,7 @@ def test_duplicate_inbound_delivery_returns_duplicate_without_side_effects(
             wait_until_bridge_ready=AsyncMock(),
             fetch_forum_channel=AsyncMock(return_value=forum_channel),
         ),
+        community_runtime=_community_runtime(database),
     )
     client = TestClient(create_http_app(runtime), raise_server_exceptions=False)
     event = _post_event(

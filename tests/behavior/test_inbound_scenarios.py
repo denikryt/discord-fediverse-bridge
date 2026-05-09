@@ -12,7 +12,9 @@ from sqlalchemy import select
 
 from src.activitypub_handlers import dispatch_activitypub_event
 from src.activitypub_models import ActivityPubEvent
+from src.community_sync.runtime import CommunityRuntime
 from src.db import Database
+from src.discord_publish_service import DiscordPublishService
 from src.http_api import create_http_app
 from src.models import CommentLink, PostLink
 from tests_constants import BRIDGE_HOST_DOMAIN, LEMMY_EXAMPLE_DOMAIN
@@ -23,6 +25,20 @@ def _database(tmp_path: Path) -> Database:
     database = Database(f"sqlite:///{tmp_path / 'behavior-inbound.db'}")
     database.create_all()
     return database
+
+
+def _community_runtime(database: Database) -> CommunityRuntime:
+    """Build a real CommunityRuntime for inbound routing scenarios.
+
+    DiscordPublishService is not called for inbound events (those go through
+    bridge_lemmy_to_discord), so it is constructed with a stub gateway.
+    """
+    publish_service = DiscordPublishService(
+        database=database,
+        fedify_gateway=AsyncMock(),
+        bridge_prefix="[bridge]",
+    )
+    return CommunityRuntime(database=database, discord_publish_service=publish_service)
 
 
 def _accepted_subscription(database: Database) -> None:
@@ -144,6 +160,7 @@ def test_accepted_subscription_inbound_post_creates_discord_thread_and_receipt(
             wait_until_bridge_ready=AsyncMock(),
             fetch_forum_channel=AsyncMock(return_value=forum_channel),
         ),
+        community_runtime=_community_runtime(database),
     )
     client = TestClient(create_http_app(runtime), raise_server_exceptions=False)
     event = _post_event(object_id=f"https://{LEMMY_EXAMPLE_DOMAIN}/post/111")
@@ -224,6 +241,7 @@ def test_inbound_post_and_comment_fan_out_to_all_accepted_subscriptions(
             fetch_forum_channel=AsyncMock(side_effect=_fetch_forum_channel),
             get_thread_by_id=AsyncMock(side_effect=_get_thread_by_id),
         ),
+        community_runtime=_community_runtime(database),
     )
     client = TestClient(create_http_app(runtime), raise_server_exceptions=False)
     post_event = _post_event(
@@ -297,6 +315,7 @@ def test_accepted_subscription_inbound_comment_creates_discord_message_and_recei
             wait_until_bridge_ready=AsyncMock(),
             get_thread_by_id=AsyncMock(return_value=thread),
         ),
+        community_runtime=_community_runtime(database),
     )
     client = TestClient(create_http_app(runtime), raise_server_exceptions=False)
     event = _comment_event(
@@ -333,6 +352,7 @@ async def test_no_accepted_subscription_inbound_post_is_skipped(
             wait_until_bridge_ready=AsyncMock(),
             fetch_forum_channel=AsyncMock(),
         ),
+        community_runtime=_community_runtime(database),
     )
 
     result = await dispatch_activitypub_event(
@@ -368,6 +388,7 @@ def test_duplicate_delivery_id_returns_idempotent_duplicate_without_side_effects
             wait_until_bridge_ready=AsyncMock(),
             fetch_forum_channel=AsyncMock(return_value=forum_channel),
         ),
+        community_runtime=_community_runtime(database),
     )
     client = TestClient(create_http_app(runtime), raise_server_exceptions=False)
     event = _post_event(
@@ -417,6 +438,7 @@ async def test_discord_originated_echo_is_skipped_without_creating_duplicate(
             wait_until_bridge_ready=AsyncMock(),
             fetch_forum_channel=AsyncMock(),
         ),
+        community_runtime=_community_runtime(database),
     )
 
     result = await dispatch_activitypub_event(_post_event(object_id=object_id), runtime)
@@ -445,6 +467,7 @@ def test_comment_before_parent_mapping_becomes_deferred_then_retries_processed(
             wait_until_bridge_ready=AsyncMock(),
             get_thread_by_id=AsyncMock(return_value=thread),
         ),
+        community_runtime=_community_runtime(database),
     )
     client = TestClient(create_http_app(runtime), raise_server_exceptions=False)
     event = _comment_event(
@@ -507,6 +530,7 @@ def test_discord_target_failure_marks_inbound_receipt_failed(
                 )
             ),
         ),
+        community_runtime=_community_runtime(database),
     )
     client = TestClient(create_http_app(runtime), raise_server_exceptions=False)
     event = _post_event(

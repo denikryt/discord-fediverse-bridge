@@ -5,6 +5,7 @@ import logging
 
 import uvicorn
 
+from .community_sync.runtime import CommunityRuntime
 from .config import Settings
 from .db import Database
 from .discord_bot import BridgeBot
@@ -42,11 +43,15 @@ async def main() -> None:
     )
     lemmy = LemmyClient(settings.normalized_lemmy_base_url)
 
+    community_runtime = CommunityRuntime(
+        database=database,
+        discord_publish_service=discord_publish_service,
+    )
     bot = BridgeBot(
         settings=settings,
         database=database,
         fedify_gateway=fedify_gateway,
-        discord_publish_service=discord_publish_service,
+        community_runtime=community_runtime,
         lemmy=lemmy,
     )
     runtime = Runtime(
@@ -58,6 +63,7 @@ async def main() -> None:
         discord_publish_service=discord_publish_service,
         registration_service=registration_service,
         bot=bot,
+        community_runtime=community_runtime,
     )
     http_app = create_http_app(runtime)
     http_server = uvicorn.Server(
