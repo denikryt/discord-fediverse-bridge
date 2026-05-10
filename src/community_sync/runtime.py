@@ -363,6 +363,15 @@ class CommunityRuntime:
 
         Returns status='skipped' if the post is already mapped or no subscriptions exist.
         Returns status='processed' after successful delivery to all subscribed channels.
+
+        Retry and partial-delivery behavior (Phase 6):
+          If a thread group already exists for this ap_id (e.g. because a prior delivery
+          partially succeeded for some channels but failed for others), the retry returns
+          'skipped' — it does not attempt to complete missing channel deliveries. The
+          get-then-create guard is not atomic: a concurrent replay can race past it, but
+          the UNIQUE constraint on (thread_group_id, discord_channel_id) provides the
+          final safety net at the DB level. Full per-channel retry on partial failure is
+          Phase 8 scope.
         """
         from ..activitypub_handlers import HandlerResult as _HandlerResult
 
@@ -431,6 +440,14 @@ class CommunityRuntime:
 
         Returns status='skipped' if already mapped, status='deferred' if the parent post
         is not yet mapped, status='processed' after successful delivery.
+
+        Retry and partial-delivery behavior (Phase 6):
+          If a message group already exists for this ap_id, the retry returns 'skipped'.
+          The get-then-create guard is not atomic; the UNIQUE constraint on
+          CommunityMessageGroupDelivery.discord_message_id is the final safety net.
+          Partial delivery (some threads succeeded, some failed) is not retried here —
+          the message group row already exists, so the retry hits the 'already mapped'
+          guard and skips entirely. Full per-thread retry on partial failure is Phase 8 scope.
         """
         from ..activitypub_handlers import HandlerResult as _HandlerResult
 
