@@ -15,6 +15,7 @@ from typing import TYPE_CHECKING
 import discord
 
 if TYPE_CHECKING:
+    from ..models import CommunityThreadGroupDelivery
     from ..discord_bot import BridgeBot
 
 logger = logging.getLogger(__name__)
@@ -27,6 +28,15 @@ class MirrorResult:
     channel_id: int
     thread_id: int
     starter_message_id: int
+
+
+@dataclass(slots=True)
+class MirrorMessageResult:
+    """Describe one successfully delivered mirror message into a sibling thread."""
+
+    channel_id: int
+    thread_id: int
+    message_id: int
 
 
 def _format_mirror_body(message: discord.Message | object) -> str:
@@ -116,4 +126,44 @@ class DiscordFanout:
                     getattr(source_thread, "id", "?"), channel_id,
                 )
 
+        return results
+
+    async def mirror_message_to_siblings(
+        self,
+        *,
+        source_message: object,
+        sibling_thread_deliveries: list[CommunityThreadGroupDelivery],
+    ) -> list[MirrorMessageResult]:
+        """Deliver one mirror copy of source_message into each sibling thread.
+
+        Iterates sibling_thread_deliveries (all role='mirror' entries for the
+        thread group), fetches each target thread via bot.get_thread_by_id, and
+        sends the formatted mirror body. Returns one MirrorMessageResult per
+        successfully delivered mirror. A sibling thread that fails does not block
+        the others — the error is logged and that thread is skipped, preserving
+        partial-success behaviour so the source AP publish is never rolled back.
+        """
+        results: list[MirrorMessageResult] = []
+        content = _format_mirror_body(source_message)
+        for delivery in sibling_thread_deliveries:
+            try:
+                thread = await self.bot.get_thread_by_id(delivery.discord_thread_id)
+                sent = await thread.send(content=content)
+                results.append(MirrorMessageResult(
+                    channel_id=delivery.discord_channel_id,
+                    thread_id=delivery.discord_thread_id,
+                    message_id=sent.id,
+                ))
+                logger.info(
+                    "Mirrored message %s into thread %s as message %s",
+                    getattr(source_message, "id", "?"),
+                    delivery.discord_thread_id,
+                    sent.id,
+                )
+            except Exception:
+                logger.exception(
+                    "Failed to mirror message %s into thread %s",
+                    getattr(source_message, "id", "?"),
+                    delivery.discord_thread_id,
+                )
         return results

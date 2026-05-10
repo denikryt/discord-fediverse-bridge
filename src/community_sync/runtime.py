@@ -136,14 +136,78 @@ class CommunityRuntime:
     ) -> PublishResult:
         """Handle a new Discord thread message from a subscribed channel.
 
-        Phase 2: delegates directly to DiscordPublishService.publish_thread_message.
-        Phase 3+ will create a CommunityMessageGroup, call the AP gateway,
-        and fan out the message to sibling subscribed channels.
+        Deduplicates via CommunityMessageGroup, publishes to AP via
+        DiscordPublishService, creates the canonical message-group row, records
+        source delivery, then fans out to all sibling mirror threads and records
+        each mirror delivery. If the source thread has no CommunityThreadGroup
+        (pre-Phase-2 / legacy thread), AP publish happens but no message-group
+        rows are written and no fanout is attempted.
+
+        Returns status='ignored' with reason='duplicate_discord_message' if this
+        message was already processed (e.g. a Discord reconnect re-fires the event).
         """
-        # Pass through to existing publish logic unchanged.
-        return await self.discord_publish_service.publish_thread_message(
-            message=message,
+        # Dedup: if a message group already exists for this source message,
+        # a reconnect or duplicate Discord event fired — skip without re-publishing.
+        if self.database.get_message_group_by_source_message(message.id) is not None:
+            logger.info("Message %s already has a message group — skipping duplicate", message.id)
+            return _ignored_result("duplicate_discord_message")
+
+        # AP publish via existing service; return early on non-publish outcomes.
+        result = await self.discord_publish_service.publish_thread_message(message=message)
+        if result.status != "published":
+            return result
+
+        # Resolve the thread group for the source thread. If none exists (pre-Phase-2
+        # thread or legacy path), skip message-group creation and fanout entirely.
+        thread = message.channel
+        thread_group = self.database.get_thread_group_by_source_thread(thread.id)
+        if thread_group is None:
+            return result
+
+        # Create the canonical message group for this source event.
+        message_group = self.database.create_message_group(
+            community_actor_id=thread_group.community_actor_id,
+            thread_group_id=thread_group.id,
+            source_channel_id=thread.parent_id,
+            source_thread_id=thread.id,
+            source_message_id=message.id,
+            ap_activity_id=result.activity_id,
+            ap_object_id=result.object_id,
         )
+        # Record the source delivery so reply-chain resolution and dedup can find
+        # this message by its Discord message ID later.
+        self.database.add_message_delivery(
+            message_group_id=message_group.id,
+            discord_channel_id=thread.parent_id,
+            discord_thread_id=thread.id,
+            discord_message_id=message.id,
+            role="source",
+        )
+
+        # Resolve sibling mirror thread deliveries for the same thread group and fan out.
+        if self.discord_fanout is not None:
+            sibling_deliveries = [
+                d for d in self.database.get_thread_deliveries(thread_group.id)
+                if d.role == "mirror"
+            ]
+            if sibling_deliveries:
+                mirror_results = await self.discord_fanout.mirror_message_to_siblings(
+                    source_message=message,
+                    sibling_thread_deliveries=sibling_deliveries,
+                )
+                for mirror in mirror_results:
+                    # Each successfully delivered mirror message gets its own
+                    # delivery row so the on_message guard can identify mirror-thread
+                    # messages and the reply chain can be resolved correctly.
+                    self.database.add_message_delivery(
+                        message_group_id=message_group.id,
+                        discord_channel_id=mirror.channel_id,
+                        discord_thread_id=mirror.thread_id,
+                        discord_message_id=mirror.message_id,
+                        role="mirror",
+                    )
+
+        return result
 
     async def handle_inbound_post(
         self,

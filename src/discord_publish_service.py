@@ -168,7 +168,17 @@ class DiscordPublishService:
 
         post_link = self.database.get_post_link_by_thread_id(getattr(thread, "id"))
         if post_link is None or post_link.lemmy_post_ap_id is None:
-            return PublishResult(status="ignored", reason="no_post_context")
+            # Backward-compat fallback for Phase 2+ threads that have a
+            # CommunityThreadGroup but no PostLink. Remove when Phase 5 drops
+            # PostLink and rewrites this method to use CommunityThreadGroup directly.
+            thread_group = self.database.get_thread_group_by_source_thread(getattr(thread, "id"))
+            if thread_group is None or thread_group.ap_object_id is None:
+                return PublishResult(status="ignored", reason="no_post_context")
+            from types import SimpleNamespace
+            post_link = SimpleNamespace(
+                lemmy_post_ap_id=thread_group.ap_object_id,
+                discord_starter_message_id=thread_group.source_starter_message_id,
+            )
         if post_link.discord_starter_message_id == getattr(message, "id"):
             return PublishResult(
                 status="ignored", reason="starter_message_already_handled"
