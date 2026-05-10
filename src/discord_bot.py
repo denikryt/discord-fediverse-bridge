@@ -128,6 +128,13 @@ class BridgeBot(discord.Client):
         if subscription is None:
             return
 
+        # Mirror threads must not re-publish to AP — the source thread already did.
+        # Check the delivery role before calling community_runtime to avoid a
+        # double-publish loop where the mirror thread triggers another AP create.
+        delivery = self.database.get_thread_delivery_by_thread(message.channel.id)
+        if delivery is not None and delivery.role == "mirror":
+            return
+
         await self.community_runtime.handle_discord_message(
             message=message,
         )

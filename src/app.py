@@ -5,6 +5,7 @@ import logging
 
 import uvicorn
 
+from .community_sync.discord_fanout import DiscordFanout
 from .community_sync.runtime import CommunityRuntime
 from .config import Settings
 from .db import Database
@@ -43,6 +44,11 @@ async def main() -> None:
     )
     lemmy = LemmyClient(settings.normalized_lemmy_base_url)
 
+    # CommunityRuntime is constructed without discord_fanout first so it can be
+    # passed to BridgeBot. DiscordFanout needs a reference to bot (for
+    # fetch_forum_channel), which means bot must exist first. We inject the fanout
+    # after construction via attribute assignment to break the circular dependency:
+    # CommunityRuntime → DiscordFanout → BridgeBot → CommunityRuntime.
     community_runtime = CommunityRuntime(
         database=database,
         discord_publish_service=discord_publish_service,
@@ -54,6 +60,8 @@ async def main() -> None:
         community_runtime=community_runtime,
         lemmy=lemmy,
     )
+    discord_fanout = DiscordFanout(bot=bot)
+    community_runtime.discord_fanout = discord_fanout
     runtime = Runtime(
         settings=settings,
         database=database,
