@@ -233,12 +233,21 @@ def test_out_of_order_comment_receipt_becomes_deferred_and_retries_successfully(
     assert receipt_after_first is not None
     assert receipt_after_first.status == "deferred"
 
-    database.create_post_link(
-        lemmy_post_id=111,
-        lemmy_post_ap_id=f"https://{LEMMY_EXAMPLE_DOMAIN}/post/111",
-        discord_forum_thread_id=200,
+    post_ap_id = f"https://{LEMMY_EXAMPLE_DOMAIN}/post/111"
+    thread_group = database.create_thread_group(
+        community_actor_id=f"https://{LEMMY_EXAMPLE_DOMAIN}/c/hackers",
+        source_channel_id=None,
+        source_thread_id=None,
+        source_starter_message_id=None,
+        ap_activity_id=f"https://{LEMMY_EXAMPLE_DOMAIN}/activities/create/post/111",
+        ap_object_id=post_ap_id,
+    )
+    database.add_thread_delivery(
+        thread_group_id=thread_group.id,
+        discord_channel_id=100,
+        discord_thread_id=200,
         discord_starter_message_id=300,
-        direction="lemmy_to_discord",
+        role="inbound",
     )
     second_response = client.post(
         "/internal/activitypub/events",
@@ -246,15 +255,14 @@ def test_out_of_order_comment_receipt_becomes_deferred_and_retries_successfully(
         json=event.model_dump(mode="json"),
     )
     receipt_after_second = database.get_event_receipt(event.delivery_id)
-    created_comment_link = database.get_comment_link_by_lemmy_comment_ap_id(
-        f"https://{LEMMY_EXAMPLE_DOMAIN}/comment/222"
-    )
+    comment_ap_id = f"https://{LEMMY_EXAMPLE_DOMAIN}/comment/222"
+    created_message_group = database.get_message_group_by_ap_object(comment_ap_id)
 
     assert second_response.status_code == 200
     assert second_response.json()["status"] == "processed"
     assert receipt_after_second is not None
     assert receipt_after_second.status == "processed"
-    assert created_comment_link is not None
+    assert created_message_group is not None
 
 
 def test_failed_inbound_discord_fanout_marks_receipt_failed(tmp_path: Path) -> None:

@@ -28,11 +28,18 @@ class PublishResult:
 
 
 class DiscordPublishService:
-    """Own outbound publish policy for Discord thread starters and replies."""
+    """Own outbound AP publish for Discord thread starters and replies.
 
-    # The service centralizes all Stage 6 decisions around registration,
-    # accepted subscriptions, dedup, reply-target resolution, and persistence
-    # so the Discord bot stays focused on event intake only.
+    Responsibilities after Phase 5:
+    - Validate subscription (accepted) and user registration.
+    - Publish to ActivityPub via FedifyGatewayClient.
+    - Persist MessageMapping and PublishedActivityObject for echo suppression
+      and reply-chain resolution.
+
+    Dedup, fanout, PostLink, and CommentLink are all owned by CommunityRuntime
+    from Phase 5 onward. This service does not write PostLink or CommentLink rows.
+    """
+
     def __init__(
         self,
         *,
@@ -40,6 +47,7 @@ class DiscordPublishService:
         fedify_gateway: FedifyGatewayClient,
         bridge_prefix: str,
     ) -> None:
+        """Initialise with the shared database, AP gateway, and bridge prefix."""
         self.database = database
         self.fedify_gateway = fedify_gateway
         self.bridge_prefix = bridge_prefix
@@ -50,26 +58,20 @@ class DiscordPublishService:
         thread: object,
         starter_message: object,
     ) -> PublishResult:
-        """Publish one Discord forum-thread starter as a user-authored AP post."""
+        """Publish one Discord forum-thread starter as a user-authored AP post.
+
+        Validates subscription and registration, then publishes to AP. Does not
+        write PostLink rows — CommunityRuntime owns thread-group persistence.
+        Dedup against duplicate thread events is enforced by CommunityRuntime
+        via get_thread_group_by_source_thread before calling this method.
+        """
         subscription = self.database.get_subscription_by_channel(
             getattr(thread, "parent_id")
         )
         if subscription is None:
             return PublishResult(status="ignored", reason="no_subscription")
         if subscription.status != "accepted":
-            return PublishResult(
-                status="ignored", reason="subscription_not_active"
-            )
-        if self.database.get_post_link_by_thread_id(getattr(thread, "id")) is not None:
-            return PublishResult(
-                status="ignored", reason="duplicate_discord_thread"
-            )
-        if self.database.get_message_mapping_by_discord_message_id(
-            getattr(starter_message, "id")
-        ) is not None:
-            return PublishResult(
-                status="ignored", reason="duplicate_discord_message"
-            )
+            return PublishResult(status="ignored", reason="subscription_not_active")
 
         user = self.database.get_user_by_discord_user_id(
             str(getattr(getattr(starter_message, "author"), "id"))
@@ -96,15 +98,6 @@ class DiscordPublishService:
             )
         )
 
-        # PostLink stays active in Stage 6 so later thread replies can resolve
-        # the post context immediately, before any remote Announce loops back.
-        self.database.create_post_link(
-            lemmy_post_id=-int(getattr(thread, "id")),
-            lemmy_post_ap_id=publish_result.object_id,
-            discord_forum_thread_id=getattr(thread, "id"),
-            discord_starter_message_id=getattr(starter_message, "id"),
-            direction="discord_to_activitypub",
-        )
         self.database.create_message_mapping(
             source_platform="discord",
             source_id=str(getattr(starter_message, "id")),
@@ -144,7 +137,13 @@ class DiscordPublishService:
         )
 
     async def publish_thread_message(self, *, message: object) -> PublishResult:
-        """Publish one Discord thread message as a user-authored AP comment."""
+        """Publish one Discord thread message as a user-authored AP comment.
+
+        Resolves post context from CommunityThreadGroup (the sole path from Phase 5
+        onward — PostLink fallback removed). Does not write CommentLink rows.
+        Dedup against duplicate message events is enforced by CommunityRuntime via
+        get_message_group_by_source_message before calling this method.
+        """
         thread = getattr(message, "channel")
         subscription = self.database.get_subscription_by_channel(
             getattr(thread, "parent_id")
@@ -152,34 +151,16 @@ class DiscordPublishService:
         if subscription is None:
             return PublishResult(status="ignored", reason="no_subscription")
         if subscription.status != "accepted":
-            return PublishResult(
-                status="ignored", reason="subscription_not_active"
-            )
-        if self.database.get_message_mapping_by_discord_message_id(
-            getattr(message, "id")
-        ) is not None:
-            return PublishResult(
-                status="ignored", reason="duplicate_discord_message"
-            )
-        if self.database.has_comment_link_for_discord_message(getattr(message, "id")):
-            return PublishResult(
-                status="ignored", reason="duplicate_discord_message"
-            )
+            return PublishResult(status="ignored", reason="subscription_not_active")
 
-        post_link = self.database.get_post_link_by_thread_id(getattr(thread, "id"))
-        if post_link is None or post_link.lemmy_post_ap_id is None:
-            # Backward-compat fallback for Phase 2+ threads that have a
-            # CommunityThreadGroup but no PostLink. Remove when Phase 5 drops
-            # PostLink and rewrites this method to use CommunityThreadGroup directly.
-            thread_group = self.database.get_thread_group_by_source_thread(getattr(thread, "id"))
-            if thread_group is None or thread_group.ap_object_id is None:
-                return PublishResult(status="ignored", reason="no_post_context")
-            from types import SimpleNamespace
-            post_link = SimpleNamespace(
-                lemmy_post_ap_id=thread_group.ap_object_id,
-                discord_starter_message_id=thread_group.source_starter_message_id,
-            )
-        if post_link.discord_starter_message_id == getattr(message, "id"):
+        # Resolve post context from CommunityThreadGroup — the authoritative source
+        # from Phase 5 onward. If no thread group exists for this thread, the thread
+        # predates Phase 2 or was never registered, so AP publish is not possible.
+        thread_group = self.database.get_thread_group_by_source_thread(getattr(thread, "id"))
+        if thread_group is None or thread_group.ap_object_id is None:
+            return PublishResult(status="ignored", reason="no_post_context")
+
+        if thread_group.source_starter_message_id == getattr(message, "id"):
             return PublishResult(
                 status="ignored", reason="starter_message_already_handled"
             )
@@ -191,7 +172,13 @@ class DiscordPublishService:
             await getattr(message, "reply")(UNREGISTERED_REPLY)
             return PublishResult(status="ignored", reason="unregistered_user")
 
-        target = self._resolve_comment_target(post_link=post_link, message=message)
+        # Resolve the AP reply target using the message's Discord reference.
+        # parent_ap_id is the comment AP id if replying to a known comment,
+        # or None (falling back to the post AP id) for root-level replies.
+        reply_target_ap_id = self._resolve_reply_target(
+            message=message,
+            thread_group=thread_group,
+        )
         author_name = self._author_name(getattr(message, "author"))
         body = format_discord_body_for_lemmy(
             author_name,
@@ -205,21 +192,10 @@ class DiscordPublishService:
                 kind="comment",
                 title=None,
                 body_markdown=body,
-                in_reply_to_object_id=target.reply_target_object_id,
+                in_reply_to_object_id=reply_target_ap_id,
             )
         )
 
-        # CommentLink remains the current runtime parent lookup table, while
-        # MessageMapping captures the generic AP activity/object ids for dedup.
-        self.database.create_comment_link(
-            lemmy_comment_id=-int(getattr(message, "id")),
-            lemmy_comment_ap_id=publish_result.object_id,
-            lemmy_parent_comment_ap_id=target.parent_comment_ap_id,
-            lemmy_post_id=-int(getattr(thread, "id")),
-            discord_forum_thread_id=getattr(thread, "id"),
-            discord_message_id=getattr(message, "id"),
-            direction="discord_to_activitypub",
-        )
         self.database.create_message_mapping(
             source_platform="discord",
             source_id=str(getattr(message, "id")),
@@ -241,7 +217,7 @@ class DiscordPublishService:
             kind="comment",
             title=None,
             body_markdown=body,
-            in_reply_to_object_id=target.reply_target_object_id,
+            in_reply_to_object_id=reply_target_ap_id,
             discord_channel_id=getattr(thread, "parent_id"),
             discord_message_id=getattr(message, "id"),
         )
@@ -258,50 +234,36 @@ class DiscordPublishService:
             object_id=publish_result.object_id,
         )
 
-    def _resolve_comment_target(self, *, post_link: object, message: object):
-        """Resolve the AP object that one Discord reply should target."""
+    def _resolve_reply_target(self, *, message: object, thread_group: object) -> str:
+        """Resolve the AP object ID that this Discord reply should target.
+
+        Uses CommunityMessageGroup.ap_object_id for replies to known prior messages.
+        Falls back to the thread group's post AP object ID for root replies or
+        when the referenced message has no known message group.
+        """
+        post_ap_id = thread_group.ap_object_id
         reference = getattr(message, "reference", None)
-        reference_message_id = (
-            getattr(reference, "message_id", None) if reference is not None else None
-        )
-        if reference_message_id is None:
-            return _CommentTarget(
-                reply_target_object_id=getattr(post_link, "lemmy_post_ap_id"),
-                parent_comment_ap_id=None,
-            )
-        if reference_message_id == getattr(post_link, "discord_starter_message_id"):
-            return _CommentTarget(
-                reply_target_object_id=getattr(post_link, "lemmy_post_ap_id"),
-                parent_comment_ap_id=None,
-            )
+        referenced_id = getattr(reference, "message_id", None) if reference else None
 
-        parent_link = self.database.get_comment_link_by_discord_message_id(
-            reference_message_id
-        )
-        if (
-            parent_link is None
-            or parent_link.discord_forum_thread_id != getattr(getattr(message, "channel"), "id")
-            or parent_link.lemmy_comment_ap_id is None
-        ):
-            return _CommentTarget(
-                reply_target_object_id=getattr(post_link, "lemmy_post_ap_id"),
-                parent_comment_ap_id=None,
-            )
+        if referenced_id is None:
+            # Root reply to the post.
+            return post_ap_id
 
-        return _CommentTarget(
-            reply_target_object_id=parent_link.lemmy_comment_ap_id,
-            parent_comment_ap_id=parent_link.lemmy_comment_ap_id,
-        )
+        starter_id = getattr(thread_group, "source_starter_message_id", None)
+        if referenced_id == starter_id:
+            # Explicit reply to the thread starter — targets the post.
+            return post_ap_id
+
+        # Look up whether the referenced Discord message belongs to a known
+        # message group and resolve its AP object ID.
+        parent_group = self.database.get_message_group_by_delivered_message(referenced_id)
+        if parent_group is None or parent_group.ap_object_id is None:
+            # Unknown reference (pre-Phase-3 or cross-thread) — fall back to post.
+            return post_ap_id
+
+        return parent_group.ap_object_id
 
     @staticmethod
     def _author_name(author: object) -> str:
         """Return the display name the bridge uses in outbound markdown content."""
         return getattr(author, "display_name", None) or getattr(author, "name")
-
-
-@dataclass(slots=True)
-class _CommentTarget:
-    """Carry the chosen AP reply target and optional parent-comment identity."""
-
-    reply_target_object_id: str
-    parent_comment_ap_id: str | None

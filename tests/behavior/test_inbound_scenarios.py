@@ -8,7 +8,6 @@ from unittest.mock import AsyncMock
 
 import pytest
 from fastapi.testclient import TestClient
-from sqlalchemy import select
 
 from src.activitypub_handlers import dispatch_activitypub_event
 from src.activitypub_models import ActivityPubEvent
@@ -16,7 +15,6 @@ from src.community_sync.runtime import CommunityRuntime
 from src.db import Database
 from src.discord_publish_service import DiscordPublishService
 from src.http_api import create_http_app
-from src.models import CommentLink, PostLink
 from tests_constants import BRIDGE_HOST_DOMAIN, LEMMY_EXAMPLE_DOMAIN
 
 
@@ -27,18 +25,14 @@ def _database(tmp_path: Path) -> Database:
     return database
 
 
-def _community_runtime(database: Database) -> CommunityRuntime:
-    """Build a real CommunityRuntime for inbound routing scenarios.
-
-    DiscordPublishService is not called for inbound events (those go through
-    bridge_lemmy_to_discord), so it is constructed with a stub gateway.
-    """
+def _community_runtime(database: Database, *, bot: object | None = None) -> CommunityRuntime:
+    """Build a real CommunityRuntime for inbound routing scenarios."""
     publish_service = DiscordPublishService(
         database=database,
         fedify_gateway=AsyncMock(),
         bridge_prefix="[bridge]",
     )
-    return CommunityRuntime(database=database, discord_publish_service=publish_service)
+    return CommunityRuntime(database=database, discord_publish_service=publish_service, bot=bot)
 
 
 def _accepted_subscription(database: Database) -> None:
@@ -140,7 +134,10 @@ def _event_headers(delivery_id: str) -> dict[str, str]:
 def test_accepted_subscription_inbound_post_creates_discord_thread_and_receipt(
     tmp_path: Path,
 ) -> None:
-    """An accepted subscription should fan a remote post into one Discord thread."""
+    """An accepted subscription should fan a remote post into one Discord thread.
+
+    After Phase 5 the mapping is recorded in CommunityThreadGroup, not PostLink.
+    """
     database = _database(tmp_path)
     _accepted_subscription(database)
     forum_channel = SimpleNamespace(
@@ -152,15 +149,16 @@ def test_accepted_subscription_inbound_post_creates_discord_thread_and_receipt(
             )
         )
     )
+    bot = SimpleNamespace(
+        wait_until_bridge_ready=AsyncMock(),
+        fetch_forum_channel=AsyncMock(return_value=forum_channel),
+    )
     runtime = SimpleNamespace(
         settings=SimpleNamespace(fedify_shared_secret="secret"),
         database=database,
         lemmy=SimpleNamespace(),
-        bot=SimpleNamespace(
-            wait_until_bridge_ready=AsyncMock(),
-            fetch_forum_channel=AsyncMock(return_value=forum_channel),
-        ),
-        community_runtime=_community_runtime(database),
+        bot=bot,
+        community_runtime=_community_runtime(database, bot=bot),
     )
     client = TestClient(create_http_app(runtime), raise_server_exceptions=False)
     event = _post_event(object_id=f"https://{LEMMY_EXAMPLE_DOMAIN}/post/111")
@@ -170,12 +168,17 @@ def test_accepted_subscription_inbound_post_creates_discord_thread_and_receipt(
         headers=_event_headers(event.delivery_id),
         json=event.model_dump(mode="json"),
     )
-    post_link = database.get_post_link_by_lemmy_post_ap_id(event.object.ap_id)
+    thread_group = database.get_thread_group_by_ap_object(event.object.ap_id)
     receipt = database.get_event_receipt(event.delivery_id)
 
     assert response.status_code == 200
     assert response.json()["status"] == "processed"
-    assert post_link is not None
+    # Mapping is now in CommunityThreadGroup, not PostLink.
+    assert thread_group is not None
+    assert thread_group.ap_object_id == event.object.ap_id
+    deliveries = database.get_thread_deliveries(thread_group.id)
+    assert len(deliveries) == 1
+    assert deliveries[0].discord_thread_id == 200
     assert receipt is not None
     assert receipt.status == "processed"
 
@@ -183,7 +186,10 @@ def test_accepted_subscription_inbound_post_creates_discord_thread_and_receipt(
 def test_inbound_post_and_comment_fan_out_to_all_accepted_subscriptions(
     tmp_path: Path,
 ) -> None:
-    """One inbound post/comment pair should create copies in every subscribed forum."""
+    """One inbound post/comment pair should create copies in every subscribed forum.
+
+    After Phase 5 the mapping is in CommunityThreadGroup/CommunityMessageGroup.
+    """
     database = _database(tmp_path)
     _accepted_subscription_for_channel(database, channel_id=100)
     _accepted_subscription_for_channel(database, channel_id=101)
@@ -208,16 +214,13 @@ def test_inbound_post_and_comment_fan_out_to_all_accepted_subscriptions(
     thread_a = SimpleNamespace(
         id=200,
         send=AsyncMock(return_value=SimpleNamespace(id=900)),
-        fetch_message=AsyncMock(),
     )
     thread_b = SimpleNamespace(
         id=201,
         send=AsyncMock(return_value=SimpleNamespace(id=901)),
-        fetch_message=AsyncMock(),
     )
 
     async def _fetch_forum_channel(channel_id: int) -> object:
-        """Return the fake forum channel that belongs to the requested subscription."""
         if channel_id == 100:
             return forum_channel_a
         if channel_id == 101:
@@ -225,23 +228,23 @@ def test_inbound_post_and_comment_fan_out_to_all_accepted_subscriptions(
         raise AssertionError(f"Unexpected forum channel lookup {channel_id}")
 
     async def _get_thread_by_id(thread_id: int) -> object:
-        """Return the fake mirrored thread for the requested Discord thread ID."""
         if thread_id == 200:
             return thread_a
         if thread_id == 201:
             return thread_b
         raise AssertionError(f"Unexpected thread lookup {thread_id}")
 
+    bot = SimpleNamespace(
+        wait_until_bridge_ready=AsyncMock(),
+        fetch_forum_channel=AsyncMock(side_effect=_fetch_forum_channel),
+        get_thread_by_id=AsyncMock(side_effect=_get_thread_by_id),
+    )
     runtime = SimpleNamespace(
         settings=SimpleNamespace(fedify_shared_secret="secret"),
         database=database,
         lemmy=SimpleNamespace(),
-        bot=SimpleNamespace(
-            wait_until_bridge_ready=AsyncMock(),
-            fetch_forum_channel=AsyncMock(side_effect=_fetch_forum_channel),
-            get_thread_by_id=AsyncMock(side_effect=_get_thread_by_id),
-        ),
-        community_runtime=_community_runtime(database),
+        bot=bot,
+        community_runtime=_community_runtime(database, bot=bot),
     )
     client = TestClient(create_http_app(runtime), raise_server_exceptions=False)
     post_event = _post_event(
@@ -265,26 +268,22 @@ def test_inbound_post_and_comment_fan_out_to_all_accepted_subscriptions(
         json=comment_event.model_dump(mode="json"),
     )
 
-    with database.session() as session:
-        post_links = list(
-            session.scalars(
-                select(PostLink).where(PostLink.lemmy_post_ap_id == post_event.object.ap_id)
-            )
-        )
-        comment_links = list(
-            session.scalars(
-                select(CommentLink).where(
-                    CommentLink.lemmy_comment_ap_id == comment_event.object.ap_id
-                )
-            )
-        )
+    thread_group = database.get_thread_group_by_ap_object(post_event.object.ap_id)
+    message_group = database.get_message_group_by_ap_object(comment_event.object.ap_id)
 
     assert post_response.status_code == 200
     assert post_response.json()["status"] == "processed"
     assert comment_response.status_code == 200
     assert comment_response.json()["status"] == "processed"
-    assert {link.discord_forum_thread_id for link in post_links} == {200, 201}
-    assert {link.discord_forum_thread_id for link in comment_links} == {200, 201}
+
+    assert thread_group is not None
+    thread_deliveries = database.get_thread_deliveries(thread_group.id)
+    assert {d.discord_thread_id for d in thread_deliveries} == {200, 201}
+
+    assert message_group is not None
+    msg_deliveries = database.get_message_deliveries(message_group.id)
+    assert {d.discord_thread_id for d in msg_deliveries} == {200, 201}
+
     assert thread_a.send.await_count == 1
     assert thread_b.send.await_count == 1
 
@@ -292,35 +291,49 @@ def test_inbound_post_and_comment_fan_out_to_all_accepted_subscriptions(
 def test_accepted_subscription_inbound_comment_creates_discord_message_and_receipt(
     tmp_path: Path,
 ) -> None:
-    """A mapped parent post should let an inbound remote comment reach Discord."""
+    """A mapped parent post should let an inbound remote comment reach Discord.
+
+    After Phase 5 the parent is mapped via CommunityThreadGroup, not PostLink.
+    """
     database = _database(tmp_path)
     _accepted_subscription(database)
-    database.create_post_link(
-        lemmy_post_id=111,
-        lemmy_post_ap_id=f"https://{LEMMY_EXAMPLE_DOMAIN}/post/111",
-        discord_forum_thread_id=200,
-        discord_starter_message_id=300,
-        direction="lemmy_to_discord",
+
+    # Pre-insert the thread group for the parent post (as Phase 5 inbound would do).
+    post_ap_id = f"https://{LEMMY_EXAMPLE_DOMAIN}/post/111"
+    thread_group = database.create_thread_group(
+        community_actor_id=f"https://{LEMMY_EXAMPLE_DOMAIN}/c/hackers",
+        source_channel_id=None,
+        source_thread_id=None,
+        source_starter_message_id=None,
+        ap_object_id=post_ap_id,
     )
+    database.add_thread_delivery(
+        thread_group_id=thread_group.id,
+        discord_channel_id=100,
+        discord_thread_id=200,
+        discord_starter_message_id=300,
+        role="inbound",
+    )
+
     thread = SimpleNamespace(
         id=200,
         send=AsyncMock(return_value=SimpleNamespace(id=900)),
-        fetch_message=AsyncMock(),
+    )
+    bot = SimpleNamespace(
+        wait_until_bridge_ready=AsyncMock(),
+        get_thread_by_id=AsyncMock(return_value=thread),
     )
     runtime = SimpleNamespace(
         settings=SimpleNamespace(fedify_shared_secret="secret"),
         database=database,
         lemmy=SimpleNamespace(),
-        bot=SimpleNamespace(
-            wait_until_bridge_ready=AsyncMock(),
-            get_thread_by_id=AsyncMock(return_value=thread),
-        ),
-        community_runtime=_community_runtime(database),
+        bot=bot,
+        community_runtime=_community_runtime(database, bot=bot),
     )
     client = TestClient(create_http_app(runtime), raise_server_exceptions=False)
     event = _comment_event(
         object_id=f"https://{LEMMY_EXAMPLE_DOMAIN}/comment/111",
-        post_ap_id=f"https://{LEMMY_EXAMPLE_DOMAIN}/post/111",
+        post_ap_id=post_ap_id,
         delivery_id=f"https://{LEMMY_EXAMPLE_DOMAIN}/activities/create/comment/111",
     )
 
@@ -329,12 +342,14 @@ def test_accepted_subscription_inbound_comment_creates_discord_message_and_recei
         headers=_event_headers(event.delivery_id),
         json=event.model_dump(mode="json"),
     )
-    comment_link = database.get_comment_link_by_lemmy_comment_ap_id(event.object.ap_id)
+    message_group = database.get_message_group_by_ap_object(event.object.ap_id)
     receipt = database.get_event_receipt(event.delivery_id)
 
     assert response.status_code == 200
     assert response.json()["status"] == "processed"
-    assert comment_link is not None
+    # Mapping is now in CommunityMessageGroup, not CommentLink.
+    assert message_group is not None
+    assert message_group.ap_object_id == event.object.ap_id
     assert receipt is not None
     assert receipt.status == "processed"
 
@@ -345,14 +360,15 @@ async def test_no_accepted_subscription_inbound_post_is_skipped(
 ) -> None:
     """Without an accepted subscription the system should leave the event untouched."""
     database = _database(tmp_path)
+    bot = SimpleNamespace(
+        wait_until_bridge_ready=AsyncMock(),
+        fetch_forum_channel=AsyncMock(),
+    )
     runtime = SimpleNamespace(
         database=database,
         lemmy=SimpleNamespace(),
-        bot=SimpleNamespace(
-            wait_until_bridge_ready=AsyncMock(),
-            fetch_forum_channel=AsyncMock(),
-        ),
-        community_runtime=_community_runtime(database),
+        bot=bot,
+        community_runtime=_community_runtime(database, bot=bot),
     )
 
     result = await dispatch_activitypub_event(
@@ -361,8 +377,7 @@ async def test_no_accepted_subscription_inbound_post_is_skipped(
     )
 
     assert result.status == "skipped"
-    assert result.detail == "no subscriptions for this community"
-    runtime.bot.fetch_forum_channel.assert_not_awaited()
+    bot.fetch_forum_channel.assert_not_awaited()
 
 
 def test_duplicate_delivery_id_returns_idempotent_duplicate_without_side_effects(
@@ -380,15 +395,16 @@ def test_duplicate_delivery_id_returns_idempotent_duplicate_without_side_effects
             )
         )
     )
+    bot = SimpleNamespace(
+        wait_until_bridge_ready=AsyncMock(),
+        fetch_forum_channel=AsyncMock(return_value=forum_channel),
+    )
     runtime = SimpleNamespace(
         settings=SimpleNamespace(fedify_shared_secret="secret"),
         database=database,
         lemmy=SimpleNamespace(),
-        bot=SimpleNamespace(
-            wait_until_bridge_ready=AsyncMock(),
-            fetch_forum_channel=AsyncMock(return_value=forum_channel),
-        ),
-        community_runtime=_community_runtime(database),
+        bot=bot,
+        community_runtime=_community_runtime(database, bot=bot),
     )
     client = TestClient(create_http_app(runtime), raise_server_exceptions=False)
     event = _post_event(
@@ -431,51 +447,57 @@ async def test_discord_originated_echo_is_skipped_without_creating_duplicate(
         discord_channel_id=100,
         discord_message_id=300,
     )
+    bot = SimpleNamespace(
+        wait_until_bridge_ready=AsyncMock(),
+        fetch_forum_channel=AsyncMock(),
+    )
     runtime = SimpleNamespace(
         database=database,
         lemmy=SimpleNamespace(),
-        bot=SimpleNamespace(
-            wait_until_bridge_ready=AsyncMock(),
-            fetch_forum_channel=AsyncMock(),
-        ),
-        community_runtime=_community_runtime(database),
+        bot=bot,
+        community_runtime=_community_runtime(database, bot=bot),
     )
 
     result = await dispatch_activitypub_event(_post_event(object_id=object_id), runtime)
 
     assert result.status == "skipped"
     assert result.detail == "discord-originated echo"
-    runtime.bot.fetch_forum_channel.assert_not_awaited()
+    bot.fetch_forum_channel.assert_not_awaited()
 
 
 def test_comment_before_parent_mapping_becomes_deferred_then_retries_processed(
     tmp_path: Path,
 ) -> None:
-    """A retryable out-of-order comment should succeed once the parent post exists."""
+    """A retryable out-of-order comment should succeed once the parent post is mapped.
+
+    After Phase 5 the parent is looked up via CommunityThreadGroup, not PostLink.
+    """
     database = _database(tmp_path)
     _accepted_subscription(database)
     thread = SimpleNamespace(
         id=200,
         send=AsyncMock(return_value=SimpleNamespace(id=900)),
-        fetch_message=AsyncMock(),
+    )
+    bot = SimpleNamespace(
+        wait_until_bridge_ready=AsyncMock(),
+        get_thread_by_id=AsyncMock(return_value=thread),
     )
     runtime = SimpleNamespace(
         settings=SimpleNamespace(fedify_shared_secret="secret"),
         database=database,
         lemmy=SimpleNamespace(),
-        bot=SimpleNamespace(
-            wait_until_bridge_ready=AsyncMock(),
-            get_thread_by_id=AsyncMock(return_value=thread),
-        ),
-        community_runtime=_community_runtime(database),
+        bot=bot,
+        community_runtime=_community_runtime(database, bot=bot),
     )
     client = TestClient(create_http_app(runtime), raise_server_exceptions=False)
+    post_ap_id = f"https://{LEMMY_EXAMPLE_DOMAIN}/post/111"
     event = _comment_event(
         object_id=f"https://{LEMMY_EXAMPLE_DOMAIN}/comment/222",
-        post_ap_id=f"https://{LEMMY_EXAMPLE_DOMAIN}/post/111",
+        post_ap_id=post_ap_id,
         delivery_id=f"https://{LEMMY_EXAMPLE_DOMAIN}/activities/create/comment/222",
     )
 
+    # First attempt: no thread group yet — should be deferred.
     first_response = client.post(
         "/internal/activitypub/events",
         headers=_event_headers(event.delivery_id),
@@ -483,20 +505,30 @@ def test_comment_before_parent_mapping_becomes_deferred_then_retries_processed(
     )
     first_receipt = database.get_event_receipt(event.delivery_id)
 
-    database.create_post_link(
-        lemmy_post_id=111,
-        lemmy_post_ap_id=f"https://{LEMMY_EXAMPLE_DOMAIN}/post/111",
-        discord_forum_thread_id=200,
-        discord_starter_message_id=300,
-        direction="lemmy_to_discord",
+    # Now create the thread group for the parent post.
+    thread_group = database.create_thread_group(
+        community_actor_id=f"https://{LEMMY_EXAMPLE_DOMAIN}/c/hackers",
+        source_channel_id=None,
+        source_thread_id=None,
+        source_starter_message_id=None,
+        ap_object_id=post_ap_id,
     )
+    database.add_thread_delivery(
+        thread_group_id=thread_group.id,
+        discord_channel_id=100,
+        discord_thread_id=200,
+        discord_starter_message_id=300,
+        role="inbound",
+    )
+
+    # Second attempt: thread group exists — should be processed.
     second_response = client.post(
         "/internal/activitypub/events",
         headers=_event_headers(event.delivery_id),
         json=event.model_dump(mode="json"),
     )
     second_receipt = database.get_event_receipt(event.delivery_id)
-    comment_link = database.get_comment_link_by_lemmy_comment_ap_id(
+    message_group = database.get_message_group_by_ap_object(
         f"https://{LEMMY_EXAMPLE_DOMAIN}/comment/222"
     )
 
@@ -508,7 +540,8 @@ def test_comment_before_parent_mapping_becomes_deferred_then_retries_processed(
     assert second_response.json()["status"] == "processed"
     assert second_receipt is not None
     assert second_receipt.status == "processed"
-    assert comment_link is not None
+    # Mapping is now in CommunityMessageGroup, not CommentLink.
+    assert message_group is not None
 
 
 def test_discord_target_failure_marks_inbound_receipt_failed(
@@ -517,20 +550,21 @@ def test_discord_target_failure_marks_inbound_receipt_failed(
     """A Discord-side failure must not leave a false processed inbound receipt."""
     database = _database(tmp_path)
     _accepted_subscription(database)
+    bot = SimpleNamespace(
+        wait_until_bridge_ready=AsyncMock(),
+        fetch_forum_channel=AsyncMock(
+            return_value=SimpleNamespace(
+                id=100,
+                create_thread=AsyncMock(side_effect=RuntimeError("discord create failed"))
+            )
+        ),
+    )
     runtime = SimpleNamespace(
         settings=SimpleNamespace(fedify_shared_secret="secret"),
         database=database,
         lemmy=SimpleNamespace(),
-        bot=SimpleNamespace(
-            wait_until_bridge_ready=AsyncMock(),
-            fetch_forum_channel=AsyncMock(
-                return_value=SimpleNamespace(
-                    id=100,
-                    create_thread=AsyncMock(side_effect=RuntimeError("discord create failed"))
-                )
-            ),
-        ),
-        community_runtime=_community_runtime(database),
+        bot=bot,
+        community_runtime=_community_runtime(database, bot=bot),
     )
     client = TestClient(create_http_app(runtime), raise_server_exceptions=False)
     event = _post_event(

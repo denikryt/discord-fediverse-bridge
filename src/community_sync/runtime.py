@@ -1,15 +1,19 @@
 """Central orchestration entry point for shared community sync.
 
 CommunityRuntime is the single call boundary for all thread/message events in
-both directions (Discord→AP and AP→Discord). Phase 2 owns thread-group creation,
-AP publish, and Discord fanout to sibling subscribed channels.
+both directions (Discord→AP and AP→Discord). Phase 2+ owns thread-group creation,
+AP publish, and Discord fanout to sibling subscribed channels. Phase 5 adds
+direct inbound AP delivery onto shared group tables, replacing the legacy
+PostLink/CommentLink path.
 """
 
 from __future__ import annotations
 
 import logging
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from typing import TYPE_CHECKING
+
+import discord as discord_lib
 
 if TYPE_CHECKING:
     import discord
@@ -113,6 +117,34 @@ def _resolve_reply_context(
     )
 
 
+def _resolve_inbound_reference(
+    database: Database,
+    parent_group: object,
+    thread_delivery: object,
+) -> discord_lib.MessageReference | None:
+    """Resolve the Discord reply reference for one inbound comment delivery.
+
+    Returns a MessageReference when the parent message group has a delivery
+    in this specific thread. Returns None (flat send) when the parent is
+    the AP post root (parent_group=None) or when no delivery exists for
+    this thread (e.g. partial prior failure — best-effort fallback).
+    """
+    if parent_group is None:
+        return None
+    delivery = database.get_message_delivery_in_thread(
+        parent_group.id, thread_delivery.discord_thread_id
+    )
+    if delivery is None:
+        return None
+    # fail_if_not_exists=False: send still lands even if the referenced
+    # message was deleted; Discord just suppresses the reply banner.
+    return discord_lib.MessageReference(
+        message_id=delivery.discord_message_id,
+        channel_id=thread_delivery.discord_thread_id,
+        fail_if_not_exists=False,
+    )
+
+
 class CommunityRuntime:
     """Orchestrate all shared community sync events through one stable call boundary.
 
@@ -127,16 +159,22 @@ class CommunityRuntime:
         database: Database,
         discord_publish_service: DiscordPublishService,
         discord_fanout: DiscordFanout | None = None,
+        bot: object | None = None,
     ) -> None:
-        """Initialise the runtime with the shared database, publish service, and fanout.
+        """Initialise the runtime with the shared database, publish service, fanout, and bot.
 
         discord_fanout is optional so tests that only exercise AP publish paths
         do not need to construct a full BridgeBot. When None, mirror delivery is
         skipped and only the source delivery row is written.
+
+        bot is the BridgeBot instance used for inbound AP delivery (fetch_forum_channel,
+        get_thread_by_id, wait_until_bridge_ready). Optional for backward compat with
+        tests that only exercise outbound paths.
         """
         self.database = database
         self.discord_publish_service = discord_publish_service
         self.discord_fanout = discord_fanout
+        self.bot = bot
 
     async def handle_discord_thread_create(
         self,
@@ -317,32 +355,151 @@ class CommunityRuntime:
         event: ActivityPubEvent,
         runtime: Runtime,
     ) -> HandlerResult:
-        """Handle an inbound ActivityPub post event.
+        """Handle an inbound ActivityPub post by creating Discord threads in all subscriptions.
 
-        Delegates to the private _deliver_post helper in activitypub_handlers,
-        bypassing the public handle_post_created entry point to avoid a circular
-        call chain. Echo suppression is applied at the entry point before routing
-        here, so _deliver_post receives only genuine inbound events.
+        Deduplicates via CommunityThreadGroup.ap_object_id. Creates one thread per
+        accepted subscription and records each as an 'inbound' delivery row. Does not
+        write PostLink rows — group tables are the sole mapping from Phase 5 onward.
+
+        Returns status='skipped' if the post is already mapped or no subscriptions exist.
+        Returns status='processed' after successful delivery to all subscribed channels.
         """
-        # Lazy import avoids a circular module dependency: activitypub_handlers
-        # imports Runtime which imports CommunityRuntime. The import is safe at
-        # call time because all modules are fully initialised by then.
-        from ..activitypub_handlers import _deliver_post
-        return await _deliver_post(event, runtime)
+        from ..activitypub_handlers import HandlerResult as _HandlerResult
+
+        # Dedup: if a thread group already exists for this AP object, a duplicate
+        # or replayed event arrived — skip without creating more threads.
+        if self.database.get_thread_group_by_ap_object(event.object.ap_id) is not None:
+            logger.info("Post %s already mapped to a thread group — skipping", event.object.ap_id)
+            return _HandlerResult(status="skipped", detail="post already mapped")
+
+        subscriptions = self.database.get_subscriptions_by_community(event.community_actor_id)
+        accepted = [s for s in subscriptions if s.status == "accepted"]
+        if not accepted:
+            return _HandlerResult(status="skipped", detail="no subscriptions for this community")
+
+        # Use self.bot when available; fall back to runtime.bot for backward compat
+        # with callers that pass the full Runtime (e.g. existing integration tests).
+        bot = self.bot or runtime.bot
+        await bot.wait_until_bridge_ready()
+
+        # Create the canonical thread group. source_* fields are None because
+        # inbound AP events have no single source Discord channel.
+        # delivery_id is the closest equivalent to an activity_id for inbound events.
+        thread_group = self.database.create_thread_group(
+            community_actor_id=event.community_actor_id,
+            source_channel_id=None,
+            source_thread_id=None,
+            source_starter_message_id=None,
+            ap_activity_id=event.delivery_id,
+            ap_object_id=event.object.ap_id,
+        )
+
+        # Lazy import avoids circular dependency: bridge_lemmy_to_discord imports db.
+        from ..bridge_lemmy_to_discord import _create_inbound_discord_thread
+
+        for subscription in accepted:
+            forum_channel = await bot.fetch_forum_channel(subscription.discord_channel_id)
+            thread_id, starter_message_id = await _create_inbound_discord_thread(
+                forum_channel=forum_channel,
+                event=event,
+            )
+            self.database.add_thread_delivery(
+                thread_group_id=thread_group.id,
+                discord_channel_id=subscription.discord_channel_id,
+                discord_thread_id=thread_id,
+                discord_starter_message_id=starter_message_id,
+                role="inbound",
+            )
+
+        logger.info(
+            "Delivered inbound post %s into %d subscribed channel(s)",
+            event.object.ap_id, len(accepted),
+        )
+        return _HandlerResult(status="processed", detail="post created")
 
     async def handle_inbound_comment(
         self,
         event: ActivityPubEvent,
         runtime: Runtime,
     ) -> HandlerResult:
-        """Handle an inbound ActivityPub comment event.
+        """Handle an inbound ActivityPub comment by delivering it into all mapped threads.
 
-        Delegates to the private _deliver_comment helper in activitypub_handlers.
-        Echo suppression is applied at the entry point before routing here.
+        Deduplicates via CommunityMessageGroup.ap_object_id. Resolves the parent thread
+        group via post_ap_id and the parent message group via parent_ap_id (when present).
+        Delivers the comment into every thread in the thread group with the correct per-thread
+        Discord reply reference. Does not write CommentLink rows.
+
+        Returns status='skipped' if already mapped, status='deferred' if the parent post
+        is not yet mapped, status='processed' after successful delivery.
         """
-        # Lazy import for the same circular-dependency reason as handle_inbound_post.
-        from ..activitypub_handlers import _deliver_comment
-        return await _deliver_comment(event, runtime)
+        from ..activitypub_handlers import HandlerResult as _HandlerResult
+
+        # Dedup: if a message group already exists for this AP object, skip.
+        if self.database.get_message_group_by_ap_object(event.object.ap_id) is not None:
+            logger.info("Comment %s already mapped — skipping", event.object.ap_id)
+            return _HandlerResult(status="skipped", detail="comment already mapped")
+
+        # Resolve the thread group via the post AP id. If the post hasn't been
+        # delivered yet, defer so the caller can retry when the post arrives.
+        thread_group = self.database.get_thread_group_by_ap_object(
+            event.object.post_ap_id or ""
+        )
+        if thread_group is None:
+            logger.info(
+                "Skipping comment %s — parent post %s not yet mapped",
+                event.object.ap_id, event.object.post_ap_id,
+            )
+            return _HandlerResult(status="deferred", detail="parent post not mapped yet")
+
+        bot = self.bot or runtime.bot
+        await bot.wait_until_bridge_ready()
+
+        # Resolve the parent message group when this is a reply to a prior comment.
+        # get_message_group_by_ap_object returns None when parent_ap_id is the post
+        # itself (root comment), which is the correct flat-send fallback.
+        parent_group = None
+        if event.object.parent_ap_id:
+            parent_group = self.database.get_message_group_by_ap_object(
+                event.object.parent_ap_id
+            )
+
+        message_group = self.database.create_message_group(
+            community_actor_id=event.community_actor_id,
+            thread_group_id=thread_group.id,
+            source_channel_id=None,
+            source_thread_id=None,
+            source_message_id=None,
+            ap_activity_id=event.delivery_id,
+            ap_object_id=event.object.ap_id,
+            parent_message_group_id=parent_group.id if parent_group else None,
+        )
+
+        from ..bridge_lemmy_to_discord import _send_inbound_comment
+
+        thread_deliveries = self.database.get_thread_deliveries(thread_group.id)
+        for thread_delivery in thread_deliveries:
+            thread = await bot.get_thread_by_id(thread_delivery.discord_thread_id)
+            # Resolve the per-thread Discord reply reference. Returns None when the
+            # parent is the post root or when no delivery exists for this thread.
+            reference = _resolve_inbound_reference(self.database, parent_group, thread_delivery)
+            message = await _send_inbound_comment(
+                thread=thread,
+                event=event,
+                reference=reference,
+            )
+            self.database.add_message_delivery(
+                message_group_id=message_group.id,
+                discord_channel_id=thread_delivery.discord_channel_id,
+                discord_thread_id=thread_delivery.discord_thread_id,
+                discord_message_id=message.id,
+                role="inbound",
+            )
+
+        logger.info(
+            "Delivered inbound comment %s into %d thread(s)",
+            event.object.ap_id, len(thread_deliveries),
+        )
+        return _HandlerResult(status="processed", detail="comment created")
 
 
 def _ignored_result(reason: str) -> PublishResult:

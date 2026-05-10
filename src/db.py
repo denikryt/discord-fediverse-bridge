@@ -664,13 +664,17 @@ class Database:
         self,
         *,
         community_actor_id: str,
-        source_channel_id: int,
-        source_thread_id: int,
-        source_starter_message_id: int,
+        source_channel_id: int | None,
+        source_thread_id: int | None,
+        source_starter_message_id: int | None,
         ap_activity_id: str | None = None,
         ap_object_id: str | None = None,
     ) -> CommunityThreadGroup:
-        """Create the canonical thread-group record for one source thread event."""
+        """Create the canonical thread-group record for one source thread event.
+
+        source_* fields are None for inbound AP events, which create Discord threads
+        in all subscribed channels simultaneously without a single source channel.
+        """
         with self.session() as session:
             group = CommunityThreadGroup(
                 community_actor_id=community_actor_id,
@@ -764,14 +768,18 @@ class Database:
         *,
         community_actor_id: str,
         thread_group_id: int,
-        source_channel_id: int,
-        source_thread_id: int,
-        source_message_id: int,
+        source_channel_id: int | None,
+        source_thread_id: int | None,
+        source_message_id: int | None,
         ap_activity_id: str | None = None,
         ap_object_id: str | None = None,
         parent_message_group_id: int | None = None,
     ) -> CommunityMessageGroup:
-        """Create the canonical message-group record for one source message event."""
+        """Create the canonical message-group record for one source message event.
+
+        source_* fields are None for inbound AP events, which deliver into all
+        subscribed threads simultaneously without a single source message.
+        """
         with self.session() as session:
             group = CommunityMessageGroup(
                 community_actor_id=community_actor_id,

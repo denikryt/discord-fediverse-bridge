@@ -129,7 +129,6 @@ async def test_thread_starter_from_registered_user_publishes_and_persists_mappin
         starter_message=starter_message,
     )
 
-    post_link = database.get_post_link_by_thread_id(thread.id)
     mapping = database.get_message_mapping_by_discord_message_id(starter_message.id)
     stored_object = database.get_published_activity_object_by_object_id(
         post_object_url
@@ -138,8 +137,6 @@ async def test_thread_starter_from_registered_user_publishes_and_persists_mappin
     assert result.status == "published"
     assert result.reason == "published"
     fedify_gateway.publish_content.assert_awaited_once()
-    assert post_link is not None
-    assert post_link.lemmy_post_ap_id == post_object_url
     assert mapping is not None
     assert mapping.activity_id == post_activity_url
     assert stored_object is not None
@@ -185,12 +182,13 @@ async def test_thread_message_from_registered_user_publishes_as_comment(
     comment_activity_url = (
         f"https://{BRIDGE_HOST_DOMAIN}/users/alice/activities/create/comment/1"
     )
-    database.create_post_link(
-        lemmy_post_id=0,
-        lemmy_post_ap_id=post_object_url,
-        discord_forum_thread_id=thread.id,
-        discord_starter_message_id=300,
-        direction="discord_to_activitypub",
+    database.create_thread_group(
+        community_actor_id=f"https://{LEMMY_EXAMPLE_DOMAIN}/c/hackers",
+        source_channel_id=100,
+        source_thread_id=thread.id,
+        source_starter_message_id=300,
+        ap_activity_id=f"https://{BRIDGE_HOST_DOMAIN}/users/alice/activities/create/post/1",
+        ap_object_id=post_object_url,
     )
     fedify_gateway = AsyncMock()
     fedify_gateway.publish_content.return_value = PublishContentResult(
@@ -203,7 +201,6 @@ async def test_thread_message_from_registered_user_publishes_as_comment(
 
     result = await service.publish_thread_message(message=message)
 
-    comment_link = database.get_comment_link_by_discord_message_id(message.id)
     mapping = database.get_message_mapping_by_discord_message_id(message.id)
     stored_object = database.get_published_activity_object_by_object_id(
         comment_object_url
@@ -212,8 +209,6 @@ async def test_thread_message_from_registered_user_publishes_as_comment(
     assert result.status == "published"
     assert result.reason == "published"
     fedify_gateway.publish_content.assert_awaited_once()
-    assert comment_link is not None
-    assert comment_link.lemmy_comment_ap_id == comment_object_url
     assert mapping is not None
     assert mapping.object_id == comment_object_url
     assert stored_object is not None
@@ -234,21 +229,29 @@ async def test_thread_reply_uses_parent_comment_object_id_when_available(
     parent_comment_object_url = (
         f"https://{BRIDGE_HOST_DOMAIN}/users/alice/objects/comment/parent"
     )
-    database.create_post_link(
-        lemmy_post_id=0,
-        lemmy_post_ap_id=post_object_url,
-        discord_forum_thread_id=thread.id,
-        discord_starter_message_id=300,
-        direction="discord_to_activitypub",
+    thread_group = database.create_thread_group(
+        community_actor_id=f"https://{LEMMY_EXAMPLE_DOMAIN}/c/hackers",
+        source_channel_id=100,
+        source_thread_id=thread.id,
+        source_starter_message_id=300,
+        ap_activity_id=f"https://{BRIDGE_HOST_DOMAIN}/users/alice/activities/create/post/1",
+        ap_object_id=post_object_url,
     )
-    database.create_comment_link(
-        lemmy_comment_id=0,
-        lemmy_comment_ap_id=parent_comment_object_url,
-        lemmy_parent_comment_ap_id=None,
-        lemmy_post_id=0,
-        discord_forum_thread_id=thread.id,
+    parent_message_group = database.create_message_group(
+        community_actor_id=f"https://{LEMMY_EXAMPLE_DOMAIN}/c/hackers",
+        thread_group_id=thread_group.id,
+        source_channel_id=100,
+        source_thread_id=thread.id,
+        source_message_id=401,
+        ap_activity_id=f"https://{BRIDGE_HOST_DOMAIN}/users/alice/activities/create/comment/parent",
+        ap_object_id=parent_comment_object_url,
+    )
+    database.add_message_delivery(
+        message_group_id=parent_message_group.id,
+        discord_channel_id=100,
+        discord_thread_id=thread.id,
         discord_message_id=401,
-        direction="discord_to_activitypub",
+        role="source",
     )
     fedify_gateway = AsyncMock()
     fedify_gateway.publish_content.return_value = PublishContentResult(
@@ -289,13 +292,6 @@ async def test_thread_message_in_pending_subscription_is_ignored(
     )
     _registered_user(database)
     thread = _thread()
-    database.create_post_link(
-        lemmy_post_id=0,
-        lemmy_post_ap_id=f"https://{BRIDGE_HOST_DOMAIN}/users/alice/objects/post/1",
-        discord_forum_thread_id=thread.id,
-        discord_starter_message_id=300,
-        direction="discord_to_activitypub",
-    )
     fedify_gateway = AsyncMock()
     service = _service(database, fedify_gateway)
     message = _thread_message(thread=thread)
@@ -308,31 +304,14 @@ async def test_thread_message_in_pending_subscription_is_ignored(
 
 
 @pytest.mark.asyncio
-async def test_duplicate_discord_message_is_ignored_before_gateway_call(
+async def test_message_without_thread_group_returns_no_post_context(
     tmp_path: Path,
 ) -> None:
-    """Duplicate Discord message IDs should stop before another publish attempt."""
+    """A message in a thread with no CommunityThreadGroup returns no_post_context."""
     database = _database(tmp_path)
     _accepted_subscription(database)
     _registered_user(database)
     thread = _thread()
-    database.create_post_link(
-        lemmy_post_id=0,
-        lemmy_post_ap_id=f"https://{BRIDGE_HOST_DOMAIN}/users/alice/objects/post/1",
-        discord_forum_thread_id=thread.id,
-        discord_starter_message_id=300,
-        direction="discord_to_activitypub",
-    )
-    database.create_message_mapping(
-        source_platform="discord",
-        source_id="301",
-        activity_id=f"https://{BRIDGE_HOST_DOMAIN}/users/alice/activities/create/comment/existing",
-        object_id=f"https://{BRIDGE_HOST_DOMAIN}/users/alice/objects/comment/existing",
-        actor_url=f"https://{BRIDGE_HOST_DOMAIN}/users/alice",
-        community_actor_url=f"https://{LEMMY_EXAMPLE_DOMAIN}/c/hackers",
-        discord_channel_id=100,
-        discord_message_id=301,
-    )
     fedify_gateway = AsyncMock()
     service = _service(database, fedify_gateway)
     message = _thread_message(thread=thread, message_id=301)
@@ -340,7 +319,7 @@ async def test_duplicate_discord_message_is_ignored_before_gateway_call(
     result = await service.publish_thread_message(message=message)
 
     assert result.status == "ignored"
-    assert result.reason == "duplicate_discord_message"
+    assert result.reason == "no_post_context"
     fedify_gateway.publish_content.assert_not_awaited()
 
 
@@ -364,7 +343,6 @@ async def test_gateway_publish_failure_does_not_store_false_success_mapping(
             starter_message=starter_message,
         )
 
-    assert database.get_post_link_by_thread_id(thread.id) is None
     assert (
         database.get_message_mapping_by_discord_message_id(starter_message.id)
         is None

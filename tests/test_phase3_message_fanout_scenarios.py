@@ -309,22 +309,21 @@ async def test_phase3_duplicate_message_is_ignored(tmp_path: Path) -> None:
 
 
 @pytest.mark.asyncio
-async def test_phase3_message_in_legacy_thread_publishes_without_fanout(tmp_path: Path) -> None:
-    """A message in a pre-Phase-2 thread AP-publishes without creating message-group rows.
+async def test_phase3_message_in_legacy_thread_is_ignored_without_thread_group(tmp_path: Path) -> None:
+    """A message in a pre-Phase-2 thread (PostLink only) is ignored — no CommunityThreadGroup.
 
     System state: one accepted subscription for channel 100, one registered user,
     PostLink for thread 200 (legacy — no CommunityThreadGroup exists).
     Action: call handle_discord_message for message 400 in thread 200.
-    Assert: result status is 'published', no CommunityMessageGroup row created,
-    no CommunityMessageGroupDelivery rows, gateway called once.
+    Assert: result status is 'ignored' with reason 'no_post_context', gateway not called.
+    Phase 5 removes the PostLink fallback path — only CommunityThreadGroup is used.
     """
     database = _database(tmp_path)
     _accepted_subscription(database, channel_id=100)
     _registered_user(database)
     # Insert a legacy PostLink for thread 200 but no CommunityThreadGroup.
-    # This is the pre-Phase-2 state: publish_thread_message finds the PostLink
-    # and publishes normally, but handle_discord_message detects no thread group
-    # and skips message-group creation and fanout entirely.
+    # Phase 5: publish_thread_message only consults CommunityThreadGroup, so this
+    # thread has no resolvable post context and the message is ignored.
     database.create_post_link(
         lemmy_post_id=-200,
         lemmy_post_ap_id=f"https://{BRIDGE_HOST_DOMAIN}/objects/post/legacy",
@@ -341,11 +340,12 @@ async def test_phase3_message_in_legacy_thread_publishes_without_fanout(tmp_path
 
     message_group = database.get_message_group_by_source_message(400)
 
-    assert result.status == "published"
-    # No message group must have been created — legacy thread has no thread group.
+    assert result.status == "ignored"
+    assert result.reason == "no_post_context"
+    # No message group created — no thread group found.
     assert message_group is None
-    # No delivery rows created.
-    gateway.publish_content.assert_awaited_once()
+    # Gateway must not have been called.
+    gateway.publish_content.assert_not_awaited()
 
 
 @pytest.mark.asyncio

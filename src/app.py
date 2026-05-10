@@ -62,6 +62,9 @@ async def main() -> None:
     )
     discord_fanout = DiscordFanout(bot=bot)
     community_runtime.discord_fanout = discord_fanout
+    # Wire bot into CommunityRuntime after construction for the same reason
+    # discord_fanout is injected late — bot depends on community_runtime existing first.
+    community_runtime.bot = bot
     runtime = Runtime(
         settings=settings,
         database=database,

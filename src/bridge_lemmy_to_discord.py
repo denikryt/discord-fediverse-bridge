@@ -11,15 +11,16 @@ from .formatting import format_lemmy_comment_for_discord, format_lemmy_post_for_
 logger = logging.getLogger(__name__)
 
 
-async def create_discord_thread_for_activitypub_post(
+async def _create_inbound_discord_thread(
     *,
-    database: Database,
     forum_channel: discord.ForumChannel,
     event: ActivityPubEvent,
-) -> int:
-    """Create one Discord forum-thread copy for an inbound ActivityPub post."""
-    # Posts become forum threads plus a starter message, and both IDs are
-    # persisted because later comment sync needs the thread mapping.
+) -> tuple[int, int]:
+    """Create one Discord forum-thread for an inbound AP post.
+
+    Returns (thread_id, starter_message_id). No DB writes — the caller
+    (CommunityRuntime.handle_inbound_post) persists the delivery rows.
+    """
     post = event.object
     title = format_thread_title_for_discord(post.title or "Untitled Lemmy Post")
     body = format_lemmy_post_for_discord(
@@ -39,94 +40,35 @@ async def create_discord_thread_for_activitypub_post(
     if thread is None:
         raise RuntimeError("Discord create_thread did not return a thread object")
     if message is None:
-        # Some discord.py variants do not hand back the starter message, so we
-        # recover it immediately before persisting the mapping.
+        # Some discord.py variants do not return the starter message, so recover
+        # it immediately before returning — caller needs the starter_message_id.
         try:
             message = await thread.fetch_message(thread.id)
         except discord.HTTPException as exc:
             raise RuntimeError("Discord create_thread did not return a starter message") from exc
 
-    database.create_post_link(
-        lemmy_post_id=post.lemmy_id,
-        lemmy_post_ap_id=post.ap_id,
-        discord_forum_channel_id=forum_channel.id,
-        discord_forum_thread_id=thread.id,
-        discord_starter_message_id=message.id,
-        direction="lemmy_to_discord",
-    )
     logger.info("Created Discord forum thread %s from ActivityPub post %s", thread.id, post.ap_id)
-    return thread.id
+    return thread.id, message.id
 
 
-async def create_discord_message_for_activitypub_comment(
+async def _send_inbound_comment(
     *,
-    database: Database,
     thread: discord.Thread,
     event: ActivityPubEvent,
-) -> int:
-    """Create one Discord message copy for an inbound ActivityPub comment."""
-    # Comments are appended to an existing mapped Discord thread and use a
-    # Discord reply when the Lemmy parent comment is already mapped locally.
+    reference: discord.MessageReference | None,
+) -> discord.Message:
+    """Send one Discord message for an inbound AP comment.
+
+    Returns the sent Discord message. No DB writes — the caller
+    (CommunityRuntime.handle_inbound_comment) persists the delivery row.
+    The reference is already resolved by the caller via _resolve_inbound_reference.
+    """
     comment = event.object
-    body = format_lemmy_comment_for_discord(comment.author_name, normalize_text(comment.body_markdown), comment.url)
-    parent_message = await resolve_parent_discord_message(
-        database=database,
-        thread=thread,
-        parent_comment_ap_id=comment.parent_ap_id,
+    body = format_lemmy_comment_for_discord(
+        comment.author_name,
+        normalize_text(comment.body_markdown),
+        comment.url,
     )
-    message = await thread.send(body, reference=parent_message)
-
-    database.create_comment_link(
-        lemmy_comment_id=comment.lemmy_id,
-        lemmy_comment_ap_id=comment.ap_id,
-        lemmy_parent_comment_ap_id=comment.parent_ap_id,
-        lemmy_post_id=comment.post_lemmy_id or 0,
-        discord_forum_thread_id=thread.id,
-        discord_message_id=message.id,
-        direction="lemmy_to_discord",
-    )
+    message = await thread.send(body, reference=reference)
     logger.info("Created Discord message %s from ActivityPub comment %s", message.id, comment.ap_id)
-    return message.id
-
-
-async def resolve_parent_discord_message(
-    *,
-    database: Database,
-    thread: discord.Thread,
-    parent_comment_ap_id: str | None,
-) -> discord.Message | None:
-    """Resolve the thread-local parent Discord message for one inbound comment."""
-    # Reply threading is best-effort: if the parent comment is unknown or the
-    # mapped Discord message can no longer be fetched, fall back to a plain
-    # thread message instead of dropping the comment.
-    if not parent_comment_ap_id:
-        return None
-
-    parent_links = database.get_comment_links_by_lemmy_comment_ap_id(parent_comment_ap_id)
-    if not parent_links:
-        logger.debug(
-            "No Discord parent mapping found for Lemmy parent comment %s",
-            parent_comment_ap_id,
-        )
-        return None
-
-    parent_link = next(
-        (link for link in parent_links if link.discord_forum_thread_id == thread.id),
-        None,
-    )
-    if parent_link is None:
-        logger.debug(
-            "Mapped parent comment %s belongs to another Discord thread, skipping reply linkage",
-            parent_comment_ap_id,
-        )
-        return None
-
-    try:
-        return await thread.fetch_message(parent_link.discord_message_id)
-    except discord.HTTPException:
-        logger.warning(
-            "Failed to fetch Discord parent message %s for Lemmy parent comment %s",
-            parent_link.discord_message_id,
-            parent_comment_ap_id,
-        )
-        return None
+    return message

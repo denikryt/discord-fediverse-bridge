@@ -216,13 +216,15 @@ class CommunityThreadGroup(Base):
     # CommunityThreadGroup is the Phase 2+ replacement for PostLink. It records
     # the canonical source event (AP IDs, source channel/thread) and lets each
     # subscribed channel own a separate CommunityThreadGroupDelivery row.
+    # source_* fields are nullable to accommodate inbound AP events, which have
+    # no source Discord channel — threads are created in all subscribed channels.
     __tablename__ = "community_thread_groups"
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
     community_actor_id: Mapped[str] = mapped_column(String(512), nullable=False)
-    source_channel_id: Mapped[int] = mapped_column(Integer, nullable=False)
-    source_thread_id: Mapped[int] = mapped_column(Integer, nullable=False, unique=True)
-    source_starter_message_id: Mapped[int] = mapped_column(Integer, nullable=False)
+    source_channel_id: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    source_thread_id: Mapped[int | None] = mapped_column(Integer, nullable=True, unique=True)
+    source_starter_message_id: Mapped[int | None] = mapped_column(Integer, nullable=True)
     ap_activity_id: Mapped[str | None] = mapped_column(String(512), nullable=True)
     ap_object_id: Mapped[str | None] = mapped_column(String(512), nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, nullable=False)
@@ -255,15 +257,16 @@ class CommunityMessageGroup(Base):
     # CommunityMessageGroup is the Phase 2+ replacement for CommentLink. It
     # records the canonical source message (AP IDs, source context) and lets
     # each delivery channel own a CommunityMessageGroupDelivery row.
+    # source_* fields are nullable to accommodate inbound AP events, which have
+    # no source Discord message — the message is created in all subscribed threads.
     __tablename__ = "community_message_groups"
-    __table_args__ = (UniqueConstraint("source_message_id"),)
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
     community_actor_id: Mapped[str] = mapped_column(String(512), nullable=False)
     thread_group_id: Mapped[int] = mapped_column(Integer, nullable=False)
-    source_channel_id: Mapped[int] = mapped_column(Integer, nullable=False)
-    source_thread_id: Mapped[int] = mapped_column(Integer, nullable=False)
-    source_message_id: Mapped[int] = mapped_column(Integer, nullable=False)
+    source_channel_id: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    source_thread_id: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    source_message_id: Mapped[int | None] = mapped_column(Integer, nullable=True)
     ap_activity_id: Mapped[str | None] = mapped_column(String(512), nullable=True)
     ap_object_id: Mapped[str | None] = mapped_column(String(512), nullable=True)
     # FK to another CommunityMessageGroup if this message is a reply.

@@ -118,13 +118,16 @@ async def test_registered_user_with_accepted_subscription_publishes_thread_start
         thread=_thread(),
         starter_message=_starter_message(),
     )
-    post_link = database.get_post_link_by_thread_id(200)
     mapping = database.get_message_mapping_by_discord_message_id(300)
+    stored_object = database.get_published_activity_object_by_object_id(
+        f"https://{BRIDGE_HOST_DOMAIN}/users/alice/objects/post/1"
+    )
 
     assert result.status == "published"
-    assert post_link is not None
     assert mapping is not None
     assert mapping.object_id == f"https://{BRIDGE_HOST_DOMAIN}/users/alice/objects/post/1"
+    assert stored_object is not None
+    assert stored_object.kind == "post"
 
 
 @pytest.mark.asyncio
@@ -135,12 +138,14 @@ async def test_registered_user_with_accepted_subscription_publishes_thread_reply
     database = _database(tmp_path)
     _accepted_subscription(database)
     _registered_user(database)
-    database.create_post_link(
-        lemmy_post_id=0,
-        lemmy_post_ap_id=f"https://{BRIDGE_HOST_DOMAIN}/users/alice/objects/post/1",
-        discord_forum_thread_id=200,
-        discord_starter_message_id=300,
-        direction="discord_to_activitypub",
+    post_object_url = f"https://{BRIDGE_HOST_DOMAIN}/users/alice/objects/post/1"
+    database.create_thread_group(
+        community_actor_id=f"https://{LEMMY_EXAMPLE_DOMAIN}/c/hackers",
+        source_channel_id=100,
+        source_thread_id=200,
+        source_starter_message_id=300,
+        ap_activity_id=f"https://{BRIDGE_HOST_DOMAIN}/users/alice/activities/create/post/1",
+        ap_object_id=post_object_url,
     )
     fedify_gateway = AsyncMock()
     fedify_gateway.publish_content.return_value = PublishContentResult(
@@ -153,13 +158,16 @@ async def test_registered_user_with_accepted_subscription_publishes_thread_reply
     result = await service.publish_thread_message(
         message=_thread_message(thread=_thread()),
     )
-    comment_link = database.get_comment_link_by_discord_message_id(301)
     mapping = database.get_message_mapping_by_discord_message_id(301)
+    stored_object = database.get_published_activity_object_by_object_id(
+        f"https://{BRIDGE_HOST_DOMAIN}/users/alice/objects/comment/1"
+    )
 
     assert result.status == "published"
-    assert comment_link is not None
     assert mapping is not None
     assert mapping.object_id == f"https://{BRIDGE_HOST_DOMAIN}/users/alice/objects/comment/1"
+    assert stored_object is not None
+    assert stored_object.kind == "comment"
 
 
 @pytest.mark.asyncio
@@ -203,7 +211,6 @@ async def test_registered_user_without_accepted_subscription_does_not_publish(
     assert result.status == "ignored"
     assert result.reason == "no_subscription"
     fedify_gateway.publish_content.assert_not_awaited()
-    assert database.get_post_link_by_thread_id(200) is None
     assert database.get_message_mapping_by_discord_message_id(300) is None
 
 
@@ -225,5 +232,4 @@ async def test_gateway_publish_failure_does_not_persist_false_success(
             starter_message=_starter_message(),
         )
 
-    assert database.get_post_link_by_thread_id(200) is None
     assert database.get_message_mapping_by_discord_message_id(300) is None

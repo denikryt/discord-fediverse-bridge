@@ -67,12 +67,19 @@ def _publish_service(database: Database, fedify_gateway: AsyncMock) -> DiscordPu
     )
 
 
-def _community_runtime(database: Database, fedify_gateway: AsyncMock) -> CommunityRuntime:
+def _community_runtime(
+    database: Database,
+    fedify_gateway: AsyncMock,
+    *,
+    bot: object | None = None,
+) -> CommunityRuntime:
     """Build a real CommunityRuntime with one fake gateway boundary."""
-    return CommunityRuntime(
+    runtime = CommunityRuntime(
         database=database,
         discord_publish_service=_publish_service(database, fedify_gateway),
     )
+    runtime.bot = bot
+    return runtime
 
 
 def _fake_thread(*, thread_id: int = 200, channel_id: int = 100) -> SimpleNamespace:
@@ -198,14 +205,14 @@ async def test_community_runtime_thread_create_publishes_and_persists(
 
     result = await runtime.handle_discord_thread_create(thread=thread, starter_message=starter_message)
 
-    post_link = database.get_post_link_by_thread_id(thread.id)
     mapping = database.get_message_mapping_by_discord_message_id(starter_message.id)
     stored_object = database.get_published_activity_object_by_object_id(post_object_url)
+    thread_group = database.get_thread_group_by_source_thread(thread.id)
 
     assert result.status == "published"
-    # PostLink must exist so later thread replies can resolve the post context.
-    assert post_link is not None
-    assert post_link.lemmy_post_ap_id == post_object_url
+    # CommunityThreadGroup must exist with the AP object id for reply resolution.
+    assert thread_group is not None
+    assert thread_group.ap_object_id == post_object_url
     # MessageMapping must exist for echo suppression when Lemmy loops the activity back.
     assert mapping is not None
     assert mapping.activity_id == post_activity_url
@@ -235,13 +242,14 @@ async def test_community_runtime_thread_message_publishes_as_comment(
     post_object_url = f"https://{BRIDGE_HOST_DOMAIN}/users/alice/objects/post/1"
     comment_object_url = f"https://{BRIDGE_HOST_DOMAIN}/users/alice/objects/comment/1"
     comment_activity_url = f"https://{BRIDGE_HOST_DOMAIN}/users/alice/activities/create/comment/1"
-    # Pre-existing PostLink lets publish_thread_message resolve the post context.
-    database.create_post_link(
-        lemmy_post_id=0,
-        lemmy_post_ap_id=post_object_url,
-        discord_forum_thread_id=thread.id,
-        discord_starter_message_id=300,
-        direction="discord_to_activitypub",
+    # CommunityThreadGroup lets publish_thread_message resolve the post context.
+    database.create_thread_group(
+        community_actor_id=f"https://{LEMMY_EXAMPLE_DOMAIN}/c/hackers",
+        source_channel_id=thread.parent_id,
+        source_thread_id=thread.id,
+        source_starter_message_id=300,
+        ap_activity_id=f"https://{BRIDGE_HOST_DOMAIN}/users/alice/activities/create/post/1",
+        ap_object_id=post_object_url,
     )
     fedify_gateway = AsyncMock()
     fedify_gateway.publish_content.return_value = PublishContentResult(
@@ -254,14 +262,14 @@ async def test_community_runtime_thread_message_publishes_as_comment(
 
     result = await runtime.handle_discord_message(message=message)
 
-    comment_link = database.get_comment_link_by_discord_message_id(message.id)
     mapping = database.get_message_mapping_by_discord_message_id(message.id)
     stored_object = database.get_published_activity_object_by_object_id(comment_object_url)
+    message_group = database.get_message_group_by_source_message(message.id)
 
     assert result.status == "published"
-    # CommentLink must exist so inbound routing can resolve parent-comment chains.
-    assert comment_link is not None
-    assert comment_link.lemmy_comment_ap_id == comment_object_url
+    # CommunityMessageGroup must exist for reply chain resolution.
+    assert message_group is not None
+    assert message_group.ap_object_id == comment_object_url
     # MessageMapping must exist for echo suppression on the Announce loop-back.
     assert mapping is not None
     assert mapping.object_id == comment_object_url
@@ -296,25 +304,26 @@ async def test_community_runtime_inbound_post_creates_discord_thread(
             )
         ),
     )
+    fake_bot = SimpleNamespace(
+        wait_until_bridge_ready=AsyncMock(),
+        fetch_forum_channel=AsyncMock(return_value=fake_forum_channel),
+    )
     fedify_gateway = AsyncMock()
+    community_rt = _community_runtime(database, fedify_gateway, bot=fake_bot)
     runtime_obj = SimpleNamespace(
         database=database,
-        bot=SimpleNamespace(
-            wait_until_bridge_ready=AsyncMock(),
-            fetch_forum_channel=AsyncMock(return_value=fake_forum_channel),
-        ),
-        community_runtime=_community_runtime(database, fedify_gateway),
+        bot=fake_bot,
+        community_runtime=community_rt,
     )
     event = _post_event(object_id=post_ap_id)
 
-    result = await runtime_obj.community_runtime.handle_inbound_post(event, runtime_obj)
+    result = await community_rt.handle_inbound_post(event, runtime_obj)
 
-    post_link = database.get_post_link_by_lemmy_post_ap_id(post_ap_id)
+    thread_group = database.get_thread_group_by_ap_object(post_ap_id)
 
     assert result.status == "processed"
-    # PostLink must exist so later inbound comments can resolve their parent thread.
-    assert post_link is not None
-    assert post_link.discord_forum_channel_id == 100
+    # CommunityThreadGroup must exist so later inbound comments can resolve the thread.
+    assert thread_group is not None
 
 
 @pytest.mark.asyncio
@@ -332,14 +341,21 @@ async def test_community_runtime_inbound_comment_creates_discord_message(
     _accepted_subscription(database)
     post_ap_id = f"https://{LEMMY_EXAMPLE_DOMAIN}/post/99"
     comment_ap_id = f"https://{LEMMY_EXAMPLE_DOMAIN}/comment/55"
-    # Pre-existing PostLink lets the inbound handler find the target Discord thread.
-    database.create_post_link(
-        lemmy_post_id=99,
-        lemmy_post_ap_id=post_ap_id,
-        discord_forum_channel_id=100,
-        discord_forum_thread_id=200,
+    # Pre-existing CommunityThreadGroup lets the inbound handler find the target thread.
+    thread_group = database.create_thread_group(
+        community_actor_id=f"https://{LEMMY_EXAMPLE_DOMAIN}/c/hackers",
+        source_channel_id=None,
+        source_thread_id=None,
+        source_starter_message_id=None,
+        ap_activity_id=f"https://{LEMMY_EXAMPLE_DOMAIN}/activities/create/post/99",
+        ap_object_id=post_ap_id,
+    )
+    database.add_thread_delivery(
+        thread_group_id=thread_group.id,
+        discord_channel_id=100,
+        discord_thread_id=200,
         discord_starter_message_id=300,
-        direction="lemmy_to_discord",
+        role="inbound",
     )
     # Thread and send are mocked — Discord SDK is the outer boundary here.
     fake_thread = SimpleNamespace(
@@ -347,23 +363,24 @@ async def test_community_runtime_inbound_comment_creates_discord_message(
         send=AsyncMock(return_value=SimpleNamespace(id=900)),
         fetch_message=AsyncMock(),
     )
+    fake_bot = SimpleNamespace(
+        wait_until_bridge_ready=AsyncMock(),
+        get_thread_by_id=AsyncMock(return_value=fake_thread),
+    )
     fedify_gateway = AsyncMock()
+    community_rt = _community_runtime(database, fedify_gateway, bot=fake_bot)
     runtime_obj = SimpleNamespace(
         database=database,
-        bot=SimpleNamespace(
-            wait_until_bridge_ready=AsyncMock(),
-            get_thread_by_id=AsyncMock(return_value=fake_thread),
-        ),
-        community_runtime=_community_runtime(database, fedify_gateway),
+        bot=fake_bot,
+        community_runtime=community_rt,
     )
     event = _comment_event(object_id=comment_ap_id, post_ap_id=post_ap_id)
 
-    result = await runtime_obj.community_runtime.handle_inbound_comment(event, runtime_obj)
+    result = await community_rt.handle_inbound_comment(event, runtime_obj)
 
-    comment_link = database.get_comment_link_by_lemmy_comment_ap_id(comment_ap_id)
+    message_group = database.get_message_group_by_ap_object(comment_ap_id)
 
     assert result.status == "processed"
-    # CommentLink must exist so future reply lookups resolve the correct parent.
-    assert comment_link is not None
-    assert comment_link.lemmy_comment_ap_id == comment_ap_id
-    assert comment_link.discord_forum_thread_id == 200
+    # CommunityMessageGroup must exist so future reply lookups resolve the correct parent.
+    assert message_group is not None
+    assert message_group.ap_object_id == comment_ap_id
