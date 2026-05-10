@@ -39,6 +39,24 @@ class MirrorMessageResult:
     message_id: int
 
 
+def _make_discord_reference(
+    thread: discord.Thread, message_id: int | None
+) -> discord.MessageReference | None:
+    """Build a Discord MessageReference for thread.send, or None for a flat send.
+
+    fail_if_not_exists=False prevents the send from raising if the referenced
+    message was deleted between mirror creation and this send call. The message
+    still arrives in the thread; Discord will just not render the reply banner.
+    """
+    if message_id is None:
+        return None
+    return discord.MessageReference(
+        message_id=message_id,
+        channel_id=thread.id,
+        fail_if_not_exists=False,
+    )
+
+
 def _format_mirror_body(message: discord.Message | object) -> str:
     """Build the mirror thread body from the source starter message.
 
@@ -133,22 +151,36 @@ class DiscordFanout:
         *,
         source_message: object,
         sibling_thread_deliveries: list[CommunityThreadGroupDelivery],
+        reply_context: object,
     ) -> list[MirrorMessageResult]:
         """Deliver one mirror copy of source_message into each sibling thread.
 
         Iterates sibling_thread_deliveries (all role='mirror' entries for the
         thread group), fetches each target thread via bot.get_thread_by_id, and
-        sends the formatted mirror body. Returns one MirrorMessageResult per
-        successfully delivered mirror. A sibling thread that fails does not block
-        the others — the error is logged and that thread is skipped, preserving
-        partial-success behaviour so the source AP publish is never rolled back.
+        sends the formatted mirror body with the resolved Discord reference.
+
+        reply_context is a duck-typed object with get_reference_for_thread(thread_id)
+        that returns the Discord message ID to use as a reference, or None for a
+        flat send. _ReplyContext from runtime.py satisfies this contract.
+
+        Returns one MirrorMessageResult per successfully delivered mirror. A
+        sibling thread that fails does not block the others — the error is logged
+        and that thread is skipped, preserving partial-success behaviour so the
+        source AP publish is never rolled back.
         """
         results: list[MirrorMessageResult] = []
         content = _format_mirror_body(source_message)
         for delivery in sibling_thread_deliveries:
             try:
                 thread = await self.bot.get_thread_by_id(delivery.discord_thread_id)
-                sent = await thread.send(content=content)
+                # Resolve the Discord reference for this specific mirror thread.
+                # None means flat send (no reply banner); passing reference=None
+                # to thread.send is identical to omitting it.
+                reference = _make_discord_reference(
+                    thread,
+                    reply_context.get_reference_for_thread(delivery.discord_thread_id),
+                )
+                sent = await thread.send(content=content, reference=reference)
                 results.append(MirrorMessageResult(
                     channel_id=delivery.discord_channel_id,
                     thread_id=delivery.discord_thread_id,

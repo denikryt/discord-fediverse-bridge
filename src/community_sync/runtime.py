@@ -8,6 +8,7 @@ AP publish, and Discord fanout to sibling subscribed channels.
 from __future__ import annotations
 
 import logging
+from dataclasses import dataclass, field
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
@@ -21,6 +22,95 @@ if TYPE_CHECKING:
     from .discord_fanout import DiscordFanout
 
 logger = logging.getLogger(__name__)
+
+
+@dataclass(slots=True)
+class _ReplyContext:
+    """Carry per-thread reply reference IDs resolved before fanout begins.
+
+    parent_message_group_id is set when the source message replies to a known
+    message group, so handle_discord_message can populate the FK on creation.
+
+    per_thread_references maps mirror thread_id -> discord message_id to use
+    as the Discord reference when sending into that thread. A None value means
+    flat send (no reference) for that thread.
+    """
+
+    parent_message_group_id: int | None
+    per_thread_references: dict[int, int | None]
+
+    def get_reference_for_thread(self, thread_id: int) -> int | None:
+        """Return the Discord message ID to reference in this thread, or None for flat send."""
+        return self.per_thread_references.get(thread_id)
+
+
+def _resolve_reply_context(
+    database: Database,
+    message: object,
+    thread_group: object,
+    sibling_deliveries: list,
+) -> _ReplyContext:
+    """Resolve reply reference IDs for each sibling thread before fanout.
+
+    Covers four cases:
+    - No reference on source message → flat send for all siblings.
+    - Reference is the source starter → each sibling uses its own starter message.
+    - Reference maps to a known message group → per-thread delivery lookup.
+    - Reference is unknown (pre-Phase-3 or out-of-thread) → flat send.
+
+    Must be called after sibling_deliveries is computed but before
+    create_message_group, so parent_message_group_id is available at group
+    creation time.
+    """
+    reference = getattr(message, "reference", None)
+    referenced_id = getattr(reference, "message_id", None) if reference else None
+
+    if referenced_id is None:
+        # Root message: no reference needed for any sibling.
+        return _ReplyContext(
+            parent_message_group_id=None,
+            per_thread_references={d.discord_thread_id: None for d in sibling_deliveries},
+        )
+
+    # Reply to the source thread's starter: each sibling uses its own starter
+    # message as the reference so the reply is anchored to the top of each mirror.
+    if referenced_id == thread_group.source_starter_message_id:
+        return _ReplyContext(
+            parent_message_group_id=None,
+            per_thread_references={
+                d.discord_thread_id: d.discord_starter_message_id
+                for d in sibling_deliveries
+            },
+        )
+
+    # Look up whether the referenced message belongs to a known message group.
+    # This covers replies to previously mirrored messages (Phase 3+).
+    parent_group = database.get_message_group_by_delivered_message(referenced_id)
+    if parent_group is None:
+        # Unknown reference (pre-Phase-3 message or cross-thread reference):
+        # fall back to flat send so the mirror is not silently dropped.
+        return _ReplyContext(
+            parent_message_group_id=None,
+            per_thread_references={d.discord_thread_id: None for d in sibling_deliveries},
+        )
+
+    # Known mirrored message: resolve the per-thread mirror delivery so each
+    # sibling references the correct local copy of the parent message.
+    per_thread: dict[int, int | None] = {}
+    for d in sibling_deliveries:
+        mirror_delivery = database.get_message_delivery_in_thread(
+            parent_group.id, d.discord_thread_id
+        )
+        # If no delivery exists for this thread (e.g. partial prior failure),
+        # fall back to flat send for that specific sibling.
+        per_thread[d.discord_thread_id] = (
+            mirror_delivery.discord_message_id if mirror_delivery else None
+        )
+
+    return _ReplyContext(
+        parent_message_group_id=parent_group.id,
+        per_thread_references=per_thread,
+    )
 
 
 class CommunityRuntime:
@@ -164,7 +254,23 @@ class CommunityRuntime:
         if thread_group is None:
             return result
 
-        # Create the canonical message group for this source event.
+        # Compute sibling deliveries before creating the message group so that
+        # _resolve_reply_context can build the per_thread_references map, and the
+        # parent_message_group_id FK is available at group creation time.
+        sibling_deliveries = [
+            d for d in self.database.get_thread_deliveries(thread_group.id)
+            if d.role == "mirror"
+        ]
+
+        # Resolve reply context from the source message's Discord reference.
+        # This determines parent_message_group_id and the per-thread reference IDs
+        # that each sibling thread send will use.
+        reply_context = _resolve_reply_context(
+            self.database, message, thread_group, sibling_deliveries
+        )
+
+        # Create the canonical message group for this source event, recording the
+        # parent message group when this is a reply to a known mirrored message.
         message_group = self.database.create_message_group(
             community_actor_id=thread_group.community_actor_id,
             thread_group_id=thread_group.id,
@@ -173,6 +279,7 @@ class CommunityRuntime:
             source_message_id=message.id,
             ap_activity_id=result.activity_id,
             ap_object_id=result.object_id,
+            parent_message_group_id=reply_context.parent_message_group_id,
         )
         # Record the source delivery so reply-chain resolution and dedup can find
         # this message by its Discord message ID later.
@@ -184,28 +291,24 @@ class CommunityRuntime:
             role="source",
         )
 
-        # Resolve sibling mirror thread deliveries for the same thread group and fan out.
-        if self.discord_fanout is not None:
-            sibling_deliveries = [
-                d for d in self.database.get_thread_deliveries(thread_group.id)
-                if d.role == "mirror"
-            ]
-            if sibling_deliveries:
-                mirror_results = await self.discord_fanout.mirror_message_to_siblings(
-                    source_message=message,
-                    sibling_thread_deliveries=sibling_deliveries,
+        # Fan out to sibling mirror threads with per-thread Discord references.
+        if self.discord_fanout is not None and sibling_deliveries:
+            mirror_results = await self.discord_fanout.mirror_message_to_siblings(
+                source_message=message,
+                sibling_thread_deliveries=sibling_deliveries,
+                reply_context=reply_context,
+            )
+            for mirror in mirror_results:
+                # Each successfully delivered mirror message gets its own
+                # delivery row so the on_message guard can identify mirror-thread
+                # messages and the reply chain can be resolved correctly.
+                self.database.add_message_delivery(
+                    message_group_id=message_group.id,
+                    discord_channel_id=mirror.channel_id,
+                    discord_thread_id=mirror.thread_id,
+                    discord_message_id=mirror.message_id,
+                    role="mirror",
                 )
-                for mirror in mirror_results:
-                    # Each successfully delivered mirror message gets its own
-                    # delivery row so the on_message guard can identify mirror-thread
-                    # messages and the reply chain can be resolved correctly.
-                    self.database.add_message_delivery(
-                        message_group_id=message_group.id,
-                        discord_channel_id=mirror.channel_id,
-                        discord_thread_id=mirror.thread_id,
-                        discord_message_id=mirror.message_id,
-                        role="mirror",
-                    )
 
         return result
 
