@@ -182,13 +182,20 @@ async def test_thread_message_from_registered_user_publishes_as_comment(
     comment_activity_url = (
         f"https://{BRIDGE_HOST_DOMAIN}/users/alice/activities/create/comment/1"
     )
-    database.create_thread_group(
+    thread_group = database.create_thread_group(
         community_actor_id=f"https://{LEMMY_EXAMPLE_DOMAIN}/c/hackers",
         source_channel_id=100,
         source_thread_id=thread.id,
         source_starter_message_id=300,
         ap_activity_id=f"https://{BRIDGE_HOST_DOMAIN}/users/alice/activities/create/post/1",
         ap_object_id=post_object_url,
+    )
+    database.add_thread_delivery(
+        thread_group_id=thread_group.id,
+        discord_channel_id=100,
+        discord_thread_id=thread.id,
+        discord_starter_message_id=300,
+        role="source",
     )
     fedify_gateway = AsyncMock()
     fedify_gateway.publish_content.return_value = PublishContentResult(
@@ -236,6 +243,13 @@ async def test_thread_reply_uses_parent_comment_object_id_when_available(
         source_starter_message_id=300,
         ap_activity_id=f"https://{BRIDGE_HOST_DOMAIN}/users/alice/activities/create/post/1",
         ap_object_id=post_object_url,
+    )
+    database.add_thread_delivery(
+        thread_group_id=thread_group.id,
+        discord_channel_id=100,
+        discord_thread_id=thread.id,
+        discord_starter_message_id=300,
+        role="source",
     )
     parent_message_group = database.create_message_group(
         community_actor_id=f"https://{LEMMY_EXAMPLE_DOMAIN}/c/hackers",
