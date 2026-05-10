@@ -861,6 +861,22 @@ class Database:
             session.flush()
             return delivery
 
+    def get_message_delivery_by_message(
+        self, discord_message_id: int
+    ) -> CommunityMessageGroupDelivery | None:
+        """Load the delivery row for one Discord message ID.
+
+        Used by on_raw_message_edit and on_raw_message_delete to check the
+        delivery role before deciding whether to propagate the event to AP.
+        Returns None if the message is not part of any tracked delivery.
+        """
+        with self.session() as session:
+            return session.scalar(
+                select(CommunityMessageGroupDelivery).where(
+                    CommunityMessageGroupDelivery.discord_message_id == discord_message_id
+                )
+            )
+
     def get_message_deliveries(
         self, message_group_id: int
     ) -> list[CommunityMessageGroupDelivery]:

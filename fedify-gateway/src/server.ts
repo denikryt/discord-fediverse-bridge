@@ -17,9 +17,18 @@ import {
 import { type GatewayContextData, loadConfig } from "./config.js";
 import { loadPublishedActivityObjectByObjectId } from "./db.js";
 import { createGatewayFederation } from "./federation.js";
-import { followCommunity, publishContent } from "./federation-outbound.js";
+import {
+  deleteContent,
+  followCommunity,
+  publishContent,
+  updateContent,
+} from "./federation-outbound.js";
 import { buildPublishedActivityObjectJson } from "./published-objects.js";
-import type { PublishContentRequest } from "./types.js";
+import type {
+  DeleteContentRequest,
+  PublishContentRequest,
+  UpdateContentRequest,
+} from "./types.js";
 
 // server.ts owns the operator-facing HTTP surface of the gateway: health,
 // manual follow, inbox logging, and Fedify middleware wiring.
@@ -198,6 +207,87 @@ app.post("/publish", async (context) => {
           : null,
     });
     return context.json(result);
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    return context.json({ error: message }, { status: 500 });
+  }
+});
+
+app.post("/update", async (context) => {
+  // Python owns the edit policy; this endpoint owns the signed Update delivery.
+  if (
+    !hasValidInternalAuthorization(
+      context.req.header("Authorization") ?? null,
+    )
+  ) {
+    return context.json({ error: "invalid authorization" }, { status: 401 });
+  }
+
+  const payload = (await context.req.json()) as Partial<UpdateContentRequest>;
+  if (
+    typeof payload.actorUsername !== "string" ||
+    typeof payload.communityActorUrl !== "string" ||
+    typeof payload.apObjectId !== "string" ||
+    (payload.kind !== "post" && payload.kind !== "comment") ||
+    typeof payload.bodyMarkdown !== "string"
+  ) {
+    return context.json(
+      {
+        error:
+          "actorUsername, communityActorUrl, apObjectId, kind, and bodyMarkdown are required",
+      },
+      { status: 400 },
+    );
+  }
+
+  try {
+    await updateContent(fedify, config, {
+      actorUsername: payload.actorUsername,
+      communityActorUrl: payload.communityActorUrl,
+      apObjectId: payload.apObjectId,
+      kind: payload.kind,
+      bodyMarkdown: payload.bodyMarkdown,
+      title:
+        typeof payload.title === "string" && payload.title.length > 0
+          ? payload.title
+          : null,
+    });
+    return context.json({ status: "ok" });
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    return context.json({ error: message }, { status: 500 });
+  }
+});
+
+app.post("/delete", async (context) => {
+  // Python owns the delete policy; this endpoint owns the signed Delete delivery.
+  if (
+    !hasValidInternalAuthorization(
+      context.req.header("Authorization") ?? null,
+    )
+  ) {
+    return context.json({ error: "invalid authorization" }, { status: 401 });
+  }
+
+  const payload = (await context.req.json()) as Partial<DeleteContentRequest>;
+  if (
+    typeof payload.actorUsername !== "string" ||
+    typeof payload.communityActorUrl !== "string" ||
+    typeof payload.apObjectId !== "string"
+  ) {
+    return context.json(
+      { error: "actorUsername, communityActorUrl, and apObjectId are required" },
+      { status: 400 },
+    );
+  }
+
+  try {
+    await deleteContent(fedify, config, {
+      actorUsername: payload.actorUsername,
+      communityActorUrl: payload.communityActorUrl,
+      apObjectId: payload.apObjectId,
+    });
+    return context.json({ status: "ok" });
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
     return context.json({ error: message }, { status: 500 });

@@ -1,8 +1,13 @@
 import { Temporal } from "@js-temporal/polyfill";
-import { Create, Follow, Note, Page, Source } from "@fedify/vocab";
+import { Create, Delete, Follow, Note, Page, Source, Update } from "@fedify/vocab";
 import type { Federation } from "@fedify/fedify";
 import type { GatewayConfig } from "./config.js";
-import type { PublishContentRequest, PublishContentResult } from "./types.js";
+import type {
+  DeleteContentRequest,
+  PublishContentRequest,
+  PublishContentResult,
+  UpdateContentRequest,
+} from "./types.js";
 
 export interface FollowCommunityResult {
   communityActorUrl: string;
@@ -206,6 +211,140 @@ function buildPublishObject(
     replyTarget: new URL(request.inReplyToObjectId),
     url: objectId,
   });
+}
+
+export async function updateContent(
+  federation: Federation<GatewayConfig>,
+  config: GatewayConfig,
+  request: UpdateContentRequest,
+): Promise<void> {
+  // Update delivery mirrors publish delivery: same actor URI, same community
+  // fetch, but wraps the object in an Update activity instead of Create.
+  const ctx = federation.createContext(new URL(config.fedifyOrigin), config);
+  const actorUri = buildUserActorUri(config, request.actorUsername);
+  const { communityId, inboxUrl } = await fetchRemoteCommunity(
+    request.communityActorUrl,
+  );
+
+  const objectId = new URL(request.apObjectId);
+  const activityId = new URL(
+    `/users/${request.actorUsername}/activities/update/${request.kind}/${Date.now()}-${Math.random().toString(36).slice(2)}`,
+    config.fedifyOrigin,
+  );
+  const htmlContent = markdownToHtml(request.bodyMarkdown);
+  const source = new Source({
+    content: request.bodyMarkdown,
+    mediaType: "text/markdown",
+  });
+  const PUBLIC = new URL("https://www.w3.org/ns/activitystreams#Public");
+  const community = new URL(communityId);
+  const updated = Temporal.Now.instant();
+
+  // Build the full updated object — Lemmy requires all original fields plus the
+  // updated timestamp and new content. The actor must match the original attributedTo.
+  let object;
+  if (request.kind === "post") {
+    object = new Page({
+      id: objectId,
+      name: request.title ?? "Untitled Discord Post",
+      attribution: actorUri,
+      audience: community,
+      tos: [PUBLIC, community],
+      ccs: [actorUri],
+      source,
+      content: htmlContent,
+      updated,
+      url: objectId,
+    });
+  } else {
+    object = new Note({
+      id: objectId,
+      attribution: actorUri,
+      audience: community,
+      tos: [PUBLIC, community],
+      ccs: [actorUri],
+      source,
+      content: htmlContent,
+      updated,
+    });
+  }
+
+  const activity = new Update({
+    id: activityId,
+    actor: actorUri,
+    object,
+    tos: [PUBLIC, community],
+    ccs: [actorUri],
+  });
+
+  console.log("[Update] Sending Update activity:", {
+    actorUsername: request.actorUsername,
+    kind: request.kind,
+    apObjectId: request.apObjectId,
+    communityId,
+    activityId: activityId.toString(),
+  });
+
+  try {
+    await ctx.sendActivity(
+      { username: request.actorUsername },
+      { id: new URL(communityId), inboxId: new URL(inboxUrl) },
+      activity,
+    );
+    console.log("[Update] sendActivity completed successfully");
+  } catch (err) {
+    console.error("[Update] sendActivity failed:", err);
+    throw err;
+  }
+}
+
+export async function deleteContent(
+  federation: Federation<GatewayConfig>,
+  config: GatewayConfig,
+  request: DeleteContentRequest,
+): Promise<void> {
+  // Delete delivery uses the AP object URL as the object field (string form, not
+  // a full object), matching the Lemmy federation protocol for Delete activities.
+  const ctx = federation.createContext(new URL(config.fedifyOrigin), config);
+  const actorUri = buildUserActorUri(config, request.actorUsername);
+  const { communityId, inboxUrl } = await fetchRemoteCommunity(
+    request.communityActorUrl,
+  );
+
+  const activityId = new URL(
+    `/users/${request.actorUsername}/activities/delete/${Date.now()}-${Math.random().toString(36).slice(2)}`,
+    config.fedifyOrigin,
+  );
+  const PUBLIC = new URL("https://www.w3.org/ns/activitystreams#Public");
+  const community = new URL(communityId);
+
+  const activity = new Delete({
+    id: activityId,
+    actor: actorUri,
+    // Lemmy Delete uses the object URL as a plain URL, not a full object body.
+    object: new URL(request.apObjectId),
+    tos: [PUBLIC, community],
+    ccs: [actorUri],
+  });
+
+  console.log("[Delete] Sending Delete activity:", {
+    actorUsername: request.actorUsername,
+    apObjectId: request.apObjectId,
+    communityId,
+    activityId: activityId.toString(),
+  });
+
+  try {
+    await ctx.sendActivity(
+      { username: request.actorUsername },
+      { id: new URL(communityId), inboxId: new URL(inboxUrl) },
+      activity,
+    );
+    console.log("[Delete] sendActivity completed successfully");
+  } catch (err) {
+    console.error("[Delete] sendActivity failed:", err);
+    throw err;
+  }
 }
 
 function markdownToHtml(markdown: string): string {

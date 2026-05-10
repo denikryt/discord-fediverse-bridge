@@ -54,3 +54,22 @@ export interface PublishContentResult {
   objectId: string;
   communityActorUrl: string;
 }
+
+export interface UpdateContentRequest {
+  // actorUsername must match the original attributedTo — Lemmy enforces this
+  // ownership check and rejects Updates from any other actor.
+  actorUsername: string;
+  communityActorUrl: string;
+  apObjectId: string;
+  kind: "post" | "comment";
+  bodyMarkdown: string;
+  // title is required for posts only; ignored for comments.
+  title?: string | null;
+}
+
+export interface DeleteContentRequest {
+  // actorUsername must match the original attributedTo — same ownership rule as Update.
+  actorUsername: string;
+  communityActorUrl: string;
+  apObjectId: string;
+}

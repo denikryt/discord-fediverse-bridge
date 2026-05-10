@@ -40,6 +40,27 @@ class PublishContentResult:
     community_actor_url: str
 
 
+@dataclass(slots=True)
+class UpdateContentRequest:
+    # actorUsername must match the original object attributedTo — Lemmy enforces
+    # this ownership check and rejects Updates from any other actor.
+    actor_username: str
+    community_actor_url: str
+    ap_object_id: str
+    kind: str
+    body_markdown: str
+    # title is required for posts; None for comments.
+    title: str | None = None
+
+
+@dataclass(slots=True)
+class DeleteContentRequest:
+    # actorUsername must match the original attributedTo — same ownership rule.
+    actor_username: str
+    community_actor_url: str
+    ap_object_id: str
+
+
 class FedifyGatewayClient:
     """Call the local Fedify gateway for follow and publish operations."""
 
@@ -95,3 +116,32 @@ class FedifyGatewayClient:
             object_id=payload["objectId"],
             community_actor_url=payload["communityActorUrl"],
         )
+
+    async def update_content(self, request: UpdateContentRequest) -> None:
+        """Trigger one gateway-side Update activity for an edited post or comment."""
+        response = await self._client.post(
+            "/update",
+            headers={"Authorization": f"Bearer {self._shared_secret}"},
+            json={
+                "actorUsername": request.actor_username,
+                "communityActorUrl": request.community_actor_url,
+                "apObjectId": request.ap_object_id,
+                "kind": request.kind,
+                "bodyMarkdown": request.body_markdown,
+                "title": request.title,
+            },
+        )
+        response.raise_for_status()
+
+    async def delete_content(self, request: DeleteContentRequest) -> None:
+        """Trigger one gateway-side Delete activity for a deleted post or comment."""
+        response = await self._client.post(
+            "/delete",
+            headers={"Authorization": f"Bearer {self._shared_secret}"},
+            json={
+                "actorUsername": request.actor_username,
+                "communityActorUrl": request.community_actor_url,
+                "apObjectId": request.ap_object_id,
+            },
+        )
+        response.raise_for_status()

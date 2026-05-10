@@ -29,6 +29,14 @@ async def dispatch_activitypub_event(
         return await handle_post_created(event, runtime)
     if event.event_type == "comment.created":
         return await handle_comment_created(event, runtime)
+    if event.event_type == "post.updated":
+        return await runtime.community_runtime.handle_inbound_post_update(event, runtime)
+    if event.event_type == "post.deleted":
+        return await runtime.community_runtime.handle_inbound_post_delete(event, runtime)
+    if event.event_type == "comment.updated":
+        return await runtime.community_runtime.handle_inbound_comment_update(event, runtime)
+    if event.event_type == "comment.deleted":
+        return await runtime.community_runtime.handle_inbound_comment_delete(event, runtime)
     if event.event_type == "follow.accepted":
         return await handle_follow_accepted(event, runtime)
     raise RuntimeError(f"Unsupported event type: {event.event_type}")

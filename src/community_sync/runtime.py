@@ -4,11 +4,13 @@ CommunityRuntime is the single call boundary for all thread/message events in
 both directions (Discord→AP and AP→Discord). Phase 2+ owns thread-group creation,
 AP publish, and Discord fanout to sibling subscribed channels. Phase 5 adds
 direct inbound AP delivery onto shared group tables, replacing the legacy
-PostLink/CommentLink path.
+PostLink/CommentLink path. Phase 8 adds edit and delete propagation in both
+directions, using the same delivery row tables for reverse-lookup.
 """
 
 from __future__ import annotations
 
+import asyncio
 import logging
 from dataclasses import dataclass
 from typing import TYPE_CHECKING
@@ -20,6 +22,7 @@ if TYPE_CHECKING:
     from ..activitypub_models import ActivityPubEvent
     from ..db import Database
     from ..discord_publish_service import DiscordPublishService, PublishResult
+    from ..fedify_gateway_client import DeleteContentRequest, UpdateContentRequest
     from ..runtime import Runtime
     from .discord_fanout import DiscordFanout
 
@@ -515,6 +518,314 @@ class CommunityRuntime:
             event.object.ap_id, len(thread_deliveries),
         )
         return _HandlerResult(status="processed", detail="comment created")
+
+
+    async def handle_discord_message_edit(
+        self,
+        message_id: int,
+        new_content: str,
+        runtime: Runtime,
+    ) -> None:
+        """Propagate a Discord source-message edit to all mirror messages and to AP.
+
+        Resolves the message group by the edited message ID, edits all mirror
+        deliveries via DiscordFanout, then sends one AP Update to the gateway.
+        Returns silently if no delivery row exists for message_id (unknown message).
+
+        If a mirror edit fails, the error is logged and the AP Update is still sent —
+        individual mirror failures do not abort the outbound AP propagation.
+        """
+        from ..fedify_gateway_client import UpdateContentRequest
+
+        # Reverse-lookup the message group by the Discord message ID.
+        # Covers both source and mirror deliveries via the delivery table.
+        message_group = self.database.get_message_group_by_delivered_message(message_id)
+        if message_group is None:
+            # Unknown message — not in any delivery row; nothing to propagate.
+            logger.debug("No delivery row for message %s — skipping edit propagation", message_id)
+            return
+
+        # Mirror deliveries are the non-source copies that need to be updated.
+        all_deliveries = self.database.get_message_deliveries(message_group.id)
+        mirror_deliveries = [d for d in all_deliveries if d.role != "source"]
+
+        if self.discord_fanout is not None and mirror_deliveries:
+            await self.discord_fanout.propagate_edit(
+                mirror_deliveries=mirror_deliveries,
+                new_content=new_content,
+            )
+
+        # Send the AP Update if the message group has an AP object and community actor.
+        # These are set for all Discord-originated messages published via the bridge.
+        if message_group.ap_object_id and message_group.community_actor_id:
+            # Resolve the actor username from the source thread's publish record.
+            # The actor owns the AP object and must be the one who sends Update.
+            actor_username = await _resolve_actor_username(
+                self.database, message_group
+            )
+            if actor_username:
+                await runtime.fedify_gateway.update_content(UpdateContentRequest(
+                    actor_username=actor_username,
+                    community_actor_url=message_group.community_actor_id,
+                    ap_object_id=message_group.ap_object_id,
+                    kind="comment" if message_group.source_thread_id else "post",
+                    body_markdown=new_content,
+                ))
+
+    async def handle_discord_message_delete(
+        self,
+        message_id: int,
+        runtime: Runtime,
+    ) -> None:
+        """Propagate a Discord source-message delete to all mirror messages and to AP.
+
+        Resolves the message group by the deleted message ID, deletes all mirror
+        deliveries via DiscordFanout, then sends one AP Delete to the gateway.
+        Returns silently if no delivery row exists for message_id (unknown message).
+
+        If a mirror delete fails, the error is logged and the AP Delete is still sent —
+        individual mirror failures do not abort the outbound AP propagation.
+        """
+        from ..fedify_gateway_client import DeleteContentRequest
+
+        message_group = self.database.get_message_group_by_delivered_message(message_id)
+        if message_group is None:
+            logger.debug("No delivery row for message %s — skipping delete propagation", message_id)
+            return
+
+        all_deliveries = self.database.get_message_deliveries(message_group.id)
+        mirror_deliveries = [d for d in all_deliveries if d.role != "source"]
+
+        if self.discord_fanout is not None and mirror_deliveries:
+            await self.discord_fanout.propagate_delete(mirror_deliveries=mirror_deliveries)
+
+        if message_group.ap_object_id and message_group.community_actor_id:
+            actor_username = await _resolve_actor_username(
+                self.database, message_group
+            )
+            if actor_username:
+                await runtime.fedify_gateway.delete_content(DeleteContentRequest(
+                    actor_username=actor_username,
+                    community_actor_url=message_group.community_actor_id,
+                    ap_object_id=message_group.ap_object_id,
+                ))
+
+    async def handle_inbound_post_update(
+        self,
+        event: ActivityPubEvent,
+        runtime: Runtime,
+    ) -> HandlerResult:
+        """Handle an inbound AP Update for a post by editing all Discord thread starters.
+
+        Resolves thread group via ap_object_id. If not found, returns 'skipped' —
+        the Update arrived before the original Create and no deferred retry is attempted.
+        Edits all thread deliveries concurrently via asyncio.gather.
+        """
+        from ..activitypub_handlers import HandlerResult as _HandlerResult
+
+        thread_group = self.database.get_thread_group_by_ap_object(event.object.ap_id)
+        if thread_group is None:
+            logger.info("Post update for %s — no thread group found, skipping", event.object.ap_id)
+            return _HandlerResult(status="skipped", detail="post not yet mapped")
+
+        thread_deliveries = self.database.get_thread_deliveries(thread_group.id)
+        if not thread_deliveries:
+            return _HandlerResult(status="skipped", detail="no thread deliveries")
+
+        bot = self.bot or runtime.bot
+        new_content = event.object.body_markdown or ""
+
+        async def _edit_thread_starter(delivery: object) -> None:
+            try:
+                thread = await bot.get_thread_by_id(delivery.discord_thread_id)
+                starter = await thread.fetch_message(delivery.discord_starter_message_id)
+                await starter.edit(content=new_content)
+                logger.info(
+                    "Edited inbound post starter in thread %s", delivery.discord_thread_id
+                )
+            except Exception:
+                logger.exception(
+                    "Failed to edit inbound post starter in thread %s",
+                    delivery.discord_thread_id,
+                )
+
+        # Edit all thread starters concurrently; failures are logged individually.
+        await asyncio.gather(
+            *[_edit_thread_starter(d) for d in thread_deliveries],
+            return_exceptions=True,
+        )
+
+        return _HandlerResult(status="processed", detail="post updated")
+
+    async def handle_inbound_post_delete(
+        self,
+        event: ActivityPubEvent,
+        runtime: Runtime,
+    ) -> HandlerResult:
+        """Handle an inbound AP Delete for a post by deleting all Discord threads.
+
+        Resolves thread group via ap_object_id. Missing deliveries are skipped.
+        Requires MANAGE_THREADS permission; failure is logged as a partial failure.
+        """
+        from ..activitypub_handlers import HandlerResult as _HandlerResult
+
+        thread_group = self.database.get_thread_group_by_ap_object(event.object.ap_id)
+        if thread_group is None:
+            logger.info("Post delete for %s — no thread group found, skipping", event.object.ap_id)
+            return _HandlerResult(status="skipped", detail="post not yet mapped")
+
+        thread_deliveries = self.database.get_thread_deliveries(thread_group.id)
+
+        bot = self.bot or runtime.bot
+
+        async def _delete_thread(delivery: object) -> None:
+            try:
+                thread = await bot.get_thread_by_id(delivery.discord_thread_id)
+                await thread.delete()
+                logger.info(
+                    "Deleted inbound post thread %s", delivery.discord_thread_id
+                )
+            except Exception:
+                logger.exception(
+                    "Failed to delete inbound post thread %s", delivery.discord_thread_id
+                )
+
+        # Delete all threads concurrently; each failure is logged without aborting others.
+        await asyncio.gather(
+            *[_delete_thread(d) for d in thread_deliveries],
+            return_exceptions=True,
+        )
+
+        return _HandlerResult(status="processed", detail="post deleted")
+
+    async def handle_inbound_comment_update(
+        self,
+        event: ActivityPubEvent,
+        runtime: Runtime,
+    ) -> HandlerResult:
+        """Handle an inbound AP Update for a comment by editing all Discord message deliveries.
+
+        Resolves message group via ap_object_id. Returns 'skipped' if not found.
+        Edits all delivery messages concurrently via asyncio.gather.
+        """
+        from ..activitypub_handlers import HandlerResult as _HandlerResult
+
+        message_group = self.database.get_message_group_by_ap_object(event.object.ap_id)
+        if message_group is None:
+            logger.info(
+                "Comment update for %s — no message group found, skipping",
+                event.object.ap_id,
+            )
+            return _HandlerResult(status="skipped", detail="comment not yet mapped")
+
+        deliveries = self.database.get_message_deliveries(message_group.id)
+        if not deliveries:
+            return _HandlerResult(status="skipped", detail="no message deliveries")
+
+        bot = self.bot or runtime.bot
+        new_content = event.object.body_markdown or ""
+
+        async def _edit_message(delivery: object) -> None:
+            try:
+                thread = await bot.get_thread_by_id(delivery.discord_thread_id)
+                message = await thread.fetch_message(delivery.discord_message_id)
+                await message.edit(content=new_content)
+                logger.info(
+                    "Edited inbound comment message %s in thread %s",
+                    delivery.discord_message_id,
+                    delivery.discord_thread_id,
+                )
+            except Exception:
+                logger.exception(
+                    "Failed to edit inbound comment message %s in thread %s",
+                    delivery.discord_message_id,
+                    delivery.discord_thread_id,
+                )
+
+        await asyncio.gather(
+            *[_edit_message(d) for d in deliveries],
+            return_exceptions=True,
+        )
+
+        return _HandlerResult(status="processed", detail="comment updated")
+
+    async def handle_inbound_comment_delete(
+        self,
+        event: ActivityPubEvent,
+        runtime: Runtime,
+    ) -> HandlerResult:
+        """Handle an inbound AP Delete for a comment by deleting all Discord message deliveries.
+
+        Resolves message group via ap_object_id. Missing deliveries are skipped without error.
+        Deletes all delivery messages concurrently via asyncio.gather.
+        """
+        from ..activitypub_handlers import HandlerResult as _HandlerResult
+
+        message_group = self.database.get_message_group_by_ap_object(event.object.ap_id)
+        if message_group is None:
+            logger.info(
+                "Comment delete for %s — no message group found, skipping",
+                event.object.ap_id,
+            )
+            return _HandlerResult(status="skipped", detail="comment not yet mapped")
+
+        deliveries = self.database.get_message_deliveries(message_group.id)
+
+        bot = self.bot or runtime.bot
+
+        async def _delete_message(delivery: object) -> None:
+            try:
+                thread = await bot.get_thread_by_id(delivery.discord_thread_id)
+                message = await thread.fetch_message(delivery.discord_message_id)
+                await message.delete()
+                logger.info(
+                    "Deleted inbound comment message %s in thread %s",
+                    delivery.discord_message_id,
+                    delivery.discord_thread_id,
+                )
+            except Exception:
+                logger.exception(
+                    "Failed to delete inbound comment message %s in thread %s",
+                    delivery.discord_message_id,
+                    delivery.discord_thread_id,
+                )
+
+        await asyncio.gather(
+            *[_delete_message(d) for d in deliveries],
+            return_exceptions=True,
+        )
+
+        return _HandlerResult(status="processed", detail="comment deleted")
+
+
+async def _resolve_actor_username(database: Database, message_group: object) -> str | None:
+    """Resolve the AP actor username for a message group's source message.
+
+    Looks up the user record that owns the source Discord message publish.
+    Returns None if no user is found (e.g. legacy messages without actor mapping).
+    The actor username is required to send Update/Delete activities — Lemmy
+    enforces that the actor matches the original attributedTo.
+    """
+    from ..models import MessageMapping, User
+    from sqlalchemy import select
+
+    source_message_id = getattr(message_group, "source_message_id", None)
+    if source_message_id is None:
+        return None
+
+    # Look up the MessageMapping row for this source message to find the actor.
+    with database.session() as session:
+        mapping = session.scalar(
+            select(MessageMapping).where(
+                MessageMapping.discord_message_id == str(source_message_id)
+            )
+        )
+        if mapping is None:
+            return None
+        user = session.scalar(
+            select(User).where(User.id == mapping.user_id)
+        )
+        return user.activitypub_username if user else None
 
 
 def _ignored_result(reason: str) -> PublishResult:

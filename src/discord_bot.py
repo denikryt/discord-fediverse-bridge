@@ -139,6 +139,74 @@ class BridgeBot(discord.Client):
             message=message,
         )
 
+    async def on_raw_message_edit(self, payload: discord.RawMessageUpdateEvent) -> None:
+        """Forward an edited source Discord message to CommunityRuntime for propagation.
+
+        Uses the raw event so edits fire for all messages, not just cached ones.
+        The mirror guard fires first: if the message belongs to a mirror delivery,
+        return immediately — mirror edits must not trigger a second AP Update.
+        """
+        delivery = self.database.get_message_delivery_by_message(payload.message_id)
+        if delivery is None:
+            # Not a tracked delivery — nothing to propagate.
+            return
+        if delivery.role == "mirror":
+            # Mirror message edit: the source thread already owns AP propagation.
+            return
+
+        # Extract updated content from the raw payload data.
+        # Discord raw edit events include the full message data dict.
+        new_content = payload.data.get("content", "")
+        if not new_content:
+            return
+
+        from .runtime import Runtime
+        runtime = self._get_runtime()
+        if runtime is None:
+            return
+
+        await self.community_runtime.handle_discord_message_edit(
+            message_id=payload.message_id,
+            new_content=new_content,
+            runtime=runtime,
+        )
+
+    async def on_raw_message_delete(self, payload: discord.RawMessageDeleteEvent) -> None:
+        """Forward a deleted source Discord message to CommunityRuntime for propagation.
+
+        Uses the raw event so deletes fire for all messages, not just cached ones.
+        The mirror guard fires first: if the message belongs to a mirror delivery,
+        return immediately — mirror deletes must not trigger a second AP Delete.
+        """
+        delivery = self.database.get_message_delivery_by_message(payload.message_id)
+        if delivery is None:
+            return
+        if delivery.role == "mirror":
+            return
+
+        from .runtime import Runtime
+        runtime = self._get_runtime()
+        if runtime is None:
+            return
+
+        await self.community_runtime.handle_discord_message_delete(
+            message_id=payload.message_id,
+            runtime=runtime,
+        )
+
+    def _get_runtime(self) -> object | None:
+        """Return the bridge Runtime instance, if available.
+
+        The Runtime is injected after construction via set_runtime(); it must be
+        set before any outbound AP calls can be made. Returns None if not set,
+        which causes edit/delete propagation to be skipped for that event.
+        """
+        return getattr(self, "_runtime", None)
+
+    def set_runtime(self, runtime: object) -> None:
+        """Inject the bridge Runtime so edit/delete handlers can call the AP gateway."""
+        self._runtime = runtime
+
     async def _fetch_starter_message(self, thread: discord.Thread) -> discord.Message | None:
         # Discord APIs are inconsistent here, so we try the direct starter
         # message path first and then fall back to oldest history.

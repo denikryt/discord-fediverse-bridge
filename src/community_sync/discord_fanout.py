@@ -8,6 +8,7 @@ the already-resolved sibling targets.
 
 from __future__ import annotations
 
+import asyncio
 import logging
 from dataclasses import dataclass
 from typing import TYPE_CHECKING
@@ -15,7 +16,7 @@ from typing import TYPE_CHECKING
 import discord
 
 if TYPE_CHECKING:
-    from ..models import CommunityThreadGroupDelivery
+    from ..models import CommunityMessageGroupDelivery, CommunityThreadGroupDelivery
     from ..discord_bot import BridgeBot
 
 logger = logging.getLogger(__name__)
@@ -199,3 +200,70 @@ class DiscordFanout:
                     delivery.discord_thread_id,
                 )
         return results
+
+    async def propagate_edit(
+        self,
+        *,
+        mirror_deliveries: list[CommunityMessageGroupDelivery],
+        new_content: str,
+    ) -> None:
+        """Edit all mirror Discord messages concurrently with the new content.
+
+        Uses asyncio.gather with return_exceptions=True so individual mirror
+        failures are collected and logged without blocking the remaining edits.
+        The caller is responsible for sending the AP Update regardless of
+        whether any individual mirror edit failed.
+        """
+        async def _edit_one(delivery: CommunityMessageGroupDelivery) -> None:
+            try:
+                thread = await self.bot.get_thread_by_id(delivery.discord_thread_id)
+                message = await thread.fetch_message(delivery.discord_message_id)
+                await message.edit(content=new_content)
+                logger.info(
+                    "Edited mirror message %s in thread %s",
+                    delivery.discord_message_id,
+                    delivery.discord_thread_id,
+                )
+            except Exception:
+                logger.exception(
+                    "Failed to edit mirror message %s in thread %s",
+                    delivery.discord_message_id,
+                    delivery.discord_thread_id,
+                )
+
+        # Run all mirror edits concurrently; return_exceptions=True ensures one
+        # Discord API failure does not cancel remaining concurrent edits.
+        await asyncio.gather(*[_edit_one(d) for d in mirror_deliveries], return_exceptions=True)
+
+    async def propagate_delete(
+        self,
+        *,
+        mirror_deliveries: list[CommunityMessageGroupDelivery],
+    ) -> None:
+        """Delete all mirror Discord messages concurrently.
+
+        Uses asyncio.gather with return_exceptions=True so individual mirror
+        failures are collected and logged without blocking the remaining deletes.
+        The caller is responsible for sending the AP Delete regardless of
+        whether any individual mirror delete failed.
+        """
+        async def _delete_one(delivery: CommunityMessageGroupDelivery) -> None:
+            try:
+                thread = await self.bot.get_thread_by_id(delivery.discord_thread_id)
+                message = await thread.fetch_message(delivery.discord_message_id)
+                await message.delete()
+                logger.info(
+                    "Deleted mirror message %s in thread %s",
+                    delivery.discord_message_id,
+                    delivery.discord_thread_id,
+                )
+            except Exception:
+                logger.exception(
+                    "Failed to delete mirror message %s in thread %s",
+                    delivery.discord_message_id,
+                    delivery.discord_thread_id,
+                )
+
+        # Run all mirror deletes concurrently; return_exceptions=True ensures one
+        # Discord API failure does not cancel remaining concurrent deletes.
+        await asyncio.gather(*[_delete_one(d) for d in mirror_deliveries], return_exceptions=True)

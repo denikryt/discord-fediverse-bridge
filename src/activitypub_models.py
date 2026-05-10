@@ -29,7 +29,14 @@ class ActivityPubEvent(BaseModel):
     # mismatched gateway payloads fail before side effects happen.
     model_config = ConfigDict(extra="forbid")
 
-    event_type: Literal["post.created", "comment.created"]
+    event_type: Literal[
+        "post.created",
+        "post.updated",
+        "post.deleted",
+        "comment.created",
+        "comment.updated",
+        "comment.deleted",
+    ]
     delivery_id: str
     occurred_at: datetime
     community_actor_id: str
@@ -40,10 +47,12 @@ class ActivityPubEvent(BaseModel):
     def validate_event_shape(self) -> "ActivityPubEvent":
         # The event type and object kind must stay in sync because downstream
         # handlers branch on that contract instead of re-inspecting payloads.
-        if self.event_type == "post.created" and self.object.kind != "post":
-            raise ValueError("post.created requires object.kind='post'")
-        if self.event_type == "comment.created" and self.object.kind != "comment":
-            raise ValueError("comment.created requires object.kind='comment'")
+        post_events = {"post.created", "post.updated", "post.deleted"}
+        comment_events = {"comment.created", "comment.updated", "comment.deleted"}
+        if self.event_type in post_events and self.object.kind != "post":
+            raise ValueError(f"{self.event_type} requires object.kind='post'")
+        if self.event_type in comment_events and self.object.kind != "comment":
+            raise ValueError(f"{self.event_type} requires object.kind='comment'")
         if self.event_type == "comment.created" and not self.object.post_ap_id:
             raise ValueError("comment.created requires object.post_ap_id")
         if self.event_type == "comment.created" and self.object.post_lemmy_id is None:
