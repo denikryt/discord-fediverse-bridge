@@ -13,11 +13,9 @@ import logging
 from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
-import discord as discord_lib
+import discord
 
 if TYPE_CHECKING:
-    import discord
-
     from ..activitypub_handlers import HandlerResult
     from ..activitypub_models import ActivityPubEvent
     from ..db import Database
@@ -121,7 +119,7 @@ def _resolve_inbound_reference(
     database: Database,
     parent_group: object,
     thread_delivery: object,
-) -> discord_lib.MessageReference | None:
+) -> discord.MessageReference | None:
     """Resolve the Discord reply reference for one inbound comment delivery.
 
     Returns a MessageReference when the parent message group has a delivery
@@ -138,7 +136,7 @@ def _resolve_inbound_reference(
         return None
     # fail_if_not_exists=False: send still lands even if the referenced
     # message was deleted; Discord just suppresses the reply banner.
-    return discord_lib.MessageReference(
+    return discord.MessageReference(
         message_id=delivery.discord_message_id,
         channel_id=thread_delivery.discord_thread_id,
         fail_if_not_exists=False,
