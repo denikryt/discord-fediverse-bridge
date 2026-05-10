@@ -76,6 +76,8 @@ async def main() -> None:
         bot=bot,
         community_runtime=community_runtime,
     )
+    # Inject runtime into bot so edit/delete handlers can call AP gateway
+    bot.set_runtime(runtime)
     http_app = create_http_app(runtime)
     http_server = uvicorn.Server(
         uvicorn.Config(

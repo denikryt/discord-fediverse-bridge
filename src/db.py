@@ -712,6 +712,13 @@ class Database:
                 )
             )
 
+    def get_thread_group_by_id(
+        self, thread_group_id: int
+    ) -> CommunityThreadGroup | None:
+        """Retrieve a thread group by its primary key ID."""
+        with self.session() as session:
+            return session.get(CommunityThreadGroup, thread_group_id)
+
     def get_thread_group_by_any_thread(
         self, discord_thread_id: int
     ) -> CommunityThreadGroup | None:
@@ -817,6 +824,13 @@ class Database:
             session.add(group)
             session.flush()
             return group
+
+    def get_message_group_by_id(
+        self, message_group_id: int
+    ) -> CommunityMessageGroup | None:
+        """Retrieve a message group by its primary key ID."""
+        with self.session() as session:
+            return session.get(CommunityMessageGroup, message_group_id)
 
     def get_message_group_by_source_message(
         self, source_message_id: int

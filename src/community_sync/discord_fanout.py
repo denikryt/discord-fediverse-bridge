@@ -219,6 +219,8 @@ class DiscordFanout:
                 thread = await self.bot.get_thread_by_id(delivery.discord_thread_id)
                 message = await thread.fetch_message(delivery.discord_message_id)
                 await message.edit(content=new_content)
+                # Track that we edited this message to dedup on_raw_message_edit events
+                self.bot.track_message_edit(delivery.discord_message_id)
                 logger.info(
                     "Edited mirror message %s in thread %s",
                     delivery.discord_message_id,
@@ -252,6 +254,8 @@ class DiscordFanout:
                 thread = await self.bot.get_thread_by_id(delivery.discord_thread_id)
                 message = await thread.fetch_message(delivery.discord_message_id)
                 await message.delete()
+                # Track that we deleted this message to dedup on_raw_message_delete events
+                self.bot.track_message_delete(delivery.discord_message_id)
                 logger.info(
                     "Deleted mirror message %s in thread %s",
                     delivery.discord_message_id,

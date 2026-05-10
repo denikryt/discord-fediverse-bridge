@@ -284,19 +284,8 @@ class CommunityRuntime:
             logger.info("Message %s already has a message group — skipping duplicate", message.id)
             return _ignored_result("duplicate_discord_message")
 
-        logger.info(
-            "[handle_discord_message] msg=%s thread=%s channel=%s author=%s",
-            message.id, message.channel.id,
-            getattr(message.channel, "parent_id", None),
-            getattr(getattr(message, "author", None), "id", None),
-        )
-
         # AP publish via existing service; return early on non-publish outcomes.
         result = await self.discord_publish_service.publish_thread_message(message=message)
-        logger.info(
-            "[handle_discord_message] publish result: status=%s reason=%s",
-            result.status, getattr(result, "reason", None),
-        )
         if result.status != "published":
             return result
 
@@ -305,10 +294,6 @@ class CommunityRuntime:
         thread = message.channel
         thread_group = self.database.get_thread_group_by_any_thread(thread.id)
         if thread_group is None:
-            logger.warning(
-                "[handle_discord_message] published to AP but no thread_group for thread=%s — fanout skipped",
-                thread.id,
-            )
             return result
 
         # Phase 9: Compute sibling deliveries = all threads in the group except the
@@ -319,10 +304,6 @@ class CommunityRuntime:
             d for d in self.database.get_thread_deliveries(thread_group.id)
             if d.discord_thread_id != thread.id
         ]
-        logger.info(
-            "[handle_discord_message] thread_group=%s message_thread=%s sibling_deliveries=%s",
-            thread_group.id, thread.id, [d.discord_thread_id for d in sibling_deliveries],
-        )
 
         # Resolve reply context from the source message's Discord reference.
         # This determines parent_message_group_id and the per-thread reference IDs
@@ -575,8 +556,6 @@ class CommunityRuntime:
         # Covers both source and mirror deliveries via the delivery table.
         message_group = self.database.get_message_group_by_delivered_message(message_id)
         if message_group is None:
-            # Unknown message — not in any delivery row; nothing to propagate.
-            logger.debug("No delivery row for message %s — skipping edit propagation", message_id)
             return
 
         # Mirror deliveries are the non-source copies that need to be updated.
@@ -598,13 +577,28 @@ class CommunityRuntime:
                 self.database, message_group
             )
             if actor_username:
-                await runtime.fedify_gateway.update_content(UpdateContentRequest(
-                    actor_username=actor_username,
-                    community_actor_url=message_group.community_actor_id,
-                    ap_object_id=message_group.ap_object_id,
-                    kind="comment" if message_group.source_thread_id else "post",
-                    body_markdown=new_content,
-                ))
+                try:
+                    # For comments, resolve the parent post AP object ID
+                    in_reply_to_object_id = None
+                    if message_group.parent_message_group_id:
+                        parent = self.database.get_message_group_by_id(message_group.parent_message_group_id)
+                        if parent:
+                            in_reply_to_object_id = parent.ap_object_id
+                    elif message_group.thread_group_id:
+                        thread_group = self.database.get_thread_group_by_id(message_group.thread_group_id)
+                        if thread_group:
+                            in_reply_to_object_id = thread_group.ap_object_id
+
+                    await runtime.fedify_gateway.update_content(UpdateContentRequest(
+                        actor_username=actor_username,
+                        community_actor_url=message_group.community_actor_id,
+                        ap_object_id=message_group.ap_object_id,
+                        kind="comment",
+                        body_markdown=new_content,
+                        in_reply_to_object_id=in_reply_to_object_id,
+                    ))
+                except Exception:
+                    logger.exception("Failed to send message edit to AP gateway")
 
     async def handle_discord_message_delete(
         self,
@@ -624,7 +618,6 @@ class CommunityRuntime:
 
         message_group = self.database.get_message_group_by_delivered_message(message_id)
         if message_group is None:
-            logger.debug("No delivery row for message %s — skipping delete propagation", message_id)
             return
 
         all_deliveries = self.database.get_message_deliveries(message_group.id)
@@ -638,11 +631,14 @@ class CommunityRuntime:
                 self.database, message_group
             )
             if actor_username:
-                await runtime.fedify_gateway.delete_content(DeleteContentRequest(
-                    actor_username=actor_username,
-                    community_actor_url=message_group.community_actor_id,
-                    ap_object_id=message_group.ap_object_id,
-                ))
+                try:
+                    await runtime.fedify_gateway.delete_content(DeleteContentRequest(
+                        actor_username=actor_username,
+                        community_actor_url=message_group.community_actor_id,
+                        ap_object_id=message_group.ap_object_id,
+                    ))
+                except Exception:
+                    logger.exception("Failed to send message delete to AP gateway")
 
     async def handle_inbound_post_update(
         self,
@@ -857,7 +853,7 @@ async def _resolve_actor_username(database: Database, message_group: object) -> 
         if mapping is None:
             return None
         user = session.scalar(
-            select(User).where(User.id == mapping.user_id)
+            select(User).where(User.actor_url == mapping.actor_url)
         )
         return user.activitypub_username if user else None
 

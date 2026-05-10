@@ -51,6 +51,9 @@ class UpdateContentRequest:
     body_markdown: str
     # title is required for posts; None for comments.
     title: str | None = None
+    # in_reply_to_object_id is required for comments to identify the parent post.
+    # Lemmy will not process comment updates without this field.
+    in_reply_to_object_id: str | None = None
 
 
 @dataclass(slots=True)
@@ -129,6 +132,7 @@ class FedifyGatewayClient:
                 "kind": request.kind,
                 "bodyMarkdown": request.body_markdown,
                 "title": request.title,
+                "inReplyToObjectId": request.in_reply_to_object_id,
             },
         )
         response.raise_for_status()

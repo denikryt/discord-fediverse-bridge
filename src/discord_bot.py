@@ -49,6 +49,11 @@ class BridgeBot(discord.Client):
         # Tracks thread IDs that have already been processed this session so
         # a second on_thread_create after lock cleanup still exits cleanly.
         self._synced_threads: set[int] = set()
+        # Dedup edit/delete events fired by mirror updates we just made.
+        # When we update a mirror message in Discord, Discord fires on_raw_message_edit.
+        # We track recently-edited message IDs to break the echo loop.
+        self._recent_edits: dict[int, float] = {}  # message_id -> timestamp
+        self._recent_deletes: dict[int, float] = {}  # message_id -> timestamp
 
     async def setup_hook(self) -> None:
         # setup_hook runs before the bot connects, making it the right place to
@@ -143,59 +148,114 @@ class BridgeBot(discord.Client):
         )
 
     async def on_raw_message_edit(self, payload: discord.RawMessageUpdateEvent) -> None:
-        """Forward an edited source Discord message to CommunityRuntime for propagation.
+        """Forward an edited Discord message to CommunityRuntime for propagation.
 
         Uses the raw event so edits fire for all messages, not just cached ones.
-        The mirror guard fires first: if the message belongs to a mirror delivery,
-        return immediately — mirror edits must not trigger a second AP Update.
+        Only processes Discord-originated messages (those in MessageMapping).
+        Inbound AP messages (starter threads from Lemmy) are handled via AP events,
+        not Discord edit events, so they're skipped here.
+
+        Dedup: when we edit a mirror message in Discord, Discord fires on_raw_message_edit.
+        We track recently-edited messages to avoid re-processing our own edits and
+        creating infinite loops (edit→fanout→edit→fanout...).
         """
+        import time
+        logger.info("[on_raw_message_edit] msg=%s", payload.message_id)
+
+        # Dedup: if we edited this message recently, skip to avoid loop.
+        now = time.time()
+        if payload.message_id in self._recent_edits:
+            edit_age = now - self._recent_edits[payload.message_id]
+            if edit_age < 5.0:  # Within 5 seconds of our edit
+                logger.info("[on_raw_message_edit] skipping recent edit (age=%.1fs)", edit_age)
+                return
+
         delivery = self.database.get_message_delivery_by_message(payload.message_id)
         if delivery is None:
-            # Not a tracked delivery — nothing to propagate.
+            logger.info("[on_raw_message_edit] no delivery found for msg=%s", payload.message_id)
             return
-        if delivery.role == "mirror":
-            # Mirror message edit: the source thread already owns AP propagation.
+
+        # Only process Discord-originated messages (source or mirror role).
+        # Inbound AP messages should not be edited via Discord events.
+        if delivery.role == "inbound":
+            logger.info("[on_raw_message_edit] inbound message — skipping (handled via AP events)")
             return
 
         # Extract updated content from the raw payload data.
         # Discord raw edit events include the full message data dict.
         new_content = payload.data.get("content", "")
+        logger.info(
+            "[on_raw_message_edit] extracted content from payload: len=%d keys=%s",
+            len(new_content) if new_content else 0,
+            list(payload.data.keys()),
+        )
         if not new_content:
+            logger.info("[on_raw_message_edit] no content in payload for msg=%s", payload.message_id)
             return
 
         from .runtime import Runtime
         runtime = self._get_runtime()
         if runtime is None:
+            logger.info("[on_raw_message_edit] no runtime available for msg=%s", payload.message_id)
             return
 
-        await self.community_runtime.handle_discord_message_edit(
-            message_id=payload.message_id,
-            new_content=new_content,
-            runtime=runtime,
-        )
+        logger.info("[on_raw_message_edit] calling handle_discord_message_edit for msg=%s thread=%s", payload.message_id, payload.channel_id)
+        try:
+            await self.community_runtime.handle_discord_message_edit(
+                message_id=payload.message_id,
+                new_content=new_content,
+                runtime=runtime,
+            )
+        except Exception:
+            logger.exception("[on_raw_message_edit] exception in handle_discord_message_edit for msg=%s", payload.message_id)
 
     async def on_raw_message_delete(self, payload: discord.RawMessageDeleteEvent) -> None:
-        """Forward a deleted source Discord message to CommunityRuntime for propagation.
+        """Forward a deleted Discord message to CommunityRuntime for propagation.
 
         Uses the raw event so deletes fire for all messages, not just cached ones.
-        The mirror guard fires first: if the message belongs to a mirror delivery,
-        return immediately — mirror deletes must not trigger a second AP Delete.
+        Only processes Discord-originated messages (those in MessageMapping).
+        Inbound AP messages (starter threads from Lemmy) are handled via AP events,
+        not Discord delete events, so they're skipped here.
+
+        Dedup: when we delete a mirror message in Discord, Discord fires on_raw_message_delete.
+        We track recently-deleted messages to avoid re-processing our own deletes.
         """
+        import time
+        logger.info("[on_raw_message_delete] msg=%s", payload.message_id)
+
+        # Dedup: if we deleted this message recently, skip to avoid loop.
+        now = time.time()
+        if payload.message_id in self._recent_deletes:
+            delete_age = now - self._recent_deletes[payload.message_id]
+            if delete_age < 5.0:  # Within 5 seconds of our delete
+                logger.info("[on_raw_message_delete] skipping recent delete (age=%.1fs)", delete_age)
+                return
+
         delivery = self.database.get_message_delivery_by_message(payload.message_id)
         if delivery is None:
+            logger.info("[on_raw_message_delete] no delivery found for msg=%s", payload.message_id)
             return
-        if delivery.role == "mirror":
+
+        # Only process Discord-originated messages (source or mirror role).
+        # Inbound AP messages should not be deleted via Discord events.
+        if delivery.role == "inbound":
+            logger.info("[on_raw_message_delete] inbound message — skipping (handled via AP events)")
             return
 
         from .runtime import Runtime
         runtime = self._get_runtime()
         if runtime is None:
+            logger.info("[on_raw_message_delete] no runtime available for msg=%s", payload.message_id)
             return
 
-        await self.community_runtime.handle_discord_message_delete(
-            message_id=payload.message_id,
-            runtime=runtime,
-        )
+        logger.info("[on_raw_message_delete] calling handle_discord_message_delete for msg=%s thread=%s", payload.message_id, payload.channel_id)
+        try:
+            await self.community_runtime.handle_discord_message_delete(
+                message_id=payload.message_id,
+                runtime=runtime,
+            )
+        except Exception:
+            logger.exception("[on_raw_message_delete] exception in handle_discord_message_delete for msg=%s", payload.message_id)
 
     def _get_runtime(self) -> object | None:
         """Return the bridge Runtime instance, if available.
@@ -209,6 +269,16 @@ class BridgeBot(discord.Client):
     def set_runtime(self, runtime: object) -> None:
         """Inject the bridge Runtime so edit/delete handlers can call the AP gateway."""
         self._runtime = runtime
+
+    def track_message_edit(self, message_id: int) -> None:
+        """Record that we just edited this message to dedup on_raw_message_edit."""
+        import time
+        self._recent_edits[message_id] = time.time()
+
+    def track_message_delete(self, message_id: int) -> None:
+        """Record that we just deleted this message to dedup on_raw_message_delete."""
+        import time
+        self._recent_deletes[message_id] = time.time()
 
     async def _fetch_starter_message(self, thread: discord.Thread) -> discord.Message | None:
         # Discord APIs are inconsistent here, so we try the direct starter

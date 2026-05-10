@@ -257,7 +257,7 @@ export async function updateContent(
       url: objectId,
     });
   } else {
-    object = new Note({
+    const noteParams: ConstructorParameters<typeof Note>[0] = {
       id: objectId,
       attribution: actorUri,
       audience: community,
@@ -266,7 +266,13 @@ export async function updateContent(
       source,
       content: htmlContent,
       updated,
-    });
+    };
+    // For comments, inReplyTo is required by Lemmy to identify the parent post
+    // Lemmy expects inReplyTo as an array of URLs
+    if (request.inReplyToObjectId) {
+      noteParams.replyTarget = new URL(request.inReplyToObjectId);
+    }
+    object = new Note(noteParams);
   }
 
   const activity = new Update({
@@ -281,11 +287,16 @@ export async function updateContent(
     actorUsername: request.actorUsername,
     kind: request.kind,
     apObjectId: request.apObjectId,
+    inReplyToObjectId: request.inReplyToObjectId,
+    bodyMarkdown: request.bodyMarkdown,
     communityId,
     activityId: activityId.toString(),
   });
 
   try {
+    const activityJson = await activity.toJsonLd();
+    console.log("[Update] Activity JSON-LD (before sendActivity):", JSON.stringify(activityJson, null, 2));
+
     await ctx.sendActivity(
       { username: request.actorUsername },
       { id: new URL(communityId), inboxId: new URL(inboxUrl) },

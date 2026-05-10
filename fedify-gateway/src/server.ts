@@ -251,6 +251,10 @@ app.post("/update", async (context) => {
         typeof payload.title === "string" && payload.title.length > 0
           ? payload.title
           : null,
+      inReplyToObjectId:
+        typeof payload.inReplyToObjectId === "string" && payload.inReplyToObjectId.length > 0
+          ? payload.inReplyToObjectId
+          : null,
     });
     return context.json({ status: "ok" });
   } catch (error) {

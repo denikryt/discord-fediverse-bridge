@@ -65,6 +65,9 @@ export interface UpdateContentRequest {
   bodyMarkdown: string;
   // title is required for posts only; ignored for comments.
   title?: string | null;
+  // inReplyToObjectId is required for comments to identify the parent post.
+  // Lemmy will not process comment updates without this field.
+  inReplyToObjectId?: string | null;
 }
 
 export interface DeleteContentRequest {
