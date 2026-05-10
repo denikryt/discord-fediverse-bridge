@@ -252,63 +252,6 @@ async def test_phase2_duplicate_thread_create_is_ignored(tmp_path: Path) -> None
 
 
 @pytest.mark.asyncio
-async def test_phase2_mirror_thread_message_is_skipped_by_on_message_guard(tmp_path: Path) -> None:
-    """on_message skips messages in mirror threads to prevent double-publishing to AP.
-
-    System state: one accepted subscription for channel 100, one CommunityThreadGroup,
-    one mirror delivery row for thread 201 in channel 100.
-    Action: call BridgeBot.on_message (unbound, injected into a minimal namespace)
-    with a fake message in mirror thread 201.
-    Assert: community_runtime.handle_discord_message was not called.
-    """
-    database = _database(tmp_path)
-    _accepted_subscription(database, channel_id=100)
-    # Create a thread group and a mirror delivery for thread 201.
-    thread_group = database.create_thread_group(
-        community_actor_id=COMMUNITY_ACTOR_URL,
-        source_channel_id=100,
-        source_thread_id=200,
-        source_starter_message_id=300,
-    )
-    database.add_thread_delivery(
-        thread_group_id=thread_group.id,
-        discord_channel_id=100,
-        discord_thread_id=201,
-        discord_starter_message_id=501,
-        role="mirror",
-    )
-
-    from src.discord_bot import BridgeBot
-
-    mock_runtime = MagicMock()
-    mock_runtime.handle_discord_message = AsyncMock()
-    fake_bot = SimpleNamespace(
-        user=None,
-        database=database,
-        community_runtime=mock_runtime,
-    )
-
-    # Replace discord.Thread in the bot module with a plain class so isinstance
-    # passes for our fake channel without touching real Discord SDK objects.
-    # patch() restores the original value after the with-block — no runtime effect.
-    class FakeThread:
-        def __init__(self, id: int, parent_id: int) -> None:
-            self.id = id
-            self.parent_id = parent_id
-
-    fake_channel = FakeThread(id=201, parent_id=100)
-    fake_author = SimpleNamespace(id=999, bot=False)
-    fake_message = SimpleNamespace(author=fake_author, channel=fake_channel)
-
-    with patch("src.discord_bot.discord") as mock_discord:
-        mock_discord.Thread = FakeThread
-        await BridgeBot.on_message(fake_bot, fake_message)  # type: ignore[arg-type]
-
-    # handle_discord_message must NOT have been called — mirror guard fired.
-    mock_runtime.handle_discord_message.assert_not_called()
-
-
-@pytest.mark.asyncio
 async def test_phase2_mirror_failure_does_not_block_source_publish(tmp_path: Path) -> None:
     """A mirror delivery failure must not roll back the source AP publish.
 

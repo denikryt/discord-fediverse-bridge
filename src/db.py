@@ -712,6 +712,29 @@ class Database:
                 )
             )
 
+    def get_thread_group_by_any_thread(
+        self, discord_thread_id: int
+    ) -> CommunityThreadGroup | None:
+        """Load the thread group for any thread (source, mirror, or inbound).
+
+        Phase 9: Looks up the thread group via CommunityThreadGroupDelivery,
+        allowing mirror and inbound threads to resolve their post context.
+        Unlike get_thread_group_by_source_thread, this works for any role.
+        """
+        with self.session() as session:
+            delivery = session.scalar(
+                select(CommunityThreadGroupDelivery).where(
+                    CommunityThreadGroupDelivery.discord_thread_id == discord_thread_id
+                )
+            )
+            if delivery is None:
+                return None
+            return session.scalar(
+                select(CommunityThreadGroup).where(
+                    CommunityThreadGroup.id == delivery.thread_group_id
+                )
+            )
+
     def add_thread_delivery(
         self,
         *,

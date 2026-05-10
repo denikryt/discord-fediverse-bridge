@@ -77,16 +77,19 @@ def _resolve_reply_context(
             per_thread_references={d.discord_thread_id: None for d in sibling_deliveries},
         )
 
-    # Reply to the source thread's starter: each sibling uses its own starter
-    # message as the reference so the reply is anchored to the top of each mirror.
-    if referenced_id == thread_group.source_starter_message_id:
-        return _ReplyContext(
-            parent_message_group_id=None,
-            per_thread_references={
-                d.discord_thread_id: d.discord_starter_message_id
-                for d in sibling_deliveries
-            },
-        )
+    # Phase 9: Reply to any thread starter (source, mirror, or inbound): each
+    # sibling uses its own starter message as the reference so the reply is
+    # anchored to the top of each mirror.
+    thread_deliveries = database.get_thread_deliveries(thread_group.id)
+    for delivery in thread_deliveries:
+        if referenced_id == delivery.discord_starter_message_id:
+            return _ReplyContext(
+                parent_message_group_id=None,
+                per_thread_references={
+                    d.discord_thread_id: d.discord_starter_message_id
+                    for d in sibling_deliveries
+                },
+            )
 
     # Look up whether the referenced message belongs to a known message group.
     # This covers replies to previously mirrored messages (Phase 3+).
@@ -281,25 +284,45 @@ class CommunityRuntime:
             logger.info("Message %s already has a message group — skipping duplicate", message.id)
             return _ignored_result("duplicate_discord_message")
 
+        logger.info(
+            "[handle_discord_message] msg=%s thread=%s channel=%s author=%s",
+            message.id, message.channel.id,
+            getattr(message.channel, "parent_id", None),
+            getattr(getattr(message, "author", None), "id", None),
+        )
+
         # AP publish via existing service; return early on non-publish outcomes.
         result = await self.discord_publish_service.publish_thread_message(message=message)
+        logger.info(
+            "[handle_discord_message] publish result: status=%s reason=%s",
+            result.status, getattr(result, "reason", None),
+        )
         if result.status != "published":
             return result
 
-        # Resolve the thread group for the source thread. If none exists (pre-Phase-2
+        # Resolve the thread group for the originating thread. If none exists (pre-Phase-2
         # thread or legacy path), skip message-group creation and fanout entirely.
         thread = message.channel
-        thread_group = self.database.get_thread_group_by_source_thread(thread.id)
+        thread_group = self.database.get_thread_group_by_any_thread(thread.id)
         if thread_group is None:
+            logger.warning(
+                "[handle_discord_message] published to AP but no thread_group for thread=%s — fanout skipped",
+                thread.id,
+            )
             return result
 
-        # Compute sibling deliveries before creating the message group so that
-        # _resolve_reply_context can build the per_thread_references map, and the
-        # parent_message_group_id FK is available at group creation time.
+        # Phase 9: Compute sibling deliveries = all threads in the group except the
+        # originating thread (regardless of role). This enables mirror and inbound
+        # threads to fan out to all other threads, not just source threads receiving
+        # from mirrors.
         sibling_deliveries = [
             d for d in self.database.get_thread_deliveries(thread_group.id)
-            if d.role == "mirror"
+            if d.discord_thread_id != thread.id
         ]
+        logger.info(
+            "[handle_discord_message] thread_group=%s message_thread=%s sibling_deliveries=%s",
+            thread_group.id, thread.id, [d.discord_thread_id for d in sibling_deliveries],
+        )
 
         # Resolve reply context from the source message's Discord reference.
         # This determines parent_message_group_id and the per-thread reference IDs
@@ -452,6 +475,11 @@ class CommunityRuntime:
         """
         from ..activitypub_handlers import HandlerResult as _HandlerResult
 
+        logger.info(
+            "[handle_inbound_comment] ap_id=%s post_ap_id=%s parent_ap_id=%s",
+            event.object.ap_id, event.object.post_ap_id, event.object.parent_ap_id,
+        )
+
         # Dedup: if a message group already exists for this AP object, skip.
         if self.database.get_message_group_by_ap_object(event.object.ap_id) is not None:
             logger.info("Comment %s already mapped — skipping", event.object.ap_id)
@@ -468,6 +496,12 @@ class CommunityRuntime:
                 event.object.ap_id, event.object.post_ap_id,
             )
             return _HandlerResult(status="deferred", detail="parent post not mapped yet")
+
+        logger.info(
+            "[handle_inbound_comment] thread_group=%s deliveries=%s",
+            thread_group.id,
+            [d.discord_thread_id for d in self.database.get_thread_deliveries(thread_group.id)],
+        )
 
         bot = self.bot or runtime.bot
         await bot.wait_until_bridge_ready()

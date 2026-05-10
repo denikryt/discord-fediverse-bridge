@@ -153,10 +153,10 @@ class DiscordPublishService:
         if subscription.status != "accepted":
             return PublishResult(status="ignored", reason="subscription_not_active")
 
-        # Resolve post context from CommunityThreadGroup — the authoritative source
-        # from Phase 5 onward. If no thread group exists for this thread, the thread
+        # Resolve post context from CommunityThreadGroup — works for source, mirror,
+        # and inbound threads (Phase 9). If no thread group exists, the thread
         # predates Phase 2 or was never registered, so AP publish is not possible.
-        thread_group = self.database.get_thread_group_by_source_thread(getattr(thread, "id"))
+        thread_group = self.database.get_thread_group_by_any_thread(getattr(thread, "id"))
         if thread_group is None or thread_group.ap_object_id is None:
             return PublishResult(status="ignored", reason="no_post_context")
 
@@ -240,6 +240,9 @@ class DiscordPublishService:
         Uses CommunityMessageGroup.ap_object_id for replies to known prior messages.
         Falls back to the thread group's post AP object ID for root replies or
         when the referenced message has no known message group.
+
+        Phase 9: Also checks if the referenced message is any starter message in
+        the thread group (source, mirror, or inbound) — all treat as root reply.
         """
         post_ap_id = thread_group.ap_object_id
         reference = getattr(message, "reference", None)
@@ -249,10 +252,13 @@ class DiscordPublishService:
             # Root reply to the post.
             return post_ap_id
 
-        starter_id = getattr(thread_group, "source_starter_message_id", None)
-        if referenced_id == starter_id:
-            # Explicit reply to the thread starter — targets the post.
-            return post_ap_id
+        # Check if this is a reply to any starter message in the thread group.
+        # Phase 9: Generalised to handle replies to mirror/inbound starters.
+        thread_deliveries = self.database.get_thread_deliveries(thread_group.id)
+        for delivery in thread_deliveries:
+            if referenced_id == delivery.discord_starter_message_id:
+                # Reply to any thread starter (source, mirror, or inbound) — targets the post.
+                return post_ap_id
 
         # Look up whether the referenced Discord message belongs to a known
         # message group and resolve its AP object ID.
