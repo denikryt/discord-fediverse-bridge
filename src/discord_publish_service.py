@@ -153,10 +153,14 @@ class DiscordPublishService:
         if subscription.status != "accepted":
             return PublishResult(status="ignored", reason="subscription_not_active")
 
-        # Resolve post context from CommunityThreadGroup — works for source, mirror,
-        # and inbound threads (Phase 9). If no thread group exists, the thread
-        # predates Phase 2 or was never registered, so AP publish is not possible.
-        thread_group = self.database.get_thread_group_by_any_thread(getattr(thread, "id"))
+        # Resolve post context from CommunityThreadGroup. Phase 9: first try to find
+        # via any thread (source, mirror, inbound via delivery table). Fall back to
+        # source_thread lookup for legacy tests that don't create delivery rows.
+        thread_id = getattr(thread, "id")
+        thread_group = self.database.get_thread_group_by_any_thread(thread_id)
+        if thread_group is None:
+            # Fallback for legacy threads without delivery rows.
+            thread_group = self.database.get_thread_group_by_source_thread(thread_id)
         if thread_group is None or thread_group.ap_object_id is None:
             return PublishResult(status="ignored", reason="no_post_context")
 

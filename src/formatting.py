@@ -41,11 +41,9 @@ def format_lemmy_comment_for_discord(author: str, body: str, url: str) -> str:
 
 
 def format_discord_body_for_lemmy(author: str, content: str, prefix: str) -> str:
+    # Phase 9: Remove the "[bridge] From Discord user" header — just return the content.
     cleaned = normalize_text(content)
-    header = f"{prefix} From Discord user **{author}**"
-    if cleaned:
-        return f"{header}\n\n{cleaned}"
-    return header
+    return cleaned
 
 
 def format_thread_title_for_discord(title: str) -> str:
