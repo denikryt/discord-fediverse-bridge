@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from types import SimpleNamespace
+from unittest.mock import AsyncMock, patch
 
 import pytest
 
@@ -222,4 +223,149 @@ async def test_subscribe_channel_retries_failed_subscription(
         follow_activity_id=f"https://{BRIDGE_EXAMPLE_DOMAIN}/activities/follow/2",
         initiated_by_discord_user_id="1234567890",
         status="pending",
+    )
+
+
+# ---------------------------------------------------------------------------
+# Helpers for allowlist / lemmy_instance tests
+# ---------------------------------------------------------------------------
+
+
+def _settings(allowlist: list[str]) -> SimpleNamespace:
+    """Build a minimal settings stub with the given federation_allowlist."""
+    return SimpleNamespace(federation_allowlist=allowlist)
+
+
+def _make_interaction(lemmy_instance: str | None) -> AsyncMock:
+    """Build an interaction stub that carries a namespace.lemmy_instance value."""
+    mock = AsyncMock()
+    mock.response.send_message = AsyncMock()
+    mock.user.id = "1234567890"
+    mock.namespace = SimpleNamespace(lemmy_instance=lemmy_instance)
+    return mock
+
+
+# ---------------------------------------------------------------------------
+# Autocomplete + allowlist tests
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_subscribe_autocomplete_uses_lemmy_instance_url(
+    command_tree, database, lemmy, fedify_gateway
+):
+    # When lemmy_instance is provided and the allowlist is empty, autocomplete
+    # must create a temporary LemmyClient for that URL, query it, and return
+    # its communities. The default injected client must not be called.
+    remote_instance_url = "https://lemmy.world"
+    interaction = _make_interaction(remote_instance_url)
+    remote_communities = [
+        {
+            "community": {
+                "name": "worldnews",
+                "title": "World News",
+                "actor_id": f"{remote_instance_url}/c/worldnews",
+                "id": 42,
+            }
+        }
+    ]
+
+    settings = _settings([])
+    subscribe.register(command_tree, database, lemmy, fedify_gateway, settings)
+    autocomplete_fn = subscribe._community_autocomplete(lemmy, settings)
+
+    with patch("src.commands.subscribe.LemmyClient") as MockLemmyClient:
+        fake_remote = AsyncMock()
+        fake_remote.list_communities.return_value = remote_communities
+        MockLemmyClient.return_value = fake_remote
+
+        choices = await autocomplete_fn(interaction, "world")
+
+    MockLemmyClient.assert_called_once_with(remote_instance_url)
+    fake_remote.list_communities.assert_awaited_once_with(limit=50)
+    fake_remote.close.assert_awaited_once()
+    lemmy.list_communities.assert_not_awaited()
+
+    assert len(choices) == 1
+    assert choices[0].name == "World News (worldnews)"
+    assert choices[0].value == f"{remote_instance_url}/c/worldnews|worldnews|42"
+
+
+@pytest.mark.asyncio
+async def test_subscribe_autocomplete_falls_back_to_default_client(
+    command_tree, database, lemmy, fedify_gateway
+):
+    # When lemmy_instance is absent, autocomplete must use the injected default
+    # LemmyClient and must not construct a new one.
+    interaction = _make_interaction(None)
+    default_communities = [
+        {
+            "community": {
+                "name": "tech",
+                "title": "Technology",
+                "actor_id": f"https://{LEMMY_EXAMPLE_DOMAIN}/c/tech",
+                "id": 7,
+            }
+        }
+    ]
+    lemmy.list_communities.return_value = default_communities
+
+    settings = _settings([])
+    subscribe.register(command_tree, database, lemmy, fedify_gateway, settings)
+    autocomplete_fn = subscribe._community_autocomplete(lemmy, settings)
+
+    with patch("src.commands.subscribe.LemmyClient") as MockLemmyClient:
+        choices = await autocomplete_fn(interaction, "")
+
+    MockLemmyClient.assert_not_called()
+    lemmy.list_communities.assert_awaited_once_with(limit=50)
+
+    assert len(choices) == 1
+    assert choices[0].name == "Technology (tech)"
+    assert choices[0].value == f"https://{LEMMY_EXAMPLE_DOMAIN}/c/tech|tech|7"
+
+
+@pytest.mark.asyncio
+async def test_subscribe_autocomplete_rejects_unlisted_instance(
+    command_tree, database, lemmy, fedify_gateway
+):
+    # When the allowlist is non-empty and lemmy_instance is not in it,
+    # autocomplete must return an empty list without querying Lemmy.
+    interaction = _make_interaction("https://forbidden.instance")
+
+    settings = _settings(["allowed.example"])
+    subscribe.register(command_tree, database, lemmy, fedify_gateway, settings)
+    autocomplete_fn = subscribe._community_autocomplete(lemmy, settings)
+
+    with patch("src.commands.subscribe.LemmyClient") as MockLemmyClient:
+        choices = await autocomplete_fn(interaction, "")
+
+    MockLemmyClient.assert_not_called()
+    lemmy.list_communities.assert_not_awaited()
+    assert choices == []
+
+
+@pytest.mark.asyncio
+async def test_subscribe_channel_rejects_unlisted_lemmy_instance(
+    command_tree, interaction, forum_channel, database, lemmy, fedify_gateway
+):
+    # When lemmy_instance is provided but not in the allowlist, the command
+    # handler must return an ephemeral error before touching the DB or Lemmy.
+    community_actor_url = f"https://{LEMMY_EXAMPLE_DOMAIN}/c/hackers"
+    settings = _settings(["allowed.example"])
+    subscribe.register(command_tree, database, lemmy, fedify_gateway, settings)
+
+    command = command_tree.commands["subscribe-channel"]
+    await command.callback(
+        interaction,
+        forum_channel,
+        f"{community_actor_url}|hackers|777",
+        lemmy_instance="https://forbidden.instance",
+    )
+
+    database.create_subscription.assert_not_called()
+    lemmy.resolve_community_id.assert_not_awaited()
+    interaction.response.send_message.assert_awaited_once_with(
+        "Instance **forbidden.instance** is not in the federation allowlist.",
+        ephemeral=True,
     )

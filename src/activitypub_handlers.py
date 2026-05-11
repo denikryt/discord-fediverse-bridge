@@ -8,6 +8,7 @@ from .activitypub_models import (
     BridgeGatewayEvent,
     FollowLifecycleEvent,
 )
+from .federation_policy import is_instance_allowed
 from .runtime import Runtime
 
 logger = logging.getLogger(__name__)
@@ -24,6 +25,20 @@ class HandlerResult:
 async def dispatch_activitypub_event(
     event: BridgeGatewayEvent, runtime: Runtime
 ) -> HandlerResult:
+    # follow.accepted is exempt: it is a lifecycle response to our own outbound
+    # Follow and must always be processed regardless of the allowlist.
+    if event.event_type != "follow.accepted":
+        # settings may be absent in test runtimes that pre-date allowlist support;
+        # treat a missing settings as an empty allowlist (allow all).
+        allowlist = getattr(getattr(runtime, "settings", None), "federation_allowlist", [])
+        if not is_instance_allowed(event.community_actor_id, allowlist):
+            logger.debug(
+                "Skipping %s from non-allowlisted instance: %s",
+                event.event_type,
+                event.community_actor_id,
+            )
+            return HandlerResult(status="skipped", detail="instance not in allowlist")
+
     # Keep dispatch explicit so supported inbound event types stay obvious.
     if event.event_type == "post.created":
         return await handle_post_created(event, runtime)

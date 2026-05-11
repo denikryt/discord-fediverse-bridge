@@ -9,8 +9,10 @@ import discord
 from discord import app_commands
 from discordops import run_operation_definition_async
 
+from ..config import Settings
 from ..db import Database
 from ..fedify_gateway_client import FedifyGatewayClient
+from ..federation_policy import is_instance_allowed
 from ..lemmy_client import LemmyClient
 from ..operations import SubscribeInput, subscribe_operation
 
@@ -22,20 +24,41 @@ def register(
     database: Database,
     lemmy: LemmyClient,
     fedify_gateway: FedifyGatewayClient,
+    settings: Settings | None = None,
 ) -> None:
     """Register the subscribe-channel slash command on the Discord tree."""
+    # settings is optional for backwards compatibility with tests that do not
+    # need allowlist enforcement. When None, an empty allowlist is used (allow all).
+    allowlist = settings.federation_allowlist if settings is not None else []
+
     # The registered slash command stays focused on Discord parsing and Lemmy
     # lookup, while the operation layer owns registration and follow lifecycle
     # policy so runtime decisions stay testable without Discord adapters.
     @tree.command(name="subscribe-channel", description="Subscribe a forum channel to a Lemmy community")
-    @app_commands.describe(channel="Forum channel to subscribe", community="Lemmy community")
-    @app_commands.autocomplete(community=_community_autocomplete(lemmy))
+    @app_commands.describe(
+        channel="Forum channel to subscribe",
+        community="Lemmy community",
+        lemmy_instance="Optional: Lemmy instance URL to search communities from (e.g. https://lemmy.world)",
+    )
+    @app_commands.autocomplete(community=_community_autocomplete(lemmy, settings))
     @app_commands.default_permissions(manage_channels=True)
     async def subscribe_channel(
         interaction: discord.Interaction,
         channel: discord.ForumChannel,
         community: str,
+        lemmy_instance: str | None = None,
     ) -> None:
+        # If a remote instance was specified, verify it is in the allowlist before
+        # doing any Lemmy lookups or DB mutations.
+        if lemmy_instance:
+            if not is_instance_allowed(lemmy_instance, allowlist):
+                hostname = urlparse(lemmy_instance).hostname or lemmy_instance
+                await interaction.response.send_message(
+                    f"Instance **{hostname}** is not in the federation allowlist.",
+                    ephemeral=True,
+                )
+                return
+
         # The autocomplete payload encodes both the actor ID and the numeric
         # community ID so successful selections avoid a second Lemmy round-trip.
         actor_id, community_name, community_id_str = _parse_community_value(community)
@@ -81,19 +104,47 @@ def register(
             logger.info("Sent bridge follow for channel %s to community %s", channel.id, actor_id)
 
 
-def _community_autocomplete(lemmy: LemmyClient):
-    """Build the Discord autocomplete callback for Lemmy communities."""
+def _community_autocomplete(lemmy: LemmyClient, settings: Settings | None = None):
+    """Build the Discord autocomplete callback for Lemmy communities.
+
+    When settings is provided, the federation_allowlist is enforced: if the user
+    has typed a lemmy_instance value that is not in the allowlist, an empty list
+    is returned immediately without querying Lemmy.
+
+    When lemmy_instance is set and allowed, a temporary LemmyClient is created
+    for that instance URL and closed after the query so no connection is leaked.
+    """
+    allowlist = settings.federation_allowlist if settings is not None else []
+
     # Autocomplete keeps the existing compact encoding so the command handler
     # can recover actor ID, short name, and numeric ID from one selection.
     async def autocomplete(
         interaction: discord.Interaction,
         current: str,
     ) -> list[app_commands.Choice[str]]:
-        try:
-            communities = await lemmy.list_communities(limit=50)
-        except Exception:
-            logger.exception("Failed to fetch communities for autocomplete")
-            return []
+        instance_url: str | None = getattr(interaction.namespace, "lemmy_instance", None)
+
+        if instance_url:
+            # Reject the instance early if it is not in the allowlist, so the
+            # user gets no results rather than a cryptic network error.
+            if not is_instance_allowed(instance_url, allowlist):
+                return []
+            # Create a temporary client for the remote instance and close it
+            # in a finally block to avoid leaking connections.
+            remote_client = LemmyClient(instance_url)
+            try:
+                communities = await remote_client.list_communities(limit=50)
+            except Exception:
+                logger.exception("Failed to fetch communities from %s for autocomplete", instance_url)
+                return []
+            finally:
+                await remote_client.close()
+        else:
+            try:
+                communities = await lemmy.list_communities(limit=50)
+            except Exception:
+                logger.exception("Failed to fetch communities for autocomplete")
+                return []
 
         choices = []
         for item in communities:

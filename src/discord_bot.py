@@ -60,7 +60,7 @@ class BridgeBot(discord.Client):
         # register slash commands and sync the tree with Discord.
         from .commands import list_subs, register, subscribe, unsubscribe
         register.register(self.tree, self.settings)
-        subscribe.register(self.tree, self.database, self.lemmy, self.fedify_gateway)
+        subscribe.register(self.tree, self.database, self.lemmy, self.fedify_gateway, self.settings)
         unsubscribe.register(self.tree, self.database)
         list_subs.register(self.tree, self.database)
         await self.tree.sync()

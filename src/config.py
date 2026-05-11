@@ -1,4 +1,4 @@
-from pydantic import Field, HttpUrl
+from pydantic import Field, HttpUrl, field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -24,6 +24,17 @@ class Settings(BaseSettings):
     fedify_origin: HttpUrl = Field(default="http://127.0.0.1:3000", alias="FEDIFY_ORIGIN")
     bridge_display_prefix: str = Field(default="[bridge]", alias="BRIDGE_DISPLAY_PREFIX")
     log_level: str = Field(default="INFO", alias="LOG_LEVEL")
+    # Comma-separated list of allowed Lemmy instance hostnames (e.g. "lemmy.world,beehaw.org").
+    # Empty means all instances are allowed (open federation).
+    federation_allowlist: list[str] = Field(default_factory=list, alias="FEDERATION_ALLOWLIST")
+
+    @field_validator("federation_allowlist", mode="before")
+    @classmethod
+    def _split_allowlist(cls, v: object) -> list[str]:
+        # Env vars arrive as a single string; split on commas and drop empty entries.
+        if isinstance(v, str):
+            return [entry.strip() for entry in v.split(",") if entry.strip()]
+        return list(v) if v else []
 
     @property
     def normalized_lemmy_base_url(self) -> str:
