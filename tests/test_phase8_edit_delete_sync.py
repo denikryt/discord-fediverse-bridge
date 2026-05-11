@@ -589,8 +589,8 @@ async def test_inbound_comment_update_for_unknown_ap_id_returns_skipped(tmp_path
 
 
 @pytest.mark.asyncio
-async def test_inbound_comment_delete_removes_all_discord_deliveries(tmp_path: Path) -> None:
-    """Inbound comment.deleted deletes all delivery messages in the message group."""
+async def test_inbound_comment_delete_marks_all_discord_deliveries_deleted(tmp_path: Path) -> None:
+    """Inbound comment.deleted edits all delivery messages to '*deleted by creator*'."""
     database = _database(tmp_path)
     msg_id_1 = 300
     msg_id_2 = 400
@@ -649,22 +649,36 @@ async def test_inbound_comment_delete_removes_all_discord_deliveries(tmp_path: P
     result = await community_runtime.handle_inbound_comment_delete(event, runtime_obj)
 
     assert result.status == "processed"
-    # Both Discord messages must have been deleted.
+    # Both Discord messages must be edited to the deletion placeholder, not deleted.
     thread1.fetch_message.assert_awaited_once_with(msg_id_1)
-    msg1.delete.assert_awaited_once()
+    msg1.edit.assert_awaited_once_with(content="*deleted by creator*")
+    msg1.delete.assert_not_awaited()
     thread2.fetch_message.assert_awaited_once_with(msg_id_2)
-    msg2.delete.assert_awaited_once()
+    msg2.edit.assert_awaited_once_with(content="*deleted by creator*")
+    msg2.delete.assert_not_awaited()
 
 
 @pytest.mark.asyncio
-async def test_inbound_post_delete_removes_all_thread_deliveries(tmp_path: Path) -> None:
-    """Inbound post.deleted deletes all Discord threads in the thread group."""
+async def test_inbound_post_delete_marks_all_thread_starters_deleted(tmp_path: Path) -> None:
+    """Inbound post.deleted edits all thread starter messages to '*deleted by creator*'."""
     database = _database(tmp_path)
     thread_id_1 = 200
     thread_id_2 = 500
+    starter_msg_id_1 = 999
+    starter_msg_id_2 = 998
 
-    thread1 = SimpleNamespace(id=thread_id_1, delete=AsyncMock())
-    thread2 = SimpleNamespace(id=thread_id_2, delete=AsyncMock())
+    starter1 = SimpleNamespace(id=starter_msg_id_1, edit=AsyncMock(), delete=AsyncMock())
+    starter2 = SimpleNamespace(id=starter_msg_id_2, edit=AsyncMock(), delete=AsyncMock())
+    thread1 = SimpleNamespace(
+        id=thread_id_1,
+        fetch_message=AsyncMock(return_value=starter1),
+        delete=AsyncMock(),
+    )
+    thread2 = SimpleNamespace(
+        id=thread_id_2,
+        fetch_message=AsyncMock(return_value=starter2),
+        delete=AsyncMock(),
+    )
     bot = _fake_bot(threads={thread_id_1: thread1, thread_id_2: thread2})
 
     community_runtime = _community_runtime(database, bot=bot)
@@ -678,12 +692,12 @@ async def test_inbound_post_delete_removes_all_thread_deliveries(tmp_path: Path)
     database.add_thread_delivery(
         thread_group_id=thread_group.id,
         discord_channel_id=100, discord_thread_id=thread_id_1,
-        discord_starter_message_id=999, role="inbound",
+        discord_starter_message_id=starter_msg_id_1, role="inbound",
     )
     database.add_thread_delivery(
         thread_group_id=thread_group.id,
         discord_channel_id=101, discord_thread_id=thread_id_2,
-        discord_starter_message_id=998, role="inbound",
+        discord_starter_message_id=starter_msg_id_2, role="inbound",
     )
 
     event = _fake_update_event(
@@ -695,9 +709,13 @@ async def test_inbound_post_delete_removes_all_thread_deliveries(tmp_path: Path)
     result = await community_runtime.handle_inbound_post_delete(event, runtime_obj)
 
     assert result.status == "processed"
-    # Both Discord threads must have been deleted.
-    thread1.delete.assert_awaited_once()
-    thread2.delete.assert_awaited_once()
+    # Both starter messages must be edited to the deletion placeholder, not threads deleted.
+    thread1.fetch_message.assert_awaited_once_with(starter_msg_id_1)
+    starter1.edit.assert_awaited_once_with(content="*deleted by creator*")
+    thread1.delete.assert_not_awaited()
+    thread2.fetch_message.assert_awaited_once_with(starter_msg_id_2)
+    starter2.edit.assert_awaited_once_with(content="*deleted by creator*")
+    thread2.delete.assert_not_awaited()
 
 
 # ---------------------------------------------------------------------------
@@ -774,7 +792,7 @@ async def test_dispatch_routes_post_deleted_with_existing_thread_group(tmp_path:
     result = await dispatch_activitypub_event(event, runtime_obj)
 
     assert result.status == "processed"
-    fake_thread.delete.assert_awaited_once()
+    fake_thread.delete.assert_not_awaited()
 
 
 # ---------------------------------------------------------------------------

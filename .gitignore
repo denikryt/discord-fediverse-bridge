@@ -10,3 +10,4 @@ dev/
 AGENTS.md
 *sqlite3
 CLAUDE.md
+.claude/

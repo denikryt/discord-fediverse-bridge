@@ -692,10 +692,11 @@ class CommunityRuntime:
         event: ActivityPubEvent,
         runtime: Runtime,
     ) -> HandlerResult:
-        """Handle an inbound AP Delete for a post by deleting all Discord threads.
+        """Handle an inbound AP Delete for a post by marking all thread starter messages deleted.
 
-        Resolves thread group via ap_object_id. Missing deliveries are skipped.
-        Requires MANAGE_THREADS permission; failure is logged as a partial failure.
+        Edits each thread's starter message to '*deleted by creator*' rather than
+        deleting the thread, so the conversation history is preserved in Discord.
+        Resolves thread group via ap_object_id. Returns 'skipped' if not found.
         """
         from ..activitypub_handlers import HandlerResult as _HandlerResult
 
@@ -708,21 +709,23 @@ class CommunityRuntime:
 
         bot = self.bot or runtime.bot
 
-        async def _delete_thread(delivery: object) -> None:
+        async def _mark_starter_deleted(delivery: object) -> None:
             try:
                 thread = await bot.get_thread_by_id(delivery.discord_thread_id)
-                await thread.delete()
+                starter = await thread.fetch_message(delivery.discord_starter_message_id)
+                await starter.edit(content="*deleted by creator*")
                 logger.info(
-                    "Deleted inbound post thread %s", delivery.discord_thread_id
+                    "Marked inbound post starter deleted in thread %s", delivery.discord_thread_id
                 )
             except Exception:
                 logger.exception(
-                    "Failed to delete inbound post thread %s", delivery.discord_thread_id
+                    "Failed to mark inbound post starter deleted in thread %s",
+                    delivery.discord_thread_id,
                 )
 
-        # Delete all threads concurrently; each failure is logged without aborting others.
+        # Edit all starters concurrently; each failure is logged without aborting others.
         await asyncio.gather(
-            *[_delete_thread(d) for d in thread_deliveries],
+            *[_mark_starter_deleted(d) for d in thread_deliveries],
             return_exceptions=True,
         )
 
@@ -784,10 +787,11 @@ class CommunityRuntime:
         event: ActivityPubEvent,
         runtime: Runtime,
     ) -> HandlerResult:
-        """Handle an inbound AP Delete for a comment by deleting all Discord message deliveries.
+        """Handle an inbound AP Delete for a comment by marking all Discord messages deleted.
 
-        Resolves message group via ap_object_id. Missing deliveries are skipped without error.
-        Deletes all delivery messages concurrently via asyncio.gather.
+        Edits each delivery message to '*deleted by creator*' rather than deleting it,
+        so the conversation thread structure is preserved in Discord.
+        Resolves message group via ap_object_id. Returns 'skipped' if not found.
         """
         from ..activitypub_handlers import HandlerResult as _HandlerResult
 
@@ -803,25 +807,25 @@ class CommunityRuntime:
 
         bot = self.bot or runtime.bot
 
-        async def _delete_message(delivery: object) -> None:
+        async def _mark_message_deleted(delivery: object) -> None:
             try:
                 thread = await bot.get_thread_by_id(delivery.discord_thread_id)
                 message = await thread.fetch_message(delivery.discord_message_id)
-                await message.delete()
+                await message.edit(content="*deleted by creator*")
                 logger.info(
-                    "Deleted inbound comment message %s in thread %s",
+                    "Marked inbound comment message %s deleted in thread %s",
                     delivery.discord_message_id,
                     delivery.discord_thread_id,
                 )
             except Exception:
                 logger.exception(
-                    "Failed to delete inbound comment message %s in thread %s",
+                    "Failed to mark inbound comment message %s deleted in thread %s",
                     delivery.discord_message_id,
                     delivery.discord_thread_id,
                 )
 
         await asyncio.gather(
-            *[_delete_message(d) for d in deliveries],
+            *[_mark_message_deleted(d) for d in deliveries],
             return_exceptions=True,
         )
 
