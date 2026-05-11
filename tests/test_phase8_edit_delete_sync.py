@@ -734,10 +734,27 @@ async def test_dispatch_routes_comment_updated_to_handler(tmp_path: Path) -> Non
 
 
 @pytest.mark.asyncio
-async def test_dispatch_routes_post_deleted_to_handler(tmp_path: Path) -> None:
-    """dispatch_activitypub_event routes post.deleted to handle_inbound_post_delete."""
+async def test_dispatch_routes_post_deleted_with_existing_thread_group(tmp_path: Path) -> None:
+    """dispatch_activitypub_event routes post.deleted to handle_inbound_post_delete, deletes thread."""
     database = _database(tmp_path)
-    community_runtime = _community_runtime(database)
+    thread_id = 200
+
+    fake_thread = SimpleNamespace(id=thread_id, delete=AsyncMock())
+    bot = _fake_bot(threads={thread_id: fake_thread})
+    community_runtime = _community_runtime(database, bot=bot)
+
+    # Seed a real thread group with one inbound delivery.
+    thread_group = database.create_thread_group(
+        community_actor_id=COMMUNITY_ACTOR_URL,
+        source_channel_id=None, source_thread_id=None,
+        source_starter_message_id=None,
+        ap_activity_id="delivery-post-dispatch", ap_object_id=POST_AP_ID,
+    )
+    database.add_thread_delivery(
+        thread_group_id=thread_group.id,
+        discord_channel_id=100, discord_thread_id=thread_id,
+        discord_starter_message_id=999, role="inbound",
+    )
 
     event = _fake_update_event(
         event_type="post.deleted",
@@ -754,6 +771,117 @@ async def test_dispatch_routes_post_deleted_to_handler(tmp_path: Path) -> None:
         fedify_gateway=AsyncMock(),
         bot=SimpleNamespace(wait_until_bridge_ready=wait_until_bridge_ready),
     )
-    # No thread group exists → should return skipped, not raise.
+    result = await dispatch_activitypub_event(event, runtime_obj)
+
+    assert result.status == "processed"
+    fake_thread.delete.assert_awaited_once()
+
+
+# ---------------------------------------------------------------------------
+# Inbound AP post.updated tests (new — no coverage existed before)
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_inbound_post_update_edits_discord_thread_starters(tmp_path: Path) -> None:
+    """Inbound post.updated edits the starter message in all thread deliveries."""
+    database = _database(tmp_path)
+    thread_id_1 = 200
+    thread_id_2 = 500
+    starter_msg_id_1 = 999
+    starter_msg_id_2 = 998
+
+    # Each fake thread exposes fetch_message for the starter and an editable stub.
+    starter1 = SimpleNamespace(id=starter_msg_id_1, edit=AsyncMock(), delete=AsyncMock())
+    starter2 = SimpleNamespace(id=starter_msg_id_2, edit=AsyncMock(), delete=AsyncMock())
+    thread1 = SimpleNamespace(
+        id=thread_id_1,
+        fetch_message=AsyncMock(return_value=starter1),
+        delete=AsyncMock(),
+    )
+    thread2 = SimpleNamespace(
+        id=thread_id_2,
+        fetch_message=AsyncMock(return_value=starter2),
+        delete=AsyncMock(),
+    )
+    bot = _fake_bot(threads={thread_id_1: thread1, thread_id_2: thread2})
+    community_runtime = _community_runtime(database, bot=bot)
+
+    # Seed thread group with two inbound deliveries, each having its own starter message.
+    thread_group = database.create_thread_group(
+        community_actor_id=COMMUNITY_ACTOR_URL,
+        source_channel_id=None, source_thread_id=None,
+        source_starter_message_id=None,
+        ap_activity_id="delivery-post-update", ap_object_id=POST_AP_ID,
+    )
+    database.add_thread_delivery(
+        thread_group_id=thread_group.id,
+        discord_channel_id=100, discord_thread_id=thread_id_1,
+        discord_starter_message_id=starter_msg_id_1, role="inbound",
+    )
+    database.add_thread_delivery(
+        thread_group_id=thread_group.id,
+        discord_channel_id=101, discord_thread_id=thread_id_2,
+        discord_starter_message_id=starter_msg_id_2, role="inbound",
+    )
+
+    event = _fake_update_event(
+        event_type="post.updated",
+        ap_id=POST_AP_ID,
+        kind="post",
+        body_markdown="New post body",
+    )
+    runtime_obj = _fake_runtime()
+    result = await community_runtime.handle_inbound_post_update(event, runtime_obj)
+
+    assert result.status == "processed"
+    # Both starter messages must have been fetched and edited.
+    thread1.fetch_message.assert_awaited_once_with(starter_msg_id_1)
+    starter1.edit.assert_awaited_once_with(content="New post body")
+    thread2.fetch_message.assert_awaited_once_with(starter_msg_id_2)
+    starter2.edit.assert_awaited_once_with(content="New post body")
+
+
+@pytest.mark.asyncio
+async def test_inbound_post_update_for_unknown_ap_id_returns_skipped(tmp_path: Path) -> None:
+    """Inbound post.updated for an unmapped post returns skipped with no Discord calls."""
+    database = _database(tmp_path)
+    bot = _fake_bot(threads={})
+    community_runtime = _community_runtime(database, bot=bot)
+
+    event = _fake_update_event(
+        event_type="post.updated",
+        ap_id=POST_AP_ID,
+        kind="post",
+        body_markdown="Updated",
+    )
+    runtime_obj = _fake_runtime()
+    result = await community_runtime.handle_inbound_post_update(event, runtime_obj)
+
+    assert result.status == "skipped"
+
+
+@pytest.mark.asyncio
+async def test_dispatch_routes_post_updated_to_handler(tmp_path: Path) -> None:
+    """dispatch_activitypub_event routes post.updated to handle_inbound_post_update."""
+    database = _database(tmp_path)
+    community_runtime = _community_runtime(database)
+
+    event = _fake_update_event(
+        event_type="post.updated",
+        ap_id=POST_AP_ID,
+        kind="post",
+    )
+
+    async def wait_until_bridge_ready() -> None:
+        pass
+
+    runtime_obj = SimpleNamespace(
+        community_runtime=community_runtime,
+        database=database,
+        fedify_gateway=AsyncMock(),
+        bot=SimpleNamespace(wait_until_bridge_ready=wait_until_bridge_ready),
+    )
+    # No thread group for this AP ID → routes to handler, handler returns skipped.
     result = await dispatch_activitypub_event(event, runtime_obj)
     assert result.status == "skipped"

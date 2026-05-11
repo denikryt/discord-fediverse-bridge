@@ -7,15 +7,15 @@ export async function deliverEventToPythonBridge(
 ): Promise<void> {
   // The Python bridge is the single downstream consumer, so this helper owns
   // the authenticated POST contract and its diagnostic logging.
-  const isDebug = process.env.FEDIFY_LOG_LEVEL === "debug";
+  const isDebug = process.env.LOG_LEVEL === "debug";
   const body = JSON.stringify(event);
-  console.log("[Bridge] Sending event:", {
-    url: eventsUrl,
-    deliveryId: event.delivery_id,
-    eventType: event.event_type,
-    objectId: describeEventObject(event),
-  });
   if (isDebug) {
+    console.log("[Bridge][debug] Sending event:", {
+      url: eventsUrl,
+      deliveryId: event.delivery_id,
+      eventType: event.event_type,
+      objectId: describeEventObject(event),
+    });
     console.log("[Bridge][debug] Event payload:", body);
     console.log("[Bridge][debug] Event body size:", body.length);
   }
@@ -38,11 +38,6 @@ export async function deliverEventToPythonBridge(
     );
   }
 
-  console.log("[Bridge] Response status:", {
-    deliveryId: event.delivery_id,
-    status: response.status,
-    statusText: response.statusText,
-  });
   let parsedResponse: { status?: string; detail?: string } | null = null;
   try {
     parsedResponse = (await response.clone().json()) as {
@@ -62,12 +57,10 @@ export async function deliverEventToPythonBridge(
       `Python bridge rejected delivery ${event.delivery_id}: ${response.status} ${response.statusText} ${responseBody}`,
     );
   }
-  console.log("[Bridge] Event delivered:", {
-    deliveryId: event.delivery_id,
-    objectId: describeEventObject(event),
-    resultStatus: parsedResponse?.status ?? "ok",
-    resultDetail: parsedResponse?.detail ?? null,
-  });
+
+  const resultStatus = parsedResponse?.status ?? "ok";
+  const objectId = describeEventObject(event);
+  console.log(`[Bridge] ${event.event_type} delivered — ${objectId} (${resultStatus})`);
 }
 
 function describeEventObject(event: InternalBridgeEvent): string {

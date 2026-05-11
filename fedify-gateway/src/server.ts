@@ -316,6 +316,7 @@ app.use(async (context, next) => {
       });
       if (isDebug) {
         console.log("[HTTP][debug] Inbox payload summary:", payloadSummary);
+        console.log("[HTTP][debug] Inbox full body:", JSON.stringify(payloadSummary.rawParsed, null, 2));
       }
     } else if (isDebug) {
       console.log("[HTTP][debug] Inbox payload summary failed");
@@ -324,8 +325,8 @@ app.use(async (context, next) => {
 
   await next();
 
-  if (method === "POST" && path === "/inbox") {
-    console.log(`[HTTP] Response status: ${context.res.status}`);
+  if (isDebug && method === "POST" && path === "/inbox") {
+    console.log(`[HTTP][debug] Response status: ${context.res.status}`);
   }
 });
 
@@ -454,6 +455,7 @@ interface InboxPayloadSummary {
   objectId: string | null;
   nestedObjectType: string | null;
   nestedObjectId: string | null;
+  rawParsed: Record<string, unknown>;
 }
 
 async function readInboxPayloadSummary(
@@ -462,7 +464,7 @@ async function readInboxPayloadSummary(
   try {
     const rawBody = await context.req.raw.clone().text();
     const parsed = JSON.parse(rawBody) as Record<string, unknown>;
-    return summarizeInboxPayload(parsed);
+    return { ...summarizeInboxPayload(parsed), rawParsed: parsed };
   } catch {
     return null;
   }
@@ -507,7 +509,7 @@ function isInboxPost(method: string, url: string): boolean {
 
 function summarizeInboxPayload(
   parsed: Record<string, unknown>,
-): InboxPayloadSummary {
+): Omit<InboxPayloadSummary, "rawParsed"> {
   // The summary intentionally keeps only the fields needed to distinguish
   // post/comment and wrapped/unwrapped ActivityPub shapes in logs.
   const object = asRecord(parsed.object);

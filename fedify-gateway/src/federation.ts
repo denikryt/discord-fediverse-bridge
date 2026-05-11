@@ -17,7 +17,12 @@ import {
   loadUserActorIdentity,
 } from "./actor-store.js";
 import type { GatewayContextData } from "./config.js";
-import { normalizeCreateActivity, normalizeCreateActivityFromJson } from "./normalize.js";
+import {
+  normalizeCreateActivity,
+  normalizeCreateActivityFromJson,
+  normalizeUpdateActivityFromJson,
+  normalizeDeleteActivityFromJson,
+} from "./normalize.js";
 import { deliverEventToPythonBridge } from "./python-bridge.js";
 import type {
   BridgeContentEvent,
@@ -122,40 +127,78 @@ export function createGatewayFederation(
     })
     .on(Announce, async (ctx, activity) => {
       try {
-        // Lemmy commonly sends Announce(Create(...)), so this path unwraps the
-        // nested Create using the cached raw inbox payload.
+        // Lemmy wraps Create, Update, and Delete inside Announce.
+        // Try each type in turn using the cached raw inbox payload.
         const announceEnvelope = getAnnounceEnvelope(ctx, activity.id?.href ?? null);
 
         logAnnounceDebug(isDebug, announceEnvelope);
 
         const createRecord = extractCreateRecord(announceEnvelope.rawRecord);
-        if (createRecord == null) {
-          logDebug(
-            isDebug,
-            "Could not find Create in Announce.object from raw JSON",
-          );
+        if (createRecord != null) {
+          const event = await normalizeCreateActivityFromJson(createRecord);
+          if (event == null) {
+            logDebug(isDebug, "normalizeCreateActivityFromJson returned null");
+            return;
+          }
+          if (shouldSkipCommunityEvent(event, config.communityActorId)) {
+            logDebug(isDebug, "Event community does not match, skipping");
+            return;
+          }
+          const nestedObject = asRecord(createRecord.object);
+          await deliverNormalizedEvent(config, event, {
+            announceId: announceEnvelope.announceId,
+            createId: asString(createRecord.id) ?? event.delivery_id,
+            eventType: event.event_type,
+            kind: event.object.kind,
+            objectId: asString(nestedObject?.id) ?? event.object.ap_id,
+          });
           return;
         }
 
-        const event = await normalizeCreateActivityFromJson(createRecord);
-        if (event == null) {
-          logDebug(isDebug, "normalizeCreateActivityFromJson returned null");
+        const updateRecord = extractUpdateRecord(announceEnvelope.rawRecord);
+        if (updateRecord != null) {
+          const event = await normalizeUpdateActivityFromJson(updateRecord);
+          if (event == null) {
+            logDebug(isDebug, "normalizeUpdateActivityFromJson returned null");
+            return;
+          }
+          if (shouldSkipCommunityEvent(event, config.communityActorId)) {
+            logDebug(isDebug, "Event community does not match, skipping");
+            return;
+          }
+          await deliverNormalizedEvent(config, event, {
+            announceId: announceEnvelope.announceId,
+            updateId: asString(updateRecord.id) ?? event.delivery_id,
+            eventType: event.event_type,
+            objectId: event.object.ap_id,
+          });
           return;
         }
 
-        if (shouldSkipCommunityEvent(event, config.communityActorId)) {
-          logDebug(isDebug, "Event community does not match, skipping");
+        const deleteRecord = extractDeleteRecord(announceEnvelope.rawRecord);
+        if (deleteRecord != null) {
+          const event = normalizeDeleteActivityFromJson(deleteRecord);
+          if (event == null) {
+            logDebug(isDebug, "normalizeDeleteActivityFromJson returned null");
+            return;
+          }
+          if (shouldSkipCommunityEvent(event, config.communityActorId)) {
+            logDebug(isDebug, "Event community does not match, skipping");
+            return;
+          }
+          await deliverNormalizedEvent(config, event, {
+            announceId: announceEnvelope.announceId,
+            deleteId: asString(deleteRecord.id) ?? event.delivery_id,
+            eventType: event.event_type,
+            objectId: event.object.ap_id,
+          });
           return;
         }
 
-        const nestedObject = asRecord(createRecord.object);
-        await deliverNormalizedEvent(config, event, {
-          announceId: announceEnvelope.announceId,
-          createId: asString(createRecord.id) ?? event.delivery_id,
-          eventType: event.event_type,
-          kind: event.object.kind,
-          objectId: asString(nestedObject?.id) ?? event.object.ap_id,
-        });
+        logDebug(
+          isDebug,
+          "Could not find Create, Update, or Delete in Announce.object from raw JSON",
+        );
       } catch (error) {
         console.error(
           "[Fedify] Error processing Announce:",
@@ -195,16 +238,14 @@ async function deliverNormalizedEvent(
 ): Promise<void> {
   // All successful normalization funnels through one delivery path so logging
   // and Python-bridge auth stay consistent across Create and Announce.
-  console.log("[Fedify] Delivering event", logContext);
+  if (config.logLevel === "debug") {
+    console.log("[Fedify][debug] Delivering event", logContext);
+  }
   await deliverEventToPythonBridge(
     config.pythonBridgeEventsUrl,
     config.pythonBridgeSharedSecret,
     event,
   );
-  console.log("[Fedify] Event delivered", {
-    deliveryId: event.delivery_id,
-    eventType: event.event_type,
-  });
 }
 
 function shouldSkipCommunityEvent(
@@ -272,6 +313,22 @@ function extractCreateRecord(
 ): Record<string, unknown> | null {
   const rawObject = asRecord(rawRecord?.object);
   return rawObject?.type === "Create" ? rawObject : null;
+}
+
+function extractUpdateRecord(
+  rawRecord: Record<string, unknown> | null,
+): Record<string, unknown> | null {
+  // Lemmy sends Announce(Update(...)) for post and comment edits.
+  const rawObject = asRecord(rawRecord?.object);
+  return rawObject?.type === "Update" ? rawObject : null;
+}
+
+function extractDeleteRecord(
+  rawRecord: Record<string, unknown> | null,
+): Record<string, unknown> | null {
+  // Lemmy sends Announce(Delete(...)) for post and comment deletes.
+  const rawObject = asRecord(rawRecord?.object);
+  return rawObject?.type === "Delete" ? rawObject : null;
 }
 
 function asRecord(value: unknown): Record<string, unknown> | null {

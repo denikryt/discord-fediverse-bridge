@@ -160,46 +160,45 @@ class BridgeBot(discord.Client):
         creating infinite loops (edit→fanout→edit→fanout...).
         """
         import time
-        logger.info("[on_raw_message_edit] msg=%s", payload.message_id)
+        logger.debug("[on_raw_message_edit] msg=%s", payload.message_id)
 
         # Dedup: if we edited this message recently, skip to avoid loop.
         now = time.time()
         if payload.message_id in self._recent_edits:
             edit_age = now - self._recent_edits[payload.message_id]
             if edit_age < 5.0:  # Within 5 seconds of our edit
-                logger.info("[on_raw_message_edit] skipping recent edit (age=%.1fs)", edit_age)
+                logger.debug("[on_raw_message_edit] skipping recent edit (age=%.1fs)", edit_age)
                 return
 
         delivery = self.database.get_message_delivery_by_message(payload.message_id)
         if delivery is None:
-            logger.info("[on_raw_message_edit] no delivery found for msg=%s", payload.message_id)
+            logger.debug("[on_raw_message_edit] no delivery found for msg=%s", payload.message_id)
             return
 
         # Only process Discord-originated messages (source or mirror role).
         # Inbound AP messages should not be edited via Discord events.
         if delivery.role == "inbound":
-            logger.info("[on_raw_message_edit] inbound message — skipping (handled via AP events)")
+            logger.debug("[on_raw_message_edit] inbound message — skipping (handled via AP events)")
             return
 
         # Extract updated content from the raw payload data.
         # Discord raw edit events include the full message data dict.
         new_content = payload.data.get("content", "")
-        logger.info(
-            "[on_raw_message_edit] extracted content from payload: len=%d keys=%s",
+        logger.debug(
+            "[on_raw_message_edit] extracted content from payload: len=%d",
             len(new_content) if new_content else 0,
-            list(payload.data.keys()),
         )
         if not new_content:
-            logger.info("[on_raw_message_edit] no content in payload for msg=%s", payload.message_id)
+            logger.debug("[on_raw_message_edit] no content in payload for msg=%s", payload.message_id)
             return
 
         from .runtime import Runtime
         runtime = self._get_runtime()
         if runtime is None:
-            logger.info("[on_raw_message_edit] no runtime available for msg=%s", payload.message_id)
+            logger.warning("[on_raw_message_edit] no runtime available for msg=%s", payload.message_id)
             return
 
-        logger.info("[on_raw_message_edit] calling handle_discord_message_edit for msg=%s thread=%s", payload.message_id, payload.channel_id)
+        logger.info("Discord message edit msg=%s thread=%s", payload.message_id, payload.channel_id)
         try:
             await self.community_runtime.handle_discord_message_edit(
                 message_id=payload.message_id,
@@ -221,34 +220,34 @@ class BridgeBot(discord.Client):
         We track recently-deleted messages to avoid re-processing our own deletes.
         """
         import time
-        logger.info("[on_raw_message_delete] msg=%s", payload.message_id)
+        logger.debug("[on_raw_message_delete] msg=%s", payload.message_id)
 
         # Dedup: if we deleted this message recently, skip to avoid loop.
         now = time.time()
         if payload.message_id in self._recent_deletes:
             delete_age = now - self._recent_deletes[payload.message_id]
             if delete_age < 5.0:  # Within 5 seconds of our delete
-                logger.info("[on_raw_message_delete] skipping recent delete (age=%.1fs)", delete_age)
+                logger.debug("[on_raw_message_delete] skipping recent delete (age=%.1fs)", delete_age)
                 return
 
         delivery = self.database.get_message_delivery_by_message(payload.message_id)
         if delivery is None:
-            logger.info("[on_raw_message_delete] no delivery found for msg=%s", payload.message_id)
+            logger.debug("[on_raw_message_delete] no delivery found for msg=%s", payload.message_id)
             return
 
         # Only process Discord-originated messages (source or mirror role).
         # Inbound AP messages should not be deleted via Discord events.
         if delivery.role == "inbound":
-            logger.info("[on_raw_message_delete] inbound message — skipping (handled via AP events)")
+            logger.debug("[on_raw_message_delete] inbound message — skipping (handled via AP events)")
             return
 
         from .runtime import Runtime
         runtime = self._get_runtime()
         if runtime is None:
-            logger.info("[on_raw_message_delete] no runtime available for msg=%s", payload.message_id)
+            logger.warning("[on_raw_message_delete] no runtime available for msg=%s", payload.message_id)
             return
 
-        logger.info("[on_raw_message_delete] calling handle_discord_message_delete for msg=%s thread=%s", payload.message_id, payload.channel_id)
+        logger.info("Discord message delete msg=%s thread=%s", payload.message_id, payload.channel_id)
         try:
             await self.community_runtime.handle_discord_message_delete(
                 message_id=payload.message_id,

@@ -456,7 +456,7 @@ class CommunityRuntime:
         """
         from ..activitypub_handlers import HandlerResult as _HandlerResult
 
-        logger.info(
+        logger.debug(
             "[handle_inbound_comment] ap_id=%s post_ap_id=%s parent_ap_id=%s",
             event.object.ap_id, event.object.post_ap_id, event.object.parent_ap_id,
         )
@@ -478,7 +478,7 @@ class CommunityRuntime:
             )
             return _HandlerResult(status="deferred", detail="parent post not mapped yet")
 
-        logger.info(
+        logger.debug(
             "[handle_inbound_comment] thread_group=%s deliveries=%s",
             thread_group.id,
             [d.discord_thread_id for d in self.database.get_thread_deliveries(thread_group.id)],

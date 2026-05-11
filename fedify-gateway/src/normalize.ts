@@ -54,6 +54,98 @@ export async function normalizeCreateActivityFromJson(
   return null;
 }
 
+export async function normalizeUpdateActivityFromJson(
+  activity: unknown,
+): Promise<BridgeEvent | null> {
+  // Handles the unwrapped Update record extracted from Announce(Update(...)).
+  // Delegates to the same sub-normalizers as Create but overrides event_type.
+  if (!isRecord(activity) || activity.type !== "Update") {
+    return null;
+  }
+
+  const object = asRecord(activity.object);
+  if (!object) {
+    return null;
+  }
+
+  if (object.type === "Page" || object.type === "Article") {
+    const event = normalizePostActivityFromJson(activity, object);
+    // Override event_type: the object shape is identical to Create but this is an edit.
+    return { ...event, event_type: "post.updated" };
+  }
+
+  if (object.type === "Note") {
+    const event = await normalizeCommentActivityFromJson(activity, object);
+    // Override event_type: same shape as Create but this is an edit.
+    return { ...event, event_type: "comment.updated" };
+  }
+
+  return null;
+}
+
+export function normalizeDeleteActivityFromJson(
+  activity: unknown,
+): BridgeEvent | null {
+  // Handles the unwrapped Delete record extracted from Announce(Delete(...)).
+  // Lemmy 0.19 sends object as a plain string URL (primary path).
+  // Older format fallback: object may be { id: "..." }.
+  if (!isRecord(activity) || activity.type !== "Delete") {
+    return null;
+  }
+
+  // Primary path: object is a plain string URL (confirmed from real Lemmy 0.19.18 logs).
+  // Fallback: object is a record with an id field (older Lemmy versions).
+  const apId =
+    asString(activity.object) ??
+    asString(asRecord(activity.object)?.id);
+
+  if (!apId) {
+    return null;
+  }
+
+  // community_actor_id lives directly on the Delete record's audience field —
+  // confirmed from real logs. object is a plain string so we can't read it from there.
+  // Fall back to cc[0] if audience is absent.
+  const communityActorId =
+    resolveCommunityActorIdForDelete(activity) ??
+    asString(activity.actor) ??
+    "";
+
+  // Infer kind from the URL path: /post/ → post, /comment/ → comment.
+  const kind = inferKindFromApId(apId);
+  if (!kind) {
+    return null;
+  }
+
+  const eventType = kind === "post" ? "post.deleted" : "comment.deleted";
+  const now = new Date().toISOString();
+
+  return {
+    actor_id: asString(activity.actor) ?? "",
+    community_actor_id: communityActorId,
+    delivery_id: asString(activity.id) ?? randomUUID(),
+    event_type: eventType,
+    occurred_at: now,
+    object: {
+      ap_id: apId,
+      // author_name, title, body_markdown are irrelevant for delete handlers —
+      // they only look up the record by ap_id. Stubs satisfy the required schema.
+      author_name: "",
+      body_markdown: null,
+      kind,
+      // lemmy_id: 0 is a safe stub — delete handlers never read this field.
+      lemmy_id: parseLemmyNumericIdOrZero(apId, kind),
+      parent_ap_id: null,
+      post_ap_id: null,
+      post_lemmy_id: null,
+      // published_at must be a valid ISO string for Pydantic; now() satisfies that.
+      published_at: now,
+      title: null,
+      url: apId,
+    },
+  };
+}
+
 async function normalizePostActivity(
   activity: Create,
   object: Page,
@@ -516,4 +608,39 @@ function lastPathSegment(value: string): string {
   const pathname = new URL(value).pathname;
   const parts = pathname.split("/").filter(Boolean);
   return parts[parts.length - 1] ?? value;
+}
+
+function inferKindFromApId(apId: string): "post" | "comment" | null {
+  // Lemmy AP IDs use /post/<n> and /comment/<n> path conventions.
+  try {
+    const { pathname } = new URL(apId);
+    if (/\/post\/\d+/.test(pathname)) return "post";
+    if (/\/comment\/\d+/.test(pathname)) return "comment";
+  } catch {
+    // Non-URL ap_id — cannot infer kind.
+  }
+  return null;
+}
+
+function parseLemmyNumericIdOrZero(apId: string, kind: "post" | "comment"): number {
+  // Returns 0 when the id cannot be parsed — acceptable for Delete events
+  // because no delete handler reads the lemmy_id field.
+  return tryParseLemmyNumericId(apId, kind) ?? 0;
+}
+
+function resolveCommunityActorIdForDelete(
+  activity: Record<string, unknown>,
+): string | null {
+  // audience is present on the Delete record itself in Lemmy 0.19 (confirmed from real logs).
+  // Fall back to the first /c/ community found in cc or to.
+  const audience = asString(activity.audience);
+  if (audience && isCommunityActorId(audience)) {
+    return audience;
+  }
+
+  const candidates = [
+    ...normalizeStringArray(activity.cc),
+    ...normalizeStringArray(activity.to),
+  ];
+  return candidates.find((c) => isCommunityActorId(c)) ?? null;
 }

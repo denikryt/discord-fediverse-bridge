@@ -16,7 +16,13 @@ export interface BridgeContentEvent {
   actor_id: string;
   community_actor_id: string;
   delivery_id: string;
-  event_type: "post.created" | "comment.created";
+  event_type:
+    | "post.created"
+    | "comment.created"
+    | "post.updated"
+    | "comment.updated"
+    | "post.deleted"
+    | "comment.deleted";
   object: BridgeObject;
   occurred_at: string;
 }
