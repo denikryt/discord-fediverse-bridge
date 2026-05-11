@@ -156,7 +156,6 @@ def test_accepted_subscription_inbound_post_creates_discord_thread_and_receipt(
     runtime = SimpleNamespace(
         settings=SimpleNamespace(fedify_shared_secret="secret"),
         database=database,
-        lemmy=SimpleNamespace(),
         bot=bot,
         community_runtime=_community_runtime(database, bot=bot),
     )
@@ -242,7 +241,6 @@ def test_inbound_post_and_comment_fan_out_to_all_accepted_subscriptions(
     runtime = SimpleNamespace(
         settings=SimpleNamespace(fedify_shared_secret="secret"),
         database=database,
-        lemmy=SimpleNamespace(),
         bot=bot,
         community_runtime=_community_runtime(database, bot=bot),
     )
@@ -326,7 +324,6 @@ def test_accepted_subscription_inbound_comment_creates_discord_message_and_recei
     runtime = SimpleNamespace(
         settings=SimpleNamespace(fedify_shared_secret="secret"),
         database=database,
-        lemmy=SimpleNamespace(),
         bot=bot,
         community_runtime=_community_runtime(database, bot=bot),
     )
@@ -366,7 +363,6 @@ async def test_no_accepted_subscription_inbound_post_is_skipped(
     )
     runtime = SimpleNamespace(
         database=database,
-        lemmy=SimpleNamespace(),
         bot=bot,
         community_runtime=_community_runtime(database, bot=bot),
     )
@@ -402,7 +398,6 @@ def test_duplicate_delivery_id_returns_idempotent_duplicate_without_side_effects
     runtime = SimpleNamespace(
         settings=SimpleNamespace(fedify_shared_secret="secret"),
         database=database,
-        lemmy=SimpleNamespace(),
         bot=bot,
         community_runtime=_community_runtime(database, bot=bot),
     )
@@ -453,7 +448,6 @@ async def test_discord_originated_echo_is_skipped_without_creating_duplicate(
     )
     runtime = SimpleNamespace(
         database=database,
-        lemmy=SimpleNamespace(),
         bot=bot,
         community_runtime=_community_runtime(database, bot=bot),
     )
@@ -485,7 +479,6 @@ def test_comment_before_parent_mapping_becomes_deferred_then_retries_processed(
     runtime = SimpleNamespace(
         settings=SimpleNamespace(fedify_shared_secret="secret"),
         database=database,
-        lemmy=SimpleNamespace(),
         bot=bot,
         community_runtime=_community_runtime(database, bot=bot),
     )
@@ -562,7 +555,6 @@ def test_discord_target_failure_marks_inbound_receipt_failed(
     runtime = SimpleNamespace(
         settings=SimpleNamespace(fedify_shared_secret="secret"),
         database=database,
-        lemmy=SimpleNamespace(),
         bot=bot,
         community_runtime=_community_runtime(database, bot=bot),
     )

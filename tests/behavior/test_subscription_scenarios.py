@@ -62,13 +62,14 @@ async def test_no_subscription_subscribe_command_sends_follow_and_marks_pending(
         follow_activity_id=f"https://{BRIDGE_EXAMPLE_DOMAIN}/activities/follow/1",
     )
 
-    subscribe.register(command_tree, database, lemmy, fedify_gateway)
+    subscribe.register(command_tree, database, fedify_gateway)
 
     command = command_tree.commands["subscribe-channel"]
     await command.callback(
         interaction,
-        forum_channel,
+        f"https://{LEMMY_EXAMPLE_DOMAIN}",
         f"{community_actor_url}|hackers|777",
+        forum_channel,
     )
     subscription = database.get_subscription_by_channel(forum_channel.id)
 
@@ -102,13 +103,14 @@ async def test_pending_subscription_second_subscribe_does_not_send_follow(
         status="pending",
     )
 
-    subscribe.register(command_tree, database, lemmy, fedify_gateway)
+    subscribe.register(command_tree, database, fedify_gateway)
 
     command = command_tree.commands["subscribe-channel"]
     await command.callback(
         interaction,
-        forum_channel,
+        f"https://{LEMMY_EXAMPLE_DOMAIN}",
         f"{_community_actor_url()}|hackers|777",
+        forum_channel,
     )
 
     fedify_gateway.follow_community.assert_not_awaited()
@@ -139,13 +141,14 @@ async def test_accepted_subscription_second_subscribe_does_not_send_follow(
         status="accepted",
     )
 
-    subscribe.register(command_tree, database, lemmy, fedify_gateway)
+    subscribe.register(command_tree, database, fedify_gateway)
 
     command = command_tree.commands["subscribe-channel"]
     await command.callback(
         interaction,
-        forum_channel,
+        f"https://{LEMMY_EXAMPLE_DOMAIN}",
         f"{_community_actor_url()}|hackers|777",
+        forum_channel,
     )
 
     fedify_gateway.follow_community.assert_not_awaited()
@@ -170,13 +173,14 @@ async def test_follow_dispatch_failure_marks_subscription_failed(
     _register_user(database)
     fedify_gateway.follow_community.side_effect = RuntimeError("boom")
 
-    subscribe.register(command_tree, database, lemmy, fedify_gateway)
+    subscribe.register(command_tree, database, fedify_gateway)
 
     command = command_tree.commands["subscribe-channel"]
     await command.callback(
         interaction,
-        forum_channel,
+        f"https://{LEMMY_EXAMPLE_DOMAIN}",
         f"{_community_actor_url()}|hackers|777",
+        forum_channel,
     )
     subscription = database.get_subscription_by_channel(forum_channel.id)
 
@@ -209,7 +213,6 @@ async def test_follow_accepted_event_promotes_pending_subscription_to_accepted(
     )
     runtime = SimpleNamespace(
         database=database,
-        lemmy=SimpleNamespace(),
         bot=SimpleNamespace(
             fetch_user=AsyncMock(return_value=dm_user),
         ),

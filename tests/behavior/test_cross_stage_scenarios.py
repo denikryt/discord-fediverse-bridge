@@ -88,7 +88,6 @@ def _registration_runtime(database: Database) -> SimpleNamespace:
         database=database,
         registration_service=registration_service,
         discord_oauth_client=FakeDiscordOAuthClient(),
-        lemmy=SimpleNamespace(),
         fedify_gateway=SimpleNamespace(),
         bot=SimpleNamespace(),
         community_runtime=community_runtime,
@@ -190,12 +189,13 @@ async def test_register_subscribe_accept_publish_then_echo_is_suppressed(
         community_inbox_url=f"{community_actor_url}/inbox",
         follow_activity_id=follow_activity_id,
     )
-    subscribe.register(command_tree, database, lemmy, fedify_gateway)
+    subscribe.register(command_tree, database, fedify_gateway)
     subscribe_command = command_tree.commands["subscribe-channel"]
     await subscribe_command.callback(
         interaction,
-        forum_channel,
+        f"https://{LEMMY_EXAMPLE_DOMAIN}",
         f"{community_actor_url}|hackers|777",
+        forum_channel,
     )
     pending_subscription = database.get_subscription_by_channel(forum_channel.id)
     assert pending_subscription is not None
@@ -205,7 +205,6 @@ async def test_register_subscribe_accept_publish_then_echo_is_suppressed(
         _follow_accept_event(follow_activity_id),
         SimpleNamespace(
             database=database,
-            lemmy=SimpleNamespace(),
             bot=SimpleNamespace(
                 fetch_user=AsyncMock(
                     return_value=SimpleNamespace(send=AsyncMock())
@@ -241,7 +240,6 @@ async def test_register_subscribe_accept_publish_then_echo_is_suppressed(
     )
     echo_runtime = SimpleNamespace(
         database=database,
-        lemmy=SimpleNamespace(),
         bot=SimpleNamespace(
             wait_until_bridge_ready=AsyncMock(),
             fetch_forum_channel=AsyncMock(),
@@ -315,7 +313,6 @@ async def test_lemmy_announce_of_local_post_is_suppressed_via_actor_check(
     )
     runtime = SimpleNamespace(
         database=database,
-        lemmy=SimpleNamespace(),
         bot=SimpleNamespace(
             wait_until_bridge_ready=AsyncMock(),
             fetch_forum_channel=AsyncMock(),
@@ -355,14 +352,15 @@ async def test_failed_subscribe_retry_then_accept_allows_publish(
     )
 
     community_actor_url = f"https://{LEMMY_EXAMPLE_DOMAIN}/c/hackers"
-    subscribe.register(command_tree, database, lemmy, fedify_gateway)
+    subscribe.register(command_tree, database, fedify_gateway)
     subscribe_command = command_tree.commands["subscribe-channel"]
 
     fedify_gateway.follow_community.side_effect = RuntimeError("boom")
     await subscribe_command.callback(
         interaction,
-        forum_channel,
+        f"https://{LEMMY_EXAMPLE_DOMAIN}",
         f"{community_actor_url}|hackers|777",
+        forum_channel,
     )
     failed_subscription = database.get_subscription_by_channel(forum_channel.id)
     assert failed_subscription is not None
@@ -378,8 +376,9 @@ async def test_failed_subscribe_retry_then_accept_allows_publish(
     )
     await subscribe_command.callback(
         interaction,
-        forum_channel,
+        f"https://{LEMMY_EXAMPLE_DOMAIN}",
         f"{community_actor_url}|hackers|777",
+        forum_channel,
     )
     pending_subscription = database.get_subscription_by_channel(forum_channel.id)
     assert pending_subscription is not None
@@ -389,7 +388,6 @@ async def test_failed_subscribe_retry_then_accept_allows_publish(
         _follow_accept_event(follow_activity_id),
         SimpleNamespace(
             database=database,
-            lemmy=SimpleNamespace(),
             bot=SimpleNamespace(
                 fetch_user=AsyncMock(
                     return_value=SimpleNamespace(send=AsyncMock())

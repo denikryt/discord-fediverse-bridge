@@ -63,7 +63,6 @@ async def test_follow_accept_event_marks_pending_subscription_accepted(
     )
     runtime = SimpleNamespace(
         database=database,
-        lemmy=SimpleNamespace(),
         bot=SimpleNamespace(
             fetch_user=AsyncMock(return_value=dm_user),
         ),

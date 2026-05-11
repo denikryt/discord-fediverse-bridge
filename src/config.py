@@ -8,7 +8,6 @@ class Settings(BaseSettings):
     model_config = SettingsConfigDict(env_file=".env", env_file_encoding="utf-8", extra="ignore")
 
     discord_token: str = Field(alias="DISCORD_TOKEN")
-    lemmy_base_url: HttpUrl = Field(alias="LEMMY_BASE_URL")
 
     database_url: str = Field(default="sqlite:///./bridge.db", alias="DATABASE_URL")
     fedify_gateway_url: HttpUrl = Field(default="http://127.0.0.1:3000", alias="FEDIFY_GATEWAY_URL")
@@ -35,12 +34,6 @@ class Settings(BaseSettings):
         if isinstance(v, str):
             return [entry.strip() for entry in v.split(",") if entry.strip()]
         return list(v) if v else []
-
-    @property
-    def normalized_lemmy_base_url(self) -> str:
-        # Keep one canonical base URL shape so API path joins do not depend on
-        # whether the env var had a trailing slash.
-        return str(self.lemmy_base_url).rstrip("/")
 
     @property
     def normalized_public_bridge_base_url(self) -> str:

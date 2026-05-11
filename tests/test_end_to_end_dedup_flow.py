@@ -131,7 +131,6 @@ async def test_inbound_post_with_discord_originated_mapping_is_skipped_as_echo(
     )
     runtime = SimpleNamespace(
         database=database,
-        lemmy=SimpleNamespace(),
         bot=SimpleNamespace(
             wait_until_bridge_ready=AsyncMock(),
             fetch_forum_channel=AsyncMock(),
@@ -168,7 +167,6 @@ async def test_inbound_comment_with_discord_originated_mapping_is_skipped_as_ech
     )
     runtime = SimpleNamespace(
         database=database,
-        lemmy=SimpleNamespace(),
         bot=SimpleNamespace(
             wait_until_bridge_ready=AsyncMock(),
             get_thread_by_id=AsyncMock(),
@@ -198,7 +196,6 @@ def test_out_of_order_comment_receipt_becomes_deferred_and_retries_successfully(
     runtime = SimpleNamespace(
         settings=SimpleNamespace(fedify_shared_secret="secret"),
         database=database,
-        lemmy=SimpleNamespace(),
         bot=SimpleNamespace(
             wait_until_bridge_ready=AsyncMock(),
             get_thread_by_id=AsyncMock(
@@ -272,7 +269,6 @@ def test_failed_inbound_discord_fanout_marks_receipt_failed(tmp_path: Path) -> N
     runtime = SimpleNamespace(
         settings=SimpleNamespace(fedify_shared_secret="secret"),
         database=database,
-        lemmy=SimpleNamespace(),
         bot=SimpleNamespace(
             wait_until_bridge_ready=AsyncMock(),
             fetch_forum_channel=AsyncMock(
@@ -322,7 +318,6 @@ def test_duplicate_inbound_delivery_returns_duplicate_without_side_effects(
     runtime = SimpleNamespace(
         settings=SimpleNamespace(fedify_shared_secret="secret"),
         database=database,
-        lemmy=SimpleNamespace(),
         bot=SimpleNamespace(
             wait_until_bridge_ready=AsyncMock(),
             fetch_forum_channel=AsyncMock(return_value=forum_channel),

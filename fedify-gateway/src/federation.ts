@@ -211,6 +211,13 @@ export function createGatewayFederation(
     })
     .on(Accept, async (ctx, activity) => {
       const activityId = activity.id?.href ?? null;
+      const rawJson = ctx.data.activitypubRawJson;
+      console.log("[Fedify][debug] Accept received", {
+        activityId,
+        actorId: activity.actorId?.href,
+        objectId: activity.objectId?.href,
+        rawObject: (rawJson as Record<string, unknown>)?.object,
+      });
       const event = buildFollowAcceptedEvent(
         activity,
         ctx.data,
@@ -218,6 +225,7 @@ export function createGatewayFederation(
       );
       if (event == null) {
         logDebug(isDebug, "Accept did not contain a follow activity id");
+        console.log("[Fedify][debug] Accept null event — raw activity:", JSON.stringify(rawJson, null, 2));
         return;
       }
 

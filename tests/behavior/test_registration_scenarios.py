@@ -71,7 +71,6 @@ def _runtime(tmp_path: Path) -> SimpleNamespace:
         database=database,
         registration_service=registration_service,
         discord_oauth_client=FakeDiscordOAuthClient(),
-        lemmy=SimpleNamespace(),
         fedify_gateway=SimpleNamespace(),
         bot=SimpleNamespace(),
     )

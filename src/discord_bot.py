@@ -10,7 +10,6 @@ from .community_sync.runtime import CommunityRuntime
 from .config import Settings
 from .db import Database
 from .fedify_gateway_client import FedifyGatewayClient
-from .lemmy_client import LemmyClient
 
 logger = logging.getLogger(__name__)
 
@@ -28,7 +27,6 @@ class BridgeBot(discord.Client):
         database: Database,
         fedify_gateway: FedifyGatewayClient,
         community_runtime: CommunityRuntime,
-        lemmy: LemmyClient,
     ) -> None:
         """Initialise the bot with shared services and Discord intent configuration."""
         intents = discord.Intents.default()
@@ -40,7 +38,6 @@ class BridgeBot(discord.Client):
         self.database = database
         self.fedify_gateway = fedify_gateway
         self.community_runtime = community_runtime
-        self.lemmy = lemmy
         self.tree = app_commands.CommandTree(self)
         self.bridge_ready = asyncio.Event()
         # Per-thread locks prevent duplicate Lemmy posts when Discord fires
@@ -60,7 +57,7 @@ class BridgeBot(discord.Client):
         # register slash commands and sync the tree with Discord.
         from .commands import list_subs, register, subscribe, unsubscribe
         register.register(self.tree, self.settings)
-        subscribe.register(self.tree, self.database, self.lemmy, self.fedify_gateway, self.settings)
+        subscribe.register(self.tree, self.database, self.fedify_gateway, self.settings)
         unsubscribe.register(self.tree, self.database)
         list_subs.register(self.tree, self.database)
         await self.tree.sync()
@@ -73,7 +70,6 @@ class BridgeBot(discord.Client):
 
     async def close(self) -> None:
         await self.fedify_gateway.close()
-        await self.lemmy.close()
         await super().close()
 
     async def on_thread_create(self, thread: discord.Thread) -> None:

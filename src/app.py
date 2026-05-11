@@ -14,7 +14,6 @@ from .discord_oauth_client import DiscordOAuthClient
 from .discord_publish_service import DiscordPublishService
 from .fedify_gateway_client import FedifyGatewayClient
 from .http_api import create_http_app
-from .lemmy_client import LemmyClient
 from .logging_setup import configure_logging
 from .registration_service import RegistrationService
 from .runtime import Runtime
@@ -42,7 +41,6 @@ async def main() -> None:
         database=database,
         base_url=settings.normalized_fedify_origin,
     )
-    lemmy = LemmyClient(settings.normalized_lemmy_base_url)
 
     # CommunityRuntime is constructed without discord_fanout first so it can be
     # passed to BridgeBot. DiscordFanout needs a reference to bot (for
@@ -58,7 +56,6 @@ async def main() -> None:
         database=database,
         fedify_gateway=fedify_gateway,
         community_runtime=community_runtime,
-        lemmy=lemmy,
     )
     discord_fanout = DiscordFanout(bot=bot)
     community_runtime.discord_fanout = discord_fanout
@@ -68,7 +65,6 @@ async def main() -> None:
     runtime = Runtime(
         settings=settings,
         database=database,
-        lemmy=lemmy,
         fedify_gateway=fedify_gateway,
         discord_oauth_client=discord_oauth_client,
         discord_publish_service=discord_publish_service,
