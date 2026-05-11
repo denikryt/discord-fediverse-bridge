@@ -21,6 +21,7 @@ import {
   deleteContent,
   followCommunity,
   publishContent,
+  unfollowCommunity,
   updateContent,
 } from "./federation-outbound.js";
 import { buildPublishedActivityObjectJson } from "./published-objects.js";
@@ -152,6 +153,38 @@ app.post("/follow-community", async (context) => {
   try {
     const result = await followCommunity(fedify, config, communityActorUrl);
     return context.json(result);
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    return context.json({ error: message }, { status: 500 });
+  }
+});
+
+app.post("/unfollow-community", async (context) => {
+  if (
+    !hasValidInternalAuthorization(
+      context.req.header("Authorization") ?? null,
+    )
+  ) {
+    return context.json({ error: "invalid authorization" }, { status: 401 });
+  }
+  const { communityActorUrl, followActivityId } = await context.req.json();
+
+  if (!communityActorUrl || typeof communityActorUrl !== "string") {
+    return context.json(
+      { error: "communityActorUrl is required and must be a string" },
+      { status: 400 },
+    );
+  }
+  if (!followActivityId || typeof followActivityId !== "string") {
+    return context.json(
+      { error: "followActivityId is required and must be a string" },
+      { status: 400 },
+    );
+  }
+
+  try {
+    await unfollowCommunity(fedify, config, communityActorUrl, followActivityId);
+    return context.json({ ok: true });
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
     return context.json({ error: message }, { status: 500 });

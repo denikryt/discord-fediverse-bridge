@@ -1,5 +1,5 @@
 import { Temporal } from "@js-temporal/polyfill";
-import { Create, Delete, Follow, Note, Page, Source, Update } from "@fedify/vocab";
+import { Create, Delete, Follow, Note, Page, Source, Undo, Update } from "@fedify/vocab";
 import type { Federation } from "@fedify/fedify";
 import type { GatewayConfig } from "./config.js";
 import type {
@@ -80,6 +80,57 @@ export async function followCommunity(
     communityInboxUrl: inboxUrl,
     followActivityId: follow.id?.href ?? follow.id?.toString() ?? "",
   };
+}
+
+export async function unfollowCommunity(
+  federation: Federation<GatewayConfig>,
+  config: GatewayConfig,
+  communityActorUrl: string,
+  followActivityId: string,
+): Promise<void> {
+  const ctx = federation.createContext(new URL(config.fedifyOrigin), config);
+  const actorUri = ctx.getActorUri(config.actorIdentifier);
+
+  const communityResponse = await fetch(communityActorUrl, {
+    headers: { Accept: "application/activity+json" },
+  });
+  if (!communityResponse.ok) {
+    throw new Error(`Failed to fetch community actor: ${communityResponse.status}`);
+  }
+  const communityActor = await communityResponse.json();
+  const inboxUrl = communityActor.inbox;
+  const communityId = communityActor.id;
+
+  if (!inboxUrl) throw new Error("Community actor does not have an inbox");
+  if (!communityId) throw new Error("Community actor does not have an id");
+
+  const undo = new Undo({
+    id: new URL(
+      `${config.fedifyOrigin}activities/undo/${Date.now()}/${Math.random().toString(36).slice(2)}`,
+    ),
+    actor: actorUri,
+    object: new Follow({
+      id: new URL(followActivityId),
+      actor: actorUri,
+      object: new URL(communityId),
+    }),
+  });
+
+  console.log("[Unfollow] Sending Undo(Follow) activity:", {
+    actorUri: actorUri.toString(),
+    communityId,
+    inboxUrl,
+    followActivityId,
+    undoId: undo.id?.toString(),
+  });
+
+  await ctx.sendActivity(
+    { username: config.actorIdentifier },
+    { id: new URL(communityId), inboxId: new URL(inboxUrl) },
+    undo,
+  );
+
+  console.log("[Unfollow] Successfully sent Undo(Follow) activity");
 }
 
 export async function publishContent(
