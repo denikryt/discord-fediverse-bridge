@@ -173,8 +173,7 @@ async def _body(operation_input: SubscribeInput) -> OperationResult:
             applied=True,
             message=(
                 f"Subscribed {operation_input.channel_mention} to "
-                f"**{_requested_community_label(operation_input)}**. "
-                f"The bridge is already federated with this community."
+                f"**{_requested_community_label(operation_input)}**."
             ),
         )
 

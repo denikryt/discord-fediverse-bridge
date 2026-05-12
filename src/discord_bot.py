@@ -171,10 +171,12 @@ class BridgeBot(discord.Client):
             logger.debug("[on_raw_message_edit] no delivery found for msg=%s", payload.message_id)
             return
 
-        # Only process Discord-originated messages (source or mirror role).
-        # Inbound AP messages should not be edited via Discord events.
-        if delivery.role == "inbound":
-            logger.debug("[on_raw_message_edit] inbound message — skipping (handled via AP events)")
+        # Only propagate edits from source messages — those written by the user.
+        # Mirror messages are bot-owned copies; edits to them (including our own
+        # propagation writes) must not re-trigger fanout or an infinite loop results.
+        # Inbound AP messages are handled via AP Update events, not Discord events.
+        if delivery.role != "source":
+            logger.debug("[on_raw_message_edit] role=%s — skipping (not source)", delivery.role)
             return
 
         # Extract updated content from the raw payload data.
@@ -188,6 +190,11 @@ class BridgeBot(discord.Client):
             logger.debug("[on_raw_message_edit] no content in payload for msg=%s", payload.message_id)
             return
 
+        # Extract author display name from payload for mirror header attribution.
+        # global_name is the Display Name set by the user; falls back to username.
+        author_data = payload.data.get("author") or {}
+        author_display_name = author_data.get("global_name") or author_data.get("username") or ""
+
         from .runtime import Runtime
         runtime = self._get_runtime()
         if runtime is None:
@@ -199,6 +206,7 @@ class BridgeBot(discord.Client):
             await self.community_runtime.handle_discord_message_edit(
                 message_id=payload.message_id,
                 new_content=new_content,
+                author_display_name=author_display_name,
                 runtime=runtime,
             )
         except Exception:

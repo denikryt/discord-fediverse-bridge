@@ -6,7 +6,7 @@ from collections.abc import Iterator
 from contextlib import contextmanager
 from datetime import datetime
 
-from sqlalchemy import create_engine, select
+from sqlalchemy import create_engine, select, text
 from sqlalchemy.orm import Session, sessionmaker
 
 from .models import (
@@ -42,6 +42,32 @@ class Database:
     def create_all(self) -> None:
         """Create the full clean-schema set required by the current codebase."""
         Base.metadata.create_all(self.engine)
+
+    def migrate(self) -> None:
+        """Apply additive schema migrations that create_all cannot handle.
+
+        create_all only creates missing tables — it never alters existing ones.
+        Each entry is a (table, column, ALTER statement) triple. The column is
+        checked via PRAGMA table_info before executing, making each migration
+        idempotent. SQLite does not support ALTER TABLE ... ADD COLUMN IF NOT EXISTS.
+        """
+        # discord_guild_id was added to channel_community_subscriptions after
+        # initial deployment; existing databases need the column added.
+        _migrations = [
+            (
+                "channel_community_subscriptions",
+                "discord_guild_id",
+                "ALTER TABLE channel_community_subscriptions ADD COLUMN discord_guild_id INTEGER",
+            ),
+        ]
+        with self.engine.connect() as conn:
+            for table, column, stmt in _migrations:
+                # PRAGMA table_info returns one row per column; skip if already present.
+                rows = conn.execute(text(f"PRAGMA table_info({table})")).fetchall()
+                existing = {row[1] for row in rows}
+                if column not in existing:
+                    conn.execute(text(stmt))
+            conn.commit()
 
     @contextmanager
     def session(self) -> Iterator[Session]:

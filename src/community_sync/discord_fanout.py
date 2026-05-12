@@ -62,17 +62,17 @@ def _format_mirror_body(message: discord.Message | object) -> str:
     """Build the mirror thread body from the source starter message.
 
     Format:
-        [bridge] {author_display_name}
+        `{author_display_name}`
 
         {content}
 
-    The author line attributes the original poster so readers know who wrote it,
-    even though the bot's account owns the mirror post.
+    Uses the same backtick-quoted header format as inbound Lemmy messages so
+    apply_edit_to_discord_message can preserve the attribution line on edits.
     """
     author = getattr(message, "author", None)
     display_name = getattr(author, "display_name", None) or getattr(author, "name", "unknown")
     content = getattr(message, "content", "") or ""
-    return f"[bridge] {display_name}\n\n{content}"
+    return f"`{display_name}`\n\n{content}"
 
 
 def _unpack_thread_result(result: object) -> tuple[object, object]:
@@ -206,6 +206,7 @@ class DiscordFanout:
         *,
         mirror_deliveries: list[CommunityMessageGroupDelivery],
         new_content: str,
+        author_display_name: str = "",
     ) -> None:
         """Edit all mirror Discord messages concurrently with the new content.
 
@@ -213,15 +214,25 @@ class DiscordFanout:
         failures are collected and logged without blocking the remaining edits.
         The caller is responsible for sending the AP Update regardless of
         whether any individual mirror edit failed.
+
+        author_display_name is used to build a header when the mirror message
+        has no existing backtick-quoted attribution line (e.g. messages created
+        before the header format was introduced).
         """
         async def _edit_one(delivery: CommunityMessageGroupDelivery) -> None:
             try:
                 from ..formatting import apply_edit_to_discord_message
                 thread = await self.bot.get_thread_by_id(delivery.discord_thread_id)
                 message = await thread.fetch_message(delivery.discord_message_id)
-                # Preserve the author header line from the current message content
-                # so the username attribution is not lost when the body is updated.
-                updated = apply_edit_to_discord_message(message.content, new_content)
+                # Preserve the author header from the current message when present.
+                # Fall back to building a fresh header from author_display_name so
+                # older mirror messages (created before the header format) also get
+                # proper attribution after an edit.
+                updated = apply_edit_to_discord_message(
+                    message.content,
+                    new_content,
+                    fallback_header=author_display_name,
+                )
                 await message.edit(content=updated)
                 # Track that we edited this message to dedup on_raw_message_edit events
                 self.bot.track_message_edit(delivery.discord_message_id)

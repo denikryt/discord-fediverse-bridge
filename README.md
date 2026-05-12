@@ -20,7 +20,13 @@ The project runs as two processes:
 
 ## How It Works
 
-To send messages from Discord into Lemmy, a user must register on the bridge. Use the `/register` command — the bot replies with a registration link. Following it opens a web page where the user logs in with their Discord account and chooses a username. This creates an ActivityPub identity for that user so their posts and comments appear correctly attributed in the fediverse.
+The bridge runs a single **bridge actor** — one ActivityPub identity that follows Lemmy communities on behalf of all subscribers. When a moderator runs `/subscribe-channel`, the bridge actor sends a `Follow` to the target community. Inbound posts and comments are delivered to this actor and then fanned out to every subscribed Discord channel. The `Follow` is shared across channels: if multiple channels subscribe to the same community, only one AP follow is sent.
+
+For outbound traffic (Discord → Lemmy), each registered Discord user gets their own **individual AP identity**. These identities are used to publish posts and comments so they appear attributed to the correct person in the fediverse. They are not used for `Follow` activities — that is handled exclusively by the bridge actor.
+
+Discord channels from different guilds can subscribe to the same Lemmy community. Inbound posts are delivered to all of them.
+
+To send messages from Discord into Lemmy, a user must register on the bridge. Use the `/register` command — the bot replies with a registration link. Following it opens a web page where the user logs in with their Discord account and chooses a username.
 
 ## What Is Synced
 

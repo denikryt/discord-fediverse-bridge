@@ -29,6 +29,7 @@ async def main() -> None:
 
     database = Database(settings.database_url)
     database.create_all()
+    database.migrate()
 
     fedify_gateway = FedifyGatewayClient(settings)
     discord_oauth_client = DiscordOAuthClient(settings)

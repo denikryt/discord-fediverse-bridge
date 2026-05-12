@@ -561,12 +561,16 @@ class CommunityRuntime:
         message_id: int,
         new_content: str,
         runtime: Runtime,
+        author_display_name: str = "",
     ) -> None:
         """Propagate a Discord source-message edit to all mirror messages and to AP.
 
         Resolves the message group by the edited message ID, edits all mirror
         deliveries via DiscordFanout, then sends one AP Update to the gateway.
         Returns silently if no delivery row exists for message_id (unknown message).
+
+        author_display_name is used to build the mirror header so the attribution
+        line is preserved even when the mirror message had no prior header.
 
         If a mirror edit fails, the error is logged and the AP Update is still sent —
         individual mirror failures do not abort the outbound AP propagation.
@@ -579,14 +583,17 @@ class CommunityRuntime:
         if message_group is None:
             return
 
-        # Mirror deliveries are the non-source copies that need to be updated.
+        # Mirror deliveries are the bot-owned copies that need to be updated.
+        # Only role="mirror" — inbound deliveries are owned by the AP sender,
+        # not the bot, so editing them would result in a 403 Forbidden.
         all_deliveries = self.database.get_message_deliveries(message_group.id)
-        mirror_deliveries = [d for d in all_deliveries if d.role != "source"]
+        mirror_deliveries = [d for d in all_deliveries if d.role == "mirror"]
 
         if self.discord_fanout is not None and mirror_deliveries:
             await self.discord_fanout.propagate_edit(
                 mirror_deliveries=mirror_deliveries,
                 new_content=new_content,
+                author_display_name=author_display_name,
             )
 
         # Send the AP Update if the message group has an AP object and community actor.
@@ -772,7 +779,11 @@ class CommunityRuntime:
             )
             return _HandlerResult(status="skipped", detail="comment not yet mapped")
 
-        deliveries = self.database.get_message_deliveries(message_group.id)
+        all_deliveries = self.database.get_message_deliveries(message_group.id)
+        # Only edit messages the bot itself wrote: inbound (created by bot from AP)
+        # and mirror (bot-owned copies in sibling channels).
+        # Source messages are user-authored — editing them returns 403 Forbidden.
+        deliveries = [d for d in all_deliveries if d.role in ("inbound", "mirror")]
         if not deliveries:
             return _HandlerResult(status="skipped", detail="no message deliveries")
 
@@ -828,7 +839,9 @@ class CommunityRuntime:
             )
             return _HandlerResult(status="skipped", detail="comment not yet mapped")
 
-        deliveries = self.database.get_message_deliveries(message_group.id)
+        all_deliveries = self.database.get_message_deliveries(message_group.id)
+        # Only edit messages the bot itself wrote — source messages are user-authored.
+        deliveries = [d for d in all_deliveries if d.role in ("inbound", "mirror")]
 
         bot = self.bot or runtime.bot
 

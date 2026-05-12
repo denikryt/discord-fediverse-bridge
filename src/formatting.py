@@ -50,18 +50,25 @@ def format_lemmy_comment_for_discord(author: str, body: str, url: str, actor_id:
     return truncate("\n\n".join(parts), DISCORD_MESSAGE_LIMIT)
 
 
-def apply_edit_to_discord_message(current_content: str, new_body: str) -> str:
+def apply_edit_to_discord_message(
+    current_content: str,
+    new_body: str,
+    fallback_header: str = "",
+) -> str:
     """Replace the body of a bridge-formatted Discord message while keeping the header line.
 
     Bridge messages have the form:
-        `username@domain`
+        `username`
 
         body text
 
     When an edit arrives (from Discord or inbound AP), only the body changes.
     The header line is preserved verbatim so the author attribution is not lost.
-    If the current content has no recognisable header (e.g. legacy messages),
-    the new body is returned as-is.
+
+    If the current content has no recognisable header and fallback_header is
+    provided, a fresh backtick-quoted header is built from it. This covers
+    older mirror messages created before the header format was introduced.
+    If neither a header nor a fallback is available, the new body is returned as-is.
     """
     # The header is always the first paragraph (everything before the first \n\n).
     # Split on the first double-newline only so multi-paragraph bodies are kept intact.
@@ -69,13 +76,20 @@ def apply_edit_to_discord_message(current_content: str, new_body: str) -> str:
     header = parts[0].strip()
     new_body = new_body.strip()
 
-    # Only treat the first line as a header when it looks like a bridge attribution
-    # (backtick-quoted username). Plain messages or legacy content fall through.
+    # Use the existing header when it looks like a bridge attribution (backtick-quoted).
     if header.startswith("`") and header.endswith("`"):
         if new_body:
             return truncate(f"{header}\n\n{new_body}", DISCORD_MESSAGE_LIMIT)
         return header
-    # No recognisable header — return the new body unchanged.
+
+    # No recognisable header — build one from fallback_header when available.
+    if fallback_header:
+        header = f"`{fallback_header}`"
+        if new_body:
+            return truncate(f"{header}\n\n{new_body}", DISCORD_MESSAGE_LIMIT)
+        return header
+
+    # No header and no fallback — return the new body unchanged.
     return truncate(new_body, DISCORD_MESSAGE_LIMIT)
 
 
