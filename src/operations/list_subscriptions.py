@@ -11,15 +11,23 @@ from ..db import Database
 
 @dataclass
 class ListSubscriptionsInput:
-    # Listing only depends on the subscription repository.
+    """Carry the guild context needed to scope the subscription list."""
+
     database: Database
+    # None means no guild context — falls back to showing all subscriptions
+    # (e.g. when called outside a guild or from legacy code paths).
+    guild_id: int | None = None
     _subscriptions: list[object] | None = field(default=None, init=False, repr=False)
 
     def get_subscriptions(self) -> list[object]:
+        """Load and memoize subscriptions scoped to the guild when possible."""
         # The empty-state check and success payload should see one cached
         # subscription snapshot for a single command invocation.
         if self._subscriptions is None:
-            self._subscriptions = self.database.get_all_subscriptions()
+            if self.guild_id is not None:
+                self._subscriptions = self.database.get_subscriptions_by_guild(self.guild_id)
+            else:
+                self._subscriptions = self.database.get_all_subscriptions()
         return self._subscriptions
 
 

@@ -79,6 +79,7 @@ def register(
                 database=database,
                 fedify_gateway=fedify_gateway,
                 discord_user_id=str(interaction.user.id),
+                guild_id=interaction.guild_id,
                 channel_id=channel.id,
                 channel_mention=channel.mention,
                 actor_id=actor_id,

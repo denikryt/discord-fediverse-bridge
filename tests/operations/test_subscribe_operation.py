@@ -162,6 +162,7 @@ async def test_subscribe_creates_bridge_follow_when_none_exists() -> None:
     )
     database.create_subscription.assert_called_once_with(
         discord_channel_id=123,
+        discord_guild_id=None,
         lemmy_community_actor_id=community_actor_url,
         lemmy_community_name="hackers",
         lemmy_community_id=777,
@@ -213,6 +214,7 @@ async def test_subscribe_reuses_existing_bridge_follow_when_accepted() -> None:
     # Only a channel subscription row is created, already as accepted.
     database.create_subscription.assert_called_once_with(
         discord_channel_id=456,
+        discord_guild_id=None,
         lemmy_community_actor_id=community_actor_url,
         lemmy_community_name="hackers",
         lemmy_community_id=777,
@@ -263,6 +265,7 @@ async def test_subscribe_reuses_existing_bridge_follow_when_pending() -> None:
     # Channel subscription is created as pending — it will activate when Accept arrives.
     database.create_subscription.assert_called_once_with(
         discord_channel_id=789,
+        discord_guild_id=None,
         lemmy_community_actor_id=community_actor_url,
         lemmy_community_name="hackers",
         lemmy_community_id=777,
@@ -312,6 +315,7 @@ async def test_subscribe_operation_marks_failed_when_follow_dispatch_fails() -> 
     )
     database.create_subscription.assert_called_once_with(
         discord_channel_id=123,
+        discord_guild_id=None,
         lemmy_community_actor_id=community_actor_url,
         lemmy_community_name="hackers",
         lemmy_community_id=777,
@@ -377,6 +381,7 @@ async def test_subscribe_operation_retries_failed_subscription() -> None:
     )
     database.create_subscription.assert_called_once_with(
         discord_channel_id=123,
+        discord_guild_id=None,
         lemmy_community_actor_id=community_actor_url,
         lemmy_community_name="hackers",
         lemmy_community_id=777,

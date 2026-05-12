@@ -47,6 +47,7 @@ def interaction() -> AsyncMock:
     mock_interaction = AsyncMock()
     mock_interaction.response.send_message = AsyncMock()
     mock_interaction.user.id = "1234567890"
+    mock_interaction.guild_id = 99999
     return mock_interaction
 
 

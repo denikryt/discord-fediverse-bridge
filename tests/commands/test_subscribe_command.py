@@ -43,6 +43,7 @@ async def test_subscribe_channel_success(
     fake_client.resolve_community_id.assert_awaited_once_with(name="hackers")
     database.create_subscription.assert_called_once_with(
         discord_channel_id=forum_channel.id,
+        discord_guild_id=interaction.guild_id,
         lemmy_community_actor_id=community_actor_url,
         lemmy_community_name="hackers",
         lemmy_community_id=777,
@@ -182,6 +183,7 @@ async def test_subscribe_channel_marks_failed_when_follow_dispatch_fails(
 
     database.create_subscription.assert_called_once_with(
         discord_channel_id=forum_channel.id,
+        discord_guild_id=interaction.guild_id,
         lemmy_community_actor_id=community_actor_url,
         lemmy_community_name="hackers",
         lemmy_community_id=777,
@@ -229,6 +231,7 @@ async def test_subscribe_channel_retries_failed_subscription(
     database.delete_subscription.assert_called_once_with(forum_channel.id)
     database.create_subscription.assert_called_once_with(
         discord_channel_id=forum_channel.id,
+        discord_guild_id=interaction.guild_id,
         lemmy_community_actor_id=community_actor_url,
         lemmy_community_name="hackers",
         lemmy_community_id=777,
@@ -255,6 +258,7 @@ def _make_interaction(lemmy_instance: str | None) -> AsyncMock:
     mock = AsyncMock()
     mock.response.send_message = AsyncMock()
     mock.user.id = "1234567890"
+    mock.guild_id = 99999
     mock.namespace = SimpleNamespace(lemmy_instance=lemmy_instance)
     return mock
 

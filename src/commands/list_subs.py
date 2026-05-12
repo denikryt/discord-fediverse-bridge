@@ -17,7 +17,7 @@ def register(tree: app_commands.CommandTree, database: Database) -> None:
         # ownership of Discord embed rendering for successful responses.
         result = await run_operation_definition_async(
             list_subscriptions_operation,
-            ListSubscriptionsInput(database=database),
+            ListSubscriptionsInput(database=database, guild_id=interaction.guild_id),
         )
         if not result.applied:
             await interaction.response.send_message(result.message, ephemeral=True)

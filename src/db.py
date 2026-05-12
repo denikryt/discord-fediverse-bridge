@@ -248,10 +248,24 @@ class Database:
         with self.session() as session:
             return list(session.scalars(select(ChannelCommunitySubscription).order_by(ChannelCommunitySubscription.created_at)))
 
+    def get_subscriptions_by_guild(self, discord_guild_id: int) -> list[ChannelCommunitySubscription]:
+        """Return all subscription rows for one Discord guild in creation order.
+
+        Used by /list-subscriptions to show only the subscriptions that belong
+        to the guild where the command was invoked.
+        """
+        with self.session() as session:
+            return list(session.scalars(
+                select(ChannelCommunitySubscription)
+                .where(ChannelCommunitySubscription.discord_guild_id == discord_guild_id)
+                .order_by(ChannelCommunitySubscription.created_at)
+            ))
+
     def create_subscription(
         self,
         *,
         discord_channel_id: int,
+        discord_guild_id: int | None = None,
         lemmy_community_actor_id: str,
         lemmy_community_name: str | None,
         lemmy_community_id: int | None,
@@ -268,6 +282,7 @@ class Database:
         with self.session() as session:
             sub = ChannelCommunitySubscription(
                 discord_channel_id=discord_channel_id,
+                discord_guild_id=discord_guild_id,
                 lemmy_community_actor_id=lemmy_community_actor_id,
                 lemmy_community_name=lemmy_community_name,
                 lemmy_community_id=lemmy_community_id,

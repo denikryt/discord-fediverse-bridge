@@ -91,6 +91,7 @@ class ChannelCommunitySubscription(Base):
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
     discord_channel_id: Mapped[int] = mapped_column(Integer, nullable=False, unique=True)
+    discord_guild_id: Mapped[int | None] = mapped_column(Integer, nullable=True)
     lemmy_community_actor_id: Mapped[str] = mapped_column(String(512), nullable=False)
     lemmy_community_name: Mapped[str | None] = mapped_column(String(255), nullable=True)
     lemmy_community_id: Mapped[int | None] = mapped_column(Integer, nullable=True)

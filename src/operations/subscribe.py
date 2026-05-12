@@ -38,6 +38,7 @@ class SubscribeInput:
     community_name: str | None
     numeric_id: int | None
     community_handle: str
+    guild_id: int | None = None
     _bridge_user: object | None = field(default=None, init=False, repr=False)
     _bridge_user_loaded: bool = field(default=False, init=False, repr=False)
     _existing_subscription: object | None = field(default=None, init=False, repr=False)
@@ -158,6 +159,7 @@ async def _body(operation_input: SubscribeInput) -> OperationResult:
         # accepted. Create the new channel row immediately as accepted.
         operation_input.database.create_subscription(
             discord_channel_id=operation_input.channel_id,
+            discord_guild_id=operation_input.guild_id,
             lemmy_community_actor_id=operation_input.actor_id,
             lemmy_community_name=operation_input.community_name,
             lemmy_community_id=operation_input.numeric_id,
@@ -181,6 +183,7 @@ async def _body(operation_input: SubscribeInput) -> OperationResult:
         # channel row so this channel activates when the shared Accept arrives.
         operation_input.database.create_subscription(
             discord_channel_id=operation_input.channel_id,
+            discord_guild_id=operation_input.guild_id,
             lemmy_community_actor_id=operation_input.actor_id,
             lemmy_community_name=operation_input.community_name,
             lemmy_community_id=operation_input.numeric_id,
@@ -216,6 +219,7 @@ async def _body(operation_input: SubscribeInput) -> OperationResult:
         )
         operation_input.database.create_subscription(
             discord_channel_id=operation_input.channel_id,
+            discord_guild_id=operation_input.guild_id,
             lemmy_community_actor_id=operation_input.actor_id,
             lemmy_community_name=operation_input.community_name,
             lemmy_community_id=operation_input.numeric_id,
@@ -244,6 +248,7 @@ async def _body(operation_input: SubscribeInput) -> OperationResult:
     )
     operation_input.database.create_subscription(
         discord_channel_id=operation_input.channel_id,
+        discord_guild_id=operation_input.guild_id,
         lemmy_community_actor_id=follow_result.community_actor_url,
         lemmy_community_name=operation_input.community_name,
         lemmy_community_id=operation_input.numeric_id,
