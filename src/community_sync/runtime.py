@@ -443,8 +443,13 @@ class CommunityRuntime:
         Delivers the comment into every thread in the thread group with the correct per-thread
         Discord reply reference. Does not write CommentLink rows.
 
+        If the parent post has no CommunityThreadGroup yet, attempts on-demand backfill:
+        fetches the post from the remote AP endpoint, creates the Discord thread in all
+        subscribed channels that have no delivery row, and persists the group/delivery rows.
+        Falls back to deferred if the fetch or parse fails.
+
         Returns status='skipped' if already mapped, status='deferred' if the parent post
-        is not yet mapped, status='processed' after successful delivery.
+        is not yet mapped and cannot be fetched, status='processed' after successful delivery.
 
         Retry and partial-delivery behavior (Phase 6):
           If a message group already exists for this ap_id, the retry returns 'skipped'.
@@ -466,17 +471,33 @@ class CommunityRuntime:
             logger.info("Comment %s already mapped — skipping", event.object.ap_id)
             return _HandlerResult(status="skipped", detail="comment already mapped")
 
-        # Resolve the thread group via the post AP id. If the post hasn't been
-        # delivered yet, defer so the caller can retry when the post arrives.
-        thread_group = self.database.get_thread_group_by_ap_object(
-            event.object.post_ap_id or ""
+        # Resolve the thread group and ensure all subscribed channels have a delivery
+        # row. When the group is missing entirely, or when some channels have no
+        # delivery row yet (partial prior delivery), backfill fills the gaps by
+        # fetching the post from the remote AP endpoint. Fetch failure → deferred.
+        post_ap_id = event.object.post_ap_id or ""
+        thread_group = self.database.get_thread_group_by_ap_object(post_ap_id)
+        bot = self.bot or runtime.bot
+
+        needs_backfill = _needs_backfill(
+            thread_group=thread_group,
+            community_actor_id=event.community_actor_id,
+            database=self.database,
         )
-        if thread_group is None:
-            logger.info(
-                "Skipping comment %s — parent post %s not yet mapped",
-                event.object.ap_id, event.object.post_ap_id,
+        if needs_backfill:
+            thread_group = await _backfill_post_as_thread_group(
+                post_ap_id=post_ap_id,
+                community_actor_id=event.community_actor_id,
+                delivery_id=event.delivery_id,
+                bot=bot,
+                database=self.database,
             )
-            return _HandlerResult(status="deferred", detail="parent post not mapped yet")
+            if thread_group is None:
+                logger.info(
+                    "Deferring comment %s — parent post %s not mapped and fetch failed",
+                    event.object.ap_id, event.object.post_ap_id,
+                )
+                return _HandlerResult(status="deferred", detail="parent post not mapped and fetch failed")
 
         logger.debug(
             "[handle_inbound_comment] thread_group=%s deliveries=%s",
@@ -830,6 +851,126 @@ class CommunityRuntime:
         )
 
         return _HandlerResult(status="processed", detail="comment deleted")
+
+
+def _needs_backfill(
+    *,
+    thread_group: object | None,
+    community_actor_id: str,
+    database: Database,
+) -> bool:
+    """Return True when backfill is needed to ensure all subscribed channels have a delivery row.
+
+    Two cases require backfill:
+    - No thread group exists at all (post was never delivered to any channel).
+    - Thread group exists but some accepted subscriptions have no delivery row
+      (partial prior delivery, e.g. due to a transient Discord failure).
+    """
+    subscriptions = database.get_subscriptions_by_community(community_actor_id)
+    accepted_channel_ids = {s.discord_channel_id for s in subscriptions if s.status == "accepted"}
+    if not accepted_channel_ids:
+        return False
+
+    if thread_group is None:
+        return True
+
+    # Check whether every accepted channel already has a delivery row.
+    existing_deliveries = database.get_thread_deliveries(thread_group.id)
+    delivered_channel_ids = {d.discord_channel_id for d in existing_deliveries}
+    return bool(accepted_channel_ids - delivered_channel_ids)
+
+
+async def _backfill_post_as_thread_group(
+    *,
+    post_ap_id: str,
+    community_actor_id: str,
+    delivery_id: str,
+    bot: object,
+    database: Database,
+) -> object | None:
+    """Fetch a missing AP post and create its Discord threads on demand.
+
+    Called when a comment.created event arrives but the parent post has no
+    CommunityThreadGroup yet. Fetches the raw AP Page document from post_ap_id,
+    constructs a synthetic post.created event, and delivers it into all accepted
+    subscriptions that do not yet have a thread delivery row for this post.
+
+    Two cases:
+    - No CommunityThreadGroup exists: create it, then create threads in all
+      accepted subscriptions for the community.
+    - CommunityThreadGroup exists (partial prior delivery): reuse it and create
+      threads only in subscriptions that have no delivery row yet. This prevents
+      duplicate threads in channels that already received the post while still
+      backfilling channels that missed it.
+
+    Returns the CommunityThreadGroup (new or existing) on success, None if the
+    remote fetch or AP document parse fails.
+    """
+    from ..bridge_lemmy_to_discord import _build_post_event_from_ap_doc, _create_inbound_discord_thread, _fetch_ap_object
+
+    # Fetch the AP post document from the remote instance.
+    try:
+        doc = await _fetch_ap_object(post_ap_id)
+    except Exception:
+        logger.exception("Backfill fetch failed for post %s", post_ap_id)
+        return None
+
+    # Synthesize a post.created event from the raw AP document.
+    try:
+        post_event = _build_post_event_from_ap_doc(doc, community_actor_id, delivery_id)
+    except Exception:
+        logger.exception("Backfill parse failed for post %s", post_ap_id)
+        return None
+
+    # Resolve or create the thread group for this post.
+    thread_group = database.get_thread_group_by_ap_object(post_ap_id)
+    if thread_group is None:
+        thread_group = database.create_thread_group(
+            community_actor_id=community_actor_id,
+            source_channel_id=None,
+            source_thread_id=None,
+            source_starter_message_id=None,
+            ap_activity_id=delivery_id,
+            ap_object_id=post_ap_id,
+        )
+
+    # Determine which subscribed channels already have a delivery row.
+    existing_deliveries = database.get_thread_deliveries(thread_group.id)
+    already_delivered_channels = {d.discord_channel_id for d in existing_deliveries}
+
+    subscriptions = database.get_subscriptions_by_community(community_actor_id)
+    accepted = [s for s in subscriptions if s.status == "accepted"]
+
+    await bot.wait_until_bridge_ready()
+
+    for subscription in accepted:
+        # Skip channels that already have a delivery to avoid creating duplicate threads.
+        if subscription.discord_channel_id in already_delivered_channels:
+            continue
+        try:
+            forum_channel = await bot.fetch_forum_channel(subscription.discord_channel_id)
+            thread_id, starter_message_id = await _create_inbound_discord_thread(
+                forum_channel=forum_channel,
+                event=post_event,
+            )
+            database.add_thread_delivery(
+                thread_group_id=thread_group.id,
+                discord_channel_id=subscription.discord_channel_id,
+                discord_thread_id=thread_id,
+                discord_starter_message_id=starter_message_id,
+                role="inbound",
+            )
+        except Exception:
+            logger.exception(
+                "Backfill thread creation failed for channel %s post %s",
+                subscription.discord_channel_id, post_ap_id,
+            )
+
+    logger.info(
+        "Backfilled post %s into thread group %s (%d subscription(s) processed)",
+        post_ap_id, thread_group.id, len(accepted),
+    )
+    return thread_group
 
 
 async def _resolve_actor_username(database: Database, message_group: object) -> str | None:
