@@ -32,11 +32,21 @@ def format_lemmy_post_for_discord(author: str, title: str, body: str, url: str) 
     return truncate("\n\n".join(parts), DISCORD_MESSAGE_LIMIT)
 
 
-def format_lemmy_comment_for_discord(author: str, body: str, url: str) -> str:
-    parts = [f"Comment from `{author}`"]
+def format_lemmy_comment_for_discord(author: str, body: str, url: str, actor_id: str = "") -> str:
+    # Show full fediverse handle when we can derive the instance domain from actor_id.
+    # Falls back to plain username when actor_id is absent (e.g. synthetic events).
+    if actor_id:
+        try:
+            from urllib.parse import urlparse
+            domain = urlparse(actor_id).hostname or ""
+            display = f"`{author}@{domain}`" if domain else f"`{author}`"
+        except Exception:
+            display = f"`{author}`"
+    else:
+        display = f"`{author}`"
+    parts = [display]
     if body.strip():
         parts.append(body.strip())
-    parts.append(url)
     return truncate("\n\n".join(parts), DISCORD_MESSAGE_LIMIT)
 
 

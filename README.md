@@ -18,14 +18,23 @@ The project runs as two processes:
    - outbound `Follow` and `Create`
    - inbound federation intake forwarded to Python
 
+## How It Works
+
+To send messages from Discord into Lemmy, a user must register on the bridge. Use the `/register` command — the bot replies with a registration link. Following it opens a web page where the user logs in with their Discord account and chooses a username. This creates an ActivityPub identity for that user so their posts and comments appear correctly attributed in the fediverse.
+
 ## What Is Synced
 
-- Discord forum thread starter -> ActivityPub post
-- Discord message inside a mapped thread -> ActivityPub comment
-- inbound ActivityPub post -> Discord forum thread + starter message
-- inbound ActivityPub comment -> Discord thread message
+Discord → Lemmy + sibling Discord channels (registration required — messages are not forwarded without it):
+- forum thread starter → ActivityPub post, mirrored to all other subscribed channels
+- thread message → ActivityPub comment, mirrored to all sibling threads
+- edit / delete propagated to Lemmy and all sibling mirrors
 
-Only create flows are implemented. Edits, deletes, attachments, and vote sync are not implemented.
+Lemmy → all subscribed Discord channels:
+- inbound post → thread created in every subscribed forum channel
+- inbound comment → message in each mapped thread
+- edit / delete propagated to Discord
+
+Vote sync is not implemented.
 
 ## Requirements
 
@@ -34,6 +43,9 @@ Only create flows are implemented. Edits, deletes, attachments, and vote sync ar
 - a Discord bot with `message content intent` enabled
 - a public Lemmy instance URL
 - a running `fedify-gateway`
+- two public domains with HTTPS:
+  - **gateway domain** — must be reachable from the internet; Lemmy instances send AP requests (WebFinger, Follow, inbox) here
+  - **bridge domain** — serves the web registration page; used as the Discord OAuth redirect URI
 
 ## Python Bridge Env
 
@@ -42,8 +54,8 @@ Env template: `.env.example`
 Required:
 
 - `DISCORD_TOKEN`
-- `LEMMY_BASE_URL`
 - `FEDIFY_SHARED_SECRET`
+- `FEDIFY_ORIGIN`
 
 Common:
 
@@ -51,6 +63,10 @@ Common:
 - `INTERNAL_HTTP_HOST`
 - `INTERNAL_HTTP_PORT`
 - `PUBLIC_BRIDGE_BASE_URL`
+
+Optional:
+
+- `FEDERATION_ALLOWLIST` — comma-separated Lemmy hostnames to accept; empty means all instances allowed
 
 Needed only for web registration:
 
@@ -66,11 +82,19 @@ Required:
 
 - `FEDIFY_ORIGIN`
 - `PYTHON_BRIDGE_SHARED_SECRET`
+- `FEDIFY_BRIDGE_PRIVATE_KEY_JWK_JSON` — generate with `npm run generate-keys`
+- `FEDIFY_BRIDGE_PUBLIC_KEY_JWK_JSON` — generate with `npm run generate-keys`
 
 Common:
 
 - `PYTHON_BRIDGE_EVENTS_URL`
 - `FEDIFY_PORT`
+- `LOG_LEVEL`
+
+Needed only for nginx setup (`nginx-setup.sh`):
+
+- `GATEWAY_DOMAIN`
+- `BRIDGE_DOMAIN`
 
 ## Install
 
@@ -125,17 +149,7 @@ npm run verify:python-contract
 npm run verify:publish-contract
 ```
 
-## Registration
-
-Routes served by the Python bridge:
-
-- `GET /register`
-- `GET /auth/discord/start`
-- `GET /auth/discord/callback`
-- `POST /register/complete`
-- `GET /register/success`
-
-## Commands
+## Discord bot commands
 
 - `/register`
 - `/subscribe-channel`

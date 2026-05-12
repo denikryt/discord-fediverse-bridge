@@ -161,6 +161,7 @@ async def _send_inbound_comment(
         comment.author_name,
         normalize_text(comment.body_markdown),
         comment.url,
+        actor_id=event.actor_id,
     )
     message = await thread.send(body, reference=reference)
     logger.info("Created Discord message %s from ActivityPub comment %s", message.id, comment.ap_id)
