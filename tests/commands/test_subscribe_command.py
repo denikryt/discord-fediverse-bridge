@@ -337,7 +337,7 @@ async def test_subscribe_autocomplete_uses_lemmy_instance_url(
         choices = await autocomplete_fn(interaction, "world")
 
     MockLemmyClient.assert_called_once_with(remote_instance_url)
-    fake_remote.list_communities.assert_awaited_once_with(limit=50)
+    fake_remote.list_communities.assert_awaited_once_with(limit=50, type_="Local")
     fake_remote.close.assert_awaited_once()
 
     assert len(choices) == 1

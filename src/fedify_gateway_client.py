@@ -120,6 +120,24 @@ class FedifyGatewayClient:
             community_actor_url=payload["communityActorUrl"],
         )
 
+    async def unfollow_community(
+        self, community_actor_url: str, follow_activity_id: str
+    ) -> None:
+        """Trigger one gateway-side Undo(Follow) to remove a community follow.
+
+        Called by the unsubscribe flow when the last channel subscription for a
+        community is deleted. The gateway signs and delivers the Undo activity.
+        """
+        response = await self._client.post(
+            "/unfollow-community",
+            headers={"Authorization": f"Bearer {self._shared_secret}"},
+            json={
+                "communityActorUrl": community_actor_url,
+                "followActivityId": follow_activity_id,
+            },
+        )
+        response.raise_for_status()
+
     async def update_content(self, request: UpdateContentRequest) -> None:
         """Trigger one gateway-side Update activity for an edited post or comment."""
         response = await self._client.post(

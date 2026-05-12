@@ -295,6 +295,31 @@ class CommunityMessageGroupDelivery(Base):
     role: Mapped[str] = mapped_column(String(32), nullable=False)
 
 
+class BridgeActorFollow(Base):
+    """Track one AP-level Follow from the bridge actor to a remote community.
+
+    This table owns the network-level fact of whether our bridge actor is
+    following a community. It is independent of Discord channel subscriptions:
+    multiple channels can subscribe to the same community while only one
+    BridgeActorFollow row exists. The row is deleted only when the last
+    channel subscription for that community is removed and an Undo(Follow)
+    has been dispatched.
+    """
+
+    # status values: pending | accepted | failed
+    __tablename__ = "bridge_actor_follows"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    # Canonical AP actor URL for the remote community — UNIQUE enforces the
+    # one-follow-per-community invariant at the DB level.
+    community_actor_id: Mapped[str] = mapped_column(String(512), nullable=False, unique=True)
+    follow_activity_id: Mapped[str | None] = mapped_column(String(512), nullable=True)
+    community_inbox_url: Mapped[str | None] = mapped_column(String(512), nullable=True)
+    status: Mapped[str] = mapped_column(String(32), nullable=False, default="pending")
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, nullable=False)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, onupdate=utcnow, nullable=False)
+
+
 class RemoteActor(Base):
     """Cache remote actor metadata needed for verification and delivery."""
 

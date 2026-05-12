@@ -1,3 +1,9 @@
+"""Handlers for inbound ActivityPub events delivered by the Fedify gateway.
+
+Each handler receives a typed event model and a Runtime, performs all DB
+mutations, and returns a HandlerResult that the HTTP layer records as a receipt.
+"""
+
 from __future__ import annotations
 
 import logging
@@ -16,8 +22,13 @@ logger = logging.getLogger(__name__)
 
 @dataclass(slots=True)
 class HandlerResult:
-    # Handlers return explicit processing status so HTTP receipts can record
-    # whether the event was processed, skipped, or retried later.
+    """Carry the processing outcome of one inbound ActivityPub event.
+
+    Handlers return explicit status so the HTTP receipt layer can record
+    whether the event was processed, skipped, or needs a retry.
+    """
+
+    # status values: processed | skipped
     status: str
     detail: str
 
@@ -25,6 +36,13 @@ class HandlerResult:
 async def dispatch_activitypub_event(
     event: BridgeGatewayEvent, runtime: Runtime
 ) -> HandlerResult:
+    """Route one inbound ActivityPub event to the correct handler.
+
+    follow.accepted is exempt from the allowlist check because it is a
+    lifecycle response to our own outbound Follow and must always be processed.
+    All other event types are filtered against the federation allowlist before
+    any handler logic runs.
+    """
     # follow.accepted is exempt: it is a lifecycle response to our own outbound
     # Follow and must always be processed regardless of the allowlist.
     if event.event_type != "follow.accepted":
@@ -61,10 +79,12 @@ async def handle_post_created(event: ActivityPubEvent, runtime: Runtime) -> Hand
     """Route one inbound ActivityPub post through CommunityRuntime.
 
     Echo suppression is applied here before routing so the check is not
-    duplicated inside CommunityRuntime.
+    duplicated inside CommunityRuntime. Also promotes pending follows to
+    accepted when the instance starts delivering without sending Accept first.
     """
     if _is_discord_originated_echo(event, runtime):
         return HandlerResult(status="skipped", detail="discord-originated echo")
+    await _maybe_implicit_accept(event.community_actor_id, runtime)
     return await runtime.community_runtime.handle_inbound_post(event, runtime)
 
 
@@ -72,70 +92,137 @@ async def handle_comment_created(event: ActivityPubEvent, runtime: Runtime) -> H
     """Route one inbound ActivityPub comment through CommunityRuntime.
 
     Echo suppression is applied here before routing so the check is not
-    duplicated inside CommunityRuntime.
+    duplicated inside CommunityRuntime. Also promotes pending follows to
+    accepted when the instance starts delivering without sending Accept first.
     """
     if _is_discord_originated_echo(event, runtime):
         return HandlerResult(status="skipped", detail="discord-originated echo")
+    await _maybe_implicit_accept(event.community_actor_id, runtime)
     return await runtime.community_runtime.handle_inbound_comment(event, runtime)
 
 
 async def handle_follow_accepted(
     event: FollowLifecycleEvent, runtime: Runtime
 ) -> HandlerResult:
-    # Follow acceptance is pure subscription-state mutation, so it does not
-    # touch Discord directly for routing state, but we still try to notify the
-    # target forum channel after acceptance so moderators see the result in the
-    # same place where they issued the subscribe command.
-    subscription = runtime.database.get_subscription_by_follow_activity_id(
-        event.object.follow_activity_id
+    """Process an Accept(Follow) from a remote Lemmy instance.
+
+    Marks the BridgeActorFollow row accepted, which in turn marks all pending
+    ChannelCommunitySubscription rows for the same community accepted. Then
+    DMs every Discord user who initiated one of those subscriptions so they see
+    confirmation in the channel where they ran /subscribe-channel.
+    """
+    follow_activity_id = event.object.follow_activity_id
+
+    # Look up by follow_activity_id first; fall back to community_actor_id if
+    # the bridge_actor_follows table is not yet populated (migration path).
+    bridge_follow = runtime.database.get_bridge_actor_follow_by_follow_activity_id(
+        follow_activity_id
     )
-    if subscription is None:
-        logger.info(
-            "Skipping follow acceptance for unknown follow activity %s",
-            event.object.follow_activity_id,
-        )
+
+    if bridge_follow is None:
+        # Legacy path: Accept arrived for a follow that predates the
+        # bridge_actor_follows table. Fall back to the old channel-row lookup.
+        subscription = runtime.database.get_subscription_by_follow_activity_id(follow_activity_id)
+        if subscription is None:
+            logger.info(
+                "Skipping follow acceptance for unknown follow activity %s",
+                follow_activity_id,
+            )
+            return HandlerResult(status="skipped", detail="follow activity is not mapped")
+        if subscription.status == "accepted":
+            return HandlerResult(status="skipped", detail="subscription already accepted")
+
+        runtime.database.mark_subscription_accepted_by_follow_activity_id(follow_activity_id)
+        await _notify_channel_accepted(subscription, runtime)
         return HandlerResult(
-            status="skipped", detail="follow activity is not mapped"
+            status="processed",
+            detail="subscription accepted and channel notified (legacy path)",
         )
-    if subscription.status == "accepted":
-        return HandlerResult(status="skipped", detail="subscription already accepted")
 
-    runtime.database.mark_subscription_accepted_by_follow_activity_id(
-        event.object.follow_activity_id
+    if bridge_follow.status == "accepted":
+        return HandlerResult(status="skipped", detail="bridge follow already accepted")
+
+    # Mark the bridge-actor follow and all pending channel rows accepted atomically.
+    # get_pending_channel_subscriptions_for_community must be called BEFORE
+    # mark_bridge_actor_follow_accepted so we capture the pending rows that need DMs.
+    community_actor_id = bridge_follow.community_actor_id
+    pending_subs = runtime.database.get_pending_channel_subscriptions_for_community(
+        community_actor_id
+    )
+    runtime.database.mark_bridge_actor_follow_accepted(community_actor_id)
+
+    # DM every Discord user who was waiting on this community.
+    for sub in pending_subs:
+        await _notify_channel_accepted(sub, runtime)
+
+    return HandlerResult(
+        status="processed",
+        detail=f"bridge follow accepted; {len(pending_subs)} channel(s) notified",
     )
 
+
+async def _maybe_implicit_accept(
+    community_actor_id: str, runtime: Runtime
+) -> None:
+    """Promote a pending bridge-actor follow to accepted when inbound events arrive.
+
+    Some Lemmy instances start delivering events without ever sending an explicit
+    Accept(Follow). This function detects that case: if we receive a post or
+    comment from a community whose bridge-actor follow is still pending, we treat
+    the delivery itself as implicit acceptance and activate all waiting channels.
+    """
+    bridge_follow = runtime.database.get_bridge_actor_follow(community_actor_id)
+    if bridge_follow is None or bridge_follow.status != "pending":
+        # Either already accepted/failed or no follow row at all — nothing to promote.
+        return
+
+    logger.info(
+        "Implicit accept: received inbound event for pending follow on %s; "
+        "promoting to accepted",
+        community_actor_id,
+    )
+
+    # Capture pending subs before marking accepted so DMs can be sent.
+    pending_subs = runtime.database.get_pending_channel_subscriptions_for_community(
+        community_actor_id
+    )
+    runtime.database.mark_bridge_actor_follow_accepted(community_actor_id)
+
+    for sub in pending_subs:
+        await _notify_channel_accepted(sub, runtime)
+
+
+async def _notify_channel_accepted(subscription: object, runtime: Runtime) -> None:
+    """DM the Discord user who initiated a subscription that it is now active.
+
+    Failures are caught and logged rather than propagated so a DM failure does
+    not prevent the subscription from being marked accepted.
+    """
     try:
         community_label = (
-            subscription.community_handle
-            or subscription.lemmy_community_name
-            or subscription.lemmy_community_actor_id
+            getattr(subscription, "community_handle", None)
+            or getattr(subscription, "lemmy_community_name", None)
+            or getattr(subscription, "lemmy_community_actor_id", "unknown")
         )
-        # Notify via DM to the user who ran /subscribe-channel.
-        if subscription.initiated_by_discord_user_id is not None:
-            user = await runtime.bot.fetch_user(int(subscription.initiated_by_discord_user_id))
+        discord_channel_id = getattr(subscription, "discord_channel_id", None)
+        initiator_id = getattr(subscription, "initiated_by_discord_user_id", None)
+
+        if initiator_id is not None:
+            user = await runtime.bot.fetch_user(int(initiator_id))
             await user.send(
                 f"Your bridge follow for **{community_label}** was accepted. "
-                f"<#{subscription.discord_channel_id}> is now federated."
+                f"<#{discord_channel_id}> is now federated."
             )
         else:
             logger.warning(
                 "No initiator recorded for subscription %s, skipping DM notification",
-                subscription.discord_channel_id,
+                discord_channel_id,
             )
     except Exception:
         logger.exception(
             "Could not send follow acceptance notification for channel %s",
-            subscription.discord_channel_id,
+            getattr(subscription, "discord_channel_id", "unknown"),
         )
-        return HandlerResult(
-            status="processed",
-            detail="subscription accepted; notification failed",
-        )
-
-    return HandlerResult(
-        status="processed",
-        detail="subscription accepted and channel notified",
-    )
 
 
 def _is_discord_originated_echo(event: ActivityPubEvent, runtime: Runtime) -> bool:

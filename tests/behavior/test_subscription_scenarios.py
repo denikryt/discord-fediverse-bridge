@@ -11,7 +11,7 @@ import pytest
 
 from src.activitypub_handlers import dispatch_activitypub_event
 from src.activitypub_models import FollowLifecycleEvent
-from src.commands import subscribe
+from src.commands import subscribe, unsubscribe
 from src.db import Database
 from tests_constants import BRIDGE_EXAMPLE_DOMAIN, LEMMY_EXAMPLE_DOMAIN
 
@@ -72,14 +72,75 @@ async def test_no_subscription_subscribe_command_sends_follow_and_marks_pending(
         forum_channel,
     )
     subscription = database.get_subscription_by_channel(forum_channel.id)
+    bridge_follow = database.get_bridge_actor_follow(community_actor_url)
 
     assert subscription is not None
     assert subscription.status == "pending"
+    # A bridge_actor_follows row must be created alongside the channel subscription.
+    assert bridge_follow is not None
+    assert bridge_follow.status == "pending"
+    assert bridge_follow.community_actor_id == community_actor_url
     fedify_gateway.follow_community.assert_awaited_once_with(community_actor_url)
     interaction.response.send_message.assert_awaited_once_with(
         "Sent a bridge follow for <#12345> -> **hackers**. Waiting for federation acceptance.",
         ephemeral=False,
     )
+
+
+@pytest.mark.asyncio
+async def test_second_channel_reuses_existing_accepted_bridge_follow(
+    tmp_path: Path,
+    command_tree,
+    interaction,
+    forum_channel,
+    lemmy,
+    fedify_gateway,
+) -> None:
+    """Second channel subscribing to an already-accepted community activates immediately."""
+    database = _database(tmp_path)
+    _register_user(database)
+    community_actor_url = _community_actor_url()
+    follow_activity_id = f"https://{BRIDGE_EXAMPLE_DOMAIN}/activities/follow/1"
+    # Pre-seed: bridge actor already accepted for this community, first channel active.
+    database.create_bridge_actor_follow(
+        community_actor_id=community_actor_url,
+        follow_activity_id=follow_activity_id,
+        community_inbox_url=f"{community_actor_url}/inbox",
+        status="accepted",
+    )
+    # Different channel from forum_channel — first one is already subscribed.
+    database.create_subscription(
+        discord_channel_id=99999,
+        lemmy_community_actor_id=community_actor_url,
+        lemmy_community_name="hackers",
+        lemmy_community_id=777,
+        community_handle=f"!hackers@{LEMMY_EXAMPLE_DOMAIN}",
+        community_inbox_url=f"{community_actor_url}/inbox",
+        follow_activity_id=follow_activity_id,
+        initiated_by_discord_user_id="9999",
+        status="accepted",
+    )
+
+    subscribe.register(command_tree, database, fedify_gateway)
+
+    command = command_tree.commands["subscribe-channel"]
+    await command.callback(
+        interaction,
+        f"https://{LEMMY_EXAMPLE_DOMAIN}",
+        f"{community_actor_url}|hackers|777",
+        forum_channel,
+    )
+    new_subscription = database.get_subscription_by_channel(forum_channel.id)
+
+    # No new Follow sent — bridge actor already federated.
+    fedify_gateway.follow_community.assert_not_awaited()
+    assert new_subscription is not None
+    # Second channel is immediately accepted — no need to wait.
+    assert new_subscription.status == "accepted"
+    # Still only one bridge_actor_follows row.
+    bridge_follow = database.get_bridge_actor_follow(community_actor_url)
+    assert bridge_follow is not None
+    assert bridge_follow.status == "accepted"
 
 
 @pytest.mark.asyncio
@@ -183,9 +244,12 @@ async def test_follow_dispatch_failure_marks_subscription_failed(
         forum_channel,
     )
     subscription = database.get_subscription_by_channel(forum_channel.id)
+    bridge_follow = database.get_bridge_actor_follow(_community_actor_url())
 
     assert subscription is not None
     assert subscription.status == "failed"
+    assert bridge_follow is not None
+    assert bridge_follow.status == "failed"
     interaction.response.send_message.assert_awaited_once_with(
         "Could not subscribe <#12345> to **hackers** because the bridge Follow request failed.",
         ephemeral=True,
@@ -193,24 +257,43 @@ async def test_follow_dispatch_failure_marks_subscription_failed(
 
 
 @pytest.mark.asyncio
-async def test_follow_accepted_event_promotes_pending_subscription_to_accepted(
+async def test_follow_accepted_event_promotes_all_pending_subscriptions(
     tmp_path: Path,
 ) -> None:
-    """A matching Accept(Follow) should activate the subscription and DM the initiator."""
+    """A matching Accept(Follow) should activate ALL pending channel subscriptions."""
     database = _database(tmp_path)
     follow_activity_id = f"https://{BRIDGE_EXAMPLE_DOMAIN}/activities/follow/1"
-    dm_user = SimpleNamespace(send=AsyncMock())
+    community_actor_url = _community_actor_url()
+    # Two channels both waiting for acceptance on the same community.
+    database.create_bridge_actor_follow(
+        community_actor_id=community_actor_url,
+        follow_activity_id=follow_activity_id,
+        community_inbox_url=f"{community_actor_url}/inbox",
+        status="pending",
+    )
     database.create_subscription(
         discord_channel_id=12345,
-        lemmy_community_actor_id=_community_actor_url(),
+        lemmy_community_actor_id=community_actor_url,
         lemmy_community_name="hackers",
         lemmy_community_id=777,
         community_handle=f"!hackers@{LEMMY_EXAMPLE_DOMAIN}",
-        community_inbox_url=f"{_community_actor_url()}/inbox",
+        community_inbox_url=f"{community_actor_url}/inbox",
         follow_activity_id=follow_activity_id,
-        initiated_by_discord_user_id="1234567890",
+        initiated_by_discord_user_id="1111",
         status="pending",
     )
+    database.create_subscription(
+        discord_channel_id=99999,
+        lemmy_community_actor_id=community_actor_url,
+        lemmy_community_name="hackers",
+        lemmy_community_id=777,
+        community_handle=f"!hackers@{LEMMY_EXAMPLE_DOMAIN}",
+        community_inbox_url=f"{community_actor_url}/inbox",
+        follow_activity_id=follow_activity_id,
+        initiated_by_discord_user_id="2222",
+        status="pending",
+    )
+    dm_user = SimpleNamespace(send=AsyncMock())
     runtime = SimpleNamespace(
         database=database,
         bot=SimpleNamespace(
@@ -221,19 +304,123 @@ async def test_follow_accepted_event_promotes_pending_subscription_to_accepted(
         event_type="follow.accepted",
         delivery_id=f"https://{LEMMY_EXAMPLE_DOMAIN}/activities/accept/1",
         occurred_at=datetime.now(UTC),
-        community_actor_id=_community_actor_url(),
-        actor_id=_community_actor_url(),
+        community_actor_id=community_actor_url,
+        actor_id=community_actor_url,
         object={"follow_activity_id": follow_activity_id},
     )
 
     result = await dispatch_activitypub_event(event, runtime)
-    subscription = database.get_subscription_by_channel(12345)
 
     assert result.status == "processed"
-    assert subscription is not None
-    assert subscription.status == "accepted"
-    runtime.bot.fetch_user.assert_awaited_once_with(1234567890)
-    dm_user.send.assert_awaited_once_with(
-        "Your bridge follow for **!hackers@lemmy.example** was accepted. "
-        "<#12345> is now federated."
+    # Both channel subscriptions must be accepted.
+    sub1 = database.get_subscription_by_channel(12345)
+    sub2 = database.get_subscription_by_channel(99999)
+    assert sub1.status == "accepted"
+    assert sub2.status == "accepted"
+    # The bridge-actor follow row must be accepted.
+    bridge_follow = database.get_bridge_actor_follow(community_actor_url)
+    assert bridge_follow.status == "accepted"
+    # Both initiating users should receive a DM.
+    assert runtime.bot.fetch_user.await_count == 2
+    assert dm_user.send.await_count == 2
+
+
+@pytest.mark.asyncio
+async def test_unsubscribe_last_channel_sends_undo_follow(
+    tmp_path: Path,
+    command_tree,
+    interaction,
+    forum_channel,
+    fedify_gateway,
+) -> None:
+    """Unsubscribing the last channel for a community sends Undo(Follow)."""
+    database = _database(tmp_path)
+    community_actor_url = _community_actor_url()
+    follow_activity_id = f"https://{BRIDGE_EXAMPLE_DOMAIN}/activities/follow/1"
+    database.create_bridge_actor_follow(
+        community_actor_id=community_actor_url,
+        follow_activity_id=follow_activity_id,
+        community_inbox_url=f"{community_actor_url}/inbox",
+        status="accepted",
     )
+    database.create_subscription(
+        discord_channel_id=forum_channel.id,
+        lemmy_community_actor_id=community_actor_url,
+        lemmy_community_name="hackers",
+        lemmy_community_id=777,
+        community_handle=f"!hackers@{LEMMY_EXAMPLE_DOMAIN}",
+        community_inbox_url=f"{community_actor_url}/inbox",
+        follow_activity_id=follow_activity_id,
+        initiated_by_discord_user_id="1234567890",
+        status="accepted",
+    )
+
+    unsubscribe.register(command_tree, database, fedify_gateway)
+
+    command = command_tree.commands["unsubscribe-channel"]
+    await command.callback(interaction, forum_channel)
+
+    # Channel subscription must be gone.
+    assert database.get_subscription_by_channel(forum_channel.id) is None
+    # Undo(Follow) must be dispatched.
+    fedify_gateway.unfollow_community.assert_awaited_once_with(
+        community_actor_url, follow_activity_id
+    )
+    # Bridge follow row must be cleaned up.
+    assert database.get_bridge_actor_follow(community_actor_url) is None
+
+
+@pytest.mark.asyncio
+async def test_unsubscribe_one_of_two_channels_keeps_bridge_follow(
+    tmp_path: Path,
+    command_tree,
+    interaction,
+    forum_channel,
+    fedify_gateway,
+) -> None:
+    """Unsubscribing one of two channels keeps the bridge follow row intact."""
+    database = _database(tmp_path)
+    community_actor_url = _community_actor_url()
+    follow_activity_id = f"https://{BRIDGE_EXAMPLE_DOMAIN}/activities/follow/1"
+    database.create_bridge_actor_follow(
+        community_actor_id=community_actor_url,
+        follow_activity_id=follow_activity_id,
+        community_inbox_url=f"{community_actor_url}/inbox",
+        status="accepted",
+    )
+    # Two channels subscribed to the same community.
+    database.create_subscription(
+        discord_channel_id=forum_channel.id,
+        lemmy_community_actor_id=community_actor_url,
+        lemmy_community_name="hackers",
+        lemmy_community_id=777,
+        community_handle=f"!hackers@{LEMMY_EXAMPLE_DOMAIN}",
+        community_inbox_url=f"{community_actor_url}/inbox",
+        follow_activity_id=follow_activity_id,
+        initiated_by_discord_user_id="1234567890",
+        status="accepted",
+    )
+    database.create_subscription(
+        discord_channel_id=99999,
+        lemmy_community_actor_id=community_actor_url,
+        lemmy_community_name="hackers",
+        lemmy_community_id=777,
+        community_handle=f"!hackers@{LEMMY_EXAMPLE_DOMAIN}",
+        community_inbox_url=f"{community_actor_url}/inbox",
+        follow_activity_id=follow_activity_id,
+        initiated_by_discord_user_id="9999",
+        status="accepted",
+    )
+
+    unsubscribe.register(command_tree, database, fedify_gateway)
+
+    command = command_tree.commands["unsubscribe-channel"]
+    await command.callback(interaction, forum_channel)
+
+    # Only the target channel subscription is removed.
+    assert database.get_subscription_by_channel(forum_channel.id) is None
+    assert database.get_subscription_by_channel(99999) is not None
+    # No Undo dispatched — the other channel still subscribes.
+    fedify_gateway.unfollow_community.assert_not_awaited()
+    # Bridge follow row is preserved.
+    assert database.get_bridge_actor_follow(community_actor_url) is not None

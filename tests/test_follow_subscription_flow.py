@@ -42,14 +42,20 @@ def test_follow_accept_event_has_separate_typed_model() -> None:
 
 
 @pytest.mark.asyncio
-async def test_follow_accept_event_marks_pending_subscription_accepted(
+async def test_follow_accept_event_marks_bridge_follow_and_channel_accepted(
     tmp_path: Path,
 ) -> None:
-    """A matching Accept(Follow) should activate the pending subscription row."""
+    """A matching Accept(Follow) should activate the bridge follow and channel rows."""
     database = _database(tmp_path)
     lemmy_actor_url = f"https://{LEMMY_EXAMPLE_DOMAIN}/c/hackers"
     follow_activity_id = f"https://{BRIDGE_EXAMPLE_DOMAIN}/activities/follow/1"
     dm_user = SimpleNamespace(send=AsyncMock())
+    database.create_bridge_actor_follow(
+        community_actor_id=lemmy_actor_url,
+        follow_activity_id=follow_activity_id,
+        community_inbox_url=f"{lemmy_actor_url}/inbox",
+        status="pending",
+    )
     database.create_subscription(
         discord_channel_id=123,
         lemmy_community_actor_id=lemmy_actor_url,
@@ -78,11 +84,13 @@ async def test_follow_accept_event_marks_pending_subscription_accepted(
 
     result = await dispatch_activitypub_event(event, runtime)
     subscription = database.get_subscription_by_channel(123)
+    bridge_follow = database.get_bridge_actor_follow(lemmy_actor_url)
 
     assert result.status == "processed"
-    assert result.detail == "subscription accepted and channel notified"
     assert subscription is not None
     assert subscription.status == "accepted"
+    assert bridge_follow is not None
+    assert bridge_follow.status == "accepted"
     runtime.bot.fetch_user.assert_awaited_once_with(1234567890)
     dm_user.send.assert_awaited_once_with(
         "Your bridge follow for **!hackers@lemmy.example** was accepted. "

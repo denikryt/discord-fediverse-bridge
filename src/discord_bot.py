@@ -58,7 +58,7 @@ class BridgeBot(discord.Client):
         from .commands import list_subs, register, subscribe, unsubscribe
         register.register(self.tree, self.settings)
         subscribe.register(self.tree, self.database, self.fedify_gateway, self.settings)
-        unsubscribe.register(self.tree, self.database)
+        unsubscribe.register(self.tree, self.database, self.fedify_gateway)
         list_subs.register(self.tree, self.database)
         await self.tree.sync()
 

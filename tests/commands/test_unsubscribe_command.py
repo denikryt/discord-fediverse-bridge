@@ -1,23 +1,28 @@
 from __future__ import annotations
 
 from types import SimpleNamespace
+from unittest.mock import AsyncMock
 
 import pytest
 
 from src.commands import unsubscribe
-from tests_constants import LEMMY_EXAMPLE_DOMAIN
+from tests_constants import BRIDGE_EXAMPLE_DOMAIN, LEMMY_EXAMPLE_DOMAIN
 
 
 @pytest.mark.asyncio
-async def test_unsubscribe_channel_success(command_tree, interaction, forum_channel, database):
+async def test_unsubscribe_channel_success(command_tree, interaction, forum_channel, database, fedify_gateway):
     # The command shows the existing community label in the success message and
     # only deletes after confirming the mapping exists.
+    community_actor_url = f"https://{LEMMY_EXAMPLE_DOMAIN}/c/hackers"
     database.get_subscription_by_channel.return_value = SimpleNamespace(
         lemmy_community_name="hackers",
-        lemmy_community_actor_id=f"https://{LEMMY_EXAMPLE_DOMAIN}/c/hackers",
+        lemmy_community_actor_id=community_actor_url,
     )
+    database.delete_subscription.return_value = True
+    # One other channel still subscribes — no Undo dispatched.
+    database.count_subscriptions_for_community.return_value = 1
 
-    unsubscribe.register(command_tree, database)
+    unsubscribe.register(command_tree, database, fedify_gateway)
 
     command = command_tree.commands["unsubscribe-channel"]
     await command.callback(interaction, forum_channel)
@@ -30,11 +35,11 @@ async def test_unsubscribe_channel_success(command_tree, interaction, forum_chan
 
 
 @pytest.mark.asyncio
-async def test_unsubscribe_channel_rejects_missing_subscription(command_tree, interaction, forum_channel, database):
+async def test_unsubscribe_channel_rejects_missing_subscription(command_tree, interaction, forum_channel, database, fedify_gateway):
     # Missing mappings are reported ephemerally and must not trigger a delete call.
     database.get_subscription_by_channel.return_value = None
 
-    unsubscribe.register(command_tree, database)
+    unsubscribe.register(command_tree, database, fedify_gateway)
 
     command = command_tree.commands["unsubscribe-channel"]
     await command.callback(interaction, forum_channel)

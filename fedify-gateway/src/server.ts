@@ -349,7 +349,6 @@ app.use(async (context, next) => {
       });
       if (isDebug) {
         console.log("[HTTP][debug] Inbox payload summary:", payloadSummary);
-        console.log("[HTTP][debug] Inbox full body:", JSON.stringify(payloadSummary.rawParsed, null, 2));
       }
     } else if (isDebug) {
       console.log("[HTTP][debug] Inbox payload summary failed");
