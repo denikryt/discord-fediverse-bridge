@@ -2,22 +2,6 @@
 
 Python bridge plus a separate Fedify gateway that sync Discord forum threads with Lemmy communities.
 
-## Processes
-
-The project runs as two processes:
-
-1. `Python bridge`
-   - Discord bot
-   - internal FastAPI server
-   - registration backend
-   - subscription state and message mappings in SQLite
-
-2. `fedify-gateway`
-   - ActivityPub protocol edge
-   - local actor documents and WebFinger
-   - outbound `Follow` and `Create`
-   - inbound federation intake forwarded to Python
-
 ## How It Works
 
 The bridge runs a single **bridge actor** — one ActivityPub identity that follows Lemmy communities on behalf of all subscribers. When a moderator runs `/subscribe-channel`, the bridge actor sends a `Follow` to the target community. Inbound posts and comments are delivered to this actor and then fanned out to every subscribed Discord channel. The `Follow` is shared across channels: if multiple channels subscribe to the same community, only one AP follow is sent.
@@ -41,6 +25,22 @@ Lemmy → all subscribed Discord channels:
 - edit / delete propagated to Discord
 
 Vote sync is not implemented.
+
+## Processes
+
+The project runs as two processes:
+
+1. `Python bridge`
+   - Discord bot
+   - internal FastAPI server
+   - registration backend
+   - subscription state and message mappings in SQLite
+
+2. `fedify-gateway`
+   - ActivityPub protocol edge
+   - local actor documents and WebFinger
+   - outbound `Follow` and `Create`
+   - inbound federation intake forwarded to Python
 
 ## Requirements
 
