@@ -1,6 +1,6 @@
 import { randomUUID } from "node:crypto";
 
-import { Create } from "@fedify/vocab";
+import { Create, Link } from "@fedify/vocab";
 import { Note } from "@fedify/vocab";
 import { Page } from "@fedify/vocab";
 import { type Object as ActivityObject } from "@fedify/vocab";
@@ -151,7 +151,10 @@ async function normalizePostActivity(
   object: Page,
 ): Promise<BridgeEvent> {
   const apId = requireUrl(object.id, "post object id");
-  const url = resolveObjectUrl(object) ?? apId;
+  // Lemmy link posts store the external article URL in attachment[0].href.
+  // object.url points back to the Lemmy post itself, so prefer attachment
+  // when it differs from the AP id.
+  const url = await resolvePostUrl(object, apId);
   const publishedAt = toIsoString(object.published) ?? toIsoString(activity.published);
 
   return {
@@ -267,6 +270,10 @@ function normalizePostActivityFromJson(
 ): BridgeEvent {
   const apId = requireString(object.id, "post object id");
   const publishedAt = asString(object.published) ?? asString(activity.published) ?? new Date().toISOString();
+  // Lemmy link posts store the external article URL in attachment[0].href.
+  // object.url points back to the Lemmy post itself, so prefer attachment
+  // when it differs from the AP id.
+  const url = resolvePostUrlFromJson(object, apId);
 
   return {
     actor_id: asString(activity.actor) ?? "",
@@ -285,9 +292,23 @@ function normalizePostActivityFromJson(
       post_lemmy_id: null,
       published_at: publishedAt,
       title: asString(object.name),
-      url: asString(object.url) ?? apId,
+      url,
     },
   };
+}
+
+function resolvePostUrlFromJson(object: Record<string, unknown>, apId: string): string {
+  // Check attachment array first for the external article URL.
+  const attachments = object.attachment;
+  if (Array.isArray(attachments)) {
+    for (const a of attachments) {
+      const href = asString((a as Record<string, unknown>).href);
+      if (href && href !== apId) {
+        return href;
+      }
+    }
+  }
+  return asString(object.url) ?? apId;
 }
 
 async function normalizeCommentActivityFromJson(
@@ -447,6 +468,21 @@ async function resolveReplyChainContext(
       : nestedContext.parentApId,
     postSource: nestedContext.postSource,
   };
+}
+
+async function resolvePostUrl(object: Page, apId: string): Promise<string> {
+  // Check attachment first: Lemmy link posts place the external article URL
+  // in attachment[0].href. Only use it when it differs from the AP id so
+  // text-only posts (which have no meaningful attachment) still fall back
+  // to the Lemmy post URL.
+  for await (const attachment of object.getAttachments()) {
+    if (!(attachment instanceof Link)) continue;
+    const href = attachment.href?.href;
+    if (href && href !== apId) {
+      return href;
+    }
+  }
+  return resolveObjectUrl(object) ?? apId;
 }
 
 function resolveObjectUrl(object: ActivityObject): string | null {
