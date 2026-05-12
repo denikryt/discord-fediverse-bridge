@@ -216,9 +216,13 @@ class DiscordFanout:
         """
         async def _edit_one(delivery: CommunityMessageGroupDelivery) -> None:
             try:
+                from ..formatting import apply_edit_to_discord_message
                 thread = await self.bot.get_thread_by_id(delivery.discord_thread_id)
                 message = await thread.fetch_message(delivery.discord_message_id)
-                await message.edit(content=new_content)
+                # Preserve the author header line from the current message content
+                # so the username attribution is not lost when the body is updated.
+                updated = apply_edit_to_discord_message(message.content, new_content)
+                await message.edit(content=updated)
                 # Track that we edited this message to dedup on_raw_message_edit events
                 self.bot.track_message_edit(delivery.discord_message_id)
                 logger.info(

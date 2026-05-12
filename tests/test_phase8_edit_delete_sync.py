@@ -18,6 +18,8 @@ Directions covered:
   - Inbound AP comment update for unknown ap_id → skipped.
   - Inbound AP comment delete → all delivery messages deleted.
   - Inbound AP post delete → all Discord threads deleted.
+  - Mirror edit preserves `username@domain` header line in mirror messages.
+  - Inbound comment update preserves `username@domain` header in inbound messages.
 """
 
 from __future__ import annotations
@@ -113,10 +115,16 @@ def _fake_thread_with_message(
     *,
     thread_id: int,
     message_id: int,
+    content: str = "",
 ) -> SimpleNamespace:
-    """Build a fake Discord thread whose fetch_message returns an editable/deletable message."""
+    """Build a fake Discord thread whose fetch_message returns an editable/deletable message.
+
+    content simulates the current Discord message body, which apply_edit_to_discord_message
+    reads to preserve the bridge attribution header when editing.
+    """
     fake_message = SimpleNamespace(
         id=message_id,
+        content=content,
         edit=AsyncMock(),
         delete=AsyncMock(),
     )
@@ -239,7 +247,9 @@ async def test_source_message_edit_propagates_to_mirrors_and_ap(tmp_path: Path) 
     mirror_msg_id = 600
     source_msg_id = 301
 
-    fake_mirror_message = SimpleNamespace(id=mirror_msg_id, edit=AsyncMock(), delete=AsyncMock())
+    # Mirror message has no bridge attribution header (plain content).
+    # apply_edit_to_discord_message falls through to return new body as-is.
+    fake_mirror_message = SimpleNamespace(id=mirror_msg_id, content="Old body", edit=AsyncMock(), delete=AsyncMock())
     fake_mirror_thread = SimpleNamespace(
         id=mirror_thread_id,
         fetch_message=AsyncMock(return_value=fake_mirror_message),
@@ -262,7 +272,7 @@ async def test_source_message_edit_propagates_to_mirrors_and_ap(tmp_path: Path) 
         runtime=runtime_obj,
     )
 
-    # Mirror message must be edited via Discord API.
+    # Mirror message must be edited with just the new content (no header to preserve).
     fake_mirror_thread.fetch_message.assert_awaited_once_with(mirror_msg_id)
     fake_mirror_message.edit.assert_awaited_once_with(content="Edited content")
 
@@ -306,8 +316,8 @@ async def test_mirror_edit_failure_does_not_block_ap_update(tmp_path: Path) -> N
         id=mirror_thread_id_1,
         fetch_message=AsyncMock(side_effect=discord.NotFound(MagicMock(), "not found")),
     )
-    # Second mirror thread succeeds.
-    success_message = SimpleNamespace(id=mirror_msg_id_2, edit=AsyncMock(), delete=AsyncMock())
+    # Second mirror thread succeeds — content has no header so body is returned as-is.
+    success_message = SimpleNamespace(id=mirror_msg_id_2, content="Old body", edit=AsyncMock(), delete=AsyncMock())
     success_thread = SimpleNamespace(
         id=mirror_thread_id_2,
         fetch_message=AsyncMock(return_value=success_message),
@@ -501,8 +511,9 @@ async def test_inbound_comment_update_edits_all_discord_deliveries(tmp_path: Pat
     thread_id_1 = 200
     thread_id_2 = 500
 
-    msg1 = SimpleNamespace(id=msg_id_1, edit=AsyncMock(), delete=AsyncMock())
-    msg2 = SimpleNamespace(id=msg_id_2, edit=AsyncMock(), delete=AsyncMock())
+    # Inbound messages have no bridge attribution header — apply_edit falls through to raw body.
+    msg1 = SimpleNamespace(id=msg_id_1, content="Old comment body", edit=AsyncMock(), delete=AsyncMock())
+    msg2 = SimpleNamespace(id=msg_id_2, content="Old comment body", edit=AsyncMock(), delete=AsyncMock())
     thread1 = SimpleNamespace(id=thread_id_1, fetch_message=AsyncMock(return_value=msg1))
     thread2 = SimpleNamespace(id=thread_id_2, fetch_message=AsyncMock(return_value=msg2))
     bot = _fake_bot(threads={thread_id_1: thread1, thread_id_2: thread2})
@@ -597,8 +608,8 @@ async def test_inbound_comment_delete_marks_all_discord_deliveries_deleted(tmp_p
     thread_id_1 = 200
     thread_id_2 = 500
 
-    msg1 = SimpleNamespace(id=msg_id_1, edit=AsyncMock(), delete=AsyncMock())
-    msg2 = SimpleNamespace(id=msg_id_2, edit=AsyncMock(), delete=AsyncMock())
+    msg1 = SimpleNamespace(id=msg_id_1, content="`alice@lemmy.example`\n\nOriginal body", edit=AsyncMock(), delete=AsyncMock())
+    msg2 = SimpleNamespace(id=msg_id_2, content="`alice@lemmy.example`\n\nOriginal body", edit=AsyncMock(), delete=AsyncMock())
     thread1 = SimpleNamespace(id=thread_id_1, fetch_message=AsyncMock(return_value=msg1))
     thread2 = SimpleNamespace(id=thread_id_2, fetch_message=AsyncMock(return_value=msg2))
     bot = _fake_bot(threads={thread_id_1: thread1, thread_id_2: thread2})
@@ -903,3 +914,121 @@ async def test_dispatch_routes_post_updated_to_handler(tmp_path: Path) -> None:
     # No thread group for this AP ID → routes to handler, handler returns skipped.
     result = await dispatch_activitypub_event(event, runtime_obj)
     assert result.status == "skipped"
+
+
+# ---------------------------------------------------------------------------
+# Header preservation tests — username survives edits
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_mirror_edit_preserves_username_header(tmp_path: Path) -> None:
+    """Editing a source message preserves the `username@domain` header in the mirror.
+
+    Mirror messages are created with a "`username@domain`\\n\\nbody" format.
+    When a Discord edit propagates to the mirror, apply_edit_to_discord_message
+    must keep the header line and replace only the body below it.
+    """
+    database = _database(tmp_path)
+    mirror_thread_id = 500
+    mirror_msg_id = 600
+    source_msg_id = 301
+
+    # Mirror message already carries the bridge attribution header.
+    mirror_message = SimpleNamespace(
+        id=mirror_msg_id,
+        content="`alice@lemmy.example`\n\nOriginal body text",
+        edit=AsyncMock(),
+        delete=AsyncMock(),
+    )
+    mirror_thread = SimpleNamespace(
+        id=mirror_thread_id,
+        fetch_message=AsyncMock(return_value=mirror_message),
+    )
+    bot = _fake_bot(threads={mirror_thread_id: mirror_thread})
+    fanout = _fake_fanout(bot=bot)
+    runtime_obj = _fake_runtime()
+    community_runtime = _community_runtime(database, bot=bot, discord_fanout=fanout)
+
+    _setup_message_group_with_deliveries(
+        database,
+        source_msg_id=source_msg_id,
+        mirror_msg_id=mirror_msg_id,
+        mirror_thread_id=mirror_thread_id,
+    )
+
+    await community_runtime.handle_discord_message_edit(
+        message_id=source_msg_id,
+        new_content="Edited body text",
+        runtime=runtime_obj,
+    )
+
+    # Mirror must be edited with header preserved and body replaced.
+    mirror_message.edit.assert_awaited_once_with(
+        content="`alice@lemmy.example`\n\nEdited body text"
+    )
+
+
+@pytest.mark.asyncio
+async def test_inbound_comment_update_preserves_username_header(tmp_path: Path) -> None:
+    """Inbound comment.updated preserves the `username@domain` header in inbound messages.
+
+    Inbound messages are created with "`username@domain`\\n\\nbody". When an AP
+    Update arrives, apply_edit_to_discord_message must keep the header and replace
+    only the body so the author attribution is not lost.
+    """
+    database = _database(tmp_path)
+    msg_id = 300
+    thread_id = 200
+
+    # Inbound message carries the bridge attribution header from initial delivery.
+    message = SimpleNamespace(
+        id=msg_id,
+        content="`bob@lemmy.example`\n\nOriginal comment text",
+        edit=AsyncMock(),
+        delete=AsyncMock(),
+    )
+    thread = SimpleNamespace(id=thread_id, fetch_message=AsyncMock(return_value=message))
+    bot = _fake_bot(threads={thread_id: thread})
+    community_runtime = _community_runtime(database, bot=bot)
+
+    # Set up one inbound thread group and message group.
+    thread_group = database.create_thread_group(
+        community_actor_id=COMMUNITY_ACTOR_URL,
+        source_channel_id=None, source_thread_id=None,
+        source_starter_message_id=None,
+        ap_activity_id="delivery-post-hdr", ap_object_id=POST_AP_ID,
+    )
+    database.add_thread_delivery(
+        thread_group_id=thread_group.id,
+        discord_channel_id=100, discord_thread_id=thread_id,
+        discord_starter_message_id=999, role="inbound",
+    )
+    message_group = database.create_message_group(
+        community_actor_id=COMMUNITY_ACTOR_URL,
+        thread_group_id=thread_group.id,
+        source_channel_id=None, source_thread_id=None, source_message_id=None,
+        ap_activity_id="delivery-comment-hdr", ap_object_id=COMMENT_AP_ID,
+    )
+    database.add_message_delivery(
+        message_group_id=message_group.id,
+        discord_channel_id=100, discord_thread_id=thread_id,
+        discord_message_id=msg_id, role="inbound",
+    )
+
+    event = _fake_update_event(
+        event_type="comment.updated",
+        ap_id=COMMENT_AP_ID,
+        kind="comment",
+        body_markdown="Updated comment text",
+        post_ap_id=POST_AP_ID,
+        post_lemmy_id=1,
+    )
+    runtime_obj = _fake_runtime()
+    result = await community_runtime.handle_inbound_comment_update(event, runtime_obj)
+
+    assert result.status == "processed"
+    # Header must be preserved; only the body below it is replaced.
+    message.edit.assert_awaited_once_with(
+        content="`bob@lemmy.example`\n\nUpdated comment text"
+    )

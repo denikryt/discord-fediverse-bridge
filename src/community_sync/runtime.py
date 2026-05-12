@@ -781,9 +781,13 @@ class CommunityRuntime:
 
         async def _edit_message(delivery: object) -> None:
             try:
+                from ..formatting import apply_edit_to_discord_message
                 thread = await bot.get_thread_by_id(delivery.discord_thread_id)
                 message = await thread.fetch_message(delivery.discord_message_id)
-                await message.edit(content=new_content)
+                # Preserve the author header from the existing message so the
+                # username attribution survives the inbound AP Update.
+                updated = apply_edit_to_discord_message(message.content, new_content)
+                await message.edit(content=updated)
                 logger.info(
                     "Edited inbound comment message %s in thread %s",
                     delivery.discord_message_id,
