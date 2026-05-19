@@ -11,6 +11,8 @@ import logging
 from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
+import discord
+
 from ..db import Database
 from ..fedify_gateway_client import FedifyGatewayClient, PublishContentRequest
 from ..formatting import format_discord_body_for_lemmy, format_thread_title_for_discord
@@ -85,7 +87,9 @@ class LocalCommunityRuntime:
             self.bridge_prefix,
         )
         title = format_thread_title_for_discord(getattr(thread, "name"))
-        publish_result = await self.fedify_gateway.publish_content(
+        # Local communities publish to accepted follower inboxes, not to one
+        # remote community inbox, so they must use the dedicated gateway path.
+        publish_result = await self.fedify_gateway.publish_local_community_content(
             PublishContentRequest(
                 actor_username=user.activitypub_username,
                 community_actor_url=getattr(local_community, "actor_url"),
@@ -171,7 +175,9 @@ class LocalCommunityRuntime:
             getattr(message, "content"),
             self.bridge_prefix,
         )
-        publish_result = await self.fedify_gateway.publish_content(
+        # Comment fanout for local communities uses the same follower-aware
+        # gateway contract as top-level posts.
+        publish_result = await self.fedify_gateway.publish_local_community_content(
             PublishContentRequest(
                 actor_username=user.activitypub_username,
                 community_actor_url=getattr(local_community, "actor_url"),
@@ -295,7 +301,13 @@ class LocalCommunityRuntime:
         )
         send_kwargs: dict[str, object] = {}
         if parent_discord_message_id is not None:
-            send_kwargs["reference"] = type("MessageReference", (), {"message_id": parent_discord_message_id})()
+            # discord.py validates the concrete reference type at send time, so
+            # local-community replies must build a real MessageReference rather
+            # than a duck-typed object carrying only message_id.
+            send_kwargs["reference"] = self._build_message_reference(
+                discord_thread=discord_thread,
+                message_id=parent_discord_message_id,
+            )
         created_message = await discord_thread.send(
             self._format_inbound_comment_body(event),
             **send_kwargs,
@@ -380,3 +392,26 @@ class LocalCommunityRuntime:
         author_name = getattr(object_payload, "author_name", "remote")
         body_markdown = getattr(object_payload, "body_markdown", None) or ""
         return f"**{author_name}**\n\n{body_markdown}".strip()
+
+    @staticmethod
+    def _build_message_reference(
+        *,
+        discord_thread: object,
+        message_id: int,
+    ) -> discord.MessageReference:
+        """Build one discord.py-compatible reference for an inbound mirrored reply.
+
+        The runtime only needs the parent message id and the thread channel id.
+        `fail_if_not_exists=False` keeps reply fanout resilient when Discord no
+        longer has the exact cached parent message object locally.
+        """
+        guild_id = getattr(discord_thread, "guild_id", None)
+        guild = getattr(discord_thread, "guild", None)
+        if guild_id is None and guild is not None:
+            guild_id = getattr(guild, "id", None)
+        return discord.MessageReference(
+            message_id=message_id,
+            channel_id=getattr(discord_thread, "id"),
+            guild_id=guild_id,
+            fail_if_not_exists=False,
+        )

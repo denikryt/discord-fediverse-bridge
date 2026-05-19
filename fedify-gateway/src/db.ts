@@ -32,6 +32,15 @@ export interface LocalCommunityRow {
   privateKeyPem: string;
 }
 
+export interface LocalCommunityFollowerRow {
+  // Accepted follower rows define the concrete remote inbox fanout targets for
+  // one Discord-backed local community publish.
+  remoteActorId: string;
+  remoteInboxUrl: string;
+  followActivityId: string;
+  status: string;
+}
+
 export interface PublishedActivityObjectRow {
   // The durable object row contains enough data to reconstruct a local Page or
   // Note without relying on the original publish process still being in memory.
@@ -203,6 +212,57 @@ export async function loadLocalCommunityByActorUrl(
         publicKeyPem: asString(row.public_key_pem),
         privateKeyPem: asString(row.private_key_pem),
       };
+    } finally {
+      statement.free();
+    }
+  } finally {
+    database.close();
+  }
+}
+
+export async function loadAcceptedLocalCommunityFollowersByActorUrl(
+  config: GatewayConfig,
+  actorUrl: string,
+): Promise<LocalCommunityFollowerRow[]> {
+  const database = await openConfiguredDatabase(config);
+  try {
+    let statement;
+    try {
+      statement = database.prepare(`
+        SELECT
+          follower.remote_actor_id,
+          follower.remote_inbox_url,
+          follower.follow_activity_id,
+          follower.status
+        FROM local_community_followers AS follower
+        JOIN local_communities AS community
+          ON community.id = follower.local_community_id
+        WHERE community.actor_url = ?
+          AND follower.status = 'accepted'
+        ORDER BY follower.created_at, follower.id
+      `);
+    } catch (error) {
+      if (
+        isMissingLocalCommunitiesTableError(error) ||
+        isMissingLocalCommunityFollowersTableError(error)
+      ) {
+        return [];
+      }
+      throw error;
+    }
+    try {
+      statement.bind([actorUrl]);
+      const rows: LocalCommunityFollowerRow[] = [];
+      while (statement.step()) {
+        const row = statement.getAsObject() as Record<string, unknown>;
+        rows.push({
+          remoteActorId: asString(row.remote_actor_id),
+          remoteInboxUrl: asString(row.remote_inbox_url),
+          followActivityId: asString(row.follow_activity_id),
+          status: asString(row.status),
+        });
+      }
+      return rows;
     } finally {
       statement.free();
     }
@@ -395,6 +455,13 @@ function isMissingLocalCommunitiesTableError(error: unknown): boolean {
   return (
     error instanceof Error &&
     error.message.includes("no such table: local_communities")
+  );
+}
+
+function isMissingLocalCommunityFollowersTableError(error: unknown): boolean {
+  return (
+    error instanceof Error &&
+    error.message.includes("no such table: local_community_followers")
   );
 }
 

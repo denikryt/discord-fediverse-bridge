@@ -2,11 +2,14 @@ import { Temporal } from "@js-temporal/polyfill";
 import { Accept, Create, Delete, Follow, Note, Page, Source, Undo, Update } from "@fedify/vocab";
 import type { Federation } from "@fedify/fedify";
 import type { GatewayConfig } from "./config.js";
+import { loadAcceptedLocalCommunityFollowersByActorUrl } from "./db.js";
 import type {
   AcceptLocalCommunityFollowRequest,
   DeleteContentRequest,
   PublishContentRequest,
   PublishContentResult,
+  PublishLocalCommunityContentRequest,
+  PublishLocalCommunityContentResult,
   UpdateContentRequest,
 } from "./types.js";
 
@@ -177,6 +180,71 @@ export async function publishContent(
     activityId: activityId.href,
     objectId: objectId.href,
     communityActorUrl: communityId,
+  };
+}
+
+export async function publishLocalCommunityContent(
+  federation: Federation<GatewayConfig>,
+  config: GatewayConfig,
+  request: PublishLocalCommunityContentRequest,
+): Promise<PublishLocalCommunityContentResult> {
+  // Local-community fanout must deliver one user-authored Create to every
+  // accepted follower inbox instead of incorrectly looping the activity back
+  // into the bridge's own community inbox.
+  const ctx = federation.createContext(new URL(config.fedifyOrigin), config);
+  const followers = await loadAcceptedLocalCommunityFollowersByActorUrl(
+    config,
+    request.communityActorUrl,
+  );
+  if (followers.length === 0) {
+    throw new Error("Local community has no accepted followers");
+  }
+
+  const builtCreate = buildPublishCreateActivity(
+    config,
+    request,
+    request.communityActorUrl,
+  );
+  const activity = builtCreate.activity;
+  const objectId = builtCreate.objectId;
+  const activityId = builtCreate.activityId;
+
+  let deliveredFollowerCount = 0;
+  let failedFollowerCount = 0;
+
+  for (const follower of followers) {
+    try {
+      await ctx.sendActivity(
+        { username: request.actorUsername },
+        {
+          id: new URL(follower.remoteActorId),
+          inboxId: new URL(follower.remoteInboxUrl),
+        },
+        activity,
+      );
+      deliveredFollowerCount += 1;
+    } catch (error) {
+      // Fanout must continue toward healthy followers even if one target
+      // rejects the activity or is temporarily unreachable.
+      failedFollowerCount += 1;
+      console.error("[LocalCommunityPublish] sendActivity failed:", {
+        remoteActorId: follower.remoteActorId,
+        remoteInboxUrl: follower.remoteInboxUrl,
+        error: error instanceof Error ? error.message : String(error),
+      });
+    }
+  }
+
+  if (deliveredFollowerCount === 0) {
+    throw new Error("Local community publish failed for all accepted followers");
+  }
+
+  return {
+    activityId: activityId.href,
+    objectId: objectId.href,
+    communityActorUrl: request.communityActorUrl,
+    deliveredFollowerCount,
+    failedFollowerCount,
   };
 }
 

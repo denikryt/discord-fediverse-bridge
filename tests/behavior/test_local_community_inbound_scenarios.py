@@ -6,6 +6,7 @@ from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import AsyncMock
 
+import discord
 import pytest
 
 from src.activitypub_models import ActivityPubEvent, BridgeGatewayEvent
@@ -73,7 +74,11 @@ def _post_event(*, actor_id: str = "https://lemmy.example/u/bob") -> ActivityPub
     )
 
 
-def _comment_event(*, actor_id: str = "https://lemmy.example/u/bob") -> ActivityPubEvent:
+def _comment_event(
+    *,
+    actor_id: str = "https://lemmy.example/u/bob",
+    parent_ap_id: str = "https://lemmy.example/post/1",
+) -> ActivityPubEvent:
     """Build one normalized inbound comment targeting the local community actor."""
     return ActivityPubEvent.model_validate(
         {
@@ -88,7 +93,7 @@ def _comment_event(*, actor_id: str = "https://lemmy.example/u/bob") -> Activity
                 "lemmy_id": 2,
                 "post_ap_id": "https://lemmy.example/post/1",
                 "post_lemmy_id": 1,
-                "parent_ap_id": "https://lemmy.example/post/1",
+                "parent_ap_id": parent_ap_id,
                 "title": None,
                 "body_markdown": "hello comment",
                 "url": "https://lemmy.example/comment/1",
@@ -148,7 +153,69 @@ async def test_remote_follower_top_level_post_creates_new_discord_thread(
 
     assert result.status == "processed"
     assert created is not None
-    assert created.origin_kind == "remote_follower"
+
+
+@pytest.mark.asyncio
+async def test_remote_follower_nested_reply_uses_real_discord_message_reference(
+    tmp_path: Path,
+) -> None:
+    """A nested remote reply must pass a real discord.py MessageReference."""
+    database, runtime = _runtime(tmp_path)
+    local_community = _local_community(database)
+    database.create_local_community_follower(
+        local_community_id=local_community.id,
+        remote_actor_id="https://lemmy.example/u/bob",
+        remote_inbox_url="https://lemmy.example/u/bob/inbox",
+        follow_activity_id="https://lemmy.example/activities/follow/1",
+    )
+    thread_row = database.create_local_community_thread(
+        local_community_id=local_community.id,
+        discord_thread_id=200,
+        discord_starter_message_id=300,
+        ap_activity_id="https://bridge.example/users/alice/activities/create/post/1",
+        ap_object_id="https://lemmy.example/post/1",
+        direction="ap_to_discord",
+        origin_kind="remote_follower",
+    )
+    database.create_local_community_message(
+        local_community_thread_id=thread_row.id,
+        discord_message_id=401,
+        ap_activity_id="https://lemmy.example/activities/create/comment/0",
+        ap_object_id="https://lemmy.example/comment/0",
+        parent_ap_object_id="https://lemmy.example/post/1",
+        parent_discord_message_id=300,
+        direction="ap_to_discord",
+    )
+
+    async def send_with_type_check(content: str, **kwargs: object) -> object:
+        """Assert the runtime passes one real discord.py MessageReference."""
+        reference = kwargs.get("reference")
+        assert isinstance(reference, discord.MessageReference)
+        assert reference.message_id == 401
+        assert reference.channel_id == 200
+        assert reference.fail_if_not_exists is False
+        return SimpleNamespace(id=402)
+
+    runtime.bot = build_bot(
+        threads={
+            200: SimpleNamespace(
+                id=200,
+                send=AsyncMock(side_effect=send_with_type_check),
+            )
+        }
+    )
+
+    result = await runtime.handle_inbound_comment(
+        _comment_event(parent_ap_id="https://lemmy.example/comment/0"),
+        SimpleNamespace(),
+    )
+    created = database.get_local_community_message_by_ap_object_id(
+        "https://lemmy.example/comment/1"
+    )
+
+    assert result.status == "processed"
+    assert created is not None
+    assert created.parent_discord_message_id == 401
 
 
 @pytest.mark.asyncio

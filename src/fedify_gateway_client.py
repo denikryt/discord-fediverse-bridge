@@ -53,6 +53,23 @@ class PublishContentResult:
 
 
 @dataclass(slots=True)
+class PublishLocalCommunityContentResult:
+    """Describe one local-community publish fanout outcome.
+
+    Local-community publishes still produce one canonical AP activity/object id
+    pair, but the gateway also reports how many accepted followers received the
+    delivery so Python can distinguish this path from ordinary remote-community
+    publishes.
+    """
+
+    activity_id: str
+    object_id: str
+    community_actor_url: str
+    delivered_follower_count: int
+    failed_follower_count: int
+
+
+@dataclass(slots=True)
 class UpdateContentRequest:
     # actorUsername must match the original object attributedTo — Lemmy enforces
     # this ownership check and rejects Updates from any other actor.
@@ -141,6 +158,37 @@ class FedifyGatewayClient:
             activity_id=payload["activityId"],
             object_id=payload["objectId"],
             community_actor_url=payload["communityActorUrl"],
+        )
+
+    async def publish_local_community_content(
+        self, request: PublishContentRequest
+    ) -> PublishLocalCommunityContentResult:
+        """Trigger one gateway-side Create fanout for a Discord-backed community.
+
+        Unlike ordinary publish delivery, this path targets every accepted
+        follower inbox of one local community instead of one remote community
+        actor inbox.
+        """
+        response = await self._client.post(
+            "/publish-local-community",
+            headers={"Authorization": f"Bearer {self._shared_secret}"},
+            json={
+                "actorUsername": request.actor_username,
+                "communityActorUrl": request.community_actor_url,
+                "kind": request.kind,
+                "title": request.title,
+                "bodyMarkdown": request.body_markdown,
+                "inReplyToObjectId": request.in_reply_to_object_id,
+            },
+        )
+        response.raise_for_status()
+        payload = response.json()
+        return PublishLocalCommunityContentResult(
+            activity_id=payload["activityId"],
+            object_id=payload["objectId"],
+            community_actor_url=payload["communityActorUrl"],
+            delivered_follower_count=int(payload["deliveredFollowerCount"]),
+            failed_follower_count=int(payload["failedFollowerCount"]),
         )
 
     async def unfollow_community(

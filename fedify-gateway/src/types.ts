@@ -78,6 +78,23 @@ export interface PublishContentResult {
   communityActorUrl: string;
 }
 
+export interface PublishLocalCommunityContentRequest {
+  actorUsername: string;
+  communityActorUrl: string;
+  kind: "post" | "comment";
+  title: string | null;
+  bodyMarkdown: string;
+  inReplyToObjectId: string | null;
+}
+
+export interface PublishLocalCommunityContentResult {
+  activityId: string;
+  objectId: string;
+  communityActorUrl: string;
+  deliveredFollowerCount: number;
+  failedFollowerCount: number;
+}
+
 export interface UpdateContentRequest {
   // actorUsername must match the original attributedTo — Lemmy enforces this
   // ownership check and rejects Updates from any other actor.

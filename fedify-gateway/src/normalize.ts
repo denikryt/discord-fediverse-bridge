@@ -633,7 +633,11 @@ function isLemmyPath(value: string, kind: "post" | "comment"): boolean {
 }
 
 function isCommunityActorId(value: string): boolean {
-  return /\/c\/[^/]+(?:$|\/)/.test(new URL(value).pathname);
+  const pathname = new URL(value).pathname;
+  return (
+    /\/c\/[^/]+(?:$|\/)/.test(pathname) ||
+    /\/communities\/[^/]+(?:$|\/)/.test(pathname)
+  );
 }
 
 function toIsoString(value: { toString(): string } | null | undefined): string {
@@ -668,7 +672,7 @@ function resolveCommunityActorIdForDelete(
   activity: Record<string, unknown>,
 ): string | null {
   // audience is present on the Delete record itself in Lemmy 0.19 (confirmed from real logs).
-  // Fall back to the first /c/ community found in cc or to.
+  // Fall back to the first community actor id found in cc or to.
   const audience = asString(activity.audience);
   if (audience && isCommunityActorId(audience)) {
     return audience;

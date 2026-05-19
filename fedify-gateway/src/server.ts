@@ -29,6 +29,7 @@ import {
   deleteContent,
   followCommunity,
   publishContent,
+  publishLocalCommunityContent,
   unfollowCommunity,
   updateContent,
 } from "./federation-outbound.js";
@@ -37,6 +38,7 @@ import type {
   AcceptLocalCommunityFollowRequest,
   DeleteContentRequest,
   PublishContentRequest,
+  PublishLocalCommunityContentRequest,
   UpdateContentRequest,
 } from "./types.js";
 import { buildWebFingerDocument } from "./webfinger.js";
@@ -298,6 +300,62 @@ app.post("/publish", async (context) => {
 
   try {
     const result = await publishContent(fedify, config, {
+      actorUsername: payload.actorUsername,
+      communityActorUrl: payload.communityActorUrl,
+      kind: payload.kind,
+      title:
+        typeof payload.title === "string" && payload.title.length > 0
+          ? payload.title
+          : null,
+      bodyMarkdown: payload.bodyMarkdown,
+      inReplyToObjectId:
+        typeof payload.inReplyToObjectId === "string"
+          ? payload.inReplyToObjectId
+          : null,
+    });
+    return context.json(result);
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    return context.json({ error: message }, { status: 500 });
+  }
+});
+
+app.post("/publish-local-community", async (context) => {
+  // Local-community publishes fan out one signed Create to every accepted
+  // follower inbox of the Discord-backed community.
+  if (
+    !hasValidInternalAuthorization(
+      config,
+      context.req.header("Authorization") ?? null,
+    )
+  ) {
+    return context.json({ error: "invalid authorization" }, { status: 401 });
+  }
+
+  const payload = (await context.req.json()) as Partial<PublishLocalCommunityContentRequest>;
+  if (
+    typeof payload.actorUsername !== "string" ||
+    typeof payload.communityActorUrl !== "string" ||
+    (payload.kind !== "post" && payload.kind !== "comment") ||
+    typeof payload.bodyMarkdown !== "string"
+  ) {
+    return context.json(
+      {
+        error:
+          "actorUsername, communityActorUrl, kind, and bodyMarkdown are required",
+      },
+      { status: 400 },
+    );
+  }
+  if (payload.kind === "comment" && typeof payload.inReplyToObjectId !== "string") {
+    return context.json(
+      { error: "comment publish requires inReplyToObjectId" },
+      { status: 400 },
+    );
+  }
+
+  try {
+    const result = await publishLocalCommunityContent(fedify, config, {
       actorUsername: payload.actorUsername,
       communityActorUrl: payload.communityActorUrl,
       kind: payload.kind,

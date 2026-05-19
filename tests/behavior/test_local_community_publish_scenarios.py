@@ -7,7 +7,7 @@ from unittest.mock import AsyncMock
 
 import pytest
 
-from src.fedify_gateway_client import PublishContentResult
+from src.fedify_gateway_client import PublishLocalCommunityContentResult
 from src.local_communities.runtime import LocalCommunityRuntime
 from src.local_communities.service import LocalCommunityService
 from support.db import add_registered_user, build_database
@@ -49,10 +49,17 @@ async def test_registered_user_thread_starter_in_local_community_publishes_post(
     database, runtime = _runtime(tmp_path)
     _local_community(database)
     add_registered_user(database)
-    runtime.fedify_gateway.publish_content.return_value = PublishContentResult(
+    runtime.fedify_gateway.publish_content.side_effect = AssertionError(
+        "local-community thread starters must use the dedicated local-community publish path"
+    )
+    runtime.fedify_gateway.publish_local_community_content.return_value = (
+        PublishLocalCommunityContentResult(
         activity_id="https://bridge.example/users/alice/activities/create/post/1",
         object_id="https://bridge.example/users/alice/post/1",
         community_actor_url="https://bridge.example/communities/hackers",
+        delivered_follower_count=1,
+        failed_follower_count=0,
+        )
     )
 
     result = await runtime.handle_discord_thread_create(
@@ -64,6 +71,7 @@ async def test_registered_user_thread_starter_in_local_community_publishes_post(
     assert result.status == "published"
     assert created is not None
     assert created.ap_object_id == "https://bridge.example/users/alice/post/1"
+    runtime.fedify_gateway.publish_local_community_content.assert_awaited_once()
 
 
 @pytest.mark.asyncio
@@ -95,16 +103,23 @@ async def test_discord_reply_in_local_community_thread_publishes_comment_with_pa
     add_registered_user(database)
     thread = build_thread()
     starter = build_starter_message()
-    runtime.fedify_gateway.publish_content.side_effect = [
-        PublishContentResult(
+    runtime.fedify_gateway.publish_content.side_effect = AssertionError(
+        "local-community replies must use the dedicated local-community publish path"
+    )
+    runtime.fedify_gateway.publish_local_community_content.side_effect = [
+        PublishLocalCommunityContentResult(
             activity_id="https://bridge.example/users/alice/activities/create/post/1",
             object_id="https://bridge.example/users/alice/post/1",
             community_actor_url="https://bridge.example/communities/hackers",
+            delivered_follower_count=1,
+            failed_follower_count=0,
         ),
-        PublishContentResult(
+        PublishLocalCommunityContentResult(
             activity_id="https://bridge.example/users/alice/activities/create/comment/1",
             object_id="https://bridge.example/users/alice/comment/1",
             community_actor_url="https://bridge.example/communities/hackers",
+            delivered_follower_count=1,
+            failed_follower_count=0,
         ),
     ]
     await runtime.handle_discord_thread_create(thread=thread, starter_message=starter)
@@ -117,3 +132,4 @@ async def test_discord_reply_in_local_community_thread_publishes_comment_with_pa
     assert result.status == "published"
     assert created is not None
     assert created.parent_ap_object_id == "https://bridge.example/users/alice/post/1"
+    assert runtime.fedify_gateway.publish_local_community_content.await_count == 2
