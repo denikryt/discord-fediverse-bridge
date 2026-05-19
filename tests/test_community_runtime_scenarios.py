@@ -14,167 +14,12 @@ from unittest.mock import AsyncMock
 
 import pytest
 
-from src.community_sync.runtime import CommunityRuntime
-from src.db import Database
-from src.discord_publish_service import DiscordPublishService
 from src.fedify_gateway_client import PublishContentResult
+from support.activitypub import build_comment_created_event, build_post_created_event
+from support.db import add_accepted_subscription, add_registered_user, build_database
+from support.discord import build_starter_message, build_thread, build_thread_message
+from support.runtime import build_community_runtime
 from tests_constants import BRIDGE_HOST_DOMAIN, LEMMY_EXAMPLE_DOMAIN
-
-
-def _database(tmp_path: Path) -> Database:
-    """Create one real SQLite repository for CommunityRuntime scenario tests."""
-    database = Database(f"sqlite:///{tmp_path / 'community-runtime.db'}")
-    database.create_all()
-    return database
-
-
-def _accepted_subscription(database: Database, *, channel_id: int = 100) -> None:
-    """Insert one accepted community subscription for routing scenarios."""
-    community_actor_url = f"https://{LEMMY_EXAMPLE_DOMAIN}/c/hackers"
-    database.create_subscription(
-        discord_channel_id=channel_id,
-        lemmy_community_actor_id=community_actor_url,
-        lemmy_community_name="hackers",
-        lemmy_community_id=42,
-        community_handle=f"!hackers@{LEMMY_EXAMPLE_DOMAIN}",
-        community_inbox_url=f"{community_actor_url}/inbox",
-        follow_activity_id=f"https://{BRIDGE_HOST_DOMAIN}/activities/follow/1",
-        status="accepted",
-    )
-
-
-def _registered_user(database: Database) -> None:
-    """Insert one registered local user actor for outbound publish scenarios."""
-    actor_url = f"https://{BRIDGE_HOST_DOMAIN}/users/alice"
-    database.create_user(
-        discord_user_id="123",
-        activitypub_username="alice",
-        actor_url=actor_url,
-        inbox_url=f"{actor_url}/inbox",
-        outbox_url=f"{actor_url}/outbox",
-        followers_url=f"{actor_url}/followers",
-        public_key_pem="public-key",
-        private_key_pem="private-key",
-    )
-
-
-def _publish_service(database: Database, fedify_gateway: AsyncMock) -> DiscordPublishService:
-    """Build a DiscordPublishService wired to one fake gateway boundary."""
-    return DiscordPublishService(
-        database=database,
-        fedify_gateway=fedify_gateway,
-        bridge_prefix="[bridge]",
-    )
-
-
-def _community_runtime(
-    database: Database,
-    fedify_gateway: AsyncMock,
-    *,
-    bot: object | None = None,
-) -> CommunityRuntime:
-    """Build a real CommunityRuntime with one fake gateway boundary."""
-    runtime = CommunityRuntime(
-        database=database,
-        discord_publish_service=_publish_service(database, fedify_gateway),
-    )
-    runtime.bot = bot
-    return runtime
-
-
-def _fake_thread(*, thread_id: int = 200, channel_id: int = 100) -> SimpleNamespace:
-    """Return one fake Discord forum thread for outbound publish scenarios."""
-    return SimpleNamespace(id=thread_id, parent_id=channel_id, name="Thread title")
-
-
-def _fake_starter_message(*, message_id: int = 300, author_id: int = 123) -> SimpleNamespace:
-    """Return one fake Discord starter message for thread publish scenarios."""
-    return SimpleNamespace(
-        id=message_id,
-        content="hello from discord",
-        author=SimpleNamespace(id=author_id, display_name="Alice", name="alice"),
-        reply=AsyncMock(),
-    )
-
-
-def _fake_message(
-    *,
-    thread: SimpleNamespace,
-    message_id: int = 301,
-    author_id: int = 123,
-    reference: object | None = None,
-) -> SimpleNamespace:
-    """Return one fake Discord thread message for comment publish scenarios."""
-    return SimpleNamespace(
-        id=message_id,
-        content="hello comment",
-        author=SimpleNamespace(id=author_id, display_name="Alice", name="alice"),
-        channel=thread,
-        reference=reference,
-        reply=AsyncMock(),
-    )
-
-
-def _post_event(
-    *,
-    object_id: str,
-    community_actor_id: str | None = None,
-    actor_id: str | None = None,
-    delivery_id: str | None = None,
-) -> object:
-    """Build one inbound post event for CommunityRuntime routing scenarios."""
-    from src.activitypub_models import ActivityPubEvent
-    return ActivityPubEvent.model_validate({
-        "event_type": "post.created",
-        "delivery_id": delivery_id or f"https://{LEMMY_EXAMPLE_DOMAIN}/activities/create/post/99",
-        "occurred_at": "2026-05-10T10:00:00Z",
-        "community_actor_id": community_actor_id or f"https://{LEMMY_EXAMPLE_DOMAIN}/c/hackers",
-        "actor_id": actor_id or f"https://{LEMMY_EXAMPLE_DOMAIN}/u/alice",
-        "object": {
-            "ap_id": object_id,
-            "kind": "post",
-            "lemmy_id": 99,
-            "post_ap_id": None,
-            "post_lemmy_id": None,
-            "parent_ap_id": None,
-            "title": "Test post",
-            "body_markdown": "test body",
-            "url": object_id,
-            "published_at": "2026-05-10T10:00:00Z",
-            "author_name": "alice",
-        },
-    })
-
-
-def _comment_event(
-    *,
-    object_id: str,
-    post_ap_id: str,
-    actor_id: str | None = None,
-    delivery_id: str | None = None,
-) -> object:
-    """Build one inbound comment event for CommunityRuntime routing scenarios."""
-    from src.activitypub_models import ActivityPubEvent
-    return ActivityPubEvent.model_validate({
-        "event_type": "comment.created",
-        "delivery_id": delivery_id or f"https://{LEMMY_EXAMPLE_DOMAIN}/activities/create/comment/55",
-        "occurred_at": "2026-05-10T10:00:00Z",
-        "community_actor_id": f"https://{LEMMY_EXAMPLE_DOMAIN}/c/hackers",
-        "actor_id": actor_id or f"https://{LEMMY_EXAMPLE_DOMAIN}/u/alice",
-        "object": {
-            "ap_id": object_id,
-            "kind": "comment",
-            "lemmy_id": 55,
-            "post_ap_id": post_ap_id,
-            "post_lemmy_id": 99,
-            "parent_ap_id": None,
-            "title": None,
-            "body_markdown": "test comment body",
-            "url": object_id,
-            "published_at": "2026-05-10T10:00:00Z",
-            "author_name": "alice",
-        },
-    })
 
 
 @pytest.mark.asyncio
@@ -188,9 +33,9 @@ async def test_community_runtime_thread_create_publishes_and_persists(
     Assert: result.status is 'published', PostLink exists, MessageMapping exists,
     PublishedActivityObject exists, gateway was called exactly once.
     """
-    database = _database(tmp_path)
-    _accepted_subscription(database)
-    _registered_user(database)
+    database = build_database(tmp_path, "community-runtime.db")
+    add_accepted_subscription(database)
+    add_registered_user(database)
     post_object_url = f"https://{BRIDGE_HOST_DOMAIN}/users/alice/objects/post/1"
     post_activity_url = f"https://{BRIDGE_HOST_DOMAIN}/users/alice/activities/create/post/1"
     fedify_gateway = AsyncMock()
@@ -199,9 +44,9 @@ async def test_community_runtime_thread_create_publishes_and_persists(
         object_id=post_object_url,
         community_actor_url=f"https://{LEMMY_EXAMPLE_DOMAIN}/c/hackers",
     )
-    runtime = _community_runtime(database, fedify_gateway)
-    thread = _fake_thread()
-    starter_message = _fake_starter_message()
+    runtime = build_community_runtime(database, fedify_gateway=fedify_gateway)
+    thread = build_thread()
+    starter_message = build_starter_message()
 
     result = await runtime.handle_discord_thread_create(thread=thread, starter_message=starter_message)
 
@@ -235,10 +80,10 @@ async def test_community_runtime_thread_message_publishes_as_comment(
     in thread 200. Assert: result.status is 'published', CommentLink exists,
     MessageMapping exists, PublishedActivityObject with kind='comment' exists.
     """
-    database = _database(tmp_path)
-    _accepted_subscription(database)
-    _registered_user(database)
-    thread = _fake_thread()
+    database = build_database(tmp_path, "community-runtime.db")
+    add_accepted_subscription(database)
+    add_registered_user(database)
+    thread = build_thread()
     post_object_url = f"https://{BRIDGE_HOST_DOMAIN}/users/alice/objects/post/1"
     comment_object_url = f"https://{BRIDGE_HOST_DOMAIN}/users/alice/objects/comment/1"
     comment_activity_url = f"https://{BRIDGE_HOST_DOMAIN}/users/alice/activities/create/comment/1"
@@ -264,8 +109,10 @@ async def test_community_runtime_thread_message_publishes_as_comment(
         object_id=comment_object_url,
         community_actor_url=f"https://{LEMMY_EXAMPLE_DOMAIN}/c/hackers",
     )
-    runtime = _community_runtime(database, fedify_gateway)
-    message = _fake_message(thread=thread, message_id=301)
+    runtime = build_community_runtime(database, fedify_gateway=fedify_gateway)
+    message = build_thread_message(
+        message_id=301, thread_id=thread.id, channel_id=thread.parent_id
+    )
 
     result = await runtime.handle_discord_message(message=message)
 
@@ -298,8 +145,8 @@ async def test_community_runtime_inbound_post_creates_discord_thread(
     Action: call handle_inbound_post with a post event from the hackers community.
     Assert: HandlerResult.status is 'processed', PostLink exists for the AP post ID.
     """
-    database = _database(tmp_path)
-    _accepted_subscription(database)
+    database = build_database(tmp_path, "community-runtime.db")
+    add_accepted_subscription(database)
     post_ap_id = f"https://{LEMMY_EXAMPLE_DOMAIN}/post/99"
     # Forum channel and bot are mocked — Discord SDK is the outer boundary here.
     fake_forum_channel = SimpleNamespace(
@@ -316,13 +163,15 @@ async def test_community_runtime_inbound_post_creates_discord_thread(
         fetch_forum_channel=AsyncMock(return_value=fake_forum_channel),
     )
     fedify_gateway = AsyncMock()
-    community_rt = _community_runtime(database, fedify_gateway, bot=fake_bot)
+    community_rt = build_community_runtime(
+        database, fedify_gateway=fedify_gateway, bot=fake_bot
+    )
     runtime_obj = SimpleNamespace(
         database=database,
         bot=fake_bot,
         community_runtime=community_rt,
     )
-    event = _post_event(object_id=post_ap_id)
+    event = build_post_created_event(object_id=post_ap_id)
 
     result = await community_rt.handle_inbound_post(event, runtime_obj)
 
@@ -344,8 +193,8 @@ async def test_community_runtime_inbound_comment_creates_discord_message(
     Action: call handle_inbound_comment with a comment event for post 99.
     Assert: HandlerResult.status is 'processed', CommentLink exists for comment 55.
     """
-    database = _database(tmp_path)
-    _accepted_subscription(database)
+    database = build_database(tmp_path, "community-runtime.db")
+    add_accepted_subscription(database)
     post_ap_id = f"https://{LEMMY_EXAMPLE_DOMAIN}/post/99"
     comment_ap_id = f"https://{LEMMY_EXAMPLE_DOMAIN}/comment/55"
     # Pre-existing CommunityThreadGroup lets the inbound handler find the target thread.
@@ -375,13 +224,15 @@ async def test_community_runtime_inbound_comment_creates_discord_message(
         get_thread_by_id=AsyncMock(return_value=fake_thread),
     )
     fedify_gateway = AsyncMock()
-    community_rt = _community_runtime(database, fedify_gateway, bot=fake_bot)
+    community_rt = build_community_runtime(
+        database, fedify_gateway=fedify_gateway, bot=fake_bot
+    )
     runtime_obj = SimpleNamespace(
         database=database,
         bot=fake_bot,
         community_runtime=community_rt,
     )
-    event = _comment_event(object_id=comment_ap_id, post_ap_id=post_ap_id)
+    event = build_comment_created_event(object_id=comment_ap_id, post_ap_id=post_ap_id)
 
     result = await community_rt.handle_inbound_comment(event, runtime_obj)
 

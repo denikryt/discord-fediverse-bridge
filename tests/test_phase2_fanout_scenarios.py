@@ -15,102 +15,19 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 
 from src.community_sync.discord_fanout import DiscordFanout
-from src.community_sync.runtime import CommunityRuntime
-from src.db import Database
-from src.discord_publish_service import DiscordPublishService
-from src.fedify_gateway_client import PublishContentResult
-from tests_constants import BRIDGE_HOST_DOMAIN, LEMMY_EXAMPLE_DOMAIN
-
-COMMUNITY_ACTOR_URL = f"https://{LEMMY_EXAMPLE_DOMAIN}/c/hackers"
-
-
-def _database(tmp_path: Path) -> Database:
-    """Create one real SQLite repository for Phase 2 fanout scenario tests."""
-    database = Database(f"sqlite:///{tmp_path / 'phase2-fanout.db'}")
-    database.create_all()
-    return database
-
-
-def _accepted_subscription(database: Database, *, channel_id: int) -> None:
-    """Insert one accepted community subscription for the shared hackers community."""
-    database.create_subscription(
-        discord_channel_id=channel_id,
-        lemmy_community_actor_id=COMMUNITY_ACTOR_URL,
-        lemmy_community_name="hackers",
-        lemmy_community_id=42,
-        community_handle=f"!hackers@{LEMMY_EXAMPLE_DOMAIN}",
-        community_inbox_url=f"{COMMUNITY_ACTOR_URL}/inbox",
-        follow_activity_id=f"https://{BRIDGE_HOST_DOMAIN}/activities/follow/{channel_id}",
-        status="accepted",
-    )
-
-
-def _registered_user(database: Database) -> None:
-    """Insert one registered local user actor for outbound publish scenarios."""
-    actor_url = f"https://{BRIDGE_HOST_DOMAIN}/users/alice"
-    database.create_user(
-        discord_user_id="123",
-        activitypub_username="alice",
-        actor_url=actor_url,
-        inbox_url=f"{actor_url}/inbox",
-        outbox_url=f"{actor_url}/outbox",
-        followers_url=f"{actor_url}/followers",
-        public_key_pem="public-key",
-        private_key_pem="private-key",
-    )
-
-
-def _publish_gateway(
-    *,
-    activity_id: str | None = None,
-    object_id: str | None = None,
-) -> AsyncMock:
-    """Build a mocked FedifyGatewayClient that returns a valid PublishContentResult."""
-    gateway = AsyncMock()
-    gateway.publish_content.return_value = PublishContentResult(
-        activity_id=activity_id or f"https://{BRIDGE_HOST_DOMAIN}/users/alice/activities/create/post/1",
-        object_id=object_id or f"https://{BRIDGE_HOST_DOMAIN}/users/alice/objects/post/1",
-        community_actor_url=COMMUNITY_ACTOR_URL,
-    )
-    return gateway
-
-
-def _publish_service(database: Database, gateway: AsyncMock) -> DiscordPublishService:
-    """Build a DiscordPublishService wired to one fake gateway boundary."""
-    return DiscordPublishService(
-        database=database,
-        fedify_gateway=gateway,
-        bridge_prefix="[bridge]",
-    )
-
-
-def _community_runtime(
-    database: Database,
-    gateway: AsyncMock,
-    *,
-    discord_fanout: DiscordFanout | None = None,
-) -> CommunityRuntime:
-    """Build a real CommunityRuntime with optional DiscordFanout."""
-    return CommunityRuntime(
-        database=database,
-        discord_publish_service=_publish_service(database, gateway),
-        discord_fanout=discord_fanout,
-    )
-
-
-def _fake_thread(*, thread_id: int = 200, channel_id: int = 100) -> SimpleNamespace:
-    """Return one fake Discord forum thread."""
-    return SimpleNamespace(id=thread_id, parent_id=channel_id, name="Thread title")
-
-
-def _fake_starter_message(*, message_id: int = 300, author_id: int = 123) -> SimpleNamespace:
-    """Return one fake Discord starter message."""
-    return SimpleNamespace(
-        id=message_id,
-        content="hello from discord",
-        author=SimpleNamespace(id=author_id, display_name="Alice", name="alice"),
-        reply=AsyncMock(),
-    )
+from support.db import (
+    COMMUNITY_ACTOR_URL,
+    add_accepted_subscription,
+    add_registered_user,
+    build_database,
+)
+from support.discord import (
+    build_forum_channel_object_result,
+    build_starter_message,
+    build_thread,
+)
+from support.gateway import build_gateway_mock
+from support.runtime import build_community_runtime
 
 
 @pytest.mark.asyncio
@@ -122,13 +39,13 @@ async def test_phase2_single_subscription_no_mirror_created(tmp_path: Path) -> N
     Assert: result status is 'published', CommunityThreadGroup exists, one source
     delivery row exists, no mirror delivery row exists, gateway called once.
     """
-    database = _database(tmp_path)
-    _accepted_subscription(database, channel_id=100)
-    _registered_user(database)
-    gateway = _publish_gateway()
-    runtime = _community_runtime(database, gateway)
-    thread = _fake_thread(thread_id=200, channel_id=100)
-    starter = _fake_starter_message(message_id=300)
+    database = build_database(tmp_path, "phase2-fanout.db")
+    add_accepted_subscription(database, channel_id=100)
+    add_registered_user(database)
+    gateway = build_gateway_mock()
+    runtime = build_community_runtime(database, fedify_gateway=gateway)
+    thread = build_thread(thread_id=200, channel_id=100)
+    starter = build_starter_message(message_id=300)
 
     result = await runtime.handle_discord_thread_create(thread=thread, starter_message=starter)
 
@@ -162,31 +79,25 @@ async def test_phase2_two_subscriptions_mirror_thread_created_in_sibling(tmp_pat
     Assert: result status is 'published', two delivery rows (source + mirror),
     mirror row has channel 101 and the fake mirror thread id, gateway called once.
     """
-    database = _database(tmp_path)
-    _accepted_subscription(database, channel_id=100)
-    _accepted_subscription(database, channel_id=101)
-    _registered_user(database)
-    gateway = _publish_gateway()
+    database = build_database(tmp_path, "phase2-fanout.db")
+    add_accepted_subscription(database, channel_id=100)
+    add_accepted_subscription(database, channel_id=101)
+    add_registered_user(database)
+    gateway = build_gateway_mock()
 
     # Fake mirror forum channel with a controllable create_thread return.
-    fake_mirror_thread = SimpleNamespace(id=500)
-    fake_mirror_message = SimpleNamespace(id=501)
-    fake_forum_channel = SimpleNamespace(
-        id=101,
-        create_thread=AsyncMock(
-            return_value=SimpleNamespace(
-                thread=fake_mirror_thread,
-                message=fake_mirror_message,
-            )
-        ),
+    fake_forum_channel = build_forum_channel_object_result(
+        channel_id=101, thread_id=500, starter_message_id=501
     )
     fake_bot = SimpleNamespace(
         fetch_forum_channel=AsyncMock(return_value=fake_forum_channel),
     )
     fanout = DiscordFanout(bot=fake_bot)
-    runtime = _community_runtime(database, gateway, discord_fanout=fanout)
-    thread = _fake_thread(thread_id=200, channel_id=100)
-    starter = _fake_starter_message(message_id=300)
+    runtime = build_community_runtime(
+        database, fedify_gateway=gateway, discord_fanout=fanout
+    )
+    thread = build_thread(thread_id=200, channel_id=100)
+    starter = build_starter_message(message_id=300)
 
     result = await runtime.handle_discord_thread_create(thread=thread, starter_message=starter)
 
@@ -221,9 +132,9 @@ async def test_phase2_duplicate_thread_create_is_ignored(tmp_path: Path) -> None
     Action: call handle_discord_thread_create for thread 200.
     Assert: result status is 'ignored', gateway not called, no new delivery rows.
     """
-    database = _database(tmp_path)
-    _accepted_subscription(database, channel_id=100)
-    _registered_user(database)
+    database = build_database(tmp_path, "phase2-fanout.db")
+    add_accepted_subscription(database, channel_id=100)
+    add_registered_user(database)
     # Pre-insert the thread group to simulate a prior successful publish.
     database.create_thread_group(
         community_actor_id=COMMUNITY_ACTOR_URL,
@@ -233,10 +144,10 @@ async def test_phase2_duplicate_thread_create_is_ignored(tmp_path: Path) -> None
         ap_activity_id="https://example.com/activity/1",
         ap_object_id="https://example.com/object/1",
     )
-    gateway = _publish_gateway()
-    runtime = _community_runtime(database, gateway)
-    thread = _fake_thread(thread_id=200, channel_id=100)
-    starter = _fake_starter_message(message_id=300)
+    gateway = build_gateway_mock()
+    runtime = build_community_runtime(database, fedify_gateway=gateway)
+    thread = build_thread(thread_id=200, channel_id=100)
+    starter = build_starter_message(message_id=300)
 
     result = await runtime.handle_discord_thread_create(thread=thread, starter_message=starter)
 
@@ -261,20 +172,22 @@ async def test_phase2_mirror_failure_does_not_block_source_publish(tmp_path: Pat
     Assert: result status is 'published', CommunityThreadGroup exists, one source
     delivery row exists, no mirror delivery row (mirror failed), gateway called once.
     """
-    database = _database(tmp_path)
-    _accepted_subscription(database, channel_id=100)
-    _accepted_subscription(database, channel_id=101)
-    _registered_user(database)
-    gateway = _publish_gateway()
+    database = build_database(tmp_path, "phase2-fanout.db")
+    add_accepted_subscription(database, channel_id=100)
+    add_accepted_subscription(database, channel_id=101)
+    add_registered_user(database)
+    gateway = build_gateway_mock()
 
     # Simulate a Discord error when trying to mirror into channel 101.
     fake_bot = SimpleNamespace(
         fetch_forum_channel=AsyncMock(side_effect=RuntimeError("discord error")),
     )
     fanout = DiscordFanout(bot=fake_bot)
-    runtime = _community_runtime(database, gateway, discord_fanout=fanout)
-    thread = _fake_thread(thread_id=200, channel_id=100)
-    starter = _fake_starter_message(message_id=300)
+    runtime = build_community_runtime(
+        database, fedify_gateway=gateway, discord_fanout=fanout
+    )
+    thread = build_thread(thread_id=200, channel_id=100)
+    starter = build_starter_message(message_id=300)
 
     result = await runtime.handle_discord_thread_create(thread=thread, starter_message=starter)
 

@@ -3,59 +3,18 @@
 from __future__ import annotations
 
 from pathlib import Path
-from types import SimpleNamespace
 from unittest.mock import AsyncMock
 
 import pytest
 
-from src.db import Database
 from src.discord_publish_service import DiscordPublishService, UNREGISTERED_REPLY
-from src.fedify_gateway_client import PublishContentResult
-from tests_constants import (
-    BRIDGE_EXAMPLE_DOMAIN,
-    BRIDGE_HOST_DOMAIN,
-    LEMMY_EXAMPLE_DOMAIN,
-)
+from support.db import add_accepted_subscription, add_registered_user, build_database
+from support.discord import build_starter_message, build_thread, build_thread_message
+from support.gateway import build_publish_result
+from tests_constants import BRIDGE_HOST_DOMAIN, LEMMY_EXAMPLE_DOMAIN
 
 
-def _database(tmp_path: Path) -> Database:
-    """Create a real SQLite-backed repository for publish flow tests."""
-    database = Database(f"sqlite:///{tmp_path / 'bridge-stage6.db'}")
-    database.create_all()
-    return database
-
-
-def _accepted_subscription(database: Database) -> None:
-    """Insert one active accepted subscription used by outbound publish tests."""
-    community_actor_url = f"https://{LEMMY_EXAMPLE_DOMAIN}/c/hackers"
-    database.create_subscription(
-        discord_channel_id=100,
-        lemmy_community_actor_id=community_actor_url,
-        lemmy_community_name="hackers",
-        lemmy_community_id=42,
-        community_handle=f"!hackers@{LEMMY_EXAMPLE_DOMAIN}",
-        community_inbox_url=f"{community_actor_url}/inbox",
-        follow_activity_id=f"https://{BRIDGE_EXAMPLE_DOMAIN}/activities/follow/1",
-        status="accepted",
-    )
-
-
-def _registered_user(database: Database) -> None:
-    """Insert one registered local user actor used by outbound publish tests."""
-    actor_url = f"https://{BRIDGE_HOST_DOMAIN}/users/alice"
-    database.create_user(
-        discord_user_id="123",
-        activitypub_username="alice",
-        actor_url=actor_url,
-        inbox_url=f"{actor_url}/inbox",
-        outbox_url=f"{actor_url}/outbox",
-        followers_url=f"{actor_url}/followers",
-        public_key_pem="public-key",
-        private_key_pem="private-key",
-    )
-
-
-def _service(database: Database, fedify_gateway: AsyncMock) -> DiscordPublishService:
+def _service(database, fedify_gateway: AsyncMock) -> DiscordPublishService:
     """Build the Stage 6 publish service with one fake gateway boundary."""
     return DiscordPublishService(
         database=database,
@@ -64,65 +23,25 @@ def _service(database: Database, fedify_gateway: AsyncMock) -> DiscordPublishSer
     )
 
 
-def _thread() -> SimpleNamespace:
-    """Return one fake forum thread object with the fields Stage 6 uses."""
-    return SimpleNamespace(id=200, parent_id=100, name="Thread title")
-
-
-def _starter_message() -> SimpleNamespace:
-    """Return one fake Discord starter message for thread publish scenarios."""
-    return SimpleNamespace(
-        id=300,
-        content="hello from discord",
-        author=SimpleNamespace(id=123, display_name="Alice", name="alice"),
-        reply=AsyncMock(),
-    )
-
-
-def _thread_message(
-    *,
-    thread: SimpleNamespace,
-    message_id: int = 301,
-    reference_message_id: int | None = None,
-    author_id: int = 123,
-) -> SimpleNamespace:
-    """Return one fake Discord thread message for comment publish scenarios."""
-    reference = (
-        SimpleNamespace(message_id=reference_message_id)
-        if reference_message_id is not None
-        else None
-    )
-    return SimpleNamespace(
-        id=message_id,
-        content="hello comment",
-        author=SimpleNamespace(id=author_id, display_name="Alice", name="alice"),
-        channel=thread,
-        reference=reference,
-        reply=AsyncMock(),
-    )
-
-
 @pytest.mark.asyncio
 async def test_thread_starter_from_registered_user_publishes_and_persists_mappings(
     tmp_path: Path,
 ) -> None:
     """A registered user should publish a thread starter through the gateway."""
-    database = _database(tmp_path)
-    _accepted_subscription(database)
-    _registered_user(database)
+    database = build_database(tmp_path, "bridge-stage6.db")
+    add_accepted_subscription(database)
+    add_registered_user(database)
     post_object_url = f"https://{BRIDGE_HOST_DOMAIN}/users/alice/objects/post/1"
     post_activity_url = (
         f"https://{BRIDGE_HOST_DOMAIN}/users/alice/activities/create/post/1"
     )
     fedify_gateway = AsyncMock()
-    fedify_gateway.publish_content.return_value = PublishContentResult(
-        activity_id=post_activity_url,
-        object_id=post_object_url,
-        community_actor_url=f"https://{LEMMY_EXAMPLE_DOMAIN}/c/hackers",
+    fedify_gateway.publish_content.return_value = build_publish_result(
+        kind="post", activity_id=post_activity_url, object_id=post_object_url
     )
     service = _service(database, fedify_gateway)
-    thread = _thread()
-    starter_message = _starter_message()
+    thread = build_thread()
+    starter_message = build_starter_message()
 
     result = await service.publish_thread_starter(
         thread=thread,
@@ -149,12 +68,12 @@ async def test_thread_starter_from_unregistered_user_is_ignored_and_replied_to(
     tmp_path: Path,
 ) -> None:
     """An unregistered author should be told to use `/register` and not published."""
-    database = _database(tmp_path)
-    _accepted_subscription(database)
+    database = build_database(tmp_path, "bridge-stage6.db")
+    add_accepted_subscription(database)
     fedify_gateway = AsyncMock()
     service = _service(database, fedify_gateway)
-    thread = _thread()
-    starter_message = _starter_message()
+    thread = build_thread()
+    starter_message = build_starter_message()
     starter_message.author.id = 999
 
     result = await service.publish_thread_starter(
@@ -173,10 +92,10 @@ async def test_thread_message_from_registered_user_publishes_as_comment(
     tmp_path: Path,
 ) -> None:
     """A registered user message inside a mapped thread should publish as a comment."""
-    database = _database(tmp_path)
-    _accepted_subscription(database)
-    _registered_user(database)
-    thread = _thread()
+    database = build_database(tmp_path, "bridge-stage6.db")
+    add_accepted_subscription(database)
+    add_registered_user(database)
+    thread = build_thread()
     post_object_url = f"https://{BRIDGE_HOST_DOMAIN}/users/alice/objects/post/1"
     comment_object_url = f"https://{BRIDGE_HOST_DOMAIN}/users/alice/objects/comment/1"
     comment_activity_url = (
@@ -198,13 +117,11 @@ async def test_thread_message_from_registered_user_publishes_as_comment(
         role="source",
     )
     fedify_gateway = AsyncMock()
-    fedify_gateway.publish_content.return_value = PublishContentResult(
-        activity_id=comment_activity_url,
-        object_id=comment_object_url,
-        community_actor_url=f"https://{LEMMY_EXAMPLE_DOMAIN}/c/hackers",
+    fedify_gateway.publish_content.return_value = build_publish_result(
+        kind="comment", activity_id=comment_activity_url, object_id=comment_object_url
     )
     service = _service(database, fedify_gateway)
-    message = _thread_message(thread=thread)
+    message = build_thread_message(thread_id=thread.id, channel_id=thread.parent_id)
 
     result = await service.publish_thread_message(message=message)
 
@@ -228,10 +145,10 @@ async def test_thread_reply_uses_parent_comment_object_id_when_available(
     tmp_path: Path,
 ) -> None:
     """A Discord reply should target the mapped parent AP comment when known."""
-    database = _database(tmp_path)
-    _accepted_subscription(database)
-    _registered_user(database)
-    thread = _thread()
+    database = build_database(tmp_path, "bridge-stage6.db")
+    add_accepted_subscription(database)
+    add_registered_user(database)
+    thread = build_thread()
     post_object_url = f"https://{BRIDGE_HOST_DOMAIN}/users/alice/objects/post/1"
     parent_comment_object_url = (
         f"https://{BRIDGE_HOST_DOMAIN}/users/alice/objects/comment/parent"
@@ -268,15 +185,16 @@ async def test_thread_reply_uses_parent_comment_object_id_when_available(
         role="source",
     )
     fedify_gateway = AsyncMock()
-    fedify_gateway.publish_content.return_value = PublishContentResult(
+    fedify_gateway.publish_content.return_value = build_publish_result(
+        kind="comment",
         activity_id=f"https://{BRIDGE_HOST_DOMAIN}/users/alice/activities/create/comment/2",
         object_id=f"https://{BRIDGE_HOST_DOMAIN}/users/alice/objects/comment/2",
-        community_actor_url=f"https://{LEMMY_EXAMPLE_DOMAIN}/c/hackers",
     )
     service = _service(database, fedify_gateway)
-    message = _thread_message(
-        thread=thread,
+    message = build_thread_message(
         message_id=402,
+        thread_id=thread.id,
+        channel_id=thread.parent_id,
         reference_message_id=401,
     )
 
@@ -296,7 +214,7 @@ async def test_thread_message_in_pending_subscription_is_ignored(
     tmp_path: Path,
 ) -> None:
     """Pending subscriptions must not publish Discord messages yet."""
-    database = _database(tmp_path)
+    database = build_database(tmp_path, "bridge-stage6.db")
     database.create_subscription(
         discord_channel_id=100,
         lemmy_community_actor_id=f"https://{LEMMY_EXAMPLE_DOMAIN}/c/hackers",
@@ -304,11 +222,11 @@ async def test_thread_message_in_pending_subscription_is_ignored(
         lemmy_community_id=42,
         status="pending",
     )
-    _registered_user(database)
-    thread = _thread()
+    add_registered_user(database)
+    thread = build_thread()
     fedify_gateway = AsyncMock()
     service = _service(database, fedify_gateway)
-    message = _thread_message(thread=thread)
+    message = build_thread_message(thread_id=thread.id, channel_id=thread.parent_id)
 
     result = await service.publish_thread_message(message=message)
 
@@ -322,13 +240,15 @@ async def test_message_without_thread_group_returns_no_post_context(
     tmp_path: Path,
 ) -> None:
     """A message in a thread with no CommunityThreadGroup returns no_post_context."""
-    database = _database(tmp_path)
-    _accepted_subscription(database)
-    _registered_user(database)
-    thread = _thread()
+    database = build_database(tmp_path, "bridge-stage6.db")
+    add_accepted_subscription(database)
+    add_registered_user(database)
+    thread = build_thread()
     fedify_gateway = AsyncMock()
     service = _service(database, fedify_gateway)
-    message = _thread_message(thread=thread, message_id=301)
+    message = build_thread_message(
+        thread_id=thread.id, channel_id=thread.parent_id, message_id=301
+    )
 
     result = await service.publish_thread_message(message=message)
 
@@ -342,14 +262,14 @@ async def test_gateway_publish_failure_does_not_store_false_success_mapping(
     tmp_path: Path,
 ) -> None:
     """Publish persistence must only happen after the gateway returns success."""
-    database = _database(tmp_path)
-    _accepted_subscription(database)
-    _registered_user(database)
+    database = build_database(tmp_path, "bridge-stage6.db")
+    add_accepted_subscription(database)
+    add_registered_user(database)
     fedify_gateway = AsyncMock()
     fedify_gateway.publish_content.side_effect = RuntimeError("boom")
     service = _service(database, fedify_gateway)
-    thread = _thread()
-    starter_message = _starter_message()
+    thread = build_thread()
+    starter_message = build_starter_message()
 
     with pytest.raises(RuntimeError):
         await service.publish_thread_starter(
