@@ -717,6 +717,17 @@ class Database:
                 )
             )
 
+    def get_local_community_thread_by_starter_message_id(
+        self, discord_starter_message_id: int
+    ) -> LocalCommunityThread | None:
+        """Load the local-community thread row for one Discord starter message."""
+        with self.session() as session:
+            return session.scalar(
+                select(LocalCommunityThread).where(
+                    LocalCommunityThread.discord_starter_message_id == discord_starter_message_id
+                )
+            )
+
     def get_local_community_thread_by_ap_object_id(
         self, ap_object_id: str
     ) -> LocalCommunityThread | None:
@@ -788,6 +799,11 @@ class Database:
                     ).order_by(LocalCommunityMessage.created_at, LocalCommunityMessage.id)
                 )
             )
+
+    def get_local_community_thread_by_id(self, local_community_thread_id: int) -> LocalCommunityThread | None:
+        """Load one local-community thread row by its primary key."""
+        with self.session() as session:
+            return session.get(LocalCommunityThread, local_community_thread_id)
 
     def list_users(self) -> list[User]:
         """Return all registered users in stable creation order."""
@@ -899,6 +915,17 @@ class Database:
             return session.scalar(
                 select(PublishedActivityObject).where(
                     PublishedActivityObject.object_id == object_id
+                )
+            )
+
+    def get_published_activity_object_by_discord_message_id(
+        self, discord_message_id: int
+    ) -> PublishedActivityObject | None:
+        """Load one stored gateway-published object by Discord message ID."""
+        with self.session() as session:
+            return session.scalar(
+                select(PublishedActivityObject).where(
+                    PublishedActivityObject.discord_message_id == discord_message_id
                 )
             )
 

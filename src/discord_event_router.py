@@ -39,6 +39,18 @@ class DiscordEventRouter:
             return False
         return self.database.get_subscription_by_channel(forum_channel_id) is not None
 
+    def is_local_community_message(self, message_id: int) -> bool:
+        """Return whether one Discord message belongs to local-community mode.
+
+        The local-community mode has two canonical Discord message surfaces:
+        starter messages mapped by `local_community_threads` and reply messages
+        mapped by `local_community_messages`.
+        """
+        return (
+            self.database.get_local_community_thread_by_starter_message_id(message_id) is not None
+            or self.database.get_local_community_message_by_discord_message_id(message_id) is not None
+        )
+
     async def handle_thread_create(self, *, thread: object, starter_message: object) -> object:
         """Route one thread-create event into the owning bridge mode."""
         forum_channel_id = getattr(thread, "parent_id", None)
@@ -62,4 +74,46 @@ class DiscordEventRouter:
             )
         return await self.community_runtime.handle_discord_message(
             message=message,
+        )
+
+    async def handle_message_edit(
+        self,
+        *,
+        message_id: int,
+        new_content: str,
+        author_display_name: str,
+        runtime: object,
+    ) -> None:
+        """Route one raw Discord edit event into the owning bridge mode."""
+        if self.is_local_community_message(message_id):
+            await self.local_community_runtime.handle_discord_message_edit(
+                message_id=message_id,
+                new_content=new_content,
+                author_display_name=author_display_name,
+                runtime=runtime,
+            )
+            return
+        await self.community_runtime.handle_discord_message_edit(
+            message_id=message_id,
+            new_content=new_content,
+            author_display_name=author_display_name,
+            runtime=runtime,
+        )
+
+    async def handle_message_delete(
+        self,
+        *,
+        message_id: int,
+        runtime: object,
+    ) -> None:
+        """Route one raw Discord delete event into the owning bridge mode."""
+        if self.is_local_community_message(message_id):
+            await self.local_community_runtime.handle_discord_message_delete(
+                message_id=message_id,
+                runtime=runtime,
+            )
+            return
+        await self.community_runtime.handle_discord_message_delete(
+            message_id=message_id,
+            runtime=runtime,
         )

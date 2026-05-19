@@ -1,13 +1,23 @@
-"""Publish Discord-originated content through registered local AP user actors."""
+"""Shared outbound AP publish service for Discord-authored content.
+
+The historic module name is kept because many tests and integrations still
+import from it, but the service itself is now `ContentPublishService`. It owns
+the generic Discord -> ActivityPub create path used by both remote-subscription
+mode and local-community mode.
+"""
 
 from __future__ import annotations
 
 import logging
 from dataclasses import dataclass
+from typing import Awaitable, Callable
 
-from .db import Database
-from .fedify_gateway_client import FedifyGatewayClient, PublishContentRequest
-from .formatting import format_discord_body_for_lemmy, format_thread_title_for_discord
+from .content_sync.outbound_publish import (
+    build_discord_comment_body,
+    build_discord_post_title,
+    resolve_registered_user,
+)
+from .content_sync.persistence import persist_publish_artifacts
 
 logger = logging.getLogger(__name__)
 
@@ -27,24 +37,24 @@ class PublishResult:
     object_id: str | None = None
 
 
-class DiscordPublishService:
-    """Own outbound AP publish for Discord thread starters and replies.
+class ContentPublishService:
+    """Own reusable outbound AP create behavior for Discord-authored content.
 
-    Responsibilities after Phase 5:
-    - Validate subscription (accepted) and user registration.
-    - Publish to ActivityPub via FedifyGatewayClient.
-    - Persist MessageMapping and PublishedActivityObject for echo suppression
-      and reply-chain resolution.
+    Responsibilities:
+    - validate author registration
+    - format Discord bodies and titles for AP publish
+    - call the gateway publish boundary
+    - persist the generic mapping/object rows shared by both bridge modes
 
-    Dedup, fanout, PostLink, and CommentLink are all owned by CommunityRuntime
-    from Phase 5 onward. This service does not write PostLink or CommentLink rows.
+    Mode-specific runtimes still own routing, dedup, reply-table lookups, and
+    canonical thread/message mapping tables.
     """
 
     def __init__(
         self,
         *,
-        database: Database,
-        fedify_gateway: FedifyGatewayClient,
+        database: object,
+        fedify_gateway: object,
         bridge_prefix: str,
     ) -> None:
         """Initialise with the shared database, AP gateway, and bridge prefix."""
@@ -58,39 +68,103 @@ class DiscordPublishService:
         thread: object,
         starter_message: object,
     ) -> PublishResult:
-        """Publish one Discord forum-thread starter as a user-authored AP post.
-
-        Validates subscription and registration, then publishes to AP. Does not
-        write PostLink rows — CommunityRuntime owns thread-group persistence.
-        Dedup against duplicate thread events is enforced by CommunityRuntime
-        via get_thread_group_by_source_thread before calling this method.
-        """
-        subscription = self.database.get_subscription_by_channel(
-            getattr(thread, "parent_id")
-        )
+        """Publish one Discord forum-thread starter into a remote subscribed community."""
+        subscription = self.database.get_subscription_by_channel(getattr(thread, "parent_id"))
         if subscription is None:
             return PublishResult(status="ignored", reason="no_subscription")
         if subscription.status != "accepted":
             return PublishResult(status="ignored", reason="subscription_not_active")
 
-        user = self.database.get_user_by_discord_user_id(
-            str(getattr(getattr(starter_message, "author"), "id"))
+        return await self.publish_post_to_community(
+            thread=thread,
+            starter_message=starter_message,
+            community_actor_url=subscription.lemmy_community_actor_id,
+            publish_call=self.fedify_gateway.publish_content,
+        )
+
+    async def publish_thread_message(self, *, message: object) -> PublishResult:
+        """Publish one Discord thread message into a remote subscribed community."""
+        thread = getattr(message, "channel")
+        subscription = self.database.get_subscription_by_channel(getattr(thread, "parent_id"))
+        if subscription is None:
+            return PublishResult(status="ignored", reason="no_subscription")
+        if subscription.status != "accepted":
+            return PublishResult(status="ignored", reason="subscription_not_active")
+
+        thread_group = self.database.get_thread_group_by_any_thread(getattr(thread, "id"))
+        if thread_group is None or thread_group.ap_object_id is None:
+            return PublishResult(status="ignored", reason="no_post_context")
+
+        if thread_group.source_starter_message_id == getattr(message, "id"):
+            return PublishResult(status="ignored", reason="starter_message_already_handled")
+
+        reply_target_ap_id = self._resolve_reply_target(message=message, thread_group=thread_group)
+        return await self.publish_comment_to_community(
+            message=message,
+            community_actor_url=subscription.lemmy_community_actor_id,
+            parent_object_id=reply_target_ap_id,
+            publish_call=self.fedify_gateway.publish_content,
+        )
+
+    async def publish_local_thread_starter(
+        self,
+        *,
+        thread: object,
+        starter_message: object,
+        community_actor_url: str,
+    ) -> PublishResult:
+        """Publish one Discord forum-thread starter into a local federated community."""
+        return await self.publish_post_to_community(
+            thread=thread,
+            starter_message=starter_message,
+            community_actor_url=community_actor_url,
+            publish_call=self.fedify_gateway.publish_local_community_content,
+        )
+
+    async def publish_local_thread_message(
+        self,
+        *,
+        message: object,
+        community_actor_url: str,
+        parent_object_id: str,
+    ) -> PublishResult:
+        """Publish one Discord reply inside a local community thread."""
+        return await self.publish_comment_to_community(
+            message=message,
+            community_actor_url=community_actor_url,
+            parent_object_id=parent_object_id,
+            publish_call=self.fedify_gateway.publish_local_community_content,
+        )
+
+    async def publish_post_to_community(
+        self,
+        *,
+        thread: object,
+        starter_message: object,
+        community_actor_url: str,
+        publish_call: Callable[[object], Awaitable[object]],
+    ) -> PublishResult:
+        """Publish one Discord thread starter through the supplied gateway path."""
+        user = await resolve_registered_user(
+            database=self.database,
+            author=getattr(starter_message, "author"),
+            reply_target=starter_message,
+            unregistered_reply=UNREGISTERED_REPLY,
         )
         if user is None:
-            await getattr(starter_message, "reply")(UNREGISTERED_REPLY)
             return PublishResult(status="ignored", reason="unregistered_user")
 
         author_name = self._author_name(getattr(starter_message, "author"))
-        body = format_discord_body_for_lemmy(
-            author_name,
-            getattr(starter_message, "content"),
-            self.bridge_prefix,
+        body = build_discord_comment_body(
+            author_name=author_name,
+            content=getattr(starter_message, "content"),
+            bridge_prefix=self.bridge_prefix,
         )
-        title = format_thread_title_for_discord(getattr(thread, "name"))
-        publish_result = await self.fedify_gateway.publish_content(
-            PublishContentRequest(
+        title = build_discord_post_title(thread_name=getattr(thread, "name"))
+        publish_result = await publish_call(
+            self._build_publish_request(
                 actor_username=user.activitypub_username,
-                community_actor_url=subscription.lemmy_community_actor_id,
+                community_actor_url=community_actor_url,
                 kind="post",
                 title=title,
                 body_markdown=body,
@@ -98,29 +172,19 @@ class DiscordPublishService:
             )
         )
 
-        self.database.create_message_mapping(
-            source_platform="discord",
+        persist_publish_artifacts(
+            self.database,
             source_id=str(getattr(starter_message, "id")),
-            activity_id=publish_result.activity_id,
-            object_id=publish_result.object_id,
-            actor_url=user.actor_url,
-            community_actor_url=subscription.lemmy_community_actor_id,
-            discord_channel_id=getattr(thread, "parent_id"),
-            discord_message_id=getattr(starter_message, "id"),
-        )
-        # The durable object store lets the gateway later serve this exact AP
-        # object back to Lemmy when reply chains reference its canonical URL.
-        self.database.create_published_activity_object(
             actor_username=user.activitypub_username,
             actor_url=user.actor_url,
-            community_actor_url=subscription.lemmy_community_actor_id,
+            community_actor_url=community_actor_url,
             activity_id=publish_result.activity_id,
             object_id=publish_result.object_id,
             kind="post",
             title=title,
             body_markdown=body,
             in_reply_to_object_id=None,
-            discord_channel_id=getattr(thread, "parent_id"),
+            discord_channel_id=getattr(thread, "parent_id", None),
             discord_message_id=getattr(starter_message, "id"),
         )
         logger.info(
@@ -136,89 +200,55 @@ class DiscordPublishService:
             object_id=publish_result.object_id,
         )
 
-    async def publish_thread_message(self, *, message: object) -> PublishResult:
-        """Publish one Discord thread message as a user-authored AP comment.
-
-        Resolves post context from CommunityThreadGroup (the sole path from Phase 5
-        onward — PostLink fallback removed). Does not write CommentLink rows.
-        Dedup against duplicate message events is enforced by CommunityRuntime via
-        get_message_group_by_source_message before calling this method.
-        """
+    async def publish_comment_to_community(
+        self,
+        *,
+        message: object,
+        community_actor_url: str,
+        parent_object_id: str,
+        publish_call: Callable[[object], Awaitable[object]],
+    ) -> PublishResult:
+        """Publish one Discord comment through the supplied gateway path."""
         thread = getattr(message, "channel")
-        subscription = self.database.get_subscription_by_channel(
-            getattr(thread, "parent_id")
-        )
-        if subscription is None:
-            return PublishResult(status="ignored", reason="no_subscription")
-        if subscription.status != "accepted":
-            return PublishResult(status="ignored", reason="subscription_not_active")
-
-        # Resolve post context from CommunityThreadGroup — works for source, mirror,
-        # and inbound threads (Phase 9). If no thread group exists, the thread
-        # predates Phase 2 or was never registered, so AP publish is not possible.
-        thread_group = self.database.get_thread_group_by_any_thread(getattr(thread, "id"))
-        if thread_group is None or thread_group.ap_object_id is None:
-            return PublishResult(status="ignored", reason="no_post_context")
-
-        if thread_group.source_starter_message_id == getattr(message, "id"):
-            return PublishResult(
-                status="ignored", reason="starter_message_already_handled"
-            )
-
-        user = self.database.get_user_by_discord_user_id(
-            str(getattr(getattr(message, "author"), "id"))
+        user = await resolve_registered_user(
+            database=self.database,
+            author=getattr(message, "author"),
+            reply_target=message,
+            unregistered_reply=UNREGISTERED_REPLY,
         )
         if user is None:
-            await getattr(message, "reply")(UNREGISTERED_REPLY)
             return PublishResult(status="ignored", reason="unregistered_user")
 
-        # Resolve the AP reply target using the message's Discord reference.
-        # parent_ap_id is the comment AP id if replying to a known comment,
-        # or None (falling back to the post AP id) for root-level replies.
-        reply_target_ap_id = self._resolve_reply_target(
-            message=message,
-            thread_group=thread_group,
-        )
         author_name = self._author_name(getattr(message, "author"))
-        body = format_discord_body_for_lemmy(
-            author_name,
-            getattr(message, "content"),
-            self.bridge_prefix,
+        body = build_discord_comment_body(
+            author_name=author_name,
+            content=getattr(message, "content"),
+            bridge_prefix=self.bridge_prefix,
         )
-        publish_result = await self.fedify_gateway.publish_content(
-            PublishContentRequest(
+        publish_result = await publish_call(
+            self._build_publish_request(
                 actor_username=user.activitypub_username,
-                community_actor_url=subscription.lemmy_community_actor_id,
+                community_actor_url=community_actor_url,
                 kind="comment",
                 title=None,
                 body_markdown=body,
-                in_reply_to_object_id=reply_target_ap_id,
+                in_reply_to_object_id=parent_object_id,
             )
         )
 
-        self.database.create_message_mapping(
-            source_platform="discord",
+        persist_publish_artifacts(
+            self.database,
             source_id=str(getattr(message, "id")),
-            activity_id=publish_result.activity_id,
-            object_id=publish_result.object_id,
-            actor_url=user.actor_url,
-            community_actor_url=subscription.lemmy_community_actor_id,
-            discord_channel_id=getattr(thread, "parent_id"),
-            discord_message_id=getattr(message, "id"),
-        )
-        # Store the published comment body and parent object so local gateway
-        # URLs can be resolved without relying on transient HTTP state later.
-        self.database.create_published_activity_object(
             actor_username=user.activitypub_username,
             actor_url=user.actor_url,
-            community_actor_url=subscription.lemmy_community_actor_id,
+            community_actor_url=community_actor_url,
             activity_id=publish_result.activity_id,
             object_id=publish_result.object_id,
             kind="comment",
             title=None,
             body_markdown=body,
-            in_reply_to_object_id=reply_target_ap_id,
-            discord_channel_id=getattr(thread, "parent_id"),
+            in_reply_to_object_id=parent_object_id,
+            discord_channel_id=getattr(thread, "parent_id", None),
             discord_message_id=getattr(message, "id"),
         )
         logger.info(
@@ -235,41 +265,57 @@ class DiscordPublishService:
         )
 
     def _resolve_reply_target(self, *, message: object, thread_group: object) -> str:
-        """Resolve the AP object ID that this Discord reply should target.
-
-        Uses CommunityMessageGroup.ap_object_id for replies to known prior messages.
-        Falls back to the thread group's post AP object ID for root replies or
-        when the referenced message has no known message group.
-
-        Phase 9: Also checks if the referenced message is any starter message in
-        the thread group (source, mirror, or inbound) — all treat as root reply.
-        """
+        """Resolve the AP object ID that one remote-subscription reply should target."""
         post_ap_id = thread_group.ap_object_id
         reference = getattr(message, "reference", None)
         referenced_id = getattr(reference, "message_id", None) if reference else None
 
         if referenced_id is None:
-            # Root reply to the post.
             return post_ap_id
 
-        # Check if this is a reply to any starter message in the thread group.
-        # Phase 9: Generalised to handle replies to mirror/inbound starters.
         thread_deliveries = self.database.get_thread_deliveries(thread_group.id)
         for delivery in thread_deliveries:
             if referenced_id == delivery.discord_starter_message_id:
-                # Reply to any thread starter (source, mirror, or inbound) — targets the post.
                 return post_ap_id
 
-        # Look up whether the referenced Discord message belongs to a known
-        # message group and resolve its AP object ID.
         parent_group = self.database.get_message_group_by_delivered_message(referenced_id)
         if parent_group is None or parent_group.ap_object_id is None:
-            # Unknown reference (pre-Phase-3 or cross-thread) — fall back to post.
             return post_ap_id
-
         return parent_group.ap_object_id
 
     @staticmethod
     def _author_name(author: object) -> str:
-        """Return the display name the bridge uses in outbound markdown content."""
-        return getattr(author, "display_name", None) or getattr(author, "name")
+        """Resolve the best human-readable author label from a Discord author object."""
+        return (
+            getattr(author, "display_name", None)
+            or getattr(author, "global_name", None)
+            or getattr(author, "name", None)
+            or "unknown"
+        )
+
+    @staticmethod
+    def _build_publish_request(
+        *,
+        actor_username: str,
+        community_actor_url: str,
+        kind: str,
+        title: str | None,
+        body_markdown: str,
+        in_reply_to_object_id: str | None,
+    ) -> object:
+        """Build one gateway publish request without importing mode-specific code."""
+        from .fedify_gateway_client import PublishContentRequest
+
+        return PublishContentRequest(
+            actor_username=actor_username,
+            community_actor_url=community_actor_url,
+            kind=kind,
+            title=title,
+            body_markdown=body_markdown,
+            in_reply_to_object_id=in_reply_to_object_id,
+        )
+
+
+# Backward-compat alias while the rest of the codebase and older tests migrate
+# to the clearer `ContentPublishService` name.
+DiscordPublishService = ContentPublishService

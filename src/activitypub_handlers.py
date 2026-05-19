@@ -64,12 +64,20 @@ async def dispatch_activitypub_event(
     if event.event_type == "comment.created":
         return await handle_comment_created(event, runtime)
     if event.event_type == "post.updated":
+        if _is_local_community_target(event, runtime):
+            return await runtime.local_community_runtime.handle_inbound_post_update(event, runtime)
         return await runtime.community_runtime.handle_inbound_post_update(event, runtime)
     if event.event_type == "post.deleted":
+        if _is_local_community_target(event, runtime):
+            return await runtime.local_community_runtime.handle_inbound_post_delete(event, runtime)
         return await runtime.community_runtime.handle_inbound_post_delete(event, runtime)
     if event.event_type == "comment.updated":
+        if _is_local_community_target(event, runtime):
+            return await runtime.local_community_runtime.handle_inbound_comment_update(event, runtime)
         return await runtime.community_runtime.handle_inbound_comment_update(event, runtime)
     if event.event_type == "comment.deleted":
+        if _is_local_community_target(event, runtime):
+            return await runtime.local_community_runtime.handle_inbound_comment_delete(event, runtime)
         return await runtime.community_runtime.handle_inbound_comment_delete(event, runtime)
     if event.event_type == "follow.accepted":
         return await handle_follow_accepted(event, runtime)

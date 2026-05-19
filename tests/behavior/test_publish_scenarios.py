@@ -7,10 +7,12 @@ from types import SimpleNamespace
 from unittest.mock import AsyncMock
 
 import pytest
+from sqlalchemy import func, select
 
 from src.db import Database
 from src.discord_publish_service import DiscordPublishService, UNREGISTERED_REPLY
 from src.fedify_gateway_client import PublishContentResult
+from src.models import MessageMapping, PublishedActivityObject
 from tests_constants import BRIDGE_HOST_DOMAIN, LEMMY_EXAMPLE_DOMAIN
 
 
@@ -128,6 +130,9 @@ async def test_registered_user_with_accepted_subscription_publishes_thread_start
     assert mapping.object_id == f"https://{BRIDGE_HOST_DOMAIN}/users/alice/objects/post/1"
     assert stored_object is not None
     assert stored_object.kind == "post"
+    with database.session() as session:
+        assert session.scalar(select(func.count()).select_from(MessageMapping)) == 1
+        assert session.scalar(select(func.count()).select_from(PublishedActivityObject)) == 1
 
 
 @pytest.mark.asyncio
@@ -175,6 +180,76 @@ async def test_registered_user_with_accepted_subscription_publishes_thread_reply
     assert mapping.object_id == f"https://{BRIDGE_HOST_DOMAIN}/users/alice/objects/comment/1"
     assert stored_object is not None
     assert stored_object.kind == "comment"
+
+
+@pytest.mark.asyncio
+async def test_remote_subscription_reply_semantics_preserve_nested_and_unknown_fallback(
+    tmp_path: Path,
+) -> None:
+    """Remote-subscription replies should keep nested and unknown-parent semantics."""
+    database = _database(tmp_path)
+    _accepted_subscription(database)
+    _registered_user(database)
+    post_object_url = f"https://{BRIDGE_HOST_DOMAIN}/users/alice/objects/post/1"
+    thread_group = database.create_thread_group(
+        community_actor_id=f"https://{LEMMY_EXAMPLE_DOMAIN}/c/hackers",
+        source_channel_id=100,
+        source_thread_id=200,
+        source_starter_message_id=300,
+        ap_activity_id=f"https://{BRIDGE_HOST_DOMAIN}/users/alice/activities/create/post/1",
+        ap_object_id=post_object_url,
+    )
+    database.add_thread_delivery(
+        thread_group_id=thread_group.id,
+        discord_channel_id=100,
+        discord_thread_id=200,
+        discord_starter_message_id=300,
+        role="source",
+    )
+    parent_group = database.create_message_group(
+        community_actor_id=f"https://{LEMMY_EXAMPLE_DOMAIN}/c/hackers",
+        thread_group_id=thread_group.id,
+        source_channel_id=100,
+        source_thread_id=200,
+        source_message_id=301,
+        ap_activity_id=f"https://{BRIDGE_HOST_DOMAIN}/users/alice/activities/create/comment/0",
+        ap_object_id=f"https://{BRIDGE_HOST_DOMAIN}/users/alice/objects/comment/0",
+    )
+    database.add_message_delivery(
+        message_group_id=parent_group.id,
+        discord_channel_id=100,
+        discord_thread_id=200,
+        discord_message_id=301,
+        role="source",
+    )
+    fedify_gateway = AsyncMock()
+    fedify_gateway.publish_content.side_effect = [
+        PublishContentResult(
+            activity_id=f"https://{BRIDGE_HOST_DOMAIN}/users/alice/activities/create/comment/1",
+            object_id=f"https://{BRIDGE_HOST_DOMAIN}/users/alice/objects/comment/1",
+            community_actor_url=f"https://{LEMMY_EXAMPLE_DOMAIN}/c/hackers",
+        ),
+        PublishContentResult(
+            activity_id=f"https://{BRIDGE_HOST_DOMAIN}/users/alice/activities/create/comment/2",
+            object_id=f"https://{BRIDGE_HOST_DOMAIN}/users/alice/objects/comment/2",
+            community_actor_url=f"https://{LEMMY_EXAMPLE_DOMAIN}/c/hackers",
+        ),
+    ]
+    service = _service(database, fedify_gateway)
+
+    nested_result = await service.publish_thread_message(
+        message=_thread_message(thread=_thread(), message_id=302, reference_message_id=301),
+    )
+    unknown_result = await service.publish_thread_message(
+        message=_thread_message(thread=_thread(), message_id=303, reference_message_id=999),
+    )
+
+    assert nested_result.status == "published"
+    assert unknown_result.status == "published"
+    nested_request = fedify_gateway.publish_content.await_args_list[0].args[0]
+    unknown_request = fedify_gateway.publish_content.await_args_list[1].args[0]
+    assert nested_request.in_reply_to_object_id == f"https://{BRIDGE_HOST_DOMAIN}/users/alice/objects/comment/0"
+    assert unknown_request.in_reply_to_object_id == post_object_url
 
 
 @pytest.mark.asyncio

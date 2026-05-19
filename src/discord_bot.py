@@ -174,8 +174,9 @@ class BridgeBot(discord.Client):
                 logger.debug("[on_raw_message_edit] skipping recent edit (age=%.1fs)", edit_age)
                 return
 
-        delivery = self.database.get_message_delivery_by_message(payload.message_id)
-        if delivery is None:
+        is_local_message = self.event_router.is_local_community_message(payload.message_id)
+        delivery = None if is_local_message else self.database.get_message_delivery_by_message(payload.message_id)
+        if delivery is None and not is_local_message:
             logger.debug("[on_raw_message_edit] no delivery found for msg=%s", payload.message_id)
             return
 
@@ -183,7 +184,7 @@ class BridgeBot(discord.Client):
         # Mirror messages are bot-owned copies; edits to them (including our own
         # propagation writes) must not re-trigger fanout or an infinite loop results.
         # Inbound AP messages are handled via AP Update events, not Discord events.
-        if delivery.role != "source":
+        if delivery is not None and delivery.role != "source":
             logger.debug("[on_raw_message_edit] role=%s — skipping (not source)", delivery.role)
             return
 
@@ -211,7 +212,7 @@ class BridgeBot(discord.Client):
 
         logger.info("Discord message edit msg=%s thread=%s", payload.message_id, payload.channel_id)
         try:
-            await self.community_runtime.handle_discord_message_edit(
+            await self.event_router.handle_message_edit(
                 message_id=payload.message_id,
                 new_content=new_content,
                 author_display_name=author_display_name,
@@ -242,14 +243,15 @@ class BridgeBot(discord.Client):
                 logger.debug("[on_raw_message_delete] skipping recent delete (age=%.1fs)", delete_age)
                 return
 
-        delivery = self.database.get_message_delivery_by_message(payload.message_id)
-        if delivery is None:
+        is_local_message = self.event_router.is_local_community_message(payload.message_id)
+        delivery = None if is_local_message else self.database.get_message_delivery_by_message(payload.message_id)
+        if delivery is None and not is_local_message:
             logger.debug("[on_raw_message_delete] no delivery found for msg=%s", payload.message_id)
             return
 
         # Only process Discord-originated messages (source or mirror role).
         # Inbound AP messages should not be deleted via Discord events.
-        if delivery.role == "inbound":
+        if delivery is not None and delivery.role == "inbound":
             logger.debug("[on_raw_message_delete] inbound message — skipping (handled via AP events)")
             return
 
@@ -261,7 +263,7 @@ class BridgeBot(discord.Client):
 
         logger.info("Discord message delete msg=%s thread=%s", payload.message_id, payload.channel_id)
         try:
-            await self.community_runtime.handle_discord_message_delete(
+            await self.event_router.handle_message_delete(
                 message_id=payload.message_id,
                 runtime=runtime,
             )

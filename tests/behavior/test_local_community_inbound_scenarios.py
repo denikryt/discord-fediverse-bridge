@@ -10,6 +10,7 @@ import discord
 import pytest
 
 from src.activitypub_models import ActivityPubEvent, BridgeGatewayEvent
+from src.discord_publish_service import ContentPublishService
 from src.local_communities.runtime import LocalCommunityRuntime
 from src.local_communities.service import LocalCommunityService
 from support.db import build_database
@@ -24,9 +25,15 @@ def _runtime(tmp_path: Path) -> tuple[object, LocalCommunityRuntime]:
     """Build a real local-community runtime with a fake gateway boundary."""
     database = build_database(tmp_path, "local-community-inbound.db")
     gateway = AsyncMock()
+    publish_service = ContentPublishService(
+        database=database,
+        fedify_gateway=gateway,
+        bridge_prefix="[bridge]",
+    )
     runtime = LocalCommunityRuntime(
         database=database,
         fedify_gateway=gateway,
+        content_publish_service=publish_service,
         bridge_prefix="[bridge]",
     )
     return database, runtime

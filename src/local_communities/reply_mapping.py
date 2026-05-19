@@ -2,22 +2,14 @@
 
 Reply mapping is correctness-critical because local-community comments must
 preserve the same parent thread/message structure on both Discord and the
-federated side.
+federated side. The local-community mode reuses the shared root-or-mapped
+contract while keeping its own table lookups.
 """
 
 from __future__ import annotations
 
-from dataclasses import dataclass
-
 from ..db import Database
-
-
-@dataclass(slots=True)
-class LocalReplyContext:
-    """Carry the resolved parent identifiers for one local-community reply."""
-
-    parent_ap_object_id: str
-    parent_discord_message_id: int | None
+from ..content_sync.reply_mapping import ResolvedReplyTarget, resolve_root_or_mapped_reply
 
 
 def resolve_outbound_reply_context(
@@ -25,7 +17,7 @@ def resolve_outbound_reply_context(
     database: Database,
     thread_row: object,
     message: object,
-) -> LocalReplyContext:
+) -> ResolvedReplyTarget:
     """Resolve which AP object an outbound Discord reply should target.
 
     Root replies target the thread's post object. Replies to known mapped local
@@ -33,21 +25,10 @@ def resolve_outbound_reply_context(
     """
     reference = getattr(message, "reference", None)
     referenced_id = getattr(reference, "message_id", None) if reference else None
-    if referenced_id is None:
-        return LocalReplyContext(
-            parent_ap_object_id=getattr(thread_row, "ap_object_id"),
-            parent_discord_message_id=None,
-        )
-
-    mapped_message = database.get_local_community_message_by_discord_message_id(referenced_id)
-    if mapped_message is None:
-        return LocalReplyContext(
-            parent_ap_object_id=getattr(thread_row, "ap_object_id"),
-            parent_discord_message_id=referenced_id,
-        )
-    return LocalReplyContext(
-        parent_ap_object_id=getattr(mapped_message, "ap_object_id"),
-        parent_discord_message_id=referenced_id,
+    return resolve_root_or_mapped_reply(
+        root_ap_object_id=getattr(thread_row, "ap_object_id"),
+        referenced_message_id=referenced_id,
+        lookup_mapped_message=database.get_local_community_message_by_discord_message_id,
     )
 
 

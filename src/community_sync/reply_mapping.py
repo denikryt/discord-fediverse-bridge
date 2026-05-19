@@ -9,8 +9,9 @@ flat-send fallbacks.
 from __future__ import annotations
 
 from dataclasses import dataclass
+from types import SimpleNamespace
 
-import discord
+from ..content_sync.inbound_references import build_message_reference
 
 
 @dataclass(slots=True)
@@ -94,7 +95,7 @@ def resolve_inbound_reference(
     database: object,
     parent_group: object | None,
     thread_delivery: object,
-) -> discord.MessageReference | None:
+) -> object | None:
     """Resolve one inbound Discord reply reference from message-group mappings.
 
     Returns `None` for root comments or when the parent message has no delivery
@@ -110,9 +111,9 @@ def resolve_inbound_reference(
     if delivery is None:
         return None
 
-    return discord.MessageReference(
+    # Build the concrete discord.py reference through the shared helper so both
+    # bridge modes keep the same `fail_if_not_exists=False` reply behavior.
+    return build_message_reference(
+        discord_thread=SimpleNamespace(id=thread_delivery.discord_thread_id),
         message_id=delivery.discord_message_id,
-        channel_id=thread_delivery.discord_thread_id,
-        fail_if_not_exists=False,
     )
-

@@ -9,7 +9,7 @@ from .config import Settings
 from .db import Database
 from .discord_bot import BridgeBot
 from .discord_oauth_client import DiscordOAuthClient
-from .discord_publish_service import DiscordPublishService
+from .discord_publish_service import ContentPublishService
 from .fedify_gateway_client import FedifyGatewayClient
 from .local_communities.runtime import LocalCommunityRuntime
 from .registration_service import RegistrationService
@@ -29,7 +29,7 @@ class Runtime:
     database: Database
     fedify_gateway: FedifyGatewayClient
     discord_oauth_client: DiscordOAuthClient
-    discord_publish_service: DiscordPublishService
+    content_publish_service: ContentPublishService
     registration_service: RegistrationService
     bot: BridgeBot
     community_runtime: CommunityRuntime

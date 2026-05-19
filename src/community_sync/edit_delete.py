@@ -11,6 +11,8 @@ import logging
 
 from sqlalchemy import select
 
+from ..content_sync.edit_delete import edit_discord_message, mark_discord_message_deleted
+
 logger = logging.getLogger(__name__)
 
 
@@ -64,9 +66,13 @@ async def propagate_inbound_post_update(
 
     async def edit_thread_starter(delivery: object) -> None:
         try:
-            thread = await bot.get_thread_by_id(delivery.discord_thread_id)
-            starter = await thread.fetch_message(delivery.discord_starter_message_id)
-            await starter.edit(content=new_content)
+            await edit_discord_message(
+                bot=bot,
+                discord_thread_id=delivery.discord_thread_id,
+                discord_message_id=delivery.discord_starter_message_id,
+                new_content=new_content,
+                preserve_header=False,
+            )
             logger.info("Edited inbound post starter in thread %s", delivery.discord_thread_id)
         except Exception:
             logger.exception(
@@ -89,9 +95,11 @@ async def propagate_inbound_post_delete(
 
     async def mark_starter_deleted(delivery: object) -> None:
         try:
-            thread = await bot.get_thread_by_id(delivery.discord_thread_id)
-            starter = await thread.fetch_message(delivery.discord_starter_message_id)
-            await starter.edit(content="*deleted by creator*")
+            await mark_discord_message_deleted(
+                bot=bot,
+                discord_thread_id=delivery.discord_thread_id,
+                discord_message_id=delivery.discord_starter_message_id,
+            )
             logger.info(
                 "Marked inbound post starter deleted in thread %s",
                 delivery.discord_thread_id,
@@ -115,14 +123,16 @@ async def propagate_inbound_comment_update(
     new_content: str,
 ) -> None:
     """Edit all bot-owned inbound comment messages concurrently."""
-    from ..formatting import apply_edit_to_discord_message
 
     async def edit_message(delivery: object) -> None:
         try:
-            thread = await bot.get_thread_by_id(delivery.discord_thread_id)
-            message = await thread.fetch_message(delivery.discord_message_id)
-            updated = apply_edit_to_discord_message(message.content, new_content)
-            await message.edit(content=updated)
+            await edit_discord_message(
+                bot=bot,
+                discord_thread_id=delivery.discord_thread_id,
+                discord_message_id=delivery.discord_message_id,
+                new_content=new_content,
+                preserve_header=True,
+            )
             logger.info(
                 "Edited inbound comment message %s in thread %s",
                 delivery.discord_message_id,
@@ -150,9 +160,11 @@ async def propagate_inbound_comment_delete(
 
     async def mark_message_deleted(delivery: object) -> None:
         try:
-            thread = await bot.get_thread_by_id(delivery.discord_thread_id)
-            message = await thread.fetch_message(delivery.discord_message_id)
-            await message.edit(content="*deleted by creator*")
+            await mark_discord_message_deleted(
+                bot=bot,
+                discord_thread_id=delivery.discord_thread_id,
+                discord_message_id=delivery.discord_message_id,
+            )
             logger.info(
                 "Marked inbound comment message %s deleted in thread %s",
                 delivery.discord_message_id,

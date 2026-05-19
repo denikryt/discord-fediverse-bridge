@@ -12,7 +12,7 @@ from .db import Database
 from .discord_bot import BridgeBot
 from .discord_event_router import DiscordEventRouter
 from .discord_oauth_client import DiscordOAuthClient
-from .discord_publish_service import DiscordPublishService
+from .discord_publish_service import ContentPublishService
 from .fedify_gateway_client import FedifyGatewayClient
 from .http_api import create_http_app
 from .local_communities.runtime import LocalCommunityRuntime
@@ -68,7 +68,7 @@ def build_runtime(settings: Settings) -> Runtime:
 
     fedify_gateway = FedifyGatewayClient(settings)
     discord_oauth_client = DiscordOAuthClient(settings)
-    discord_publish_service = DiscordPublishService(
+    content_publish_service = ContentPublishService(
         database=database,
         fedify_gateway=fedify_gateway,
         bridge_prefix=settings.bridge_display_prefix,
@@ -80,6 +80,7 @@ def build_runtime(settings: Settings) -> Runtime:
     local_community_runtime = LocalCommunityRuntime(
         database=database,
         fedify_gateway=fedify_gateway,
+        content_publish_service=content_publish_service,
         bridge_prefix=settings.bridge_display_prefix,
     )
 
@@ -90,7 +91,7 @@ def build_runtime(settings: Settings) -> Runtime:
     # CommunityRuntime → DiscordFanout → BridgeBot → CommunityRuntime.
     community_runtime = CommunityRuntime(
         database=database,
-        discord_publish_service=discord_publish_service,
+        content_publish_service=content_publish_service,
     )
     event_router = DiscordEventRouter(
         database=database,
@@ -114,7 +115,7 @@ def build_runtime(settings: Settings) -> Runtime:
         database=database,
         fedify_gateway=fedify_gateway,
         discord_oauth_client=discord_oauth_client,
-        discord_publish_service=discord_publish_service,
+        content_publish_service=content_publish_service,
         registration_service=registration_service,
         bot=bot,
         community_runtime=community_runtime,
