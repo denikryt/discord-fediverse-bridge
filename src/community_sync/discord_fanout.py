@@ -162,7 +162,7 @@ class DiscordFanout:
 
         reply_context is a duck-typed object with get_reference_for_thread(thread_id)
         that returns the Discord message ID to use as a reference, or None for a
-        flat send. _ReplyContext from runtime.py satisfies this contract.
+        flat send. ReplyContext from `reply_mapping.py` satisfies this contract.
 
         Returns one MirrorMessageResult per successfully delivered mirror. A
         sibling thread that fails does not block the others — the error is logged

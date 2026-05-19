@@ -12,10 +12,32 @@ from __future__ import annotations
 
 import asyncio
 import logging
-from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
 import discord
+
+from .backfill import backfill_post_as_thread_group
+from .delivery_mapping import (
+    get_message_group_for_ap_object,
+    get_message_group_for_delivered_message,
+    get_message_group_for_source_message,
+    get_sibling_thread_deliveries,
+    get_thread_group_for_any_thread,
+    get_thread_group_for_ap_object,
+    get_thread_group_for_source_thread,
+)
+from .edit_delete import (
+    get_inbound_comment_edit_deliveries,
+    get_outbound_delete_deliveries,
+    get_outbound_edit_deliveries,
+    propagate_inbound_comment_delete,
+    propagate_inbound_comment_update,
+    propagate_inbound_post_delete,
+    propagate_inbound_post_update,
+    resolve_actor_username,
+)
+from .inbound_mapping import get_accepted_subscriptions, get_parent_message_group, needs_backfill
+from .reply_mapping import resolve_inbound_reference, resolve_reply_context
 
 if TYPE_CHECKING:
     from ..activitypub_handlers import HandlerResult
@@ -27,126 +49,6 @@ if TYPE_CHECKING:
     from .discord_fanout import DiscordFanout
 
 logger = logging.getLogger(__name__)
-
-
-@dataclass(slots=True)
-class _ReplyContext:
-    """Carry per-thread reply reference IDs resolved before fanout begins.
-
-    parent_message_group_id is set when the source message replies to a known
-    message group, so handle_discord_message can populate the FK on creation.
-
-    per_thread_references maps mirror thread_id -> discord message_id to use
-    as the Discord reference when sending into that thread. A None value means
-    flat send (no reference) for that thread.
-    """
-
-    parent_message_group_id: int | None
-    per_thread_references: dict[int, int | None]
-
-    def get_reference_for_thread(self, thread_id: int) -> int | None:
-        """Return the Discord message ID to reference in this thread, or None for flat send."""
-        return self.per_thread_references.get(thread_id)
-
-
-def _resolve_reply_context(
-    database: Database,
-    message: object,
-    thread_group: object,
-    sibling_deliveries: list,
-) -> _ReplyContext:
-    """Resolve reply reference IDs for each sibling thread before fanout.
-
-    Covers four cases:
-    - No reference on source message → flat send for all siblings.
-    - Reference is the source starter → each sibling uses its own starter message.
-    - Reference maps to a known message group → per-thread delivery lookup.
-    - Reference is unknown (pre-Phase-3 or out-of-thread) → flat send.
-
-    Must be called after sibling_deliveries is computed but before
-    create_message_group, so parent_message_group_id is available at group
-    creation time.
-    """
-    reference = getattr(message, "reference", None)
-    referenced_id = getattr(reference, "message_id", None) if reference else None
-
-    if referenced_id is None:
-        # Root message: no reference needed for any sibling.
-        return _ReplyContext(
-            parent_message_group_id=None,
-            per_thread_references={d.discord_thread_id: None for d in sibling_deliveries},
-        )
-
-    # Phase 9: Reply to any thread starter (source, mirror, or inbound): each
-    # sibling uses its own starter message as the reference so the reply is
-    # anchored to the top of each mirror.
-    thread_deliveries = database.get_thread_deliveries(thread_group.id)
-    for delivery in thread_deliveries:
-        if referenced_id == delivery.discord_starter_message_id:
-            return _ReplyContext(
-                parent_message_group_id=None,
-                per_thread_references={
-                    d.discord_thread_id: d.discord_starter_message_id
-                    for d in sibling_deliveries
-                },
-            )
-
-    # Look up whether the referenced message belongs to a known message group.
-    # This covers replies to previously mirrored messages (Phase 3+).
-    parent_group = database.get_message_group_by_delivered_message(referenced_id)
-    if parent_group is None:
-        # Unknown reference (pre-Phase-3 message or cross-thread reference):
-        # fall back to flat send so the mirror is not silently dropped.
-        return _ReplyContext(
-            parent_message_group_id=None,
-            per_thread_references={d.discord_thread_id: None for d in sibling_deliveries},
-        )
-
-    # Known mirrored message: resolve the per-thread mirror delivery so each
-    # sibling references the correct local copy of the parent message.
-    per_thread: dict[int, int | None] = {}
-    for d in sibling_deliveries:
-        mirror_delivery = database.get_message_delivery_in_thread(
-            parent_group.id, d.discord_thread_id
-        )
-        # If no delivery exists for this thread (e.g. partial prior failure),
-        # fall back to flat send for that specific sibling.
-        per_thread[d.discord_thread_id] = (
-            mirror_delivery.discord_message_id if mirror_delivery else None
-        )
-
-    return _ReplyContext(
-        parent_message_group_id=parent_group.id,
-        per_thread_references=per_thread,
-    )
-
-
-def _resolve_inbound_reference(
-    database: Database,
-    parent_group: object,
-    thread_delivery: object,
-) -> discord.MessageReference | None:
-    """Resolve the Discord reply reference for one inbound comment delivery.
-
-    Returns a MessageReference when the parent message group has a delivery
-    in this specific thread. Returns None (flat send) when the parent is
-    the AP post root (parent_group=None) or when no delivery exists for
-    this thread (e.g. partial prior failure — best-effort fallback).
-    """
-    if parent_group is None:
-        return None
-    delivery = database.get_message_delivery_in_thread(
-        parent_group.id, thread_delivery.discord_thread_id
-    )
-    if delivery is None:
-        return None
-    # fail_if_not_exists=False: send still lands even if the referenced
-    # message was deleted; Discord just suppresses the reply banner.
-    return discord.MessageReference(
-        message_id=delivery.discord_message_id,
-        channel_id=thread_delivery.discord_thread_id,
-        fail_if_not_exists=False,
-    )
 
 
 class CommunityRuntime:
@@ -196,7 +98,7 @@ class CommunityRuntime:
         """
         # Dedup: if a thread group already exists for this source thread,
         # a reconnect or duplicate event fired — skip without re-publishing.
-        if self.database.get_thread_group_by_source_thread(thread.id) is not None:
+        if get_thread_group_for_source_thread(self.database, thread.id) is not None:
             logger.info("Thread %s already has a thread group — skipping duplicate", thread.id)
             return _ignored_result("duplicate_discord_thread")
 
@@ -280,7 +182,7 @@ class CommunityRuntime:
         """
         # Dedup: if a message group already exists for this source message,
         # a reconnect or duplicate Discord event fired — skip without re-publishing.
-        if self.database.get_message_group_by_source_message(message.id) is not None:
+        if get_message_group_for_source_message(self.database, message.id) is not None:
             logger.info("Message %s already has a message group — skipping duplicate", message.id)
             return _ignored_result("duplicate_discord_message")
 
@@ -292,7 +194,7 @@ class CommunityRuntime:
         # Resolve the thread group for the originating thread. If none exists (pre-Phase-2
         # thread or legacy path), skip message-group creation and fanout entirely.
         thread = message.channel
-        thread_group = self.database.get_thread_group_by_any_thread(thread.id)
+        thread_group = get_thread_group_for_any_thread(self.database, thread.id)
         if thread_group is None:
             return result
 
@@ -300,15 +202,14 @@ class CommunityRuntime:
         # originating thread (regardless of role). This enables mirror and inbound
         # threads to fan out to all other threads, not just source threads receiving
         # from mirrors.
-        sibling_deliveries = [
-            d for d in self.database.get_thread_deliveries(thread_group.id)
-            if d.discord_thread_id != thread.id
-        ]
+        sibling_deliveries = get_sibling_thread_deliveries(
+            self.database, thread_group_id=thread_group.id, source_thread_id=thread.id
+        )
 
         # Resolve reply context from the source message's Discord reference.
         # This determines parent_message_group_id and the per-thread reference IDs
         # that each sibling thread send will use.
-        reply_context = _resolve_reply_context(
+        reply_context = resolve_reply_context(
             self.database, message, thread_group, sibling_deliveries
         )
 
@@ -382,12 +283,11 @@ class CommunityRuntime:
 
         # Dedup: if a thread group already exists for this AP object, a duplicate
         # or replayed event arrived — skip without creating more threads.
-        if self.database.get_thread_group_by_ap_object(event.object.ap_id) is not None:
+        if get_thread_group_for_ap_object(self.database, event.object.ap_id) is not None:
             logger.info("Post %s already mapped to a thread group — skipping", event.object.ap_id)
             return _HandlerResult(status="skipped", detail="post already mapped")
 
-        subscriptions = self.database.get_subscriptions_by_community(event.community_actor_id)
-        accepted = [s for s in subscriptions if s.status == "accepted"]
+        accepted = get_accepted_subscriptions(self.database, event.community_actor_id)
         if not accepted:
             return _HandlerResult(status="skipped", detail="no subscriptions for this community")
 
@@ -467,7 +367,7 @@ class CommunityRuntime:
         )
 
         # Dedup: if a message group already exists for this AP object, skip.
-        if self.database.get_message_group_by_ap_object(event.object.ap_id) is not None:
+        if get_message_group_for_ap_object(self.database, event.object.ap_id) is not None:
             logger.info("Comment %s already mapped — skipping", event.object.ap_id)
             return _HandlerResult(status="skipped", detail="comment already mapped")
 
@@ -476,16 +376,16 @@ class CommunityRuntime:
         # delivery row yet (partial prior delivery), backfill fills the gaps by
         # fetching the post from the remote AP endpoint. Fetch failure → deferred.
         post_ap_id = event.object.post_ap_id or ""
-        thread_group = self.database.get_thread_group_by_ap_object(post_ap_id)
+        thread_group = get_thread_group_for_ap_object(self.database, post_ap_id)
         bot = self.bot or runtime.bot
 
-        needs_backfill = _needs_backfill(
+        should_backfill = needs_backfill(
             thread_group=thread_group,
             community_actor_id=event.community_actor_id,
             database=self.database,
         )
-        if needs_backfill:
-            thread_group = await _backfill_post_as_thread_group(
+        if should_backfill:
+            thread_group = await backfill_post_as_thread_group(
                 post_ap_id=post_ap_id,
                 community_actor_id=event.community_actor_id,
                 delivery_id=event.delivery_id,
@@ -511,11 +411,7 @@ class CommunityRuntime:
         # Resolve the parent message group when this is a reply to a prior comment.
         # get_message_group_by_ap_object returns None when parent_ap_id is the post
         # itself (root comment), which is the correct flat-send fallback.
-        parent_group = None
-        if event.object.parent_ap_id:
-            parent_group = self.database.get_message_group_by_ap_object(
-                event.object.parent_ap_id
-            )
+        parent_group = get_parent_message_group(self.database, event.object.parent_ap_id)
 
         message_group = self.database.create_message_group(
             community_actor_id=event.community_actor_id,
@@ -535,7 +431,9 @@ class CommunityRuntime:
             thread = await bot.get_thread_by_id(thread_delivery.discord_thread_id)
             # Resolve the per-thread Discord reply reference. Returns None when the
             # parent is the post root or when no delivery exists for this thread.
-            reference = _resolve_inbound_reference(self.database, parent_group, thread_delivery)
+            reference = resolve_inbound_reference(
+                self.database, parent_group, thread_delivery
+            )
             message = await _send_inbound_comment(
                 thread=thread,
                 event=event,
@@ -579,7 +477,7 @@ class CommunityRuntime:
 
         # Reverse-lookup the message group by the Discord message ID.
         # Covers both source and mirror deliveries via the delivery table.
-        message_group = self.database.get_message_group_by_delivered_message(message_id)
+        message_group = get_message_group_for_delivered_message(self.database, message_id)
         if message_group is None:
             return
 
@@ -587,7 +485,7 @@ class CommunityRuntime:
         # Only role="mirror" — inbound deliveries are owned by the AP sender,
         # not the bot, so editing them would result in a 403 Forbidden.
         all_deliveries = self.database.get_message_deliveries(message_group.id)
-        mirror_deliveries = [d for d in all_deliveries if d.role == "mirror"]
+        mirror_deliveries = get_outbound_edit_deliveries(all_deliveries)
 
         if self.discord_fanout is not None and mirror_deliveries:
             await self.discord_fanout.propagate_edit(
@@ -601,7 +499,7 @@ class CommunityRuntime:
         if message_group.ap_object_id and message_group.community_actor_id:
             # Resolve the actor username from the source thread's publish record.
             # The actor owns the AP object and must be the one who sends Update.
-            actor_username = await _resolve_actor_username(
+            actor_username = await resolve_actor_username(
                 self.database, message_group
             )
             if actor_username:
@@ -644,18 +542,18 @@ class CommunityRuntime:
         """
         from ..fedify_gateway_client import DeleteContentRequest
 
-        message_group = self.database.get_message_group_by_delivered_message(message_id)
+        message_group = get_message_group_for_delivered_message(self.database, message_id)
         if message_group is None:
             return
 
         all_deliveries = self.database.get_message_deliveries(message_group.id)
-        mirror_deliveries = [d for d in all_deliveries if d.role != "source"]
+        mirror_deliveries = get_outbound_delete_deliveries(all_deliveries)
 
         if self.discord_fanout is not None and mirror_deliveries:
             await self.discord_fanout.propagate_delete(mirror_deliveries=mirror_deliveries)
 
         if message_group.ap_object_id and message_group.community_actor_id:
-            actor_username = await _resolve_actor_username(
+            actor_username = await resolve_actor_username(
                 self.database, message_group
             )
             if actor_username:
@@ -681,7 +579,7 @@ class CommunityRuntime:
         """
         from ..activitypub_handlers import HandlerResult as _HandlerResult
 
-        thread_group = self.database.get_thread_group_by_ap_object(event.object.ap_id)
+        thread_group = get_thread_group_for_ap_object(self.database, event.object.ap_id)
         if thread_group is None:
             logger.info("Post update for %s — no thread group found, skipping", event.object.ap_id)
             return _HandlerResult(status="skipped", detail="post not yet mapped")
@@ -693,24 +591,8 @@ class CommunityRuntime:
         bot = self.bot or runtime.bot
         new_content = event.object.body_markdown or ""
 
-        async def _edit_thread_starter(delivery: object) -> None:
-            try:
-                thread = await bot.get_thread_by_id(delivery.discord_thread_id)
-                starter = await thread.fetch_message(delivery.discord_starter_message_id)
-                await starter.edit(content=new_content)
-                logger.info(
-                    "Edited inbound post starter in thread %s", delivery.discord_thread_id
-                )
-            except Exception:
-                logger.exception(
-                    "Failed to edit inbound post starter in thread %s",
-                    delivery.discord_thread_id,
-                )
-
-        # Edit all thread starters concurrently; failures are logged individually.
-        await asyncio.gather(
-            *[_edit_thread_starter(d) for d in thread_deliveries],
-            return_exceptions=True,
+        await propagate_inbound_post_update(
+            bot=bot, thread_deliveries=thread_deliveries, new_content=new_content
         )
 
         return _HandlerResult(status="processed", detail="post updated")
@@ -728,7 +610,7 @@ class CommunityRuntime:
         """
         from ..activitypub_handlers import HandlerResult as _HandlerResult
 
-        thread_group = self.database.get_thread_group_by_ap_object(event.object.ap_id)
+        thread_group = get_thread_group_for_ap_object(self.database, event.object.ap_id)
         if thread_group is None:
             logger.info("Post delete for %s — no thread group found, skipping", event.object.ap_id)
             return _HandlerResult(status="skipped", detail="post not yet mapped")
@@ -737,25 +619,7 @@ class CommunityRuntime:
 
         bot = self.bot or runtime.bot
 
-        async def _mark_starter_deleted(delivery: object) -> None:
-            try:
-                thread = await bot.get_thread_by_id(delivery.discord_thread_id)
-                starter = await thread.fetch_message(delivery.discord_starter_message_id)
-                await starter.edit(content="*deleted by creator*")
-                logger.info(
-                    "Marked inbound post starter deleted in thread %s", delivery.discord_thread_id
-                )
-            except Exception:
-                logger.exception(
-                    "Failed to mark inbound post starter deleted in thread %s",
-                    delivery.discord_thread_id,
-                )
-
-        # Edit all starters concurrently; each failure is logged without aborting others.
-        await asyncio.gather(
-            *[_mark_starter_deleted(d) for d in thread_deliveries],
-            return_exceptions=True,
-        )
+        await propagate_inbound_post_delete(bot=bot, thread_deliveries=thread_deliveries)
 
         return _HandlerResult(status="processed", detail="post deleted")
 
@@ -771,7 +635,7 @@ class CommunityRuntime:
         """
         from ..activitypub_handlers import HandlerResult as _HandlerResult
 
-        message_group = self.database.get_message_group_by_ap_object(event.object.ap_id)
+        message_group = get_message_group_for_ap_object(self.database, event.object.ap_id)
         if message_group is None:
             logger.info(
                 "Comment update for %s — no message group found, skipping",
@@ -783,37 +647,15 @@ class CommunityRuntime:
         # Only edit messages the bot itself wrote: inbound (created by bot from AP)
         # and mirror (bot-owned copies in sibling channels).
         # Source messages are user-authored — editing them returns 403 Forbidden.
-        deliveries = [d for d in all_deliveries if d.role in ("inbound", "mirror")]
+        deliveries = get_inbound_comment_edit_deliveries(all_deliveries)
         if not deliveries:
             return _HandlerResult(status="skipped", detail="no message deliveries")
 
         bot = self.bot or runtime.bot
         new_content = event.object.body_markdown or ""
 
-        async def _edit_message(delivery: object) -> None:
-            try:
-                from ..formatting import apply_edit_to_discord_message
-                thread = await bot.get_thread_by_id(delivery.discord_thread_id)
-                message = await thread.fetch_message(delivery.discord_message_id)
-                # Preserve the author header from the existing message so the
-                # username attribution survives the inbound AP Update.
-                updated = apply_edit_to_discord_message(message.content, new_content)
-                await message.edit(content=updated)
-                logger.info(
-                    "Edited inbound comment message %s in thread %s",
-                    delivery.discord_message_id,
-                    delivery.discord_thread_id,
-                )
-            except Exception:
-                logger.exception(
-                    "Failed to edit inbound comment message %s in thread %s",
-                    delivery.discord_message_id,
-                    delivery.discord_thread_id,
-                )
-
-        await asyncio.gather(
-            *[_edit_message(d) for d in deliveries],
-            return_exceptions=True,
+        await propagate_inbound_comment_update(
+            bot=bot, deliveries=deliveries, new_content=new_content
         )
 
         return _HandlerResult(status="processed", detail="comment updated")
@@ -831,7 +673,7 @@ class CommunityRuntime:
         """
         from ..activitypub_handlers import HandlerResult as _HandlerResult
 
-        message_group = self.database.get_message_group_by_ap_object(event.object.ap_id)
+        message_group = get_message_group_for_ap_object(self.database, event.object.ap_id)
         if message_group is None:
             logger.info(
                 "Comment delete for %s — no message group found, skipping",
@@ -841,184 +683,13 @@ class CommunityRuntime:
 
         all_deliveries = self.database.get_message_deliveries(message_group.id)
         # Only edit messages the bot itself wrote — source messages are user-authored.
-        deliveries = [d for d in all_deliveries if d.role in ("inbound", "mirror")]
+        deliveries = get_inbound_comment_edit_deliveries(all_deliveries)
 
         bot = self.bot or runtime.bot
 
-        async def _mark_message_deleted(delivery: object) -> None:
-            try:
-                thread = await bot.get_thread_by_id(delivery.discord_thread_id)
-                message = await thread.fetch_message(delivery.discord_message_id)
-                await message.edit(content="*deleted by creator*")
-                logger.info(
-                    "Marked inbound comment message %s deleted in thread %s",
-                    delivery.discord_message_id,
-                    delivery.discord_thread_id,
-                )
-            except Exception:
-                logger.exception(
-                    "Failed to mark inbound comment message %s deleted in thread %s",
-                    delivery.discord_message_id,
-                    delivery.discord_thread_id,
-                )
-
-        await asyncio.gather(
-            *[_mark_message_deleted(d) for d in deliveries],
-            return_exceptions=True,
-        )
+        await propagate_inbound_comment_delete(bot=bot, deliveries=deliveries)
 
         return _HandlerResult(status="processed", detail="comment deleted")
-
-
-def _needs_backfill(
-    *,
-    thread_group: object | None,
-    community_actor_id: str,
-    database: Database,
-) -> bool:
-    """Return True when backfill is needed to ensure all subscribed channels have a delivery row.
-
-    Two cases require backfill:
-    - No thread group exists at all (post was never delivered to any channel).
-    - Thread group exists but some accepted subscriptions have no delivery row
-      (partial prior delivery, e.g. due to a transient Discord failure).
-    """
-    subscriptions = database.get_subscriptions_by_community(community_actor_id)
-    accepted_channel_ids = {s.discord_channel_id for s in subscriptions if s.status == "accepted"}
-    if not accepted_channel_ids:
-        return False
-
-    if thread_group is None:
-        return True
-
-    # Check whether every accepted channel already has a delivery row.
-    existing_deliveries = database.get_thread_deliveries(thread_group.id)
-    delivered_channel_ids = {d.discord_channel_id for d in existing_deliveries}
-    return bool(accepted_channel_ids - delivered_channel_ids)
-
-
-async def _backfill_post_as_thread_group(
-    *,
-    post_ap_id: str,
-    community_actor_id: str,
-    delivery_id: str,
-    bot: object,
-    database: Database,
-) -> object | None:
-    """Fetch a missing AP post and create its Discord threads on demand.
-
-    Called when a comment.created event arrives but the parent post has no
-    CommunityThreadGroup yet. Fetches the raw AP Page document from post_ap_id,
-    constructs a synthetic post.created event, and delivers it into all accepted
-    subscriptions that do not yet have a thread delivery row for this post.
-
-    Two cases:
-    - No CommunityThreadGroup exists: create it, then create threads in all
-      accepted subscriptions for the community.
-    - CommunityThreadGroup exists (partial prior delivery): reuse it and create
-      threads only in subscriptions that have no delivery row yet. This prevents
-      duplicate threads in channels that already received the post while still
-      backfilling channels that missed it.
-
-    Returns the CommunityThreadGroup (new or existing) on success, None if the
-    remote fetch or AP document parse fails.
-    """
-    from ..bridge_lemmy_to_discord import _build_post_event_from_ap_doc, _create_inbound_discord_thread, _fetch_ap_object
-
-    # Fetch the AP post document from the remote instance.
-    try:
-        doc = await _fetch_ap_object(post_ap_id)
-    except Exception:
-        logger.exception("Backfill fetch failed for post %s", post_ap_id)
-        return None
-
-    # Synthesize a post.created event from the raw AP document.
-    try:
-        post_event = _build_post_event_from_ap_doc(doc, community_actor_id, delivery_id)
-    except Exception:
-        logger.exception("Backfill parse failed for post %s", post_ap_id)
-        return None
-
-    # Resolve or create the thread group for this post.
-    thread_group = database.get_thread_group_by_ap_object(post_ap_id)
-    if thread_group is None:
-        thread_group = database.create_thread_group(
-            community_actor_id=community_actor_id,
-            source_channel_id=None,
-            source_thread_id=None,
-            source_starter_message_id=None,
-            ap_activity_id=delivery_id,
-            ap_object_id=post_ap_id,
-        )
-
-    # Determine which subscribed channels already have a delivery row.
-    existing_deliveries = database.get_thread_deliveries(thread_group.id)
-    already_delivered_channels = {d.discord_channel_id for d in existing_deliveries}
-
-    subscriptions = database.get_subscriptions_by_community(community_actor_id)
-    accepted = [s for s in subscriptions if s.status == "accepted"]
-
-    await bot.wait_until_bridge_ready()
-
-    for subscription in accepted:
-        # Skip channels that already have a delivery to avoid creating duplicate threads.
-        if subscription.discord_channel_id in already_delivered_channels:
-            continue
-        try:
-            forum_channel = await bot.fetch_forum_channel(subscription.discord_channel_id)
-            thread_id, starter_message_id = await _create_inbound_discord_thread(
-                forum_channel=forum_channel,
-                event=post_event,
-            )
-            database.add_thread_delivery(
-                thread_group_id=thread_group.id,
-                discord_channel_id=subscription.discord_channel_id,
-                discord_thread_id=thread_id,
-                discord_starter_message_id=starter_message_id,
-                role="inbound",
-            )
-        except Exception:
-            logger.exception(
-                "Backfill thread creation failed for channel %s post %s",
-                subscription.discord_channel_id, post_ap_id,
-            )
-
-    logger.info(
-        "Backfilled post %s into thread group %s (%d subscription(s) processed)",
-        post_ap_id, thread_group.id, len(accepted),
-    )
-    return thread_group
-
-
-async def _resolve_actor_username(database: Database, message_group: object) -> str | None:
-    """Resolve the AP actor username for a message group's source message.
-
-    Looks up the user record that owns the source Discord message publish.
-    Returns None if no user is found (e.g. legacy messages without actor mapping).
-    The actor username is required to send Update/Delete activities — Lemmy
-    enforces that the actor matches the original attributedTo.
-    """
-    from ..models import MessageMapping, User
-    from sqlalchemy import select
-
-    source_message_id = getattr(message_group, "source_message_id", None)
-    if source_message_id is None:
-        return None
-
-    # Look up the MessageMapping row for this source message to find the actor.
-    with database.session() as session:
-        mapping = session.scalar(
-            select(MessageMapping).where(
-                MessageMapping.discord_message_id == str(source_message_id)
-            )
-        )
-        if mapping is None:
-            return None
-        user = session.scalar(
-            select(User).where(User.actor_url == mapping.actor_url)
-        )
-        return user.activitypub_username if user else None
-
 
 def _ignored_result(reason: str) -> PublishResult:
     """Build a PublishResult for events that are intentionally skipped.
