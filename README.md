@@ -34,6 +34,11 @@ fanned out to every subscribed Discord channel. The `Follow` is shared across
 channels: if multiple channels subscribe to the same community, only one AP
 follow is sent.
 
+When the last subscribed Discord channel leaves one remote community, the
+bridge sends `Undo(Follow)` for the shared bridge actor. If that remote cleanup
+fails, the bridge keeps the shared follow row so operators can retry instead of
+silently losing federation state.
+
 For outbound traffic, each registered Discord user gets their own **individual
 AP identity**. These identities are used to publish posts and comments so they
 appear attributed to the correct person in the fediverse. They are not used for
@@ -53,6 +58,14 @@ operator can run `/create_community` with:
 - `name`
 - `description`
 - the target Discord forum channel
+
+Local community discovery is exposed through:
+
+- `acct:!slug@your-gateway-host` for Discord-backed community actors
+- `acct:username@your-gateway-host` for registered local Discord users
+
+User handles are only local bridge identities for authorship and display in
+the fediverse. They are not a remote follow target.
 
 ## What Is Synced
 
@@ -203,6 +216,7 @@ npm run verify:publish-contract
 - `/subscribe-channel`
 - `/unsubscribe-channel`
 - `/list-subscriptions`
+- `/create_community`
 
 ## Nginx
 

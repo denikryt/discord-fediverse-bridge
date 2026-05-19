@@ -19,8 +19,9 @@ async def test_unsubscribe_channel_success(command_tree, interaction, forum_chan
         lemmy_community_actor_id=community_actor_url,
     )
     database.delete_subscription.return_value = True
-    # One other channel still subscribes — no Undo dispatched.
-    database.count_subscriptions_for_community.return_value = 1
+    # The operation reads the count before deletion, so two rows means one
+    # other channel still remains subscribed afterward.
+    database.count_subscriptions_for_community.return_value = 2
 
     unsubscribe.register(command_tree, database, fedify_gateway)
 

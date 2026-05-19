@@ -2,8 +2,9 @@
 
 When the last Discord channel subscription for a community is deleted, an
 Undo(Follow) is sent to the remote instance and the BridgeActorFollow row
-is removed. When other channels still subscribe to the same community, only
-the ChannelCommunitySubscription row is deleted — no AP activity is sent.
+is removed only if that cleanup succeeds. When other channels still subscribe
+to the same community, only the ChannelCommunitySubscription row is deleted —
+no AP activity is sent.
 """
 
 from __future__ import annotations
@@ -14,7 +15,7 @@ from dataclasses import dataclass, field
 from discordops import OperationDefinition, OperationResult, Precondition
 
 from ..db import Database
-from ..fedify_gateway_client import FedifyGatewayClient
+from ..fedify_gateway_client import FedifyGatewayClient, UnfollowCommunityResult
 
 logger = logging.getLogger(__name__)
 
@@ -70,7 +71,8 @@ async def _body(operation_input: UnsubscribeInput) -> OperationResult:
 
     The Undo is only dispatched when no other channel subscriptions remain for
     the same community, because the bridge actor follow is shared across all
-    channels that subscribe to the same community.
+    channels that subscribe to the same community. The shared follow row is
+    retained until the remote instance accepts the cleanup.
     """
     subscription = operation_input.get_subscription()
     if subscription is None:
@@ -82,6 +84,29 @@ async def _body(operation_input: UnsubscribeInput) -> OperationResult:
 
     community_actor_id = subscription.lemmy_community_actor_id
     label = _community_label(subscription)
+    subscription_count = operation_input.database.count_subscriptions_for_community(
+        community_actor_id
+    )
+    is_last_channel = subscription_count <= 1
+
+    bridge_follow = None
+    follow_activity_id: str | None = None
+    if is_last_channel:
+        # Last-channel cleanup is only safe when the shared follow row still
+        # knows the exact outbound Follow activity that must be undone.
+        bridge_follow = operation_input.database.get_bridge_actor_follow(community_actor_id)
+        if bridge_follow is not None:
+            follow_activity_id = bridge_follow.follow_activity_id
+        if follow_activity_id is None:
+            return OperationResult(
+                applied=False,
+                message=(
+                    f"Could not unsubscribe {operation_input.channel_mention} from "
+                    f"**{label}** because the bridge follow activity id is missing. "
+                    "Remote Undo(Follow) cannot be retried safely."
+                ),
+                reason="follow_activity_id_missing",
+            )
 
     deleted = operation_input.database.delete_subscription(operation_input.channel_id)
     if not deleted:
@@ -91,32 +116,61 @@ async def _body(operation_input: UnsubscribeInput) -> OperationResult:
             reason="subscription_missing_during_delete",
         )
 
-    # Check how many channel subscriptions remain for this community after deletion.
-    remaining = operation_input.database.count_subscriptions_for_community(community_actor_id)
+    if not is_last_channel:
+        return OperationResult(
+            applied=True,
+            message=f"Unsubscribed {operation_input.channel_mention} from **{label}**.",
+        )
 
-    if remaining == 0:
-        # This was the last channel — send Undo(Follow) and clean up the AP follow row.
-        bridge_follow = operation_input.database.get_bridge_actor_follow(community_actor_id)
-        if bridge_follow is not None and bridge_follow.follow_activity_id is not None:
-            try:
-                await operation_input.fedify_gateway.unfollow_community(
-                    community_actor_id,
-                    bridge_follow.follow_activity_id,
-                )
-            except Exception:
-                # Undo delivery failure is logged but does not block local cleanup.
-                # The operator can use the CLI tool to retry the Undo manually.
-                logger.exception(
-                    "Could not send Undo(Follow) for community %s; "
-                    "bridge_actor_follows row will still be deleted",
-                    community_actor_id,
-                )
-        operation_input.database.delete_bridge_actor_follow(community_actor_id)
-
-    return OperationResult(
-        applied=True,
-        message=f"Unsubscribed {operation_input.channel_mention} from **{label}**.",
+    # At this point the local channel cleanup already happened. Remote cleanup
+    # is attempted afterward, and the bridge follow row survives any failure.
+    cleanup_result = await _send_remote_unfollow(
+        operation_input,
+        community_actor_id=community_actor_id,
+        follow_activity_id=follow_activity_id,
     )
+    if cleanup_result.accepted:
+        operation_input.database.delete_bridge_actor_follow(community_actor_id)
+        return OperationResult(
+            applied=True,
+            message=f"Unsubscribed {operation_input.channel_mention} from **{label}**.",
+        )
+
+    error_detail = cleanup_result.error or "gateway did not confirm cleanup"
+    return OperationResult(
+        applied=False,
+        message=(
+            f"Unsubscribed {operation_input.channel_mention} from **{label}** locally, "
+            f"but remote Undo(Follow) failed: {error_detail}. "
+            "The bridge follow row was kept for retry."
+        ),
+        reason="remote_unfollow_failed",
+    )
+
+
+async def _send_remote_unfollow(
+    operation_input: UnsubscribeInput,
+    *,
+    community_actor_id: str,
+    follow_activity_id: str,
+) -> UnfollowCommunityResult:
+    """Dispatch one remote Undo(Follow) and convert unexpected errors into retryable failures."""
+    try:
+        return await operation_input.fedify_gateway.unfollow_community(
+            community_actor_id,
+            follow_activity_id,
+        )
+    except Exception:
+        # AsyncMock-based command tests and unexpected client regressions may
+        # still surface exceptions directly. Preserve retry state either way.
+        logger.exception(
+            "Could not send Undo(Follow) for community %s; bridge_actor_follows row was preserved",
+            community_actor_id,
+        )
+        return UnfollowCommunityResult(
+            accepted=False,
+            error="unexpected gateway failure during Undo(Follow)",
+        )
 
 
 unsubscribe_operation = OperationDefinition(

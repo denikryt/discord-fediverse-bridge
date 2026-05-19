@@ -1,4 +1,5 @@
 import { createHash } from "node:crypto";
+import { pathToFileURL } from "node:url";
 
 import { serve } from "@hono/node-server";
 import { federation as fedifyMiddleware } from "@fedify/hono";
@@ -16,7 +17,11 @@ import {
   loadLocalCommunityIdentity,
   loadUserActorIdentity,
 } from "./actor-store.js";
-import { type GatewayContextData, loadConfig } from "./config.js";
+import {
+  type GatewayConfig,
+  type GatewayContextData,
+  loadConfig,
+} from "./config.js";
 import { loadPublishedActivityObjectByObjectId } from "./db.js";
 import { createGatewayFederation } from "./federation.js";
 import {
@@ -34,172 +39,173 @@ import type {
   PublishContentRequest,
   UpdateContentRequest,
 } from "./types.js";
+import { buildWebFingerDocument } from "./webfinger.js";
 
 // server.ts owns the operator-facing HTTP surface of the gateway: health,
 // manual follow, inbox logging, and Fedify middleware wiring.
-const config = loadConfig();
-const fedify = createGatewayFederation(config);
+export function createGatewayApp(config: GatewayConfig): Hono {
+  const fedify = createGatewayFederation(config);
+  const app = new Hono();
+  const isDebug = config.logLevel === "debug";
 
-const app = new Hono();
-const isDebug = config.logLevel === "debug";
-
-app.get("/healthz", (context) => {
-  return context.json({ status: "ok" });
-});
-
-app.get("/.well-known/webfinger", async (context) => {
-  const resource = context.req.query("resource");
-  if (!resource) {
-    return context.json({ error: "resource query parameter is required" }, 400);
-  }
-
-  const webFingerDocument = await buildWebFingerDocument(resource);
-  if (webFingerDocument == null) {
-    return context.json({ error: "resource not found" }, 404);
-  }
-  return context.newResponse(JSON.stringify(webFingerDocument), 200, {
-    "Content-Type": "application/jrd+json",
+  app.get("/healthz", (context) => {
+    return context.json({ status: "ok" });
   });
-});
 
-app.get("/users/:username", async (context) => {
-  const username = context.req.param("username");
-  const actor = await buildRegisteredUserActorDocument(username);
-  if (actor == null) {
-    return context.json({ error: "user actor not found" }, 404);
-  }
-  return activityJsonResponse(await actor.toJsonLd());
-});
+  app.get("/.well-known/webfinger", async (context) => {
+    const resource = context.req.query("resource");
+    if (!resource) {
+      return context.json({ error: "resource query parameter is required" }, 400);
+    }
 
-app.get("/communities/:slug", async (context) => {
-  const slug = context.req.param("slug");
-  const actor = await buildLocalCommunityActorDocument(slug);
-  if (actor == null) {
-    return context.json({ error: "community actor not found" }, 404);
-  }
-  return activityJsonResponse(await actor.toJsonLd());
-});
+    const webFingerDocument = await buildWebFingerDocument(config, resource);
+    if (webFingerDocument == null) {
+      return context.json({ error: "resource not found" }, 404);
+    }
+    return context.newResponse(JSON.stringify(webFingerDocument), 200, {
+      "Content-Type": "application/jrd+json",
+    });
+  });
 
-app.get("/c/:slug", async (context) => {
-  const slug = context.req.param("slug");
-  const actor = await buildLocalCommunityActorDocument(slug);
-  if (actor == null) {
-    return context.json({ error: "community actor not found" }, 404);
-  }
-  return activityJsonResponse(await actor.toJsonLd());
-});
+  app.get("/users/:username", async (context) => {
+    const username = context.req.param("username");
+    const actor = await buildRegisteredUserActorDocument(config, fedify, username);
+    if (actor == null) {
+      return context.json({ error: "user actor not found" }, 404);
+    }
+    return activityJsonResponse(await actor.toJsonLd());
+  });
 
-app.get("/communities/:slug/outbox", async (context) => {
-  const slug = context.req.param("slug");
-  const community = await loadLocalCommunityIdentity(config, slug);
-  if (community == null) {
-    return context.json({ error: "community actor not found" }, 404);
-  }
-  return activityJsonResponse(
-    await buildEmptyOrderedCollection(
-      new URL(`/communities/${slug}/outbox`, config.fedifyOrigin),
-    ).toJsonLd(),
-  );
-});
+  app.get("/communities/:slug", async (context) => {
+    const slug = context.req.param("slug");
+    const actor = await buildLocalCommunityActorDocument(config, fedify, slug);
+    if (actor == null) {
+      return context.json({ error: "community actor not found" }, 404);
+    }
+    return activityJsonResponse(await actor.toJsonLd());
+  });
 
-app.get("/communities/:slug/followers", async (context) => {
-  const slug = context.req.param("slug");
-  const community = await loadLocalCommunityIdentity(config, slug);
-  if (community == null) {
-    return context.json({ error: "community actor not found" }, 404);
-  }
-  return activityJsonResponse(
-    await buildEmptyOrderedCollection(
-      new URL(`/communities/${slug}/followers`, config.fedifyOrigin),
-    ).toJsonLd(),
-  );
-});
+  app.get("/c/:slug", async (context) => {
+    const slug = context.req.param("slug");
+    const actor = await buildLocalCommunityActorDocument(config, fedify, slug);
+    if (actor == null) {
+      return context.json({ error: "community actor not found" }, 404);
+    }
+    return activityJsonResponse(await actor.toJsonLd());
+  });
 
-app.get("/communities/:slug/post/:objectId", async (context) => {
-  const object = await loadPublishedObjectForRequest(context.req.path);
-  if (object == null || object.kind !== "post") {
-    return context.json({ error: "published post not found" }, 404);
-  }
-  return activityJsonResponse(buildPublishedActivityObjectJson(object));
-});
+  app.get("/communities/:slug/outbox", async (context) => {
+    const slug = context.req.param("slug");
+    const community = await loadLocalCommunityIdentity(config, slug);
+    if (community == null) {
+      return context.json({ error: "community actor not found" }, 404);
+    }
+    return activityJsonResponse(
+      await buildEmptyOrderedCollection(
+        new URL(`/communities/${slug}/outbox`, config.fedifyOrigin),
+      ).toJsonLd(),
+    );
+  });
 
-app.get("/communities/:slug/comment/:objectId", async (context) => {
-  const object = await loadPublishedObjectForRequest(context.req.path);
-  if (object == null || object.kind !== "comment") {
-    return context.json({ error: "published comment not found" }, 404);
-  }
-  return activityJsonResponse(buildPublishedActivityObjectJson(object));
-});
+  app.get("/communities/:slug/followers", async (context) => {
+    const slug = context.req.param("slug");
+    const community = await loadLocalCommunityIdentity(config, slug);
+    if (community == null) {
+      return context.json({ error: "community actor not found" }, 404);
+    }
+    return activityJsonResponse(
+      await buildEmptyOrderedCollection(
+        new URL(`/communities/${slug}/followers`, config.fedifyOrigin),
+      ).toJsonLd(),
+    );
+  });
 
-app.get("/users/:username/outbox", async (context) => {
-  const username = context.req.param("username");
-  if (!(await hasLocalActor(config, username))) {
-    return context.json({ error: "user actor not found" }, 404);
-  }
-  return activityJsonResponse(
-    await buildEmptyOrderedCollection(
-      new URL(`/users/${username}/outbox`, config.fedifyOrigin),
-    ).toJsonLd(),
-  );
-});
+  app.get("/communities/:slug/post/:objectId", async (context) => {
+    const object = await loadPublishedObjectForRequest(config, context.req.path);
+    if (object == null || object.kind !== "post") {
+      return context.json({ error: "published post not found" }, 404);
+    }
+    return activityJsonResponse(buildPublishedActivityObjectJson(object));
+  });
 
-app.get("/users/:username/followers", async (context) => {
-  const username = context.req.param("username");
-  if (!(await hasLocalActor(config, username))) {
-    return context.json({ error: "user actor not found" }, 404);
-  }
-  return activityJsonResponse(
-    await buildEmptyOrderedCollection(
-      new URL(`/users/${username}/followers`, config.fedifyOrigin),
-    ).toJsonLd(),
-  );
-});
+  app.get("/communities/:slug/comment/:objectId", async (context) => {
+    const object = await loadPublishedObjectForRequest(config, context.req.path);
+    if (object == null || object.kind !== "comment") {
+      return context.json({ error: "published comment not found" }, 404);
+    }
+    return activityJsonResponse(buildPublishedActivityObjectJson(object));
+  });
 
-app.get("/users/:username/post/:objectId", async (context) => {
-  const object = await loadPublishedObjectForRequest(context.req.path);
-  if (object == null || object.kind !== "post") {
-    return context.json({ error: "published post not found" }, 404);
-  }
-  return activityJsonResponse(buildPublishedActivityObjectJson(object));
-});
+  app.get("/users/:username/outbox", async (context) => {
+    const username = context.req.param("username");
+    if ((await loadUserActorIdentity(config, username)) == null) {
+      return context.json({ error: "user actor not found" }, 404);
+    }
+    return activityJsonResponse(
+      await buildEmptyOrderedCollection(
+        new URL(`/users/${username}/outbox`, config.fedifyOrigin),
+      ).toJsonLd(),
+    );
+  });
 
-app.get("/users/:username/comment/:objectId", async (context) => {
-  const object = await loadPublishedObjectForRequest(context.req.path);
-  if (object == null || object.kind !== "comment") {
-    return context.json({ error: "published comment not found" }, 404);
-  }
-  return activityJsonResponse(buildPublishedActivityObjectJson(object));
-});
+  app.get("/users/:username/followers", async (context) => {
+    const username = context.req.param("username");
+    if ((await loadUserActorIdentity(config, username)) == null) {
+      return context.json({ error: "user actor not found" }, 404);
+    }
+    return activityJsonResponse(
+      await buildEmptyOrderedCollection(
+        new URL(`/users/${username}/followers`, config.fedifyOrigin),
+      ).toJsonLd(),
+    );
+  });
 
-app.get("/actors/:identifier/outbox", async (context) => {
-  const identifier = context.req.param("identifier");
-  if (!(await hasLocalActor(config, identifier))) {
-    return context.json({ error: "actor not found" }, 404);
-  }
-  return activityJsonResponse(
-    await buildEmptyOrderedCollection(
-      new URL(`/actors/${identifier}/outbox`, config.fedifyOrigin),
-    ).toJsonLd(),
-  );
-});
+  app.get("/users/:username/post/:objectId", async (context) => {
+    const object = await loadPublishedObjectForRequest(config, context.req.path);
+    if (object == null || object.kind !== "post") {
+      return context.json({ error: "published post not found" }, 404);
+    }
+    return activityJsonResponse(buildPublishedActivityObjectJson(object));
+  });
 
-app.get("/actors/:identifier/followers", async (context) => {
-  const identifier = context.req.param("identifier");
-  if (!(await hasLocalActor(config, identifier))) {
-    return context.json({ error: "actor not found" }, 404);
-  }
-  return activityJsonResponse(
-    await buildEmptyOrderedCollection(
-      new URL(`/actors/${identifier}/followers`, config.fedifyOrigin),
-    ).toJsonLd(),
-  );
-});
+  app.get("/users/:username/comment/:objectId", async (context) => {
+    const object = await loadPublishedObjectForRequest(config, context.req.path);
+    if (object == null || object.kind !== "comment") {
+      return context.json({ error: "published comment not found" }, 404);
+    }
+    return activityJsonResponse(buildPublishedActivityObjectJson(object));
+  });
 
-app.post("/follow-community", async (context) => {
+  app.get("/actors/:identifier/outbox", async (context) => {
+    const identifier = context.req.param("identifier");
+    if (!(await hasLocalActor(config, identifier))) {
+      return context.json({ error: "actor not found" }, 404);
+    }
+    return activityJsonResponse(
+      await buildEmptyOrderedCollection(
+        new URL(`/actors/${identifier}/outbox`, config.fedifyOrigin),
+      ).toJsonLd(),
+    );
+  });
+
+  app.get("/actors/:identifier/followers", async (context) => {
+    const identifier = context.req.param("identifier");
+    if (!(await hasLocalActor(config, identifier))) {
+      return context.json({ error: "actor not found" }, 404);
+    }
+    return activityJsonResponse(
+      await buildEmptyOrderedCollection(
+        new URL(`/actors/${identifier}/followers`, config.fedifyOrigin),
+      ).toJsonLd(),
+    );
+  });
+
+  app.post("/follow-community", async (context) => {
   // This endpoint exists as an operational bootstrap path until follow logic
   // is driven from the bot itself.
   if (
     !hasValidInternalAuthorization(
+      config,
       context.req.header("Authorization") ?? null,
     )
   ) {
@@ -226,6 +232,7 @@ app.post("/follow-community", async (context) => {
 app.post("/unfollow-community", async (context) => {
   if (
     !hasValidInternalAuthorization(
+      config,
       context.req.header("Authorization") ?? null,
     )
   ) {
@@ -260,6 +267,7 @@ app.post("/publish", async (context) => {
   // signed user-actor Create delivery through Fedify.
   if (
     !hasValidInternalAuthorization(
+      config,
       context.req.header("Authorization") ?? null,
     )
   ) {
@@ -313,6 +321,7 @@ app.post("/publish", async (context) => {
 app.post("/accept-local-community-follow", async (context) => {
   if (
     !hasValidInternalAuthorization(
+      config,
       context.req.header("Authorization") ?? null,
     )
   ) {
@@ -355,6 +364,7 @@ app.post("/update", async (context) => {
   // Python owns the edit policy; this endpoint owns the signed Update delivery.
   if (
     !hasValidInternalAuthorization(
+      config,
       context.req.header("Authorization") ?? null,
     )
   ) {
@@ -405,6 +415,7 @@ app.post("/delete", async (context) => {
   // Python owns the delete policy; this endpoint owns the signed Delete delivery.
   if (
     !hasValidInternalAuthorization(
+      config,
       context.req.header("Authorization") ?? null,
     )
   ) {
@@ -476,100 +487,35 @@ app.use(
   }),
 );
 
-serve({
-  fetch: app.fetch.bind(app),
-  port: config.port,
-});
-
-console.log(
-  `Fedify gateway listening on ${config.fedifyOrigin} (port ${config.port}) and forwarding to ${config.pythonBridgeEventsUrl}`,
-);
-
-async function buildWebFingerDocument(
-  resource: string,
-): Promise<Record<string, unknown> | null> {
-  const localHost = new URL(config.fedifyOrigin).host;
-  const bridgeIdentity = getBridgeActorIdentity(config);
-
-  if (resource === `acct:${config.actorIdentifier}@${localHost}`) {
-    return {
-      subject: resource,
-      aliases: [bridgeIdentity.actorId.href],
-      links: [
-        {
-          rel: "self",
-          type: "application/activity+json",
-          href: bridgeIdentity.actorId.href,
-        },
-      ],
-    };
-  }
-
-  const explicitCommunitySlug = parseLocalCommunityAcctResource(resource, localHost);
-  if (explicitCommunitySlug != null) {
-    const communityIdentity = await loadLocalCommunityIdentity(config, explicitCommunitySlug);
-    if (communityIdentity == null) {
-      return null;
-    }
-
-    return {
-      subject: resource,
-      aliases: [
-        communityIdentity.actorId.href,
-        new URL(`/c/${explicitCommunitySlug}`, config.fedifyOrigin).href,
-      ],
-      links: [
-        {
-          rel: "self",
-          type: "application/activity+json",
-          href: communityIdentity.actorId.href,
-        },
-      ],
-    };
-  }
-
-  const localName = parseLocalAcctResource(resource, localHost);
-  if (localName == null) {
-    return null;
-  }
-
-  const userIdentity = await loadUserActorIdentity(config, localName);
-  if (userIdentity != null) {
-    return {
-      subject: resource,
-      aliases: [userIdentity.actorId.href],
-      links: [
-        {
-          rel: "self",
-          type: "application/activity+json",
-          href: userIdentity.actorId.href,
-        },
-      ],
-    };
-  }
-
-  const communityIdentity = await loadLocalCommunityIdentity(config, localName);
-  if (communityIdentity == null) {
-    return null;
-  }
-
-  return {
-    subject: resource,
-    aliases: [
-      communityIdentity.actorId.href,
-      new URL(`/c/${localName}`, config.fedifyOrigin).href,
-    ],
-    links: [
-      {
-        rel: "self",
-        type: "application/activity+json",
-        href: communityIdentity.actorId.href,
-      },
-    ],
-  };
+  return app;
 }
 
-async function buildRegisteredUserActorDocument(username: string) {
+export function startGatewayServer(config: GatewayConfig = loadConfig()): void {
+  const app = createGatewayApp(config);
+  serve({
+    fetch: app.fetch.bind(app),
+    port: config.port,
+  });
+
+  console.log(
+    `Fedify gateway listening on ${config.fedifyOrigin} (port ${config.port}) and forwarding to ${config.pythonBridgeEventsUrl}`,
+  );
+}
+
+if (isMainModule()) {
+  startGatewayServer();
+}
+
+function isMainModule(): boolean {
+  const entry = process.argv[1];
+  return entry != null && import.meta.url === pathToFileURL(entry).href;
+}
+
+async function buildRegisteredUserActorDocument(
+  config: GatewayConfig,
+  fedify: ReturnType<typeof createGatewayFederation>,
+  username: string,
+) {
   const userIdentity = await loadUserActorIdentity(config, username);
   if (userIdentity == null) {
     return null;
@@ -582,7 +528,11 @@ async function buildRegisteredUserActorDocument(username: string) {
   );
 }
 
-async function buildLocalCommunityActorDocument(slug: string) {
+async function buildLocalCommunityActorDocument(
+  config: GatewayConfig,
+  fedify: ReturnType<typeof createGatewayFederation>,
+  slug: string,
+) {
   const communityIdentity = await loadLocalCommunityIdentity(config, slug);
   if (communityIdentity == null) {
     return null;
@@ -595,36 +545,6 @@ async function buildLocalCommunityActorDocument(slug: string) {
   );
 }
 
-function parseLocalAcctResource(
-  resource: string,
-  localHost: string,
-): string | null {
-  if (!resource.startsWith("acct:")) {
-    return null;
-  }
-  const handle = resource.slice("acct:".length);
-  const parts = handle.split("@");
-  if (parts.length !== 2 || parts[0].length === 0 || parts[1] !== localHost) {
-    return null;
-  }
-  return parts[0];
-}
-
-function parseLocalCommunityAcctResource(
-  resource: string,
-  localHost: string,
-): string | null {
-  if (!resource.startsWith("acct:!")) {
-    return null;
-  }
-  const handle = resource.slice("acct:!".length);
-  const parts = handle.split("@");
-  if (parts.length !== 2 || parts[0].length === 0 || parts[1] !== localHost) {
-    return null;
-  }
-  return parts[0];
-}
-
 function activityJsonResponse(payload: unknown): Response {
   return new Response(JSON.stringify(payload), {
     status: 200,
@@ -635,6 +555,7 @@ function activityJsonResponse(payload: unknown): Response {
 }
 
 async function loadPublishedObjectForRequest(
+  config: GatewayConfig,
   requestPath: string,
 ) {
   // Route lookup uses the exact canonical object URL, which keeps restart
@@ -644,6 +565,7 @@ async function loadPublishedObjectForRequest(
 }
 
 function hasValidInternalAuthorization(
+  config: GatewayConfig,
   authorizationHeader: string | null,
 ): boolean {
   return (

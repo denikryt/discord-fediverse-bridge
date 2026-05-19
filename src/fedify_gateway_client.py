@@ -20,6 +20,18 @@ class FollowCommunityResult:
 
 
 @dataclass(slots=True)
+class UnfollowCommunityResult:
+    """Describe whether the gateway accepted one Undo(Follow) cleanup request.
+
+    Python-side unsubscribe logic needs an explicit success/failure contract so
+    it can preserve `bridge_actor_follows` rows until remote cleanup succeeds.
+    """
+
+    accepted: bool
+    error: str | None = None
+
+
+@dataclass(slots=True)
 class PublishContentRequest:
     # The Python bridge decides actor ownership and reply context, then passes
     # the normalized publish intent to the gateway for signed AP delivery.
@@ -133,21 +145,39 @@ class FedifyGatewayClient:
 
     async def unfollow_community(
         self, community_actor_url: str, follow_activity_id: str
-    ) -> None:
+    ) -> UnfollowCommunityResult:
         """Trigger one gateway-side Undo(Follow) to remove a community follow.
 
         Called by the unsubscribe flow when the last channel subscription for a
         community is deleted. The gateway signs and delivers the Undo activity.
         """
-        response = await self._client.post(
-            "/unfollow-community",
-            headers={"Authorization": f"Bearer {self._shared_secret}"},
-            json={
-                "communityActorUrl": community_actor_url,
-                "followActivityId": follow_activity_id,
-            },
-        )
-        response.raise_for_status()
+        try:
+            response = await self._client.post(
+                "/unfollow-community",
+                headers={"Authorization": f"Bearer {self._shared_secret}"},
+                json={
+                    "communityActorUrl": community_actor_url,
+                    "followActivityId": follow_activity_id,
+                },
+            )
+        except httpx.HTTPError as exc:
+            # Transport failures are surfaced as an explicit failed result so
+            # unsubscribe can keep retry state without relying on exceptions.
+            return UnfollowCommunityResult(accepted=False, error=str(exc))
+
+        if not response.is_success:
+            return UnfollowCommunityResult(
+                accepted=False,
+                error=_extract_error_message(response),
+            )
+
+        payload = response.json()
+        if payload.get("ok") is not True:
+            return UnfollowCommunityResult(
+                accepted=False,
+                error="gateway did not confirm Undo(Follow) delivery",
+            )
+        return UnfollowCommunityResult(accepted=True)
 
     async def update_content(self, request: UpdateContentRequest) -> None:
         """Trigger one gateway-side Update activity for an edited post or comment."""
@@ -201,3 +231,16 @@ class FedifyGatewayClient:
             },
         )
         response.raise_for_status()
+
+
+def _extract_error_message(response: httpx.Response) -> str:
+    """Return the most useful gateway error message for operator-facing retry logs."""
+    try:
+        payload = response.json()
+    except ValueError:
+        return f"gateway returned HTTP {response.status_code}"
+
+    error = payload.get("error")
+    if isinstance(error, str) and error:
+        return error
+    return f"gateway returned HTTP {response.status_code}"
