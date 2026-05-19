@@ -10,6 +10,8 @@ Discord and Lemmy.
 It allows you to:
 
 - connect a Discord forum channel to one Lemmy community
+- expose a Discord forum channel as one local federated community that Lemmy
+  users can follow
 - send a message in one subscribed Discord channel and have it appear in all
   other subscribed Discord channels for the same community
 - publish Discord posts and comments to Lemmy
@@ -19,6 +21,8 @@ It allows you to:
 
 The bridge keeps a single ActivityPub presence for the Lemmy community side and
 creates per-user ActivityPub identities for Discord users who publish content.
+It can also host a Discord forum channel as one local community actor with the
+`/create_community` command.
 
 ## How It Works
 
@@ -41,6 +45,14 @@ To send messages from Discord into Lemmy, a user must register on the bridge.
 Use the `/register` command - the bot replies with a registration link.
 Following it opens a web page where the user logs in with their Discord account
 and chooses a username.
+
+To expose a Discord forum as a local federated community, an allowlisted bot
+operator can run `/create_community` with:
+
+- `slug`
+- `name`
+- `description`
+- the target Discord forum channel
 
 ## What Is Synced
 

@@ -26,14 +26,33 @@ class Settings(BaseSettings):
     # Comma-separated list of allowed Lemmy instance hostnames (e.g. "lemmy.world,beehaw.org").
     # Empty means all instances are allowed (open federation).
     federation_allowlist: list[str] = Field(default_factory=list, alias="FEDERATION_ALLOWLIST")
+    # Comma-separated Discord user IDs allowed to create local communities.
+    # The bridge keeps this operator list explicit because creating a federated
+    # local community is more privileged than subscribing a channel.
+    local_community_operator_allowlist: list[str] = Field(
+        default_factory=list,
+        alias="LOCAL_COMMUNITY_OPERATOR_ALLOWLIST",
+    )
 
-    @field_validator("federation_allowlist", mode="before")
+    @field_validator("federation_allowlist", "local_community_operator_allowlist", mode="before")
     @classmethod
     def _split_allowlist(cls, v: object) -> list[str]:
-        # Env vars arrive as a single string; split on commas and drop empty entries.
+        # Accept comma-separated env values:
+        #   FEDERATION_ALLOWLIST=lemmy.world,beehaw.org
+        #   LOCAL_COMMUNITY_OPERATOR_ALLOWLIST=123456789012345678,987654321098765432
+        #
+        # Also tolerate pydantic-settings decoding a bare numeric env value as int:
+        #   LOCAL_COMMUNITY_OPERATOR_ALLOWLIST=123456789012345678
+        if v is None or v == "":
+            return []
+
         if isinstance(v, str):
             return [entry.strip() for entry in v.split(",") if entry.strip()]
-        return list(v) if v else []
+
+        if isinstance(v, int):
+            return [str(v)]
+
+        return [str(entry).strip() for entry in v if str(entry).strip()]
 
     @property
     def normalized_public_bridge_base_url(self) -> str:

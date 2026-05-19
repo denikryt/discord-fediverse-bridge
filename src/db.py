@@ -19,6 +19,10 @@ from .models import (
     CommunityMessageGroupDelivery,
     CommunityThreadGroup,
     CommunityThreadGroupDelivery,
+    LocalCommunity,
+    LocalCommunityFollower,
+    LocalCommunityMessage,
+    LocalCommunityThread,
     MessageMapping,
     PostLink,
     PublishedActivityObject,
@@ -540,6 +544,250 @@ class Database:
         """Load the registered user that owns one actor URL."""
         with self.session() as session:
             return session.scalar(select(User).where(User.actor_url == actor_url))
+
+    def create_local_community(
+        self,
+        *,
+        discord_guild_id: int,
+        discord_forum_channel_id: int,
+        slug: str,
+        display_name: str,
+        summary: str,
+        actor_url: str,
+        inbox_url: str,
+        outbox_url: str,
+        followers_url: str,
+        public_key_pem: str,
+        private_key_pem: str,
+        status: str = "active",
+    ) -> LocalCommunity:
+        """Create one Discord-backed local community row.
+
+        The local-community creation flow persists the actor identity in Python
+        so the gateway can read it later without owning any creation policy.
+        """
+        with self.session() as session:
+            community = LocalCommunity(
+                discord_guild_id=discord_guild_id,
+                discord_forum_channel_id=discord_forum_channel_id,
+                slug=slug,
+                display_name=display_name,
+                summary=summary,
+                actor_url=actor_url,
+                inbox_url=inbox_url,
+                outbox_url=outbox_url,
+                followers_url=followers_url,
+                public_key_pem=public_key_pem,
+                private_key_pem=private_key_pem,
+                status=status,
+            )
+            session.add(community)
+            session.flush()
+            return community
+
+    def get_local_community_by_forum_channel_id(
+        self, discord_forum_channel_id: int
+    ) -> LocalCommunity | None:
+        """Load the local community bound to one Discord forum channel."""
+        with self.session() as session:
+            return session.scalar(
+                select(LocalCommunity).where(
+                    LocalCommunity.discord_forum_channel_id == discord_forum_channel_id
+                )
+            )
+
+    def get_local_community_by_actor_url(self, actor_url: str) -> LocalCommunity | None:
+        """Load the local community that owns one actor URL."""
+        with self.session() as session:
+            return session.scalar(
+                select(LocalCommunity).where(LocalCommunity.actor_url == actor_url)
+            )
+
+    def get_local_community_by_slug(self, slug: str) -> LocalCommunity | None:
+        """Load the local community for one stable slug."""
+        with self.session() as session:
+            return session.scalar(
+                select(LocalCommunity).where(LocalCommunity.slug == slug)
+            )
+
+    def list_local_communities(self) -> list[LocalCommunity]:
+        """Return all local communities in stable creation order."""
+        with self.session() as session:
+            return list(
+                session.scalars(select(LocalCommunity).order_by(LocalCommunity.created_at, LocalCommunity.id))
+            )
+
+    def create_local_community_follower(
+        self,
+        *,
+        local_community_id: int,
+        remote_actor_id: str,
+        remote_inbox_url: str,
+        follow_activity_id: str,
+        status: str = "accepted",
+    ) -> LocalCommunityFollower:
+        """Persist one accepted follower for a local community."""
+        with self.session() as session:
+            follower = LocalCommunityFollower(
+                local_community_id=local_community_id,
+                remote_actor_id=remote_actor_id,
+                remote_inbox_url=remote_inbox_url,
+                follow_activity_id=follow_activity_id,
+                status=status,
+            )
+            session.add(follower)
+            session.flush()
+            return follower
+
+    def get_local_community_follower(
+        self,
+        *,
+        local_community_id: int,
+        remote_actor_id: str,
+    ) -> LocalCommunityFollower | None:
+        """Load the follower row for one remote actor and local community."""
+        with self.session() as session:
+            return session.scalar(
+                select(LocalCommunityFollower).where(
+                    LocalCommunityFollower.local_community_id == local_community_id,
+                    LocalCommunityFollower.remote_actor_id == remote_actor_id,
+                )
+            )
+
+    def get_local_community_follower_by_follow_activity_id(
+        self, follow_activity_id: str
+    ) -> LocalCommunityFollower | None:
+        """Load one local-community follower row by the original Follow ID."""
+        with self.session() as session:
+            return session.scalar(
+                select(LocalCommunityFollower).where(
+                    LocalCommunityFollower.follow_activity_id == follow_activity_id
+                )
+            )
+
+    def list_local_community_followers(
+        self,
+        local_community_id: int,
+        *,
+        status: str | None = "accepted",
+    ) -> list[LocalCommunityFollower]:
+        """Load followers for one local community, optionally filtered by status."""
+        with self.session() as session:
+            statement = select(LocalCommunityFollower).where(
+                LocalCommunityFollower.local_community_id == local_community_id
+            )
+            if status is not None:
+                statement = statement.where(LocalCommunityFollower.status == status)
+            return list(session.scalars(statement.order_by(LocalCommunityFollower.created_at, LocalCommunityFollower.id)))
+
+    def create_local_community_thread(
+        self,
+        *,
+        local_community_id: int,
+        discord_thread_id: int,
+        discord_starter_message_id: int,
+        ap_activity_id: str,
+        ap_object_id: str,
+        direction: str,
+        origin_kind: str,
+    ) -> LocalCommunityThread:
+        """Persist one canonical post/thread mapping for local-community mode."""
+        with self.session() as session:
+            thread = LocalCommunityThread(
+                local_community_id=local_community_id,
+                discord_thread_id=discord_thread_id,
+                discord_starter_message_id=discord_starter_message_id,
+                ap_activity_id=ap_activity_id,
+                ap_object_id=ap_object_id,
+                direction=direction,
+                origin_kind=origin_kind,
+            )
+            session.add(thread)
+            session.flush()
+            return thread
+
+    def get_local_community_thread_by_discord_thread_id(
+        self, discord_thread_id: int
+    ) -> LocalCommunityThread | None:
+        """Load the local-community thread row for one Discord thread."""
+        with self.session() as session:
+            return session.scalar(
+                select(LocalCommunityThread).where(
+                    LocalCommunityThread.discord_thread_id == discord_thread_id
+                )
+            )
+
+    def get_local_community_thread_by_ap_object_id(
+        self, ap_object_id: str
+    ) -> LocalCommunityThread | None:
+        """Load the local-community thread row for one AP post object ID."""
+        with self.session() as session:
+            return session.scalar(
+                select(LocalCommunityThread).where(
+                    LocalCommunityThread.ap_object_id == ap_object_id
+                )
+            )
+
+    def create_local_community_message(
+        self,
+        *,
+        local_community_thread_id: int,
+        discord_message_id: int,
+        ap_activity_id: str,
+        ap_object_id: str,
+        parent_ap_object_id: str | None,
+        parent_discord_message_id: int | None,
+        direction: str,
+    ) -> LocalCommunityMessage:
+        """Persist one canonical message/comment mapping for local-community mode."""
+        with self.session() as session:
+            message = LocalCommunityMessage(
+                local_community_thread_id=local_community_thread_id,
+                discord_message_id=discord_message_id,
+                ap_activity_id=ap_activity_id,
+                ap_object_id=ap_object_id,
+                parent_ap_object_id=parent_ap_object_id,
+                parent_discord_message_id=parent_discord_message_id,
+                direction=direction,
+            )
+            session.add(message)
+            session.flush()
+            return message
+
+    def get_local_community_message_by_discord_message_id(
+        self, discord_message_id: int
+    ) -> LocalCommunityMessage | None:
+        """Load the local-community message row for one Discord message."""
+        with self.session() as session:
+            return session.scalar(
+                select(LocalCommunityMessage).where(
+                    LocalCommunityMessage.discord_message_id == discord_message_id
+                )
+            )
+
+    def get_local_community_message_by_ap_object_id(
+        self, ap_object_id: str
+    ) -> LocalCommunityMessage | None:
+        """Load the local-community message row for one AP comment object ID."""
+        with self.session() as session:
+            return session.scalar(
+                select(LocalCommunityMessage).where(
+                    LocalCommunityMessage.ap_object_id == ap_object_id
+                )
+            )
+
+    def list_local_community_messages_for_thread(
+        self, local_community_thread_id: int
+    ) -> list[LocalCommunityMessage]:
+        """Load all mapped messages for one local-community thread."""
+        with self.session() as session:
+            return list(
+                session.scalars(
+                    select(LocalCommunityMessage).where(
+                        LocalCommunityMessage.local_community_thread_id == local_community_thread_id
+                    ).order_by(LocalCommunityMessage.created_at, LocalCommunityMessage.id)
+                )
+            )
 
     def list_users(self) -> list[User]:
         """Return all registered users in stable creation order."""

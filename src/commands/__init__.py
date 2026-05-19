@@ -1,3 +1,3 @@
-from . import list_subs, register, subscribe, unsubscribe
+from . import create_community, list_subs, register, subscribe, unsubscribe
 
-__all__ = ["register", "subscribe", "unsubscribe", "list_subs"]
+__all__ = ["register", "subscribe", "unsubscribe", "list_subs", "create_community"]

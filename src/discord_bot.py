@@ -6,9 +6,9 @@ import logging
 import discord
 from discord import app_commands
 
-from .community_sync.runtime import CommunityRuntime
 from .config import Settings
 from .db import Database
+from .discord_event_router import DiscordEventRouter
 from .fedify_gateway_client import FedifyGatewayClient
 
 logger = logging.getLogger(__name__)
@@ -26,7 +26,7 @@ class BridgeBot(discord.Client):
         settings: Settings,
         database: Database,
         fedify_gateway: FedifyGatewayClient,
-        community_runtime: CommunityRuntime,
+        event_router: DiscordEventRouter,
     ) -> None:
         """Initialise the bot with shared services and Discord intent configuration."""
         intents = discord.Intents.default()
@@ -37,7 +37,10 @@ class BridgeBot(discord.Client):
         self.settings = settings
         self.database = database
         self.fedify_gateway = fedify_gateway
-        self.community_runtime = community_runtime
+        self.event_router = event_router
+        # Keep the current runtime reachable for edit/delete paths that still
+        # belong only to the remote-subscription mode today.
+        self.community_runtime = event_router.community_runtime
         self.tree = app_commands.CommandTree(self)
         self.bridge_ready = asyncio.Event()
         # Per-thread locks prevent duplicate Lemmy posts when Discord fires
@@ -55,11 +58,12 @@ class BridgeBot(discord.Client):
     async def setup_hook(self) -> None:
         # setup_hook runs before the bot connects, making it the right place to
         # register slash commands and sync the tree with Discord.
-        from .commands import list_subs, register, subscribe, unsubscribe
+        from .commands import create_community, list_subs, register, subscribe, unsubscribe
         register.register(self.tree, self.settings)
         subscribe.register(self.tree, self.database, self.fedify_gateway, self.settings)
         unsubscribe.register(self.tree, self.database, self.fedify_gateway)
         list_subs.register(self.tree, self.database)
+        create_community.register(self.tree, self.database, self.settings)
         await self.tree.sync()
 
     async def on_ready(self) -> None:
@@ -77,8 +81,10 @@ class BridgeBot(discord.Client):
         # Threads created by the bot itself are skipped to break the echo loop.
         if thread.parent_id is None:
             return
-        subscription = self.database.get_subscription_by_channel(thread.parent_id)
-        if subscription is None:
+        if not (
+            self.event_router.is_remote_subscription_forum(thread.parent_id)
+            or self.event_router.is_local_community_forum(thread.parent_id)
+        ):
             return
         if self.user and thread.owner_id == self.user.id:
             return
@@ -107,7 +113,7 @@ class BridgeBot(discord.Client):
             if starter_message.author.bot:
                 return
 
-            result = await self.community_runtime.handle_discord_thread_create(
+            result = await self.event_router.handle_thread_create(
                 thread=thread,
                 starter_message=starter_message,
             )
@@ -125,8 +131,10 @@ class BridgeBot(discord.Client):
             return
         if message.channel.parent_id is None:
             return
-        subscription = self.database.get_subscription_by_channel(message.channel.parent_id)
-        if subscription is None:
+        if not (
+            self.event_router.is_remote_subscription_forum(message.channel.parent_id)
+            or self.event_router.is_local_community_forum(message.channel.parent_id)
+        ):
             return
 
         delivery = self.database.get_thread_delivery_by_thread(message.channel.id)
@@ -139,7 +147,7 @@ class BridgeBot(discord.Client):
 
         # Phase 9: Allow all delivery roles (source, mirror, inbound) to proceed.
         # The bot-author guard (line 119 above) is the sole loop-prevention mechanism.
-        await self.community_runtime.handle_discord_message(
+        await self.event_router.handle_message(
             message=message,
         )
 

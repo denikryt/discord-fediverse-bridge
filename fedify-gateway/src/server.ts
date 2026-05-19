@@ -7,17 +7,20 @@ import { Hono } from "hono";
 import { storeRawActivity } from "./activitypub-raw-cache.js";
 import {
   buildEmptyOrderedCollection,
+  buildLocalCommunityGroupActor,
   buildUserPersonActor,
 } from "./actors.js";
 import {
   getBridgeActorIdentity,
   hasLocalActor,
+  loadLocalCommunityIdentity,
   loadUserActorIdentity,
 } from "./actor-store.js";
 import { type GatewayContextData, loadConfig } from "./config.js";
 import { loadPublishedActivityObjectByObjectId } from "./db.js";
 import { createGatewayFederation } from "./federation.js";
 import {
+  acceptLocalCommunityFollow,
   deleteContent,
   followCommunity,
   publishContent,
@@ -26,6 +29,7 @@ import {
 } from "./federation-outbound.js";
 import { buildPublishedActivityObjectJson } from "./published-objects.js";
 import type {
+  AcceptLocalCommunityFollowRequest,
   DeleteContentRequest,
   PublishContentRequest,
   UpdateContentRequest,
@@ -65,6 +69,66 @@ app.get("/users/:username", async (context) => {
     return context.json({ error: "user actor not found" }, 404);
   }
   return activityJsonResponse(await actor.toJsonLd());
+});
+
+app.get("/communities/:slug", async (context) => {
+  const slug = context.req.param("slug");
+  const actor = await buildLocalCommunityActorDocument(slug);
+  if (actor == null) {
+    return context.json({ error: "community actor not found" }, 404);
+  }
+  return activityJsonResponse(await actor.toJsonLd());
+});
+
+app.get("/c/:slug", async (context) => {
+  const slug = context.req.param("slug");
+  const actor = await buildLocalCommunityActorDocument(slug);
+  if (actor == null) {
+    return context.json({ error: "community actor not found" }, 404);
+  }
+  return activityJsonResponse(await actor.toJsonLd());
+});
+
+app.get("/communities/:slug/outbox", async (context) => {
+  const slug = context.req.param("slug");
+  const community = await loadLocalCommunityIdentity(config, slug);
+  if (community == null) {
+    return context.json({ error: "community actor not found" }, 404);
+  }
+  return activityJsonResponse(
+    await buildEmptyOrderedCollection(
+      new URL(`/communities/${slug}/outbox`, config.fedifyOrigin),
+    ).toJsonLd(),
+  );
+});
+
+app.get("/communities/:slug/followers", async (context) => {
+  const slug = context.req.param("slug");
+  const community = await loadLocalCommunityIdentity(config, slug);
+  if (community == null) {
+    return context.json({ error: "community actor not found" }, 404);
+  }
+  return activityJsonResponse(
+    await buildEmptyOrderedCollection(
+      new URL(`/communities/${slug}/followers`, config.fedifyOrigin),
+    ).toJsonLd(),
+  );
+});
+
+app.get("/communities/:slug/post/:objectId", async (context) => {
+  const object = await loadPublishedObjectForRequest(context.req.path);
+  if (object == null || object.kind !== "post") {
+    return context.json({ error: "published post not found" }, 404);
+  }
+  return activityJsonResponse(buildPublishedActivityObjectJson(object));
+});
+
+app.get("/communities/:slug/comment/:objectId", async (context) => {
+  const object = await loadPublishedObjectForRequest(context.req.path);
+  if (object == null || object.kind !== "comment") {
+    return context.json({ error: "published comment not found" }, 404);
+  }
+  return activityJsonResponse(buildPublishedActivityObjectJson(object));
 });
 
 app.get("/users/:username/outbox", async (context) => {
@@ -246,6 +310,47 @@ app.post("/publish", async (context) => {
   }
 });
 
+app.post("/accept-local-community-follow", async (context) => {
+  if (
+    !hasValidInternalAuthorization(
+      context.req.header("Authorization") ?? null,
+    )
+  ) {
+    return context.json({ error: "invalid authorization" }, { status: 401 });
+  }
+
+  const payload = (await context.req.json()) as Partial<AcceptLocalCommunityFollowRequest>;
+  if (
+    typeof payload.communitySlug !== "string" ||
+    typeof payload.communityActorUrl !== "string" ||
+    typeof payload.remoteActorId !== "string" ||
+    typeof payload.remoteInboxUrl !== "string" ||
+    typeof payload.followActivityId !== "string"
+  ) {
+    return context.json(
+      {
+        error:
+          "communitySlug, communityActorUrl, remoteActorId, remoteInboxUrl, and followActivityId are required",
+      },
+      { status: 400 },
+    );
+  }
+
+  try {
+    await acceptLocalCommunityFollow(fedify, config, {
+      communitySlug: payload.communitySlug,
+      communityActorUrl: payload.communityActorUrl,
+      remoteActorId: payload.remoteActorId,
+      remoteInboxUrl: payload.remoteInboxUrl,
+      followActivityId: payload.followActivityId,
+    });
+    return context.json({ status: "ok" });
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    return context.json({ error: message }, { status: 500 });
+  }
+});
+
 app.post("/update", async (context) => {
   // Python owns the edit policy; this endpoint owns the signed Update delivery.
   if (
@@ -383,8 +488,6 @@ console.log(
 async function buildWebFingerDocument(
   resource: string,
 ): Promise<Record<string, unknown> | null> {
-  // The manual WebFinger route preserves the canonical `/users/{username}`
-  // surface even though Fedify itself only supports one actor dispatcher path.
   const localHost = new URL(config.fedifyOrigin).host;
   const bridgeIdentity = getBridgeActorIdentity(config);
 
@@ -402,24 +505,65 @@ async function buildWebFingerDocument(
     };
   }
 
-  const username = parseLocalAcctResource(resource, localHost);
-  if (username == null) {
+  const explicitCommunitySlug = parseLocalCommunityAcctResource(resource, localHost);
+  if (explicitCommunitySlug != null) {
+    const communityIdentity = await loadLocalCommunityIdentity(config, explicitCommunitySlug);
+    if (communityIdentity == null) {
+      return null;
+    }
+
+    return {
+      subject: resource,
+      aliases: [
+        communityIdentity.actorId.href,
+        new URL(`/c/${explicitCommunitySlug}`, config.fedifyOrigin).href,
+      ],
+      links: [
+        {
+          rel: "self",
+          type: "application/activity+json",
+          href: communityIdentity.actorId.href,
+        },
+      ],
+    };
+  }
+
+  const localName = parseLocalAcctResource(resource, localHost);
+  if (localName == null) {
     return null;
   }
 
-  const userIdentity = await loadUserActorIdentity(config, username);
-  if (userIdentity == null) {
+  const userIdentity = await loadUserActorIdentity(config, localName);
+  if (userIdentity != null) {
+    return {
+      subject: resource,
+      aliases: [userIdentity.actorId.href],
+      links: [
+        {
+          rel: "self",
+          type: "application/activity+json",
+          href: userIdentity.actorId.href,
+        },
+      ],
+    };
+  }
+
+  const communityIdentity = await loadLocalCommunityIdentity(config, localName);
+  if (communityIdentity == null) {
     return null;
   }
 
   return {
     subject: resource,
-    aliases: [userIdentity.actorId.href],
+    aliases: [
+      communityIdentity.actorId.href,
+      new URL(`/c/${localName}`, config.fedifyOrigin).href,
+    ],
     links: [
       {
         rel: "self",
         type: "application/activity+json",
-        href: userIdentity.actorId.href,
+        href: communityIdentity.actorId.href,
       },
     ],
   };
@@ -438,6 +582,19 @@ async function buildRegisteredUserActorDocument(username: string) {
   );
 }
 
+async function buildLocalCommunityActorDocument(slug: string) {
+  const communityIdentity = await loadLocalCommunityIdentity(config, slug);
+  if (communityIdentity == null) {
+    return null;
+  }
+  const context = fedify.createContext(new URL(config.fedifyOrigin), config);
+  return buildLocalCommunityGroupActor(
+    communityIdentity,
+    new URL("/inbox", config.fedifyOrigin),
+    await context.getActorKeyPairs(slug),
+  );
+}
+
 function parseLocalAcctResource(
   resource: string,
   localHost: string,
@@ -446,6 +603,21 @@ function parseLocalAcctResource(
     return null;
   }
   const handle = resource.slice("acct:".length);
+  const parts = handle.split("@");
+  if (parts.length !== 2 || parts[0].length === 0 || parts[1] !== localHost) {
+    return null;
+  }
+  return parts[0];
+}
+
+function parseLocalCommunityAcctResource(
+  resource: string,
+  localHost: string,
+): string | null {
+  if (!resource.startsWith("acct:!")) {
+    return null;
+  }
+  const handle = resource.slice("acct:!".length);
   const parts = handle.split("@");
   if (parts.length !== 2 || parts[0].length === 0 || parts[1] !== localHost) {
     return null;

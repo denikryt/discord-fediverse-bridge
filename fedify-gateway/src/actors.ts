@@ -1,12 +1,17 @@
 import {
   type CryptographicKey,
   Endpoints,
+  Group,
   OrderedCollection,
   Person,
   Service,
 } from "@fedify/vocab";
 
-import type { BridgeActorIdentity, UserActorIdentity } from "./actor-store.js";
+import type {
+  BridgeActorIdentity,
+  LocalCommunityIdentity,
+  UserActorIdentity,
+} from "./actor-store.js";
 
 interface PublicKeyCarrier {
   // Fedify enriches actor key pairs with a `cryptographicKey` object that can
@@ -47,6 +52,28 @@ export function buildUserPersonActor(
     id: identity.actorId,
     preferredUsername: identity.username,
     name: identity.username,
+    inbox: identity.inboxId,
+    outbox: identity.outboxId,
+    followers: identity.followersId,
+    endpoints: new Endpoints({
+      sharedInbox: sharedInboxId,
+    }),
+    publicKeys: keyPairs.map((keyPair) => keyPair.cryptographicKey),
+  });
+}
+
+export function buildLocalCommunityGroupActor(
+  identity: LocalCommunityIdentity,
+  sharedInboxId: URL,
+  keyPairs: PublicKeyCarrier[],
+): Group {
+  // Local communities are represented as Group actors because they model one
+  // shared discussion space while leaving authorship to individual user actors.
+  return new Group({
+    id: identity.actorId,
+    preferredUsername: identity.slug,
+    name: identity.displayName,
+    summary: identity.summary,
     inbox: identity.inboxId,
     outbox: identity.outboxId,
     followers: identity.followersId,

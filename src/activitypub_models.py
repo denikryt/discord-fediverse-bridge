@@ -81,7 +81,29 @@ class FollowLifecycleEvent(BaseModel):
     object: FollowLifecycleObject
 
 
+class LocalCommunityFollowRequestObject(BaseModel):
+    """Carry the identifiers needed to persist and accept a remote follow."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    follow_activity_id: str
+    remote_inbox_url: str
+
+
+class LocalCommunityFollowRequestEvent(BaseModel):
+    """Describe one inbound Follow addressed to a local community actor."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    event_type: Literal["local.follow_requested"]
+    delivery_id: str
+    occurred_at: datetime
+    community_actor_id: str
+    actor_id: str
+    object: LocalCommunityFollowRequestObject
+
+
 BridgeGatewayEvent = Annotated[
-    ActivityPubEvent | FollowLifecycleEvent,
+    ActivityPubEvent | FollowLifecycleEvent | LocalCommunityFollowRequestEvent,
     Field(discriminator="event_type"),
 ]

@@ -11,6 +11,7 @@ from .discord_bot import BridgeBot
 from .discord_oauth_client import DiscordOAuthClient
 from .discord_publish_service import DiscordPublishService
 from .fedify_gateway_client import FedifyGatewayClient
+from .local_communities.runtime import LocalCommunityRuntime
 from .registration_service import RegistrationService
 
 
@@ -32,3 +33,4 @@ class Runtime:
     registration_service: RegistrationService
     bot: BridgeBot
     community_runtime: CommunityRuntime
+    local_community_runtime: LocalCommunityRuntime

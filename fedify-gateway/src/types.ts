@@ -44,7 +44,24 @@ export interface FollowAcceptedEvent {
   occurred_at: string;
 }
 
-export type InternalBridgeEvent = BridgeContentEvent | FollowAcceptedEvent;
+export interface LocalFollowRequestedObject {
+  follow_activity_id: string;
+  remote_inbox_url: string;
+}
+
+export interface LocalFollowRequestedEvent {
+  actor_id: string;
+  community_actor_id: string;
+  delivery_id: string;
+  event_type: "local.follow_requested";
+  object: LocalFollowRequestedObject;
+  occurred_at: string;
+}
+
+export type InternalBridgeEvent =
+  | BridgeContentEvent
+  | FollowAcceptedEvent
+  | LocalFollowRequestedEvent;
 
 export interface PublishContentRequest {
   actorUsername: string;
@@ -81,4 +98,12 @@ export interface DeleteContentRequest {
   actorUsername: string;
   communityActorUrl: string;
   apObjectId: string;
+}
+
+export interface AcceptLocalCommunityFollowRequest {
+  communitySlug: string;
+  communityActorUrl: string;
+  remoteActorId: string;
+  remoteInboxUrl: string;
+  followActivityId: string;
 }

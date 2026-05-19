@@ -8,12 +8,16 @@ import { Accept, Announce, Create, Follow } from "@fedify/vocab";
 import { getRawActivity } from "./activitypub-raw-cache.js";
 import {
   buildBridgeServiceActor,
+  buildLocalCommunityGroupActor,
   buildUserPersonActor,
 } from "./actors.js";
 import {
   getBridgeActorIdentity,
   hasLocalActor,
   loadActorKeyPair,
+  loadLocalCommunityIdentity,
+  resolveLocalCommunityByActorUrl,
+  resolveLocalActorKind,
   loadUserActorIdentity,
 } from "./actor-store.js";
 import type { GatewayContextData } from "./config.js";
@@ -27,6 +31,7 @@ import { deliverEventToPythonBridge } from "./python-bridge.js";
 import type {
   BridgeContentEvent,
   FollowAcceptedEvent,
+  LocalFollowRequestedEvent,
 } from "./types.js";
 
 export function createGatewayFederation(
@@ -44,8 +49,9 @@ export function createGatewayFederation(
   federation
     .setActorDispatcher("/actors/{identifier}", async (ctx, identifier) => {
       const sharedInboxId = ctx.getInboxUri();
+      const actorKind = await resolveLocalActorKind(config, identifier);
 
-      if (identifier === config.actorIdentifier) {
+      if (actorKind === "bridge") {
         const bridgeIdentity = getBridgeActorIdentity(config);
         const bridgeKeys = await ctx.getActorKeyPairs(identifier);
         return buildBridgeServiceActor(
@@ -55,19 +61,35 @@ export function createGatewayFederation(
         );
       }
 
-      const userIdentity = await loadUserActorIdentity(config, identifier);
-      if (userIdentity == null) {
-        return null;
+      if (actorKind === "user") {
+        const userIdentity = await loadUserActorIdentity(config, identifier);
+        if (userIdentity == null) {
+          return null;
+        }
+
+        // User actors remain Person objects even though the actor dispatcher path
+        // is shared with the bridge actor. Their canonical IDs come from the
+        // Python-owned registration records in the shared database.
+        return buildUserPersonActor(
+          userIdentity,
+          sharedInboxId,
+          await ctx.getActorKeyPairs(identifier),
+        );
       }
 
-      // User actors remain Person objects even though the actor dispatcher path
-      // is shared with the bridge actor. Their canonical IDs come from the
-      // Python-owned registration records in the shared database.
-      return buildUserPersonActor(
-        userIdentity,
-        sharedInboxId,
-        await ctx.getActorKeyPairs(identifier),
-      );
+      if (actorKind === "community") {
+        const communityIdentity = await loadLocalCommunityIdentity(config, identifier);
+        if (communityIdentity == null) {
+          return null;
+        }
+        return buildLocalCommunityGroupActor(
+          communityIdentity,
+          sharedInboxId,
+          await ctx.getActorKeyPairs(identifier),
+        );
+      }
+
+      return null;
     })
     .setKeyPairsDispatcher(async (_ctx, identifier) => {
       const keyPair = await loadActorKeyPair(config, identifier);
@@ -98,7 +120,7 @@ export function createGatewayFederation(
     });
 
   federation
-    .setInboxListeners("/users/{identifier}/inbox", "/inbox")
+    .setInboxListeners("/communities/{identifier}/inbox", "/inbox")
     .withIdempotency("per-inbox")
     .on(Create, async (_ctx, activity) => {
       if (isDebug) {
@@ -206,8 +228,17 @@ export function createGatewayFederation(
         );
       }
     })
-    .on(Follow, async () => {
-      return;
+    .on(Follow, async (_ctx, activity) => {
+      const event = await buildLocalFollowRequestedEvent(config, activity);
+      if (event == null) {
+        return;
+      }
+      await deliverNormalizedEvent(config, event, {
+        deliveryId: event.delivery_id,
+        eventType: event.event_type,
+        communityActorId: event.community_actor_id,
+        remoteActorId: event.actor_id,
+      });
     })
     .on(Accept, async (ctx, activity) => {
       const activityId = activity.id?.href ?? null;
@@ -241,7 +272,7 @@ export function createGatewayFederation(
 
 async function deliverNormalizedEvent(
   config: GatewayContextData,
-  event: BridgeContentEvent | FollowAcceptedEvent,
+  event: BridgeContentEvent | FollowAcceptedEvent | LocalFollowRequestedEvent,
   logContext: Record<string, unknown>,
 ): Promise<void> {
   // All successful normalization funnels through one delivery path so logging
@@ -387,6 +418,44 @@ export function buildFollowAcceptedEvent(
     event_type: "follow.accepted",
     object: {
       follow_activity_id: followActivityId,
+    },
+    occurred_at: new Date().toISOString(),
+  };
+}
+
+export async function buildLocalFollowRequestedEvent(
+  config: GatewayContextData,
+  activity: Follow,
+): Promise<LocalFollowRequestedEvent | null> {
+  const targetActorId = activity.objectId?.href;
+  const remoteActorId = activity.actorId?.href;
+  if (targetActorId == null || remoteActorId == null) {
+    return null;
+  }
+
+  const localCommunity = await resolveLocalCommunityByActorUrl(config, targetActorId);
+  if (localCommunity == null) {
+    // Only follows addressed to owned local communities should go through
+    // this local-community follow path.
+    return null;
+  }
+
+  const remoteActor = await activity.getActor({ suppressError: true });
+  const remoteInboxUrl = remoteActor?.inboxId?.href;
+  if (remoteInboxUrl == null) {
+    return null;
+  }
+
+  return {
+    actor_id: remoteActorId,
+    community_actor_id: targetActorId,
+    delivery_id:
+      activity.id?.href
+      ?? `local-follow:${localCommunity.slug}:${Date.now()}`,
+    event_type: "local.follow_requested",
+    object: {
+      follow_activity_id: activity.id?.href ?? `local-follow:${localCommunity.slug}`,
+      remote_inbox_url: remoteInboxUrl,
     },
     occurred_at: new Date().toISOString(),
   };

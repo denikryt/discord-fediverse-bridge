@@ -6,7 +6,13 @@ import {
 } from "@fedify/fedify";
 
 import type { GatewayConfig } from "./config.js";
-import { loadRegisteredUserByUsername, type RegisteredUserRow } from "./db.js";
+import {
+  loadLocalCommunityByActorUrl,
+  loadLocalCommunityBySlug,
+  loadRegisteredUserByUsername,
+  type LocalCommunityRow,
+  type RegisteredUserRow,
+} from "./db.js";
 
 export interface BridgeActorIdentity {
   // The bridge actor is config-backed because the deployment has exactly one
@@ -31,6 +37,22 @@ export interface UserActorIdentity {
   privateKeyPem: string;
   username: string;
 }
+
+export interface LocalCommunityIdentity {
+  // Local communities are Group actors backed by Discord forums and stored in
+  // the shared Python-owned database.
+  actorId: URL;
+  followersId: URL;
+  inboxId: URL;
+  outboxId: URL;
+  publicKeyPem: string;
+  privateKeyPem: string;
+  slug: string;
+  displayName: string;
+  summary: string;
+}
+
+export type LocalActorKind = "bridge" | "user" | "community";
 
 let generatedBridgeKeyPair: Promise<CryptoKeyPair> | null = null;
 
@@ -65,14 +87,44 @@ export async function loadUserActorIdentity(
   return mapRegisteredUserRow(row);
 }
 
+export async function loadLocalCommunityIdentity(
+  config: GatewayConfig,
+  slug: string,
+): Promise<LocalCommunityIdentity | null> {
+  const row = await loadLocalCommunityBySlug(config, slug);
+  if (row == null) {
+    return null;
+  }
+  return mapLocalCommunityRow(row);
+}
+
 export async function hasLocalActor(
   config: GatewayConfig,
-  username: string,
+  identifier: string,
 ): Promise<boolean> {
-  if (username === config.actorIdentifier) {
+  if (identifier === config.actorIdentifier) {
     return true;
   }
-  return (await loadRegisteredUserByUsername(config, username)) != null;
+  if ((await loadRegisteredUserByUsername(config, identifier)) != null) {
+    return true;
+  }
+  return (await loadLocalCommunityBySlug(config, identifier)) != null;
+}
+
+export async function resolveLocalActorKind(
+  config: GatewayConfig,
+  identifier: string,
+): Promise<LocalActorKind | null> {
+  if (identifier === config.actorIdentifier) {
+    return "bridge";
+  }
+  if ((await loadRegisteredUserByUsername(config, identifier)) != null) {
+    return "user";
+  }
+  if ((await loadLocalCommunityBySlug(config, identifier)) != null) {
+    return "community";
+  }
+  return null;
 }
 
 export async function loadActorKeyPair(
@@ -84,10 +136,14 @@ export async function loadActorKeyPair(
   }
 
   const user = await loadUserActorIdentity(config, identifier);
-  if (user == null) {
-    return null;
+  if (user != null) {
+    return await importPemKeyPair(user.publicKeyPem, user.privateKeyPem);
   }
-  return await importPemKeyPair(user.publicKeyPem, user.privateKeyPem);
+  const community = await loadLocalCommunityIdentity(config, identifier);
+  if (community != null) {
+    return await importPemKeyPair(community.publicKeyPem, community.privateKeyPem);
+  }
+  return null;
 }
 
 async function loadBridgeActorKeyPair(
@@ -124,6 +180,31 @@ function mapRegisteredUserRow(row: RegisteredUserRow): UserActorIdentity {
     privateKeyPem: row.privateKeyPem,
     username: row.activitypubUsername,
   };
+}
+
+function mapLocalCommunityRow(row: LocalCommunityRow): LocalCommunityIdentity {
+  return {
+    actorId: new URL(row.actorUrl),
+    followersId: new URL(row.followersUrl),
+    inboxId: new URL(row.inboxUrl),
+    outboxId: new URL(row.outboxUrl),
+    publicKeyPem: row.publicKeyPem,
+    privateKeyPem: row.privateKeyPem,
+    slug: row.slug,
+    displayName: row.displayName,
+    summary: row.summary,
+  };
+}
+
+export async function resolveLocalCommunityByActorUrl(
+  config: GatewayConfig,
+  actorUrl: string,
+): Promise<LocalCommunityIdentity | null> {
+  const row = await loadLocalCommunityByActorUrl(config, actorUrl);
+  if (row == null) {
+    return null;
+  }
+  return mapLocalCommunityRow(row);
 }
 
 async function importPemKeyPair(

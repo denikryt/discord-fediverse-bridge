@@ -18,6 +18,20 @@ export interface RegisteredUserRow {
   privateKeyPem: string;
 }
 
+export interface LocalCommunityRow {
+  // Local communities are Python-owned rows that define one Discord-backed
+  // Group actor the gateway must expose and sign on behalf of.
+  slug: string;
+  actorUrl: string;
+  inboxUrl: string;
+  outboxUrl: string;
+  followersUrl: string;
+  displayName: string;
+  summary: string;
+  publicKeyPem: string;
+  privateKeyPem: string;
+}
+
 export interface PublishedActivityObjectRow {
   // The durable object row contains enough data to reconstruct a local Page or
   // Note without relying on the original publish process still being in memory.
@@ -45,19 +59,27 @@ export async function loadRegisteredUserByUsername(
   // registered users appear to the gateway without requiring a process restart.
   const database = await openConfiguredDatabase(config);
   try {
-    const statement = database.prepare(`
-      SELECT
-        activitypub_username,
-        actor_url,
-        inbox_url,
-        outbox_url,
-        followers_url,
-        public_key_pem,
-        private_key_pem
-      FROM users
-      WHERE activitypub_username = ?
-      LIMIT 1
-    `);
+    let statement;
+    try {
+      statement = database.prepare(`
+        SELECT
+          activitypub_username,
+          actor_url,
+          inbox_url,
+          outbox_url,
+          followers_url,
+          public_key_pem,
+          private_key_pem
+        FROM users
+        WHERE activitypub_username = ?
+        LIMIT 1
+      `);
+    } catch (error) {
+      if (isMissingUsersTableError(error)) {
+        return null;
+      }
+      throw error;
+    }
     try {
       statement.bind([username]);
       if (!statement.step()) {
@@ -70,6 +92,114 @@ export async function loadRegisteredUserByUsername(
         inboxUrl: asString(row.inbox_url),
         outboxUrl: asString(row.outbox_url),
         followersUrl: asString(row.followers_url),
+        publicKeyPem: asString(row.public_key_pem),
+        privateKeyPem: asString(row.private_key_pem),
+      };
+    } finally {
+      statement.free();
+    }
+  } finally {
+    database.close();
+  }
+}
+
+export async function loadLocalCommunityBySlug(
+  config: GatewayConfig,
+  slug: string,
+): Promise<LocalCommunityRow | null> {
+  const database = await openConfiguredDatabase(config);
+  try {
+    let statement;
+    try {
+      statement = database.prepare(`
+        SELECT
+          slug,
+          actor_url,
+          inbox_url,
+          outbox_url,
+          followers_url,
+          display_name,
+          summary,
+          public_key_pem,
+          private_key_pem
+        FROM local_communities
+        WHERE slug = ?
+        LIMIT 1
+      `);
+    } catch (error) {
+      if (isMissingLocalCommunitiesTableError(error)) {
+        return null;
+      }
+      throw error;
+    }
+    try {
+      statement.bind([slug]);
+      if (!statement.step()) {
+        return null;
+      }
+      const row = statement.getAsObject() as Record<string, unknown>;
+      return {
+        slug: asString(row.slug),
+        actorUrl: asString(row.actor_url),
+        inboxUrl: asString(row.inbox_url),
+        outboxUrl: asString(row.outbox_url),
+        followersUrl: asString(row.followers_url),
+        displayName: asString(row.display_name),
+        summary: asString(row.summary),
+        publicKeyPem: asString(row.public_key_pem),
+        privateKeyPem: asString(row.private_key_pem),
+      };
+    } finally {
+      statement.free();
+    }
+  } finally {
+    database.close();
+  }
+}
+
+export async function loadLocalCommunityByActorUrl(
+  config: GatewayConfig,
+  actorUrl: string,
+): Promise<LocalCommunityRow | null> {
+  const database = await openConfiguredDatabase(config);
+  try {
+    let statement;
+    try {
+      statement = database.prepare(`
+        SELECT
+          slug,
+          actor_url,
+          inbox_url,
+          outbox_url,
+          followers_url,
+          display_name,
+          summary,
+          public_key_pem,
+          private_key_pem
+        FROM local_communities
+        WHERE actor_url = ?
+        LIMIT 1
+      `);
+    } catch (error) {
+      if (isMissingLocalCommunitiesTableError(error)) {
+        return null;
+      }
+      throw error;
+    }
+    try {
+      statement.bind([actorUrl]);
+      if (!statement.step()) {
+        return null;
+      }
+      const row = statement.getAsObject() as Record<string, unknown>;
+      return {
+        slug: asString(row.slug),
+        actorUrl: asString(row.actor_url),
+        inboxUrl: asString(row.inbox_url),
+        outboxUrl: asString(row.outbox_url),
+        followersUrl: asString(row.followers_url),
+        displayName: asString(row.display_name),
+        summary: asString(row.summary),
         publicKeyPem: asString(row.public_key_pem),
         privateKeyPem: asString(row.private_key_pem),
       };
@@ -258,5 +388,19 @@ function isMissingPublishedObjectsTableError(error: unknown): boolean {
   return (
     error instanceof Error &&
     error.message.includes("no such table: published_activity_objects")
+  );
+}
+
+function isMissingLocalCommunitiesTableError(error: unknown): boolean {
+  return (
+    error instanceof Error &&
+    error.message.includes("no such table: local_communities")
+  );
+}
+
+function isMissingUsersTableError(error: unknown): boolean {
+  return (
+    error instanceof Error &&
+    error.message.includes("no such table: users")
   );
 }

@@ -64,6 +64,17 @@ class DeleteContentRequest:
     ap_object_id: str
 
 
+@dataclass(slots=True)
+class AcceptLocalCommunityFollowRequest:
+    """Carry one signed Accept(Follow) request for a local community actor."""
+
+    community_slug: str
+    community_actor_url: str
+    remote_actor_id: str
+    remote_inbox_url: str
+    follow_activity_id: str
+
+
 class FedifyGatewayClient:
     """Call the local Fedify gateway for follow and publish operations."""
 
@@ -164,6 +175,29 @@ class FedifyGatewayClient:
                 "actorUsername": request.actor_username,
                 "communityActorUrl": request.community_actor_url,
                 "apObjectId": request.ap_object_id,
+            },
+        )
+        response.raise_for_status()
+
+    async def accept_local_community_follow(
+        self,
+        *,
+        community_slug: str,
+        community_actor_url: str,
+        remote_actor_id: str,
+        remote_inbox_url: str,
+        follow_activity_id: str,
+    ) -> None:
+        """Trigger one gateway-side Accept(Follow) for a local community actor."""
+        response = await self._client.post(
+            "/accept-local-community-follow",
+            headers={"Authorization": f"Bearer {self._shared_secret}"},
+            json={
+                "communitySlug": community_slug,
+                "communityActorUrl": community_actor_url,
+                "remoteActorId": remote_actor_id,
+                "remoteInboxUrl": remote_inbox_url,
+                "followActivityId": follow_activity_id,
             },
         )
         response.raise_for_status()

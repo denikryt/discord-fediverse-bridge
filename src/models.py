@@ -339,3 +339,110 @@ class RemoteActor(Base):
     last_fetched_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, nullable=False)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, nullable=False)
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, onupdate=utcnow, nullable=False)
+
+
+class LocalCommunity(Base):
+    """Persist one Discord forum exposed as a local federated community.
+
+    LocalCommunity is the Python-owned source of truth for the community actor
+    metadata that the gateway exposes publicly. The row binds one Discord forum
+    channel to one stable actor URL and one stable keypair.
+    """
+
+    __tablename__ = "local_communities"
+    __table_args__ = (
+        UniqueConstraint("discord_forum_channel_id"),
+        UniqueConstraint("slug"),
+        UniqueConstraint("actor_url"),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    discord_guild_id: Mapped[int] = mapped_column(Integer, nullable=False)
+    discord_forum_channel_id: Mapped[int] = mapped_column(Integer, nullable=False)
+    slug: Mapped[str] = mapped_column(String(255), nullable=False)
+    display_name: Mapped[str] = mapped_column(String(255), nullable=False)
+    summary: Mapped[str] = mapped_column(String, nullable=False)
+    actor_url: Mapped[str] = mapped_column(String(512), nullable=False)
+    inbox_url: Mapped[str] = mapped_column(String(512), nullable=False)
+    outbox_url: Mapped[str] = mapped_column(String(512), nullable=False)
+    followers_url: Mapped[str] = mapped_column(String(512), nullable=False)
+    public_key_pem: Mapped[str] = mapped_column(String, nullable=False)
+    private_key_pem: Mapped[str] = mapped_column(String, nullable=False)
+    status: Mapped[str] = mapped_column(String(32), nullable=False, default="active")
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, nullable=False)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, onupdate=utcnow, nullable=False)
+
+
+class LocalCommunityFollower(Base):
+    """Persist one remote actor that is allowed to follow a local community.
+
+    Follower rows are owned by Python because moderation and retry policy live
+    there, while the gateway only owns the protocol-side Accept delivery.
+    """
+
+    __tablename__ = "local_community_followers"
+    __table_args__ = (
+        UniqueConstraint("local_community_id", "remote_actor_id"),
+        UniqueConstraint("follow_activity_id"),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    local_community_id: Mapped[int] = mapped_column(Integer, nullable=False)
+    remote_actor_id: Mapped[str] = mapped_column(String(512), nullable=False)
+    remote_inbox_url: Mapped[str] = mapped_column(String(512), nullable=False)
+    follow_activity_id: Mapped[str] = mapped_column(String(512), nullable=False)
+    status: Mapped[str] = mapped_column(String(32), nullable=False, default="accepted")
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, nullable=False)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, onupdate=utcnow, nullable=False)
+
+
+class LocalCommunityThread(Base):
+    """Map one canonical local-community thread in either federation direction.
+
+    Threads are the post-level mapping surface for the local-community mode.
+    They preserve whether the canonical thread started on Discord or arrived
+    from a remote follower so replies can route consistently in both cases.
+    """
+
+    __tablename__ = "local_community_threads"
+    __table_args__ = (
+        UniqueConstraint("discord_thread_id"),
+        UniqueConstraint("discord_starter_message_id"),
+        UniqueConstraint("ap_activity_id"),
+        UniqueConstraint("ap_object_id"),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    local_community_id: Mapped[int] = mapped_column(Integer, nullable=False)
+    discord_thread_id: Mapped[int] = mapped_column(Integer, nullable=False)
+    discord_starter_message_id: Mapped[int] = mapped_column(Integer, nullable=False)
+    ap_activity_id: Mapped[str] = mapped_column(String(512), nullable=False)
+    ap_object_id: Mapped[str] = mapped_column(String(512), nullable=False)
+    direction: Mapped[str] = mapped_column(String(32), nullable=False)
+    origin_kind: Mapped[str] = mapped_column(String(32), nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, nullable=False)
+
+
+class LocalCommunityMessage(Base):
+    """Map one canonical local-community message or remote comment.
+
+    Message rows preserve both AP-parent and Discord-parent references because
+    comment routing must remain stable across local and remote reply chains.
+    """
+
+    __tablename__ = "local_community_messages"
+    __table_args__ = (
+        UniqueConstraint("discord_message_id"),
+        UniqueConstraint("ap_activity_id"),
+        UniqueConstraint("ap_object_id"),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    local_community_thread_id: Mapped[int] = mapped_column(Integer, nullable=False)
+    discord_message_id: Mapped[int] = mapped_column(Integer, nullable=False)
+    ap_activity_id: Mapped[str] = mapped_column(String(512), nullable=False)
+    ap_object_id: Mapped[str] = mapped_column(String(512), nullable=False)
+    parent_ap_object_id: Mapped[str | None] = mapped_column(String(512), nullable=True)
+    parent_discord_message_id: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    direction: Mapped[str] = mapped_column(String(32), nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, nullable=False)

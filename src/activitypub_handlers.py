@@ -14,6 +14,7 @@ from .activitypub_models import (
     BridgeGatewayEvent,
     FollowLifecycleEvent,
 )
+from .local_communities.inbound_mapping import resolve_local_community_by_actor_url
 from .federation_policy import is_instance_allowed
 from .runtime import Runtime
 
@@ -43,17 +44,17 @@ async def dispatch_activitypub_event(
     All other event types are filtered against the federation allowlist before
     any handler logic runs.
     """
-    # follow.accepted is exempt: it is a lifecycle response to our own outbound
-    # Follow and must always be processed regardless of the allowlist.
-    if event.event_type != "follow.accepted":
+    # follow.accepted and local.follow_requested are lifecycle/control events,
+    # not remote community content fanout, so they bypass the normal allowlist.
+    if event.event_type not in {"follow.accepted", "local.follow_requested"}:
         # settings may be absent in test runtimes that pre-date allowlist support;
         # treat a missing settings as an empty allowlist (allow all).
         allowlist = getattr(getattr(runtime, "settings", None), "federation_allowlist", [])
-        if not is_instance_allowed(event.community_actor_id, allowlist):
+        if not is_instance_allowed(_allowlist_subject(event, runtime), allowlist):
             logger.debug(
                 "Skipping %s from non-allowlisted instance: %s",
                 event.event_type,
-                event.community_actor_id,
+                _allowlist_subject(event, runtime),
             )
             return HandlerResult(status="skipped", detail="instance not in allowlist")
 
@@ -72,6 +73,13 @@ async def dispatch_activitypub_event(
         return await runtime.community_runtime.handle_inbound_comment_delete(event, runtime)
     if event.event_type == "follow.accepted":
         return await handle_follow_accepted(event, runtime)
+    if event.event_type == "local.follow_requested":
+        return await runtime.local_community_runtime.handle_follow_request(
+            local_community_actor_id=event.community_actor_id,
+            remote_actor_id=event.actor_id,
+            remote_inbox_url=event.object.remote_inbox_url,
+            follow_activity_id=event.object.follow_activity_id,
+        )
     raise RuntimeError(f"Unsupported event type: {event.event_type}")
 
 
@@ -84,6 +92,8 @@ async def handle_post_created(event: ActivityPubEvent, runtime: Runtime) -> Hand
     """
     if _is_discord_originated_echo(event, runtime):
         return HandlerResult(status="skipped", detail="discord-originated echo")
+    if _is_local_community_target(event, runtime):
+        return await runtime.local_community_runtime.handle_inbound_post(event, runtime)
     await _maybe_implicit_accept(event.community_actor_id, runtime)
     return await runtime.community_runtime.handle_inbound_post(event, runtime)
 
@@ -97,6 +107,8 @@ async def handle_comment_created(event: ActivityPubEvent, runtime: Runtime) -> H
     """
     if _is_discord_originated_echo(event, runtime):
         return HandlerResult(status="skipped", detail="discord-originated echo")
+    if _is_local_community_target(event, runtime):
+        return await runtime.local_community_runtime.handle_inbound_comment(event, runtime)
     await _maybe_implicit_accept(event.community_actor_id, runtime)
     return await runtime.community_runtime.handle_inbound_comment(event, runtime)
 
@@ -239,3 +251,21 @@ def _is_discord_originated_echo(event: ActivityPubEvent, runtime: Runtime) -> bo
     if runtime.database.get_user_by_actor_url(event.actor_id) is not None:
         return True
     return False
+
+
+def _is_local_community_target(event: ActivityPubEvent, runtime: Runtime) -> bool:
+    """Return whether the event targets one local community actor we own."""
+    return (
+        resolve_local_community_by_actor_url(runtime.database, event.community_actor_id)
+        is not None
+    )
+
+
+def _allowlist_subject(event: BridgeGatewayEvent, runtime: Runtime) -> str:
+    """Return the remote URL whose instance should be checked against the allowlist."""
+    if (
+        hasattr(event, "community_actor_id")
+        and resolve_local_community_by_actor_url(runtime.database, event.community_actor_id) is not None
+    ):
+        return getattr(event, "actor_id")
+    return getattr(event, "community_actor_id")

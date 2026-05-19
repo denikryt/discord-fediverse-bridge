@@ -370,7 +370,7 @@ def _begin_event_processing(
 def _event_object_id(event: BridgeGatewayEvent) -> str:
     # Receipt tracking needs one stable object identifier even though follow
     # lifecycle events do not carry post/comment objects.
-    if event.event_type == "follow.accepted":
+    if event.event_type in {"follow.accepted", "local.follow_requested"}:
         return event.object.follow_activity_id
     return event.object.ap_id
 

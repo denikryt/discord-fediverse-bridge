@@ -1,8 +1,9 @@
 import { Temporal } from "@js-temporal/polyfill";
-import { Create, Delete, Follow, Note, Page, Source, Undo, Update } from "@fedify/vocab";
+import { Accept, Create, Delete, Follow, Note, Page, Source, Undo, Update } from "@fedify/vocab";
 import type { Federation } from "@fedify/fedify";
 import type { GatewayConfig } from "./config.js";
 import type {
+  AcceptLocalCommunityFollowRequest,
   DeleteContentRequest,
   PublishContentRequest,
   PublishContentResult,
@@ -177,6 +178,37 @@ export async function publishContent(
     objectId: objectId.href,
     communityActorUrl: communityId,
   };
+}
+
+export async function acceptLocalCommunityFollow(
+  federation: Federation<GatewayConfig>,
+  config: GatewayConfig,
+  request: AcceptLocalCommunityFollowRequest,
+): Promise<void> {
+  // Python persists local-community followers first, then asks the gateway to
+  // sign and deliver the Accept from the community actor.
+  const ctx = federation.createContext(new URL(config.fedifyOrigin), config);
+  const communityActorUri = new URL(request.communityActorUrl);
+  const remoteActorUri = new URL(request.remoteActorId);
+  const acceptId = new URL(
+    `${config.fedifyOrigin}communities/${request.communitySlug}/activities/accept/${Date.now()}-${Math.random().toString(36).slice(2)}`,
+  );
+
+  const accept = new Accept({
+    id: acceptId,
+    actor: communityActorUri,
+    object: new Follow({
+      id: new URL(request.followActivityId),
+      actor: remoteActorUri,
+      object: communityActorUri,
+    }),
+  });
+
+  await ctx.sendActivity(
+    { username: request.communitySlug },
+    { id: remoteActorUri, inboxId: new URL(request.remoteInboxUrl) },
+    accept,
+  );
 }
 
 export function buildPublishCreateActivity(
