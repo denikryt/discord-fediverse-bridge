@@ -51,6 +51,28 @@ export function buildPublishedActivityObjectJson(
   };
 }
 
+/**
+ * Render the durable embedded Create activity for ActivityPub dereferencing.
+ *
+ * Mastodon dereferences Announce.object.id after accepting local-community
+ * Announce(Create(Page|Note)) deliveries, so the stored Create must be
+ * fetchable from SQLite instead of existing only inside the original POST body.
+ */
+export function buildPublishedCreateActivityJson(
+  record: PublishedActivityObjectRow,
+): Record<string, unknown> {
+  const actor = canonicalActorUrlForRecord(record);
+  return {
+    "@context": "https://www.w3.org/ns/activitystreams",
+    id: record.activityId,
+    type: "Create",
+    actor,
+    to: [ACTIVITYSTREAMS_PUBLIC, record.communityActorUrl],
+    cc: [actor],
+    object: buildPublishedActivityObjectJson(record),
+  };
+}
+
 function canonicalActorUrlForRecord(record: PublishedActivityObjectRow): string {
   // Published object rows may predate the /actors user migration and still store
   // /users/{username}. Use the durable username plus the stored origin to expose

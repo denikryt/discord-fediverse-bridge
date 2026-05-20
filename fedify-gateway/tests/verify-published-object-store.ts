@@ -4,9 +4,17 @@ import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 
-import { loadPublishedActivityObjectByObjectIdForDatabaseUrl } from "../src/db.js";
+import {
+  loadPublishedActivityObjectByActivityIdForDatabaseUrl,
+  loadPublishedActivityObjectByObjectIdForDatabaseUrl,
+} from "../src/db.js";
 import { normalizeCreateActivityFromJson } from "../src/normalize.js";
-import { buildPublishedActivityObjectJson } from "../src/published-objects.js";
+import { createGatewayApp } from "../src/server.js";
+import {
+  buildPublishedActivityObjectJson,
+  buildPublishedCreateActivityJson,
+} from "../src/published-objects.js";
+import type { GatewayConfig } from "../src/config.js";
 
 const BRIDGE_ORIGIN = "https://bot-test.example.com";
 const LEMMY_ORIGIN = "https://lemmy.example";
@@ -17,6 +25,9 @@ const CANONICAL_ALICE_ACTOR = `${BRIDGE_ORIGIN}/actors/alice`;
 async function main(): Promise<void> {
   await testStoredPostBuildsPageJsonAndResolvesWithoutHttp();
   await testStoredCommentWalksLocalReplyChainWithoutHttp();
+  await testStoredActivitiesLoadByActivityIdAndRenderCreate();
+  await testStoredCreateActivityRoutesAreFetchable();
+  await testActivityLookupHandlesUnknownAndMissingTable();
   await testStoredObjectsRemainReadableAcrossFreshDbOpens();
   console.log("published object store verification passed");
 }
@@ -155,6 +166,162 @@ async function testStoredCommentWalksLocalReplyChainWithoutHttp(): Promise<void>
   );
 }
 
+
+async function testStoredActivitiesLoadByActivityIdAndRenderCreate(): Promise<void> {
+  await withPublishedObjectDatabase(
+    [
+      {
+        actor_username: "alice",
+        actor_url: `${BRIDGE_ORIGIN}/users/alice`,
+        community_actor_url: COMMUNITY_URL,
+        activity_id: `${BRIDGE_ORIGIN}/users/alice/activities/create/post/100`,
+        object_id: `${BRIDGE_ORIGIN}/users/alice/post/100`,
+        kind: "post",
+        title: "Stored post",
+        body_markdown: "hello from discord",
+        in_reply_to_object_id: null,
+      },
+      {
+        actor_username: "alice",
+        actor_url: `${BRIDGE_ORIGIN}/users/alice`,
+        community_actor_url: COMMUNITY_URL,
+        activity_id: `${BRIDGE_ORIGIN}/users/alice/activities/create/comment/200`,
+        object_id: `${BRIDGE_ORIGIN}/users/alice/comment/200`,
+        kind: "comment",
+        title: null,
+        body_markdown: "first reply",
+        in_reply_to_object_id: `${BRIDGE_ORIGIN}/users/alice/post/100`,
+      },
+    ],
+    async (databaseUrl) => {
+      const storedPost = await loadPublishedActivityObjectByActivityIdForDatabaseUrl(
+        databaseUrl,
+        `${BRIDGE_ORIGIN}/users/alice/activities/create/post/100`,
+      );
+      assert.ok(storedPost, "stored post Create must be readable by activity id");
+
+      const postCreate = buildPublishedCreateActivityJson(storedPost);
+      const postObject = postCreate.object as Record<string, unknown>;
+      assert.equal(postCreate.type, "Create");
+      assert.equal(postCreate.id, `${BRIDGE_ORIGIN}/users/alice/activities/create/post/100`);
+      assert.equal(postCreate.actor, CANONICAL_ALICE_ACTOR);
+      assert.deepEqual(postCreate.to, [PUBLIC_IRI, COMMUNITY_URL]);
+      assert.deepEqual(postCreate.cc, [CANONICAL_ALICE_ACTOR]);
+      assert.equal(postObject.type, "Page");
+      assert.equal(postObject.id, `${BRIDGE_ORIGIN}/users/alice/post/100`);
+      assert.equal(postObject.content, "<p>hello from discord</p>");
+      assert.equal(postObject.published, "2026-05-08T12:00:00Z");
+
+      const storedComment = await loadPublishedActivityObjectByActivityIdForDatabaseUrl(
+        databaseUrl,
+        `${BRIDGE_ORIGIN}/users/alice/activities/create/comment/200`,
+      );
+      assert.ok(storedComment, "stored comment Create must be readable by activity id");
+
+      const commentCreate = buildPublishedCreateActivityJson(storedComment);
+      const commentObject = commentCreate.object as Record<string, unknown>;
+      assert.equal(commentCreate.type, "Create");
+      assert.equal(commentCreate.actor, CANONICAL_ALICE_ACTOR);
+      assert.deepEqual(commentCreate.to, [PUBLIC_IRI, COMMUNITY_URL]);
+      assert.equal(commentObject.type, "Note");
+      assert.equal(commentObject.id, `${BRIDGE_ORIGIN}/users/alice/comment/200`);
+      assert.equal(commentObject.inReplyTo, `${BRIDGE_ORIGIN}/users/alice/post/100`);
+    },
+  );
+}
+
+async function testStoredCreateActivityRoutesAreFetchable(): Promise<void> {
+  await withPublishedObjectDatabase(
+    [
+      {
+        actor_username: "alice",
+        actor_url: `${BRIDGE_ORIGIN}/users/alice`,
+        community_actor_url: COMMUNITY_URL,
+        activity_id: `${BRIDGE_ORIGIN}/users/alice/activities/create/post/100`,
+        object_id: `${BRIDGE_ORIGIN}/users/alice/post/100`,
+        kind: "post",
+        title: "Stored post",
+        body_markdown: "hello from discord",
+        in_reply_to_object_id: null,
+      },
+      {
+        actor_username: "alice",
+        actor_url: `${BRIDGE_ORIGIN}/users/alice`,
+        community_actor_url: COMMUNITY_URL,
+        activity_id: `${BRIDGE_ORIGIN}/users/alice/activities/create/comment/200`,
+        object_id: `${BRIDGE_ORIGIN}/users/alice/comment/200`,
+        kind: "comment",
+        title: null,
+        body_markdown: "first reply",
+        in_reply_to_object_id: `${BRIDGE_ORIGIN}/users/alice/post/100`,
+      },
+    ],
+    async (databaseUrl) => {
+      const app = createGatewayApp(buildRouteTestConfig(databaseUrl));
+
+      const postResponse = await app.request("/users/alice/activities/create/post/100", {
+        headers: { Accept: "application/activity+json" },
+      });
+      assert.equal(postResponse.status, 200);
+      assert.match(postResponse.headers.get("content-type") ?? "", /application\/activity\+json/);
+      const postCreate = await postResponse.json() as Record<string, unknown>;
+      assert.equal(postCreate.type, "Create");
+      assert.equal(postCreate.id, `${BRIDGE_ORIGIN}/users/alice/activities/create/post/100`);
+      assert.equal((postCreate.object as Record<string, unknown>).type, "Page");
+
+      const commentResponse = await app.request("/users/alice/activities/create/comment/200", {
+        headers: { Accept: "application/activity+json" },
+      });
+      assert.equal(commentResponse.status, 200);
+      const commentCreate = await commentResponse.json() as Record<string, unknown>;
+      assert.equal(commentCreate.type, "Create");
+      assert.equal((commentCreate.object as Record<string, unknown>).type, "Note");
+
+      const wrongKindResponse = await app.request("/users/alice/activities/create/comment/100");
+      assert.equal(wrongKindResponse.status, 404);
+
+      const wrongActorResponse = await app.request("/users/bob/activities/create/post/100");
+      assert.equal(wrongActorResponse.status, 404);
+
+      const missingResponse = await app.request("/users/alice/activities/create/post/missing");
+      assert.equal(missingResponse.status, 404);
+    },
+  );
+}
+
+async function testActivityLookupHandlesUnknownAndMissingTable(): Promise<void> {
+  await withPublishedObjectDatabase(
+    [
+      {
+        actor_username: "alice",
+        actor_url: `${BRIDGE_ORIGIN}/users/alice`,
+        community_actor_url: COMMUNITY_URL,
+        activity_id: `${BRIDGE_ORIGIN}/users/alice/activities/create/post/100`,
+        object_id: `${BRIDGE_ORIGIN}/users/alice/post/100`,
+        kind: "post",
+        title: "Stored post",
+        body_markdown: "hello from discord",
+        in_reply_to_object_id: null,
+      },
+    ],
+    async (databaseUrl) => {
+      const missing = await loadPublishedActivityObjectByActivityIdForDatabaseUrl(
+        databaseUrl,
+        `${BRIDGE_ORIGIN}/users/alice/activities/create/post/missing`,
+      );
+      assert.equal(missing, null);
+    },
+  );
+
+  await withEmptyDatabase(async (databaseUrl) => {
+    const missingTable = await loadPublishedActivityObjectByActivityIdForDatabaseUrl(
+      databaseUrl,
+      `${BRIDGE_ORIGIN}/users/alice/activities/create/post/100`,
+    );
+    assert.equal(missingTable, null);
+  });
+}
+
 async function testStoredObjectsRemainReadableAcrossFreshDbOpens(): Promise<void> {
   await withPublishedObjectDatabase(
     [
@@ -212,6 +379,49 @@ async function withPublishedObjectDatabase(
   } finally {
     rmSync(tempDir, { force: true, recursive: true });
   }
+}
+
+
+async function withEmptyDatabase(fn: (databaseUrl: string) => Promise<void>): Promise<void> {
+  const tempDir = mkdtempSync(path.join(tmpdir(), "published-object-store-empty-"));
+  const databasePath = path.join(tempDir, "empty.sqlite3");
+  const databaseUrl = `sqlite:///${databasePath}`;
+
+  try {
+    execFileSync(
+      "../.venv/bin/python",
+      ["-c", "import os, sqlite3; sqlite3.connect(os.environ['BRIDGE_TEST_DB_PATH']).close()"],
+      {
+        cwd: process.cwd(),
+        env: {
+          ...process.env,
+          BRIDGE_TEST_DB_PATH: databasePath,
+        },
+      },
+    );
+    await fn(databaseUrl);
+  } finally {
+    rmSync(tempDir, { force: true, recursive: true });
+  }
+}
+
+function buildRouteTestConfig(databaseUrl: string): GatewayConfig {
+  // Route-level tests only exercise DB-backed dereference routes, but the full
+  // gateway app still needs a complete config object for middleware setup.
+  return {
+    actorIdentifier: "bridge",
+    actorName: "Bridge",
+    actorSummary: "Bridge summary",
+    bridgePrivateKeyJwkJson: null,
+    bridgePublicKeyJwkJson: null,
+    communityActorId: null,
+    databaseUrl,
+    fedifyOrigin: BRIDGE_ORIGIN,
+    port: 3000,
+    pythonBridgeEventsUrl: "http://127.0.0.1:8080/internal/activitypub/events",
+    pythonBridgeSharedSecret: "secret",
+    logLevel: "info",
+  };
 }
 
 function buildDatabaseBootstrapScript(): string {

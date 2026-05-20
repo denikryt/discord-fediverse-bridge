@@ -277,20 +277,16 @@ export async function loadPublishedActivityObjectByObjectId(
 ): Promise<PublishedActivityObjectRow | null> {
   // Object lookups always read the latest SQLite snapshot so a gateway restart
   // is not required before newly published objects become resolvable.
-  let database: Database;
-  try {
-    database = await openConfiguredDatabase(config);
-  } catch (error) {
-    if (isMissingSqliteStorageError(error)) {
-      return null;
-    }
-    throw error;
-  }
-  try {
-    return loadPublishedActivityObjectFromDatabase(database, objectId);
-  } finally {
-    database.close();
-  }
+  return await loadPublishedActivityObjectByColumn(config, "object_id", objectId);
+}
+
+export async function loadPublishedActivityObjectByActivityId(
+  config: GatewayConfig,
+  activityId: string,
+): Promise<PublishedActivityObjectRow | null> {
+  // Activity lookups expose the durable embedded Create ids that remote servers
+  // may dereference after accepting a community Announce(Create(Page|Note)).
+  return await loadPublishedActivityObjectByColumn(config, "activity_id", activityId);
 }
 
 export async function loadPublishedActivityObjectByObjectIdForDatabaseUrl(
@@ -299,20 +295,24 @@ export async function loadPublishedActivityObjectByObjectIdForDatabaseUrl(
 ): Promise<PublishedActivityObjectRow | null> {
   // Normalize.ts reads by exact object URL outside the main server bootstrap,
   // so this helper accepts a bare DATABASE_URL instead of a full config object.
-  let database: Database;
-  try {
-    database = await openDatabaseUrl(databaseUrl);
-  } catch (error) {
-    if (isMissingSqliteStorageError(error)) {
-      return null;
-    }
-    throw error;
-  }
-  try {
-    return loadPublishedActivityObjectFromDatabase(database, objectId);
-  } finally {
-    database.close();
-  }
+  return await loadPublishedActivityObjectByColumnForDatabaseUrl(
+    databaseUrl,
+    "object_id",
+    objectId,
+  );
+}
+
+export async function loadPublishedActivityObjectByActivityIdForDatabaseUrl(
+  databaseUrl: string,
+  activityId: string,
+): Promise<PublishedActivityObjectRow | null> {
+  // Verification tests read Create activity rows directly by their durable
+  // activity_id, matching the public dereference route behavior.
+  return await loadPublishedActivityObjectByColumnForDatabaseUrl(
+    databaseUrl,
+    "activity_id",
+    activityId,
+  );
 }
 
 async function openConfiguredDatabase(
@@ -377,12 +377,60 @@ function asNullableNumber(value: unknown): number | null {
   return value;
 }
 
+type PublishedActivityObjectLookupColumn = "object_id" | "activity_id";
+
+async function loadPublishedActivityObjectByColumn(
+  config: GatewayConfig,
+  column: PublishedActivityObjectLookupColumn,
+  value: string,
+): Promise<PublishedActivityObjectRow | null> {
+  let database: Database;
+  try {
+    database = await openConfiguredDatabase(config);
+  } catch (error) {
+    if (isMissingSqliteStorageError(error)) {
+      return null;
+    }
+    throw error;
+  }
+  try {
+    return loadPublishedActivityObjectFromDatabase(database, column, value);
+  } finally {
+    database.close();
+  }
+}
+
+async function loadPublishedActivityObjectByColumnForDatabaseUrl(
+  databaseUrl: string,
+  column: PublishedActivityObjectLookupColumn,
+  value: string,
+): Promise<PublishedActivityObjectRow | null> {
+  let database: Database;
+  try {
+    database = await openDatabaseUrl(databaseUrl);
+  } catch (error) {
+    if (isMissingSqliteStorageError(error)) {
+      return null;
+    }
+    throw error;
+  }
+  try {
+    return loadPublishedActivityObjectFromDatabase(database, column, value);
+  } finally {
+    database.close();
+  }
+}
+
 function loadPublishedActivityObjectFromDatabase(
   database: Database,
-  objectId: string,
+  column: PublishedActivityObjectLookupColumn,
+  value: string,
 ): PublishedActivityObjectRow | null {
   let statement;
   try {
+    // object_id and activity_id identify the same durable local publish artifact.
+    // Keeping both lookup paths on one query/mapper prevents Mastodon activity
+    // dereference behavior from drifting away from object dereference behavior.
     statement = database.prepare(`
       SELECT
         actor_username,
@@ -398,7 +446,7 @@ function loadPublishedActivityObjectFromDatabase(
         discord_channel_id,
         discord_message_id
       FROM published_activity_objects
-      WHERE object_id = ?
+      WHERE ${column} = ?
       LIMIT 1
     `);
   } catch (error) {
@@ -408,32 +456,37 @@ function loadPublishedActivityObjectFromDatabase(
     throw error;
   }
   try {
-    statement.bind([objectId]);
+    statement.bind([value]);
     if (!statement.step()) {
       return null;
     }
-    const row = statement.getAsObject() as Record<string, unknown>;
-    const kind = asString(row.kind);
-    if (kind !== "post" && kind !== "comment") {
-      throw new Error(`Unsupported published object kind: ${kind}`);
-    }
-    return {
-      actorUsername: asString(row.actor_username),
-      actorUrl: asString(row.actor_url),
-      communityActorUrl: asString(row.community_actor_url),
-      activityId: asString(row.activity_id),
-      objectId: asString(row.object_id),
-      kind,
-      title: asNullableString(row.title),
-      bodyMarkdown: asString(row.body_markdown),
-      inReplyToObjectId: asNullableString(row.in_reply_to_object_id),
-      publishedAt: asString(row.published_at),
-      discordChannelId: asNullableNumber(row.discord_channel_id),
-      discordMessageId: asNullableNumber(row.discord_message_id),
-    };
+    return mapPublishedActivityObjectRow(statement.getAsObject() as Record<string, unknown>);
   } finally {
     statement.free();
   }
+}
+
+function mapPublishedActivityObjectRow(
+  row: Record<string, unknown>,
+): PublishedActivityObjectRow {
+  const kind = asString(row.kind);
+  if (kind !== "post" && kind !== "comment") {
+    throw new Error(`Unsupported published object kind: ${kind}`);
+  }
+  return {
+    actorUsername: asString(row.actor_username),
+    actorUrl: asString(row.actor_url),
+    communityActorUrl: asString(row.community_actor_url),
+    activityId: asString(row.activity_id),
+    objectId: asString(row.object_id),
+    kind,
+    title: asNullableString(row.title),
+    bodyMarkdown: asString(row.body_markdown),
+    inReplyToObjectId: asNullableString(row.in_reply_to_object_id),
+    publishedAt: asString(row.published_at),
+    discordChannelId: asNullableNumber(row.discord_channel_id),
+    discordMessageId: asNullableNumber(row.discord_message_id),
+  };
 }
 
 function isMissingSqliteStorageError(error: unknown): boolean {

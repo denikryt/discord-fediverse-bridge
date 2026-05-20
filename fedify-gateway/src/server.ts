@@ -23,7 +23,10 @@ import {
   type GatewayContextData,
   loadConfig,
 } from "./config.js";
-import { loadPublishedActivityObjectByObjectId } from "./db.js";
+import {
+  loadPublishedActivityObjectByActivityId,
+  loadPublishedActivityObjectByObjectId,
+} from "./db.js";
 import { createGatewayFederation } from "./federation.js";
 import {
   acceptLocalCommunityFollow,
@@ -35,7 +38,10 @@ import {
   unfollowCommunity,
   updateContent,
 } from "./federation-outbound.js";
-import { buildPublishedActivityObjectJson } from "./published-objects.js";
+import {
+  buildPublishedActivityObjectJson,
+  buildPublishedCreateActivityJson,
+} from "./published-objects.js";
 import type {
   AcceptLocalCommunityFollowRequest,
   DeleteContentRequest,
@@ -53,32 +59,33 @@ export function createGatewayApp(config: GatewayConfig): Hono {
   const app = new Hono();
   const isDebug = config.logLevel === "debug";
 
-  // This temporary access log preserves the request path, response status, and
-  // remote client hints needed to verify which ActivityPub URLs Mastodon fetches
-  // after accepting a local-community publish delivery.
-  app.use("*", async (context, next) => {
-    const startedAt = Date.now();
-    const method = context.req.method;
-    const path = context.req.path;
-    const accept = context.req.header("accept") ?? "";
-    const userAgent = context.req.header("user-agent") ?? "";
-    const forwardedFor =
-      context.req.header("cf-connecting-ip") ??
-      context.req.header("x-forwarded-for") ??
-      "";
+  if (isDebug) {
+    // Debug access logging is intentionally gated because it can be noisy, but
+    // it remains available to verify which ActivityPub URLs Mastodon fetches.
+    app.use("*", async (context, next) => {
+      const startedAt = Date.now();
+      const method = context.req.method;
+      const path = context.req.path;
+      const accept = context.req.header("accept") ?? "";
+      const userAgent = context.req.header("user-agent") ?? "";
+      const forwardedFor =
+        context.req.header("cf-connecting-ip") ??
+        context.req.header("x-forwarded-for") ??
+        "";
 
-    await next();
+      await next();
 
-    console.log("[HTTP]", {
-      method,
-      path,
-      status: context.res.status,
-      durationMs: Date.now() - startedAt,
-      accept,
-      userAgent,
-      forwardedFor,
+      console.log("[HTTP]", {
+        method,
+        path,
+        status: context.res.status,
+        durationMs: Date.now() - startedAt,
+        accept,
+        userAgent,
+        forwardedFor,
+      });
     });
-  });
+  }
 
   app.get("/healthz", (context) => {
     return context.json({ status: "ok" });
@@ -190,6 +197,33 @@ export function createGatewayApp(config: GatewayConfig): Hono {
         new URL(`/users/${username}/followers`, config.fedifyOrigin),
       ).toJsonLd(),
     );
+  });
+
+
+  app.get("/users/:username/activities/create/post/:activityId", async (context) => {
+    const activity = await loadPublishedCreateActivityForRequest(
+      config,
+      context.req.path,
+      context.req.param("username"),
+      "post",
+    );
+    if (activity == null) {
+      return context.json({ error: "published create activity not found" }, 404);
+    }
+    return activityJsonResponse(buildPublishedCreateActivityJson(activity));
+  });
+
+  app.get("/users/:username/activities/create/comment/:activityId", async (context) => {
+    const activity = await loadPublishedCreateActivityForRequest(
+      config,
+      context.req.path,
+      context.req.param("username"),
+      "comment",
+    );
+    if (activity == null) {
+      return context.json({ error: "published create activity not found" }, 404);
+    }
+    return activityJsonResponse(buildPublishedCreateActivityJson(activity));
   });
 
   app.get("/users/:username/post/:objectId", async (context) => {
@@ -695,6 +729,27 @@ async function loadPublishedObjectForRequest(
   // behavior deterministic and avoids rebuilding object IDs from fragments.
   const objectUrl = new URL(requestPath, config.fedifyOrigin).href;
   return await loadPublishedActivityObjectByObjectId(config, objectUrl);
+}
+
+
+async function loadPublishedCreateActivityForRequest(
+  config: GatewayConfig,
+  requestPath: string,
+  username: string,
+  kind: "post" | "comment",
+) {
+  // The delivered Create.id is a full URL. Reconstruct it from the request path
+  // so dereference uses the exact same durable id Python stored after publish.
+  const activityUrl = new URL(requestPath, config.fedifyOrigin).href;
+  const activity = await loadPublishedActivityObjectByActivityId(config, activityUrl);
+  if (
+    activity == null ||
+    activity.actorUsername !== username ||
+    activity.kind !== kind
+  ) {
+    return null;
+  }
+  return activity;
 }
 
 function hasValidInternalAuthorization(
