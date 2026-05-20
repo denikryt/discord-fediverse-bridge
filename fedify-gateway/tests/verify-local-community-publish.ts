@@ -36,6 +36,7 @@ async function main(): Promise<void> {
   await testLocalCommunityPostPublishesAnnounceCreatePage();
   await testLocalCommunityCommentPublishesAnnounceCreateNote();
   await testLocalCommunityPublishReportsPartialFailure();
+  await testLogLevelDebugControlsSignedJsonDeliveryLogs();
   console.log("verify:local-community-publish passed");
 }
 
@@ -180,6 +181,55 @@ async function testLocalCommunityPublishReportsPartialFailure(): Promise<void> {
   assert.equal(deliveries[0]?.inboxId, "https://lemmy.example/u/alice/inbox");
 }
 
+/**
+ * Action: the same local-community publish runs with normal and debug log levels.
+ * Expected: signed JSON delivery is always used, but verbose raw delivery logs
+ * are controlled only by LOG_LEVEL=debug.
+ */
+async function testLogLevelDebugControlsSignedJsonDeliveryLogs(): Promise<void> {
+  const originalConsoleLog = console.log;
+  const logs: unknown[][] = [];
+
+  try {
+    console.log = (...args: unknown[]) => {
+      logs.push(args);
+    };
+
+    const infoDeliveries: DeliveryRecord[] = [];
+    const restoreInfoFetch = installFetchRecorder(infoDeliveries);
+    await publishLocalCommunityContent({} as never, await buildConfig("info"), {
+      actorUsername: "alice",
+      communityActorUrl: COMMUNITY_ACTOR,
+      kind: "post",
+      title: "Info logging",
+      bodyMarkdown: "Normal logging should not emit raw request bodies.",
+      inReplyToObjectId: null,
+    });
+    restoreInfoFetch();
+
+    assert.equal(infoDeliveries.length, 2);
+    assert.equal(hasRawDeliveryLog(logs), false);
+
+    logs.length = 0;
+    const debugDeliveries: DeliveryRecord[] = [];
+    const restoreDebugFetch = installFetchRecorder(debugDeliveries);
+    await publishLocalCommunityContent({} as never, await buildConfig("debug"), {
+      actorUsername: "alice",
+      communityActorUrl: COMMUNITY_ACTOR,
+      kind: "post",
+      title: "Debug logging",
+      bodyMarkdown: "LOG_LEVEL=debug should enable raw logs.",
+      inReplyToObjectId: null,
+    });
+    restoreDebugFetch();
+
+    assert.equal(debugDeliveries.length, 2);
+    assert.equal(hasRawDeliveryLog(logs), true);
+  } finally {
+    console.log = originalConsoleLog;
+  }
+}
+
 function installFetchRecorder(
   deliveries: DeliveryRecord[],
   failingInboxes: Set<string> = new Set(),
@@ -204,7 +254,7 @@ function installFetchRecorder(
   };
 }
 
-async function buildConfig(): Promise<GatewayConfig> {
+async function buildConfig(logLevel: "info" | "debug" = "info"): Promise<GatewayConfig> {
   /** Create a temporary Python-style DB with one local community and followers. */
   const sqlJs = await initSqlJs();
   const tempDir = await mkdtemp(path.join(tmpdir(), "fedify-local-community-publish-"));
@@ -305,8 +355,13 @@ async function buildConfig(): Promise<GatewayConfig> {
     port: 3000,
     pythonBridgeEventsUrl: "http://127.0.0.1:8080/internal/activitypub/events",
     pythonBridgeSharedSecret: "secret",
-    logLevel: "info",
+    logLevel,
   };
+}
+
+function hasRawDeliveryLog(logs: unknown[][]): boolean {
+  /** Check whether verbose signed JSON request logging was emitted. */
+  return logs.some((entry) => String(entry[0]).includes("Raw ActivityPub request"));
 }
 
 function assertSignedJsonDelivery(delivery: DeliveryRecord): void {

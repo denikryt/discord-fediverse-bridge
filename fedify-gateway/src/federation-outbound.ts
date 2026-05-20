@@ -238,7 +238,7 @@ export async function publishLocalCommunityContent(
   let deliveredFollowerCount = 0;
   let failedFollowerCount = 0;
 
-  const debugDelivery = shouldLogSignedJsonDelivery();
+  const debugDelivery = shouldLogSignedJsonDelivery(config);
 
   for (const follower of followers) {
     try {
@@ -306,7 +306,7 @@ export async function sendLocalCommunityRelay(
     throw new Error("signingActorUrl must match the canonical community actor URL");
   }
   const outcomes = [];
-  const debugDelivery = shouldLogSignedJsonDelivery();
+  const debugDelivery = shouldLogSignedJsonDelivery(config);
 
   for (const delivery of request.deliveries) {
     const activityActor = delivery.activityJson.actor;
@@ -492,14 +492,10 @@ async function sendSignedJsonActivity(
   }
 }
 
-function shouldLogSignedJsonDelivery(): boolean {
-  // Keep the original raw-delivery environment variable as a backwards-compatible
-  // way to enable diagnostics, but delivery no longer depends on it.
-  return (
-    process.env.LOCAL_COMMUNITY_PUBLISH_DEBUG_DELIVERY === "1" ||
-    process.env.LOCAL_COMMUNITY_PUBLISH_RAW_DELIVERY === "1" ||
-    process.env.LOCAL_COMMUNITY_PUBLISH_DEBUG_BODY === "1"
-  );
+function shouldLogSignedJsonDelivery(config: GatewayConfig): boolean {
+  // LOG_LEVEL=debug is the single operator switch for verbose gateway
+  // diagnostics, including signed JSON delivery request/response logging.
+  return config.logLevel === "debug";
 }
 
 type ActivityJsonValue = Record<string, unknown> | unknown[] | string | number | boolean | null;
