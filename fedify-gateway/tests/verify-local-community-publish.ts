@@ -1,15 +1,19 @@
 /**
- * Gateway contract tests for Discord-backed local-community outbound fanout.
+ * Gateway contract tests for Lemmy-compatible local-community publish fanout.
  *
- * The local-community mode must deliver one user-authored Create activity to
- * each accepted remote follower inbox, not to the bridge's own local community
- * inbox. These checks keep the gateway-side fanout contract explicit.
+ * Local communities are ActivityPub Group actors. When Discord-authored content
+ * is published into a local community, the gateway must preserve the user-owned
+ * Create(Page|Note) as canonical content and fan it out as a community-owned
+ * Announce wrapper, matching Lemmy's community federation shape.
  */
 
 import assert from "node:assert/strict";
+import { webcrypto } from "node:crypto";
 import { mkdtemp, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
+
+import { exportJwk, generateCryptoKeyPair } from "@fedify/fedify";
 import initSqlJs from "sql.js";
 
 import { publishLocalCommunityContent } from "../src/federation-outbound.js";
@@ -17,23 +21,196 @@ import type { GatewayConfig } from "../src/config.js";
 import type { PublishLocalCommunityContentRequest } from "../src/types.js";
 
 const TEST_ORIGIN = "https://discord-bridge.example.com/";
+const COMMUNITY_ACTOR = `${TEST_ORIGIN}communities/hackers`;
+const COMMUNITY_FOLLOWERS = `${COMMUNITY_ACTOR}/followers`;
+const USER_ACTOR = `${TEST_ORIGIN}users/alice`;
+const PUBLIC = "https://www.w3.org/ns/activitystreams#Public";
+
+interface DeliveryRecord {
+  sender: unknown;
+  remoteActorId: string;
+  inboxId: string;
+  payload: Record<string, unknown>;
+}
 
 async function main(): Promise<void> {
-  await testLocalCommunityPublishTargetsAcceptedFollowerInboxes();
+  await testLocalCommunityPostPublishesAnnounceCreatePage();
+  await testLocalCommunityCommentPublishesAnnounceCreateNote();
+  await testLocalCommunityPublishReportsPartialFailure();
   console.log("verify:local-community-publish passed");
 }
 
 /**
- * Action: a Discord-backed local community publishes one post while two
- * accepted remote followers are present.
- *
- * Expected: the gateway delivers to both remote follower inbox URLs and keeps
- * the activity audience pointed at the local community actor URL.
+ * Action: a Discord-authored post is published into a local community.
+ * Expected: each accepted follower receives a community Announce wrapping the
+ * user-authored Create(Page), and Python-facing ids remain the embedded ids.
  */
-async function testLocalCommunityPublishTargetsAcceptedFollowerInboxes(): Promise<void> {
+async function testLocalCommunityPostPublishesAnnounceCreatePage(): Promise<void> {
+  const config = await buildConfig();
+  const deliveries: DeliveryRecord[] = [];
+  const fakeFederation = buildFakeFederation(deliveries);
+
+  const result = await publishLocalCommunityContent(
+    fakeFederation as never,
+    config,
+    {
+      actorUsername: "alice",
+      communityActorUrl: COMMUNITY_ACTOR,
+      kind: "post",
+      title: "Hello from Discord",
+      bodyMarkdown: "Body from Discord",
+      inReplyToObjectId: null,
+    },
+  );
+
+  assert.equal(result.deliveredFollowerCount, 2);
+  assert.equal(result.failedFollowerCount, 0);
+  assert.equal(result.communityActorUrl, COMMUNITY_ACTOR);
+  assert.deepEqual(
+    deliveries.map((delivery) => delivery.inboxId).sort(),
+    [
+      "https://lemmy.example/u/alice/inbox",
+      "https://mastodon.example/ap/users/bob/inbox",
+    ],
+  );
+
+  for (const delivery of deliveries) {
+    assertSenderKey(delivery.sender);
+    assert.equal(delivery.payload.type, "Announce");
+    assert.equal(delivery.payload.actor, COMMUNITY_ACTOR);
+    assert.ok(Array.isArray(delivery.payload.to));
+    assert.ok(Array.isArray(delivery.payload.cc));
+    assert.ok(toList(delivery.payload.to).includes(PUBLIC));
+    assert.ok(toList(delivery.payload.cc).includes(COMMUNITY_FOLLOWERS));
+
+    const embeddedCreate = delivery.payload.object as Record<string, unknown>;
+    const embeddedObject = embeddedCreate.object as Record<string, unknown>;
+    assert.equal(embeddedCreate.type, "Create");
+    assert.equal(embeddedCreate.actor, USER_ACTOR);
+    assert.equal(embeddedObject.type, "Page");
+    assert.equal(embeddedObject.attributedTo, USER_ACTOR);
+    assert.equal(embeddedObject.audience, COMMUNITY_ACTOR);
+    assert.ok(Array.isArray(embeddedCreate.to));
+    assert.ok(Array.isArray(embeddedObject.to));
+    assert.ok(toList(embeddedCreate.to).includes(PUBLIC));
+    assert.ok(toList(embeddedCreate.to).includes(COMMUNITY_ACTOR));
+    assert.ok(toList(embeddedObject.to).includes(PUBLIC));
+    assert.ok(toList(embeddedObject.to).includes(COMMUNITY_ACTOR));
+    assert.ok(toList(embeddedObject.cc).includes(USER_ACTOR));
+    assert.notEqual(delivery.payload.actor, embeddedObject.attributedTo);
+    assert.equal(result.activityId, embeddedCreate.id);
+    assert.equal(result.objectId, embeddedObject.id);
+    assert.notEqual(result.activityId, delivery.payload.id);
+  }
+}
+
+/**
+ * Action: a Discord-authored reply is published into a local community.
+ * Expected: the community announces the user-owned Create(Note) without
+ * rewriting author, object id, or inReplyTo mapping.
+ */
+async function testLocalCommunityCommentPublishesAnnounceCreateNote(): Promise<void> {
+  const config = await buildConfig();
+  const deliveries: DeliveryRecord[] = [];
+  const fakeFederation = buildFakeFederation(deliveries);
+  const parentObjectId = `${TEST_ORIGIN}users/alice/post/parent`;
+
+  const result = await publishLocalCommunityContent(
+    fakeFederation as never,
+    config,
+    {
+      actorUsername: "alice",
+      communityActorUrl: COMMUNITY_ACTOR,
+      kind: "comment",
+      title: null,
+      bodyMarkdown: "Reply from Discord",
+      inReplyToObjectId: parentObjectId,
+    },
+  );
+
+  assert.equal(deliveries.length, 2);
+  for (const delivery of deliveries) {
+    assertSenderKey(delivery.sender);
+    assert.equal(delivery.payload.type, "Announce");
+    assert.equal(delivery.payload.actor, COMMUNITY_ACTOR);
+
+    const embeddedCreate = delivery.payload.object as Record<string, unknown>;
+    const embeddedObject = embeddedCreate.object as Record<string, unknown>;
+    assert.equal(embeddedCreate.type, "Create");
+    assert.equal(embeddedCreate.actor, USER_ACTOR);
+    assert.equal(embeddedObject.type, "Note");
+    assert.equal(embeddedObject.attributedTo, USER_ACTOR);
+    assert.equal(embeddedObject.audience, COMMUNITY_ACTOR);
+    assert.ok(toList(embeddedObject.inReplyTo).includes(parentObjectId));
+    assert.equal(result.activityId, embeddedCreate.id);
+    assert.equal(result.objectId, embeddedObject.id);
+  }
+}
+
+/**
+ * Action: one accepted follower inbox rejects the announced activity.
+ * Expected: fanout continues to healthy followers and reports per-target counts.
+ */
+async function testLocalCommunityPublishReportsPartialFailure(): Promise<void> {
+  const config = await buildConfig();
+  const deliveries: DeliveryRecord[] = [];
+  const fakeFederation = buildFakeFederation(deliveries, new Set(["https://mastodon.example/ap/users/bob/inbox"]));
+
+  const result = await publishLocalCommunityContent(
+    fakeFederation as never,
+    config,
+    {
+      actorUsername: "alice",
+      communityActorUrl: COMMUNITY_ACTOR,
+      kind: "post",
+      title: "Partial failure",
+      bodyMarkdown: "Healthy followers should still receive this.",
+      inReplyToObjectId: null,
+    },
+  );
+
+  assert.equal(result.deliveredFollowerCount, 1);
+  assert.equal(result.failedFollowerCount, 1);
+  assert.equal(deliveries.length, 1);
+  assert.equal(deliveries[0]?.payload.type, "Announce");
+  assert.equal(deliveries[0]?.inboxId, "https://lemmy.example/u/alice/inbox");
+}
+
+function buildFakeFederation(
+  deliveries: DeliveryRecord[],
+  failingInboxes: Set<string> = new Set(),
+): unknown {
+  /** Record outbound delivery while preserving the same sendActivity seam. */
+  return {
+    createContext() {
+      return {
+        async sendActivity(
+          sender: unknown,
+          recipient: { id: URL; inboxId: URL },
+          activity: { toJsonLd(): Promise<Record<string, unknown>> },
+        ): Promise<void> {
+          if (failingInboxes.has(recipient.inboxId.href)) {
+            throw new Error(`simulated failure for ${recipient.inboxId.href}`);
+          }
+          deliveries.push({
+            sender,
+            remoteActorId: recipient.id.href,
+            inboxId: recipient.inboxId.href,
+            payload: await activity.toJsonLd(),
+          });
+        },
+      };
+    },
+  };
+}
+
+async function buildConfig(): Promise<GatewayConfig> {
+  /** Create a temporary Python-style DB with one local community and followers. */
   const sqlJs = await initSqlJs();
   const tempDir = await mkdtemp(path.join(tmpdir(), "fedify-local-community-publish-"));
   const databasePath = path.join(tempDir, "bridge.db");
+  const bridgeKeys = await generateCryptoKeyPair("RSASSA-PKCS1-v1_5");
+  const communityKeys = await generateCryptoKeyPair("RSASSA-PKCS1-v1_5");
   const db = new sqlJs.Database();
 
   try {
@@ -88,12 +265,12 @@ async function testLocalCommunityPublishTargetsAcceptedFollowerInboxes(): Promis
         "hackers",
         "Hackers",
         "A local hackerspace forum.",
-        `${TEST_ORIGIN}communities/hackers`,
-        `${TEST_ORIGIN}communities/hackers/inbox`,
-        `${TEST_ORIGIN}communities/hackers/outbox`,
-        `${TEST_ORIGIN}communities/hackers/followers`,
-        "public-key",
-        "private-key",
+        COMMUNITY_ACTOR,
+        `${COMMUNITY_ACTOR}/inbox`,
+        `${COMMUNITY_ACTOR}/outbox`,
+        COMMUNITY_FOLLOWERS,
+        await exportPublicKeyPem(communityKeys.publicKey),
+        await exportPrivateKeyPem(communityKeys.privateKey),
         "active",
       ],
     );
@@ -104,10 +281,11 @@ async function testLocalCommunityPublishTargetsAcceptedFollowerInboxes(): Promis
           remote_actor_id,
           remote_inbox_url,
           follow_activity_id,
-          status
+          status,
+          created_at
         ) VALUES
-          (1, 'https://lemmy.example/u/alice', 'https://lemmy.example/u/alice/inbox', 'https://lemmy.example/activities/follow/1', 'accepted'),
-          (1, 'https://lemmy.example/u/bob', 'https://lemmy.example/u/bob/inbox', 'https://lemmy.example/activities/follow/2', 'accepted')
+          (1, 'https://lemmy.example/u/alice', 'https://lemmy.example/u/alice/inbox', 'https://lemmy.example/activities/follow/1', 'accepted', '2026-01-01T00:00:00Z'),
+          (1, 'https://mastodon.example/ap/users/bob', 'https://mastodon.example/ap/users/bob/inbox', 'https://mastodon.example/activities/follow/2', 'accepted', '2026-01-01T00:00:01Z')
       `,
     );
     await writeFile(databasePath, Buffer.from(db.export()));
@@ -115,12 +293,12 @@ async function testLocalCommunityPublishTargetsAcceptedFollowerInboxes(): Promis
     db.close();
   }
 
-  const config: GatewayConfig = {
+  return {
     actorIdentifier: "bridge",
     actorName: "Bridge",
     actorSummary: "Bridge summary",
-    bridgePrivateKeyJwkJson: null,
-    bridgePublicKeyJwkJson: null,
+    bridgePrivateKeyJwkJson: JSON.stringify(await exportJwk(bridgeKeys.privateKey)),
+    bridgePublicKeyJwkJson: JSON.stringify(await exportJwk(bridgeKeys.publicKey)),
     communityActorId: null,
     databaseUrl: `sqlite:///${databasePath}`,
     fedifyOrigin: TEST_ORIGIN,
@@ -129,57 +307,41 @@ async function testLocalCommunityPublishTargetsAcceptedFollowerInboxes(): Promis
     pythonBridgeSharedSecret: "secret",
     logLevel: "info",
   };
+}
 
-  const deliveries: Array<{ id: string; inboxId: string; payload: unknown }> = [];
-  const fakeFederation = {
-    createContext() {
-      return {
-        async sendActivity(
-          _sender: unknown,
-          recipient: { id: URL; inboxId: URL },
-          activity: { toJsonLd(): Promise<unknown> },
-        ): Promise<void> {
-          deliveries.push({
-            id: recipient.id.href,
-            inboxId: recipient.inboxId.href,
-            payload: await activity.toJsonLd(),
-          });
-        },
-      };
-    },
-  };
+function assertSenderKey(sender: unknown): void {
+  /** The outer Announce must be signed by the followed community actor. */
+  const keyPairs = sender as Array<{ keyId: URL; privateKey: CryptoKey }>;
+  assert.equal(keyPairs[0]?.keyId.href, `${COMMUNITY_ACTOR}#main-key`);
+  assert.ok(keyPairs[0]?.privateKey != null);
+}
 
-  const request: PublishLocalCommunityContentRequest = {
-    actorUsername: "alice",
-    communityActorUrl: `${TEST_ORIGIN}communities/hackers`,
-    kind: "post",
-    title: "Hello from Discord",
-    bodyMarkdown: "Body from Discord",
-    inReplyToObjectId: null,
-  };
+function toList(value: unknown): string[] {
+  /** Normalize ActivityPub scalar-or-array addressing fields for assertions. */
+  if (Array.isArray(value)) return value.map(String);
+  if (value != null) return [String(value)];
+  return [];
+}
 
-  const result = await publishLocalCommunityContent(
-    fakeFederation as never,
-    config,
-    request,
+async function exportPrivateKeyPem(privateKey: CryptoKey): Promise<string> {
+  return toPem(
+    "PRIVATE KEY",
+    Buffer.from(await webcrypto.subtle.exportKey("pkcs8", privateKey)),
   );
+}
 
-  assert.equal(result.deliveredFollowerCount, 2);
-  assert.equal(result.failedFollowerCount, 0);
-  assert.deepEqual(
-    deliveries.map((delivery) => delivery.inboxId).sort(),
-    [
-      "https://lemmy.example/u/alice/inbox",
-      "https://lemmy.example/u/bob/inbox",
-    ],
+async function exportPublicKeyPem(publicKey: CryptoKey): Promise<string> {
+  return toPem(
+    "PUBLIC KEY",
+    Buffer.from(await webcrypto.subtle.exportKey("spki", publicKey)),
   );
-  assert.ok(
-    deliveries.every((delivery) => {
-      const payload = delivery.payload as { object?: { audience?: string } };
-      return payload.object?.audience === `${TEST_ORIGIN}communities/hackers`;
-    }),
-    "Each delivered object must stay addressed to the local community actor",
-  );
+}
+
+function toPem(label: string, bytes: Buffer): string {
+  /** Wrap DER bytes as PEM text for the Python-style SQLite test fixture. */
+  const base64 = bytes.toString("base64");
+  const wrapped = base64.match(/.{1,64}/g)?.join("\n") ?? base64;
+  return `-----BEGIN ${label}-----\n${wrapped}\n-----END ${label}-----\n`;
 }
 
 main().catch((error) => {

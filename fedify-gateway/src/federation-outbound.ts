@@ -1,5 +1,9 @@
+import { createHash, webcrypto } from "node:crypto";
+
+const ACTIVITYSTREAMS_PUBLIC_IRI = "https://www.w3.org/ns/activitystreams#Public";
+
 import { Temporal } from "@js-temporal/polyfill";
-import { Accept, Create, Delete, Follow, Note, Page, Source, Undo, Update } from "@fedify/vocab";
+import { Accept, Announce, Create, Delete, Follow, Note, Page, Source, Undo, Update } from "@fedify/vocab";
 import type { Federation } from "@fedify/fedify";
 import type { GatewayConfig } from "./config.js";
 import { loadAcceptedLocalCommunityFollowersByActorUrl } from "./db.js";
@@ -194,9 +198,9 @@ export async function publishLocalCommunityContent(
   config: GatewayConfig,
   request: PublishLocalCommunityContentRequest,
 ): Promise<PublishLocalCommunityContentResult> {
-  // Local-community fanout must deliver one user-authored Create to every
-  // accepted follower inbox instead of incorrectly looping the activity back
-  // into the bridge's own community inbox.
+  // Local-community fanout is performed by the bridge-owned community actor.
+  // The embedded Create remains user-authored, while the outer Announce makes
+  // delivery look like Lemmy Group fanout to Mastodon and other followers.
   const ctx = federation.createContext(new URL(config.fedifyOrigin), config);
   const followers = await loadAcceptedLocalCommunityFollowersByActorUrl(
     config,
@@ -206,28 +210,72 @@ export async function publishLocalCommunityContent(
     throw new Error("Local community has no accepted followers");
   }
 
+  const signingKey = await loadLocalCommunitySigningKeyByActorUrl(
+    config,
+    request.communityActorUrl,
+  );
+  if (signingKey == null) {
+    throw new Error("Local community signing key not found");
+  }
+  if (signingKey.actorId.href !== request.communityActorUrl) {
+    throw new Error("communityActorUrl must match the canonical local community actor URL");
+  }
+  const sender = [{ keyId: signingKey.keyId, privateKey: signingKey.privateKey }];
+
   const builtCreate = buildPublishCreateActivity(
     config,
     request,
     request.communityActorUrl,
   );
-  const activity = builtCreate.activity;
+  const activity = buildLocalCommunityAnnounceActivity(
+    config,
+    request.communityActorUrl,
+    builtCreate.activity,
+  );
+  const activityJson = await renderPublicActivityJson(activity);
+  const deliverableActivity = asActivityPubJson(activityJson);
   const objectId = builtCreate.objectId;
   const activityId = builtCreate.activityId;
 
   let deliveredFollowerCount = 0;
   let failedFollowerCount = 0;
 
+  const rawPublishDelivery = process.env.LOCAL_COMMUNITY_PUBLISH_RAW_DELIVERY === "1";
+  const debugPublishBody = process.env.LOCAL_COMMUNITY_PUBLISH_DEBUG_BODY === "1";
+
   for (const follower of followers) {
     try {
-      await ctx.sendActivity(
-        { username: request.actorUsername },
-        {
-          id: new URL(follower.remoteActorId),
-          inboxId: new URL(follower.remoteInboxUrl),
-        },
-        activity,
-      );
+      if (rawPublishDelivery) {
+        await sendRawSignedActivityForDebug(
+          "LocalCommunityPublish",
+          follower.remoteInboxUrl,
+          signingKey,
+          activityJson,
+        );
+      } else {
+        if (debugPublishBody) {
+          console.log("[LocalCommunityPublish] ActivityPub payload:", {
+            remoteActorId: follower.remoteActorId,
+            remoteInboxUrl: follower.remoteInboxUrl,
+            signingKeyId: signingKey.keyId.href,
+            payload: JSON.stringify(activityJson),
+          });
+        }
+        await ctx.sendActivity(
+          sender,
+          {
+            id: new URL(follower.remoteActorId),
+            inboxId: new URL(follower.remoteInboxUrl),
+          },
+          deliverableActivity as never,
+        );
+      }
+      console.log("[LocalCommunityPublish] delivery completed:", {
+        remoteActorId: follower.remoteActorId,
+        remoteInboxUrl: follower.remoteInboxUrl,
+        signingKeyId: signingKey.keyId.href,
+        rawDelivery: rawPublishDelivery,
+      });
       deliveredFollowerCount += 1;
     } catch (error) {
       // Fanout must continue toward healthy followers even if one target
@@ -236,6 +284,8 @@ export async function publishLocalCommunityContent(
       console.error("[LocalCommunityPublish] sendActivity failed:", {
         remoteActorId: follower.remoteActorId,
         remoteInboxUrl: follower.remoteInboxUrl,
+        signingKeyId: signingKey.keyId.href,
+        rawDelivery: rawPublishDelivery,
         error: error instanceof Error ? error.message : String(error),
       });
     }
@@ -357,30 +407,6 @@ export async function acceptLocalCommunityFollow(
     }),
   });
 
-console.log("[LocalCommunityFollow] Accept(Follow) expected JSON:", JSON.stringify({
-  "@context": "https://www.w3.org/ns/activitystreams",
-  id: acceptId.href,
-  type: "Accept",
-  actor: communityActorUri.href,
-  to: remoteActorUri.href,
-  object: {
-    id: request.followActivityId,
-    type: "Follow",
-    actor: remoteActorUri.href,
-    object: communityActorUri.href,
-  },
-}, null, 2));
-
-  console.log("[LocalCommunityFollow] Accept(Follow) activity object:", {
-    acceptId: acceptId.href,
-    actor: communityActorUri.href,
-    to: remoteActorUri.href,
-    followActivityId: request.followActivityId,
-    followActor: remoteActorUri.href,
-    followObject: communityActorUri.href,
-    signingKeyId: signingKey.keyId.href,
-  });
-
   console.log("[LocalCommunityFollow] Sending Accept(Follow):", {
     communitySlug: request.communitySlug,
     communityActorUrl: request.communityActorUrl,
@@ -415,6 +441,148 @@ console.log("[LocalCommunityFollow] Accept(Follow) expected JSON:", JSON.stringi
     throw error;
   }
 }
+
+async function sendRawSignedActivityForDebug(
+  label: string,
+  inboxUrl: string,
+  signingKey: { keyId: URL; privateKey: CryptoKey },
+  activityJson: Record<string, unknown>,
+): Promise<void> {
+  // This diagnostic sender is intentionally opt-in. It bypasses Fedify delivery
+  // only when LOCAL_COMMUNITY_PUBLISH_RAW_DELIVERY=1 so operators can inspect
+  // the exact JSON body, signature headers, and remote HTTP response from
+  // Mastodon without changing normal production delivery behavior.
+  const inbox = new URL(inboxUrl);
+  const body = JSON.stringify(activityJson);
+  const digest = `SHA-256=${createHash("sha256").update(body).digest("base64")}`;
+  const date = new Date().toUTCString();
+  const contentType = "application/activity+json";
+  const requestTarget = `post ${inbox.pathname}${inbox.search}`;
+  const signingString = [
+    `(request-target): ${requestTarget}`,
+    `host: ${inbox.host}`,
+    `date: ${date}`,
+    `digest: ${digest}`,
+    `content-type: ${contentType}`,
+  ].join("\n");
+  const signatureBytes = await webcrypto.subtle.sign(
+    "RSASSA-PKCS1-v1_5",
+    signingKey.privateKey,
+    Buffer.from(signingString),
+  );
+  const signature = Buffer.from(signatureBytes).toString("base64");
+  const signatureHeader = [
+    `keyId="${signingKey.keyId.href}"`,
+    `algorithm="rsa-sha256"`,
+    `headers="(request-target) host date digest content-type"`,
+    `signature="${signature}"`,
+  ].join(",");
+  const headers = {
+    Host: inbox.host,
+    Date: date,
+    Digest: digest,
+    "Content-Type": contentType,
+    Signature: signatureHeader,
+  };
+
+  console.log(`[${label}] Raw ActivityPub request:`, {
+    inboxUrl,
+    body,
+    headers,
+    signingString,
+  });
+  const response = await fetch(inbox, { method: "POST", headers, body });
+  const responseBody = await response.text();
+  console.log(`[${label}] Raw ActivityPub response:`, {
+    inboxUrl,
+    status: response.status,
+    statusText: response.statusText,
+    responseBody,
+  });
+  if (!response.ok) {
+    throw new Error(
+      `Raw ${label} delivery failed with HTTP ${response.status}: ${responseBody}`,
+    );
+  }
+}
+
+type ActivityJsonValue = Record<string, unknown> | unknown[] | string | number | boolean | null;
+
+function asActivityPubJson(activityJson: Record<string, unknown>): { toJsonLd(): Promise<Record<string, unknown>> } {
+  // sendActivity accepts objects with a toJsonLd() method. Wrapping the
+  // normalized JSON keeps Fedify delivery/signing while preserving the exact
+  // ActivityPub addressing that Lemmy validates as public.
+  return {
+    async toJsonLd(): Promise<Record<string, unknown>> {
+      return activityJson;
+    },
+  };
+}
+
+async function renderPublicActivityJson(activity: { toJsonLd(): Promise<unknown> }): Promise<Record<string, unknown>> {
+  // Fedify's JSON-LD serializer may compact the public collection as
+  // `as:Public`. Lemmy's local-community validation rejected that compact IRI
+  // as `object_is_not_public`, so local-community fanout expands it before
+  // signing or sending the activity.
+  return normalizeActivityPubJson(await activity.toJsonLd() as ActivityJsonValue) as Record<string, unknown>;
+}
+
+function normalizeActivityPubJson(value: ActivityJsonValue, key?: string): ActivityJsonValue {
+  // ActivityPub addressing fields are scalar-or-array in the vocabulary, but
+  // using arrays consistently keeps the wire shape close to Lemmy's own
+  // Announce(Create(...)) activities and avoids target-specific ambiguity.
+  if (typeof value === "string") {
+    const expanded = value === "as:Public" ? ACTIVITYSTREAMS_PUBLIC_IRI : value;
+    if ((key === "to" || key === "cc" || key === "bto" || key === "bcc") && expanded !== value) {
+      return [expanded];
+    }
+    return expanded;
+  }
+
+  if (Array.isArray(value)) {
+    return value.map((item) => normalizeActivityPubJson(item as ActivityJsonValue));
+  }
+
+  if (value != null && typeof value === "object") {
+    const normalized: Record<string, unknown> = {};
+    for (const [entryKey, entryValue] of Object.entries(value)) {
+      const nextValue = normalizeActivityPubJson(entryValue as ActivityJsonValue, entryKey);
+      if ((entryKey === "to" || entryKey === "cc" || entryKey === "bto" || entryKey === "bcc") && nextValue != null && !Array.isArray(nextValue)) {
+        normalized[entryKey] = [nextValue];
+      } else {
+        normalized[entryKey] = nextValue;
+      }
+    }
+    return normalized;
+  }
+
+  return value;
+}
+
+export function buildLocalCommunityAnnounceActivity(
+  config: GatewayConfig,
+  communityActorUrl: string,
+  createActivity: Create,
+): Announce {
+  const communityActor = new URL(communityActorUrl);
+  const PUBLIC = new URL("https://www.w3.org/ns/activitystreams#Public");
+  const announceId = new URL(
+    `/communities/${encodeURIComponent(communityActor.pathname.split("/").filter(Boolean).at(-1) ?? "community")}/activities/announce/${Date.now()}-${Math.random().toString(36).slice(2)}`,
+    config.fedifyOrigin,
+  );
+
+  // The Announce is only a delivery envelope. User authorship and canonical
+  // object identity stay in the embedded Create(Page|Note), which keeps Lemmy
+  // author display and Python's Discord mapping ids stable.
+  return new Announce({
+    id: announceId,
+    actor: communityActor,
+    object: createActivity,
+    tos: [PUBLIC],
+    ccs: [new URL("followers", `${communityActor.href.replace(/\/$/, "")}/`)],
+  });
+}
+
 
 export function buildPublishCreateActivity(
   config: GatewayConfig,
