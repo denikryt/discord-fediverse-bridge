@@ -93,6 +93,36 @@ class DeleteContentRequest:
     ap_object_id: str
 
 
+
+
+@dataclass(slots=True)
+class SendLocalCommunityRelayDelivery:
+    """Carry one already-rendered relay activity to one remote inbox."""
+
+    delivery_id: int
+    target_remote_actor_id: str
+    target_inbox_url: str
+    activity_json: dict
+
+
+@dataclass(slots=True)
+class SendLocalCommunityRelayOutcome:
+    """Describe one gateway delivery result for a relay target."""
+
+    delivery_id: int
+    ok: bool
+    target_remote_actor_id: str
+    activity_id: str | None = None
+    error: str | None = None
+
+
+@dataclass(slots=True)
+class SendLocalCommunityRelayResult:
+    """Return all per-target outcomes for one relay request."""
+
+    outcomes: list[SendLocalCommunityRelayOutcome]
+
+
 @dataclass(slots=True)
 class AcceptLocalCommunityFollowRequest:
     """Carry one signed Accept(Follow) request for a local community actor."""
@@ -256,6 +286,45 @@ class FedifyGatewayClient:
             },
         )
         response.raise_for_status()
+
+
+    async def send_local_community_relay(
+        self,
+        *,
+        signing_actor_url: str,
+        deliveries: list[SendLocalCommunityRelayDelivery],
+    ) -> SendLocalCommunityRelayResult:
+        """Ask the gateway to sign and send already-rendered relay activities."""
+        response = await self._client.post(
+            "/send-local-community-relay",
+            headers={"Authorization": f"Bearer {self._shared_secret}"},
+            json={
+                "signingActorUrl": signing_actor_url,
+                "deliveries": [
+                    {
+                        "deliveryId": delivery.delivery_id,
+                        "targetRemoteActorId": delivery.target_remote_actor_id,
+                        "targetInboxUrl": delivery.target_inbox_url,
+                        "activityJson": delivery.activity_json,
+                    }
+                    for delivery in deliveries
+                ],
+            },
+        )
+        response.raise_for_status()
+        payload = response.json()
+        return SendLocalCommunityRelayResult(
+            outcomes=[
+                SendLocalCommunityRelayOutcome(
+                    delivery_id=int(item["deliveryId"]),
+                    ok=bool(item["ok"]),
+                    target_remote_actor_id=str(item["targetRemoteActorId"]),
+                    activity_id=item.get("activityId"),
+                    error=item.get("error"),
+                )
+                for item in payload.get("outcomes", [])
+            ]
+        )
 
     async def accept_local_community_follow(
         self,

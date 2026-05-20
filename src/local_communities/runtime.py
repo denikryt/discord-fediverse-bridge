@@ -23,6 +23,7 @@ from ..db import Database
 from ..discord_publish_service import ContentPublishService
 from ..fedify_gateway_client import DeleteContentRequest, FedifyGatewayClient, UpdateContentRequest
 from ..formatting import format_lemmy_comment_for_discord, format_lemmy_post_for_discord, normalize_text
+from .federation_fanout import LocalCommunityFederationFanout
 from .delivery_mapping import (
     get_local_community_for_forum,
     get_local_community_message_for_discord_message,
@@ -65,6 +66,10 @@ class LocalCommunityRuntime:
         self.content_publish_service = content_publish_service
         self.bridge_prefix = bridge_prefix
         self.bot = bot
+        self.federation_fanout = LocalCommunityFederationFanout(
+            database=database,
+            fedify_gateway=fedify_gateway,
+        )
 
     async def handle_discord_thread_create(
         self,
@@ -168,6 +173,11 @@ class LocalCommunityRuntime:
             return _HandlerResult(status="skipped", detail="unknown local community")
         existing = get_local_community_thread_for_ap_object(self.database, getattr(getattr(event, "object"), "ap_id"))
         if existing is not None:
+            await self.federation_fanout.relay_create(
+                event=event,
+                local_community=local_community,
+                object_kind="post",
+            )
             return _HandlerResult(status="skipped", detail="post already mapped")
         follower = self.database.get_local_community_follower(
             local_community_id=getattr(local_community, "id"),
@@ -195,6 +205,11 @@ class LocalCommunityRuntime:
             direction="ap_to_discord",
             origin_kind="remote_follower",
         )
+        await self.federation_fanout.relay_create(
+            event=event,
+            local_community=local_community,
+            object_kind="post",
+        )
         return _HandlerResult(status="processed", detail="remote post created thread")
 
     async def handle_inbound_comment(self, event: object, runtime: object) -> HandlerResult:
@@ -205,6 +220,11 @@ class LocalCommunityRuntime:
         if local_community is None:
             return _HandlerResult(status="skipped", detail="unknown local community")
         if self.database.get_local_community_message_by_ap_object_id(getattr(getattr(event, "object"), "ap_id")) is not None:
+            await self.federation_fanout.relay_create(
+                event=event,
+                local_community=local_community,
+                object_kind="comment",
+            )
             return _HandlerResult(status="skipped", detail="comment already mapped")
         follower = self.database.get_local_community_follower(
             local_community_id=getattr(local_community, "id"),
@@ -242,6 +262,11 @@ class LocalCommunityRuntime:
             parent_ap_object_id=getattr(getattr(event, "object"), "parent_ap_id"),
             parent_discord_message_id=parent_discord_message_id,
             direction="ap_to_discord",
+        )
+        await self.federation_fanout.relay_create(
+            event=event,
+            local_community=local_community,
+            object_kind="comment",
         )
         return _HandlerResult(status="processed", detail="remote comment created message")
 
@@ -318,6 +343,7 @@ class LocalCommunityRuntime:
         if thread_row is None:
             return _HandlerResult(status="skipped", detail="post not yet mapped")
 
+        local_community = self.database.get_local_community_by_actor_url(getattr(event, "community_actor_id"))
         bot = self.bot or runtime.bot
         await edit_discord_message(
             bot=bot,
@@ -326,6 +352,13 @@ class LocalCommunityRuntime:
             new_content=self._format_inbound_post_body(event),
             preserve_header=False,
         )
+        if local_community is not None:
+            await self.federation_fanout.relay_update_or_delete(
+                event=event,
+                local_community=local_community,
+                object_kind="post",
+                operation="update",
+            )
         return _HandlerResult(status="processed", detail="post updated")
 
     async def handle_inbound_post_delete(self, event: object, runtime: object) -> HandlerResult:
@@ -336,12 +369,20 @@ class LocalCommunityRuntime:
         if thread_row is None:
             return _HandlerResult(status="skipped", detail="post not yet mapped")
 
+        local_community = self.database.get_local_community_by_actor_url(getattr(event, "community_actor_id"))
         bot = self.bot or runtime.bot
         await mark_discord_message_deleted(
             bot=bot,
             discord_thread_id=getattr(thread_row, "discord_thread_id"),
             discord_message_id=getattr(thread_row, "discord_starter_message_id"),
         )
+        if local_community is not None:
+            await self.federation_fanout.relay_update_or_delete(
+                event=event,
+                local_community=local_community,
+                object_kind="post",
+                operation="delete",
+            )
         return _HandlerResult(status="processed", detail="post deleted")
 
     async def handle_inbound_comment_update(self, event: object, runtime: object) -> HandlerResult:
@@ -355,6 +396,7 @@ class LocalCommunityRuntime:
         if thread_row is None:
             return _HandlerResult(status="skipped", detail="comment thread not mapped")
 
+        local_community = self.database.get_local_community_by_actor_url(getattr(event, "community_actor_id"))
         bot = self.bot or runtime.bot
         await edit_discord_message(
             bot=bot,
@@ -363,6 +405,13 @@ class LocalCommunityRuntime:
             new_content=self._format_inbound_comment_body(event),
             preserve_header=False,
         )
+        if local_community is not None:
+            await self.federation_fanout.relay_update_or_delete(
+                event=event,
+                local_community=local_community,
+                object_kind="comment",
+                operation="update",
+            )
         return _HandlerResult(status="processed", detail="comment updated")
 
     async def handle_inbound_comment_delete(self, event: object, runtime: object) -> HandlerResult:
@@ -376,12 +425,20 @@ class LocalCommunityRuntime:
         if thread_row is None:
             return _HandlerResult(status="skipped", detail="comment thread not mapped")
 
+        local_community = self.database.get_local_community_by_actor_url(getattr(event, "community_actor_id"))
         bot = self.bot or runtime.bot
         await mark_discord_message_deleted(
             bot=bot,
             discord_thread_id=getattr(thread_row, "discord_thread_id"),
             discord_message_id=getattr(message_row, "discord_message_id"),
         )
+        if local_community is not None:
+            await self.federation_fanout.relay_update_or_delete(
+                event=event,
+                local_community=local_community,
+                object_kind="comment",
+                operation="delete",
+            )
         return _HandlerResult(status="processed", detail="comment deleted")
 
     async def handle_follow_request(

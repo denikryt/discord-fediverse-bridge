@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from datetime import datetime
-from typing import Annotated, Literal
+from typing import Annotated, Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
@@ -42,6 +42,9 @@ class ActivityPubEvent(BaseModel):
     community_actor_id: str
     actor_id: str
     object: ActivityPubObject
+    source_activity_json: dict[str, Any] | None = None
+    source_activity_id: str | None = None
+    source_announce_id: str | None = None
 
     @model_validator(mode="after")
     def validate_event_shape(self) -> "ActivityPubEvent":

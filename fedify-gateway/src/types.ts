@@ -25,6 +25,9 @@ export interface BridgeContentEvent {
     | "comment.deleted";
   object: BridgeObject;
   occurred_at: string;
+  source_activity_json?: Record<string, unknown> | null;
+  source_activity_id?: string | null;
+  source_announce_id?: string | null;
 }
 
 // BridgeEvent stays as the content-event alias so the existing normalization
@@ -123,4 +126,29 @@ export interface AcceptLocalCommunityFollowRequest {
   remoteActorId: string;
   remoteInboxUrl: string;
   followActivityId: string;
+}
+
+
+export interface SendLocalCommunityRelayDelivery {
+  deliveryId: number;
+  targetRemoteActorId: string;
+  targetInboxUrl: string;
+  activityJson: Record<string, unknown>;
+}
+
+export interface SendLocalCommunityRelayRequest {
+  signingActorUrl: string;
+  deliveries: SendLocalCommunityRelayDelivery[];
+}
+
+export interface SendLocalCommunityRelayOutcome {
+  deliveryId: number;
+  targetRemoteActorId: string;
+  ok: boolean;
+  activityId: string | null;
+  error: string | null;
+}
+
+export interface SendLocalCommunityRelayResult {
+  outcomes: SendLocalCommunityRelayOutcome[];
 }

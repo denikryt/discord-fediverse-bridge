@@ -30,6 +30,7 @@ import {
   followCommunity,
   publishContent,
   publishLocalCommunityContent,
+  sendLocalCommunityRelay,
   unfollowCommunity,
   updateContent,
 } from "./federation-outbound.js";
@@ -39,6 +40,7 @@ import type {
   DeleteContentRequest,
   PublishContentRequest,
   PublishLocalCommunityContentRequest,
+  SendLocalCommunityRelayRequest,
   UpdateContentRequest,
 } from "./types.js";
 import { buildWebFingerDocument } from "./webfinger.js";
@@ -368,6 +370,52 @@ app.post("/publish-local-community", async (context) => {
         typeof payload.inReplyToObjectId === "string"
           ? payload.inReplyToObjectId
           : null,
+    });
+    return context.json(result);
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    return context.json({ error: message }, { status: 500 });
+  }
+});
+
+
+app.post("/send-local-community-relay", async (context) => {
+  if (
+    !hasValidInternalAuthorization(
+      config,
+      context.req.header("Authorization") ?? null,
+    )
+  ) {
+    return context.json({ error: "invalid authorization" }, { status: 401 });
+  }
+
+  const payload = (await context.req.json()) as Partial<SendLocalCommunityRelayRequest>;
+  if (typeof payload.signingActorUrl !== "string" || !Array.isArray(payload.deliveries)) {
+    return context.json(
+      { error: "signingActorUrl and deliveries are required" },
+      { status: 400 },
+    );
+  }
+  for (const delivery of payload.deliveries) {
+    if (
+      typeof delivery.deliveryId !== "number" ||
+      typeof delivery.targetRemoteActorId !== "string" ||
+      typeof delivery.targetInboxUrl !== "string" ||
+      delivery.activityJson == null ||
+      typeof delivery.activityJson !== "object" ||
+      Array.isArray(delivery.activityJson)
+    ) {
+      return context.json(
+        { error: "each delivery requires deliveryId, targetRemoteActorId, targetInboxUrl, and activityJson" },
+        { status: 400 },
+      );
+    }
+  }
+
+  try {
+    const result = await sendLocalCommunityRelay(fedify, config, {
+      signingActorUrl: payload.signingActorUrl,
+      deliveries: payload.deliveries,
     });
     return context.json(result);
   } catch (error) {

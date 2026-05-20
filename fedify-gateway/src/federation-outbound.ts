@@ -10,6 +10,8 @@ import type {
   PublishContentResult,
   PublishLocalCommunityContentRequest,
   PublishLocalCommunityContentResult,
+  SendLocalCommunityRelayRequest,
+  SendLocalCommunityRelayResult,
   UpdateContentRequest,
 } from "./types.js";
 
@@ -246,6 +248,78 @@ export async function publishLocalCommunityContent(
     deliveredFollowerCount,
     failedFollowerCount,
   };
+}
+
+
+export async function sendLocalCommunityRelay(
+  federation: Federation<GatewayConfig>,
+  config: GatewayConfig,
+  request: SendLocalCommunityRelayRequest,
+): Promise<SendLocalCommunityRelayResult> {
+  // Python has already selected targets and rendered exact ActivityPub JSON.
+  // The gateway only signs as the requested local community actor and delivers
+  // to the explicit inboxes, preserving the policy/transport boundary.
+  const ctx = federation.createContext(new URL(config.fedifyOrigin), config);
+  const signingActor = new URL(request.signingActorUrl);
+  const outcomes = [];
+
+  for (const delivery of request.deliveries) {
+    const activityActor = delivery.activityJson.actor;
+    if (activityActor !== request.signingActorUrl) {
+      outcomes.push({
+        deliveryId: delivery.deliveryId,
+        targetRemoteActorId: delivery.targetRemoteActorId,
+        ok: false,
+        activityId: typeof delivery.activityJson.id === "string" ? delivery.activityJson.id : null,
+        error: "activity.actor must match signingActorUrl",
+      });
+      continue;
+    }
+
+    try {
+      const activity = {
+        async toJsonLd(): Promise<Record<string, unknown>> {
+          return delivery.activityJson;
+        },
+      };
+      await ctx.sendActivity(
+        { username: localActorIdentifierFromUrl(config, request.signingActorUrl) },
+        { id: new URL(delivery.targetRemoteActorId), inboxId: new URL(delivery.targetInboxUrl) },
+        activity as never,
+      );
+      outcomes.push({
+        deliveryId: delivery.deliveryId,
+        targetRemoteActorId: delivery.targetRemoteActorId,
+        ok: true,
+        activityId: typeof delivery.activityJson.id === "string" ? delivery.activityJson.id : null,
+        error: null,
+      });
+    } catch (error) {
+      outcomes.push({
+        deliveryId: delivery.deliveryId,
+        targetRemoteActorId: delivery.targetRemoteActorId,
+        ok: false,
+        activityId: typeof delivery.activityJson.id === "string" ? delivery.activityJson.id : null,
+        error: error instanceof Error ? error.message : String(error),
+      });
+    }
+  }
+
+  return { outcomes };
+}
+
+function localActorIdentifierFromUrl(config: GatewayConfig, actorUrl: string): string {
+  const url = new URL(actorUrl);
+  const origin = new URL(config.fedifyOrigin);
+  if (url.origin !== origin.origin) {
+    throw new Error("signingActorUrl must belong to this gateway origin");
+  }
+  const parts = url.pathname.split("/").filter(Boolean);
+  if (parts[0] === "communities" && parts[1]) return parts[1];
+  if (parts[0] === "c" && parts[1]) return parts[1];
+  if (parts[0] === "users" && parts[1]) return parts[1];
+  if (parts[0] === "actors" && parts[1]) return parts[1];
+  throw new Error("signingActorUrl does not identify a local actor");
 }
 
 export async function acceptLocalCommunityFollow(

@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from datetime import datetime, timezone
 
-from sqlalchemy import DateTime, Integer, String, UniqueConstraint
+from sqlalchemy import DateTime, Integer, JSON, String, UniqueConstraint
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column
 
 
@@ -392,6 +392,66 @@ class LocalCommunityFollower(Base):
     remote_inbox_url: Mapped[str] = mapped_column(String(512), nullable=False)
     follow_activity_id: Mapped[str] = mapped_column(String(512), nullable=False)
     status: Mapped[str] = mapped_column(String(32), nullable=False, default="accepted")
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, nullable=False)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, onupdate=utcnow, nullable=False)
+
+
+
+
+class LocalCommunityRelaySourceActivity(Base):
+    """Store one immutable inbound ActivityPub source activity for relay.
+
+    The source row is the durable payload reference used by retries and
+    duplicate recovery. Delivery rows point here instead of duplicating large
+    JSON blobs for every target follower.
+    """
+
+    __tablename__ = "local_community_relay_source_activities"
+    __table_args__ = (
+        UniqueConstraint("local_community_id", "operation", "source_object_ap_id", "source_activity_id"),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    local_community_id: Mapped[int] = mapped_column(Integer, nullable=False)
+    object_kind: Mapped[str] = mapped_column(String(32), nullable=False)
+    operation: Mapped[str] = mapped_column(String(32), nullable=False)
+    source_object_ap_id: Mapped[str] = mapped_column(String(512), nullable=False)
+    source_activity_id: Mapped[str] = mapped_column(String(512), nullable=False)
+    source_announce_id: Mapped[str | None] = mapped_column(String(512), nullable=True)
+    origin_remote_actor_id: Mapped[str] = mapped_column(String(512), nullable=False)
+    source_activity_json: Mapped[dict] = mapped_column(JSON, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, nullable=False)
+
+
+class LocalCommunityRelayDelivery(Base):
+    """Track one relay attempt target for a local-community source activity.
+
+    Rows are operation-aware so create, update, and delete delivery outcomes do
+    not overwrite each other. This state lets later update/delete fanout target
+    only followers that actually received the original create.
+    """
+
+    __tablename__ = "local_community_relay_deliveries"
+    __table_args__ = (
+        UniqueConstraint("source_activity_row_id", "target_remote_actor_id"),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    source_activity_row_id: Mapped[int] = mapped_column(Integer, nullable=False)
+    local_community_id: Mapped[int] = mapped_column(Integer, nullable=False)
+    object_kind: Mapped[str] = mapped_column(String(32), nullable=False)
+    operation: Mapped[str] = mapped_column(String(32), nullable=False)
+    source_object_ap_id: Mapped[str] = mapped_column(String(512), nullable=False)
+    source_activity_id: Mapped[str] = mapped_column(String(512), nullable=False)
+    origin_remote_actor_id: Mapped[str] = mapped_column(String(512), nullable=False)
+    target_remote_actor_id: Mapped[str] = mapped_column(String(512), nullable=False)
+    target_inbox_url: Mapped[str] = mapped_column(String(512), nullable=False)
+    delivery_profile: Mapped[str] = mapped_column(String(64), nullable=False, default="threadiverse_group")
+    relay_activity_id: Mapped[str | None] = mapped_column(String(512), nullable=True)
+    status: Mapped[str] = mapped_column(String(32), nullable=False, default="pending")
+    attempt_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    last_attempted_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    last_error: Mapped[str | None] = mapped_column(String(1024), nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, nullable=False)
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, onupdate=utcnow, nullable=False)
 

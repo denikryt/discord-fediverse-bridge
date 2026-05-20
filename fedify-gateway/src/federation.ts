@@ -141,6 +141,10 @@ export function createGatewayFederation(
         return;
       }
 
+      const sourceActivityJson = await activity.toJsonLd() as Record<string, unknown>;
+      event.source_activity_json = sourceActivityJson;
+      event.source_activity_id = typeof sourceActivityJson.id === "string" ? sourceActivityJson.id : event.delivery_id;
+      event.source_announce_id = null;
       await deliverNormalizedEvent(config, event, {
         deliveryId: event.delivery_id,
         eventType: event.event_type,
@@ -167,6 +171,9 @@ export function createGatewayFederation(
             return;
           }
           const nestedObject = asRecord(createRecord.object);
+          event.source_activity_json = createRecord;
+          event.source_activity_id = asString(createRecord.id) ?? event.delivery_id;
+          event.source_announce_id = announceEnvelope.announceId;
           await deliverNormalizedEvent(config, event, {
             announceId: announceEnvelope.announceId,
             createId: asString(createRecord.id) ?? event.delivery_id,
@@ -188,6 +195,9 @@ export function createGatewayFederation(
             logDebug(isDebug, "Event community does not match, skipping");
             return;
           }
+          event.source_activity_json = updateRecord;
+          event.source_activity_id = asString(updateRecord.id) ?? event.delivery_id;
+          event.source_announce_id = announceEnvelope.announceId;
           await deliverNormalizedEvent(config, event, {
             announceId: announceEnvelope.announceId,
             updateId: asString(updateRecord.id) ?? event.delivery_id,
@@ -208,6 +218,9 @@ export function createGatewayFederation(
             logDebug(isDebug, "Event community does not match, skipping");
             return;
           }
+          event.source_activity_json = deleteRecord;
+          event.source_activity_id = asString(deleteRecord.id) ?? event.delivery_id;
+          event.source_announce_id = announceEnvelope.announceId;
           await deliverNormalizedEvent(config, event, {
             announceId: announceEnvelope.announceId,
             deleteId: asString(deleteRecord.id) ?? event.delivery_id,
