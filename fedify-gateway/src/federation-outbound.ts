@@ -201,7 +201,6 @@ export async function publishLocalCommunityContent(
   // Local-community fanout is performed by the bridge-owned community actor.
   // The embedded Create remains user-authored, while the outer Announce makes
   // delivery look like Lemmy Group fanout to Mastodon and other followers.
-  const ctx = federation.createContext(new URL(config.fedifyOrigin), config);
   const followers = await loadAcceptedLocalCommunityFollowersByActorUrl(
     config,
     request.communityActorUrl,
@@ -233,59 +232,41 @@ export async function publishLocalCommunityContent(
     builtCreate.activity,
   );
   const activityJson = await renderPublicActivityJson(activity);
-  const deliverableActivity = asActivityPubJson(activityJson);
   const objectId = builtCreate.objectId;
   const activityId = builtCreate.activityId;
 
   let deliveredFollowerCount = 0;
   let failedFollowerCount = 0;
 
-  const rawPublishDelivery = process.env.LOCAL_COMMUNITY_PUBLISH_RAW_DELIVERY === "1";
-  const debugPublishBody = process.env.LOCAL_COMMUNITY_PUBLISH_DEBUG_BODY === "1";
+  const debugDelivery = shouldLogSignedJsonDelivery();
 
   for (const follower of followers) {
     try {
-      if (rawPublishDelivery) {
-        await sendRawSignedActivityForDebug(
-          "LocalCommunityPublish",
-          follower.remoteInboxUrl,
-          signingKey,
-          activityJson,
-        );
-      } else {
-        if (debugPublishBody) {
-          console.log("[LocalCommunityPublish] ActivityPub payload:", {
-            remoteActorId: follower.remoteActorId,
-            remoteInboxUrl: follower.remoteInboxUrl,
-            signingKeyId: signingKey.keyId.href,
-            payload: JSON.stringify(activityJson),
-          });
-        }
-        await ctx.sendActivity(
-          sender,
-          {
-            id: new URL(follower.remoteActorId),
-            inboxId: new URL(follower.remoteInboxUrl),
-          },
-          deliverableActivity as never,
-        );
-      }
+      await sendSignedJsonActivity(
+        "LocalCommunityPublish",
+        follower.remoteInboxUrl,
+        signingKey,
+        activityJson,
+        { debugDelivery },
+      );
       console.log("[LocalCommunityPublish] delivery completed:", {
         remoteActorId: follower.remoteActorId,
         remoteInboxUrl: follower.remoteInboxUrl,
         signingKeyId: signingKey.keyId.href,
-        rawDelivery: rawPublishDelivery,
+        deliveryBackend: "signed-json",
+        debugDelivery,
       });
       deliveredFollowerCount += 1;
     } catch (error) {
       // Fanout must continue toward healthy followers even if one target
       // rejects the activity or is temporarily unreachable.
       failedFollowerCount += 1;
-      console.error("[LocalCommunityPublish] sendActivity failed:", {
+      console.error("[LocalCommunityPublish] signed JSON delivery failed:", {
         remoteActorId: follower.remoteActorId,
         remoteInboxUrl: follower.remoteInboxUrl,
         signingKeyId: signingKey.keyId.href,
-        rawDelivery: rawPublishDelivery,
+        deliveryBackend: "signed-json",
+        debugDelivery,
         error: error instanceof Error ? error.message : String(error),
       });
     }
@@ -313,7 +294,6 @@ export async function sendLocalCommunityRelay(
   // Python has already selected targets and rendered exact ActivityPub JSON.
   // The gateway only signs as the requested local community actor and delivers
   // to the explicit inboxes, preserving the policy/transport boundary.
-  const ctx = federation.createContext(new URL(config.fedifyOrigin), config);
   const signingActor = new URL(request.signingActorUrl);
   const signingKey = await loadLocalCommunitySigningKeyByActorUrl(
     config,
@@ -325,8 +305,8 @@ export async function sendLocalCommunityRelay(
   if (signingKey.actorId.href !== signingActor.href) {
     throw new Error("signingActorUrl must match the canonical community actor URL");
   }
-  const sender = [{ keyId: signingKey.keyId, privateKey: signingKey.privateKey }];
   const outcomes = [];
+  const debugDelivery = shouldLogSignedJsonDelivery();
 
   for (const delivery of request.deliveries) {
     const activityActor = delivery.activityJson.actor;
@@ -342,15 +322,12 @@ export async function sendLocalCommunityRelay(
     }
 
     try {
-      const activity = {
-        async toJsonLd(): Promise<Record<string, unknown>> {
-          return delivery.activityJson;
-        },
-      };
-      await ctx.sendActivity(
-        sender,
-        { id: new URL(delivery.targetRemoteActorId), inboxId: new URL(delivery.targetInboxUrl) },
-        activity as never,
+      await sendSignedJsonActivity(
+        "LocalCommunityRelay",
+        delivery.targetInboxUrl,
+        signingKey,
+        delivery.activityJson,
+        { debugDelivery },
       );
       outcomes.push({
         deliveryId: delivery.deliveryId,
@@ -442,16 +419,21 @@ export async function acceptLocalCommunityFollow(
   }
 }
 
-async function sendRawSignedActivityForDebug(
+interface SignedJsonDeliveryOptions {
+  debugDelivery: boolean;
+}
+
+async function sendSignedJsonActivity(
   label: string,
   inboxUrl: string,
   signingKey: { keyId: URL; privateKey: CryptoKey },
   activityJson: Record<string, unknown>,
+  options: SignedJsonDeliveryOptions,
 ): Promise<void> {
-  // This diagnostic sender is intentionally opt-in. It bypasses Fedify delivery
-  // only when LOCAL_COMMUNITY_PUBLISH_RAW_DELIVERY=1 so operators can inspect
-  // the exact JSON body, signature headers, and remote HTTP response from
-  // Mastodon without changing normal production delivery behavior.
+  // Local-community fanout uses an exact JSON wire contract that mirrors
+  // Lemmy's Announce(Create(...)) shape. Fedify's high-level sendActivity
+  // expects Fedify-native activity objects, so this path signs and posts the
+  // already-rendered JSON directly while keeping detailed body logs opt-in.
   const inbox = new URL(inboxUrl);
   const body = JSON.stringify(activityJson);
   const digest = `SHA-256=${createHash("sha256").update(body).digest("base64")}`;
@@ -485,39 +467,42 @@ async function sendRawSignedActivityForDebug(
     Signature: signatureHeader,
   };
 
-  console.log(`[${label}] Raw ActivityPub request:`, {
-    inboxUrl,
-    body,
-    headers,
-    signingString,
-  });
+  if (options.debugDelivery) {
+    console.log(`[${label}] Raw ActivityPub request:`, {
+      inboxUrl,
+      body,
+      headers,
+      signingString,
+    });
+  }
   const response = await fetch(inbox, { method: "POST", headers, body });
   const responseBody = await response.text();
-  console.log(`[${label}] Raw ActivityPub response:`, {
-    inboxUrl,
-    status: response.status,
-    statusText: response.statusText,
-    responseBody,
-  });
+  if (options.debugDelivery) {
+    console.log(`[${label}] Raw ActivityPub response:`, {
+      inboxUrl,
+      status: response.status,
+      statusText: response.statusText,
+      responseBody,
+    });
+  }
   if (!response.ok) {
     throw new Error(
-      `Raw ${label} delivery failed with HTTP ${response.status}: ${responseBody}`,
+      `${label} signed JSON delivery failed with HTTP ${response.status}: ${responseBody}`,
     );
   }
 }
 
-type ActivityJsonValue = Record<string, unknown> | unknown[] | string | number | boolean | null;
-
-function asActivityPubJson(activityJson: Record<string, unknown>): { toJsonLd(): Promise<Record<string, unknown>> } {
-  // sendActivity accepts objects with a toJsonLd() method. Wrapping the
-  // normalized JSON keeps Fedify delivery/signing while preserving the exact
-  // ActivityPub addressing that Lemmy validates as public.
-  return {
-    async toJsonLd(): Promise<Record<string, unknown>> {
-      return activityJson;
-    },
-  };
+function shouldLogSignedJsonDelivery(): boolean {
+  // Keep the original raw-delivery environment variable as a backwards-compatible
+  // way to enable diagnostics, but delivery no longer depends on it.
+  return (
+    process.env.LOCAL_COMMUNITY_PUBLISH_DEBUG_DELIVERY === "1" ||
+    process.env.LOCAL_COMMUNITY_PUBLISH_RAW_DELIVERY === "1" ||
+    process.env.LOCAL_COMMUNITY_PUBLISH_DEBUG_BODY === "1"
+  );
 }
+
+type ActivityJsonValue = Record<string, unknown> | unknown[] | string | number | boolean | null;
 
 async function renderPublicActivityJson(activity: { toJsonLd(): Promise<unknown> }): Promise<Record<string, unknown>> {
   // Fedify's JSON-LD serializer may compact the public collection as

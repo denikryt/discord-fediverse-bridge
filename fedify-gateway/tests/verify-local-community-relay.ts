@@ -35,25 +35,8 @@ async function main(): Promise<void> {
  * reports one successful outcome per target.
  */
 async function testRelaySendsAlreadyRenderedActivityToExplicitTargets(): Promise<void> {
-  const deliveries: Array<{ sender: unknown; id: string; inboxId: string; payload: unknown }> = [];
-  const fakeFederation = {
-    createContext() {
-      return {
-        async sendActivity(
-          sender: unknown,
-          recipient: { id: URL; inboxId: URL },
-          activity: { toJsonLd(): Promise<unknown> },
-        ): Promise<void> {
-          deliveries.push({
-            sender,
-            id: recipient.id.href,
-            inboxId: recipient.inboxId.href,
-            payload: await activity.toJsonLd(),
-          });
-        },
-      };
-    },
-  };
+  const deliveries: Array<{ inboxId: string; payload: unknown; headers: Record<string, string> }> = [];
+  const restoreFetch = installFetchRecorder(deliveries);
   const config = await buildConfig();
   const activityJson = buildAnnounceJson();
   const request: SendLocalCommunityRelayRequest = {
@@ -74,18 +57,17 @@ async function testRelaySendsAlreadyRenderedActivityToExplicitTargets(): Promise
     ],
   };
 
-  const result = await sendLocalCommunityRelay(fakeFederation as never, config, request);
+  const result = await sendLocalCommunityRelay({} as never, config, request);
+  restoreFetch();
 
   assert.deepEqual(result.outcomes.map((outcome) => outcome.ok), [true, true]);
   assert.deepEqual(
     deliveries.map((delivery) => delivery.inboxId).sort(),
     ["https://lemmy.example/u/alice/inbox", "https://lemmy.example/u/carol/inbox"],
   );
-  assert.ok(deliveries.every((delivery) => delivery.payload === activityJson));
-  assert.ok(deliveries.every((delivery) => {
-    const sender = delivery.sender as Array<{ keyId: URL; privateKey: CryptoKey }>;
-    return sender[0]?.keyId.href === `${TEST_ORIGIN}communities/hackers#main-key`;
-  }));
+  assert.ok(deliveries.every((delivery) => JSON.stringify(delivery.payload) === JSON.stringify(activityJson)));
+  assert.ok(deliveries.every((delivery) => delivery.headers["content-type"] === "application/activity+json"));
+  assert.ok(deliveries.every((delivery) => delivery.headers.signature.includes(`keyId="${TEST_ORIGIN}communities/hackers#main-key"`)));
 }
 
 /**
@@ -96,19 +78,11 @@ async function testRelaySendsAlreadyRenderedActivityToExplicitTargets(): Promise
  */
 async function testRelayRejectsMismatchedActorWithoutDelivery(): Promise<void> {
   const deliveries: unknown[] = [];
-  const fakeFederation = {
-    createContext() {
-      return {
-        async sendActivity(): Promise<void> {
-          deliveries.push({});
-        },
-      };
-    },
-  };
+  const restoreFetch = installFetchRecorder(deliveries as Array<{ inboxId: string; payload: unknown; headers: Record<string, string> }>);
   const activityJson = buildAnnounceJson();
   activityJson.actor = `${TEST_ORIGIN}communities/other`;
 
-  const result = await sendLocalCommunityRelay(fakeFederation as never, await buildConfig(), {
+  const result = await sendLocalCommunityRelay({} as never, await buildConfig(), {
     signingActorUrl: `${TEST_ORIGIN}communities/hackers`,
     deliveries: [
       {
@@ -119,10 +93,30 @@ async function testRelayRejectsMismatchedActorWithoutDelivery(): Promise<void> {
       },
     ],
   });
+  restoreFetch();
 
   assert.equal(result.outcomes.length, 1);
   assert.equal(result.outcomes[0]?.ok, false);
   assert.equal(deliveries.length, 0);
+}
+
+function installFetchRecorder(
+  deliveries: Array<{ inboxId: string; payload: unknown; headers: Record<string, string> }>,
+): () => void {
+  /** Capture exact signed JSON relay delivery without using Fedify sendActivity. */
+  const originalFetch = globalThis.fetch;
+  globalThis.fetch = async (input: RequestInfo | URL, init?: RequestInit): Promise<Response> => {
+    const headers = new Headers(init?.headers);
+    deliveries.push({
+      inboxId: input instanceof URL ? input.href : String(input),
+      payload: JSON.parse(String(init?.body ?? "{}")) as Record<string, unknown>,
+      headers: Object.fromEntries(headers.entries()),
+    });
+    return new Response("", { status: 202, statusText: "Accepted" });
+  };
+  return () => {
+    globalThis.fetch = originalFetch;
+  };
 }
 
 async function buildConfig(): Promise<GatewayConfig> {

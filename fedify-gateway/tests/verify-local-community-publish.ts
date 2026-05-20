@@ -27,10 +27,9 @@ const USER_ACTOR = `${TEST_ORIGIN}actors/alice`;
 const PUBLIC = "https://www.w3.org/ns/activitystreams#Public";
 
 interface DeliveryRecord {
-  sender: unknown;
-  remoteActorId: string;
   inboxId: string;
   payload: Record<string, unknown>;
+  headers: Record<string, string>;
 }
 
 async function main(): Promise<void> {
@@ -48,10 +47,10 @@ async function main(): Promise<void> {
 async function testLocalCommunityPostPublishesAnnounceCreatePage(): Promise<void> {
   const config = await buildConfig();
   const deliveries: DeliveryRecord[] = [];
-  const fakeFederation = buildFakeFederation(deliveries);
+  const restoreFetch = installFetchRecorder(deliveries);
 
   const result = await publishLocalCommunityContent(
-    fakeFederation as never,
+    {} as never,
     config,
     {
       actorUsername: "alice",
@@ -62,6 +61,7 @@ async function testLocalCommunityPostPublishesAnnounceCreatePage(): Promise<void
       inReplyToObjectId: null,
     },
   );
+  restoreFetch();
 
   assert.equal(result.deliveredFollowerCount, 2);
   assert.equal(result.failedFollowerCount, 0);
@@ -75,7 +75,7 @@ async function testLocalCommunityPostPublishesAnnounceCreatePage(): Promise<void
   );
 
   for (const delivery of deliveries) {
-    assertSenderKey(delivery.sender);
+    assertSignedJsonDelivery(delivery);
     assert.equal(delivery.payload.type, "Announce");
     assert.equal(delivery.payload.actor, COMMUNITY_ACTOR);
     assert.ok(Array.isArray(delivery.payload.to));
@@ -112,11 +112,11 @@ async function testLocalCommunityPostPublishesAnnounceCreatePage(): Promise<void
 async function testLocalCommunityCommentPublishesAnnounceCreateNote(): Promise<void> {
   const config = await buildConfig();
   const deliveries: DeliveryRecord[] = [];
-  const fakeFederation = buildFakeFederation(deliveries);
+  const restoreFetch = installFetchRecorder(deliveries);
   const parentObjectId = `${TEST_ORIGIN}users/alice/post/parent`;
 
   const result = await publishLocalCommunityContent(
-    fakeFederation as never,
+    {} as never,
     config,
     {
       actorUsername: "alice",
@@ -130,7 +130,7 @@ async function testLocalCommunityCommentPublishesAnnounceCreateNote(): Promise<v
 
   assert.equal(deliveries.length, 2);
   for (const delivery of deliveries) {
-    assertSenderKey(delivery.sender);
+    assertSignedJsonDelivery(delivery);
     assert.equal(delivery.payload.type, "Announce");
     assert.equal(delivery.payload.actor, COMMUNITY_ACTOR);
 
@@ -154,10 +154,13 @@ async function testLocalCommunityCommentPublishesAnnounceCreateNote(): Promise<v
 async function testLocalCommunityPublishReportsPartialFailure(): Promise<void> {
   const config = await buildConfig();
   const deliveries: DeliveryRecord[] = [];
-  const fakeFederation = buildFakeFederation(deliveries, new Set(["https://mastodon.example/ap/users/bob/inbox"]));
+  const restoreFetch = installFetchRecorder(
+    deliveries,
+    new Set(["https://mastodon.example/ap/users/bob/inbox"]),
+  );
 
   const result = await publishLocalCommunityContent(
-    fakeFederation as never,
+    {} as never,
     config,
     {
       actorUsername: "alice",
@@ -168,6 +171,7 @@ async function testLocalCommunityPublishReportsPartialFailure(): Promise<void> {
       inReplyToObjectId: null,
     },
   );
+  restoreFetch();
 
   assert.equal(result.deliveredFollowerCount, 1);
   assert.equal(result.failedFollowerCount, 1);
@@ -176,31 +180,27 @@ async function testLocalCommunityPublishReportsPartialFailure(): Promise<void> {
   assert.equal(deliveries[0]?.inboxId, "https://lemmy.example/u/alice/inbox");
 }
 
-function buildFakeFederation(
+function installFetchRecorder(
   deliveries: DeliveryRecord[],
   failingInboxes: Set<string> = new Set(),
-): unknown {
-  /** Record outbound delivery while preserving the same sendActivity seam. */
-  return {
-    createContext() {
-      return {
-        async sendActivity(
-          sender: unknown,
-          recipient: { id: URL; inboxId: URL },
-          activity: { toJsonLd(): Promise<Record<string, unknown>> },
-        ): Promise<void> {
-          if (failingInboxes.has(recipient.inboxId.href)) {
-            throw new Error(`simulated failure for ${recipient.inboxId.href}`);
-          }
-          deliveries.push({
-            sender,
-            remoteActorId: recipient.id.href,
-            inboxId: recipient.inboxId.href,
-            payload: await activity.toJsonLd(),
-          });
-        },
-      };
-    },
+): () => void {
+  /** Capture signed JSON HTTP delivery without relying on Fedify sendActivity. */
+  const originalFetch = globalThis.fetch;
+  globalThis.fetch = async (input: RequestInfo | URL, init?: RequestInit): Promise<Response> => {
+    const inboxId = input instanceof URL ? input.href : String(input);
+    if (failingInboxes.has(inboxId)) {
+      return new Response("simulated failure", { status: 500, statusText: "Internal Server Error" });
+    }
+    const headers = new Headers(init?.headers);
+    deliveries.push({
+      inboxId,
+      payload: JSON.parse(String(init?.body ?? "{}")) as Record<string, unknown>,
+      headers: Object.fromEntries(headers.entries()),
+    });
+    return new Response("", { status: 202, statusText: "Accepted" });
+  };
+  return () => {
+    globalThis.fetch = originalFetch;
   };
 }
 
@@ -309,11 +309,12 @@ async function buildConfig(): Promise<GatewayConfig> {
   };
 }
 
-function assertSenderKey(sender: unknown): void {
-  /** The outer Announce must be signed by the followed community actor. */
-  const keyPairs = sender as Array<{ keyId: URL; privateKey: CryptoKey }>;
-  assert.equal(keyPairs[0]?.keyId.href, `${COMMUNITY_ACTOR}#main-key`);
-  assert.ok(keyPairs[0]?.privateKey != null);
+function assertSignedJsonDelivery(delivery: DeliveryRecord): void {
+  /** The exact JSON fanout path signs HTTP requests with the community key. */
+  assert.equal(delivery.headers["content-type"], "application/activity+json");
+  assert.match(delivery.headers.signature ?? "", /keyId="https:\/\/discord-bridge.example.com\/communities\/hackers#main-key"/);
+  assert.match(delivery.headers.signature ?? "", /headers="\(request-target\) host date digest content-type"/);
+  assert.ok(delivery.headers.digest?.startsWith("SHA-256="));
 }
 
 function toList(value: unknown): string[] {

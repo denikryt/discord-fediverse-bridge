@@ -111,8 +111,8 @@ async function testAcceptFollowSignsWithCanonicalCommunityKey(config: GatewayCon
  * canonical community key id.
  */
 async function testRelaySignsWithCanonicalCommunityKey(config: GatewayConfig): Promise<void> {
-  const deliveries: Array<{ sender: unknown; recipient: string; payload: Record<string, unknown> }> = [];
-  const fakeFederation = buildFakeFederation(deliveries);
+  const deliveries: Array<{ inboxId: string; payload: Record<string, unknown>; headers: Record<string, string> }> = [];
+  const restoreFetch = installFetchRecorder(deliveries);
   const activityJson = {
     "@context": "https://www.w3.org/ns/activitystreams",
     id: `${TEST_ORIGIN}communities/hackers/activities/announce/1`,
@@ -136,12 +136,34 @@ async function testRelaySignsWithCanonicalCommunityKey(config: GatewayConfig): P
     ],
   };
 
-  const result = await sendLocalCommunityRelay(fakeFederation as never, config, request);
+  const result = await sendLocalCommunityRelay({} as never, config, request);
+  restoreFetch();
 
   assert.equal(result.outcomes[0]?.ok, true);
   assert.equal(deliveries.length, 1);
-  assertSenderKey(deliveries[0]?.sender);
-  assert.equal(deliveries[0]?.payload, activityJson);
+  assert.equal(deliveries[0]?.payload.id, activityJson.id);
+  assert.equal(deliveries[0]?.payload.type, activityJson.type);
+  assert.equal(deliveries[0]?.headers["content-type"], "application/activity+json");
+  assert.match(deliveries[0]?.headers.signature ?? "", /keyId="https:\/\/discord-bridge.example.com\/communities\/hackers#main-key"/);
+}
+
+function installFetchRecorder(
+  deliveries: Array<{ inboxId: string; payload: Record<string, unknown>; headers: Record<string, string> }>,
+): () => void {
+  /** Capture signed JSON relay delivery so key identity is verified at the HTTP signature boundary. */
+  const originalFetch = globalThis.fetch;
+  globalThis.fetch = async (input: RequestInfo | URL, init?: RequestInit): Promise<Response> => {
+    const headers = new Headers(init?.headers);
+    deliveries.push({
+      inboxId: input instanceof URL ? input.href : String(input),
+      payload: JSON.parse(String(init?.body ?? "{}")) as Record<string, unknown>,
+      headers: Object.fromEntries(headers.entries()),
+    });
+    return new Response("", { status: 202, statusText: "Accepted" });
+  };
+  return () => {
+    globalThis.fetch = originalFetch;
+  };
 }
 
 function buildFakeFederation(
