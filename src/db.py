@@ -667,6 +667,41 @@ class Database:
                 )
             )
 
+    def update_local_community_follower_acceptance(
+        self,
+        *,
+        local_community_id: int,
+        remote_actor_id: str,
+        remote_inbox_url: str,
+        follow_activity_id: str,
+        status: str = "accepted",
+    ) -> LocalCommunityFollower | None:
+        """Refresh one follower row before re-sending an idempotent Accept(Follow).
+
+        Mastodon and other ActivityPub servers can retry a Follow after the
+        bridge already persisted the follower but the original Accept was lost
+        or rejected. Updating the inbox and Follow ID keeps the recovery Accept
+        tied to the latest request while preserving the existing follower row.
+        """
+        with self.session() as session:
+            follower = session.scalar(
+                select(LocalCommunityFollower).where(
+                    LocalCommunityFollower.local_community_id == local_community_id,
+                    LocalCommunityFollower.remote_actor_id == remote_actor_id,
+                )
+            )
+            if follower is None:
+                return None
+            # The remote actor can send a fresh Follow with a different activity
+            # ID or inbox; the Accept must target the current request, not stale
+            # values from an earlier delivery attempt.
+            follower.remote_inbox_url = remote_inbox_url
+            follower.follow_activity_id = follow_activity_id
+            follower.status = status
+            follower.updated_at = utcnow()
+            session.flush()
+            return follower
+
     def list_local_community_followers(
         self,
         local_community_id: int,

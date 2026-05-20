@@ -460,14 +460,35 @@ class LocalCommunityRuntime:
             remote_actor_id=remote_actor_id,
         )
         if existing is not None:
-            return _HandlerResult(status="processed", detail="local community follower already accepted")
+            # Accept(Follow) delivery is intentionally idempotent. A remote
+            # server such as Mastodon can remain in a "requested" state if the
+            # bridge persisted the follower but the original Accept was lost, so
+            # repeated Follow deliveries must refresh the stored request details
+            # and re-send the Accept instead of returning early.
+            self.database.update_local_community_follower_acceptance(
+                local_community_id=getattr(local_community, "id"),
+                remote_actor_id=remote_actor_id,
+                remote_inbox_url=remote_inbox_url,
+                follow_activity_id=follow_activity_id,
+                status="accepted",
+            )
+            detail = "local community follower accepted again"
+        else:
+            self.database.create_local_community_follower(
+                local_community_id=getattr(local_community, "id"),
+                remote_actor_id=remote_actor_id,
+                remote_inbox_url=remote_inbox_url,
+                follow_activity_id=follow_activity_id,
+                status="accepted",
+            )
+            detail = "local community follower accepted"
 
-        self.database.create_local_community_follower(
-            local_community_id=getattr(local_community, "id"),
-            remote_actor_id=remote_actor_id,
-            remote_inbox_url=remote_inbox_url,
-            follow_activity_id=follow_activity_id,
-            status="accepted",
+        logger.info(
+            "Accepting local-community Follow community=%s remote_actor=%s inbox=%s follow_activity=%s",
+            getattr(local_community, "slug"),
+            remote_actor_id,
+            remote_inbox_url,
+            follow_activity_id,
         )
         await self.fedify_gateway.accept_local_community_follow(
             community_slug=getattr(local_community, "slug"),
@@ -476,7 +497,7 @@ class LocalCommunityRuntime:
             remote_inbox_url=remote_inbox_url,
             follow_activity_id=follow_activity_id,
         )
-        return _HandlerResult(status="processed", detail="local community follower accepted")
+        return _HandlerResult(status="processed", detail=detail)
 
     @staticmethod
     def _unpack_created_thread(created: object) -> tuple[object, object]:

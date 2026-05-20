@@ -17,6 +17,7 @@ import {
   loadLocalCommunityIdentity,
   loadUserActorIdentity,
 } from "./actor-store.js";
+import { buildLocalCommunityPublicKeyCarrier } from "./local-community-keys.js";
 import {
   type GatewayConfig,
   type GatewayContextData,
@@ -643,11 +644,10 @@ async function buildLocalCommunityActorDocument(
   if (communityIdentity == null) {
     return null;
   }
-  const context = fedify.createContext(new URL(config.fedifyOrigin), config);
   return buildLocalCommunityGroupActor(
     communityIdentity,
     new URL("/inbox", config.fedifyOrigin),
-    await context.getActorKeyPairs(slug),
+    await buildLocalCommunityPublicKeyCarrier(communityIdentity),
   );
 }
 

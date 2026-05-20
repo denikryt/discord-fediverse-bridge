@@ -3,6 +3,10 @@ import { Accept, Create, Delete, Follow, Note, Page, Source, Undo, Update } from
 import type { Federation } from "@fedify/fedify";
 import type { GatewayConfig } from "./config.js";
 import { loadAcceptedLocalCommunityFollowersByActorUrl } from "./db.js";
+import {
+  loadLocalCommunitySigningKey,
+  loadLocalCommunitySigningKeyByActorUrl,
+} from "./local-community-keys.js";
 import type {
   AcceptLocalCommunityFollowRequest,
   DeleteContentRequest,
@@ -261,6 +265,17 @@ export async function sendLocalCommunityRelay(
   // to the explicit inboxes, preserving the policy/transport boundary.
   const ctx = federation.createContext(new URL(config.fedifyOrigin), config);
   const signingActor = new URL(request.signingActorUrl);
+  const signingKey = await loadLocalCommunitySigningKeyByActorUrl(
+    config,
+    request.signingActorUrl,
+  );
+  if (signingKey == null) {
+    throw new Error("signingActorUrl does not identify a local community actor");
+  }
+  if (signingKey.actorId.href !== signingActor.href) {
+    throw new Error("signingActorUrl must match the canonical community actor URL");
+  }
+  const sender = [{ keyId: signingKey.keyId, privateKey: signingKey.privateKey }];
   const outcomes = [];
 
   for (const delivery of request.deliveries) {
@@ -283,7 +298,7 @@ export async function sendLocalCommunityRelay(
         },
       };
       await ctx.sendActivity(
-        { username: localActorIdentifierFromUrl(config, request.signingActorUrl) },
+        sender,
         { id: new URL(delivery.targetRemoteActorId), inboxId: new URL(delivery.targetInboxUrl) },
         activity as never,
       );
@@ -308,19 +323,6 @@ export async function sendLocalCommunityRelay(
   return { outcomes };
 }
 
-function localActorIdentifierFromUrl(config: GatewayConfig, actorUrl: string): string {
-  const url = new URL(actorUrl);
-  const origin = new URL(config.fedifyOrigin);
-  if (url.origin !== origin.origin) {
-    throw new Error("signingActorUrl must belong to this gateway origin");
-  }
-  const parts = url.pathname.split("/").filter(Boolean);
-  if (parts[0] === "communities" && parts[1]) return parts[1];
-  if (parts[0] === "c" && parts[1]) return parts[1];
-  if (parts[0] === "users" && parts[1]) return parts[1];
-  if (parts[0] === "actors" && parts[1]) return parts[1];
-  throw new Error("signingActorUrl does not identify a local actor");
-}
 
 export async function acceptLocalCommunityFollow(
   federation: Federation<GatewayConfig>,
@@ -332,6 +334,14 @@ export async function acceptLocalCommunityFollow(
   const ctx = federation.createContext(new URL(config.fedifyOrigin), config);
   const communityActorUri = new URL(request.communityActorUrl);
   const remoteActorUri = new URL(request.remoteActorId);
+  const signingKey = await loadLocalCommunitySigningKey(config, request.communitySlug);
+  if (signingKey == null) {
+    throw new Error("Local community signing key not found");
+  }
+  if (signingKey.actorId.href !== communityActorUri.href) {
+    throw new Error("communityActorUrl must match the canonical local community actor URL");
+  }
+  const sender = [{ keyId: signingKey.keyId, privateKey: signingKey.privateKey }];
   const acceptId = new URL(
     `${config.fedifyOrigin}communities/${request.communitySlug}/activities/accept/${Date.now()}-${Math.random().toString(36).slice(2)}`,
   );
@@ -339,6 +349,7 @@ export async function acceptLocalCommunityFollow(
   const accept = new Accept({
     id: acceptId,
     actor: communityActorUri,
+    to: remoteActorUri,
     object: new Follow({
       id: new URL(request.followActivityId),
       actor: remoteActorUri,
@@ -346,11 +357,63 @@ export async function acceptLocalCommunityFollow(
     }),
   });
 
-  await ctx.sendActivity(
-    { username: request.communitySlug },
-    { id: remoteActorUri, inboxId: new URL(request.remoteInboxUrl) },
-    accept,
-  );
+console.log("[LocalCommunityFollow] Accept(Follow) expected JSON:", JSON.stringify({
+  "@context": "https://www.w3.org/ns/activitystreams",
+  id: acceptId.href,
+  type: "Accept",
+  actor: communityActorUri.href,
+  to: remoteActorUri.href,
+  object: {
+    id: request.followActivityId,
+    type: "Follow",
+    actor: remoteActorUri.href,
+    object: communityActorUri.href,
+  },
+}, null, 2));
+
+  console.log("[LocalCommunityFollow] Accept(Follow) activity object:", {
+    acceptId: acceptId.href,
+    actor: communityActorUri.href,
+    to: remoteActorUri.href,
+    followActivityId: request.followActivityId,
+    followActor: remoteActorUri.href,
+    followObject: communityActorUri.href,
+    signingKeyId: signingKey.keyId.href,
+  });
+
+  console.log("[LocalCommunityFollow] Sending Accept(Follow):", {
+    communitySlug: request.communitySlug,
+    communityActorUrl: request.communityActorUrl,
+    remoteActorId: request.remoteActorId,
+    remoteInboxUrl: request.remoteInboxUrl,
+    followActivityId: request.followActivityId,
+    acceptId: acceptId.href,
+    signingKeyId: signingKey.keyId.href,
+  });
+  try {
+    await ctx.sendActivity(
+      sender,
+      { id: remoteActorUri, inboxId: new URL(request.remoteInboxUrl) },
+      accept,
+    );
+    console.log("[LocalCommunityFollow] Accept(Follow) delivered:", {
+      communitySlug: request.communitySlug,
+      remoteActorId: request.remoteActorId,
+      followActivityId: request.followActivityId,
+      acceptId: acceptId.href,
+      signingKeyId: signingKey.keyId.href,
+    });
+  } catch (error) {
+    console.error("[LocalCommunityFollow] Accept(Follow) failed:", {
+      communitySlug: request.communitySlug,
+      remoteActorId: request.remoteActorId,
+      remoteInboxUrl: request.remoteInboxUrl,
+      followActivityId: request.followActivityId,
+      signingKeyId: signingKey.keyId.href,
+      error: error instanceof Error ? error.message : String(error),
+    });
+    throw error;
+  }
 }
 
 export function buildPublishCreateActivity(

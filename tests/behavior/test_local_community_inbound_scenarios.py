@@ -136,6 +136,47 @@ async def test_remote_follow_to_local_community_persists_follower_and_sends_acce
 
 
 @pytest.mark.asyncio
+async def test_repeated_remote_follow_resends_accept_and_refreshes_request_details(
+    tmp_path: Path,
+) -> None:
+    """A repeated Follow should recover a lost Accept without duplicating rows."""
+    database, runtime = _runtime(tmp_path)
+    local_community = _local_community(database)
+    database.create_local_community_follower(
+        local_community_id=local_community.id,
+        remote_actor_id="https://mastodon.social/ap/users/116015738644832902",
+        remote_inbox_url="https://mastodon.social/ap/users/116015738644832902/old-inbox",
+        follow_activity_id="https://mastodon.social/old-follow",
+        status="accepted",
+    )
+
+    result = await runtime.handle_follow_request(
+        local_community_actor_id=local_community.actor_url,
+        remote_actor_id="https://mastodon.social/ap/users/116015738644832902",
+        remote_inbox_url="https://mastodon.social/ap/users/116015738644832902/inbox",
+        follow_activity_id="https://mastodon.social/new-follow",
+    )
+    follower = database.get_local_community_follower(
+        local_community_id=local_community.id,
+        remote_actor_id="https://mastodon.social/ap/users/116015738644832902",
+    )
+    followers = database.list_local_community_followers(local_community.id, status=None)
+
+    assert result.status == "processed"
+    assert follower is not None
+    assert follower.remote_inbox_url == "https://mastodon.social/ap/users/116015738644832902/inbox"
+    assert follower.follow_activity_id == "https://mastodon.social/new-follow"
+    assert len(followers) == 1
+    runtime.fedify_gateway.accept_local_community_follow.assert_awaited_once_with(
+        community_slug="hackers",
+        community_actor_url=local_community.actor_url,
+        remote_actor_id="https://mastodon.social/ap/users/116015738644832902",
+        remote_inbox_url="https://mastodon.social/ap/users/116015738644832902/inbox",
+        follow_activity_id="https://mastodon.social/new-follow",
+    )
+
+
+@pytest.mark.asyncio
 async def test_remote_follower_top_level_post_creates_new_discord_thread(
     tmp_path: Path,
 ) -> None:

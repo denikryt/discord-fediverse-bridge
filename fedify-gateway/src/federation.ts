@@ -20,6 +20,7 @@ import {
   resolveLocalActorKind,
   loadUserActorIdentity,
 } from "./actor-store.js";
+import { buildLocalCommunityPublicKeyCarrier } from "./local-community-keys.js";
 import type { GatewayContextData } from "./config.js";
 import {
   normalizeCreateActivity,
@@ -85,7 +86,7 @@ export function createGatewayFederation(
         return buildLocalCommunityGroupActor(
           communityIdentity,
           sharedInboxId,
-          await ctx.getActorKeyPairs(identifier),
+          await buildLocalCommunityPublicKeyCarrier(communityIdentity),
         );
       }
 
