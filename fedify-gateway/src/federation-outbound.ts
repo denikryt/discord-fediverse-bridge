@@ -618,7 +618,9 @@ export function buildPublishCreateActivity(
 }
 
 function buildUserActorUri(config: GatewayConfig, actorUsername: string): URL {
-  return new URL(`/users/${actorUsername}`, config.fedifyOrigin);
+  // Registered users are canonical Fedify actors. Their posts/comments can keep
+  // /users object URLs, but author identity and signing use /actors.
+  return new URL(`/actors/${actorUsername}`, config.fedifyOrigin);
 }
 
 function buildPublishObject(

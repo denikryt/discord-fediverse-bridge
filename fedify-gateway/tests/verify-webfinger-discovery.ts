@@ -66,10 +66,10 @@ async function main(): Promise<void> {
       [
         "123",
         "alice",
-        `${TEST_ORIGIN}users/alice`,
-        `${TEST_ORIGIN}users/alice/inbox`,
-        `${TEST_ORIGIN}users/alice/outbox`,
-        `${TEST_ORIGIN}users/alice/followers`,
+        `${TEST_ORIGIN}actors/alice`,
+        `${TEST_ORIGIN}actors/alice/inbox`,
+        `${TEST_ORIGIN}actors/alice/outbox`,
+        `${TEST_ORIGIN}actors/alice/followers`,
         await exportPublicKeyPem(bridgeKeys.publicKey),
         await exportPrivateKeyPem(bridgeKeys.privateKey),
       ],
@@ -136,7 +136,7 @@ async function main(): Promise<void> {
   await assertWebFingerSelfLink(
     app,
     `acct:alice@discord-bridge.example.com`,
-    `${TEST_ORIGIN}users/alice`,
+    `${TEST_ORIGIN}actors/alice`,
   );
   await assertWebFingerSelfLink(
     app,

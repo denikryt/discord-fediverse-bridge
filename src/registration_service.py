@@ -95,7 +95,10 @@ class RegistrationService:
 
     def build_actor_urls(self, username: str) -> tuple[str, str, str, str]:
         """Build the canonical local actor URLs for one registered username."""
-        actor_url = f"{self.base_url}/users/{username}"
+        # Registered users use the Fedify actor namespace as their canonical
+        # ActivityPub identity. Object URLs can still live under /users, but
+        # actor/key ownership must stay aligned with /actors/{username}.
+        actor_url = f"{self.base_url}/actors/{username}"
         return (
             actor_url,
             f"{actor_url}/inbox",

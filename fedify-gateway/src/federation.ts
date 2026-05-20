@@ -68,9 +68,9 @@ export function createGatewayFederation(
           return null;
         }
 
-        // User actors remain Person objects even though the actor dispatcher path
-        // is shared with the bridge actor. Their canonical IDs come from the
-        // Python-owned registration records in the shared database.
+        // User actors remain Person objects and now use the dispatcher route as
+        // their canonical ActivityPub identity. This keeps actor IDs and Fedify
+        // key ownership aligned for Mastodon/Lemmy fetch-time validation.
         return buildUserPersonActor(
           userIdentity,
           sharedInboxId,
@@ -476,15 +476,15 @@ export async function buildLocalFollowRequestedEvent(
 }
 
 function parseUserAlias(resource: URL, origin: string): string | null {
-  // User aliases are limited to the canonical `/users/{username}` surface so
-  // the manual user-actor routes and Fedify alias resolution stay consistent.
+  // /actors is the canonical registered-user actor namespace. /users remains a
+  // compatibility alias so older object/profile links can still resolve.
   const resourceOrigin = new URL(origin);
   if (resource.origin !== resourceOrigin.origin) {
     return null;
   }
 
   const parts = resource.pathname.split("/").filter(Boolean);
-  if (parts.length !== 2 || parts[0] !== "users") {
+  if (parts.length !== 2 || (parts[0] !== "actors" && parts[0] !== "users")) {
     return null;
   }
   return parts[1];

@@ -279,7 +279,7 @@ async def test_lemmy_announce_of_local_post_is_suppressed_via_actor_check(
 
     community_actor_url = f"https://{LEMMY_EXAMPLE_DOMAIN}/c/hackers"
     object_id = f"https://{BRIDGE_HOST_DOMAIN}/users/alice/post/9999"
-    actor_url = f"https://{BRIDGE_HOST_DOMAIN}/users/alice"
+    actor_url = f"https://{BRIDGE_HOST_DOMAIN}/actors/alice"
 
     # Simulate Lemmy Announce: delivery_id and object_id are new Lemmy-generated ids,
     # but actor_id is our own registered user.

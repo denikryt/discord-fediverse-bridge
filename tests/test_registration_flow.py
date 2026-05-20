@@ -166,10 +166,10 @@ def test_register_complete_creates_user_with_urls_and_keys(tmp_path: Path) -> No
     assert response.headers["location"] == "/register/success"
     assert created is not None
     assert created.discord_user_id == "1234567890"
-    assert created.actor_url == "https://gateway.example.com/users/alice"
-    assert created.inbox_url == "https://gateway.example.com/users/alice/inbox"
-    assert created.outbox_url == "https://gateway.example.com/users/alice/outbox"
-    assert created.followers_url == "https://gateway.example.com/users/alice/followers"
+    assert created.actor_url == "https://gateway.example.com/actors/alice"
+    assert created.inbox_url == "https://gateway.example.com/actors/alice/inbox"
+    assert created.outbox_url == "https://gateway.example.com/actors/alice/outbox"
+    assert created.followers_url == "https://gateway.example.com/actors/alice/followers"
     assert created.public_key_pem == "test-public-key"
     assert created.private_key_pem == "test-private-key"
 
@@ -229,10 +229,10 @@ def test_register_complete_rejects_duplicate_username(tmp_path: Path) -> None:
     database.create_user(
         discord_user_id="existing-user",
         activitypub_username="alice",
-        actor_url="https://gateway.example.com/users/alice",
-        inbox_url="https://gateway.example.com/users/alice/inbox",
-        outbox_url="https://gateway.example.com/users/alice/outbox",
-        followers_url="https://gateway.example.com/users/alice/followers",
+        actor_url="https://gateway.example.com/actors/alice",
+        inbox_url="https://gateway.example.com/actors/alice/inbox",
+        outbox_url="https://gateway.example.com/actors/alice/outbox",
+        followers_url="https://gateway.example.com/actors/alice/followers",
         public_key_pem="public-key",
         private_key_pem="private-key",
     )
@@ -265,10 +265,10 @@ def test_register_complete_returns_existing_user_for_duplicate_discord_id(
     database.create_user(
         discord_user_id="1234567890",
         activitypub_username="alice",
-        actor_url="https://gateway.example.com/users/alice",
-        inbox_url="https://gateway.example.com/users/alice/inbox",
-        outbox_url="https://gateway.example.com/users/alice/outbox",
-        followers_url="https://gateway.example.com/users/alice/followers",
+        actor_url="https://gateway.example.com/actors/alice",
+        inbox_url="https://gateway.example.com/actors/alice/inbox",
+        outbox_url="https://gateway.example.com/actors/alice/outbox",
+        followers_url="https://gateway.example.com/actors/alice/followers",
         public_key_pem="public-key",
         private_key_pem="private-key",
     )
@@ -300,10 +300,10 @@ def test_register_page_shows_existing_registration_for_repeat_user(tmp_path: Pat
     database.create_user(
         discord_user_id="1234567890",
         activitypub_username="alice",
-        actor_url="https://gateway.example.com/users/alice",
-        inbox_url="https://gateway.example.com/users/alice/inbox",
-        outbox_url="https://gateway.example.com/users/alice/outbox",
-        followers_url="https://gateway.example.com/users/alice/followers",
+        actor_url="https://gateway.example.com/actors/alice",
+        inbox_url="https://gateway.example.com/actors/alice/inbox",
+        outbox_url="https://gateway.example.com/actors/alice/outbox",
+        followers_url="https://gateway.example.com/actors/alice/followers",
         public_key_pem="public-key",
         private_key_pem="private-key",
     )
@@ -323,7 +323,7 @@ def test_register_page_shows_existing_registration_for_repeat_user(tmp_path: Pat
     assert response.status_code == 200
     assert "Already registered" in response.text
     assert "@alice@gateway.example.com" in response.text
-    assert "https://gateway.example.com/users/alice" in response.text
+    assert "https://gateway.example.com/actors/alice" in response.text
 
 
 def test_register_success_page_shows_created_handle(tmp_path: Path) -> None:
@@ -350,7 +350,7 @@ def test_register_success_page_shows_created_handle(tmp_path: Path) -> None:
 
     assert response.status_code == 200
     assert "@alice@gateway.example.com" in response.text
-    assert "https://gateway.example.com/users/alice" in response.text
+    assert "https://gateway.example.com/actors/alice" in response.text
 
 
 def test_actor_urls_use_fedify_origin_not_bridge_url() -> None:
@@ -363,9 +363,9 @@ def test_actor_urls_use_fedify_origin_not_bridge_url() -> None:
 
     actor_url, inbox_url, outbox_url, followers_url = service.build_actor_urls("alice")
 
-    assert actor_url == "https://gateway.example.com/users/alice"
-    assert inbox_url == "https://gateway.example.com/users/alice/inbox"
-    assert outbox_url == "https://gateway.example.com/users/alice/outbox"
-    assert followers_url == "https://gateway.example.com/users/alice/followers"
+    assert actor_url == "https://gateway.example.com/actors/alice"
+    assert inbox_url == "https://gateway.example.com/actors/alice/inbox"
+    assert outbox_url == "https://gateway.example.com/actors/alice/outbox"
+    assert followers_url == "https://gateway.example.com/actors/alice/followers"
     # bridge web domain must not appear in any actor URL
     assert "bridge" not in actor_url

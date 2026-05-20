@@ -50,7 +50,7 @@ def add_registered_user(
     username: str = "alice",
 ) -> None:
     """Insert one registered local user actor used by outbound publish scenarios."""
-    actor_url = f"https://{BRIDGE_HOST_DOMAIN}/users/{username}"
+    actor_url = f"https://{BRIDGE_HOST_DOMAIN}/actors/{username}"
     database.create_user(
         discord_user_id=discord_user_id,
         activitypub_username=username,

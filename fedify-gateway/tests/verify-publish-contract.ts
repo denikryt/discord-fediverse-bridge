@@ -51,10 +51,10 @@ async function main(): Promise<void> {
 
   assert.ok(postEvent);
   assert.ok(commentEvent);
-  assert.equal(postEvent.actor_id, `${TEST_ORIGIN}users/alice`);
+  assert.equal(postEvent.actor_id, `${TEST_ORIGIN}actors/alice`);
   assert.equal(postEvent.event_type, "post.created");
   assert.equal(postEvent.community_actor_id, TEST_COMMUNITY_URL);
-  assert.equal(commentEvent.actor_id, `${TEST_ORIGIN}users/alice`);
+  assert.equal(commentEvent.actor_id, `${TEST_ORIGIN}actors/alice`);
   assert.equal(commentEvent.event_type, "comment.created");
   assert.equal(commentEvent.object.post_ap_id, `${TEST_ORIGIN}users/alice/post/123`);
 
@@ -74,7 +74,7 @@ async function main(): Promise<void> {
 
   assert.ok(postTos.includes(PUBLIC_SHORT), "Create.to must include as:Public");
   assert.ok(postTos.includes(TEST_COMMUNITY_URL), "Create.to must include community");
-  assert.ok(postCcs.includes(`${TEST_ORIGIN}users/alice`), "Create.cc must include actor");
+  assert.ok(postCcs.includes(`${TEST_ORIGIN}actors/alice`), "Create.cc must include actor");
   assert.ok(postObjectTos.includes(PUBLIC_SHORT), "Page.to must include as:Public");
   assert.ok(postObjectTos.includes(TEST_COMMUNITY_URL), "Page.to must include community");
 

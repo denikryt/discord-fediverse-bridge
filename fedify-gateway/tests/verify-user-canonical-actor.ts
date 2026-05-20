@@ -7,35 +7,67 @@ import { webcrypto } from "node:crypto";
 import { exportJwk, generateCryptoKeyPair } from "@fedify/fedify";
 import initSqlJs from "sql.js";
 
-import {
-  buildBridgeServiceActor,
-  buildUserPersonActor,
-} from "../src/actors.js";
-import {
-  getBridgeActorIdentity,
-  hasLocalActor,
-  loadActorKeyPair,
-  loadUserActorIdentity,
-} from "../src/actor-store.js";
 import type { GatewayConfig } from "../src/config.js";
+import { createGatewayApp } from "../src/server.js";
 
 const TEST_ORIGIN = "https://discord-bridge.example.com/";
 
+/**
+ * Verify that registered-user actor documents expose one canonical /actors id.
+ *
+ * This regression protects Mastodon fetch-time actor validation: the DB stores
+ * users under /actors/{username}, and /users/{username} must only resolve as a
+ * compatibility entry point that returns the same canonical actor.
+ */
 async function main(): Promise<void> {
-  // The verification script uses a throwaway SQLite file so the gateway-side
-  // actor store can be checked without depending on the real bridge database.
-  const sqlJs = await initSqlJs();
-  const tempDir = await mkdtemp(path.join(tmpdir(), "fedify-actor-layer-"));
-  const databasePath = path.join(tempDir, "bridge.db");
-
   const bridgeKeys = await generateCryptoKeyPair("RSASSA-PKCS1-v1_5");
   const userKeys = await generateCryptoKeyPair("RSASSA-PKCS1-v1_5");
+  const config = await buildConfig(bridgeKeys, userKeys);
+  const app = createGatewayApp(config);
+
+  await assertCanonicalUserActor(app, "/actors/alice");
+  await assertCanonicalUserActor(app, "/users/alice");
+
+  console.log("verify:user-canonical-actor passed");
+}
+
+async function assertCanonicalUserActor(
+  app: ReturnType<typeof createGatewayApp>,
+  pathName: string,
+): Promise<void> {
+  const response = await app.request(pathName, {
+    headers: { Accept: "application/activity+json" },
+  });
+  assert.equal(response.status, 200);
+  assert.match(response.headers.get("content-type") ?? "", /application\/activity\+json/);
+
+  const actor = await response.json() as Record<string, unknown>;
+  const publicKey = actor.publicKey as Record<string, unknown>;
+
+  assert.equal(actor.id, `${TEST_ORIGIN}actors/alice`);
+  assert.equal(actor.type, "Person");
+  assert.equal(actor.preferredUsername, "alice");
+  assert.equal(actor.inbox, `${TEST_ORIGIN}actors/alice/inbox`);
+  assert.equal(actor.outbox, `${TEST_ORIGIN}actors/alice/outbox`);
+  assert.equal(actor.followers, `${TEST_ORIGIN}actors/alice/followers`);
+  assert.equal(publicKey.id, `${TEST_ORIGIN}actors/alice#main-key`);
+  assert.equal(publicKey.owner, `${TEST_ORIGIN}actors/alice`);
+}
+
+async function buildConfig(
+  bridgeKeys: CryptoKeyPair,
+  userKeys: CryptoKeyPair,
+): Promise<GatewayConfig> {
+  const sqlJs = await initSqlJs();
+  const tempDir = await mkdtemp(path.join(tmpdir(), "user-canonical-actor-"));
+  const databasePath = path.join(tempDir, "bridge.db");
   const db = new sqlJs.Database();
+
   try {
     db.run(`
       CREATE TABLE users (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
-        discord_user_id VARCHAR(64) NOT NULL,
+        discord_user_id VARCHAR(255) NOT NULL,
         activitypub_username VARCHAR(255) NOT NULL,
         actor_url VARCHAR(512) NOT NULL,
         inbox_url VARCHAR(512) NOT NULL,
@@ -59,7 +91,7 @@ async function main(): Promise<void> {
         ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
       `,
       [
-        "1234567890",
+        "123",
         "alice",
         `${TEST_ORIGIN}actors/alice`,
         `${TEST_ORIGIN}actors/alice/inbox`,
@@ -74,7 +106,7 @@ async function main(): Promise<void> {
     db.close();
   }
 
-  const config: GatewayConfig = {
+  return {
     actorIdentifier: "bridge",
     actorName: "Bridge",
     actorSummary: "Bridge summary",
@@ -88,37 +120,6 @@ async function main(): Promise<void> {
     pythonBridgeSharedSecret: "secret",
     logLevel: "info",
   };
-
-  const bridgeIdentity = getBridgeActorIdentity(config);
-  const userIdentity = await loadUserActorIdentity(config, "alice");
-  const userKeyPair = await loadActorKeyPair(config, "alice");
-  const bridgeKeyPair = await loadActorKeyPair(config, "bridge");
-
-  assert.equal(bridgeIdentity.actorId.href, `${TEST_ORIGIN}actors/bridge`);
-  assert.equal(await hasLocalActor(config, "bridge"), true);
-  assert.equal(await hasLocalActor(config, "alice"), true);
-  assert.equal(await hasLocalActor(config, "missing"), false);
-  assert.ok(userIdentity != null);
-  assert.equal(userIdentity?.actorId.href, `${TEST_ORIGIN}actors/alice`);
-  assert.ok(userKeyPair != null);
-  assert.ok(bridgeKeyPair != null);
-
-  const bridgeActor = buildBridgeServiceActor(
-    bridgeIdentity,
-    new URL(`${TEST_ORIGIN}inbox`),
-    [],
-  );
-  const userActor = buildUserPersonActor(
-    userIdentity,
-    new URL(`${TEST_ORIGIN}inbox`),
-    [],
-  );
-
-  assert.equal(bridgeActor.id?.href, `${TEST_ORIGIN}actors/bridge`);
-  assert.equal(userActor.id?.href, `${TEST_ORIGIN}actors/alice`);
-  assert.equal(userActor.inboxId?.href, `${TEST_ORIGIN}actors/alice/inbox`);
-
-  console.log("verify:actor-layer passed");
 }
 
 async function exportPrivateKeyPem(privateKey: CryptoKey): Promise<string> {

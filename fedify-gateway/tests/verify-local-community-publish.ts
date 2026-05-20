@@ -23,7 +23,7 @@ import type { PublishLocalCommunityContentRequest } from "../src/types.js";
 const TEST_ORIGIN = "https://discord-bridge.example.com/";
 const COMMUNITY_ACTOR = `${TEST_ORIGIN}communities/hackers`;
 const COMMUNITY_FOLLOWERS = `${COMMUNITY_ACTOR}/followers`;
-const USER_ACTOR = `${TEST_ORIGIN}users/alice`;
+const USER_ACTOR = `${TEST_ORIGIN}actors/alice`;
 const PUBLIC = "https://www.w3.org/ns/activitystreams#Public";
 
 interface DeliveryRecord {

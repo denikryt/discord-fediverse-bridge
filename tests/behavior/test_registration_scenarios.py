@@ -131,15 +131,15 @@ def test_oauth_success_then_registration_complete_creates_user_actor(
     assert response.status_code == 303
     assert response.headers["location"] == "/register/success"
     assert user is not None
-    assert user.actor_url == f"https://{BRIDGE_HOST_DOMAIN}/users/alice"
-    assert user.inbox_url == f"https://{BRIDGE_HOST_DOMAIN}/users/alice/inbox"
-    assert user.outbox_url == f"https://{BRIDGE_HOST_DOMAIN}/users/alice/outbox"
-    assert user.followers_url == f"https://{BRIDGE_HOST_DOMAIN}/users/alice/followers"
+    assert user.actor_url == f"https://{BRIDGE_HOST_DOMAIN}/actors/alice"
+    assert user.inbox_url == f"https://{BRIDGE_HOST_DOMAIN}/actors/alice/inbox"
+    assert user.outbox_url == f"https://{BRIDGE_HOST_DOMAIN}/actors/alice/outbox"
+    assert user.followers_url == f"https://{BRIDGE_HOST_DOMAIN}/actors/alice/followers"
     assert user.public_key_pem == "test-public-key"
     assert user.private_key_pem == "test-private-key"
     assert success_page.status_code == 200
     assert f"@alice@{BRIDGE_HOST_DOMAIN}" in success_page.text
-    assert f"https://{BRIDGE_HOST_DOMAIN}/users/alice" in success_page.text
+    assert f"https://{BRIDGE_HOST_DOMAIN}/actors/alice" in success_page.text
 
 
 def test_duplicate_discord_user_repeat_registration_shows_existing_actor(
@@ -150,10 +150,10 @@ def test_duplicate_discord_user_repeat_registration_shows_existing_actor(
     database.create_user(
         discord_user_id="1234567890",
         activitypub_username="alice",
-        actor_url=f"https://{BRIDGE_HOST_DOMAIN}/users/alice",
-        inbox_url=f"https://{BRIDGE_HOST_DOMAIN}/users/alice/inbox",
-        outbox_url=f"https://{BRIDGE_HOST_DOMAIN}/users/alice/outbox",
-        followers_url=f"https://{BRIDGE_HOST_DOMAIN}/users/alice/followers",
+        actor_url=f"https://{BRIDGE_HOST_DOMAIN}/actors/alice",
+        inbox_url=f"https://{BRIDGE_HOST_DOMAIN}/actors/alice/inbox",
+        outbox_url=f"https://{BRIDGE_HOST_DOMAIN}/actors/alice/outbox",
+        followers_url=f"https://{BRIDGE_HOST_DOMAIN}/actors/alice/followers",
         public_key_pem="public-key",
         private_key_pem="private-key",
     )

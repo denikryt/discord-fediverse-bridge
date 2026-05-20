@@ -41,6 +41,7 @@ const COMMUNITY_URL = "https://lemmy.example/c/testcommunity";
 const ACTOR_USERNAME = "alice";
 const PARENT_POST_AP_ID = `${GATEWAY_ORIGIN}users/${ACTOR_USERNAME}/post/100`;
 const PUBLIC = "as:Public";
+const ACTOR_URL = `${GATEWAY_ORIGIN}actors/${ACTOR_USERNAME}`;
 
 const TEST_CONFIG: GatewayConfig = {
   actorIdentifier: "bridge",
@@ -103,7 +104,7 @@ async function testPostActivityShape(): Promise<void> {
   assert.ok(toList(json.to).includes(PUBLIC), "Create.to must include as:Public");
   assert.ok(toList(json.to).includes(COMMUNITY_URL), "Create.to must include community URL");
   assert.ok(
-    toList(json.cc).includes(`${GATEWAY_ORIGIN}users/${ACTOR_USERNAME}`),
+    toList(json.cc).includes(ACTOR_URL),
     "Create.cc must include the actor URL",
   );
 

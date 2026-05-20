@@ -11,6 +11,8 @@ import { buildPublishedActivityObjectJson } from "../src/published-objects.js";
 const BRIDGE_ORIGIN = "https://bot-test.example.com";
 const LEMMY_ORIGIN = "https://lemmy.example";
 const COMMUNITY_URL = `${LEMMY_ORIGIN}/c/testcommunity`;
+const PUBLIC_IRI = "https://www.w3.org/ns/activitystreams#Public";
+const CANONICAL_ALICE_ACTOR = `${BRIDGE_ORIGIN}/actors/alice`;
 
 async function main(): Promise<void> {
   await testStoredPostBuildsPageJsonAndResolvesWithoutHttp();
@@ -45,6 +47,15 @@ async function testStoredPostBuildsPageJsonAndResolvesWithoutHttp(): Promise<voi
       const objectJson = buildPublishedActivityObjectJson(storedPost);
       assert.equal(objectJson.type, "Page");
       assert.equal(objectJson.id, `${BRIDGE_ORIGIN}/users/alice/post/100`);
+      assert.equal(objectJson.attributedTo, CANONICAL_ALICE_ACTOR);
+      assert.deepEqual(objectJson.to, [PUBLIC_IRI, COMMUNITY_URL]);
+      assert.deepEqual(objectJson.cc, [CANONICAL_ALICE_ACTOR]);
+      assert.equal(objectJson.content, "<p>hello from discord</p>");
+      assert.deepEqual(objectJson.source, {
+        content: "hello from discord",
+        mediaType: "text/markdown",
+      });
+      assert.equal(objectJson.published, "2026-05-08T12:00:00Z");
 
       const event = await normalizeCreateActivityFromJson({
         type: "Create",
@@ -108,6 +119,11 @@ async function testStoredCommentWalksLocalReplyChainWithoutHttp(): Promise<void>
 
       const objectJson = buildPublishedActivityObjectJson(storedComment);
       assert.equal(objectJson.type, "Note");
+      assert.equal(objectJson.attributedTo, CANONICAL_ALICE_ACTOR);
+      assert.deepEqual(objectJson.to, [PUBLIC_IRI, COMMUNITY_URL]);
+      assert.deepEqual(objectJson.cc, [CANONICAL_ALICE_ACTOR]);
+      assert.equal(objectJson.content, "<p>first reply</p>");
+      assert.equal(objectJson.published, "2026-05-08T12:00:00Z");
       assert.equal(
         objectJson.inReplyTo,
         `${BRIDGE_ORIGIN}/users/alice/post/100`,

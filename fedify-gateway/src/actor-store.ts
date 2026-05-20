@@ -171,11 +171,15 @@ async function loadBridgeActorKeyPair(
 }
 
 function mapRegisteredUserRow(row: RegisteredUserRow): UserActorIdentity {
+  const actorId = new URL(row.actorUrl);
+  // Development databases store registered users under /actors/{username}; this
+  // matches the configured Fedify dispatcher and keeps user actor ids aligned
+  // with their signing key owner.
   return {
-    actorId: new URL(row.actorUrl),
-    followersId: new URL(row.followersUrl),
-    inboxId: new URL(row.inboxUrl),
-    outboxId: new URL(row.outboxUrl),
+    actorId,
+    followersId: new URL("followers", `${actorId.href.replace(/\/$/, "")}/`),
+    inboxId: new URL("inbox", `${actorId.href.replace(/\/$/, "")}/`),
+    outboxId: new URL("outbox", `${actorId.href.replace(/\/$/, "")}/`),
     publicKeyPem: row.publicKeyPem,
     privateKeyPem: row.privateKeyPem,
     username: row.activitypubUsername,
