@@ -52,10 +52,25 @@ export async function buildWebFingerDocument(
     return null;
   }
   const userIdentity = await loadUserActorIdentity(config, username);
-  if (userIdentity == null) {
+  if (userIdentity != null) {
+    return buildDocument(resource, [userIdentity.actorId.href], userIdentity.actorId.href);
+  }
+
+  // Lemmy can search communities by the plain slug form as well as the `!slug`
+  // handle. When the plain form is not claimed by a registered local user, use
+  // it as a community alias so discovery stays robust.
+  const communityIdentity = await loadLocalCommunityIdentity(config, username);
+  if (communityIdentity == null) {
     return null;
   }
-  return buildDocument(resource, [userIdentity.actorId.href], userIdentity.actorId.href);
+  return buildDocument(
+    resource,
+    [
+      communityIdentity.actorId.href,
+      new URL(`/c/${username}`, config.fedifyOrigin).href,
+    ],
+    communityIdentity.actorId.href,
+  );
 }
 
 function buildDocument(

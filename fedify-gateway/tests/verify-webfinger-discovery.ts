@@ -143,9 +143,19 @@ async function main(): Promise<void> {
     `acct:!hackers@discord-bridge.example.com`,
     `${TEST_ORIGIN}communities/hackers`,
   );
+  await assertWebFingerSelfLink(
+    app,
+    `acct:hackers@discord-bridge.example.com`,
+    `${TEST_ORIGIN}communities/hackers`,
+  );
+
+  const communityAliasResponse = await app.request(
+    "/.well-known/webfinger?resource=acct:hackers@discord-bridge.example.com",
+  );
+  assert.equal(communityAliasResponse.status, 200);
 
   const missingUserResponse = await app.request(
-    "/.well-known/webfinger?resource=acct:hackers@discord-bridge.example.com",
+    "/.well-known/webfinger?resource=acct:missing@discord-bridge.example.com",
   );
   assert.equal(missingUserResponse.status, 404);
 
