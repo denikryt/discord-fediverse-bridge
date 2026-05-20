@@ -53,6 +53,33 @@ export function createGatewayApp(config: GatewayConfig): Hono {
   const app = new Hono();
   const isDebug = config.logLevel === "debug";
 
+  // This temporary access log preserves the request path, response status, and
+  // remote client hints needed to verify which ActivityPub URLs Mastodon fetches
+  // after accepting a local-community publish delivery.
+  app.use("*", async (context, next) => {
+    const startedAt = Date.now();
+    const method = context.req.method;
+    const path = context.req.path;
+    const accept = context.req.header("accept") ?? "";
+    const userAgent = context.req.header("user-agent") ?? "";
+    const forwardedFor =
+      context.req.header("cf-connecting-ip") ??
+      context.req.header("x-forwarded-for") ??
+      "";
+
+    await next();
+
+    console.log("[HTTP]", {
+      method,
+      path,
+      status: context.res.status,
+      durationMs: Date.now() - startedAt,
+      accept,
+      userAgent,
+      forwardedFor,
+    });
+  });
+
   app.get("/healthz", (context) => {
     return context.json({ status: "ok" });
   });
