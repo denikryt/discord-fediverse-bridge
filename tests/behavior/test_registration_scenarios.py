@@ -97,10 +97,15 @@ async def test_unregistered_user_register_command_returns_ephemeral_link(
     command = command_tree.commands["register"]
     await command.callback(interaction)
 
-    interaction.response.send_message.assert_awaited_once_with(
+    interaction.response.defer.assert_awaited_once_with(
+        ephemeral=True,
+        thinking=False,
+    )
+    interaction.followup.send.assert_awaited_once_with(
         f"Register your ActivityPub identity here:\nhttps://{BRIDGE_HOST_DOMAIN}/register",
         ephemeral=True,
     )
+    interaction.response.send_message.assert_not_awaited()
 
 
 def test_oauth_success_then_registration_complete_creates_user_actor(

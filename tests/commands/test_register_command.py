@@ -21,7 +21,12 @@ async def test_register_command_returns_ephemeral_registration_link(
     command = command_tree.commands["register"]
     await command.callback(interaction)
 
-    interaction.response.send_message.assert_awaited_once_with(
+    interaction.response.defer.assert_awaited_once_with(
+        ephemeral=True,
+        thinking=False,
+    )
+    interaction.followup.send.assert_awaited_once_with(
         "Register your ActivityPub identity here:\nhttps://discord-bridge.example.com/register",
         ephemeral=True,
     )
+    interaction.response.send_message.assert_not_awaited()
