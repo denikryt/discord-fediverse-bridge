@@ -172,6 +172,71 @@ def _mastodon_comment_event() -> ActivityPubEvent:
     )
 
 
+def _mastodon_top_level_comment_event() -> ActivityPubEvent:
+    """Build a Mastodon-shaped reply directly to a post, not another comment."""
+    source = {
+        "@context": ["https://www.w3.org/ns/activitystreams"],
+        "id": "https://mastodon.example/ap/users/alice/statuses/top/activity",
+        "type": "Create",
+        "actor": {
+            "id": "https://mastodon.example/ap/users/alice",
+            "type": "Person",
+        },
+        "to": "as:Public",
+        "cc": [
+            "https://mastodon.example/ap/users/alice/followers",
+            "https://bridge.example/actors/choikak2",
+        ],
+        "object": {
+            "id": "https://mastodon.example/ap/users/alice/statuses/top",
+            "type": "Note",
+            "interactionPolicy": {"canQuote": {"automaticApproval": "as:Public"}},
+            "attributedTo": "https://mastodon.example/ap/users/alice",
+            "cc": [
+                "https://mastodon.example/ap/users/alice/followers",
+                "https://bridge.example/actors/choikak2",
+            ],
+            "content": "<p><span class=\"h-card\">@choikak2</span><br />test-1 from mastodon</p>",
+            "contentMap": {"en": "<p>test-1 from mastodon</p>"},
+            "context": "https://mastodon.example/contexts/1",
+            "conversation": "https://mastodon.example/contexts/1",
+            "inReplyTo": "https://bridge.example/users/choikak2/post/1779382297938",
+            "likes": {"type": "Collection", "totalItems": 0},
+            "published": "2026-05-21T16:59:20Z",
+            "replies": {"type": "Collection"},
+            "shares": {"type": "Collection", "totalItems": 0},
+            "to": "as:Public",
+            "url": "https://mastodon.example/@alice/top",
+        },
+        "published": "2026-05-21T16:59:20Z",
+    }
+    return ActivityPubEvent.model_validate(
+        {
+            "event_type": "comment.created",
+            "delivery_id": source["id"],
+            "source_activity_json": source,
+            "source_activity_id": source["id"],
+            "source_announce_id": None,
+            "occurred_at": "2026-05-21T16:59:20Z",
+            "community_actor_id": "https://bridge.example/communities/hackers",
+            "actor_id": "https://mastodon.example/ap/users/alice",
+            "object": {
+                "ap_id": "https://mastodon.example/ap/users/alice/statuses/top",
+                "kind": "comment",
+                "lemmy_id": 0,
+                "post_ap_id": "https://bridge.example/users/choikak2/post/1779382297938",
+                "post_lemmy_id": 0,
+                "parent_ap_id": None,
+                "title": None,
+                "body_markdown": "test-1 from mastodon",
+                "url": "https://mastodon.example/@alice/top",
+                "published_at": "2026-05-21T16:59:20Z",
+                "author_name": "alice",
+            },
+        }
+    )
+
+
 def _lemmy_comment_event() -> ActivityPubEvent:
     """Build a Lemmy-shaped inbound reply that must keep preserve relay behavior."""
     source = {
@@ -354,6 +419,60 @@ async def test_mastodon_shaped_comment_relay_to_lemmy_gets_threadiverse_payload(
         "inReplyToAtomUri",
     ]:
         assert key not in note
+
+
+@pytest.mark.asyncio
+async def test_mastodon_shaped_top_level_comment_relay_uses_post_as_in_reply_to(tmp_path: Path) -> None:
+    """A Mastodon reply directly to a post must keep inReplyTo pointing at that post."""
+    database, runtime = _runtime(tmp_path)
+    local_community = _local_community(database)
+    database.create_local_community_follower(
+        local_community_id=local_community.id,
+        remote_actor_id="https://mastodon.example/ap/users/alice",
+        remote_inbox_url="https://mastodon.example/ap/users/alice/inbox",
+        follow_activity_id="https://mastodon.example/follows/1",
+    )
+    database.create_local_community_follower(
+        local_community_id=local_community.id,
+        remote_actor_id="https://lemmy.example/u/admin",
+        remote_inbox_url="https://lemmy.example/u/admin/inbox",
+        follow_activity_id="https://lemmy.example/follows/admin",
+    )
+    database.create_local_community_thread(
+        local_community_id=local_community.id,
+        discord_thread_id=200,
+        discord_starter_message_id=300,
+        ap_activity_id="https://bridge.example/users/choikak2/activities/create/post/1779382297938",
+        ap_object_id="https://bridge.example/users/choikak2/post/1779382297938",
+        direction="discord_to_ap",
+        origin_kind="local_user",
+    )
+    discord_thread = build_send_thread(thread_id=200, sent_message_id=303)
+    runtime.bot = build_bot(threads={200: discord_thread})
+
+    async def gateway_result(*, signing_actor_url: str, deliveries: list[object]) -> SendLocalCommunityRelayResult:
+        """Return success so the rendered payload becomes visible in the test."""
+        return SendLocalCommunityRelayResult(
+            outcomes=[
+                SendLocalCommunityRelayOutcome(
+                    delivery_id=delivery.delivery_id,
+                    ok=True,
+                    target_remote_actor_id=delivery.target_remote_actor_id,
+                    activity_id=delivery.activity_json["id"],
+                )
+                for delivery in deliveries
+            ]
+        )
+
+    runtime.fedify_gateway.send_local_community_relay.side_effect = gateway_result
+
+    result = await runtime.handle_inbound_comment(_mastodon_top_level_comment_event(), SimpleNamespace())
+
+    assert result.status == "processed"
+    delivery = runtime.fedify_gateway.send_local_community_relay.await_args.kwargs["deliveries"][0]
+    note = delivery.activity_json["object"]["object"]
+    assert note["inReplyTo"] == "https://bridge.example/users/choikak2/post/1779382297938"
+    assert note["content"] == "<p>test-1 from mastodon</p>"
 
 
 @pytest.mark.asyncio

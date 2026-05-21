@@ -121,7 +121,7 @@ def _render_threadiverse_note_announce(
     event_object = getattr(normalized_event, "object")
     actor_id = getattr(normalized_event, "actor_id")
     body = getattr(event_object, "body_markdown", None) or ""
-    parent_id = getattr(event_object, "parent_ap_id", None)
+    parent_id = getattr(event_object, "parent_ap_id", None) or getattr(event_object, "post_ap_id", None)
 
     note = {
         "@context": "https://www.w3.org/ns/activitystreams",
@@ -141,9 +141,11 @@ def _render_threadiverse_note_announce(
         "url": getattr(event_object, "url"),
     }
     if parent_id:
-        # Parent ids come from the gateway-normalized reply chain, not from the
-        # raw source object. This keeps local-parent and remote-parent replies
-        # consistent after Mastodon mention stripping.
+        # Top-level comments have no parent comment id, but Lemmy still needs
+        # inReplyTo to point at the post. Comment replies keep their parent
+        # comment id. Both ids come from the normalized event, not raw Mastodon
+        # JSON, so local-parent and remote-parent relays stay consistent after
+        # mention stripping.
         note["inReplyTo"] = parent_id
 
     source_create_id = source_activity_json.get("id")
