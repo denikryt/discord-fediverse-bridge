@@ -41,6 +41,19 @@ export interface LocalCommunityFollowerRow {
   status: string;
 }
 
+export interface MessageMappingRow {
+  // Message mappings are the placement authority for Discord-side replies;
+  // fetchable object rows alone do not prove where a reply belongs.
+  sourcePlatform: string;
+  sourceId: string;
+  activityId: string;
+  objectId: string;
+  actorUrl: string;
+  communityActorUrl: string;
+  discordChannelId: number | null;
+  discordMessageId: number | null;
+}
+
 export interface PublishedActivityObjectRow {
   // The durable object row contains enough data to reconstruct a local Page or
   // Note without relying on the original publish process still being in memory.
@@ -315,6 +328,29 @@ export async function loadPublishedActivityObjectByActivityIdForDatabaseUrl(
   );
 }
 
+
+export async function loadMessageMappingByObjectIdForDatabaseUrl(
+  databaseUrl: string,
+  objectId: string,
+): Promise<MessageMappingRow | null> {
+  // Parent reply routing must use message_mappings because this table carries
+  // both the community actor and Discord placement identifiers.
+  let database: Database;
+  try {
+    database = await openDatabaseUrl(databaseUrl);
+  } catch (error) {
+    if (isMissingSqliteStorageError(error)) {
+      return null;
+    }
+    throw error;
+  }
+  try {
+    return loadMessageMappingFromDatabase(database, objectId);
+  } finally {
+    database.close();
+  }
+}
+
 async function openConfiguredDatabase(
   config: GatewayConfig,
 ): Promise<Database> {
@@ -421,6 +457,54 @@ async function loadPublishedActivityObjectByColumnForDatabaseUrl(
   }
 }
 
+
+function loadMessageMappingFromDatabase(
+  database: Database,
+  objectId: string,
+): MessageMappingRow | null {
+  let statement;
+  try {
+    statement = database.prepare(`
+      SELECT
+        source_platform,
+        source_id,
+        activity_id,
+        object_id,
+        actor_url,
+        community_actor_url,
+        discord_channel_id,
+        discord_message_id
+      FROM message_mappings
+      WHERE object_id = ?
+      LIMIT 1
+    `);
+  } catch (error) {
+    if (isMissingMessageMappingsTableError(error)) {
+      return null;
+    }
+    throw error;
+  }
+  try {
+    statement.bind([objectId]);
+    if (!statement.step()) {
+      return null;
+    }
+    const row = statement.getAsObject() as Record<string, unknown>;
+    return {
+      sourcePlatform: asString(row.source_platform),
+      sourceId: asString(row.source_id),
+      activityId: asString(row.activity_id),
+      objectId: asString(row.object_id),
+      actorUrl: asString(row.actor_url),
+      communityActorUrl: asString(row.community_actor_url),
+      discordChannelId: asNullableNumber(row.discord_channel_id),
+      discordMessageId: asNullableNumber(row.discord_message_id),
+    };
+  } finally {
+    statement.free();
+  }
+}
+
 function loadPublishedActivityObjectFromDatabase(
   database: Database,
   column: PublishedActivityObjectLookupColumn,
@@ -494,6 +578,13 @@ function isMissingSqliteStorageError(error: unknown): boolean {
     error instanceof Error &&
     "code" in error &&
     error.code === "ENOENT"
+  );
+}
+
+function isMissingMessageMappingsTableError(error: unknown): boolean {
+  return (
+    error instanceof Error &&
+    error.message.includes("no such table: message_mappings")
   );
 }
 

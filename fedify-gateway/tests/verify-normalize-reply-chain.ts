@@ -21,9 +21,19 @@
  */
 
 import assert from "node:assert/strict";
+import { rmSync } from "node:fs";
+import { mkdtemp, writeFile } from "node:fs/promises";
 import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
+import { tmpdir } from "node:os";
+import path from "node:path";
 
-import { normalizeCreateActivityFromJson } from "../src/normalize.js";
+import { Create, Note, Person, Source } from "@fedify/vocab";
+import initSqlJs from "sql.js";
+
+import {
+  normalizeCreateActivity,
+  normalizeCreateActivityFromJson,
+} from "../src/normalize.js";
 
 const LEMMY_ORIGIN = "https://lemmy.example";
 const COMMUNITY_URL = `${LEMMY_ORIGIN}/c/testcommunity`;
@@ -31,6 +41,8 @@ const COMMUNITY_URL = `${LEMMY_ORIGIN}/c/testcommunity`;
 async function main(): Promise<void> {
   await testLemmyReplyToGatewayPost();
   await testLemmyReplyToGatewayComment();
+  await testDirectNoteReplyToMappedLocalComment();
+  await testDirectNoteReplyToUnmappedLocalCommentRejects();
   console.log("normalize reply-chain regression tests passed");
 }
 
@@ -182,6 +194,217 @@ async function testLemmyReplyToGatewayComment(): Promise<void> {
       "parent_ap_id must be the direct gateway comment parent",
     );
   });
+}
+
+/**
+ * Action: a Mastodon-shaped server sends a direct Create(Note) reply to a
+ * gateway-owned comment. The Note does not address the local community; its
+ * inReplyTo parent mapping is the only safe routing anchor.
+ *
+ * Expected: normalization emits comment.created, derives community_actor_id from
+ * message_mappings, and accepts the non-Lemmy status URL with lemmy_id = 0.
+ */
+async function testDirectNoteReplyToMappedLocalComment(): Promise<void> {
+  const previousDatabaseUrl = process.env.DATABASE_URL;
+  const tempDir = await mkdtemp(path.join(tmpdir(), "fedify-direct-note-parent-"));
+  const databasePath = path.join(tempDir, "bridge.db");
+  const databaseUrl = `sqlite:///${databasePath}`;
+
+  try {
+    await writeBridgeParentDatabase(databasePath);
+    process.env.DATABASE_URL = databaseUrl;
+
+    const activity = new Create({
+      id: new URL("https://mastodon.example/users/alice/statuses/900/activity"),
+      actor: new Person({
+        id: new URL("https://mastodon.example/users/alice"),
+        preferredUsername: "alice",
+      }),
+      object: new Note({
+        id: new URL("https://mastodon.example/users/alice/statuses/900"),
+        replyTarget: new URL("https://bridge.example/users/bob/comment/200"),
+        source: new Source({
+          content: "reply from mastodon-shaped server",
+          mediaType: "text/markdown",
+        }),
+        url: new URL("https://mastodon.example/@alice/900"),
+      }),
+    });
+
+    const event = await normalizeCreateActivity(activity);
+
+    assert.ok(event, "direct Note reply to mapped local parent must normalize");
+    assert.equal(event.event_type, "comment.created");
+    assert.equal(event.community_actor_id, "https://bridge.example/communities/general");
+    assert.equal(event.object.lemmy_id, 0);
+    assert.equal(event.object.parent_ap_id, "https://bridge.example/users/bob/comment/200");
+    assert.equal(event.object.post_ap_id, "https://bridge.example/users/bob/post/100");
+    assert.equal(event.object.post_lemmy_id, 0);
+  } finally {
+    if (previousDatabaseUrl == null) {
+      delete process.env.DATABASE_URL;
+    } else {
+      process.env.DATABASE_URL = previousDatabaseUrl;
+    }
+    rmSync(tempDir, { force: true, recursive: true });
+  }
+}
+
+
+/**
+ * Action: a direct Note reply targets a local object that is fetchable but has
+ * no message_mappings row.
+ *
+ * Expected: normalization rejects the reply because fetchability alone does not
+ * define Discord placement.
+ */
+async function testDirectNoteReplyToUnmappedLocalCommentRejects(): Promise<void> {
+  const previousDatabaseUrl = process.env.DATABASE_URL;
+  const tempDir = await mkdtemp(path.join(tmpdir(), "fedify-direct-note-unmapped-"));
+  const databasePath = path.join(tempDir, "bridge.db");
+
+  try {
+    await writeBridgeParentDatabase(databasePath, { includeMapping: false });
+    process.env.DATABASE_URL = `sqlite:///${databasePath}`;
+
+    const activity = new Create({
+      id: new URL("https://mastodon.example/users/alice/statuses/901/activity"),
+      actor: new Person({
+        id: new URL("https://mastodon.example/users/alice"),
+        preferredUsername: "alice",
+      }),
+      object: new Note({
+        id: new URL("https://mastodon.example/users/alice/statuses/901"),
+        replyTarget: new URL("https://bridge.example/users/bob/comment/200"),
+        source: new Source({
+          content: "reply with no placement mapping",
+          mediaType: "text/markdown",
+        }),
+      }),
+    });
+
+    await assert.rejects(
+      () => normalizeCreateActivity(activity),
+      /Could not resolve community actor id for comment reply parent/,
+    );
+  } finally {
+    if (previousDatabaseUrl == null) {
+      delete process.env.DATABASE_URL;
+    } else {
+      process.env.DATABASE_URL = previousDatabaseUrl;
+    }
+    rmSync(tempDir, { force: true, recursive: true });
+  }
+}
+
+/**
+ * Builds the minimal bridge DB state required for local-parent community
+ * resolution. message_mappings is intentionally present because Discord
+ * placement must not fall back to fetchability-only published objects.
+ */
+async function writeBridgeParentDatabase(
+  databasePath: string,
+  options: { includeMapping?: boolean } = {},
+): Promise<void> {
+  const sqlJs = await initSqlJs();
+  const db = new sqlJs.Database();
+  try {
+    db.run(`
+      CREATE TABLE published_activity_objects (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        actor_username TEXT NOT NULL,
+        actor_url TEXT NOT NULL,
+        community_actor_url TEXT NOT NULL,
+        activity_id TEXT NOT NULL UNIQUE,
+        object_id TEXT NOT NULL UNIQUE,
+        kind TEXT NOT NULL,
+        title TEXT NULL,
+        body_markdown TEXT NOT NULL,
+        in_reply_to_object_id TEXT NULL,
+        discord_channel_id INTEGER NULL,
+        discord_message_id INTEGER NULL,
+        published_at TEXT NOT NULL,
+        created_at TEXT NOT NULL
+      )
+    `);
+    db.run(`
+      CREATE TABLE message_mappings (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        source_platform TEXT NOT NULL,
+        source_id TEXT NOT NULL,
+        activity_id TEXT NOT NULL UNIQUE,
+        object_id TEXT NOT NULL UNIQUE,
+        actor_url TEXT NOT NULL,
+        community_actor_url TEXT NOT NULL,
+        discord_channel_id INTEGER NULL,
+        discord_message_id INTEGER NULL,
+        created_at TEXT NOT NULL
+      )
+    `);
+    db.run(
+      `
+        INSERT INTO published_activity_objects (
+          actor_username, actor_url, community_actor_url, activity_id, object_id,
+          kind, title, body_markdown, in_reply_to_object_id,
+          discord_channel_id, discord_message_id, published_at, created_at
+        ) VALUES
+          (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?),
+          (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      `,
+      [
+        "bob",
+        "https://bridge.example/actors/bob",
+        "https://bridge.example/communities/general",
+        "https://bridge.example/users/bob/activities/create/post/100",
+        "https://bridge.example/users/bob/post/100",
+        "post",
+        "Root post",
+        "root body",
+        null,
+        10,
+        1000,
+        "2026-05-08T12:00:00Z",
+        "2026-05-08T12:00:00Z",
+        "bob",
+        "https://bridge.example/actors/bob",
+        "https://bridge.example/communities/general",
+        "https://bridge.example/users/bob/activities/create/comment/200",
+        "https://bridge.example/users/bob/comment/200",
+        "comment",
+        null,
+        "parent comment body",
+        "https://bridge.example/users/bob/post/100",
+        10,
+        2000,
+        "2026-05-08T12:01:00Z",
+        "2026-05-08T12:01:00Z",
+      ],
+    );
+    if (options.includeMapping !== false) {
+      db.run(
+        `
+          INSERT INTO message_mappings (
+            source_platform, source_id, activity_id, object_id, actor_url,
+            community_actor_url, discord_channel_id, discord_message_id, created_at
+          ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+        `,
+        [
+          "discord",
+          "2000",
+          "https://bridge.example/users/bob/activities/create/comment/200",
+          "https://bridge.example/users/bob/comment/200",
+          "https://bridge.example/actors/bob",
+          "https://bridge.example/communities/general",
+          10,
+          2000,
+          "2026-05-08T12:01:00Z",
+        ],
+      );
+    }
+    await writeFile(databasePath, Buffer.from(db.export()));
+  } finally {
+    db.close();
+  }
 }
 
 main().catch((error) => {

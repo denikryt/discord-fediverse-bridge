@@ -127,30 +127,35 @@ export function createGatewayFederation(
       if (isDebug) {
         console.log("[Fedify][debug] Received direct Create activity");
       }
-      // Direct Create handling is the happy path when the remote server does
-      // not wrap local objects inside Announce.
-      const event = await normalizeCreateActivity(activity);
-      if (event == null) {
-        logDebug(isDebug, "normalizeCreateActivity returned null");
-        return;
-      }
-      if (shouldSkipCommunityEvent(event, config.communityActorId)) {
-        logDebug(
-          isDebug,
-          "Event community does not match configured community, skipping",
-        );
-        return;
-      }
+      try {
+        // Direct Create handling is the happy path when the remote server does
+        // not wrap local objects inside Announce. Errors must be logged here
+        // because the inbox already returns 202 before async processing finishes.
+        const event = await normalizeCreateActivity(activity);
+        if (event == null) {
+          logDebug(isDebug, "normalizeCreateActivity returned null");
+          return;
+        }
+        if (shouldSkipCommunityEvent(event, config.communityActorId)) {
+          logDebug(
+            isDebug,
+            "Event community does not match configured community, skipping",
+          );
+          return;
+        }
 
-      const sourceActivityJson = await activity.toJsonLd() as Record<string, unknown>;
-      event.source_activity_json = sourceActivityJson;
-      event.source_activity_id = typeof sourceActivityJson.id === "string" ? sourceActivityJson.id : event.delivery_id;
-      event.source_announce_id = null;
-      await deliverNormalizedEvent(config, event, {
-        deliveryId: event.delivery_id,
-        eventType: event.event_type,
-        objectId: event.object.ap_id,
-      });
+        const sourceActivityJson = await activity.toJsonLd() as Record<string, unknown>;
+        event.source_activity_json = sourceActivityJson;
+        event.source_activity_id = typeof sourceActivityJson.id === "string" ? sourceActivityJson.id : event.delivery_id;
+        event.source_announce_id = null;
+        await deliverNormalizedEvent(config, event, {
+          deliveryId: event.delivery_id,
+          eventType: event.event_type,
+          objectId: event.object.ap_id,
+        });
+      } catch (error) {
+        console.error("[Fedify] Error processing direct Create activity", error);
+      }
     })
     .on(Announce, async (ctx, activity) => {
       try {

@@ -5,7 +5,10 @@ import { Note } from "@fedify/vocab";
 import { Page } from "@fedify/vocab";
 import { type Object as ActivityObject } from "@fedify/vocab";
 
-import { loadPublishedActivityObjectByObjectIdForDatabaseUrl } from "./db.js";
+import {
+  loadMessageMappingByObjectIdForDatabaseUrl,
+  loadPublishedActivityObjectByObjectIdForDatabaseUrl,
+} from "./db.js";
 import type { BridgeEvent } from "./types.js";
 
 export async function normalizeCreateActivity(
@@ -199,7 +202,7 @@ async function normalizeCommentActivity(
 
   return {
     actor_id: activity.actorId?.href ?? "",
-    community_actor_id: resolveCommunityActorId(object),
+    community_actor_id: await resolveCommentCommunityActorId(object, replyTargetId),
     delivery_id: activity.id?.href ?? randomUUID(),
     event_type: "comment.created",
     occurred_at: publishedAt,
@@ -208,7 +211,7 @@ async function normalizeCommentActivity(
       author_name: await resolveAuthorName(activity),
       body_markdown: resolveMarkdownBody(object),
       kind: "comment",
-      lemmy_id: parseRequiredLemmyNumericId(apId, "comment"),
+      lemmy_id: parseLemmyNumericIdOrZero(apId, "comment"),
       parent_ap_id: replyContext.parentApId,
       post_ap_id: replyContext.postApId,
       post_lemmy_id: parseReplyTargetPostNumericId(
@@ -240,17 +243,50 @@ async function resolveAuthorName(activity: Create): Promise<string> {
 }
 
 function resolveCommunityActorId(object: ActivityObject): string {
+  const community = tryResolveCommunityActorId(object);
+  if (!community) {
+    throw new Error("Could not resolve community actor id from ActivityPub object");
+  }
+  return community;
+}
+
+function tryResolveCommunityActorId(object: ActivityObject): string | null {
   const candidates = [
     object.audienceId?.href,
     ...object.toIds.map((id) => id.href),
     ...object.ccIds.map((id) => id.href),
   ].filter((value): value is string => Boolean(value));
 
-  const community = candidates.find((candidate) => isCommunityActorId(candidate));
-  if (!community) {
-    throw new Error("Could not resolve community actor id from ActivityPub object");
+  return candidates.find((candidate) => isCommunityActorId(candidate)) ?? null;
+}
+
+async function resolveCommentCommunityActorId(
+  object: Note,
+  replyTargetId: string,
+): Promise<string> {
+  // Lemmy-style comments address the community directly. Keep that path first
+  // so existing community routing remains unchanged for normal Lemmy traffic.
+  const addressedCommunity = tryResolveCommunityActorId(object);
+  if (addressedCommunity) {
+    logCommunityResolution("addressing", addressedCommunity, null);
+    return addressedCommunity;
   }
-  return community;
+
+  // Mastodon-shaped and other direct Note replies may address only the replied
+  // actor. In that protocol shape the local parent mapping is the routing
+  // authority because it carries the Discord placement and community actor.
+  const parentMapping = await loadLocalParentMessageMapping(replyTargetId);
+  if (parentMapping == null) {
+    throw new Error(
+      `Could not resolve community actor id for comment reply parent ${replyTargetId}`,
+    );
+  }
+  logCommunityResolution(
+    "local-parent",
+    parentMapping.communityActorUrl,
+    parentMapping.objectId,
+  );
+  return parentMapping.communityActorUrl;
 }
 
 function resolveMarkdownBody(object: ActivityObject): string | null {
@@ -330,7 +366,7 @@ async function normalizeCommentActivityFromJson(
 
   return {
     actor_id: asString(activity.actor) ?? "",
-    community_actor_id: resolveCommunityActorIdFromJson(object),
+    community_actor_id: await resolveCommentCommunityActorIdFromJson(object, replyTarget),
     delivery_id: asString(activity.id) ?? randomUUID(),
     event_type: "comment.created",
     occurred_at: publishedAt,
@@ -339,7 +375,7 @@ async function normalizeCommentActivityFromJson(
       author_name: resolveAuthorNameFromJson(activity, object),
       body_markdown: resolveMarkdownBodyFromJson(object),
       kind: "comment",
-      lemmy_id: parseRequiredLemmyNumericId(apId, "comment"),
+      lemmy_id: parseLemmyNumericIdOrZero(apId, "comment"),
       parent_ap_id: replyContext.parentApId,
       post_ap_id: replyContext.postApId,
       post_lemmy_id: parseReplyTargetPostNumericId(
@@ -354,17 +390,49 @@ async function normalizeCommentActivityFromJson(
 }
 
 function resolveCommunityActorIdFromJson(object: Record<string, unknown>): string {
+  const community = tryResolveCommunityActorIdFromJson(object);
+  if (!community) {
+    throw new Error("Could not resolve community actor id from raw ActivityPub object");
+  }
+  return community;
+}
+
+function tryResolveCommunityActorIdFromJson(
+  object: Record<string, unknown>,
+): string | null {
   const candidates = [
     ...normalizeStringArray(object.audience),
     ...normalizeStringArray(object.to),
     ...normalizeStringArray(object.cc),
   ];
 
-  const community = candidates.find((candidate) => isCommunityActorId(candidate));
-  if (!community) {
-    throw new Error("Could not resolve community actor id from raw ActivityPub object");
+  return candidates.find((candidate) => isCommunityActorId(candidate)) ?? null;
+}
+
+async function resolveCommentCommunityActorIdFromJson(
+  object: Record<string, unknown>,
+  replyTarget: string,
+): Promise<string> {
+  // Raw Announce(Create(Note)) payloads from Lemmy continue to use explicit
+  // community addressing; only missing addressing falls back to a local parent.
+  const addressedCommunity = tryResolveCommunityActorIdFromJson(object);
+  if (addressedCommunity) {
+    logCommunityResolution("addressing", addressedCommunity, null);
+    return addressedCommunity;
   }
-  return community;
+
+  const parentMapping = await loadLocalParentMessageMapping(replyTarget);
+  if (parentMapping == null) {
+    throw new Error(
+      `Could not resolve community actor id for raw comment reply parent ${replyTarget}`,
+    );
+  }
+  logCommunityResolution(
+    "local-parent",
+    parentMapping.communityActorUrl,
+    parentMapping.objectId,
+  );
+  return parentMapping.communityActorUrl;
 }
 
 function resolveMarkdownBodyFromJson(object: Record<string, unknown>): string | null {
@@ -566,6 +634,44 @@ async function fetchActivityObject(
   } catch {
     return null;
   }
+}
+
+async function loadLocalParentMessageMapping(objectId: string): Promise<{
+  objectId: string;
+  communityActorUrl: string;
+} | null> {
+  // Use message_mappings, not published_activity_objects, because only the
+  // mapping table proves that the parent has Discord placement state.
+  const databaseUrl = process.env.DATABASE_URL ?? "sqlite:///./bridge.db";
+  const row = await loadMessageMappingByObjectIdForDatabaseUrl(
+    databaseUrl,
+    objectId,
+  );
+  if (row == null) {
+    return null;
+  }
+  return {
+    objectId: row.objectId,
+    communityActorUrl: row.communityActorUrl,
+  };
+}
+
+function logCommunityResolution(
+  source: "addressing" | "local-parent",
+  communityActorId: string,
+  parentObjectId: string | null,
+): void {
+  // LOG_LEVEL=debug is the single project-wide switch for gateway diagnostics.
+  // Logging the source makes routing decisions auditable without changing the
+  // bridge event schema.
+  if (process.env.LOG_LEVEL !== "debug") {
+    return;
+  }
+  console.log("[Fedify][debug] Resolved comment community", {
+    source,
+    communityActorId,
+    parentObjectId,
+  });
 }
 
 async function loadStoredActivityObject(objectId: string): Promise<{
