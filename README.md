@@ -225,3 +225,8 @@ The repository includes:
 - `fedify-gateway/nginx.conf`
 - `fedify-gateway/nginx-setup.sh`
 - `fedify-gateway/SETUP.md`
+
+## Known issues
+
+- Mastodon replies to Lemmy-origin posts in the bridge community can bypass the bridge inbox.
+- Lemmy may receive those replies, but Discord will not see them because the gateway never receives the `Create(Note)`.
