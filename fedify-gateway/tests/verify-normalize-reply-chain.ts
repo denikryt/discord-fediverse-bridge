@@ -224,10 +224,11 @@ async function testDirectNoteReplyToMappedLocalComment(): Promise<void> {
       object: new Note({
         id: new URL("https://mastodon.example/users/alice/statuses/900"),
         replyTarget: new URL("https://bridge.example/users/bob/comment/200"),
-        source: new Source({
-          content: "reply from mastodon-shaped server",
-          mediaType: "text/markdown",
-        }),
+        // Mastodon replies do not provide source.content; they send rendered
+        // HTML with a leading mention of the local actor. The bridge must store
+        // readable text for Discord placement instead of raw HTML.
+        content:
+          '<p><span class="h-card"><a href="https://bridge.example/actors/bob">@<span>bob</span></a></span> <br />reply from mastodon-shaped server</p>',
         url: new URL("https://mastodon.example/@alice/900"),
       }),
     });
@@ -238,6 +239,7 @@ async function testDirectNoteReplyToMappedLocalComment(): Promise<void> {
     assert.equal(event.event_type, "comment.created");
     assert.equal(event.community_actor_id, "https://bridge.example/communities/general");
     assert.equal(event.object.lemmy_id, 0);
+    assert.equal(event.object.body_markdown, "reply from mastodon-shaped server");
     assert.equal(event.object.parent_ap_id, "https://bridge.example/users/bob/comment/200");
     assert.equal(event.object.post_ap_id, "https://bridge.example/users/bob/post/100");
     assert.equal(event.object.post_lemmy_id, 0);

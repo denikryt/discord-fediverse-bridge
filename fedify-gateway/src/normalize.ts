@@ -305,7 +305,10 @@ function resolveMarkdownBody(object: ActivityObject): string | null {
     return sourceContent;
   }
   if (typeof object.content === "string" && object.content.length > 0) {
-    return object.content;
+    // Mastodon and similar servers send Note.content as rendered HTML. The
+    // Python/Discord side expects this field to be readable message text, not
+    // raw HTML that Discord will preview as broken links.
+    return htmlContentToDiscordText(object.content);
   }
   return null;
 }
@@ -453,7 +456,51 @@ function resolveMarkdownBodyFromJson(object: Record<string, unknown>): string | 
   if (sourceContent) {
     return sourceContent;
   }
-  return asString(object.content);
+  const content = asString(object.content);
+  return content ? htmlContentToDiscordText(content) : null;
+}
+
+
+function htmlContentToDiscordText(content: string): string {
+  // ActivityPub content is often HTML. Convert only the rendered-content
+  // fallback path; source.content with text/markdown is preserved above.
+  let text = content
+    .replace(/<br\s*\/?\s*>/gi, "\n")
+    .replace(/<\/p\s*>/gi, "\n\n")
+    .replace(/<\/div\s*>/gi, "\n")
+    .replace(/<\/li\s*>/gi, "\n")
+    .replace(/<[^>]+>/g, "");
+
+  text = decodeBasicHtmlEntities(text)
+    .replace(/[ \t]+\n/g, "\n")
+    .replace(/\n{3,}/g, "\n\n")
+    .trim();
+
+  // Mastodon replies commonly begin with a mention of the replied local actor.
+  // Discord already places the message in the reply thread, so keep the actual
+  // body and drop that routing mention from the rendered bridge text.
+  return text.replace(/^@\S+\s*(?:\n+|\s+)/, "").trim();
+}
+
+function decodeBasicHtmlEntities(value: string): string {
+  // Keep this dependency-free and conservative; these are the entities that
+  // normally appear in sanitized ActivityPub HTML bodies. Numeric entities are
+  // decoded so non-ASCII replies remain readable in Discord.
+  return value
+    .replace(/&nbsp;/g, " ")
+    .replace(/&lt;/g, "<")
+    .replace(/&gt;/g, ">")
+    .replace(/&quot;/g, '"')
+    .replace(/&#39;/g, "'")
+    .replace(/&amp;/g, "&")
+    .replace(/&#(\d+);/g, (_match, codepoint: string) => {
+      const parsed = Number.parseInt(codepoint, 10);
+      return Number.isFinite(parsed) ? String.fromCodePoint(parsed) : _match;
+    })
+    .replace(/&#x([0-9a-f]+);/gi, (_match, codepoint: string) => {
+      const parsed = Number.parseInt(codepoint, 16);
+      return Number.isFinite(parsed) ? String.fromCodePoint(parsed) : _match;
+    });
 }
 
 function resolveAuthorNameFromJson(
