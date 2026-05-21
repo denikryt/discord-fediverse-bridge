@@ -11,8 +11,14 @@ import {
 } from "./db.js";
 import type { BridgeEvent } from "./types.js";
 
+export interface NormalizeOptions {
+  /** Shared bridge database URL resolved by the gateway configuration. */
+  databaseUrl?: string;
+}
+
 export async function normalizeCreateActivity(
   activity: Create,
+  options: NormalizeOptions = {},
 ): Promise<BridgeEvent | null> {
   // Typed Fedify objects are preferred when available because they already
   // resolve some vocabulary details for us.
@@ -26,7 +32,7 @@ export async function normalizeCreateActivity(
   }
 
   if (object instanceof Note) {
-    return await normalizeCommentActivity(activity, object);
+    return await normalizeCommentActivity(activity, object, options);
   }
 
   return null;
@@ -34,6 +40,7 @@ export async function normalizeCreateActivity(
 
 export async function normalizeCreateActivityFromJson(
   activity: unknown,
+  options: NormalizeOptions = {},
 ): Promise<BridgeEvent | null> {
   // Raw JSON normalization is the fallback for wrapped Announce payloads where
   // the typed Fedify object path is not reliable enough for nested Create.
@@ -51,7 +58,7 @@ export async function normalizeCreateActivityFromJson(
   }
 
   if (object.type === "Note") {
-    return await normalizeCommentActivityFromJson(activity, object);
+    return await normalizeCommentActivityFromJson(activity, object, options);
   }
 
   return null;
@@ -59,6 +66,7 @@ export async function normalizeCreateActivityFromJson(
 
 export async function normalizeUpdateActivityFromJson(
   activity: unknown,
+  options: NormalizeOptions = {},
 ): Promise<BridgeEvent | null> {
   // Handles the unwrapped Update record extracted from Announce(Update(...)).
   // Delegates to the same sub-normalizers as Create but overrides event_type.
@@ -78,7 +86,7 @@ export async function normalizeUpdateActivityFromJson(
   }
 
   if (object.type === "Note") {
-    const event = await normalizeCommentActivityFromJson(activity, object);
+    const event = await normalizeCommentActivityFromJson(activity, object, options);
     // Override event_type: same shape as Create but this is an edit.
     return { ...event, event_type: "comment.updated" };
   }
@@ -185,6 +193,7 @@ async function normalizePostActivity(
 async function normalizeCommentActivity(
   activity: Create,
   object: Note,
+  options: NormalizeOptions,
 ): Promise<BridgeEvent> {
   const apId = requireUrl(object.id, "comment object id");
   const replyTargetId = object.replyTargetId?.href;
@@ -192,7 +201,7 @@ async function normalizeCommentActivity(
     throw new Error(`Comment ${apId} is missing inReplyTo/replyTarget`);
   }
 
-  const replyContext = await resolveReplyChainContext(replyTargetId);
+  const replyContext = await resolveReplyChainContext(replyTargetId, options);
   if (!replyContext.postApId) {
     throw new Error(`Could not resolve post AP ID for comment ${apId}`);
   }
@@ -202,7 +211,7 @@ async function normalizeCommentActivity(
 
   return {
     actor_id: activity.actorId?.href ?? "",
-    community_actor_id: await resolveCommentCommunityActorId(object, replyTargetId),
+    community_actor_id: await resolveCommentCommunityActorId(object, replyTargetId, options),
     delivery_id: activity.id?.href ?? randomUUID(),
     event_type: "comment.created",
     occurred_at: publishedAt,
@@ -263,6 +272,7 @@ function tryResolveCommunityActorId(object: ActivityObject): string | null {
 async function resolveCommentCommunityActorId(
   object: Note,
   replyTargetId: string,
+  options: NormalizeOptions,
 ): Promise<string> {
   // Lemmy-style comments address the community directly. Keep that path first
   // so existing community routing remains unchanged for normal Lemmy traffic.
@@ -275,7 +285,7 @@ async function resolveCommentCommunityActorId(
   // Mastodon-shaped and other direct Note replies may address only the replied
   // actor. In that protocol shape the local parent mapping is the routing
   // authority because it carries the Discord placement and community actor.
-  const parentMapping = await loadLocalParentMessageMapping(replyTargetId);
+  const parentMapping = await loadLocalParentMessageMapping(replyTargetId, options);
   if (parentMapping == null) {
     throw new Error(
       `Could not resolve community actor id for comment reply parent ${replyTargetId}`,
@@ -350,6 +360,7 @@ function resolvePostUrlFromJson(object: Record<string, unknown>, apId: string): 
 async function normalizeCommentActivityFromJson(
   activity: Record<string, unknown>,
   object: Record<string, unknown>,
+  options: NormalizeOptions,
 ): Promise<BridgeEvent> {
   const apId = requireString(object.id, "comment object id");
   const replyTarget = asString(object.inReplyTo) ?? asString(object.replyTarget);
@@ -357,7 +368,7 @@ async function normalizeCommentActivityFromJson(
     throw new Error(`Comment ${apId} is missing inReplyTo`);
   }
 
-  const replyContext = await resolveReplyChainContext(replyTarget);
+  const replyContext = await resolveReplyChainContext(replyTarget, options);
   if (!replyContext.postApId) {
     throw new Error(`Could not resolve post AP ID for comment ${apId}`);
   }
@@ -366,7 +377,7 @@ async function normalizeCommentActivityFromJson(
 
   return {
     actor_id: asString(activity.actor) ?? "",
-    community_actor_id: await resolveCommentCommunityActorIdFromJson(object, replyTarget),
+    community_actor_id: await resolveCommentCommunityActorIdFromJson(object, replyTarget, options),
     delivery_id: asString(activity.id) ?? randomUUID(),
     event_type: "comment.created",
     occurred_at: publishedAt,
@@ -412,6 +423,7 @@ function tryResolveCommunityActorIdFromJson(
 async function resolveCommentCommunityActorIdFromJson(
   object: Record<string, unknown>,
   replyTarget: string,
+  options: NormalizeOptions,
 ): Promise<string> {
   // Raw Announce(Create(Note)) payloads from Lemmy continue to use explicit
   // community addressing; only missing addressing falls back to a local parent.
@@ -421,7 +433,7 @@ async function resolveCommentCommunityActorIdFromJson(
     return addressedCommunity;
   }
 
-  const parentMapping = await loadLocalParentMessageMapping(replyTarget);
+  const parentMapping = await loadLocalParentMessageMapping(replyTarget, options);
   if (parentMapping == null) {
     throw new Error(
       `Could not resolve community actor id for raw comment reply parent ${replyTarget}`,
@@ -457,6 +469,7 @@ function resolveAuthorNameFromJson(
 
 async function resolveReplyChainContext(
   replyTarget: string,
+  options: NormalizeOptions,
   visited: Set<string> = new Set(),
 ): Promise<{
   postApId: string | null;
@@ -469,7 +482,7 @@ async function resolveReplyChainContext(
   }
   visited.add(replyTarget);
 
-  const storedObject = await loadStoredActivityObject(replyTarget);
+  const storedObject = await loadStoredActivityObject(replyTarget, options);
   if (storedObject != null) {
     if (storedObject.kind === "post") {
       return {
@@ -487,6 +500,7 @@ async function resolveReplyChainContext(
     }
     const nestedContext = await resolveReplyChainContext(
       storedObject.inReplyToObjectId,
+      options,
       visited,
     );
     return {
@@ -528,7 +542,7 @@ async function resolveReplyChainContext(
       postSource: "remote",
     };
   }
-  const nestedContext = await resolveReplyChainContext(nextReplyTarget, visited);
+  const nestedContext = await resolveReplyChainContext(nextReplyTarget, options, visited);
   return {
     postApId: nestedContext.postApId,
     parentApId: isCommentLikeReplyTarget(replyTarget, parentRecord)
@@ -636,15 +650,17 @@ async function fetchActivityObject(
   }
 }
 
-async function loadLocalParentMessageMapping(objectId: string): Promise<{
+async function loadLocalParentMessageMapping(
+  objectId: string,
+  options: NormalizeOptions,
+): Promise<{
   objectId: string;
   communityActorUrl: string;
 } | null> {
   // Use message_mappings, not published_activity_objects, because only the
   // mapping table proves that the parent has Discord placement state.
-  const databaseUrl = process.env.DATABASE_URL ?? "sqlite:///./bridge.db";
   const row = await loadMessageMappingByObjectIdForDatabaseUrl(
-    databaseUrl,
+    resolveDatabaseUrl(options),
     objectId,
   );
   if (row == null) {
@@ -654,6 +670,20 @@ async function loadLocalParentMessageMapping(objectId: string): Promise<{
     objectId: row.objectId,
     communityActorUrl: row.communityActorUrl,
   };
+}
+
+function resolveDatabaseUrl(options: NormalizeOptions): string {
+  // Runtime callers pass the gateway-resolved database URL so normalization
+  // reads the same shared bridge DB as actor routes and published-object routes.
+  if (options.databaseUrl) {
+    return options.databaseUrl;
+  }
+  // Tests and standalone verify scripts may still provide DATABASE_URL directly,
+  // but production code must not depend on cwd-relative fallbacks here.
+  if (process.env.DATABASE_URL) {
+    return process.env.DATABASE_URL;
+  }
+  return "sqlite:///../bridge.db";
 }
 
 function logCommunityResolution(
@@ -674,16 +704,18 @@ function logCommunityResolution(
   });
 }
 
-async function loadStoredActivityObject(objectId: string): Promise<{
+async function loadStoredActivityObject(
+  objectId: string,
+  options: NormalizeOptions,
+): Promise<{
   kind: "post" | "comment";
   objectId: string;
   inReplyToObjectId: string | null;
 } | null> {
   // Local objects are resolved from the shared DB first so reply chains remain
   // valid even when no HTTP route or in-memory state is available yet.
-  const databaseUrl = process.env.DATABASE_URL ?? "sqlite:///./bridge.db";
   const row = await loadPublishedActivityObjectByObjectIdForDatabaseUrl(
-    databaseUrl,
+    resolveDatabaseUrl(options),
     objectId,
   );
   if (row == null) {

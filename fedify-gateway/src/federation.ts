@@ -131,7 +131,9 @@ export function createGatewayFederation(
         // Direct Create handling is the happy path when the remote server does
         // not wrap local objects inside Announce. Errors must be logged here
         // because the inbox already returns 202 before async processing finishes.
-        const event = await normalizeCreateActivity(activity);
+        const event = await normalizeCreateActivity(activity, {
+          databaseUrl: config.databaseUrl,
+        });
         if (event == null) {
           logDebug(isDebug, "normalizeCreateActivity returned null");
           return;
@@ -167,7 +169,9 @@ export function createGatewayFederation(
 
         const createRecord = extractCreateRecord(announceEnvelope.rawRecord);
         if (createRecord != null) {
-          const event = await normalizeCreateActivityFromJson(createRecord);
+          const event = await normalizeCreateActivityFromJson(createRecord, {
+            databaseUrl: config.databaseUrl,
+          });
           if (event == null) {
             logDebug(isDebug, "normalizeCreateActivityFromJson returned null");
             return;
@@ -192,7 +196,9 @@ export function createGatewayFederation(
 
         const updateRecord = extractUpdateRecord(announceEnvelope.rawRecord);
         if (updateRecord != null) {
-          const event = await normalizeUpdateActivityFromJson(updateRecord);
+          const event = await normalizeUpdateActivityFromJson(updateRecord, {
+            databaseUrl: config.databaseUrl,
+          });
           if (event == null) {
             logDebug(isDebug, "normalizeUpdateActivityFromJson returned null");
             return;

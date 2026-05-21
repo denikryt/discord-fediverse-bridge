@@ -212,7 +212,8 @@ async function testDirectNoteReplyToMappedLocalComment(): Promise<void> {
 
   try {
     await writeBridgeParentDatabase(databasePath);
-    process.env.DATABASE_URL = databaseUrl;
+    // The normalization call receives databaseUrl explicitly, matching runtime
+    // gateway config. This protects against cwd-relative DATABASE_URL fallbacks.
 
     const activity = new Create({
       id: new URL("https://mastodon.example/users/alice/statuses/900/activity"),
@@ -231,7 +232,7 @@ async function testDirectNoteReplyToMappedLocalComment(): Promise<void> {
       }),
     });
 
-    const event = await normalizeCreateActivity(activity);
+    const event = await normalizeCreateActivity(activity, { databaseUrl });
 
     assert.ok(event, "direct Note reply to mapped local parent must normalize");
     assert.equal(event.event_type, "comment.created");
@@ -265,7 +266,7 @@ async function testDirectNoteReplyToUnmappedLocalCommentRejects(): Promise<void>
 
   try {
     await writeBridgeParentDatabase(databasePath, { includeMapping: false });
-    process.env.DATABASE_URL = `sqlite:///${databasePath}`;
+    const databaseUrl = `sqlite:///${databasePath}`;
 
     const activity = new Create({
       id: new URL("https://mastodon.example/users/alice/statuses/901/activity"),
@@ -284,7 +285,7 @@ async function testDirectNoteReplyToUnmappedLocalCommentRejects(): Promise<void>
     });
 
     await assert.rejects(
-      () => normalizeCreateActivity(activity),
+      () => normalizeCreateActivity(activity, { databaseUrl }),
       /Could not resolve community actor id for comment reply parent/,
     );
   } finally {
