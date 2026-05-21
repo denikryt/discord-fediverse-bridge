@@ -24,6 +24,20 @@ import type {
   UpdateContentRequest,
 } from "./types.js";
 
+
+function getUnfollowObjectMode(): "embedded" | "iri" {
+  const rawMode = process.env.UNFOLLOW_OBJECT_MODE?.trim().toLowerCase();
+  if (rawMode == null || rawMode === "" || rawMode === "embedded") {
+    return "embedded";
+  }
+  if (rawMode === "iri") {
+    return "iri";
+  }
+  throw new Error(
+    `Invalid UNFOLLOW_OBJECT_MODE=${process.env.UNFOLLOW_OBJECT_MODE}; expected embedded or iri`,
+  );
+}
+
 export interface FollowCommunityResult {
   communityActorUrl: string;
   communityInboxUrl: string;
@@ -128,16 +142,21 @@ export async function unfollowCommunity(
   if (!inboxUrl) throw new Error("Community actor does not have an inbox");
   if (!communityId) throw new Error("Community actor does not have an id");
 
+  const unfollowObjectMode = getUnfollowObjectMode();
+  const undoObject = unfollowObjectMode === "iri"
+    ? new URL(followActivityId)
+    : new Follow({
+        id: new URL(followActivityId),
+        actor: actorUri,
+        object: new URL(communityId),
+      });
+
   const undo = new Undo({
     id: new URL(
       `${config.fedifyOrigin}activities/undo/${Date.now()}/${Math.random().toString(36).slice(2)}`,
     ),
     actor: actorUri,
-    object: new Follow({
-      id: new URL(followActivityId),
-      actor: actorUri,
-      object: new URL(communityId),
-    }),
+    object: undoObject,
   });
 
   const undoJson = await undo.toJsonLd();
@@ -147,6 +166,7 @@ export async function unfollowCommunity(
     inboxUrl,
     followActivityId,
     undoId: undo.id?.toString(),
+    objectMode: unfollowObjectMode,
   });
   appendDebugFileLog("unfollow.outbound", {
     actorUri: actorUri.toString(),
@@ -155,6 +175,7 @@ export async function unfollowCommunity(
     inboxUrl,
     followActivityId,
     undoActivityId: undo.id?.toString() ?? null,
+    objectMode: unfollowObjectMode,
     activity: undoJson as Record<string, unknown>,
   });
 
