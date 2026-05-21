@@ -82,8 +82,21 @@
 - When writing a plan, think through how the requested work can actually be implemented in this project.
 - Base the plan on the real codebase, real constraints, and real integration points.
 - Do not invent architecture, files, or implementation steps disconnected from the current project state.
-- Plans must explicitly describe the implementation path through the current codebase: which runtime path is exercised, where data is read, where it is transformed, and where side effects happen.
-- Plans must identify likely conflicts with existing contracts, tests, storage schemas, environment flags, routing, deduplication, and compatibility behavior.
-- Plans must include a regression and blind-spot analysis: what existing behavior could be broken, what cases are not covered yet, and what evidence is needed before implementation.
-- Plans must state when a refactor is required for clarity or testability and when a smaller targeted change is safer.
-- Plans must avoid hidden scope expansion. If implementation appears to require work not described in the plan, stop and revise the plan before coding.
+- Plans must include concrete implementation examples, not only conceptual descriptions.
+- Plans must describe function-level or module-level changes when the affected code path is known.
+- Plans should include example inputs, outputs, payload shapes, database rows, or assertions when they clarify the intended implementation.
+- Avoid shallow phrases such as "normalize payload" or "update handler" unless followed by the exact normalization rules or handler behavior.
+- Implementation steps must be specific enough that a developer can execute them without re-discovering the whole design.
+
+- Plans must identify expected conflicts and compatibility risks before implementation begins.
+- Plans must include a regression and blind-spot analysis for behavior that could be accidentally changed.
+- Plans must explicitly state when a proposed path is generic protocol behavior rather than vendor-specific behavior.
+- If implementation requires work that is not described in the plan, stop and report the missing planning item before changing code.
+
+## Known Issues Journal
+
+- Maintain a short known-issues journal at `notes/known_issues.md`.
+- Update the journal during development when a new issue, limitation, regression, verified behavior, or resolved issue is discovered.
+- Keep entries short and factual. The journal records status and findings; it is not a replacement for implementation plans.
+- Move or rewrite entries when their status changes, for example from open issue to fixed/verified or known behavior.
+- When a note file under `notes/` must be included in a commit or bundle, add it explicitly with `git add -f notes/known_issues.md` because `notes/` may be ignored.
