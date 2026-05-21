@@ -6,6 +6,7 @@ import { Temporal } from "@js-temporal/polyfill";
 import { Accept, Announce, Create, Delete, Follow, Note, Page, Source, Undo, Update } from "@fedify/vocab";
 import type { Federation } from "@fedify/fedify";
 import type { GatewayConfig } from "./config.js";
+import { appendDebugFileLog } from "./debug-file-log.js";
 import { loadAcceptedLocalCommunityFollowersByActorUrl } from "./db.js";
 import {
   loadLocalCommunitySigningKey,
@@ -73,11 +74,20 @@ export async function followCommunity(
     object: new URL(communityId),
   });
 
+  const followJson = await follow.toJsonLd();
   console.log("[Follow] Sending Follow activity:", {
     actorUri: actorUri.toString(),
     communityId,
     inboxUrl,
     followId: follow.id?.toString(),
+  });
+  appendDebugFileLog("follow.outbound", {
+    actorUri: actorUri.toString(),
+    communityActorUrl,
+    communityId,
+    inboxUrl,
+    followActivityId: follow.id?.toString() ?? null,
+    activity: followJson as Record<string, unknown>,
   });
 
   // Fedify signs and delivers the activity; this helper only prepares the
@@ -130,12 +140,22 @@ export async function unfollowCommunity(
     }),
   });
 
+  const undoJson = await undo.toJsonLd();
   console.log("[Unfollow] Sending Undo(Follow) activity:", {
     actorUri: actorUri.toString(),
     communityId,
     inboxUrl,
     followActivityId,
     undoId: undo.id?.toString(),
+  });
+  appendDebugFileLog("unfollow.outbound", {
+    actorUri: actorUri.toString(),
+    communityActorUrl,
+    communityId,
+    inboxUrl,
+    followActivityId,
+    undoActivityId: undo.id?.toString() ?? null,
+    activity: undoJson as Record<string, unknown>,
   });
 
   await ctx.sendActivity(
