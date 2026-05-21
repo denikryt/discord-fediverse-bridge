@@ -313,5 +313,65 @@ async def test_remote_follower_reply_creates_message_in_mapped_thread(
     result = await runtime.handle_inbound_comment(_comment_event(), SimpleNamespace())
     created = database.get_local_community_message_by_ap_object_id("https://lemmy.example/comment/1")
 
+    generic_mapping = database.get_message_mapping_by_object_id("https://lemmy.example/comment/1")
+
     assert result.status == "processed"
     assert created is not None
+    assert generic_mapping is not None
+    assert generic_mapping.source_platform == "activitypub"
+    assert generic_mapping.source_id == "https://lemmy.example/comment/1"
+    assert generic_mapping.activity_id == "https://lemmy.example/activities/create/comment/1"
+    assert generic_mapping.actor_url == "https://lemmy.example/u/bob"
+    assert generic_mapping.community_actor_url == "https://bridge.example/communities/hackers"
+    assert generic_mapping.discord_channel_id == 200
+    assert generic_mapping.discord_message_id == 400
+
+@pytest.mark.asyncio
+async def test_remote_follower_reply_keeps_existing_generic_mapping(
+    tmp_path: Path,
+) -> None:
+    """A pre-existing generic AP mapping must not break comment mirroring.
+
+    System state: the remote comment has no local-community message yet, but a
+    generic mapping already exists for the same AP object.  Action: mirror the
+    inbound comment to Discord.  Assert: Discord/local-community persistence
+    succeeds and the existing generic mapping remains the one used for later
+    gateway parent lookups.
+    """
+    database, runtime = _runtime(tmp_path)
+    local_community = _local_community(database)
+    database.create_local_community_follower(
+        local_community_id=local_community.id,
+        remote_actor_id="https://lemmy.example/u/bob",
+        remote_inbox_url="https://lemmy.example/u/bob/inbox",
+        follow_activity_id="https://lemmy.example/activities/follow/1",
+    )
+    database.create_local_community_thread(
+        local_community_id=local_community.id,
+        discord_thread_id=200,
+        discord_starter_message_id=300,
+        ap_activity_id="https://bridge.example/users/alice/activities/create/post/1",
+        ap_object_id="https://lemmy.example/post/1",
+        direction="ap_to_discord",
+        origin_kind="remote_follower",
+    )
+    database.create_message_mapping(
+        source_platform="activitypub",
+        source_id="https://lemmy.example/comment/1",
+        activity_id="https://lemmy.example/activities/create/comment/1",
+        object_id="https://lemmy.example/comment/1",
+        actor_url="https://lemmy.example/u/bob",
+        community_actor_url="https://bridge.example/communities/hackers",
+        discord_channel_id=200,
+        discord_message_id=399,
+    )
+    runtime.bot = build_bot(threads={200: build_send_thread(thread_id=200, sent_message_id=400)})
+
+    result = await runtime.handle_inbound_comment(_comment_event(), SimpleNamespace())
+    created = database.get_local_community_message_by_ap_object_id("https://lemmy.example/comment/1")
+    generic_mapping = database.get_message_mapping_by_object_id("https://lemmy.example/comment/1")
+
+    assert result.status == "processed"
+    assert created is not None
+    assert generic_mapping is not None
+    assert generic_mapping.discord_message_id == 399

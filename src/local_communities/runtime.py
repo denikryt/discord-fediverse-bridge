@@ -263,12 +263,56 @@ class LocalCommunityRuntime:
             parent_discord_message_id=parent_discord_message_id,
             direction="ap_to_discord",
         )
+        self._persist_inbound_activitypub_message_mapping(
+            event=event,
+            discord_thread_id=getattr(discord_thread, "id"),
+            discord_message_id=getattr(created_message, "id"),
+        )
         await self.federation_fanout.relay_create(
             event=event,
             local_community=local_community,
             object_kind="comment",
         )
         return _HandlerResult(status="processed", detail="remote comment created message")
+
+
+    def _persist_inbound_activitypub_message_mapping(
+        self,
+        *,
+        event: object,
+        discord_thread_id: int,
+        discord_message_id: int,
+    ) -> None:
+        """Persist the generic AP mapping for one mirrored inbound comment.
+
+        Local-community placement is still owned by `local_community_messages`,
+        but the gateway resolves later direct replies by reading
+        `message_mappings.object_id`.  Persisting this row only after Discord
+        send succeeds guarantees the gateway never resolves a parent that Python
+        cannot place back into Discord.
+        """
+        object_payload = getattr(event, "object")
+        object_id = getattr(object_payload, "ap_id")
+        activity_id = getattr(event, "delivery_id")
+
+        # ActivityPub deliveries are replayable.  Check both unique AP columns
+        # before inserting so a duplicate relay cannot turn a successfully
+        # mirrored comment into an integrity error.
+        if self.database.get_message_mapping_by_object_id(object_id) is not None:
+            return
+        if self.database.get_message_mapping_by_activity_id(activity_id) is not None:
+            return
+
+        self.database.create_message_mapping(
+            source_platform="activitypub",
+            source_id=object_id,
+            activity_id=activity_id,
+            object_id=object_id,
+            actor_url=getattr(event, "actor_id"),
+            community_actor_url=getattr(event, "community_actor_id"),
+            discord_channel_id=discord_thread_id,
+            discord_message_id=discord_message_id,
+        )
 
     async def handle_discord_message_edit(
         self,
