@@ -119,8 +119,12 @@ class LocalCommunityFederationFanout:
 
         outbound = []
         for row in pending:
+            # The source JSON preserves source ids and attribution, while the
+            # normalized event provides sanitized body text and reply-chain ids
+            # needed for compatibility projections.
             activity_json = render_local_community_relay_activity(
                 source_activity_json=source.source_activity_json,
+                normalized_event=event,
                 community_actor_url=getattr(local_community, "actor_url"),
                 community_slug=getattr(local_community, "slug"),
                 delivery_profile=row.delivery_profile,
