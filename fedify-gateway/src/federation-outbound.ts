@@ -7,6 +7,7 @@ import { Accept, Announce, Create, Delete, Follow, Note, Page, Source, Undo, Upd
 import type { Federation } from "@fedify/fedify";
 import type { GatewayConfig } from "./config.js";
 import { appendDebugFileLog } from "./debug-file-log.js";
+import { loadActorKeyPair } from "./actor-store.js";
 import { loadAcceptedLocalCommunityFollowersByActorUrl } from "./db.js";
 import {
   loadLocalCommunitySigningKey,
@@ -159,7 +160,7 @@ export async function unfollowCommunity(
     object: undoObject,
   });
 
-  const undoJson = await undo.toJsonLd();
+  const undoJson = await renderPublicActivityJson(undo);
   console.log("[Unfollow] Sending Undo(Follow) activity:", {
     actorUri: actorUri.toString(),
     communityId,
@@ -167,6 +168,7 @@ export async function unfollowCommunity(
     followActivityId,
     undoId: undo.id?.toString(),
     objectMode: unfollowObjectMode,
+    deliveryBackend: "signed-json",
   });
   appendDebugFileLog("unfollow.outbound", {
     actorUri: actorUri.toString(),
@@ -176,16 +178,25 @@ export async function unfollowCommunity(
     followActivityId,
     undoActivityId: undo.id?.toString() ?? null,
     objectMode: unfollowObjectMode,
-    activity: undoJson as Record<string, unknown>,
+    deliveryBackend: "signed-json",
+    activity: undoJson,
   });
 
-  await ctx.sendActivity(
-    { username: config.actorIdentifier },
-    { id: new URL(communityId), inboxId: new URL(inboxUrl) },
-    undo,
+  const keyPair = await loadActorKeyPair(config, config.actorIdentifier);
+  if (keyPair == null) {
+    throw new Error("Bridge actor signing key not found");
+  }
+  await sendSignedJsonActivity(
+    "Unfollow",
+    inboxUrl,
+    { keyId: new URL("#main-key", actorUri), privateKey: keyPair.privateKey },
+    undoJson,
+    { debugDelivery: shouldLogSignedJsonDelivery(config) },
   );
 
-  console.log("[Unfollow] Successfully sent Undo(Follow) activity");
+  console.log("[Unfollow] Successfully sent Undo(Follow) activity", {
+    deliveryBackend: "signed-json",
+  });
 }
 
 export async function publishContent(
