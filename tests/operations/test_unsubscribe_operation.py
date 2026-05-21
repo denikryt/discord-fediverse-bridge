@@ -187,9 +187,8 @@ async def test_unsubscribe_last_channel_with_missing_follow_id_keeps_local_state
 
 
 @pytest.mark.asyncio
-async def test_unsubscribe_can_preserve_follow_row_after_accepted_unfollow(monkeypatch: pytest.MonkeyPatch) -> None:
+async def test_unsubscribe_can_preserve_follow_row_after_accepted_unfollow() -> None:
     """Diagnostic mode keeps the bridge follow row even when remote cleanup is accepted."""
-    monkeypatch.setenv("PRESERVE_BRIDGE_FOLLOW_AFTER_UNFOLLOW", "1")
     community_actor_url = f"https://{LEMMY_EXAMPLE_DOMAIN}/c/hackers"
     follow_activity_id = f"https://{BRIDGE_EXAMPLE_DOMAIN}/activities/follow/1"
     database = Mock()
@@ -214,6 +213,7 @@ async def test_unsubscribe_can_preserve_follow_row_after_accepted_unfollow(monke
             fedify_gateway=fedify_gateway,
             channel_id=123,
             channel_mention="<#123>",
+            preserve_bridge_follow_after_unfollow=True,
         ),
     )
 

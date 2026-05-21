@@ -144,12 +144,14 @@ export async function unfollowCommunity(
   if (!communityId) throw new Error("Community actor does not have an id");
 
   const unfollowObjectMode = getUnfollowObjectMode();
+  const communityActorId = new URL(communityId);
   const undoObject = unfollowObjectMode === "iri"
     ? new URL(followActivityId)
     : new Follow({
         id: new URL(followActivityId),
         actor: actorUri,
-        object: new URL(communityId),
+        object: communityActorId,
+        tos: [communityActorId],
       });
 
   const undo = new Undo({
@@ -158,6 +160,7 @@ export async function unfollowCommunity(
     ),
     actor: actorUri,
     object: undoObject,
+    tos: [communityActorId],
   });
 
   const undoJson = await renderPublicActivityJson(undo);

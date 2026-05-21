@@ -23,6 +23,10 @@ class Settings(BaseSettings):
     fedify_origin: HttpUrl = Field(default="http://127.0.0.1:3000", alias="FEDIFY_ORIGIN")
     bridge_display_prefix: str = Field(default="[bridge]", alias="BRIDGE_DISPLAY_PREFIX")
     log_level: str = Field(default="INFO", alias="LOG_LEVEL")
+    preserve_bridge_follow_after_unfollow: bool = Field(
+        default=False,
+        alias="PRESERVE_BRIDGE_FOLLOW_AFTER_UNFOLLOW",
+    )
     # Comma-separated list of allowed Lemmy instance hostnames (e.g. "lemmy.world,beehaw.org").
     # Empty means all instances are allowed (open federation).
     federation_allowlist: list[str] = Field(default_factory=list, alias="FEDERATION_ALLOWLIST")

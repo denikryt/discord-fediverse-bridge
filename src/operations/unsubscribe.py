@@ -10,7 +10,6 @@ no AP activity is sent.
 from __future__ import annotations
 
 import logging
-import os
 from dataclasses import dataclass, field
 
 from discordops import OperationDefinition, OperationResult, Precondition
@@ -21,16 +20,6 @@ from ..fedify_gateway_client import FedifyGatewayClient, UnfollowCommunityResult
 logger = logging.getLogger(__name__)
 
 
-def _preserve_bridge_follow_after_unfollow() -> bool:
-    """Return whether accepted Undo(Follow) should keep the follow row for diagnostics."""
-    return os.environ.get("PRESERVE_BRIDGE_FOLLOW_AFTER_UNFOLLOW", "").lower() in {
-        "1",
-        "true",
-        "yes",
-        "on",
-    }
-
-
 @dataclass
 class UnsubscribeInput:
     """Carry parsed unsubscribe intent plus cached DB state for one attempt."""
@@ -39,6 +28,7 @@ class UnsubscribeInput:
     fedify_gateway: FedifyGatewayClient
     channel_id: int
     channel_mention: str
+    preserve_bridge_follow_after_unfollow: bool = False
     _subscription: object | None = field(default=None, init=False, repr=False)
     _subscription_loaded: bool = field(default=False, init=False, repr=False)
 
@@ -141,7 +131,7 @@ async def _body(operation_input: UnsubscribeInput) -> OperationResult:
         follow_activity_id=follow_activity_id,
     )
     if cleanup_result.accepted:
-        if _preserve_bridge_follow_after_unfollow():
+        if operation_input.preserve_bridge_follow_after_unfollow:
             logger.debug(
                 "Preserving bridge_actor_follows row for %s after accepted Undo(Follow) "
                 "because PRESERVE_BRIDGE_FOLLOW_AFTER_UNFOLLOW is enabled",
