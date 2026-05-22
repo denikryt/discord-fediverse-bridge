@@ -6,6 +6,8 @@ import { Temporal } from "@js-temporal/polyfill";
 import { Accept, Announce, Create, Delete, Follow, Note, Page, Source, Undo, Update } from "@fedify/vocab";
 import type { Federation } from "@fedify/fedify";
 import type { GatewayConfig } from "./config.js";
+import { appendDebugFileLog } from "./debug-file-log.js";
+import { loadActorKeyPair } from "./actor-store.js";
 import { loadAcceptedLocalCommunityFollowersByActorUrl } from "./db.js";
 import {
   loadLocalCommunitySigningKey,
@@ -22,6 +24,7 @@ import type {
   SendLocalCommunityRelayResult,
   UpdateContentRequest,
 } from "./types.js";
+
 
 export interface FollowCommunityResult {
   communityActorUrl: string;
@@ -73,11 +76,20 @@ export async function followCommunity(
     object: new URL(communityId),
   });
 
+  const followJson = await follow.toJsonLd();
   console.log("[Follow] Sending Follow activity:", {
     actorUri: actorUri.toString(),
     communityId,
     inboxUrl,
     followId: follow.id?.toString(),
+  });
+  appendDebugFileLog("follow.outbound", {
+    actorUri: actorUri.toString(),
+    communityActorUrl,
+    communityId,
+    inboxUrl,
+    followActivityId: follow.id?.toString() ?? null,
+    activity: followJson as Record<string, unknown>,
   });
 
   // Fedify signs and delivers the activity; this helper only prepares the
@@ -118,7 +130,62 @@ export async function unfollowCommunity(
   if (!inboxUrl) throw new Error("Community actor does not have an inbox");
   if (!communityId) throw new Error("Community actor does not have an id");
 
-  const undo = new Undo({
+  const undo = buildLemmyCompatibleUnfollowActivity(
+    config,
+    actorUri,
+    communityId,
+    followActivityId,
+  );
+
+  const undoJson = await renderPublicActivityJson(undo);
+  console.log("[Unfollow] Sending Undo(Follow) activity:", {
+    actorUri: actorUri.toString(),
+    communityId,
+    inboxUrl,
+    followActivityId,
+    undoId: undo.id?.toString(),
+    deliveryBackend: "signed-json",
+  });
+  appendDebugFileLog("unfollow.outbound", {
+    actorUri: actorUri.toString(),
+    communityActorUrl,
+    communityId,
+    inboxUrl,
+    followActivityId,
+    undoActivityId: undo.id?.toString() ?? null,
+    deliveryBackend: "signed-json",
+    activity: undoJson,
+  });
+
+  const keyPair = await loadActorKeyPair(config, config.actorIdentifier);
+  if (keyPair == null) {
+    throw new Error("Bridge actor signing key not found");
+  }
+  await sendSignedJsonActivity(
+    "Unfollow",
+    inboxUrl,
+    { keyId: new URL("#main-key", actorUri), privateKey: keyPair.privateKey },
+    undoJson,
+    { debugDelivery: shouldLogSignedJsonDelivery(config) },
+  );
+
+  console.log("[Unfollow] Successfully sent Undo(Follow) activity", {
+    deliveryBackend: "signed-json",
+  });
+}
+
+export function buildLemmyCompatibleUnfollowActivity(
+  config: GatewayConfig,
+  actorUri: URL,
+  communityId: string,
+  followActivityId: string,
+): Undo {
+  // Lemmy 0.19.x models Undo(Follow) with an embedded Follow object rather
+  // than an IRI. Including the community in both outer and inner `to` mirrors
+  // Lemmy's own fixture shape and lets Lemmy resolve the target community
+  // before it deletes the corresponding community_follower row.
+  const communityActorId = new URL(communityId);
+  return new Undo({
     id: new URL(
       `${config.fedifyOrigin}activities/undo/${Date.now()}/${Math.random().toString(36).slice(2)}`,
     ),
@@ -126,25 +193,11 @@ export async function unfollowCommunity(
     object: new Follow({
       id: new URL(followActivityId),
       actor: actorUri,
-      object: new URL(communityId),
+      object: communityActorId,
+      tos: [communityActorId],
     }),
+    tos: [communityActorId],
   });
-
-  console.log("[Unfollow] Sending Undo(Follow) activity:", {
-    actorUri: actorUri.toString(),
-    communityId,
-    inboxUrl,
-    followActivityId,
-    undoId: undo.id?.toString(),
-  });
-
-  await ctx.sendActivity(
-    { username: config.actorIdentifier },
-    { id: new URL(communityId), inboxId: new URL(inboxUrl) },
-    undo,
-  );
-
-  console.log("[Unfollow] Successfully sent Undo(Follow) activity");
 }
 
 export async function publishContent(
@@ -500,7 +553,7 @@ function shouldLogSignedJsonDelivery(config: GatewayConfig): boolean {
 
 type ActivityJsonValue = Record<string, unknown> | unknown[] | string | number | boolean | null;
 
-async function renderPublicActivityJson(activity: { toJsonLd(): Promise<unknown> }): Promise<Record<string, unknown>> {
+export async function renderPublicActivityJson(activity: { toJsonLd(): Promise<unknown> }): Promise<Record<string, unknown>> {
   // Fedify's JSON-LD serializer may compact the public collection as
   // `as:Public`. Lemmy's local-community validation rejected that compact IRI
   // as `object_is_not_public`, so local-community fanout expands it before

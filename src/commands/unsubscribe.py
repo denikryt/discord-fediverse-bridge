@@ -7,6 +7,7 @@ from discord import app_commands
 from discordops import run_operation_definition_async
 
 from ..db import Database
+from ..config import Settings
 from ..fedify_gateway_client import FedifyGatewayClient
 from ..operations import UnsubscribeInput, unsubscribe_operation
 
@@ -17,6 +18,7 @@ def register(
     tree: app_commands.CommandTree,
     database: Database,
     fedify_gateway: FedifyGatewayClient,
+    settings: Settings,
 ) -> None:
     """Register the unsubscribe-channel slash command on the given command tree."""
     # The registered slash command adapts Discord input into the operation
