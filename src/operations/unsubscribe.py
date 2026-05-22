@@ -28,7 +28,6 @@ class UnsubscribeInput:
     fedify_gateway: FedifyGatewayClient
     channel_id: int
     channel_mention: str
-    preserve_bridge_follow_after_unfollow: bool = False
     _subscription: object | None = field(default=None, init=False, repr=False)
     _subscription_loaded: bool = field(default=False, init=False, repr=False)
 
@@ -131,14 +130,7 @@ async def _body(operation_input: UnsubscribeInput) -> OperationResult:
         follow_activity_id=follow_activity_id,
     )
     if cleanup_result.accepted:
-        if operation_input.preserve_bridge_follow_after_unfollow:
-            logger.debug(
-                "Preserving bridge_actor_follows row for %s after accepted Undo(Follow) "
-                "because PRESERVE_BRIDGE_FOLLOW_AFTER_UNFOLLOW is enabled",
-                community_actor_id,
-            )
-        else:
-            operation_input.database.delete_bridge_actor_follow(community_actor_id)
+        operation_input.database.delete_bridge_actor_follow(community_actor_id)
         return OperationResult(
             applied=True,
             message=f"Unsubscribed {operation_input.channel_mention} from **{label}**.",

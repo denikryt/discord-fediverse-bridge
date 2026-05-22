@@ -40,7 +40,6 @@ def register(
                 fedify_gateway=fedify_gateway,
                 channel_id=channel.id,
                 channel_mention=channel.mention,
-                preserve_bridge_follow_after_unfollow=settings.preserve_bridge_follow_after_unfollow,
             ),
         )
         await interaction.response.send_message(result.message, ephemeral=not result.applied)
