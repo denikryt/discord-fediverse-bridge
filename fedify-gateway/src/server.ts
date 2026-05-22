@@ -51,6 +51,7 @@ import type {
   UpdateContentRequest,
 } from "./types.js";
 import { buildWebFingerDocument } from "./webfinger.js";
+import { appendDebugFileLog, initializeDebugFileLog, installDebugFetchLogging } from "./debug-file-log.js";
 
 // server.ts owns the operator-facing HTTP surface of the gateway: health,
 // manual follow, inbox logging, and Fedify middleware wiring.
@@ -58,6 +59,11 @@ export function createGatewayApp(config: GatewayConfig): Hono {
   const fedify = createGatewayFederation(config);
   const app = new Hono();
   const isDebug = config.logLevel === "debug";
+  const debugLogPath = initializeDebugFileLog(config);
+  installDebugFetchLogging(config);
+  if (debugLogPath != null) {
+    console.log(`[DebugFileLog] Writing gateway debug diagnostics to ${debugLogPath}`);
+  }
 
   if (isDebug) {
     // Debug access logging is intentionally gated because it can be noisy, but
@@ -633,6 +639,12 @@ app.use(async (context, next) => {
       });
       if (isDebug) {
         console.log("[HTTP][debug] Inbox payload summary:", payloadSummary);
+        appendDebugFileLog("inbox.payload", {
+          path,
+          userAgent: context.req.header("user-agent") ?? null,
+          signature: context.req.header("signature") ?? null,
+          payloadSummary: payloadSummary as unknown as Record<string, unknown>,
+        });
       }
     } else if (isDebug) {
       console.log("[HTTP][debug] Inbox payload summary failed");
@@ -643,6 +655,10 @@ app.use(async (context, next) => {
 
   if (isDebug && method === "POST" && path === "/inbox") {
     console.log(`[HTTP][debug] Response status: ${context.res.status}`);
+    appendDebugFileLog("inbox.response", {
+      path,
+      status: context.res.status,
+    });
   }
 });
 
