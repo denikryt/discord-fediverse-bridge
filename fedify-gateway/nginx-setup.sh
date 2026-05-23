@@ -113,6 +113,16 @@ $(proxy_headers)
 $(proxy_headers)
     }
 
+    location = /dashboard {
+        proxy_pass ${PYTHON_BRIDGE_UPSTREAM};
+$(proxy_headers)
+    }
+
+    location ^~ /dashboard/ {
+        proxy_pass ${PYTHON_BRIDGE_UPSTREAM};
+$(proxy_headers)
+    }
+
     location / {
         proxy_pass ${GATEWAY_UPSTREAM};
 $(proxy_headers)

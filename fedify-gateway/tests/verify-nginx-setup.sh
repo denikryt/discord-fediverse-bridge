@@ -29,6 +29,8 @@ ENV_FILE="$single_env" "$GATEWAY_DIR/nginx-setup.sh" --render > "$single_out"
 assert_contains "$single_out" "server_name bot.example.com;"
 assert_contains "$single_out" "location = /register"
 assert_contains "$single_out" "location ^~ /auth/discord/"
+assert_contains "$single_out" "location = /dashboard"
+assert_contains "$single_out" "location ^~ /dashboard/"
 assert_contains "$single_out" "proxy_pass http://127.0.0.1:8081;"
 assert_contains "$single_out" "proxy_pass http://127.0.0.1:3000;"
 

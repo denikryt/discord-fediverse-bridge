@@ -1556,6 +1556,18 @@ class Database:
     # Navigation marker for repository helpers in this persistence area.
     # ---------------------------------------------------------------------------
 
+    def list_bridge_actor_follows(self) -> list[BridgeActorFollow]:
+        """Return all bridge-actor follow rows in stable creation order."""
+        with self.session() as session:
+            return list(
+                session.scalars(
+                    select(BridgeActorFollow).order_by(
+                        BridgeActorFollow.created_at,
+                        BridgeActorFollow.id,
+                    )
+                )
+            )
+
     def get_bridge_actor_follow(self, community_actor_id: str) -> BridgeActorFollow | None:
         """Load the bridge-actor follow row for one remote community, if it exists."""
         with self.session() as session:

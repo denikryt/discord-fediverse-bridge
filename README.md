@@ -150,6 +150,13 @@ The gateway keeps canonical ActivityPub routes such as `/.well-known/webfinger`,
 
 Changing `FEDIFY_ORIGIN` on an existing deployment changes ActivityPub actor and object IDs. Treat that as a federation identity migration, not a harmless nginx change.
 
+
+## Public dashboard
+
+The Python bridge exposes a public dashboard at `/dashboard`. It shows bridge statistics, local communities, subscriber counts, bridge-actor follows, and the effective federation policy. The JSON backing endpoint is `/dashboard/data`.
+
+The dashboard is intentionally public and omits Discord guild/channel IDs, private keys, shared secrets, database paths, and internal service URLs.
+
 ## Python Bridge Env
 
 Env template: `.env.example`

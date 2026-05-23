@@ -10,6 +10,7 @@ from fastapi import FastAPI, Header, HTTPException, Request, Response, status
 from fastapi.responses import HTMLResponse, RedirectResponse
 
 from .activitypub_handlers import dispatch_activitypub_event
+from .dashboard import build_dashboard_payload, render_dashboard_html
 from .activitypub_models import BridgeGatewayEvent
 from .registration_service import RegistrationError, generate_oauth_state, generate_session_token
 from .runtime import Runtime
@@ -197,6 +198,17 @@ def create_http_app(runtime: Runtime) -> FastAPI:
                 f"<p>Actor URL: <a href=\"{user.actor_url}\">{user.actor_url}</a></p>"
             ),
         )
+
+
+    @app.get("/dashboard", response_class=HTMLResponse)
+    async def dashboard_page() -> HTMLResponse:
+        """Render the public dashboard browser shell."""
+        return HTMLResponse(render_dashboard_html())
+
+    @app.get("/dashboard/data")
+    async def dashboard_data() -> dict[str, object]:
+        """Return safe public dashboard metadata as JSON."""
+        return build_dashboard_payload(runtime)
 
     @app.post("/internal/activitypub/events")
     async def receive_activitypub_event(

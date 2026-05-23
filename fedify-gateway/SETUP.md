@@ -43,7 +43,20 @@ curl http://127.0.0.1:3000/healthz
 
 ## Nginx
 
-Single-domain mode is recommended for normal deployments. It installs one public site where ActivityPub/WebFinger routes go to fedify-gateway and registration/OAuth routes go to the Python bridge.
+Single-domain mode is recommended for normal deployments. It installs one public site where ActivityPub/WebFinger routes go to fedify-gateway and registration/OAuth/dashboard routes go to the Python bridge.
+
+```text
+/.well-known/webfinger -> fedify-gateway
+/inbox                 -> fedify-gateway
+/actors/...            -> fedify-gateway
+/communities/...       -> fedify-gateway
+/c/...                 -> fedify-gateway
+/users/...             -> fedify-gateway
+/register              -> Python bridge
+/auth/discord/...      -> Python bridge
+/dashboard             -> Python bridge
+/dashboard/data        -> Python bridge
+```
 
 ```env
 DEPLOYMENT_MODE=single-domain

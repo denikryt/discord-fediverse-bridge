@@ -10,6 +10,8 @@ This document explains HTTP route ownership between the Python bridge and the Fe
 | `/auth/discord/callback` | GET | Python FastAPI | public | OAuth callback | `src/http_api.py` | Python |
 | `/register/complete` | POST | Python FastAPI | public | Complete registration | `src/http_api.py` | Python |
 | `/register/success` | GET | Python FastAPI | public | Registration success page | `src/http_api.py` | Python |
+| `/dashboard` | GET | Python FastAPI | public | Public bridge dashboard HTML | `src/http_api.py` | Python |
+| `/dashboard/data` | GET | Python FastAPI | public | Public bridge dashboard JSON | `src/http_api.py` | Python |
 | `/internal/activitypub/events` | POST | Python FastAPI | private | Gateway-to-Python AP event intake | `src/http_api.py` | Not publicly routed |
 | `/healthz` | GET | Fedify gateway | public | Gateway health | `fedify-gateway/src/server.ts` | Gateway |
 | `/.well-known/webfinger` | GET | Fedify gateway | public | Actor discovery | `fedify-gateway/src/server.ts` | Gateway |

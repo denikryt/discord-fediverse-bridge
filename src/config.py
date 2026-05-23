@@ -23,6 +23,7 @@ class Settings(BaseSettings):
     registration_session_ttl_seconds: int = Field(default=3600, alias="REGISTRATION_SESSION_TTL_SECONDS")
     fedify_shared_secret: str = Field(alias="FEDIFY_SHARED_SECRET")
     fedify_origin: HttpUrl = Field(default="http://127.0.0.1:3000", alias="FEDIFY_ORIGIN")
+    fedify_actor_identifier: str = Field(default="bridge", alias="FEDIFY_ACTOR_IDENTIFIER")
     bridge_display_prefix: str = Field(default="[bridge]", alias="BRIDGE_DISPLAY_PREFIX")
     log_level: str = Field(default="INFO", alias="LOG_LEVEL")
     # Comma-separated list of allowed Lemmy instance hostnames (e.g. "lemmy.world,beehaw.org").
