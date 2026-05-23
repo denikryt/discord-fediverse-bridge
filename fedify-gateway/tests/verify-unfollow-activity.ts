@@ -8,7 +8,6 @@ const config: GatewayConfig = {
   actorSummary: "Bridge actor",
   bridgePrivateKeyJwkJson: null,
   bridgePublicKeyJwkJson: null,
-  communityActorId: null,
   databaseUrl: "sqlite:///../bridge.db",
   fedifyOrigin: "https://bot-test.nachitima.com/",
   port: 3000,

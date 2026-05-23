@@ -133,15 +133,10 @@ FEDIFY_ORIGIN=https://discord-bridge.example.com
 PUBLIC_BRIDGE_BASE_URL=https://discord-bridge.example.com
 DISCORD_OAUTH_REDIRECT_URI=https://discord-bridge.example.com/auth/discord/callback
 FEDIFY_GATEWAY_URL=http://127.0.0.1:3000
-PYTHON_BRIDGE_EVENTS_URL=http://127.0.0.1:8081/internal/activitypub/events
-```
-
-Configure `fedify-gateway/.env` for nginx setup:
-
-```env
 PUBLIC_DOMAIN=discord-bridge.example.com
 GATEWAY_UPSTREAM=http://127.0.0.1:3000
 PYTHON_BRIDGE_UPSTREAM=http://127.0.0.1:8081
+PYTHON_BRIDGE_EVENTS_URL=http://127.0.0.1:8081/internal/activitypub/events
 ```
 
 `GATEWAY_UPSTREAM` and `PYTHON_BRIDGE_UPSTREAM` are optional overrides for nginx rendering. Keep the defaults unless the gateway or Python bridge listens on a different local address.
@@ -166,6 +161,7 @@ Required:
 - `DISCORD_TOKEN`
 - `FEDIFY_SHARED_SECRET`
 - `FEDIFY_ORIGIN`
+- `DATABASE_URL`
 
 Common:
 
@@ -173,10 +169,17 @@ Common:
 - `INTERNAL_HTTP_HOST`
 - `INTERNAL_HTTP_PORT`
 - `PUBLIC_BRIDGE_BASE_URL`
+- `PUBLIC_DOMAIN`
+- `GATEWAY_UPSTREAM`
+- `PYTHON_BRIDGE_UPSTREAM`
+- `PYTHON_BRIDGE_EVENTS_URL`
+- `LOG_LEVEL`
 
 Optional:
 
 - `FEDERATION_ALLOWLIST` — comma-separated Lemmy hostnames to accept; empty means all instances allowed
+- `LOCAL_COMMUNITY_OPERATOR_ALLOWLIST` — comma-separated Discord user ids allowed to manage local communities
+- `BRIDGE_DISPLAY_PREFIX`
 
 Needed only for web registration:
 
@@ -190,22 +193,23 @@ Env template: `fedify-gateway/.env.example`
 
 Required:
 
-- `FEDIFY_ORIGIN`
-- `PYTHON_BRIDGE_SHARED_SECRET`
+- `DATABASE_URL`
 - `FEDIFY_BRIDGE_PRIVATE_KEY_JWK_JSON` — generate with `npm run generate-keys`
 - `FEDIFY_BRIDGE_PUBLIC_KEY_JWK_JSON` — generate with `npm run generate-keys`
 
 Common:
 
-- `PYTHON_BRIDGE_EVENTS_URL`
 - `FEDIFY_PORT`
-- `LOG_LEVEL`
 
-Needed only for nginx setup (`nginx-setup.sh`):
+Optional:
 
-- `PUBLIC_DOMAIN`
-- `GATEWAY_UPSTREAM` — optional override for the gateway upstream target
-- `PYTHON_BRIDGE_UPSTREAM` — optional override for the Python bridge upstream target
+- `FEDIFY_ACTOR_IDENTIFIER`
+- `FEDIFY_ACTOR_NAME`
+- `FEDIFY_ACTOR_SUMMARY`
+
+The gateway also reads shared deployment values from the root `.env`, including
+`FEDIFY_ORIGIN`, `FEDIFY_SHARED_SECRET`, `PYTHON_BRIDGE_EVENTS_URL`, and
+`LOG_LEVEL`.
 
 ## Install
 

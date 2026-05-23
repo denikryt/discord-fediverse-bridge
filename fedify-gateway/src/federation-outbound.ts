@@ -184,7 +184,7 @@ export function buildLemmyCompatibleUnfollowActivity(
   // than an IRI. Including the community in both outer and inner `to` mirrors
   // Lemmy's own fixture shape and lets Lemmy resolve the target community
   // before it deletes the corresponding community_follower row.
-  const communityActorId = new URL(communityId);
+  const communityActorUrl = new URL(communityId);
   return new Undo({
     id: new URL(
       `${config.fedifyOrigin}activities/undo/${Date.now()}/${Math.random().toString(36).slice(2)}`,
@@ -193,10 +193,10 @@ export function buildLemmyCompatibleUnfollowActivity(
     object: new Follow({
       id: new URL(followActivityId),
       actor: actorUri,
-      object: communityActorId,
-      tos: [communityActorId],
+      object: communityActorUrl,
+      tos: [communityActorUrl],
     }),
-    tos: [communityActorId],
+    tos: [communityActorUrl],
   });
 }
 

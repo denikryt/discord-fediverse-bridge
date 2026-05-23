@@ -2,13 +2,22 @@
 
 ## Required Env
 
-Copy `fedify-gateway/.env.example` to `fedify-gateway/.env` and fill in:
+Copy the root `.env.example` to `.env` and `fedify-gateway/.env.example` to
+`fedify-gateway/.env`.
+
+Root `.env` owns shared deployment values:
 
 - `FEDIFY_ORIGIN` — public base URL of this gateway
-- `PYTHON_BRIDGE_SHARED_SECRET` — must match `FEDIFY_SHARED_SECRET` in the Python bridge `.env`
-- `FEDIFY_BRIDGE_PRIVATE_KEY_JWK_JSON` / `FEDIFY_BRIDGE_PUBLIC_KEY_JWK_JSON` — generate once with `npm run generate-keys`
+- `FEDIFY_SHARED_SECRET` — shared secret used for gateway -> Python delivery
+- `PYTHON_BRIDGE_EVENTS_URL` — internal Python intake endpoint
+- `PUBLIC_DOMAIN` — public hostname used by `nginx-setup.sh`
 
-For nginx setup, set `PUBLIC_DOMAIN` for the single public hostname.
+`fedify-gateway/.env` keeps gateway-local values:
+
+- `DATABASE_URL`
+- `FEDIFY_BRIDGE_PRIVATE_KEY_JWK_JSON` / `FEDIFY_BRIDGE_PUBLIC_KEY_JWK_JSON` — generate once with `npm run generate-keys`
+- `FEDIFY_PORT`
+- optional actor metadata overrides
 
 ## Signing Keys
 
@@ -66,7 +75,7 @@ PYTHON_BRIDGE_UPSTREAM=http://127.0.0.1:8081
 
 `GATEWAY_UPSTREAM` and `PYTHON_BRIDGE_UPSTREAM` are optional overrides. Leave them at the defaults unless nginx must proxy to a different local bind or port.
 
-Run `nginx-setup.sh` after setting `PUBLIC_DOMAIN`. Public `/healthz` belongs to the gateway. Keep `/internal/` private; it is for gateway-to-Python delivery only.
+Run `nginx-setup.sh` after setting those values in the root `.env`. Public `/healthz` belongs to the gateway. Keep `/internal/` private; it is for gateway-to-Python delivery only.
 
 ## Verification
 

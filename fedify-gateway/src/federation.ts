@@ -139,13 +139,6 @@ export function createGatewayFederation(
           logDebug(isDebug, "normalizeCreateActivity returned null");
           return;
         }
-        if (shouldSkipCommunityEvent(event, config.communityActorId)) {
-          logDebug(
-            isDebug,
-            "Event community does not match configured community, skipping",
-          );
-          return;
-        }
 
         const sourceActivityJson = await activity.toJsonLd() as Record<string, unknown>;
         event.source_activity_json = sourceActivityJson;
@@ -177,10 +170,6 @@ export function createGatewayFederation(
             logDebug(isDebug, "normalizeCreateActivityFromJson returned null");
             return;
           }
-          if (shouldSkipCommunityEvent(event, config.communityActorId)) {
-            logDebug(isDebug, "Event community does not match, skipping");
-            return;
-          }
           const nestedObject = asRecord(createRecord.object);
           event.source_activity_json = createRecord;
           event.source_activity_id = asString(createRecord.id) ?? event.delivery_id;
@@ -204,10 +193,6 @@ export function createGatewayFederation(
             logDebug(isDebug, "normalizeUpdateActivityFromJson returned null");
             return;
           }
-          if (shouldSkipCommunityEvent(event, config.communityActorId)) {
-            logDebug(isDebug, "Event community does not match, skipping");
-            return;
-          }
           event.source_activity_json = updateRecord;
           event.source_activity_id = asString(updateRecord.id) ?? event.delivery_id;
           event.source_announce_id = announceEnvelope.announceId;
@@ -225,10 +210,6 @@ export function createGatewayFederation(
           const event = normalizeDeleteActivityFromJson(deleteRecord);
           if (event == null) {
             logDebug(isDebug, "normalizeDeleteActivityFromJson returned null");
-            return;
-          }
-          if (shouldSkipCommunityEvent(event, config.communityActorId)) {
-            logDebug(isDebug, "Event community does not match, skipping");
             return;
           }
           event.source_activity_json = deleteRecord;
@@ -262,7 +243,7 @@ export function createGatewayFederation(
       await deliverNormalizedEvent(config, event, {
         deliveryId: event.delivery_id,
         eventType: event.event_type,
-        communityActorId: event.community_actor_id,
+        communityActorUrl: event.community_actor_id,
         remoteActorId: event.actor_id,
       });
     })
@@ -278,7 +259,7 @@ export function createGatewayFederation(
       await deliverNormalizedEvent(config, event, {
         deliveryId: event.delivery_id,
         eventType: event.event_type,
-        communityActorId: event.community_actor_id,
+        communityActorUrl: event.community_actor_id,
         remoteActorId: event.actor_id,
         followActivityId: event.object.follow_activity_id,
       });
@@ -327,15 +308,6 @@ async function deliverNormalizedEvent(
     config.pythonBridgeEventsUrl,
     config.pythonBridgeSharedSecret,
     event,
-  );
-}
-
-function shouldSkipCommunityEvent(
-  event: BridgeContentEvent | FollowAcceptedEvent,
-  communityActorId: string | null,
-): boolean {
-  return Boolean(
-    communityActorId && event.community_actor_id !== communityActorId,
   );
 }
 

@@ -117,7 +117,7 @@ export function normalizeDeleteActivityFromJson(
   // community_actor_id lives directly on the Delete record's audience field —
   // confirmed from real logs. object is a plain string so we can't read it from there.
   // Fall back to cc[0] if audience is absent.
-  const communityActorId =
+  const communityActorUrl =
     resolveCommunityActorIdForDelete(activity) ??
     asString(activity.actor) ??
     "";
@@ -133,7 +133,7 @@ export function normalizeDeleteActivityFromJson(
 
   return {
     actor_id: asString(activity.actor) ?? "",
-    community_actor_id: communityActorId,
+    community_actor_id: communityActorUrl,
     delivery_id: asString(activity.id) ?? randomUUID(),
     event_type: eventType,
     occurred_at: now,
@@ -735,7 +735,7 @@ function resolveDatabaseUrl(options: NormalizeOptions): string {
 
 function logCommunityResolution(
   source: "addressing" | "local-parent",
-  communityActorId: string,
+  communityActorUrl: string,
   parentObjectId: string | null,
 ): void {
   // LOG_LEVEL=debug is the single project-wide switch for gateway diagnostics.
@@ -746,7 +746,7 @@ function logCommunityResolution(
   }
   console.log("[Fedify][debug] Resolved comment community", {
     source,
-    communityActorId,
+    communityActorUrl,
     parentObjectId,
   });
 }

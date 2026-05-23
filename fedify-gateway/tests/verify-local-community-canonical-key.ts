@@ -266,7 +266,6 @@ async function buildConfig(): Promise<GatewayConfig> {
     actorSummary: "Bridge summary",
     bridgePrivateKeyJwkJson: JSON.stringify(await exportJwk(bridgeKeys.privateKey)),
     bridgePublicKeyJwkJson: JSON.stringify(await exportJwk(bridgeKeys.publicKey)),
-    communityActorId: null,
     databaseUrl: `sqlite:///${databasePath}`,
     fedifyOrigin: TEST_ORIGIN,
     port: 3000,

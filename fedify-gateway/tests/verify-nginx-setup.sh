@@ -22,6 +22,8 @@ assert_contains() {
 single_env="$TMP_DIR/single.env"
 cat > "$single_env" <<'ENV'
 PUBLIC_DOMAIN=discord-bridge.example.com
+GATEWAY_UPSTREAM=http://127.0.0.1:3100
+PYTHON_BRIDGE_UPSTREAM=http://127.0.0.1:8181
 ENV
 single_out="$TMP_DIR/single.conf"
 ENV_FILE="$single_env" "$GATEWAY_DIR/nginx-setup.sh" --render > "$single_out"
@@ -30,8 +32,8 @@ assert_contains "$single_out" "location = /register"
 assert_contains "$single_out" "location ^~ /auth/discord/"
 assert_contains "$single_out" "location = /dashboard"
 assert_contains "$single_out" "location ^~ /dashboard/"
-assert_contains "$single_out" "proxy_pass http://127.0.0.1:8081;"
-assert_contains "$single_out" "proxy_pass http://127.0.0.1:3000;"
+assert_contains "$single_out" "proxy_pass http://127.0.0.1:8181;"
+assert_contains "$single_out" "proxy_pass http://127.0.0.1:3100;"
 
 legacy_env="$TMP_DIR/legacy.env"
 cat > "$legacy_env" <<'ENV'

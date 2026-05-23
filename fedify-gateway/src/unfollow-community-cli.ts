@@ -9,8 +9,11 @@ import process from "node:process";
 //   tsx src/unfollow-community-cli.ts <community_actor_url> <follow_activity_id>
 //   tsx src/unfollow-community-cli.ts --all                 # unfollow all
 
-const GATEWAY_URL = process.env.GATEWAY_URL ?? "http://localhost:3000";
-const SHARED_SECRET = process.env.PYTHON_BRIDGE_SHARED_SECRET;
+const GATEWAY_URL =
+  process.env.FEDIFY_GATEWAY_URL ??
+  process.env.GATEWAY_URL ??
+  "http://localhost:3000";
+const SHARED_SECRET = process.env.FEDIFY_SHARED_SECRET;
 const DATABASE_URL = process.env.DATABASE_URL ?? "sqlite:///../bridge.db";
 
 async function sendUnfollow(communityActorUrl: string, followActivityId: string): Promise<void> {

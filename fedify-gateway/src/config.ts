@@ -8,7 +8,6 @@ export interface GatewayConfig {
   actorSummary: string;
   bridgePrivateKeyJwkJson: string | null;
   bridgePublicKeyJwkJson: string | null;
-  communityActorId: string | null;
   databaseUrl: string;
   fedifyOrigin: string;
   port: number;
@@ -57,14 +56,13 @@ export function loadConfig(): GatewayConfig {
       process.env.FEDIFY_BRIDGE_PRIVATE_KEY_JWK_JSON ?? null,
     bridgePublicKeyJwkJson:
       process.env.FEDIFY_BRIDGE_PUBLIC_KEY_JWK_JSON ?? null,
-    communityActorId: process.env.LEMMY_COMMUNITY_ACTOR_ID ?? null,
     databaseUrl: process.env.DATABASE_URL ?? "sqlite:///../bridge.db",
     fedifyOrigin: requireEnv("FEDIFY_ORIGIN"),
     port: parsePort(process.env.FEDIFY_PORT, 3000),
     pythonBridgeEventsUrl:
       process.env.PYTHON_BRIDGE_EVENTS_URL ??
       "http://127.0.0.1:8080/internal/activitypub/events",
-    pythonBridgeSharedSecret: requireEnv("PYTHON_BRIDGE_SHARED_SECRET"),
+    pythonBridgeSharedSecret: requireEnv("FEDIFY_SHARED_SECRET"),
     logLevel,
   };
 }

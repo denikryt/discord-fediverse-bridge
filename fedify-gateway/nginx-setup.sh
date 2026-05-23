@@ -6,11 +6,10 @@
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-ENV_FILE="${ENV_FILE:-$SCRIPT_DIR/.env}"
+REPO_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
+ENV_FILE="${ENV_FILE:-$REPO_ROOT/.env}"
 TEMPLATE_FILE="${TEMPLATE_FILE:-$SCRIPT_DIR/nginx.conf}"
 EMAIL="${EMAIL:-$(git config user.email 2>/dev/null || echo "admin@example.com")}"
-GATEWAY_UPSTREAM="${GATEWAY_UPSTREAM:-http://127.0.0.1:3000}"
-PYTHON_BRIDGE_UPSTREAM="${PYTHON_BRIDGE_UPSTREAM:-http://127.0.0.1:8081}"
 
 read_env_value() {
     local key="$1"
@@ -38,6 +37,8 @@ load_configuration() {
     fi
 
     PUBLIC_DOMAIN="${PUBLIC_DOMAIN:-$(read_env_value PUBLIC_DOMAIN)}"
+    GATEWAY_UPSTREAM="${GATEWAY_UPSTREAM:-$(read_env_value GATEWAY_UPSTREAM)}"
+    PYTHON_BRIDGE_UPSTREAM="${PYTHON_BRIDGE_UPSTREAM:-$(read_env_value PYTHON_BRIDGE_UPSTREAM)}"
     DEPLOYMENT_MODE="${DEPLOYMENT_MODE:-$(read_env_value DEPLOYMENT_MODE)}"
     GATEWAY_DOMAIN="${GATEWAY_DOMAIN:-$(read_env_value GATEWAY_DOMAIN)}"
     BRIDGE_DOMAIN="${BRIDGE_DOMAIN:-$(read_env_value BRIDGE_DOMAIN)}"
@@ -58,6 +59,11 @@ load_configuration() {
         echo "Error: PUBLIC_DOMAIN must be set" >&2
         exit 1
     fi
+
+    # Nginx upstreams default to the local bridge binds but can still be
+    # overridden from the root env file or from shell exports for one-off runs.
+    GATEWAY_UPSTREAM="${GATEWAY_UPSTREAM:-http://127.0.0.1:3000}"
+    PYTHON_BRIDGE_UPSTREAM="${PYTHON_BRIDGE_UPSTREAM:-http://127.0.0.1:8081}"
 }
 
 escape_sed_replacement() {

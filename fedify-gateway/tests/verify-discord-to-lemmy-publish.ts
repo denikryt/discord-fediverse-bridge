@@ -49,7 +49,6 @@ const TEST_CONFIG: GatewayConfig = {
   actorSummary: "Bridge summary",
   bridgePrivateKeyJwkJson: null,
   bridgePublicKeyJwkJson: null,
-  communityActorId: null,
   databaseUrl: "sqlite:///./bridge.db",
   fedifyOrigin: GATEWAY_ORIGIN,
   port: 3000,

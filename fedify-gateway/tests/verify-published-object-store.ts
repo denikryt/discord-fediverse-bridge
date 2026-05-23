@@ -414,7 +414,6 @@ function buildRouteTestConfig(databaseUrl: string): GatewayConfig {
     actorSummary: "Bridge summary",
     bridgePrivateKeyJwkJson: null,
     bridgePublicKeyJwkJson: null,
-    communityActorId: null,
     databaseUrl,
     fedifyOrigin: BRIDGE_ORIGIN,
     port: 3000,
