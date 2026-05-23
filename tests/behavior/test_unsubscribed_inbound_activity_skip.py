@@ -8,8 +8,8 @@ from types import SimpleNamespace
 import pytest
 
 from src.activitypub_handlers import HandlerResult, dispatch_activitypub_event
-from tests.support.activitypub import build_comment_created_event, build_post_created_event
-from tests.support.db import build_database
+from support.activitypub import build_comment_created_event, build_post_created_event
+from support.db import build_database
 
 
 class _NoopCommunityRuntime:

@@ -778,6 +778,31 @@ class Database:
                 statement = statement.where(LocalCommunityFollower.status == status)
             return list(session.scalars(statement.order_by(LocalCommunityFollower.created_at, LocalCommunityFollower.id)))
 
+    def list_local_community_followers_for_all(
+        self,
+        *,
+        status: str | None = "accepted",
+    ) -> list[LocalCommunityFollower]:
+        """Load followers across every local community, optionally by status.
+
+        The public dashboard aggregates follower counts and instance hosts across
+        all local communities, so it needs one repository helper that returns
+        follower rows with stable ordering and optional status filtering.
+        """
+        with self.session() as session:
+            statement = select(LocalCommunityFollower)
+            if status is not None:
+                statement = statement.where(LocalCommunityFollower.status == status)
+            return list(
+                session.scalars(
+                    statement.order_by(
+                        LocalCommunityFollower.local_community_id,
+                        LocalCommunityFollower.created_at,
+                        LocalCommunityFollower.id,
+                    )
+                )
+            )
+
     # ---------------------------------------------------------------------------
     # Local community content mapping helpers
     #

@@ -233,6 +233,58 @@ async def _maybe_implicit_accept(
         await _notify_channel_accepted(sub, runtime)
 
 
+def _should_skip_unsubscribed_remote_create(
+    event: ActivityPubEvent,
+    runtime: Runtime,
+) -> bool:
+    """Return whether one remote Create event is irrelevant after unsubscribe.
+
+    The ActivityPub gateway still acknowledges valid inbox deliveries. This
+    guard only prevents local side effects when remote community content has no
+    accepted subscription and no mapped thread context that still belongs to the
+    bridge.
+    """
+
+    # Accepted subscriptions always keep the normal inbound path active.
+    accepted = get_accepted_subscriptions(runtime.database, event.community_actor_id)
+    if accepted:
+        return False
+
+    # `_maybe_implicit_accept()` runs before this helper. Keep the pending-follow
+    # allowance here as a defensive rule so a future call-site reorder does not
+    # accidentally skip valid content from a community that is still activating.
+    bridge_follow = runtime.database.get_bridge_actor_follow(event.community_actor_id)
+    if bridge_follow is not None and bridge_follow.status == "pending":
+        return False
+
+    if event.event_type == "post.created":
+        # Unsubscribed posts are only relevant if they already map to a stored
+        # bridge thread group. A brand-new remote post after unsubscribe should
+        # be acknowledged and ignored locally.
+        return runtime.database.get_thread_group_by_ap_object(event.object.ap_id) is None
+
+    if event.event_type == "comment.created":
+        # Comments that still belong to a mapped thread or a mapped parent
+        # message remain actionable even after unsubscribe. Only orphan comments
+        # with no mapped bridge context are skipped here.
+        if (
+            event.object.post_ap_id
+            and runtime.database.get_thread_group_by_ap_object(event.object.post_ap_id)
+            is not None
+        ):
+            return False
+        if (
+            event.object.parent_ap_id
+            and runtime.database.get_message_group_by_ap_object(event.object.parent_ap_id)
+            is not None
+        ):
+            return False
+        return True
+
+    # This helper is intentionally limited to remote Create events only.
+    return False
+
+
 async def _notify_channel_accepted(subscription: object, runtime: Runtime) -> None:
     """DM the Discord user who initiated a subscription that it is now active.
 
