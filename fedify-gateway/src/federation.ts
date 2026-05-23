@@ -3,7 +3,7 @@ import {
   InProcessMessageQueue,
   MemoryKvStore,
 } from "@fedify/fedify";
-import { Accept, Announce, Create, Follow } from "@fedify/vocab";
+import { Accept, Announce, Create, Follow, Undo } from "@fedify/vocab";
 
 import { getRawActivity } from "./activitypub-raw-cache.js";
 import {
@@ -33,6 +33,7 @@ import type {
   BridgeContentEvent,
   FollowAcceptedEvent,
   LocalFollowRequestedEvent,
+  LocalUnfollowRequestedEvent,
 } from "./types.js";
 
 export function createGatewayFederation(
@@ -265,6 +266,23 @@ export function createGatewayFederation(
         remoteActorId: event.actor_id,
       });
     })
+    .on(Undo, async (ctx, activity) => {
+      const event = await buildLocalUnfollowRequestedEvent(
+        config,
+        activity,
+        asRecord(ctx.data.activitypubRawJson),
+      );
+      if (event == null) {
+        return;
+      }
+      await deliverNormalizedEvent(config, event, {
+        deliveryId: event.delivery_id,
+        eventType: event.event_type,
+        communityActorId: event.community_actor_id,
+        remoteActorId: event.actor_id,
+        followActivityId: event.object.follow_activity_id,
+      });
+    })
     .on(Accept, async (ctx, activity) => {
       const activityId = activity.id?.href ?? null;
       const rawJson = ctx.data.activitypubRawJson;
@@ -297,7 +315,7 @@ export function createGatewayFederation(
 
 async function deliverNormalizedEvent(
   config: GatewayContextData,
-  event: BridgeContentEvent | FollowAcceptedEvent | LocalFollowRequestedEvent,
+  event: BridgeContentEvent | FollowAcceptedEvent | LocalFollowRequestedEvent | LocalUnfollowRequestedEvent,
   logContext: Record<string, unknown>,
 ): Promise<void> {
   // All successful normalization funnels through one delivery path so logging
@@ -481,6 +499,52 @@ export async function buildLocalFollowRequestedEvent(
     object: {
       follow_activity_id: activity.id?.href ?? `local-follow:${localCommunity.slug}`,
       remote_inbox_url: remoteInboxUrl,
+    },
+    occurred_at: new Date().toISOString(),
+  };
+}
+
+
+export async function buildLocalUnfollowRequestedEvent(
+  config: GatewayContextData,
+  activity: Undo,
+  rawJson: Record<string, unknown> | null,
+): Promise<LocalUnfollowRequestedEvent | null> {
+  // Undo(Follow) uses the embedded Follow object to identify the local
+  // community target. Only Undo activities from the same remote actor that sent
+  // the original Follow are accepted into the local-community unfollow path.
+  const undoActorId = activity.actorId?.href ?? asString(rawJson?.actor);
+  const embeddedFollow = asRecord(rawJson?.object);
+  if (undoActorId == null || embeddedFollow == null || embeddedFollow.type !== "Follow") {
+    return null;
+  }
+
+  const followActorId = asString(embeddedFollow.actor);
+  if (followActorId !== undoActorId) {
+    logDebug(config.logLevel === "debug", "Ignoring Undo(Follow) with mismatched actor");
+    return null;
+  }
+
+  const targetActorId = asString(embeddedFollow.object);
+  if (targetActorId == null) {
+    return null;
+  }
+
+  const localCommunity = await resolveLocalCommunityByActorUrl(config, targetActorId);
+  if (localCommunity == null) {
+    return null;
+  }
+
+  return {
+    actor_id: undoActorId,
+    community_actor_id: targetActorId,
+    delivery_id:
+      activity.id?.href
+      ?? asString(rawJson?.id)
+      ?? `local-unfollow:${localCommunity.slug}:${Date.now()}`,
+    event_type: "local.unfollow_requested",
+    object: {
+      follow_activity_id: asString(embeddedFollow.id) ?? `local-follow:${localCommunity.slug}`,
     },
     occurred_at: new Date().toISOString(),
   };

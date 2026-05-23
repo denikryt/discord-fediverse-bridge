@@ -72,5 +72,8 @@ function describeEventObject(event: InternalBridgeEvent): string {
   if (event.event_type === "local.follow_requested") {
     return event.object.follow_activity_id;
   }
+  if (event.event_type === "local.unfollow_requested") {
+    return event.object.follow_activity_id ?? event.delivery_id;
+  }
   return event.object.ap_id;
 }

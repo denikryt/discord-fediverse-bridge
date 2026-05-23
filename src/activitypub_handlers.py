@@ -47,7 +47,7 @@ async def dispatch_activitypub_event(
     """
     # follow.accepted and local.follow_requested are lifecycle/control events,
     # not remote community content fanout, so they bypass the normal allowlist.
-    if event.event_type not in {"follow.accepted", "local.follow_requested"}:
+    if event.event_type not in {"follow.accepted", "local.follow_requested", "local.unfollow_requested"}:
         # settings may be absent in test runtimes that pre-date allowlist support;
         # treat a missing settings as an empty allowlist (allow all).
         allowlist = getattr(getattr(runtime, "settings", None), "federation_allowlist", [])
@@ -87,6 +87,12 @@ async def dispatch_activitypub_event(
             local_community_actor_id=event.community_actor_id,
             remote_actor_id=event.actor_id,
             remote_inbox_url=event.object.remote_inbox_url,
+            follow_activity_id=event.object.follow_activity_id,
+        )
+    if event.event_type == "local.unfollow_requested":
+        return await runtime.local_community_runtime.handle_unfollow_request(
+            local_community_actor_id=event.community_actor_id,
+            remote_actor_id=event.actor_id,
             follow_activity_id=event.object.follow_activity_id,
         )
     raise RuntimeError(f"Unsupported event type: {event.event_type}")

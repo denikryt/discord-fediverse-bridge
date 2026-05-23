@@ -543,6 +543,36 @@ class LocalCommunityRuntime:
         )
         return _HandlerResult(status="processed", detail=detail)
 
+    async def handle_unfollow_request(
+        self,
+        *,
+        local_community_actor_id: str,
+        remote_actor_id: str,
+        follow_activity_id: str | None,
+    ) -> HandlerResult:
+        """Remove one remote actor from a local community follower set."""
+        from ..activitypub_handlers import HandlerResult as _HandlerResult
+
+        local_community = self.database.get_local_community_by_actor_url(local_community_actor_id)
+        if local_community is None:
+            return _HandlerResult(status="skipped", detail="unknown local community")
+        follower = self.database.get_local_community_follower(
+            local_community_id=getattr(local_community, "id"),
+            remote_actor_id=remote_actor_id,
+        )
+        if follower is None:
+            return _HandlerResult(status="skipped", detail="local community follower not found")
+        if follow_activity_id is not None and getattr(follower, "follow_activity_id") != follow_activity_id:
+            logger.info(
+                "Local-community unfollow Follow ID mismatch community=%s remote_actor=%s stored=%s incoming=%s",
+                getattr(local_community, "slug"), remote_actor_id, getattr(follower, "follow_activity_id"), follow_activity_id,
+            )
+        self.database.delete_local_community_follower(
+            local_community_id=getattr(local_community, "id"),
+            remote_actor_id=remote_actor_id,
+        )
+        return _HandlerResult(status="processed", detail="local community follower removed")
+
     @staticmethod
     def _unpack_created_thread(created: object) -> tuple[object, object]:
         """Normalize both supported Discord `create_thread()` return shapes."""

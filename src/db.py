@@ -738,6 +738,31 @@ class Database:
             session.flush()
             return follower
 
+    def delete_local_community_follower(
+        self,
+        *,
+        local_community_id: int,
+        remote_actor_id: str,
+    ) -> bool:
+        """Remove one accepted or pending follower row for a local community.
+
+        The delete is idempotent: callers get False when no row exists. Deleting
+        the row keeps accepted follower queries as the single source of truth for
+        future fanout.
+        """
+        with self.session() as session:
+            follower = session.scalar(
+                select(LocalCommunityFollower).where(
+                    LocalCommunityFollower.local_community_id == local_community_id,
+                    LocalCommunityFollower.remote_actor_id == remote_actor_id,
+                )
+            )
+            if follower is None:
+                return False
+            session.delete(follower)
+            session.flush()
+            return True
+
     def list_local_community_followers(
         self,
         local_community_id: int,

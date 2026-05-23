@@ -108,7 +108,28 @@ class LocalCommunityFollowRequestEvent(BaseModel):
     object: LocalCommunityFollowRequestObject
 
 
+class LocalCommunityUnfollowRequestObject(BaseModel):
+    """Carry the original Follow ID when a remote actor unfollows a local community."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    follow_activity_id: str | None = None
+
+
+class LocalCommunityUnfollowRequestEvent(BaseModel):
+    """Describe one inbound Undo(Follow) addressed to a local community actor."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    event_type: Literal["local.unfollow_requested"]
+    delivery_id: str
+    occurred_at: datetime
+    community_actor_id: str
+    actor_id: str
+    object: LocalCommunityUnfollowRequestObject
+
+
 BridgeGatewayEvent = Annotated[
-    ActivityPubEvent | FollowLifecycleEvent | LocalCommunityFollowRequestEvent,
+    ActivityPubEvent | FollowLifecycleEvent | LocalCommunityFollowRequestEvent | LocalCommunityUnfollowRequestEvent,
     Field(discriminator="event_type"),
 ]

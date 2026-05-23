@@ -87,3 +87,10 @@ This document explains the major runtime traces through the bridge: user/platfor
 1. Discord or remote update/delete routes to local community runtime.
 2. Runtime resolves local mappings, prepares delivery state, and calls gateway.
 3. Gateway signs Update/Delete or relay deliveries and Python records outcomes.
+
+## Remote ActivityPub Undo(Follow) -> local community unfollow flow
+
+1. Gateway receives embedded Undo(Follow) addressed to a local community actor.
+2. Gateway emits `local.unfollow_requested` when the target actor is owned by this bridge.
+3. Python removes the remote actor from `local_community_followers`.
+4. Future create, update, and delete fanout uses current accepted followers and excludes the removed actor.

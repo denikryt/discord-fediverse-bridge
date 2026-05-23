@@ -61,10 +61,24 @@ export interface LocalFollowRequestedEvent {
   occurred_at: string;
 }
 
+export interface LocalUnfollowRequestedObject {
+  follow_activity_id: string | null;
+}
+
+export interface LocalUnfollowRequestedEvent {
+  actor_id: string;
+  community_actor_id: string;
+  delivery_id: string;
+  event_type: "local.unfollow_requested";
+  object: LocalUnfollowRequestedObject;
+  occurred_at: string;
+}
+
 export type InternalBridgeEvent =
   | BridgeContentEvent
   | FollowAcceptedEvent
-  | LocalFollowRequestedEvent;
+  | LocalFollowRequestedEvent
+  | LocalUnfollowRequestedEvent;
 
 export interface PublishContentRequest {
   actorUsername: string;

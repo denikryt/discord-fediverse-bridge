@@ -375,3 +375,40 @@ async def test_remote_follower_reply_keeps_existing_generic_mapping(
     assert created is not None
     assert generic_mapping is not None
     assert generic_mapping.discord_message_id == 399
+
+
+@pytest.mark.asyncio
+async def test_remote_unfollow_to_local_community_removes_follower(tmp_path: Path) -> None:
+    """A local-community Undo(Follow) should remove the accepted follower row."""
+    database, runtime = _runtime(tmp_path)
+    local_community = _local_community(database)
+    database.create_local_community_follower(local_community_id=local_community.id, remote_actor_id="https://lemmy.example/u/alice", remote_inbox_url="https://lemmy.example/u/alice/inbox", follow_activity_id="https://lemmy.example/activities/follow/abc", status="accepted")
+    result = await runtime.handle_unfollow_request(local_community_actor_id=local_community.actor_url, remote_actor_id="https://lemmy.example/u/alice", follow_activity_id="https://lemmy.example/activities/follow/abc")
+    assert result.status == "processed"
+    assert result.detail == "local community follower removed"
+    assert database.get_local_community_follower(local_community_id=local_community.id, remote_actor_id="https://lemmy.example/u/alice") is None
+
+
+@pytest.mark.asyncio
+async def test_duplicate_remote_unfollow_to_local_community_is_idempotent(tmp_path: Path) -> None:
+    """Duplicate Undo(Follow) should be acknowledged locally without recreating state."""
+    database, runtime = _runtime(tmp_path)
+    local_community = _local_community(database)
+    result = await runtime.handle_unfollow_request(local_community_actor_id=local_community.actor_url, remote_actor_id="https://lemmy.example/u/alice", follow_activity_id="https://lemmy.example/activities/follow/abc")
+    assert result.status == "skipped"
+    assert result.detail == "local community follower not found"
+
+
+@pytest.mark.asyncio
+async def test_follow_after_unfollow_recreates_local_community_follower(tmp_path: Path) -> None:
+    """A fresh Follow after removal should recreate the follower row."""
+    database, runtime = _runtime(tmp_path)
+    local_community = _local_community(database)
+    database.create_local_community_follower(local_community_id=local_community.id, remote_actor_id="https://lemmy.example/u/alice", remote_inbox_url="https://lemmy.example/u/alice/old-inbox", follow_activity_id="https://lemmy.example/activities/follow/old", status="accepted")
+    await runtime.handle_unfollow_request(local_community_actor_id=local_community.actor_url, remote_actor_id="https://lemmy.example/u/alice", follow_activity_id="https://lemmy.example/activities/follow/old")
+    result = await runtime.handle_follow_request(local_community_actor_id=local_community.actor_url, remote_actor_id="https://lemmy.example/u/alice", remote_inbox_url="https://lemmy.example/u/alice/new-inbox", follow_activity_id="https://lemmy.example/activities/follow/new")
+    follower = database.get_local_community_follower(local_community_id=local_community.id, remote_actor_id="https://lemmy.example/u/alice")
+    assert result.status == "processed"
+    assert follower is not None
+    assert follower.remote_inbox_url == "https://lemmy.example/u/alice/new-inbox"
+    assert follower.follow_activity_id == "https://lemmy.example/activities/follow/new"

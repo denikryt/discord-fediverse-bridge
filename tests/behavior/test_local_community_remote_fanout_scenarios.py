@@ -655,3 +655,47 @@ async def test_inbound_post_update_relays_only_to_delivered_create_targets(tmp_p
         "https://lemmy.example/u/carol",
     ]
     assert all(delivery.activity_json["object"]["type"] == "Update" for delivery in request["deliveries"])
+
+@pytest.mark.asyncio
+async def test_inbound_post_update_skips_unfollowed_delivered_targets(tmp_path: Path) -> None:
+    """A delivered create target should not receive updates after unfollowing."""
+    database, runtime = _runtime(tmp_path)
+    local_community = _local_community(database)
+    _add_followers(database, local_community)
+    forum_channel = build_forum_channel_tuple_result(channel_id=100, thread_id=200, starter_message_id=300)
+    starter_message = SimpleNamespace(edit=AsyncMock())
+    runtime.bot = build_bot(
+        forum_channels={100: forum_channel},
+        threads={200: SimpleNamespace(fetch_message=AsyncMock(return_value=starter_message))},
+    )
+
+    async def gateway_result(*, signing_actor_url: str, deliveries: list[object]) -> SendLocalCommunityRelayResult:
+        """Mark every requested relay as delivered for continuity rows."""
+        return SendLocalCommunityRelayResult(
+            outcomes=[
+                SendLocalCommunityRelayOutcome(
+                    delivery_id=delivery.delivery_id,
+                    ok=True,
+                    target_remote_actor_id=delivery.target_remote_actor_id,
+                    activity_id=delivery.activity_json["id"],
+                )
+                for delivery in deliveries
+            ]
+        )
+
+    runtime.fedify_gateway.send_local_community_relay.side_effect = gateway_result
+    await runtime.handle_inbound_post(_post_event(), SimpleNamespace())
+    database.delete_local_community_follower(
+        local_community_id=local_community.id,
+        remote_actor_id="https://lemmy.example/u/alice",
+    )
+    runtime.fedify_gateway.send_local_community_relay.reset_mock(side_effect=True)
+    runtime.fedify_gateway.send_local_community_relay.side_effect = gateway_result
+
+    result = await runtime.handle_inbound_post_update(_post_update_event(), SimpleNamespace(bot=runtime.bot))
+
+    assert result.status == "processed"
+    request = runtime.fedify_gateway.send_local_community_relay.await_args.kwargs
+    assert sorted(delivery.target_remote_actor_id for delivery in request["deliveries"]) == [
+        "https://lemmy.example/u/carol",
+    ]

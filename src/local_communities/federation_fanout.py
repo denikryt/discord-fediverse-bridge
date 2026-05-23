@@ -50,14 +50,25 @@ class LocalCommunityFederationFanout:
             local_community_id=getattr(local_community, "id"),
             source_object_ap_id=getattr(getattr(event, "object"), "ap_id"),
         )
-        targets = [
-            {
+        accepted_followers = {
+            follower.remote_actor_id: follower
+            for follower in self.database.list_local_community_followers(
+                getattr(local_community, "id"), status="accepted"
+            )
+        }
+        targets = []
+        for row in delivered_create_targets:
+            # Historical delivery rows prove the original create reached this
+            # actor. Current follower rows decide whether update/delete relay is
+            # still allowed after an unfollow or re-follow.
+            current = accepted_followers.get(row.target_remote_actor_id)
+            if current is None:
+                continue
+            targets.append({
                 "remote_actor_id": row.target_remote_actor_id,
-                "remote_inbox_url": row.target_inbox_url,
-                "delivery_profile": row.delivery_profile,
-            }
-            for row in delivered_create_targets
-        ]
+                "remote_inbox_url": current.remote_inbox_url,
+                "delivery_profile": getattr(current, "delivery_profile", "threadiverse_group"),
+            })
         return await self._relay_to_targets(
             event=event,
             local_community=local_community,
