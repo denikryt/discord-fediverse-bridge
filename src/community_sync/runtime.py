@@ -408,6 +408,13 @@ class CommunityRuntime:
                 )
                 return _HandlerResult(status="deferred", detail="parent post not mapped and fetch failed")
 
+        if thread_group is None:
+            logger.info(
+                "Skipping comment %s — parent post %s is not mapped and no backfill is needed",
+                event.object.ap_id, event.object.post_ap_id,
+            )
+            return _HandlerResult(status="skipped", detail="parent post not mapped")
+
         logger.debug(
             "[handle_inbound_comment] thread_group=%s deliveries=%s",
             thread_group.id,

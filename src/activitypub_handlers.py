@@ -14,6 +14,7 @@ from .activitypub_models import (
     BridgeGatewayEvent,
     FollowLifecycleEvent,
 )
+from .community_sync.inbound_mapping import get_accepted_subscriptions
 from .local_communities.inbound_mapping import resolve_local_community_by_actor_url
 from .federation_policy import is_instance_allowed
 from .runtime import Runtime
@@ -103,6 +104,13 @@ async def handle_post_created(event: ActivityPubEvent, runtime: Runtime) -> Hand
     if _is_local_community_target(event, runtime):
         return await runtime.local_community_runtime.handle_inbound_post(event, runtime)
     await _maybe_implicit_accept(event.community_actor_id, runtime)
+    if _should_skip_unsubscribed_remote_create(event, runtime):
+        logger.info(
+            "Skipping inbound %s for unsubscribed community %s activity=%s object=%s post=%s parent=%s",
+            event.event_type, event.community_actor_id, event.delivery_id,
+            event.object.ap_id, event.object.post_ap_id, event.object.parent_ap_id,
+        )
+        return HandlerResult(status="skipped", detail="no subscriptions for this community")
     return await runtime.community_runtime.handle_inbound_post(event, runtime)
 
 
@@ -118,6 +126,13 @@ async def handle_comment_created(event: ActivityPubEvent, runtime: Runtime) -> H
     if _is_local_community_target(event, runtime):
         return await runtime.local_community_runtime.handle_inbound_comment(event, runtime)
     await _maybe_implicit_accept(event.community_actor_id, runtime)
+    if _should_skip_unsubscribed_remote_create(event, runtime):
+        logger.info(
+            "Skipping inbound %s for unsubscribed community %s activity=%s object=%s post=%s parent=%s",
+            event.event_type, event.community_actor_id, event.delivery_id,
+            event.object.ap_id, event.object.post_ap_id, event.object.parent_ap_id,
+        )
+        return HandlerResult(status="skipped", detail="no subscriptions for this community")
     return await runtime.community_runtime.handle_inbound_comment(event, runtime)
 
 
