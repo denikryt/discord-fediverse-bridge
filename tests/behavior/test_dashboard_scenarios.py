@@ -23,8 +23,8 @@ def _database(tmp_path: Path) -> Database:
 def _runtime(database: Database, *, allowlist: list[str] | None = None) -> SimpleNamespace:
     """Build a minimal runtime carrying dashboard-owned dependencies."""
     settings = SimpleNamespace(
-        fedify_origin="https://bot.example.com",
-        normalized_fedify_origin="https://bot.example.com",
+        fedify_origin="https://discrod-bridge.example.com",
+        normalized_fedify_origin="https://discrod-bridge.example.com",
         fedify_actor_identifier="bridge",
         federation_allowlist=allowlist or [],
         fedify_shared_secret="test-secret",
@@ -47,10 +47,10 @@ def _client(database: Database, *, allowlist: list[str] | None = None) -> TestCl
 
 
 def _create_local_community(database: Database) -> object:
-    """Create one local community with public bot.example.com URLs."""
+    """Create one local community with public discrod-bridge.example.com URLs."""
     LocalCommunityService(
         database=database,
-        base_url="https://bot.example.com",
+        base_url="https://discrod-bridge.example.com",
         keypair_generator=lambda: ("public-key", "private-key"),
     ).create_local_community(
         discord_guild_id=10,
@@ -69,8 +69,8 @@ def test_empty_dashboard_state_renders_open_federation(tmp_path: Path) -> None:
 
     assert response.status_code == 200
     payload = response.json()
-    assert payload["instance"]["origin"] == "https://bot.example.com"
-    assert payload["instance"]["bridgeActorUrl"] == "https://bot.example.com/actors/bridge"
+    assert payload["instance"]["origin"] == "https://discrod-bridge.example.com"
+    assert payload["instance"]["bridgeActorUrl"] == "https://discrod-bridge.example.com/actors/bridge"
     assert payload["localCommunities"] == []
     assert payload["bridgeActorFollows"] == []
     assert payload["federation"]["mode"] == "open"
@@ -107,8 +107,8 @@ def test_local_communities_show_safe_public_metadata_and_counts(tmp_path: Path) 
     assert community_payload["slug"] == "hackers"
     assert community_payload["name"] == "Hackers"
     assert community_payload["description"] == "A local hackerspace forum."
-    assert community_payload["actorUrl"] == "https://bot.example.com/communities/hackers"
-    assert community_payload["aliasUrl"] == "https://bot.example.com/c/hackers"
+    assert community_payload["actorUrl"] == "https://discrod-bridge.example.com/communities/hackers"
+    assert community_payload["aliasUrl"] == "https://discrod-bridge.example.com/c/hackers"
     assert community_payload["subscriberCount"] == 2
     assert len(community_payload["followers"]) == 2
     serialized = json.dumps(payload)
@@ -123,7 +123,7 @@ def test_bridge_actor_follows_are_separate_from_connected_follower_instances(tmp
     community = _create_local_community(database)
     database.create_bridge_actor_follow(
         community_actor_id="https://lemmy.world/c/news",
-        follow_activity_id="https://bot.example.com/activities/follow/news",
+        follow_activity_id="https://discrod-bridge.example.com/activities/follow/news",
         community_inbox_url="https://lemmy.world/c/news/inbox",
         status="accepted",
     )

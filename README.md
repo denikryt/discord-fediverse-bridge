@@ -115,7 +115,7 @@ The project runs as two processes:
 - a Discord bot with `message content intent` enabled
 - a public Lemmy instance URL
 - a running `fedify-gateway`
-- one public HTTPS domain for normal deployments; two HTTPS domains remain supported as legacy/advanced mode
+- one public HTTPS domain
 
 In the recommended single-domain deployment, nginx owns path routing:
 
@@ -124,17 +124,14 @@ ActivityPub/WebFinger routes -> fedify-gateway
 registration/OAuth routes    -> Python bridge
 ```
 
-Use two public domains only when you intentionally want the ActivityPub gateway and registration UI on separate hostnames.
-
-
 ## Single-domain deployment
 
 For a normal deployment, one public hostname can serve both federation and registration UI. Configure the root `.env` like this:
 
 ```env
-FEDIFY_ORIGIN=https://bot.example.com
-PUBLIC_BRIDGE_BASE_URL=https://bot.example.com
-DISCORD_OAUTH_REDIRECT_URI=https://bot.example.com/auth/discord/callback
+FEDIFY_ORIGIN=https://discord-bridge.example.com
+PUBLIC_BRIDGE_BASE_URL=https://discord-bridge.example.com
+DISCORD_OAUTH_REDIRECT_URI=https://discord-bridge.example.com/auth/discord/callback
 FEDIFY_GATEWAY_URL=http://127.0.0.1:3000
 PYTHON_BRIDGE_EVENTS_URL=http://127.0.0.1:8081/internal/activitypub/events
 ```
@@ -142,8 +139,7 @@ PYTHON_BRIDGE_EVENTS_URL=http://127.0.0.1:8081/internal/activitypub/events
 Configure `fedify-gateway/.env` for nginx setup:
 
 ```env
-DEPLOYMENT_MODE=single-domain
-PUBLIC_DOMAIN=bot.example.com
+PUBLIC_DOMAIN=discord-bridge.example.com
 ```
 
 The gateway keeps canonical ActivityPub routes such as `/.well-known/webfinger`, `/inbox`, `/actors/`, `/communities/`, `/c/`, and `/users/`. Python owns `/register` and `/auth/discord/`. Do not expose `/internal/` publicly through nginx.
@@ -203,8 +199,7 @@ Common:
 
 Needed only for nginx setup (`nginx-setup.sh`):
 
-- recommended single-domain mode: `DEPLOYMENT_MODE=single-domain` and `PUBLIC_DOMAIN`
-- legacy two-domain mode: `DEPLOYMENT_MODE=two-domain`, `GATEWAY_DOMAIN`, and `BRIDGE_DOMAIN`
+- `PUBLIC_DOMAIN`
 
 ## Install
 
@@ -271,7 +266,7 @@ npm run verify:publish-contract
 
 The repository includes:
 
-- `fedify-gateway/nginx.conf`
+- `fedify-gateway/nginx.single-domain.conf`
 - `fedify-gateway/nginx-setup.sh`
 - `fedify-gateway/SETUP.md`
 
