@@ -1,3 +1,5 @@
+"""Read-only Lemmy HTTP API client used for remote community lookup."""
+
 from __future__ import annotations
 
 import asyncio

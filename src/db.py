@@ -40,6 +40,12 @@ class Database:
 
     # Database is a small repository-style wrapper that keeps bridge code away
     # from session management and direct ORM details.
+    # ---------------------------------------------------------------------------
+    # Engine/session/migration helpers
+    #
+    # Navigation marker for repository helpers in this persistence area.
+    # ---------------------------------------------------------------------------
+
     def __init__(self, url: str) -> None:
         connect_args = {"check_same_thread": False} if url.startswith("sqlite") else {}
         self.engine = create_engine(url, future=True, connect_args=connect_args)
@@ -89,6 +95,12 @@ class Database:
             raise
         finally:
             session.close()
+
+    # ---------------------------------------------------------------------------
+    # Legacy direct Lemmy mapping helpers
+    #
+    # Navigation marker for repository helpers in this persistence area.
+    # ---------------------------------------------------------------------------
 
     def get_post_link_by_thread_id(self, discord_thread_id: int) -> PostLink | None:
         """Load the post-link row for one Discord thread, if it exists."""
@@ -223,6 +235,12 @@ class Database:
             session.flush()
             return link
 
+    # ---------------------------------------------------------------------------
+    # Inbound ActivityPub event receipt helpers
+    #
+    # Navigation marker for repository helpers in this persistence area.
+    # ---------------------------------------------------------------------------
+
     def get_event_receipt(self, delivery_id: str) -> ActivityPubEventReceipt | None:
         """Load the receipt row for one inbound delivery ID."""
         with self.session() as session:
@@ -250,6 +268,12 @@ class Database:
                 raise RuntimeError(f"Missing receipt for delivery {delivery_id}")
             receipt.status = status
             receipt.detail = detail
+
+    # ---------------------------------------------------------------------------
+    # Remote community subscription helpers
+    #
+    # Navigation marker for repository helpers in this persistence area.
+    # ---------------------------------------------------------------------------
 
     def get_subscription_by_channel(self, discord_channel_id: int) -> ChannelCommunitySubscription | None:
         """Load the single community subscription owned by one Discord channel."""
@@ -400,6 +424,12 @@ class Database:
             session.delete(sub)
             return True
 
+    # ---------------------------------------------------------------------------
+    # Registration and local user identity helpers
+    #
+    # Navigation marker for repository helpers in this persistence area.
+    # ---------------------------------------------------------------------------
+
     def create_user(
         self,
         *,
@@ -546,6 +576,12 @@ class Database:
         """Load the registered user that owns one actor URL."""
         with self.session() as session:
             return session.scalar(select(User).where(User.actor_url == actor_url))
+
+    # ---------------------------------------------------------------------------
+    # Local community identity and follower helpers
+    #
+    # Navigation marker for repository helpers in this persistence area.
+    # ---------------------------------------------------------------------------
 
     def create_local_community(
         self,
@@ -717,6 +753,12 @@ class Database:
                 statement = statement.where(LocalCommunityFollower.status == status)
             return list(session.scalars(statement.order_by(LocalCommunityFollower.created_at, LocalCommunityFollower.id)))
 
+    # ---------------------------------------------------------------------------
+    # Local community content mapping helpers
+    #
+    # Navigation marker for repository helpers in this persistence area.
+    # ---------------------------------------------------------------------------
+
     def create_local_community_thread(
         self,
         *,
@@ -842,6 +884,12 @@ class Database:
         with self.session() as session:
             return session.get(LocalCommunityThread, local_community_thread_id)
 
+
+    # ---------------------------------------------------------------------------
+    # Local community relay delivery helpers
+    #
+    # Navigation marker for repository helpers in this persistence area.
+    # ---------------------------------------------------------------------------
 
     def get_or_create_local_community_relay_source_activity(
         self,
@@ -1001,6 +1049,12 @@ class Database:
                 )
             )
 
+    # ---------------------------------------------------------------------------
+    # Generic ActivityPub object mapping helpers
+    #
+    # Navigation marker for repository helpers in this persistence area.
+    # ---------------------------------------------------------------------------
+
     def list_users(self) -> list[User]:
         """Return all registered users in stable creation order."""
         # User identity export needs a deterministic ordering so repeated dumps
@@ -1125,6 +1179,12 @@ class Database:
                 )
             )
 
+    # ---------------------------------------------------------------------------
+    # Remote actor cache helpers
+    #
+    # Navigation marker for repository helpers in this persistence area.
+    # ---------------------------------------------------------------------------
+
     def upsert_remote_actor(
         self,
         *,
@@ -1172,6 +1232,12 @@ class Database:
     # These methods are the Phase 2+ replacement for PostLink queries. All
     # methods are fully implemented so Phase 2 can start writing rows without
     # further schema changes. They return empty/None until rows exist.
+
+    # ---------------------------------------------------------------------------
+    # Shared Discord thread/message fanout helpers
+    #
+    # Navigation marker for repository helpers in this persistence area.
+    # ---------------------------------------------------------------------------
 
     def create_thread_group(
         self,
@@ -1458,6 +1524,12 @@ class Database:
     # These methods manage the AP-level follow state for the bridge actor.
     # A BridgeActorFollow row exists as long as at least one
     # ChannelCommunitySubscription references the same community_actor_id.
+
+    # ---------------------------------------------------------------------------
+    # Bridge actor follow helpers
+    #
+    # Navigation marker for repository helpers in this persistence area.
+    # ---------------------------------------------------------------------------
 
     def get_bridge_actor_follow(self, community_actor_id: str) -> BridgeActorFollow | None:
         """Load the bridge-actor follow row for one remote community, if it exists."""

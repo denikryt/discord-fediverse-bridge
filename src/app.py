@@ -1,3 +1,5 @@
+"""Process startup and runtime wiring for the Discord bridge and FastAPI server."""
+
 from __future__ import annotations
 
 import asyncio

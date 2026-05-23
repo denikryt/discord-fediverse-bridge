@@ -1,3 +1,5 @@
+"""Environment-backed settings for the Python bridge process."""
+
 from pydantic import Field, HttpUrl, field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 

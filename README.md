@@ -97,6 +97,17 @@ The project runs as two processes:
    - outbound `Follow` and `Create`
    - inbound federation intake forwarded to Python
 
+
+## Architecture and navigation
+
+- [docs/architecture/overview.md](docs/architecture/overview.md) — process boundaries and major entry points
+- [docs/architecture/bridge-modes.md](docs/architecture/bridge-modes.md) — remote subscriptions vs local communities
+- [docs/architecture/event-flows.md](docs/architecture/event-flows.md) — step-by-step behavior traces
+- [docs/architecture/http-routes.md](docs/architecture/http-routes.md) — Python/gateway route ownership
+- [docs/architecture/database-map.md](docs/architecture/database-map.md) — table ownership and invariants
+- [docs/architecture/gateway-python-contract.md](docs/architecture/gateway-python-contract.md) — internal API contract
+- [docs/development/navigation.md](docs/development/navigation.md) — task-oriented reading guide
+
 ## Requirements
 
 - Python 3.12+

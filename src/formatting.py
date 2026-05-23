@@ -1,3 +1,5 @@
+"""Formatting helpers for Discord-facing bridge messages."""
+
 from __future__ import annotations
 
 from html import unescape

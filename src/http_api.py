@@ -1,3 +1,5 @@
+"""FastAPI route layer for registration pages and private gateway event intake."""
+
 from __future__ import annotations
 
 import logging

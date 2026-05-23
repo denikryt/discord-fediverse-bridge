@@ -59,6 +59,17 @@
 - Code should be easy to scan, easy to trace, and easy to change safely.
 - If code is hard to test through runtime scenarios, simplify the design.
 
+
+## Documentation Maintenance
+
+- Documentation is required maintenance, not optional cleanup.
+- For every code, route, data model, gateway contract, deployment, or behavior change, check whether documentation is affected.
+- Read the purpose paragraph of each potentially relevant document before editing it.
+- Update only documentation whose stated responsibility covers the changed concept.
+- Do not dump unrelated details into nearby documentation files.
+- Preserve the established formatting style of the document family being edited.
+- If no documentation update is needed, understand and be able to explain why the change is outside the existing documentation boundaries.
+
 ## Plans
 
 - When explicitly asked to create a plan, create a new Markdown file in `plans/`.

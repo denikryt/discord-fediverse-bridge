@@ -1,3 +1,5 @@
+"""Discord adapter for slash commands and forum thread/message callbacks."""
+
 from __future__ import annotations
 
 import asyncio
