@@ -117,14 +117,14 @@ The project runs as two processes:
 - a running `fedify-gateway`
 - one public HTTPS domain
 
-In the recommended single-domain deployment, nginx owns path routing:
+In the recommended public-host deployment, nginx owns path routing:
 
 ```text
 ActivityPub/WebFinger routes -> fedify-gateway
 registration/OAuth routes    -> Python bridge
 ```
 
-## Single-domain deployment
+## Public host deployment
 
 For a normal deployment, one public hostname can serve both federation and registration UI. Configure the root `.env` like this:
 
@@ -140,7 +140,11 @@ Configure `fedify-gateway/.env` for nginx setup:
 
 ```env
 PUBLIC_DOMAIN=discord-bridge.example.com
+GATEWAY_UPSTREAM=http://127.0.0.1:3000
+PYTHON_BRIDGE_UPSTREAM=http://127.0.0.1:8081
 ```
+
+`GATEWAY_UPSTREAM` and `PYTHON_BRIDGE_UPSTREAM` are optional overrides for nginx rendering. Keep the defaults unless the gateway or Python bridge listens on a different local address.
 
 The gateway keeps canonical ActivityPub routes such as `/.well-known/webfinger`, `/inbox`, `/actors/`, `/communities/`, `/c/`, and `/users/`. Python owns `/register` and `/auth/discord/`. Do not expose `/internal/` publicly through nginx.
 
@@ -200,6 +204,8 @@ Common:
 Needed only for nginx setup (`nginx-setup.sh`):
 
 - `PUBLIC_DOMAIN`
+- `GATEWAY_UPSTREAM` — optional override for the gateway upstream target
+- `PYTHON_BRIDGE_UPSTREAM` — optional override for the Python bridge upstream target
 
 ## Install
 
@@ -266,7 +272,7 @@ npm run verify:publish-contract
 
 The repository includes:
 
-- `fedify-gateway/nginx.single-domain.conf`
+- `fedify-gateway/nginx.conf`
 - `fedify-gateway/nginx-setup.sh`
 - `fedify-gateway/SETUP.md`
 

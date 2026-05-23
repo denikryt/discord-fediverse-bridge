@@ -1,8 +1,8 @@
 # HTTP routes
 
-This document explains HTTP route ownership between the Python bridge and the Fedify gateway. It owns route/process/publicness information, especially for single-domain routing decisions, and does not describe full runtime behavior.
+This document explains HTTP route ownership between the Python bridge and the Fedify gateway. It owns route/process/publicness information, especially for public-host routing decisions, and does not describe full runtime behavior.
 
-| Path | Method | Owner process | Public or internal | Purpose | Primary source file | Single-domain nginx owner |
+| Path | Method | Owner process | Public or internal | Purpose | Primary source file | Public-host nginx owner |
 | --- | --- | --- | --- | --- | --- | --- |
 | `/healthz` | GET | Python FastAPI | health | Python health when directly exposed | `src/http_api.py` | Gateway by default |
 | `/register` | GET | Python FastAPI | public | Registration page | `src/http_api.py` | Python |
@@ -32,7 +32,7 @@ This document explains HTTP route ownership between the Python bridge and the Fe
 | `/update` | POST | Fedify gateway | internal | Send Update | `fedify-gateway/src/server.ts` | Internal/gateway |
 | `/delete` | POST | Fedify gateway | internal | Send Delete | `fedify-gateway/src/server.ts` | Internal/gateway |
 
-`/healthz` exists in both processes. In single-domain deployment, public `/healthz` should stay gateway-owned unless an operator intentionally adds a Python health alias.
+`/healthz` exists in both processes. In the public-host deployment, public `/healthz` should stay gateway-owned unless an operator intentionally adds a Python health alias.
 
 `/internal/activitypub/events` is authenticated with the shared gateway secret, but it is still a private gateway-to-Python route and should not be routed publicly by nginx.
 

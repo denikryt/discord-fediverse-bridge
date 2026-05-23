@@ -40,15 +40,15 @@ GATEWAY_DOMAIN=discord-bridge.example.com
 BRIDGE_DOMAIN=bridge.discord-bridge.example.com
 ENV
 if ENV_FILE="$legacy_env" "$GATEWAY_DIR/nginx-setup.sh" --render > "$TMP_DIR/legacy.out" 2>&1; then
-    echo "Expected render to fail when legacy two-domain settings are provided" >&2
+    echo "Expected render to fail when legacy split-host settings are provided" >&2
     exit 1
 fi
-assert_contains "$TMP_DIR/legacy.out" "single-domain deployments are supported"
+assert_contains "$TMP_DIR/legacy.out" "legacy split-host settings are no longer supported"
 
 missing_single_env="$TMP_DIR/missing-single.env"
 touch "$missing_single_env"
 if ENV_FILE="$missing_single_env" "$GATEWAY_DIR/nginx-setup.sh" --render > "$TMP_DIR/missing-single.out" 2>&1; then
-    echo "Expected single-domain render to fail without PUBLIC_DOMAIN" >&2
+    echo "Expected render to fail without PUBLIC_DOMAIN" >&2
     exit 1
 fi
 assert_contains "$TMP_DIR/missing-single.out" "PUBLIC_DOMAIN must be set"

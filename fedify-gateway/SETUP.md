@@ -43,7 +43,7 @@ curl http://127.0.0.1:3000/healthz
 
 ## Nginx
 
-The deployment model is single-domain. It installs one public site where ActivityPub/WebFinger routes go to fedify-gateway and registration/OAuth/dashboard routes go to the Python bridge.
+The deployment model uses one public host. It installs one public site where ActivityPub/WebFinger routes go to fedify-gateway and registration/OAuth/dashboard routes go to the Python bridge.
 
 ```text
 /.well-known/webfinger -> fedify-gateway
@@ -60,7 +60,11 @@ The deployment model is single-domain. It installs one public site where Activit
 
 ```env
 PUBLIC_DOMAIN=discord-bridge.example.com
+GATEWAY_UPSTREAM=http://127.0.0.1:3000
+PYTHON_BRIDGE_UPSTREAM=http://127.0.0.1:8081
 ```
+
+`GATEWAY_UPSTREAM` and `PYTHON_BRIDGE_UPSTREAM` are optional overrides. Leave them at the defaults unless nginx must proxy to a different local bind or port.
 
 Run `nginx-setup.sh` after setting `PUBLIC_DOMAIN`. Public `/healthz` belongs to the gateway. Keep `/internal/` private; it is for gateway-to-Python delivery only.
 

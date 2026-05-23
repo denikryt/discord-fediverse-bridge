@@ -1,12 +1,13 @@
 #!/bin/bash
-# Install nginx for the single-domain deployment model.
-# The script renders the final public site from env values so checked-in files
-# never need project-specific hostnames.
+# Install nginx for the public bridge host.
+# The script renders the checked-in nginx template from env values so route
+# ownership stays defined in one place instead of being duplicated in shell.
 
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 ENV_FILE="${ENV_FILE:-$SCRIPT_DIR/.env}"
+TEMPLATE_FILE="${TEMPLATE_FILE:-$SCRIPT_DIR/nginx.conf}"
 EMAIL="${EMAIL:-$(git config user.email 2>/dev/null || echo "admin@example.com")}"
 GATEWAY_UPSTREAM="${GATEWAY_UPSTREAM:-http://127.0.0.1:3000}"
 PYTHON_BRIDGE_UPSTREAM="${PYTHON_BRIDGE_UPSTREAM:-http://127.0.0.1:8081}"
@@ -36,20 +37,20 @@ load_configuration() {
         exit 1
     fi
 
-    DEPLOYMENT_MODE="${DEPLOYMENT_MODE:-$(read_env_value DEPLOYMENT_MODE)}"
     PUBLIC_DOMAIN="${PUBLIC_DOMAIN:-$(read_env_value PUBLIC_DOMAIN)}"
+    DEPLOYMENT_MODE="${DEPLOYMENT_MODE:-$(read_env_value DEPLOYMENT_MODE)}"
     GATEWAY_DOMAIN="${GATEWAY_DOMAIN:-$(read_env_value GATEWAY_DOMAIN)}"
     BRIDGE_DOMAIN="${BRIDGE_DOMAIN:-$(read_env_value BRIDGE_DOMAIN)}"
 
-    # Reject old split-host configuration explicitly so operators do not think
-    # two-domain mode still exists after the deployment model was simplified.
-    if [[ -n "${GATEWAY_DOMAIN}" || -n "${BRIDGE_DOMAIN}" || "${DEPLOYMENT_MODE}" == "two-domain" ]]; then
-        echo "Error: only single-domain deployments are supported; use PUBLIC_DOMAIN and remove GATEWAY_DOMAIN/BRIDGE_DOMAIN" >&2
+    # Reject the old split-host settings explicitly so operators migrate to the
+    # single public host contract instead of getting a silently wrong config.
+    if [[ -n "${DEPLOYMENT_MODE}" || -n "${GATEWAY_DOMAIN}" || -n "${BRIDGE_DOMAIN}" ]]; then
+        echo "Error: legacy split-host settings are no longer supported; use PUBLIC_DOMAIN only" >&2
         exit 1
     fi
 
-    if [[ -n "${DEPLOYMENT_MODE}" && "${DEPLOYMENT_MODE}" != "single-domain" ]]; then
-        echo "Error: DEPLOYMENT_MODE may only be omitted or set to single-domain" >&2
+    if [[ ! -f "$TEMPLATE_FILE" ]]; then
+        echo "Error: nginx template not found: $TEMPLATE_FILE" >&2
         exit 1
     fi
 
@@ -59,72 +60,26 @@ load_configuration() {
     fi
 }
 
-proxy_headers() {
-    cat <<'NGINX'
-        proxy_set_header Host $host;
-        proxy_set_header X-Real-IP $remote_addr;
-        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
-        proxy_set_header X-Forwarded-Proto $scheme;
-NGINX
+escape_sed_replacement() {
+    printf '%s' "$1" | sed -e 's/[\/&]/\\&/g'
 }
 
-render_single_domain_site() {
-    local domain="$1"
-    cat <<NGINX
-server {
-    listen 80;
-    server_name ${domain};
+render_site() {
+    local public_domain gateway_upstream python_bridge_upstream
+    public_domain="$(escape_sed_replacement "$PUBLIC_DOMAIN")"
+    gateway_upstream="$(escape_sed_replacement "$GATEWAY_UPSTREAM")"
+    python_bridge_upstream="$(escape_sed_replacement "$PYTHON_BRIDGE_UPSTREAM")"
 
-    return 301 https://\$server_name\$request_uri;
-}
-
-server {
-    listen 443 ssl http2;
-    server_name ${domain};
-
-    ssl_certificate /etc/letsencrypt/live/${domain}/fullchain.pem;
-    ssl_certificate_key /etc/letsencrypt/live/${domain}/privkey.pem;
-
-    location = /register {
-        proxy_pass ${PYTHON_BRIDGE_UPSTREAM};
-$(proxy_headers)
-    }
-
-    location ^~ /register/ {
-        proxy_pass ${PYTHON_BRIDGE_UPSTREAM};
-$(proxy_headers)
-    }
-
-    location ^~ /auth/discord/ {
-        proxy_pass ${PYTHON_BRIDGE_UPSTREAM};
-$(proxy_headers)
-    }
-
-    location = /dashboard {
-        proxy_pass ${PYTHON_BRIDGE_UPSTREAM};
-$(proxy_headers)
-    }
-
-    location ^~ /dashboard/ {
-        proxy_pass ${PYTHON_BRIDGE_UPSTREAM};
-$(proxy_headers)
-    }
-
-    location / {
-        proxy_pass ${GATEWAY_UPSTREAM};
-$(proxy_headers)
-        proxy_http_version 1.1;
-        proxy_set_header Connection "";
-        proxy_buffering off;
-        proxy_request_buffering off;
-    }
-}
-NGINX
+    sed \
+        -e "s/__PUBLIC_DOMAIN__/${public_domain}/g" \
+        -e "s/__GATEWAY_UPSTREAM__/${gateway_upstream}/g" \
+        -e "s/__PYTHON_BRIDGE_UPSTREAM__/${python_bridge_upstream}/g" \
+        "$TEMPLATE_FILE"
 }
 
 render_selected_sites() {
     load_configuration
-    render_single_domain_site "$PUBLIC_DOMAIN"
+    render_site
 }
 
 install_site() {
@@ -156,9 +111,9 @@ NGINX
 
 main() {
     load_configuration
-    install_site "$PUBLIC_DOMAIN" "$(render_single_domain_site "$PUBLIC_DOMAIN")"
+    install_site "$PUBLIC_DOMAIN" "$(render_site)"
     echo ""
-    echo "Single-domain site is up. Update .env in the project root:"
+    echo "Public site is up. Update the root .env:"
     echo "  FEDIFY_ORIGIN=https://${PUBLIC_DOMAIN}"
     echo "  PUBLIC_BRIDGE_BASE_URL=https://${PUBLIC_DOMAIN}"
     echo "  DISCORD_OAUTH_REDIRECT_URI=https://${PUBLIC_DOMAIN}/auth/discord/callback"
