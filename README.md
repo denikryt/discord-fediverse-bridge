@@ -115,9 +115,40 @@ The project runs as two processes:
 - a Discord bot with `message content intent` enabled
 - a public Lemmy instance URL
 - a running `fedify-gateway`
-- two public domains with HTTPS:
-  - **gateway domain** — must be reachable from the internet; Lemmy instances send AP requests (WebFinger, Follow, inbox) here
-  - **bridge domain** — serves the web registration page; used as the Discord OAuth redirect URI
+- one public HTTPS domain for normal deployments; two HTTPS domains remain supported as legacy/advanced mode
+
+In the recommended single-domain deployment, nginx owns path routing:
+
+```text
+ActivityPub/WebFinger routes -> fedify-gateway
+registration/OAuth routes    -> Python bridge
+```
+
+Use two public domains only when you intentionally want the ActivityPub gateway and registration UI on separate hostnames.
+
+
+## Single-domain deployment
+
+For a normal deployment, one public hostname can serve both federation and registration UI. Configure the root `.env` like this:
+
+```env
+FEDIFY_ORIGIN=https://bot.example.com
+PUBLIC_BRIDGE_BASE_URL=https://bot.example.com
+DISCORD_OAUTH_REDIRECT_URI=https://bot.example.com/auth/discord/callback
+FEDIFY_GATEWAY_URL=http://127.0.0.1:3000
+PYTHON_BRIDGE_EVENTS_URL=http://127.0.0.1:8081/internal/activitypub/events
+```
+
+Configure `fedify-gateway/.env` for nginx setup:
+
+```env
+DEPLOYMENT_MODE=single-domain
+PUBLIC_DOMAIN=bot.example.com
+```
+
+The gateway keeps canonical ActivityPub routes such as `/.well-known/webfinger`, `/inbox`, `/actors/`, `/communities/`, `/c/`, and `/users/`. Python owns `/register` and `/auth/discord/`. Do not expose `/internal/` publicly through nginx.
+
+Changing `FEDIFY_ORIGIN` on an existing deployment changes ActivityPub actor and object IDs. Treat that as a federation identity migration, not a harmless nginx change.
 
 ## Python Bridge Env
 
@@ -165,8 +196,8 @@ Common:
 
 Needed only for nginx setup (`nginx-setup.sh`):
 
-- `GATEWAY_DOMAIN`
-- `BRIDGE_DOMAIN`
+- recommended single-domain mode: `DEPLOYMENT_MODE=single-domain` and `PUBLIC_DOMAIN`
+- legacy two-domain mode: `DEPLOYMENT_MODE=two-domain`, `GATEWAY_DOMAIN`, and `BRIDGE_DOMAIN`
 
 ## Install
 
