@@ -71,6 +71,7 @@ def test_empty_dashboard_state_renders_open_federation(tmp_path: Path) -> None:
     payload = response.json()
     assert payload["instance"]["origin"] == "https://discrod-bridge.example.com"
     assert payload["instance"]["bridgeActorUrl"] == "https://discrod-bridge.example.com/actors/bridge"
+    assert payload["instance"]["registeredUserCount"] == 0
     assert payload["localCommunities"] == []
     assert payload["bridgeActorFollows"] == []
     assert payload["federation"]["mode"] == "open"
@@ -81,6 +82,26 @@ def test_local_communities_show_safe_public_metadata_and_counts(tmp_path: Path) 
     """Local communities include public metadata but not private Discord or key fields."""
     database = _database(tmp_path)
     community = _create_local_community(database)
+    database.create_user(
+        discord_user_id="1234567890",
+        activitypub_username="alice",
+        actor_url="https://discrod-bridge.example.com/users/alice",
+        inbox_url="https://discrod-bridge.example.com/users/alice/inbox",
+        outbox_url="https://discrod-bridge.example.com/users/alice/outbox",
+        followers_url="https://discrod-bridge.example.com/users/alice/followers",
+        public_key_pem="public-key",
+        private_key_pem="private-key",
+    )
+    database.create_user(
+        discord_user_id="9999999999",
+        activitypub_username="bob",
+        actor_url="https://discrod-bridge.example.com/users/bob",
+        inbox_url="https://discrod-bridge.example.com/users/bob/inbox",
+        outbox_url="https://discrod-bridge.example.com/users/bob/outbox",
+        followers_url="https://discrod-bridge.example.com/users/bob/followers",
+        public_key_pem="public-key",
+        private_key_pem="private-key",
+    )
     database.create_local_community_follower(
         local_community_id=community.id,
         remote_actor_id="https://lemmy.world/u/alice",
@@ -103,22 +124,28 @@ def test_local_communities_show_safe_public_metadata_and_counts(tmp_path: Path) 
 
     payload = _client(database).get("/dashboard/data").json()
 
+    assert payload["instance"]["registeredUserCount"] == 2
     community_payload = payload["localCommunities"][0]
     assert community_payload["slug"] == "hackers"
     assert community_payload["name"] == "Hackers"
     assert community_payload["description"] == "A local hackerspace forum."
+    assert community_payload["relayHandle"] == "!hackers@discrod-bridge.example.com"
     assert community_payload["actorUrl"] == "https://discrod-bridge.example.com/communities/hackers"
     assert community_payload["aliasUrl"] == "https://discrod-bridge.example.com/c/hackers"
     assert community_payload["subscriberCount"] == 2
     assert len(community_payload["followers"]) == 2
+    assert sorted(follower["actorUrl"] for follower in community_payload["followers"]) == [
+        "https://beehaw.org/u/bob",
+        "https://lemmy.world/u/alice",
+    ]
     serialized = json.dumps(payload)
     assert "discord_guild_id" not in serialized
     assert "private_key_pem" not in serialized
     assert "test-secret" not in serialized
 
 
-def test_bridge_actor_follows_are_separate_from_connected_follower_instances(tmp_path: Path) -> None:
-    """Outbound bridge follows do not define connected local-community instances."""
+def test_bridge_actor_follows_do_not_change_federation_policy_payload(tmp_path: Path) -> None:
+    """Outbound bridge follows stay separate from the public federation policy block."""
     database = _database(tmp_path)
     community = _create_local_community(database)
     database.create_bridge_actor_follow(
@@ -137,7 +164,10 @@ def test_bridge_actor_follows_are_separate_from_connected_follower_instances(tmp
     payload = _client(database).get("/dashboard/data").json()
 
     assert payload["bridgeActorFollows"][0]["communityActorUrl"] == "https://lemmy.world/c/news"
-    assert payload["federation"]["connectedFollowerInstances"] == ["beehaw.org"]
+    assert payload["federation"] == {
+        "mode": "open",
+        "allowlist": [],
+    }
 
 
 def test_allowlist_mode_is_explicit_and_normalized(tmp_path: Path) -> None:
@@ -157,5 +187,11 @@ def test_dashboard_html_loads_and_includes_credits(tmp_path: Path) -> None:
     assert response.status_code == 200
     assert "Discord/Fediverse Bridge Instance" in response.text
     assert "/dashboard/data" in response.text
+    assert "/dashboard.css" in response.text
+    assert "/dashboard.js" in response.text
+    assert 'data-dashboard-endpoint="/dashboard/data"' in response.text
+    assert "Remote follower relays" not in response.text
+    assert '<span class="stat-label">Origin</span>' not in response.text
+    assert '<span class="stat-label">Bridge actor</span>' not in response.text
     assert "https://nachitima.com" in response.text
     assert "Nachitima" in response.text

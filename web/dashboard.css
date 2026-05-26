@@ -1,0 +1,219 @@
+:root {
+  color-scheme: dark;
+  font-family: "Avenir Next", "Segoe UI", sans-serif;
+  --bg: #1b1a22;
+  --panel: #25242d;
+  --panel-soft: #2e2d37;
+  --line: #444252;
+  --text: #f5f3fb;
+  --muted: #bbb7ca;
+  --link: #21d4ff;
+  --accent: #ffe25c;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+body {
+  margin: 0;
+  background: radial-gradient(circle at top, #2a2932 0, var(--bg) 28rem);
+  color: var(--text);
+}
+
+main {
+  max-width: 1180px;
+  margin: 0 auto;
+  padding: 2rem 1.25rem 3rem;
+}
+
+header,
+section,
+footer {
+  margin-bottom: 1.4rem;
+}
+
+h1,
+h2,
+h3 {
+  margin: 0;
+  line-height: 1.15;
+}
+
+h1 {
+  font-size: clamp(2rem, 4vw, 3rem);
+  margin-bottom: 0.75rem;
+}
+
+h2 {
+  font-size: 2rem;
+  margin-bottom: 1rem;
+}
+
+h3 {
+  font-size: 1.7rem;
+  color: var(--accent);
+}
+
+p {
+  margin: 0;
+}
+
+.muted {
+  color: var(--muted);
+}
+
+a {
+  color: var(--link);
+  overflow-wrap: anywhere;
+}
+
+summary {
+  cursor: pointer;
+  font-weight: 700;
+}
+
+ul {
+  margin: 0.65rem 0 0;
+  padding-left: 1.15rem;
+}
+
+.stats {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+  gap: 0.75rem;
+}
+
+.stat {
+  background: color-mix(in srgb, var(--panel) 92%, black);
+  border: 1px solid var(--line);
+  border-radius: 16px;
+  padding: 0.85rem 1rem;
+}
+
+.stat-label {
+  display: block;
+  color: var(--muted);
+  font-size: 0.94rem;
+  margin-bottom: 0.45rem;
+}
+
+.stat-value {
+  font-size: 1.2rem;
+  font-weight: 700;
+}
+
+.panel {
+  background: color-mix(in srgb, var(--panel) 95%, black);
+  border: 1px solid var(--line);
+  border-radius: 18px;
+  padding: 1.1rem 1.15rem;
+}
+
+.stack {
+  display: grid;
+  gap: 1rem;
+}
+
+.community {
+  background: color-mix(in srgb, var(--panel-soft) 94%, black);
+  border: 1px solid var(--line);
+  border-radius: 18px;
+  padding: 1.25rem;
+}
+
+.handle {
+  display: inline-flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.8rem;
+  margin-top: 0.85rem;
+  margin-bottom: 0.85rem;
+  padding: 0.55rem 0.85rem;
+  background: rgba(0, 0, 0, 0.18);
+  border: 1px solid var(--line);
+  border-radius: 14px;
+  font-family: "IBM Plex Mono", "SFMono-Regular", monospace;
+  font-size: 1rem;
+  width: min(100%, 30rem);
+  position: relative;
+}
+
+.handle-text {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.copy-button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex: 0 0 auto;
+  width: 1.9rem;
+  height: 1.9rem;
+  border: 0;
+  border-radius: 10px;
+  background: transparent;
+  color: var(--text);
+  cursor: pointer;
+}
+
+.copy-button:hover {
+  background: rgba(255, 255, 255, 0.08);
+}
+
+.copy-button svg {
+  width: 1rem;
+  height: 1rem;
+  fill: currentColor;
+}
+
+.copy-toast {
+  position: absolute;
+  top: 50%;
+  right: 2.8rem;
+  transform: translateY(-50%) translateX(0.35rem);
+  padding: 0.35rem 0.55rem;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  background: color-mix(in srgb, var(--panel-soft) 96%, black);
+  color: var(--text);
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.28);
+  white-space: nowrap;
+  font-size: 0.88rem;
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity 0.18s ease, transform 0.18s ease;
+}
+
+.copy-toast.visible {
+  opacity: 1;
+  transform: translateY(-50%) translateX(0);
+}
+
+.description {
+  margin-top: 0.25rem;
+  margin-bottom: 1rem;
+  color: #d9d6e4;
+  line-height: 1.55;
+}
+
+.rowlist {
+  display: grid;
+  gap: 0.8rem;
+}
+
+.follow-row {
+  padding-bottom: 0.8rem;
+  border-bottom: 1px solid color-mix(in srgb, var(--line) 88%, transparent);
+}
+
+.follow-row:last-child {
+  border-bottom: 0;
+  padding-bottom: 0;
+}
+
+.section-copy {
+  max-width: 62rem;
+  line-height: 1.5;
+}

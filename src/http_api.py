@@ -7,10 +7,15 @@ from datetime import timedelta
 from urllib.parse import parse_qs
 
 from fastapi import FastAPI, Header, HTTPException, Request, Response, status
-from fastapi.responses import HTMLResponse, RedirectResponse
+from fastapi.responses import HTMLResponse, RedirectResponse, Response
 
 from .activitypub_handlers import dispatch_activitypub_event
-from .dashboard import build_dashboard_payload, render_dashboard_html
+from .dashboard import (
+    build_dashboard_payload,
+    read_dashboard_script,
+    read_dashboard_stylesheet,
+    render_dashboard_html,
+)
 from .activitypub_models import BridgeGatewayEvent
 from .registration_service import RegistrationError, generate_oauth_state, generate_session_token
 from .runtime import Runtime
@@ -204,6 +209,16 @@ def create_http_app(runtime: Runtime) -> FastAPI:
     async def dashboard_page() -> HTMLResponse:
         """Render the public dashboard browser shell."""
         return HTMLResponse(render_dashboard_html())
+
+    @app.get("/dashboard.css")
+    async def dashboard_stylesheet() -> Response:
+        """Return the dashboard stylesheet asset."""
+        return Response(read_dashboard_stylesheet(), media_type="text/css")
+
+    @app.get("/dashboard.js")
+    async def dashboard_script() -> Response:
+        """Return the dashboard browser script asset."""
+        return Response(read_dashboard_script(), media_type="application/javascript")
 
     @app.get("/dashboard/data")
     async def dashboard_data() -> dict[str, object]:

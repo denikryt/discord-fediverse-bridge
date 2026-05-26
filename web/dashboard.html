@@ -1,0 +1,32 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Discord/Fediverse Bridge Instance</title>
+  <link rel="stylesheet" href="/dashboard.css">
+</head>
+<body data-dashboard-endpoint="__DASHBOARD_DATA_ENDPOINT__">
+<main>
+  <header>
+    <h1>Discord/Fediverse Bridge Instance</h1>
+    <p class="muted section-copy">This instance bridges Discord communities into the Fediverse.</p>
+  </header>
+  <section id="summary" class="stats"></section>
+  <section>
+    <h2>Bridge actor follows</h2>
+    <div id="follows" class="panel"></div>
+  </section>
+  <section>
+    <h2>Local communities</h2>
+    <div id="communities" class="stack"></div>
+  </section>
+  <section>
+    <h2>Federation policy</h2>
+    <div id="federation" class="panel"></div>
+  </section>
+  <footer class="muted">Made with passion by <a href="https://nachitima.com">Nachitima</a></footer>
+</main>
+<script src="/dashboard.js"></script>
+</body>
+</html>

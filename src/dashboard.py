@@ -8,17 +8,24 @@ secrets, private keys, raw database paths, or internal service URLs.
 from __future__ import annotations
 
 from collections import defaultdict
-from html import escape
+from pathlib import Path
 from typing import Any
 from urllib.parse import urlparse
+
+WEB_DIR = Path(__file__).resolve().parent.parent / "web"
+DASHBOARD_HTML_PATH = WEB_DIR / "dashboard.html"
+DASHBOARD_CSS_PATH = WEB_DIR / "dashboard.css"
+DASHBOARD_JS_PATH = WEB_DIR / "dashboard.js"
 
 
 def build_dashboard_payload(runtime: Any) -> dict[str, object]:
     """Build the public dashboard payload from safe runtime state."""
     settings = runtime.settings
     origin = str(getattr(settings, "normalized_fedify_origin", settings.fedify_origin)).rstrip("/")
+    origin_host = _hostname_from_url(origin) or ""
     actor_identifier = getattr(settings, "fedify_actor_identifier", "bridge")
     local_communities = runtime.database.list_local_communities()
+    registered_users = runtime.database.list_users()
     followers = runtime.database.list_local_community_followers_for_all(status="accepted")
     bridge_follows = runtime.database.list_bridge_actor_follows()
 
@@ -27,20 +34,25 @@ def build_dashboard_payload(runtime: Any) -> dict[str, object]:
         followers_by_community[getattr(follower, "local_community_id")].append(follower)
 
     community_payloads = []
-    follower_hosts: set[str] = set()
-    for community in local_communities:
+    for community in sorted(
+        local_communities,
+        key=lambda row: (
+            str(getattr(row, "display_name", "")).lower(),
+            str(getattr(row, "slug", "")).lower(),
+        ),
+    ):
         community_followers = followers_by_community.get(getattr(community, "id"), [])
         follower_payloads = []
-        for follower in community_followers:
-            host = _hostname_from_url(getattr(follower, "remote_actor_id", "")) or _hostname_from_url(
-                getattr(follower, "remote_inbox_url", "")
-            )
-            if host:
-                follower_hosts.add(host)
+        for follower in sorted(
+            community_followers,
+            key=lambda row: str(getattr(row, "remote_actor_id", "")).lower(),
+        ):
+            actor_url = getattr(follower, "remote_actor_id")
             follower_payloads.append(
                 {
-                    "actorUrl": getattr(follower, "remote_actor_id"),
-                    "instanceHost": host,
+                    "actorUrl": actor_url,
+                    "instanceHost": _hostname_from_url(actor_url)
+                    or _hostname_from_url(getattr(follower, "remote_inbox_url", "")),
                 }
             )
         community_payloads.append(
@@ -48,9 +60,16 @@ def build_dashboard_payload(runtime: Any) -> dict[str, object]:
                 "slug": getattr(community, "slug"),
                 "name": getattr(community, "display_name"),
                 "description": getattr(community, "summary"),
+                "relayHandle": _local_community_relay_handle(
+                    getattr(community, "slug"),
+                    origin_host,
+                ),
                 "actorUrl": getattr(community, "actor_url"),
                 "aliasUrl": f"{origin}/c/{getattr(community, 'slug')}",
                 "followersUrl": getattr(community, "followers_url"),
+                # The dashboard uses one accepted-follower list, so this count
+                # mirrors the visible follower disclosure rather than a hidden
+                # technical metric with a different definition.
                 "subscriberCount": len(community_followers),
                 "followers": follower_payloads,
             }
@@ -74,6 +93,7 @@ def build_dashboard_payload(runtime: Any) -> dict[str, object]:
             "title": "Discord/Fediverse Bridge Instance",
             "origin": origin,
             "bridgeActorUrl": f"{origin}/actors/{actor_identifier}",
+            "registeredUserCount": len(registered_users),
             "localCommunityCount": len(community_payloads),
             "localCommunityFollowerCount": len(followers),
             "bridgeActorFollowCount": len(bridge_follow_payloads),
@@ -83,7 +103,6 @@ def build_dashboard_payload(runtime: Any) -> dict[str, object]:
         "federation": {
             "mode": "restricted_allowlist" if allowlist else "open",
             "allowlist": allowlist,
-            "connectedFollowerInstances": sorted(follower_hosts),
         },
         "credits": {
             "label": "Made with passion by Nachitima",
@@ -93,76 +112,26 @@ def build_dashboard_payload(runtime: Any) -> dict[str, object]:
 
 
 def render_dashboard_html(payload_endpoint: str = "/dashboard/data") -> str:
-    """Render a minimal public dashboard shell backed by the JSON endpoint."""
-    endpoint = escape(payload_endpoint, quote=True)
-    return f"""<!doctype html>
-<html lang=\"en\">
-<head>
-  <meta charset=\"utf-8\">
-  <meta name=\"viewport\" content=\"width=device-width, initial-scale=1\">
-  <title>Discord/Fediverse Bridge Instance</title>
-  <style>
-    :root {{ color-scheme: light dark; font-family: system-ui, sans-serif; }}
-    body {{ margin: 0; background: Canvas; color: CanvasText; }}
-    main {{ max-width: 1080px; margin: 0 auto; padding: 2rem; }}
-    header, section, footer {{ margin-bottom: 1.5rem; }}
-    .grid {{ display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap: 1rem; }}
-    .card {{ border: 1px solid color-mix(in srgb, CanvasText 18%, transparent); border-radius: 14px; padding: 1rem; }}
-    .muted {{ opacity: .75; }}
-    a {{ color: LinkText; overflow-wrap: anywhere; }}
-    code {{ overflow-wrap: anywhere; }}
-    summary {{ cursor: pointer; font-weight: 600; }}
-    ul {{ padding-left: 1.2rem; }}
-  </style>
-</head>
-<body>
-<main>
-  <header>
-    <h1>Discord/Fediverse Bridge Instance</h1>
-    <p class=\"muted\">This instance bridges Discord communities into the Fediverse.</p>
-  </header>
-  <section id=\"summary\" class=\"grid\"></section>
-  <section><h2>Local communities</h2><div id=\"communities\" class=\"grid\"></div></section>
-  <section><h2>Bridge actor follows</h2><div id=\"follows\"></div></section>
-  <section><h2>Federation policy</h2><div id=\"federation\" class=\"card\"></div></section>
-  <footer class=\"muted\">Made with passion by <a href=\"https://nachitima.com\">Nachitima</a></footer>
-</main>
-<script>
-const endpoint = "{endpoint}";
-function link(url, label) {{ return url ? `<a href="${{url}}">${{label || url}}</a>` : ""; }}
-function list(items, render) {{ return items.length ? `<ul>${{items.map(render).join("")}}</ul>` : "<p class='muted'>None.</p>"; }}
-fetch(endpoint).then(r => r.json()).then(data => {{
-  document.getElementById("summary").innerHTML = [
-    ["Origin", link(data.instance.origin)],
-    ["Bridge actor", link(data.instance.bridgeActorUrl)],
-    ["Local communities", data.instance.localCommunityCount],
-    ["Local followers", data.instance.localCommunityFollowerCount],
-    ["Bridge follows", data.instance.bridgeActorFollowCount],
-  ].map(([k, v]) => `<article class="card"><strong>${{k}}</strong><p>${{v}}</p></article>`).join("");
+    """Render the dashboard shell from the external HTML asset.
 
-  document.getElementById("communities").innerHTML = data.localCommunities.length ? data.localCommunities.map(c => `
-    <article class="card">
-      <h3>${{c.name}}</h3>
-      <p class="muted">/${{c.slug}}</p>
-      <p>Subscribers: <strong>${{c.subscriberCount}}</strong></p>
-      <p>${{link(c.actorUrl, "Actor")}} · ${{link(c.aliasUrl, "Alias")}} · ${{link(c.followersUrl, "Followers collection")}}</p>
-      <details><summary>Description</summary><p>${{c.description || "No description."}}</p></details>
-      <details><summary>Followers</summary>${{list(c.followers, f => `<li>${{link(f.actorUrl, f.instanceHost || f.actorUrl)}}</li>`)}}</details>
-    </article>`).join("") : "<p class='muted'>No local communities.</p>";
+    The shell stays in a dedicated HTML file so the route layer does not keep
+    large embedded CSS and JavaScript strings in Python source. Only the JSON
+    endpoint placeholder is injected dynamically.
+    """
+    template = DASHBOARD_HTML_PATH.read_text(encoding="utf-8")
+    # The dashboard JSON route remains configurable from Python so tests can
+    # exercise alternate route wiring without editing the static asset.
+    return template.replace("__DASHBOARD_DATA_ENDPOINT__", payload_endpoint)
 
-  document.getElementById("follows").innerHTML = list(data.bridgeActorFollows, f =>
-    `<li>${{link(f.communityActorUrl)}} — ${{f.status}} <details><summary>Technical details</summary><code>${{f.technicalDetails.communityInboxUrl || "No inbox URL"}}</code></details></li>`
-  );
-  document.getElementById("federation").innerHTML = `
-    <p>Federation mode: <strong>${{data.federation.mode === "open" ? "open" : "restricted allowlist"}}</strong></p>
-    <details open><summary>Allowlist</summary>${{list(data.federation.allowlist, h => `<li>${{h}}</li>`)}}</details>
-    <details open><summary>Connected follower instances</summary>${{list(data.federation.connectedFollowerInstances, h => `<li>${{h}}</li>`)}}</details>`;
-}}).catch(error => {{
-  document.getElementById("summary").innerHTML = `<article class="card">Failed to load dashboard data: ${{error}}</article>`;
-}});
-</script>
-</body>
-</html>"""
+
+def read_dashboard_stylesheet() -> str:
+    """Return the standalone dashboard stylesheet source."""
+    return DASHBOARD_CSS_PATH.read_text(encoding="utf-8")
+
+
+def read_dashboard_script() -> str:
+    """Return the standalone dashboard browser script source."""
+    return DASHBOARD_JS_PATH.read_text(encoding="utf-8")
 
 
 def _hostname_from_url(value: str | None) -> str | None:
@@ -177,3 +146,14 @@ def _normalize_host_list(values: list[str]) -> list[str]:
     """Normalize allowlist entries as sorted lowercase hostnames."""
     hosts = {_hostname_from_url(value.strip()) for value in values if value.strip()}
     return sorted(host for host in hosts if host)
+
+
+def _local_community_relay_handle(slug: str, origin_host: str) -> str:
+    """Build the public local-community relay handle shown on the dashboard.
+
+    The dashboard should expose the federation-facing handle operators and
+    readers actually use, not only the internal slug path segment.
+    """
+    if not origin_host:
+        return f"!{slug}"
+    return f"!{slug}@{origin_host}"
