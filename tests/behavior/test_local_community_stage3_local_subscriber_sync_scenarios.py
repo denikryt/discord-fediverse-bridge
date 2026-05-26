@@ -385,8 +385,8 @@ async def test_duplicate_source_processing_retries_missing_surfaces_only(tmp_pat
 
 
 @pytest.mark.asyncio
-async def test_local_subscriber_forum_creates_are_not_local_community_sources(tmp_path: Path) -> None:
-    """Stage 3 must not route subscriber forum creates into LocalCommunityRuntime."""
+async def test_local_subscriber_forum_creates_route_to_local_runtime_after_stage4(tmp_path: Path) -> None:
+    """Stage 4 intentionally widens active local subscriber forums into sources."""
     database, local_runtime = _runtime(tmp_path)
     local_community = _local_community(database)
     database.create_local_subscriber(local_community_id=local_community.id, discord_guild_id=10, discord_channel_id=200, initiated_by_discord_user_id="999")
@@ -396,13 +396,13 @@ async def test_local_subscriber_forum_creates_are_not_local_community_sources(tm
 
     await router.handle_thread_create(thread=build_thread(thread_id=2200, channel_id=200), starter_message=build_starter_message())
 
-    local_runtime.handle_discord_thread_create.assert_not_awaited()
-    remote_runtime.handle_discord_thread_create.assert_awaited_once()
+    local_runtime.handle_discord_thread_create.assert_awaited_once()
+    remote_runtime.handle_discord_thread_create.assert_not_awaited()
 
     local_runtime.handle_discord_message = AsyncMock()
     await router.handle_message(message=build_thread_message(message_id=2400, thread_id=2200, channel_id=200))
-    local_runtime.handle_discord_message.assert_not_awaited()
-    remote_runtime.handle_discord_message.assert_awaited_once()
+    local_runtime.handle_discord_message.assert_awaited_once()
+    remote_runtime.handle_discord_message.assert_not_awaited()
 
 
 @pytest.mark.asyncio

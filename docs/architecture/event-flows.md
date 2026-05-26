@@ -60,10 +60,10 @@ This document explains the major runtime traces through the bridge: user/platfor
 
 ## Discord thread -> local ActivityPub community publish flow
 
-1. Router selects `src/local_communities/runtime.py` for the host forum of a local community.
-2. Python records one canonical local-community thread/message row and one host Discord surface.
+1. Router selects `src/local_communities/runtime.py` for the host forum or an active local subscriber forum of a local community.
+2. Python records one canonical local-community thread/message row and a source Discord surface. Host sources create a `role="host"` source surface; local subscriber sources create a `role="local_subscriber"` source surface.
 3. Python calls gateway `/publish-local-community`; gateway creates local ActivityPub content and delivers it to accepted remote subscribers.
-4. Stage 3 local Discord fanout creates missing `role="local_subscriber"` surfaces for active local subscriber forums. Local subscriber forums are read surfaces here, not source forums yet.
+4. Local Discord fanout creates missing target surfaces: host sources copy to local subscribers, while local subscriber sources copy to the host forum and sibling local subscribers.
 
 ## Remote ActivityPub Follow -> local community follower flow
 
@@ -81,7 +81,7 @@ This document explains the major runtime traces through the bridge: user/platfor
 1. Gateway normalizes content addressed to a local community.
 2. Python routes by `community_actor_id` to local community runtime.
 3. Runtime mirrors into the host Discord forum and records canonical rows plus host surfaces.
-4. Stage 3 local Discord fanout creates missing local subscriber surfaces for active same-instance subscriber forums.
+4. Local Discord fanout creates missing local subscriber surfaces for active same-instance subscriber forums.
 5. Gateway `/send-local-community-relay` signs and delivers rendered relay activities to other accepted remote subscribers.
 
 ## Local community edit/delete flow
@@ -96,3 +96,12 @@ This document explains the major runtime traces through the bridge: user/platfor
 2. Gateway emits `local.unfollow_requested` when the target actor is owned by this bridge.
 3. Python removes the remote actor from `remote_subscribers`.
 4. Future create, update, and delete fanout uses current accepted followers and excludes the removed actor.
+
+
+## Local subscriber Discord post/comment -> local community flow
+
+1. `src/discord_event_router.py` resolves the source forum through `src/local_communities/participant_routing.py`.
+2. Active `LocalSubscriber` forums route into `LocalCommunityRuntime`; inactive subscribers and unrelated forums do not.
+3. Runtime publishes the source Discord starter/reply through the existing local-community publish path and persists one canonical row.
+4. Runtime records the source `role="local_subscriber"` surface and then fans out to the host forum plus sibling active local subscribers.
+5. Edits/deletes of local-subscriber-originated surfaces remain contained until Stage 5.

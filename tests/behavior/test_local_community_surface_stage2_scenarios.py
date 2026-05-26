@@ -271,16 +271,14 @@ def test_stage2_migrate_backfills_exactly_one_host_surface_and_drops_old_columns
 
 
 @pytest.mark.asyncio
-async def test_local_subscriber_forum_stays_out_of_stage2_runtime_routing(
+async def test_local_subscriber_forum_is_stage4_runtime_source(
     tmp_path: Path,
 ) -> None:
-    """A local-subscriber forum should still be ignored by local-community routing.
+    """Active local-subscriber forums route to local-community runtime after Stage 4.
 
-    System state: one local community exists and one different forum is
-    subscribed locally to it. Action: route a thread-create event from the
-    subscriber forum through the real `DiscordEventRouter`. Assert: the router
-    still treats that forum as non-local-community input in Stage 2 and leaves
-    `LocalCommunityRuntime` untouched.
+    Stage 2 created the surface model while keeping subscribers out of runtime.
+    Stage 4 deliberately changes that routing boundary, so this regression test
+    now documents the widened behavior without changing Stage 2 storage checks.
     """
     database = build_database(tmp_path, "local-community-stage2-router.db")
     community = _create_local_community(database, forum_channel_id=100)
@@ -305,7 +303,7 @@ async def test_local_subscriber_forum_stays_out_of_stage2_runtime_routing(
         starter_message=build_starter_message(message_id=601),
     )
 
-    assert router.is_local_community_forum(101) is False
-    assert result == "community"
-    community_runtime.handle_discord_thread_create.assert_awaited_once()
-    local_runtime.handle_discord_thread_create.assert_not_awaited()
+    assert router.is_local_community_forum(101) is True
+    assert result == "local"
+    local_runtime.handle_discord_thread_create.assert_awaited_once()
+    community_runtime.handle_discord_thread_create.assert_not_awaited()

@@ -10,6 +10,7 @@ from __future__ import annotations
 from .db import Database
 from .community_sync.runtime import CommunityRuntime
 from .local_communities.runtime import LocalCommunityRuntime
+from .local_communities.participant_routing import resolve_local_community_source_for_forum
 
 
 class DiscordEventRouter:
@@ -28,10 +29,13 @@ class DiscordEventRouter:
         self.local_community_runtime = local_community_runtime
 
     def is_local_community_forum(self, forum_channel_id: int | None) -> bool:
-        """Return whether the given forum channel is a local federated community."""
-        if forum_channel_id is None:
-            return False
-        return self.database.get_local_community_by_forum_channel_id(forum_channel_id) is not None
+        """Return whether one forum is a local-community create source.
+
+        Stage 4 widens create routing from host forums to active local
+        subscriber forums.  The helper keeps inactive subscribers and unrelated
+        forums out of local-community mode while preserving host precedence.
+        """
+        return resolve_local_community_source_for_forum(self.database, forum_channel_id) is not None
 
     def is_remote_subscription_forum(self, forum_channel_id: int | None) -> bool:
         """Return whether the given forum channel is subscribed to a remote community."""

@@ -1351,6 +1351,33 @@ class Database:
             session.flush()
             return thread
 
+    def create_local_community_thread_canonical(
+        self,
+        *,
+        local_community_id: int,
+        ap_activity_id: str,
+        ap_object_id: str,
+        direction: str,
+        origin_kind: str,
+    ) -> LocalCommunityThread:
+        """Persist one canonical local-community thread without a host surface.
+
+        Stage 4 local-subscriber source events create the source surface first
+        and then fan out to host/sibling targets.  This helper keeps that path
+        from incorrectly storing the source Discord thread as the host surface.
+        """
+        with self.session() as session:
+            thread = LocalCommunityThread(
+                local_community_id=local_community_id,
+                ap_activity_id=ap_activity_id,
+                ap_object_id=ap_object_id,
+                direction=direction,
+                origin_kind=origin_kind,
+            )
+            session.add(thread)
+            session.flush()
+            return thread
+
     def create_local_community_thread_surface(
         self,
         *,
@@ -1499,6 +1526,33 @@ class Database:
                     local_subscriber_id=None,
                 )
             )
+            session.flush()
+            return message
+
+    def create_local_community_message_canonical(
+        self,
+        *,
+        local_community_thread_id: int,
+        ap_activity_id: str,
+        ap_object_id: str,
+        parent_ap_object_id: str | None,
+        direction: str,
+    ) -> LocalCommunityMessage:
+        """Persist one canonical local-community comment without a host surface.
+
+        Local-subscriber source comments must first record the source message
+        surface, then copy into host and sibling surfaces.  Creating a host
+        surface here would bind the source Discord message to the wrong forum.
+        """
+        with self.session() as session:
+            message = LocalCommunityMessage(
+                local_community_thread_id=local_community_thread_id,
+                ap_activity_id=ap_activity_id,
+                ap_object_id=ap_object_id,
+                parent_ap_object_id=parent_ap_object_id,
+                direction=direction,
+            )
+            session.add(message)
             session.flush()
             return message
 

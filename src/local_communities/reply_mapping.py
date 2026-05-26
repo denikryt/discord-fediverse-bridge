@@ -1,9 +1,9 @@
 """Reply-target resolution helpers for local-community publish and inbound flows.
 
 Reply mapping is correctness-critical because local-community comments must
-preserve the same parent thread/message structure on both Discord and the
-federated side. The local-community mode reuses the shared root-or-mapped
-contract while keeping its own table lookups.
+preserve parent structure across ActivityPub and each concrete Discord surface.
+Stage 4 adds local-subscriber source surfaces, so outbound resolution can no
+longer assume the host surface is always the source context.
 """
 
 from __future__ import annotations
@@ -18,18 +18,36 @@ def resolve_outbound_reply_context(
     thread_row: object,
     message: object,
 ) -> ResolvedReplyTarget:
-    """Resolve which AP object an outbound Discord reply should target.
+    """Resolve which AP object an outbound host-forum reply should target."""
+    host_surface = database.get_host_local_community_thread_surface(getattr(thread_row, "id"))
+    return resolve_outbound_reply_context_for_surface(
+        database=database,
+        thread_row=thread_row,
+        source_thread_surface=host_surface,
+        message=message,
+    )
 
-    Root replies target the thread's post object. Replies to known mapped local
-    messages target that message's AP comment object instead.
+
+def resolve_outbound_reply_context_for_surface(
+    *,
+    database: Database,
+    thread_row: object,
+    source_thread_surface: object | None,
+    message: object,
+) -> ResolvedReplyTarget:
+    """Resolve an outbound reply target inside one concrete source surface.
+
+    The `source_thread_surface` constraint prevents a local subscriber reply
+    from accidentally resolving a parent message surface that belongs to the
+    host or a sibling subscriber forum.  Unknown references preserve the prior
+    host behavior by falling back to the root AP post object.
     """
-    # Stage 2 resolves the parent through the message surface table so reply
-    # ownership no longer depends on Discord ids living on canonical rows.
+
     def lookup_mapped_message(discord_message_id: int) -> object | None:
-        message_surface = database.get_local_community_message_surface_by_discord_message_id(
-            discord_message_id
-        )
+        message_surface = database.get_local_community_message_surface_by_discord_message_id(discord_message_id)
         if message_surface is None:
+            return None
+        if source_thread_surface is not None and getattr(message_surface, "local_community_thread_surface_id") != getattr(source_thread_surface, "id"):
             return None
         return database.get_local_community_message_for_surface(message_surface.id)
 
@@ -40,20 +58,14 @@ def resolve_outbound_reply_context(
         referenced_message_id=referenced_id,
         lookup_mapped_message=lookup_mapped_message,
     )
-    if resolved.parent_discord_message_id is None:
-        thread_surface = database.get_host_local_community_thread_surface(
-            getattr(thread_row, "id")
+    if resolved.parent_discord_message_id is None and source_thread_surface is not None:
+        # Root replies on any source surface should reference that surface's
+        # starter message, not the host starter, so later fanout can map parent
+        # surfaces target-by-target.
+        resolved = ResolvedReplyTarget(
+            parent_ap_object_id=resolved.parent_ap_object_id,
+            parent_discord_message_id=getattr(source_thread_surface, "discord_starter_message_id"),
         )
-        if thread_surface is not None:
-            # Stage 2 keeps root-reply ownership explicit on the message
-            # surface so later per-surface sync can distinguish starter-vs-reply
-            # without reaching back into removed canonical Discord columns.
-            resolved = ResolvedReplyTarget(
-                parent_ap_object_id=resolved.parent_ap_object_id,
-                parent_discord_message_id=getattr(
-                    thread_surface, "discord_starter_message_id"
-                ),
-            )
     return resolved
 
 
@@ -63,11 +75,7 @@ def resolve_inbound_reply_target(
     parent_ap_object_id: str | None,
     thread_row: object,
 ) -> int | None:
-    """Resolve which Discord message an inbound remote reply should reference.
-
-    Replies to the post root return the starter message id, while replies to a
-    known mapped comment return that mapped Discord message id.
-    """
+    """Resolve which host Discord message an inbound remote reply should reference."""
     if parent_ap_object_id is None or parent_ap_object_id == getattr(thread_row, "ap_object_id"):
         thread_surface = database.get_host_local_community_thread_surface(getattr(thread_row, "id"))
         if thread_surface is None:

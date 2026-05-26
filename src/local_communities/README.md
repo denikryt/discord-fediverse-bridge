@@ -20,6 +20,6 @@ Remote Lemmy subscription binding, gateway WebFinger routing, or generic content
 
 `local_communities`, `remote_subscribers`, `local_subscribers`, canonical `local_community_threads` / `local_community_messages`, per-surface `local_community_thread_surfaces` / `local_community_message_surfaces`, relay tables, and `local.follow_requested` events.
 
-## Stage 3 local subscriber boundary
+## Stage 4 local subscriber boundary
 
-Stage 3 creates synchronized Discord read surfaces in active local subscriber forums for host-originated and inbound remote-originated creates. Local subscriber forums are not source forums yet, and subscriber mirror edits/deletes are contained locally until later participant-wide stages.
+Stage 4 makes active local subscriber forums create-capable community participants. A local-subscriber-originated post/comment creates one canonical activity, one source local-subscriber surface, host/sibling Discord surfaces, and the existing local-community ActivityPub publish. Participant-wide edit/delete propagation is still deferred to Stage 5.

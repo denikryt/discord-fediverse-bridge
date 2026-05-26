@@ -19,7 +19,7 @@ Stage 1 of local-subscriber work adds a second participant type for this mode:
 - `RemoteSubscriber` — one remote ActivityPub actor following the local community.
 - `LocalSubscriber` — one same-instance Discord forum subscribed to the local community.
 
-In Stage 1, `LocalSubscriber` is control-plane state only. It is created and removed through the existing subscribe/unsubscribe commands, but it does not yet make that forum a live runtime source or fanout target. Later stages will extend local-community runtime behavior to consume that participant state.
+Stage 4 makes active `LocalSubscriber` forums create-capable local-community participants. Host forum posts/comments, inbound remote-subscriber posts/comments, and local-subscriber-originated posts/comments all create canonical local-community activity rows and concrete Discord surfaces. Participant-wide edit/delete propagation remains deferred to Stage 5.
 
 Primary files: `src/commands/create_community.py`, `src/operations/create_community.py`, `src/local_communities/service.py`, `src/local_communities/runtime.py`, `src/local_communities/federation_fanout.py`, `src/local_communities/activitypub_renderers.py`, `fedify-gateway/src/actor-store.ts`, `fedify-gateway/src/server.ts`, and `fedify-gateway/src/federation-outbound.ts`.
 

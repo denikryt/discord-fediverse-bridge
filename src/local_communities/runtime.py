@@ -32,7 +32,8 @@ from .delivery_mapping import (
     get_local_community_thread_for_discord_thread,
     get_local_community_thread_surface_for_discord_thread,
 )
-from .reply_mapping import resolve_inbound_reply_target, resolve_outbound_reply_context
+from .participant_routing import resolve_local_community_source_for_forum
+from .reply_mapping import resolve_inbound_reply_target, resolve_outbound_reply_context, resolve_outbound_reply_context_for_surface
 
 logger = logging.getLogger(__name__)
 
@@ -80,9 +81,32 @@ class LocalCommunityRuntime:
         starter_message: object,
     ) -> LocalCommunityRuntimeResult:
         """Publish one Discord thread starter into a local community as a post."""
-        local_community = get_local_community_for_forum(self.database, getattr(thread, "parent_id"))
-        if local_community is None:
+        source = resolve_local_community_source_for_forum(
+            self.database, getattr(thread, "parent_id", None)
+        )
+        if source is None:
             return LocalCommunityRuntimeResult(status="ignored", reason="not_local_community")
+        if source.source_kind == "local_subscriber":
+            return await self._handle_local_subscriber_thread_create(
+                thread=thread,
+                starter_message=starter_message,
+                local_community=source.local_community,
+                local_subscriber=source.local_subscriber,
+            )
+        return await self._handle_host_thread_create(
+            thread=thread,
+            starter_message=starter_message,
+            local_community=source.local_community,
+        )
+
+    async def _handle_host_thread_create(
+        self,
+        *,
+        thread: object,
+        starter_message: object,
+        local_community: object,
+    ) -> LocalCommunityRuntimeResult:
+        """Handle the existing host-forum thread create path unchanged."""
         existing_thread = get_local_community_thread_for_discord_thread(self.database, getattr(thread, "id"))
         if existing_thread is not None:
             await self._fanout_thread_to_local_subscribers(
@@ -94,21 +118,14 @@ class LocalCommunityRuntime:
             )
             return LocalCommunityRuntimeResult(status="ignored", reason="duplicate_thread")
 
-        # Shared create-path logic owns registration checks, formatting, gateway
-        # publish, and generic publish persistence.
         publish_result = await self.content_publish_service.publish_local_thread_starter(
             thread=thread,
             starter_message=starter_message,
             community_actor_url=getattr(local_community, "actor_url"),
         )
         if publish_result.status != "published":
-            return LocalCommunityRuntimeResult(
-                status=publish_result.status,
-                reason=publish_result.reason,
-            )
+            return LocalCommunityRuntimeResult(status=publish_result.status, reason=publish_result.reason)
 
-        # The local-community runtime still owns the canonical post/thread row
-        # that binds the Discord thread to the AP post object.
         thread_row = self.database.create_local_community_thread(
             local_community_id=getattr(local_community, "id"),
             discord_thread_id=getattr(thread, "id"),
@@ -132,17 +149,93 @@ class LocalCommunityRuntime:
             object_id=publish_result.object_id,
         )
 
+    async def _handle_local_subscriber_thread_create(
+        self,
+        *,
+        thread: object,
+        starter_message: object,
+        local_community: object,
+        local_subscriber: object | None,
+    ) -> LocalCommunityRuntimeResult:
+        """Handle a Stage 4 local-subscriber forum thread as canonical content."""
+        if local_subscriber is None:
+            return LocalCommunityRuntimeResult(status="ignored", reason="not_local_subscriber")
+        source_surface = get_local_community_thread_surface_for_discord_thread(
+            self.database, getattr(thread, "id")
+        )
+        if source_surface is not None:
+            thread_row = self.database.get_local_community_thread_for_surface(source_surface.id)
+            if thread_row is not None:
+                await self._fanout_thread_to_local_participants(
+                    local_community=local_community,
+                    thread_row=thread_row,
+                    title=getattr(thread, "name", "Untitled thread"),
+                    content=getattr(starter_message, "content", ""),
+                    source_forum_channel_id=getattr(thread, "parent_id"),
+                    include_host=True,
+                )
+            return LocalCommunityRuntimeResult(status="ignored", reason="duplicate_thread")
+
+        publish_result = await self.content_publish_service.publish_local_thread_starter(
+            thread=thread,
+            starter_message=starter_message,
+            community_actor_url=getattr(local_community, "actor_url"),
+        )
+        if publish_result.status != "published":
+            return LocalCommunityRuntimeResult(status=publish_result.status, reason=publish_result.reason)
+
+        thread_row = self.database.create_local_community_thread_canonical(
+            local_community_id=getattr(local_community, "id"),
+            ap_activity_id=publish_result.activity_id,
+            ap_object_id=publish_result.object_id,
+            direction="discord_to_ap",
+            origin_kind="discord_local_subscriber",
+        )
+        self.database.create_local_community_thread_surface(
+            local_community_thread_id=getattr(thread_row, "id"),
+            discord_forum_channel_id=getattr(thread, "parent_id"),
+            discord_thread_id=getattr(thread, "id"),
+            discord_starter_message_id=getattr(starter_message, "id"),
+            role="local_subscriber",
+            local_subscriber_id=getattr(local_subscriber, "id"),
+        )
+        await self._fanout_thread_to_local_participants(
+            local_community=local_community,
+            thread_row=thread_row,
+            title=getattr(thread, "name", "Untitled thread"),
+            content=getattr(starter_message, "content", ""),
+            source_forum_channel_id=getattr(thread, "parent_id"),
+            include_host=True,
+        )
+        return LocalCommunityRuntimeResult(
+            status="published",
+            reason="published",
+            activity_id=publish_result.activity_id,
+            object_id=publish_result.object_id,
+        )
+
     async def handle_discord_message(self, *, message: object) -> LocalCommunityRuntimeResult:
         """Publish one Discord reply inside a local-community thread as a comment."""
         thread = getattr(message, "channel")
-        local_community = get_local_community_for_forum(self.database, getattr(thread, "parent_id"))
-        if local_community is None:
+        source = resolve_local_community_source_for_forum(
+            self.database, getattr(thread, "parent_id", None)
+        )
+        if source is None:
             return LocalCommunityRuntimeResult(status="ignored", reason="not_local_community")
+        if source.source_kind == "local_subscriber":
+            return await self._handle_local_subscriber_message(
+                message=message,
+                local_community=source.local_community,
+                local_subscriber=source.local_subscriber,
+            )
+        return await self._handle_host_message(message=message, local_community=source.local_community)
+
+    async def _handle_host_message(self, *, message: object, local_community: object) -> LocalCommunityRuntimeResult:
+        """Handle the existing host-forum Discord reply path unchanged."""
+        thread = getattr(message, "channel")
         existing_message = get_local_community_message_for_discord_message(self.database, getattr(message, "id"))
         if existing_message is not None:
-            thread_row = self.database.get_local_community_thread_by_id(
-                getattr(existing_message, "local_community_thread_id")
-            )
+            thread_row = self.database.get_local_community_thread_by_id(getattr(existing_message, "local_community_thread_id"))
             if thread_row is not None:
                 await self._fanout_message_to_local_subscribers(
                     local_community=local_community,
@@ -156,32 +249,21 @@ class LocalCommunityRuntime:
         thread_row = get_local_community_thread_for_discord_thread(self.database, getattr(thread, "id"))
         if thread_row is None:
             return LocalCommunityRuntimeResult(status="ignored", reason="no_thread_context")
-        thread_surface = get_local_community_thread_surface_for_discord_thread(
-            self.database, getattr(thread, "id")
-        )
+        thread_surface = get_local_community_thread_surface_for_discord_thread(self.database, getattr(thread, "id"))
         if thread_surface is None:
             return LocalCommunityRuntimeResult(status="ignored", reason="no_thread_surface")
         if getattr(thread_surface, "discord_starter_message_id") == getattr(message, "id"):
             return LocalCommunityRuntimeResult(status="ignored", reason="starter_message_already_handled")
 
-        reply_context = resolve_outbound_reply_context(
-            database=self.database,
-            thread_row=thread_row,
-            message=message,
-        )
+        reply_context = resolve_outbound_reply_context(database=self.database, thread_row=thread_row, message=message)
         publish_result = await self.content_publish_service.publish_local_thread_message(
             message=message,
             community_actor_url=getattr(local_community, "actor_url"),
             parent_object_id=reply_context.parent_ap_object_id,
         )
         if publish_result.status != "published":
-            return LocalCommunityRuntimeResult(
-                status=publish_result.status,
-                reason=publish_result.reason,
-            )
+            return LocalCommunityRuntimeResult(status=publish_result.status, reason=publish_result.reason)
 
-        # The local-community runtime still owns the canonical comment/message
-        # row that binds the Discord reply to the AP comment object.
         message_row = self.database.create_local_community_message(
             local_community_thread_id=getattr(thread_row, "id"),
             discord_message_id=getattr(message, "id"),
@@ -197,6 +279,85 @@ class LocalCommunityRuntime:
             message_row=message_row,
             content=getattr(message, "content", ""),
             source_forum_channel_id=getattr(thread, "parent_id"),
+        )
+        return LocalCommunityRuntimeResult(
+            status="published",
+            reason="published",
+            activity_id=publish_result.activity_id,
+            object_id=publish_result.object_id,
+        )
+
+    async def _handle_local_subscriber_message(
+        self,
+        *,
+        message: object,
+        local_community: object,
+        local_subscriber: object | None,
+    ) -> LocalCommunityRuntimeResult:
+        """Handle a Stage 4 local-subscriber Discord reply as canonical content."""
+        if local_subscriber is None:
+            return LocalCommunityRuntimeResult(status="ignored", reason="not_local_subscriber")
+        thread = getattr(message, "channel")
+        existing_message = get_local_community_message_for_discord_message(self.database, getattr(message, "id"))
+        if existing_message is not None:
+            thread_row = self.database.get_local_community_thread_by_id(getattr(existing_message, "local_community_thread_id"))
+            if thread_row is not None:
+                await self._fanout_message_to_local_participants(
+                    local_community=local_community,
+                    thread_row=thread_row,
+                    message_row=existing_message,
+                    content=getattr(message, "content", ""),
+                    source_forum_channel_id=getattr(thread, "parent_id"),
+                    include_host=True,
+                )
+            return LocalCommunityRuntimeResult(status="ignored", reason="duplicate_message")
+
+        thread_surface = get_local_community_thread_surface_for_discord_thread(self.database, getattr(thread, "id"))
+        if thread_surface is None or getattr(thread_surface, "role") != "local_subscriber":
+            return LocalCommunityRuntimeResult(status="ignored", reason="no_thread_surface")
+        if getattr(thread_surface, "discord_starter_message_id") == getattr(message, "id"):
+            return LocalCommunityRuntimeResult(status="ignored", reason="starter_message_already_handled")
+        thread_row = self.database.get_local_community_thread_for_surface(getattr(thread_surface, "id"))
+        if thread_row is None:
+            return LocalCommunityRuntimeResult(status="ignored", reason="no_thread_context")
+
+        reply_context = resolve_outbound_reply_context_for_surface(
+            database=self.database,
+            thread_row=thread_row,
+            source_thread_surface=thread_surface,
+            message=message,
+        )
+        publish_result = await self.content_publish_service.publish_local_thread_message(
+            message=message,
+            community_actor_url=getattr(local_community, "actor_url"),
+            parent_object_id=reply_context.parent_ap_object_id,
+        )
+        if publish_result.status != "published":
+            return LocalCommunityRuntimeResult(status=publish_result.status, reason=publish_result.reason)
+
+        message_row = self.database.create_local_community_message_canonical(
+            local_community_thread_id=getattr(thread_row, "id"),
+            ap_activity_id=publish_result.activity_id,
+            ap_object_id=publish_result.object_id,
+            parent_ap_object_id=reply_context.parent_ap_object_id,
+            direction="discord_to_ap",
+        )
+        self.database.create_local_community_message_surface(
+            local_community_message_id=getattr(message_row, "id"),
+            local_community_thread_surface_id=getattr(thread_surface, "id"),
+            discord_forum_channel_id=getattr(thread, "parent_id"),
+            discord_message_id=getattr(message, "id"),
+            parent_discord_message_id=reply_context.parent_discord_message_id,
+            role="local_subscriber",
+            local_subscriber_id=getattr(local_subscriber, "id"),
+        )
+        await self._fanout_message_to_local_participants(
+            local_community=local_community,
+            thread_row=thread_row,
+            message_row=message_row,
+            content=getattr(message, "content", ""),
+            source_forum_channel_id=getattr(thread, "parent_id"),
+            include_host=True,
         )
         return LocalCommunityRuntimeResult(
             status="published",
@@ -366,16 +527,37 @@ class LocalCommunityRuntime:
         content: str,
         source_forum_channel_id: int | None,
     ) -> None:
-        """Best-effort fanout of one canonical post to local subscribers."""
-        if self.bot is None:
-            return
-        fanout = LocalCommunityDiscordFanout(database=self.database, bot=self.bot)
-        await fanout.fanout_thread_to_local_subscribers(
+        """Best-effort Stage 3 fanout of one canonical post to subscribers."""
+        await self._fanout_thread_to_local_participants(
             local_community=local_community,
             thread_row=thread_row,
             title=title,
             content=content,
             source_forum_channel_id=source_forum_channel_id,
+            include_host=False,
+        )
+
+    async def _fanout_thread_to_local_participants(
+        self,
+        *,
+        local_community: object,
+        thread_row: object,
+        title: str,
+        content: str,
+        source_forum_channel_id: int | None,
+        include_host: bool,
+    ) -> None:
+        """Best-effort fanout of one canonical post to selected local surfaces."""
+        if self.bot is None:
+            return
+        fanout = LocalCommunityDiscordFanout(database=self.database, bot=self.bot)
+        await fanout.fanout_thread(
+            local_community=local_community,
+            thread_row=thread_row,
+            title=title,
+            content=content,
+            source_forum_channel_id=source_forum_channel_id,
+            include_host=include_host,
         )
 
     async def _fanout_message_to_local_subscribers(
@@ -387,16 +569,37 @@ class LocalCommunityRuntime:
         content: str,
         source_forum_channel_id: int | None,
     ) -> None:
-        """Best-effort fanout of one canonical comment to local subscribers."""
-        if self.bot is None:
-            return
-        fanout = LocalCommunityDiscordFanout(database=self.database, bot=self.bot)
-        await fanout.fanout_message_to_local_subscribers(
+        """Best-effort Stage 3 fanout of one canonical comment to subscribers."""
+        await self._fanout_message_to_local_participants(
             local_community=local_community,
             thread_row=thread_row,
             message_row=message_row,
             content=content,
             source_forum_channel_id=source_forum_channel_id,
+            include_host=False,
+        )
+
+    async def _fanout_message_to_local_participants(
+        self,
+        *,
+        local_community: object,
+        thread_row: object,
+        message_row: object,
+        content: str,
+        source_forum_channel_id: int | None,
+        include_host: bool,
+    ) -> None:
+        """Best-effort fanout of one canonical comment to selected local surfaces."""
+        if self.bot is None:
+            return
+        fanout = LocalCommunityDiscordFanout(database=self.database, bot=self.bot)
+        await fanout.fanout_message(
+            local_community=local_community,
+            thread_row=thread_row,
+            message_row=message_row,
+            content=content,
+            source_forum_channel_id=source_forum_channel_id,
+            include_host=include_host,
         )
 
 

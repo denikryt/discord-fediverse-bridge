@@ -716,7 +716,7 @@ Docs:
 
 ## Stage implementation boundary notes
 
-Stage 3 implements host-originated and remote-originated create fanout into active local subscriber Discord surfaces. It intentionally keeps local subscriber forums as read surfaces only: local-subscriber-originated activity remains Stage 4, and participant-wide edit/delete propagation remains Stage 5.
+Stage 3 implements host-originated and remote-originated create fanout into active local subscriber Discord surfaces. Stage 4 implements local-subscriber-originated post/comment creates as first-class canonical community activity. Participant-wide edit/delete propagation remains Stage 5.
 
 ## Tests
 
@@ -825,13 +825,14 @@ unsubscribe behavior must continue to pass unchanged.
 
 ### Stage 4 — Local-subscriber-originated activity
 
-- make local subscriber forums valid local-community sources in
+- make active local subscriber forums valid local-community create sources in
   `DiscordEventRouter` and `LocalCommunityRuntime`;
 - publish local-subscriber-originated post/comment activity into canonical
-  community rows;
-- sync that activity to host forum, other local subscribers, and remote
-  subscribers;
-- exclude the origin local subscriber surface from local copy fanout.
+  community rows through the existing local-community publish path;
+- create source `role="local_subscriber"` surfaces and fan out missing host and
+  sibling local-subscriber surfaces;
+- exclude the origin local subscriber surface from local copy fanout;
+- keep edit/delete propagation deferred to Stage 5.
 
 ### Stage 5 — Edit/delete and retry hardening
 
