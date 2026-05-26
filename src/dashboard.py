@@ -1,8 +1,9 @@
 """Public dashboard aggregation and rendering for bridge instance metadata.
 
-This module owns the public-data boundary for `/dashboard` and `/dashboard/data`.
-It explains instance state without exposing Discord-internal identifiers,
-secrets, private keys, raw database paths, or internal service URLs.
+This module owns the public-data boundary for the human-facing dashboard shell
+served from `/` and the JSON data endpoint served from `/dashboard/data`. It
+explains instance state without exposing Discord-internal identifiers, secrets,
+private keys, raw database paths, or internal service URLs.
 """
 
 from __future__ import annotations
@@ -14,8 +15,6 @@ from urllib.parse import urlparse
 
 WEB_DIR = Path(__file__).resolve().parent.parent / "web"
 DASHBOARD_HTML_PATH = WEB_DIR / "dashboard.html"
-DASHBOARD_CSS_PATH = WEB_DIR / "dashboard.css"
-DASHBOARD_JS_PATH = WEB_DIR / "dashboard.js"
 
 
 def build_dashboard_payload(runtime: Any) -> dict[str, object]:
@@ -122,16 +121,6 @@ def render_dashboard_html(payload_endpoint: str = "/dashboard/data") -> str:
     # The dashboard JSON route remains configurable from Python so tests can
     # exercise alternate route wiring without editing the static asset.
     return template.replace("__DASHBOARD_DATA_ENDPOINT__", payload_endpoint)
-
-
-def read_dashboard_stylesheet() -> str:
-    """Return the standalone dashboard stylesheet source."""
-    return DASHBOARD_CSS_PATH.read_text(encoding="utf-8")
-
-
-def read_dashboard_script() -> str:
-    """Return the standalone dashboard browser script source."""
-    return DASHBOARD_JS_PATH.read_text(encoding="utf-8")
 
 
 def _hostname_from_url(value: str | None) -> str | None:

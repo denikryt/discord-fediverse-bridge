@@ -52,9 +52,10 @@ curl http://127.0.0.1:3000/healthz
 
 ## Nginx
 
-The deployment model uses one public host. It installs one public site where ActivityPub/WebFinger routes go to fedify-gateway and registration/OAuth/dashboard routes go to the Python bridge.
+The deployment model uses one public host. It installs one public site where ActivityPub/WebFinger routes go to fedify-gateway and the root dashboard, registration, and OAuth routes go to the Python bridge.
 
 ```text
+`/`                     -> Python bridge
 /.well-known/webfinger -> fedify-gateway
 /inbox                 -> fedify-gateway
 /actors/...            -> fedify-gateway
@@ -63,7 +64,8 @@ The deployment model uses one public host. It installs one public site where Act
 /users/...             -> fedify-gateway
 /register              -> Python bridge
 /auth/discord/...      -> Python bridge
-/dashboard             -> Python bridge
+/dashboard             -> Python bridge (redirects to `/`)
+/dashboard/static/...  -> Python bridge
 /dashboard/data        -> Python bridge
 ```
 

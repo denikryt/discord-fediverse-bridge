@@ -28,10 +28,12 @@ ENV
 single_out="$TMP_DIR/single.conf"
 ENV_FILE="$single_env" "$GATEWAY_DIR/nginx-setup.sh" --render > "$single_out"
 assert_contains "$single_out" "server_name discord-bridge.example.com;"
+assert_contains "$single_out" "location = /"
 assert_contains "$single_out" "location = /register"
 assert_contains "$single_out" "location ^~ /auth/discord/"
 assert_contains "$single_out" "location = /dashboard"
 assert_contains "$single_out" "location ^~ /dashboard/"
+assert_contains "$single_out" "location /"
 assert_contains "$single_out" "proxy_pass http://127.0.0.1:8181;"
 assert_contains "$single_out" "proxy_pass http://127.0.0.1:3100;"
 

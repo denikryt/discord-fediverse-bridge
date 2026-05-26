@@ -4,13 +4,16 @@ This document explains HTTP route ownership between the Python bridge and the Fe
 
 | Path | Method | Owner process | Public or internal | Purpose | Primary source file | Public-host nginx owner |
 | --- | --- | --- | --- | --- | --- | --- |
+| `/` | GET | Python FastAPI | public | Public bridge dashboard HTML | `src/http_api.py` | Python |
 | `/healthz` | GET | Python FastAPI | health | Python health when directly exposed | `src/http_api.py` | Gateway by default |
 | `/register` | GET | Python FastAPI | public | Registration page | `src/http_api.py` | Python |
 | `/auth/discord/start` | GET | Python FastAPI | public | Start Discord OAuth | `src/http_api.py` | Python |
 | `/auth/discord/callback` | GET | Python FastAPI | public | OAuth callback | `src/http_api.py` | Python |
 | `/register/complete` | POST | Python FastAPI | public | Complete registration | `src/http_api.py` | Python |
 | `/register/success` | GET | Python FastAPI | public | Registration success page | `src/http_api.py` | Python |
-| `/dashboard` | GET | Python FastAPI | public | Public bridge dashboard HTML | `src/http_api.py` | Python |
+| `/dashboard` | GET | Python FastAPI | public | Legacy redirect to root dashboard | `src/http_api.py` | Python |
+| `/dashboard/static/dashboard.css` | GET | Python FastAPI | public | Dashboard stylesheet | `src/http_api.py` | Python |
+| `/dashboard/static/dashboard.js` | GET | Python FastAPI | public | Dashboard browser logic | `src/http_api.py` | Python |
 | `/dashboard/data` | GET | Python FastAPI | public | Public bridge dashboard JSON | `src/http_api.py` | Python |
 | `/internal/activitypub/events` | POST | Python FastAPI | private | Gateway-to-Python AP event intake | `src/http_api.py` | Not publicly routed |
 | `/healthz` | GET | Fedify gateway | public | Gateway health | `fedify-gateway/src/server.ts` | Gateway |

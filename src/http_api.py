@@ -7,15 +7,11 @@ from datetime import timedelta
 from urllib.parse import parse_qs
 
 from fastapi import FastAPI, Header, HTTPException, Request, Response, status
-from fastapi.responses import HTMLResponse, RedirectResponse, Response
+from fastapi.responses import HTMLResponse, RedirectResponse
+from fastapi.staticfiles import StaticFiles
 
 from .activitypub_handlers import dispatch_activitypub_event
-from .dashboard import (
-    build_dashboard_payload,
-    read_dashboard_script,
-    read_dashboard_stylesheet,
-    render_dashboard_html,
-)
+from .dashboard import WEB_DIR, build_dashboard_payload, render_dashboard_html
 from .activitypub_models import BridgeGatewayEvent
 from .registration_service import RegistrationError, generate_oauth_state, generate_session_token
 from .runtime import Runtime
@@ -31,6 +27,13 @@ def create_http_app(runtime: Runtime) -> FastAPI:
     # public registration pages. The internal auth rules apply only to the
     # private event-ingest surface.
     app = FastAPI(title="discord-lemmy-bridge-internal-api")
+    # Dashboard assets stay under one namespace so nginx can proxy the whole
+    # prefix to Python instead of learning every file name individually.
+    app.mount(
+        "/dashboard/static",
+        StaticFiles(directory=str(WEB_DIR)),
+        name="dashboard-static",
+    )
 
     @app.get("/healthz")
     async def healthcheck() -> dict[str, str]:
@@ -204,21 +207,15 @@ def create_http_app(runtime: Runtime) -> FastAPI:
             ),
         )
 
-
-    @app.get("/dashboard", response_class=HTMLResponse)
+    @app.get("/", response_class=HTMLResponse)
     async def dashboard_page() -> HTMLResponse:
-        """Render the public dashboard browser shell."""
+        """Render the public dashboard browser shell on the root URL."""
         return HTMLResponse(render_dashboard_html())
 
-    @app.get("/dashboard.css")
-    async def dashboard_stylesheet() -> Response:
-        """Return the dashboard stylesheet asset."""
-        return Response(read_dashboard_stylesheet(), media_type="text/css")
-
-    @app.get("/dashboard.js")
-    async def dashboard_script() -> Response:
-        """Return the dashboard browser script asset."""
-        return Response(read_dashboard_script(), media_type="application/javascript")
+    @app.get("/dashboard")
+    async def dashboard_redirect() -> RedirectResponse:
+        """Redirect legacy dashboard links to the canonical root page."""
+        return RedirectResponse("/", status_code=status.HTTP_307_TEMPORARY_REDIRECT)
 
     @app.get("/dashboard/data")
     async def dashboard_data() -> dict[str, object]:

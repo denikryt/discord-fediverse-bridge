@@ -182,16 +182,43 @@ def test_allowlist_mode_is_explicit_and_normalized(tmp_path: Path) -> None:
 def test_dashboard_html_loads_and_includes_credits(tmp_path: Path) -> None:
     """The browser dashboard shell exposes its JSON endpoint and credits."""
     database = _database(tmp_path)
-    response = _client(database).get("/dashboard")
+    response = _client(database).get("/")
 
     assert response.status_code == 200
     assert "Discord/Fediverse Bridge Instance" in response.text
     assert "/dashboard/data" in response.text
-    assert "/dashboard.css" in response.text
-    assert "/dashboard.js" in response.text
+    assert "/dashboard/static/dashboard.css" in response.text
+    assert "/dashboard/static/dashboard.js" in response.text
     assert 'data-dashboard-endpoint="/dashboard/data"' in response.text
     assert "Remote follower relays" not in response.text
     assert '<span class="stat-label">Origin</span>' not in response.text
     assert '<span class="stat-label">Bridge actor</span>' not in response.text
     assert "https://nachitima.com" in response.text
     assert "Nachitima" in response.text
+
+
+def test_dashboard_path_redirects_to_root(tmp_path: Path) -> None:
+    """Legacy /dashboard links redirect to the canonical root dashboard."""
+    database = _database(tmp_path)
+    response = _client(database).get("/dashboard", follow_redirects=False)
+
+    assert response.status_code == 307
+    assert response.headers["location"] == "/"
+
+
+def test_dashboard_static_assets_are_served_under_dashboard_prefix(tmp_path: Path) -> None:
+    """Dashboard assets are grouped under the dashboard static namespace."""
+    database = _database(tmp_path)
+    client = _client(database)
+
+    css = client.get("/dashboard/static/dashboard.css")
+    script = client.get("/dashboard/static/dashboard.js")
+
+    assert css.status_code == 200
+    assert css.headers["content-type"].startswith("text/css")
+    assert ":root" in css.text
+    assert script.status_code == 200
+    assert script.headers["content-type"].startswith("text/javascript") or script.headers[
+        "content-type"
+    ].startswith("application/javascript")
+    assert "data-dashboard-endpoint" in script.text

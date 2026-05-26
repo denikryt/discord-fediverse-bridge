@@ -142,14 +142,14 @@ PYTHON_BRIDGE_EVENTS_URL=http://127.0.0.1:8081/internal/activitypub/events
 
 `GATEWAY_UPSTREAM` and `PYTHON_BRIDGE_UPSTREAM` are optional overrides for nginx rendering. Keep the defaults unless the gateway or Python bridge listens on a different local address.
 
-The gateway keeps canonical ActivityPub routes such as `/.well-known/webfinger`, `/inbox`, `/actors/`, `/communities/`, `/c/`, and `/users/`. Python owns `/register` and `/auth/discord/`. Do not expose `/internal/` publicly through nginx.
+The gateway keeps canonical ActivityPub routes such as `/.well-known/webfinger`, `/inbox`, `/actors/`, `/communities/`, `/c/`, and `/users/`. Python owns `/`, `/dashboard/...`, `/register`, and `/auth/discord/`. Do not expose `/internal/` publicly through nginx.
 
 Changing `FEDIFY_ORIGIN` on an existing deployment changes ActivityPub actor and object IDs. Treat that as a federation identity migration, not a harmless nginx change.
 
 
 ## Public dashboard
 
-The Python bridge exposes a public dashboard at `/dashboard`. It shows bridge statistics, local communities, subscriber counts, bridge-actor follows, and the effective federation policy. The JSON backing endpoint is `/dashboard/data`.
+The Python bridge exposes a public dashboard on the root URL `/`. Legacy `/dashboard` links redirect to `/`. The JSON backing endpoint is `/dashboard/data`, and the dashboard web assets live under `/dashboard/static/`.
 
 The dashboard is intentionally public and omits Discord guild/channel IDs, private keys, shared secrets, database paths, and internal service URLs.
 
