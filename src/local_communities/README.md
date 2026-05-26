@@ -2,11 +2,11 @@
 
 ## Purpose
 
-This package implements Discord forum channels exposed as local ActivityPub Group actors, including remote-subscriber state and relay behavior.
+This package implements Discord forum channels exposed as local ActivityPub Group actors, including remote-subscriber state, canonical local-community mappings, and relay behavior.
 
 ## Responsibility
 
-Local community runtime behavior, remote-subscriber follow acceptance, local content mappings, and relay fanout.
+Local community runtime behavior, remote-subscriber follow acceptance, canonical local-content mappings, Discord surface lookups, and relay fanout.
 
 ## Not responsible for
 
@@ -18,4 +18,4 @@ Remote Lemmy subscription binding, gateway WebFinger routing, or generic content
 
 ## Important tables or payloads
 
-`local_communities`, `remote_subscribers`, local community thread/message tables, relay tables, `local_subscribers` control-plane rows, and `local.follow_requested` events.
+`local_communities`, `remote_subscribers`, `local_subscribers`, canonical `local_community_threads` / `local_community_messages`, per-surface `local_community_thread_surfaces` / `local_community_message_surfaces`, relay tables, and `local.follow_requested` events.

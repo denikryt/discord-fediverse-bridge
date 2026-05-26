@@ -22,9 +22,11 @@ from .models import (
     LocalCommunity,
     LocalSubscriber,
     LocalCommunityMessage,
+    LocalCommunityMessageSurface,
     LocalCommunityRelayDelivery,
     LocalCommunityRelaySourceActivity,
     LocalCommunityThread,
+    LocalCommunityThreadSurface,
     MessageMapping,
     PostLink,
     PublishedActivityObject,
@@ -73,6 +75,16 @@ class Database:
                 "ALTER TABLE channel_community_subscriptions ADD COLUMN discord_guild_id INTEGER",
             ),
         ]
+        # Stage 2 adds explicit local-community surface tables. Creating them
+        # here keeps interrupted deployments and migrate-only test fixtures
+        # aligned with the schema that the runtime expects after the refactor.
+        Base.metadata.create_all(
+            self.engine,
+            tables=[
+                LocalCommunityThreadSurface.__table__,
+                LocalCommunityMessageSurface.__table__,
+            ],
+        )
         with self.engine.connect() as conn:
             # Stage 1 renamed local_community_followers to remote_subscribers.
             # Existing deployments call create_all() before migrate(), which
@@ -129,7 +141,294 @@ class Database:
                 existing = {row[1] for row in rows}
                 if column not in existing:
                     conn.execute(text(stmt))
+            thread_columns = self._table_columns(conn, "local_community_threads")
+            message_columns = self._table_columns(conn, "local_community_messages")
+            if "discord_thread_id" in thread_columns:
+                self._backfill_stage2_thread_surfaces(conn)
+            if "discord_message_id" in message_columns:
+                self._backfill_stage2_message_surfaces(conn)
+            if "discord_thread_id" in thread_columns:
+                self._rebuild_stage2_local_community_threads(conn)
+            if "discord_message_id" in message_columns:
+                self._rebuild_stage2_local_community_messages(conn)
+            self._verify_stage2_surface_invariants(conn)
             conn.commit()
+
+    def _table_columns(self, conn: object, table: str) -> set[str]:
+        """Return the current SQLite column names for one table."""
+        rows = conn.execute(text(f"PRAGMA table_info({table})")).fetchall()
+        return {str(row[1]) for row in rows}
+
+    def _backfill_stage2_thread_surfaces(self, conn: object) -> None:
+        """Create one host thread surface per legacy canonical thread row."""
+        rows = conn.execute(
+            text(
+                """
+                SELECT
+                  thread.id,
+                  community.discord_forum_channel_id,
+                  thread.discord_thread_id,
+                  thread.discord_starter_message_id
+                FROM local_community_threads AS thread
+                JOIN local_communities AS community
+                  ON community.id = thread.local_community_id
+                ORDER BY thread.id
+                """
+            )
+        ).fetchall()
+        for row in rows:
+            existing = conn.execute(
+                text(
+                    """
+                    SELECT id
+                    FROM local_community_thread_surfaces
+                    WHERE local_community_thread_id = :thread_id
+                      AND discord_forum_channel_id = :forum_channel_id
+                    """
+                ),
+                {
+                    "thread_id": row[0],
+                    "forum_channel_id": row[1],
+                },
+            ).fetchone()
+            if existing is not None:
+                continue
+            conn.execute(
+                text(
+                    """
+                    INSERT INTO local_community_thread_surfaces (
+                      local_community_thread_id,
+                      discord_forum_channel_id,
+                      discord_thread_id,
+                      discord_starter_message_id,
+                      role,
+                      created_at
+                    ) VALUES (
+                      :thread_id,
+                      :forum_channel_id,
+                      :discord_thread_id,
+                      :discord_starter_message_id,
+                      'host',
+                      :created_at
+                    )
+                    """
+                ),
+                {
+                    "thread_id": row[0],
+                    "forum_channel_id": row[1],
+                    "discord_thread_id": row[2],
+                    "discord_starter_message_id": row[3],
+                    "created_at": utcnow(),
+                },
+            )
+
+    def _backfill_stage2_message_surfaces(self, conn: object) -> None:
+        """Create one host message surface per legacy canonical comment row."""
+        rows = conn.execute(
+            text(
+                """
+                SELECT
+                  message.id,
+                  surface.id,
+                  surface.discord_forum_channel_id,
+                  message.discord_message_id,
+                  message.parent_discord_message_id
+                FROM local_community_messages AS message
+                JOIN local_community_thread_surfaces AS surface
+                  ON surface.local_community_thread_id = message.local_community_thread_id
+                 AND surface.role = 'host'
+                ORDER BY message.id
+                """
+            )
+        ).fetchall()
+        for row in rows:
+            existing = conn.execute(
+                text(
+                    """
+                    SELECT id
+                    FROM local_community_message_surfaces
+                    WHERE local_community_message_id = :message_id
+                      AND local_community_thread_surface_id = :thread_surface_id
+                    """
+                ),
+                {
+                    "message_id": row[0],
+                    "thread_surface_id": row[1],
+                },
+            ).fetchone()
+            if existing is not None:
+                continue
+            conn.execute(
+                text(
+                    """
+                    INSERT INTO local_community_message_surfaces (
+                      local_community_message_id,
+                      local_community_thread_surface_id,
+                      discord_forum_channel_id,
+                      discord_message_id,
+                      parent_discord_message_id,
+                      role,
+                      created_at
+                    ) VALUES (
+                      :message_id,
+                      :thread_surface_id,
+                      :forum_channel_id,
+                      :discord_message_id,
+                      :parent_discord_message_id,
+                      'host',
+                      :created_at
+                    )
+                    """
+                ),
+                {
+                    "message_id": row[0],
+                    "thread_surface_id": row[1],
+                    "forum_channel_id": row[2],
+                    "discord_message_id": row[3],
+                    "parent_discord_message_id": row[4],
+                    "created_at": utcnow(),
+                },
+            )
+
+    def _rebuild_stage2_local_community_threads(self, conn: object) -> None:
+        """Rebuild canonical thread rows without direct Discord-id columns."""
+        conn.execute(text("DROP TABLE IF EXISTS local_community_threads_stage2_new"))
+        conn.execute(
+            text(
+                """
+                CREATE TABLE local_community_threads_stage2_new (
+                  id INTEGER PRIMARY KEY AUTOINCREMENT,
+                  local_community_id INTEGER NOT NULL,
+                  ap_activity_id VARCHAR(512) NOT NULL,
+                  ap_object_id VARCHAR(512) NOT NULL,
+                  direction VARCHAR(32) NOT NULL,
+                  origin_kind VARCHAR(32) NOT NULL,
+                  created_at DATETIME NOT NULL,
+                  UNIQUE(ap_activity_id),
+                  UNIQUE(ap_object_id)
+                )
+                """
+            )
+        )
+        conn.execute(
+            text(
+                """
+                INSERT INTO local_community_threads_stage2_new (
+                  id,
+                  local_community_id,
+                  ap_activity_id,
+                  ap_object_id,
+                  direction,
+                  origin_kind,
+                  created_at
+                )
+                SELECT
+                  id,
+                  local_community_id,
+                  ap_activity_id,
+                  ap_object_id,
+                  direction,
+                  origin_kind,
+                  created_at
+                FROM local_community_threads
+                """
+            )
+        )
+        conn.execute(text("DROP TABLE local_community_threads"))
+        conn.execute(
+            text(
+                "ALTER TABLE local_community_threads_stage2_new RENAME TO local_community_threads"
+            )
+        )
+
+    def _rebuild_stage2_local_community_messages(self, conn: object) -> None:
+        """Rebuild canonical message rows without direct Discord-id columns."""
+        conn.execute(text("DROP TABLE IF EXISTS local_community_messages_stage2_new"))
+        conn.execute(
+            text(
+                """
+                CREATE TABLE local_community_messages_stage2_new (
+                  id INTEGER PRIMARY KEY AUTOINCREMENT,
+                  local_community_thread_id INTEGER NOT NULL,
+                  ap_activity_id VARCHAR(512) NOT NULL,
+                  ap_object_id VARCHAR(512) NOT NULL,
+                  parent_ap_object_id VARCHAR(512),
+                  direction VARCHAR(32) NOT NULL,
+                  created_at DATETIME NOT NULL,
+                  UNIQUE(ap_activity_id),
+                  UNIQUE(ap_object_id)
+                )
+                """
+            )
+        )
+        conn.execute(
+            text(
+                """
+                INSERT INTO local_community_messages_stage2_new (
+                  id,
+                  local_community_thread_id,
+                  ap_activity_id,
+                  ap_object_id,
+                  parent_ap_object_id,
+                  direction,
+                  created_at
+                )
+                SELECT
+                  id,
+                  local_community_thread_id,
+                  ap_activity_id,
+                  ap_object_id,
+                  parent_ap_object_id,
+                  direction,
+                  created_at
+                FROM local_community_messages
+                """
+            )
+        )
+        conn.execute(text("DROP TABLE local_community_messages"))
+        conn.execute(
+            text(
+                "ALTER TABLE local_community_messages_stage2_new RENAME TO local_community_messages"
+            )
+        )
+
+    def _verify_stage2_surface_invariants(self, conn: object) -> None:
+        """Fail loudly when Stage 2 host-surface ownership is ambiguous."""
+        thread_violations = conn.execute(
+            text(
+                """
+                SELECT thread.id
+                FROM local_community_threads AS thread
+                LEFT JOIN local_community_thread_surfaces AS surface
+                  ON surface.local_community_thread_id = thread.id
+                 AND surface.role = 'host'
+                GROUP BY thread.id
+                HAVING COUNT(surface.id) != 1
+                """
+            )
+        ).fetchall()
+        if thread_violations:
+            raise RuntimeError(
+                "Stage 2 migration requires exactly one host thread surface per canonical thread"
+            )
+
+        message_violations = conn.execute(
+            text(
+                """
+                SELECT message.id
+                FROM local_community_messages AS message
+                LEFT JOIN local_community_message_surfaces AS surface
+                  ON surface.local_community_message_id = message.id
+                 AND surface.role = 'host'
+                GROUP BY message.id
+                HAVING COUNT(surface.id) != 1
+                """
+            )
+        ).fetchall()
+        if message_violations:
+            raise RuntimeError(
+                "Stage 2 migration requires exactly one host message surface per canonical message"
+            )
 
     @contextmanager
     def session(self) -> Iterator[Session]:
@@ -1005,12 +1304,14 @@ class Database:
         direction: str,
         origin_kind: str,
     ) -> LocalCommunityThread:
-        """Persist one canonical post/thread mapping for local-community mode."""
+        """Persist one canonical thread row plus its host Discord surface.
+
+        Stage 2 keeps the public repository entry point small for callers while
+        moving the actual Discord ownership into `LocalCommunityThreadSurface`.
+        """
         with self.session() as session:
             thread = LocalCommunityThread(
                 local_community_id=local_community_id,
-                discord_thread_id=discord_thread_id,
-                discord_starter_message_id=discord_starter_message_id,
                 ap_activity_id=ap_activity_id,
                 ap_object_id=ap_object_id,
                 direction=direction,
@@ -1018,27 +1319,99 @@ class Database:
             )
             session.add(thread)
             session.flush()
+            # Stage 2 only creates host surfaces. Later stages can add more
+            # surfaces for the same canonical thread without rewriting callers.
+            local_community = session.get(LocalCommunity, local_community_id)
+            if local_community is None:
+                raise RuntimeError(
+                    f"Missing LocalCommunity {local_community_id} while creating host thread surface"
+                )
+            session.add(
+                LocalCommunityThreadSurface(
+                    local_community_thread_id=thread.id,
+                    discord_forum_channel_id=local_community.discord_forum_channel_id,
+                    discord_thread_id=discord_thread_id,
+                    discord_starter_message_id=discord_starter_message_id,
+                    role="host",
+                )
+            )
+            session.flush()
             return thread
 
-    def get_local_community_thread_by_discord_thread_id(
+    def create_local_community_thread_surface(
+        self,
+        *,
+        local_community_thread_id: int,
+        discord_forum_channel_id: int,
+        discord_thread_id: int,
+        discord_starter_message_id: int,
+        role: str,
+    ) -> LocalCommunityThreadSurface:
+        """Persist one explicit Discord thread surface for a canonical thread."""
+        with self.session() as session:
+            surface = LocalCommunityThreadSurface(
+                local_community_thread_id=local_community_thread_id,
+                discord_forum_channel_id=discord_forum_channel_id,
+                discord_thread_id=discord_thread_id,
+                discord_starter_message_id=discord_starter_message_id,
+                role=role,
+            )
+            session.add(surface)
+            session.flush()
+            return surface
+
+    def get_local_community_thread_surface_by_discord_thread_id(
         self, discord_thread_id: int
-    ) -> LocalCommunityThread | None:
-        """Load the local-community thread row for one Discord thread."""
+    ) -> LocalCommunityThreadSurface | None:
+        """Load the thread surface row for one Discord thread id."""
         with self.session() as session:
             return session.scalar(
-                select(LocalCommunityThread).where(
-                    LocalCommunityThread.discord_thread_id == discord_thread_id
+                select(LocalCommunityThreadSurface).where(
+                    LocalCommunityThreadSurface.discord_thread_id == discord_thread_id
                 )
             )
 
-    def get_local_community_thread_by_starter_message_id(
+    def get_local_community_thread_surface_by_starter_message_id(
         self, discord_starter_message_id: int
-    ) -> LocalCommunityThread | None:
-        """Load the local-community thread row for one Discord starter message."""
+    ) -> LocalCommunityThreadSurface | None:
+        """Load the thread surface row for one Discord starter message id."""
         with self.session() as session:
             return session.scalar(
-                select(LocalCommunityThread).where(
-                    LocalCommunityThread.discord_starter_message_id == discord_starter_message_id
+                select(LocalCommunityThreadSurface).where(
+                    LocalCommunityThreadSurface.discord_starter_message_id
+                    == discord_starter_message_id
+                )
+            )
+
+    def list_local_community_thread_surfaces(
+        self, local_community_thread_id: int
+    ) -> list[LocalCommunityThreadSurface]:
+        """List every Discord thread surface for one canonical thread."""
+        with self.session() as session:
+            return list(
+                session.scalars(
+                    select(LocalCommunityThreadSurface)
+                    .where(
+                        LocalCommunityThreadSurface.local_community_thread_id
+                        == local_community_thread_id
+                    )
+                    .order_by(
+                        LocalCommunityThreadSurface.created_at,
+                        LocalCommunityThreadSurface.id,
+                    )
+                )
+            )
+
+    def get_host_local_community_thread_surface(
+        self, local_community_thread_id: int
+    ) -> LocalCommunityThreadSurface | None:
+        """Return the host forum thread surface for one canonical thread."""
+        with self.session() as session:
+            return session.scalar(
+                select(LocalCommunityThreadSurface).where(
+                    LocalCommunityThreadSurface.local_community_thread_id
+                    == local_community_thread_id,
+                    LocalCommunityThreadSurface.role == "host",
                 )
             )
 
@@ -1064,31 +1437,131 @@ class Database:
         parent_discord_message_id: int | None,
         direction: str,
     ) -> LocalCommunityMessage:
-        """Persist one canonical message/comment mapping for local-community mode."""
+        """Persist one canonical message row plus its host Discord surface."""
         with self.session() as session:
             message = LocalCommunityMessage(
                 local_community_thread_id=local_community_thread_id,
-                discord_message_id=discord_message_id,
                 ap_activity_id=ap_activity_id,
                 ap_object_id=ap_object_id,
                 parent_ap_object_id=parent_ap_object_id,
-                parent_discord_message_id=parent_discord_message_id,
                 direction=direction,
             )
             session.add(message)
             session.flush()
-            return message
-
-    def get_local_community_message_by_discord_message_id(
-        self, discord_message_id: int
-    ) -> LocalCommunityMessage | None:
-        """Load the local-community message row for one Discord message."""
-        with self.session() as session:
-            return session.scalar(
-                select(LocalCommunityMessage).where(
-                    LocalCommunityMessage.discord_message_id == discord_message_id
+            thread_surface = session.scalar(
+                select(LocalCommunityThreadSurface).where(
+                    LocalCommunityThreadSurface.local_community_thread_id
+                    == local_community_thread_id,
+                    LocalCommunityThreadSurface.role == "host",
                 )
             )
+            if thread_surface is None:
+                raise RuntimeError(
+                    f"Missing host thread surface for local community thread {local_community_thread_id}"
+                )
+            session.add(
+                LocalCommunityMessageSurface(
+                    local_community_message_id=message.id,
+                    local_community_thread_surface_id=thread_surface.id,
+                    discord_forum_channel_id=thread_surface.discord_forum_channel_id,
+                    discord_message_id=discord_message_id,
+                    parent_discord_message_id=parent_discord_message_id,
+                    role="host",
+                )
+            )
+            session.flush()
+            return message
+
+    def create_local_community_message_surface(
+        self,
+        *,
+        local_community_message_id: int,
+        local_community_thread_surface_id: int,
+        discord_forum_channel_id: int,
+        discord_message_id: int,
+        parent_discord_message_id: int | None,
+        role: str,
+    ) -> LocalCommunityMessageSurface:
+        """Persist one explicit Discord message surface for a canonical comment."""
+        with self.session() as session:
+            surface = LocalCommunityMessageSurface(
+                local_community_message_id=local_community_message_id,
+                local_community_thread_surface_id=local_community_thread_surface_id,
+                discord_forum_channel_id=discord_forum_channel_id,
+                discord_message_id=discord_message_id,
+                parent_discord_message_id=parent_discord_message_id,
+                role=role,
+            )
+            session.add(surface)
+            session.flush()
+            return surface
+
+    def get_local_community_message_surface_by_discord_message_id(
+        self, discord_message_id: int
+    ) -> LocalCommunityMessageSurface | None:
+        """Load the message surface row for one Discord message id."""
+        with self.session() as session:
+            return session.scalar(
+                select(LocalCommunityMessageSurface).where(
+                    LocalCommunityMessageSurface.discord_message_id == discord_message_id
+                )
+            )
+
+    def list_local_community_message_surfaces(
+        self, local_community_message_id: int
+    ) -> list[LocalCommunityMessageSurface]:
+        """List every Discord message surface for one canonical comment."""
+        with self.session() as session:
+            return list(
+                session.scalars(
+                    select(LocalCommunityMessageSurface)
+                    .where(
+                        LocalCommunityMessageSurface.local_community_message_id
+                        == local_community_message_id
+                    )
+                    .order_by(
+                        LocalCommunityMessageSurface.created_at,
+                        LocalCommunityMessageSurface.id,
+                    )
+                )
+            )
+
+    def get_host_local_community_message_surface(
+        self, local_community_message_id: int
+    ) -> LocalCommunityMessageSurface | None:
+        """Return the host forum message surface for one canonical comment."""
+        with self.session() as session:
+            return session.scalar(
+                select(LocalCommunityMessageSurface).where(
+                    LocalCommunityMessageSurface.local_community_message_id
+                    == local_community_message_id,
+                    LocalCommunityMessageSurface.role == "host",
+                )
+            )
+
+    def get_local_community_thread_for_surface(
+        self, local_community_thread_surface_id: int
+    ) -> LocalCommunityThread | None:
+        """Resolve the canonical thread that owns one Discord thread surface."""
+        with self.session() as session:
+            surface = session.get(
+                LocalCommunityThreadSurface, local_community_thread_surface_id
+            )
+            if surface is None:
+                return None
+            return session.get(LocalCommunityThread, surface.local_community_thread_id)
+
+    def get_local_community_message_for_surface(
+        self, local_community_message_surface_id: int
+    ) -> LocalCommunityMessage | None:
+        """Resolve the canonical message that owns one Discord message surface."""
+        with self.session() as session:
+            surface = session.get(
+                LocalCommunityMessageSurface, local_community_message_surface_id
+            )
+            if surface is None:
+                return None
+            return session.get(LocalCommunityMessage, surface.local_community_message_id)
 
     def get_local_community_message_by_ap_object_id(
         self, ap_object_id: str

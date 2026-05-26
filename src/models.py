@@ -486,23 +486,19 @@ class LocalCommunityRelayDelivery(Base):
 class LocalCommunityThread(Base):
     """Map one canonical local-community thread in either federation direction.
 
-    Threads are the post-level mapping surface for the local-community mode.
-    They preserve whether the canonical thread started on Discord or arrived
-    from a remote follower so replies can route consistently in both cases.
+    Threads are the canonical post-level identity rows for local-community
+    mode. Stage 2 deliberately removes direct Discord ownership from this row
+    so one canonical thread can later fan out onto several Discord surfaces.
     """
 
     __tablename__ = "local_community_threads"
     __table_args__ = (
-        UniqueConstraint("discord_thread_id"),
-        UniqueConstraint("discord_starter_message_id"),
         UniqueConstraint("ap_activity_id"),
         UniqueConstraint("ap_object_id"),
     )
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
     local_community_id: Mapped[int] = mapped_column(Integer, nullable=False)
-    discord_thread_id: Mapped[int] = mapped_column(Integer, nullable=False)
-    discord_starter_message_id: Mapped[int] = mapped_column(Integer, nullable=False)
     ap_activity_id: Mapped[str] = mapped_column(String(512), nullable=False)
     ap_object_id: Mapped[str] = mapped_column(String(512), nullable=False)
     direction: Mapped[str] = mapped_column(String(32), nullable=False)
@@ -513,23 +509,76 @@ class LocalCommunityThread(Base):
 class LocalCommunityMessage(Base):
     """Map one canonical local-community message or remote comment.
 
-    Message rows preserve both AP-parent and Discord-parent references because
-    comment routing must remain stable across local and remote reply chains.
+    Message rows preserve the canonical AP identity and AP-parent linkage for
+    one local-community comment. Discord-parent linkage moves to per-surface
+    rows in Stage 2 because later stages will need different parent message ids
+    on different Discord forum surfaces.
     """
 
     __tablename__ = "local_community_messages"
     __table_args__ = (
-        UniqueConstraint("discord_message_id"),
         UniqueConstraint("ap_activity_id"),
         UniqueConstraint("ap_object_id"),
     )
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
     local_community_thread_id: Mapped[int] = mapped_column(Integer, nullable=False)
-    discord_message_id: Mapped[int] = mapped_column(Integer, nullable=False)
     ap_activity_id: Mapped[str] = mapped_column(String(512), nullable=False)
     ap_object_id: Mapped[str] = mapped_column(String(512), nullable=False)
     parent_ap_object_id: Mapped[str | None] = mapped_column(String(512), nullable=True)
-    parent_discord_message_id: Mapped[int | None] = mapped_column(Integer, nullable=True)
     direction: Mapped[str] = mapped_column(String(32), nullable=False)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, nullable=False)
+
+
+class LocalCommunityThreadSurface(Base):
+    """Map one canonical local-community thread onto one Discord forum surface.
+
+    Stage 2 introduces explicit surface rows so host-forum behavior can keep
+    working while later stages add more local Discord targets for the same
+    canonical thread.
+    """
+
+    __tablename__ = "local_community_thread_surfaces"
+    __table_args__ = (
+        UniqueConstraint("local_community_thread_id", "discord_forum_channel_id"),
+        UniqueConstraint("discord_thread_id"),
+        UniqueConstraint("discord_starter_message_id"),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    local_community_thread_id: Mapped[int] = mapped_column(Integer, nullable=False)
+    discord_forum_channel_id: Mapped[int] = mapped_column(Integer, nullable=False)
+    discord_thread_id: Mapped[int] = mapped_column(Integer, nullable=False)
+    discord_starter_message_id: Mapped[int] = mapped_column(Integer, nullable=False)
+    # Stage 2 only creates "host" rows, but persisting the role now avoids
+    # another destructive migration when local-subscriber surfaces are added.
+    role: Mapped[str] = mapped_column(String(32), nullable=False)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=utcnow, nullable=False
+    )
+
+
+class LocalCommunityMessageSurface(Base):
+    """Map one canonical local-community message onto one Discord message surface.
+
+    Message surfaces stay bound to a concrete thread surface so nested reply
+    routing can remain local to one Discord thread even after later stages add
+    several sibling forum surfaces for the same canonical community activity.
+    """
+
+    __tablename__ = "local_community_message_surfaces"
+    __table_args__ = (
+        UniqueConstraint("local_community_message_id", "local_community_thread_surface_id"),
+        UniqueConstraint("discord_message_id"),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    local_community_message_id: Mapped[int] = mapped_column(Integer, nullable=False)
+    local_community_thread_surface_id: Mapped[int] = mapped_column(Integer, nullable=False)
+    discord_forum_channel_id: Mapped[int] = mapped_column(Integer, nullable=False)
+    discord_message_id: Mapped[int] = mapped_column(Integer, nullable=False)
+    parent_discord_message_id: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    role: Mapped[str] = mapped_column(String(32), nullable=False)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=utcnow, nullable=False
+    )

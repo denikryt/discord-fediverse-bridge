@@ -43,16 +43,17 @@ This document is a task-oriented reading guide for maintainers changing or debug
 1. `src/commands/subscribe.py`; 2. `src/operations/subscribe_local_community.py`; 3. `src/commands/unsubscribe.py`; 4. `src/operations/unsubscribe_local_community.py`; 5. `src/db.py`.
 
 ## Local community relay fanout
-1. `src/local_communities/federation_fanout.py`; 2. `src/local_communities/runtime.py`; 3. `src/local_communities/delivery_mapping.py`; 4. `src/db.py`; 5. `fedify-gateway/src/federation-outbound.ts`.
+1. `src/local_communities/federation_fanout.py`; 2. `src/local_communities/runtime.py`; 3. `src/local_communities/delivery_mapping.py`; 4. `src/local_communities/reply_mapping.py`; 5. `src/db.py`; 6. `fedify-gateway/src/federation-outbound.ts`.
 
 ## Edit/delete propagation
-1. `src/discord_event_router.py`; 2. `src/content_sync/edit_delete.py`; 3. `src/community_sync/edit_delete.py`; 4. `src/local_communities/runtime.py`; 5. `fedify-gateway/src/server.ts`.
+1. `src/discord_event_router.py`; 2. `src/content_sync/edit_delete.py`; 3. `src/community_sync/edit_delete.py`; 4. `src/local_communities/runtime.py`; 5. `src/local_communities/delivery_mapping.py`; 6. `src/db.py`; 7. `fedify-gateway/src/server.ts`.
 
 ## Deduplication and idempotency
 1. `src/activitypub_handlers.py`; 2. `src/content_sync/persistence.py`; 3. `src/db.py`; 4. `fedify-gateway/src/normalize.ts`.
 
 ## Database schema
 1. `src/models.py`; 2. `src/db.py`; 3. `docs/architecture/database-map.md`.
+Stage 2 local-community work also requires reading the canonical-vs-surface split in `LocalCommunityThread`, `LocalCommunityMessage`, `LocalCommunityThreadSurface`, and `LocalCommunityMessageSurface`.
 
 ## Gateway route changes
 1. `fedify-gateway/src/server.ts`; 2. `fedify-gateway/src/types.ts`; 3. `src/fedify_gateway_client.py`; 4. `docs/architecture/http-routes.md`.

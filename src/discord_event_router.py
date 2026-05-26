@@ -42,13 +42,17 @@ class DiscordEventRouter:
     def is_local_community_message(self, message_id: int) -> bool:
         """Return whether one Discord message belongs to local-community mode.
 
-        The local-community mode has two canonical Discord message surfaces:
-        starter messages mapped by `local_community_threads` and reply messages
-        mapped by `local_community_messages`.
+        Stage 2 moves Discord ownership to explicit surface rows, so both
+        starter and reply detection must resolve through those tables instead
+        of checking canonical local-community rows directly.
         """
         return (
-            self.database.get_local_community_thread_by_starter_message_id(message_id) is not None
-            or self.database.get_local_community_message_by_discord_message_id(message_id) is not None
+            self.database.get_local_community_thread_surface_by_starter_message_id(message_id)
+            is not None
+            or self.database.get_local_community_message_surface_by_discord_message_id(
+                message_id
+            )
+            is not None
         )
 
     async def handle_thread_create(self, *, thread: object, starter_message: object) -> object:

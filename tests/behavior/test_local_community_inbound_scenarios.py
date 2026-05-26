@@ -263,7 +263,9 @@ async def test_remote_follower_nested_reply_uses_real_discord_message_reference(
 
     assert result.status == "processed"
     assert created is not None
-    assert created.parent_discord_message_id == 401
+    created_surface = database.get_host_local_community_message_surface(created.id)
+    assert created_surface is not None
+    assert created_surface.parent_discord_message_id == 401
 
 
 @pytest.mark.asyncio

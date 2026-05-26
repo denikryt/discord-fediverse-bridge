@@ -29,6 +29,7 @@ from .delivery_mapping import (
     get_local_community_message_for_discord_message,
     get_local_community_thread_for_ap_object,
     get_local_community_thread_for_discord_thread,
+    get_local_community_thread_surface_for_discord_thread,
 )
 from .reply_mapping import resolve_inbound_reply_target, resolve_outbound_reply_context
 
@@ -127,7 +128,12 @@ class LocalCommunityRuntime:
         thread_row = get_local_community_thread_for_discord_thread(self.database, getattr(thread, "id"))
         if thread_row is None:
             return LocalCommunityRuntimeResult(status="ignored", reason="no_thread_context")
-        if getattr(thread_row, "discord_starter_message_id") == getattr(message, "id"):
+        thread_surface = get_local_community_thread_surface_for_discord_thread(
+            self.database, getattr(thread, "id")
+        )
+        if thread_surface is None:
+            return LocalCommunityRuntimeResult(status="ignored", reason="no_thread_surface")
+        if getattr(thread_surface, "discord_starter_message_id") == getattr(message, "id"):
             return LocalCommunityRuntimeResult(status="ignored", reason="starter_message_already_handled")
 
         reply_context = resolve_outbound_reply_context(
@@ -239,7 +245,14 @@ class LocalCommunityRuntime:
         if self.bot is None:
             raise RuntimeError("LocalCommunityRuntime requires bot for inbound Discord delivery")
 
-        discord_thread = await self.bot.get_thread_by_id(getattr(thread_row, "discord_thread_id"))
+        host_thread_surface = self.database.get_host_local_community_thread_surface(
+            getattr(thread_row, "id")
+        )
+        if host_thread_surface is None:
+            return _HandlerResult(status="skipped", detail="comment thread host surface not mapped")
+        discord_thread = await self.bot.get_thread_by_id(
+            getattr(host_thread_surface, "discord_thread_id")
+        )
         parent_discord_message_id = resolve_inbound_reply_target(
             database=self.database,
             parent_ap_object_id=getattr(getattr(event, "object"), "parent_ap_id"),
@@ -333,8 +346,8 @@ class LocalCommunityRuntime:
         published = resolve_published_object_for_discord_message(self.database, discord_message_id=message_id)
         if published is None:
             return
-        if self.database.get_local_community_thread_by_starter_message_id(message_id) is None and (
-            self.database.get_local_community_message_by_discord_message_id(message_id) is None
+        if self.database.get_local_community_thread_surface_by_starter_message_id(message_id) is None and (
+            self.database.get_local_community_message_surface_by_discord_message_id(message_id) is None
         ):
             return
 
@@ -363,8 +376,8 @@ class LocalCommunityRuntime:
         published = resolve_published_object_for_discord_message(self.database, discord_message_id=message_id)
         if published is None:
             return
-        if self.database.get_local_community_thread_by_starter_message_id(message_id) is None and (
-            self.database.get_local_community_message_by_discord_message_id(message_id) is None
+        if self.database.get_local_community_thread_surface_by_starter_message_id(message_id) is None and (
+            self.database.get_local_community_message_surface_by_discord_message_id(message_id) is None
         ):
             return
 
@@ -386,13 +399,16 @@ class LocalCommunityRuntime:
         thread_row = self.database.get_local_community_thread_by_ap_object_id(getattr(getattr(event, "object"), "ap_id"))
         if thread_row is None:
             return _HandlerResult(status="skipped", detail="post not yet mapped")
+        thread_surface = self.database.get_host_local_community_thread_surface(getattr(thread_row, "id"))
+        if thread_surface is None:
+            return _HandlerResult(status="skipped", detail="post host surface not mapped")
 
         local_community = self.database.get_local_community_by_actor_url(getattr(event, "community_actor_id"))
         bot = self.bot or runtime.bot
         await edit_discord_message(
             bot=bot,
-            discord_thread_id=getattr(thread_row, "discord_thread_id"),
-            discord_message_id=getattr(thread_row, "discord_starter_message_id"),
+            discord_thread_id=getattr(thread_surface, "discord_thread_id"),
+            discord_message_id=getattr(thread_surface, "discord_starter_message_id"),
             new_content=self._format_inbound_post_body(event),
             preserve_header=False,
         )
@@ -412,13 +428,16 @@ class LocalCommunityRuntime:
         thread_row = self.database.get_local_community_thread_by_ap_object_id(getattr(getattr(event, "object"), "ap_id"))
         if thread_row is None:
             return _HandlerResult(status="skipped", detail="post not yet mapped")
+        thread_surface = self.database.get_host_local_community_thread_surface(getattr(thread_row, "id"))
+        if thread_surface is None:
+            return _HandlerResult(status="skipped", detail="post host surface not mapped")
 
         local_community = self.database.get_local_community_by_actor_url(getattr(event, "community_actor_id"))
         bot = self.bot or runtime.bot
         await mark_discord_message_deleted(
             bot=bot,
-            discord_thread_id=getattr(thread_row, "discord_thread_id"),
-            discord_message_id=getattr(thread_row, "discord_starter_message_id"),
+            discord_thread_id=getattr(thread_surface, "discord_thread_id"),
+            discord_message_id=getattr(thread_surface, "discord_starter_message_id"),
         )
         if local_community is not None:
             await self.federation_fanout.relay_update_or_delete(
@@ -439,13 +458,17 @@ class LocalCommunityRuntime:
         thread_row = self.database.get_local_community_thread_by_id(getattr(message_row, "local_community_thread_id"))
         if thread_row is None:
             return _HandlerResult(status="skipped", detail="comment thread not mapped")
+        thread_surface = self.database.get_host_local_community_thread_surface(getattr(thread_row, "id"))
+        message_surface = self.database.get_host_local_community_message_surface(getattr(message_row, "id"))
+        if thread_surface is None or message_surface is None:
+            return _HandlerResult(status="skipped", detail="comment host surface not mapped")
 
         local_community = self.database.get_local_community_by_actor_url(getattr(event, "community_actor_id"))
         bot = self.bot or runtime.bot
         await edit_discord_message(
             bot=bot,
-            discord_thread_id=getattr(thread_row, "discord_thread_id"),
-            discord_message_id=getattr(message_row, "discord_message_id"),
+            discord_thread_id=getattr(thread_surface, "discord_thread_id"),
+            discord_message_id=getattr(message_surface, "discord_message_id"),
             new_content=self._format_inbound_comment_body(event),
             preserve_header=False,
         )
@@ -468,13 +491,17 @@ class LocalCommunityRuntime:
         thread_row = self.database.get_local_community_thread_by_id(getattr(message_row, "local_community_thread_id"))
         if thread_row is None:
             return _HandlerResult(status="skipped", detail="comment thread not mapped")
+        thread_surface = self.database.get_host_local_community_thread_surface(getattr(thread_row, "id"))
+        message_surface = self.database.get_host_local_community_message_surface(getattr(message_row, "id"))
+        if thread_surface is None or message_surface is None:
+            return _HandlerResult(status="skipped", detail="comment host surface not mapped")
 
         local_community = self.database.get_local_community_by_actor_url(getattr(event, "community_actor_id"))
         bot = self.bot or runtime.bot
         await mark_discord_message_deleted(
             bot=bot,
-            discord_thread_id=getattr(thread_row, "discord_thread_id"),
-            discord_message_id=getattr(message_row, "discord_message_id"),
+            discord_thread_id=getattr(thread_surface, "discord_thread_id"),
+            discord_message_id=getattr(message_surface, "discord_message_id"),
         )
         if local_community is not None:
             await self.federation_fanout.relay_update_or_delete(
