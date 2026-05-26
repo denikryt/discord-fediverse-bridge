@@ -43,9 +43,9 @@ export interface LocalCommunityDiscoveryRow {
   actorUrl: string;
 }
 
-export interface LocalCommunityFollowerRow {
-  // Accepted follower rows define the concrete remote inbox fanout targets for
-  // one Discord-backed local community publish.
+export interface RemoteSubscriberRow {
+  // Accepted remote-subscriber rows define the concrete remote inbox fanout
+  // targets for one Discord-backed local community publish.
   remoteActorId: string;
   remoteInboxUrl: string;
   followActivityId: string;
@@ -296,10 +296,10 @@ export async function listLocalCommunities(
   }
 }
 
-export async function loadAcceptedLocalCommunityFollowersByActorUrl(
+export async function loadAcceptedRemoteSubscribersByActorUrl(
   config: GatewayConfig,
   actorUrl: string,
-): Promise<LocalCommunityFollowerRow[]> {
+): Promise<RemoteSubscriberRow[]> {
   const database = await openConfiguredDatabase(config);
   try {
     let statement;
@@ -310,7 +310,7 @@ export async function loadAcceptedLocalCommunityFollowersByActorUrl(
           follower.remote_inbox_url,
           follower.follow_activity_id,
           follower.status
-        FROM local_community_followers AS follower
+        FROM remote_subscribers AS follower
         JOIN local_communities AS community
           ON community.id = follower.local_community_id
         WHERE community.actor_url = ?
@@ -320,15 +320,28 @@ export async function loadAcceptedLocalCommunityFollowersByActorUrl(
     } catch (error) {
       if (
         isMissingLocalCommunitiesTableError(error) ||
-        isMissingLocalCommunityFollowersTableError(error)
+        isMissingRemoteSubscribersTableError(error)
       ) {
-        return [];
+        statement = database.prepare(`
+          SELECT
+            follower.remote_actor_id,
+            follower.remote_inbox_url,
+            follower.follow_activity_id,
+            follower.status
+          FROM local_community_followers AS follower
+          JOIN local_communities AS community
+            ON community.id = follower.local_community_id
+          WHERE community.actor_url = ?
+            AND follower.status = 'accepted'
+          ORDER BY follower.created_at, follower.id
+        `);
+      } else {
+        throw error;
       }
-      throw error;
     }
     try {
       statement.bind([actorUrl]);
-      const rows: LocalCommunityFollowerRow[] = [];
+      const rows: RemoteSubscriberRow[] = [];
       while (statement.step()) {
         const row = statement.getAsObject() as Record<string, unknown>;
         rows.push({
@@ -669,12 +682,26 @@ function isMissingLocalCommunitiesTableError(error: unknown): boolean {
   );
 }
 
+function isMissingRemoteSubscribersTableError(error: unknown): boolean {
+  return (
+    error instanceof Error &&
+    error.message.includes("no such table: remote_subscribers")
+  );
+}
+
 function isMissingLocalCommunityFollowersTableError(error: unknown): boolean {
   return (
     error instanceof Error &&
     error.message.includes("no such table: local_community_followers")
   );
 }
+
+/**
+ * Compatibility export while Stage 1 callers finish moving from the old
+ * follower terminology to explicit remote-subscriber naming.
+ */
+export const loadAcceptedLocalCommunityFollowersByActorUrl =
+  loadAcceptedRemoteSubscribersByActorUrl;
 
 function isMissingUsersTableError(error: unknown): boolean {
   return (

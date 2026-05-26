@@ -17,24 +17,36 @@ class ListSubscriptionsInput:
     # None means no guild context — falls back to showing all subscriptions
     # (e.g. when called outside a guild or from legacy code paths).
     guild_id: int | None = None
-    _subscriptions: list[object] | None = field(default=None, init=False, repr=False)
+    _remote_subscriptions: list[object] | None = field(default=None, init=False, repr=False)
+    _local_subscribers: list[object] | None = field(default=None, init=False, repr=False)
 
-    def get_subscriptions(self) -> list[object]:
-        """Load and memoize subscriptions scoped to the guild when possible."""
-        # The empty-state check and success payload should see one cached
-        # subscription snapshot for a single command invocation.
-        if self._subscriptions is None:
+    def get_remote_subscriptions(self) -> list[object]:
+        """Load and memoize remote subscriptions scoped to the guild."""
+        if self._remote_subscriptions is None:
             if self.guild_id is not None:
-                self._subscriptions = self.database.get_subscriptions_by_guild(self.guild_id)
+                self._remote_subscriptions = self.database.get_subscriptions_by_guild(self.guild_id)
             else:
-                self._subscriptions = self.database.get_all_subscriptions()
-        return self._subscriptions
+                self._remote_subscriptions = self.database.get_all_subscriptions()
+        return self._remote_subscriptions
+
+    def get_local_subscribers(self) -> list[object]:
+        """Load and memoize local subscribers scoped to the guild."""
+        if self._local_subscribers is None:
+            if self.guild_id is not None:
+                self._local_subscribers = self.database.list_local_subscribers_by_guild(self.guild_id)
+            else:
+                self._local_subscribers = []
+        return self._local_subscribers
 
 
-def _load_subscriptions(operation_input: ListSubscriptionsInput) -> list[object]:
-    # Both the precondition and success payload must see the same ordering
-    # contract from the database repository.
-    return operation_input.get_subscriptions()
+def _load_remote_subscriptions(operation_input: ListSubscriptionsInput) -> list[object]:
+    """Load the cached remote subscription snapshot for one operation run."""
+    return operation_input.get_remote_subscriptions()
+
+
+def _load_local_subscribers(operation_input: ListSubscriptionsInput) -> list[object]:
+    """Load the cached local-subscriber snapshot for one operation run."""
+    return operation_input.get_local_subscribers()
 
 
 def _reject(
@@ -50,11 +62,15 @@ def _reject(
 def _body(operation_input: ListSubscriptionsInput) -> OperationResult:
     # The operation prepares structured payload data, while the command adapter
     # remains responsible for the actual Discord embed construction.
-    subscriptions = _load_subscriptions(operation_input)
+    remote_subscriptions = _load_remote_subscriptions(operation_input)
+    local_subscribers = _load_local_subscribers(operation_input)
     return OperationResult(
         applied=True,
         message="Loaded active subscriptions.",
-        extra_kwargs={"subscriptions": subscriptions},
+        extra_kwargs={
+            "remote_subscriptions": remote_subscriptions,
+            "local_subscribers": local_subscribers,
+        },
     )
 
 
@@ -64,7 +80,8 @@ list_subscriptions_operation = OperationDefinition(
         Precondition(
             name="subscriptions_exist",
             message="No active subscriptions.",
-            predicate=lambda operation_input: bool(_load_subscriptions(operation_input)),
+            predicate=lambda operation_input: bool(_load_remote_subscriptions(operation_input))
+            or bool(_load_local_subscribers(operation_input)),
         ),
     ),
     reject=_reject,

@@ -373,14 +373,15 @@ class LocalCommunity(Base):
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, onupdate=utcnow, nullable=False)
 
 
-class LocalCommunityFollower(Base):
-    """Persist one remote actor that is allowed to follow a local community.
+class RemoteSubscriber(Base):
+    """Persist one remote ActivityPub subscriber for a local community.
 
-    Follower rows are owned by Python because moderation and retry policy live
-    there, while the gateway only owns the protocol-side Accept delivery.
+    Remote-subscriber rows are owned by Python because moderation and retry
+    policy live there, while the gateway only owns the protocol-side Accept
+    delivery.
     """
 
-    __tablename__ = "local_community_followers"
+    __tablename__ = "remote_subscribers"
     __table_args__ = (
         UniqueConstraint("local_community_id", "remote_actor_id"),
         UniqueConstraint("follow_activity_id"),
@@ -396,7 +397,33 @@ class LocalCommunityFollower(Base):
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, onupdate=utcnow, nullable=False)
 
 
+class LocalSubscriber(Base):
+    """Persist one same-instance Discord forum subscribed to a local community.
 
+    Local-subscriber rows are control-plane state in Stage 1. Later stages may
+    use them for participant sync, but this model itself does not imply any
+    runtime routing behavior.
+    """
+
+    __tablename__ = "local_subscribers"
+    __table_args__ = (
+        UniqueConstraint("local_community_id", "discord_channel_id"),
+        UniqueConstraint("discord_channel_id"),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    local_community_id: Mapped[int] = mapped_column(Integer, nullable=False)
+    discord_guild_id: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    discord_channel_id: Mapped[int] = mapped_column(Integer, nullable=False)
+    initiated_by_discord_user_id: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    status: Mapped[str] = mapped_column(String(32), nullable=False, default="active")
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, nullable=False)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, onupdate=utcnow, nullable=False)
+
+
+# Compatibility alias while Stage 1 migrates old follower terminology to the
+# explicit remote-subscriber name across the rest of the codebase.
+LocalCommunityFollower = RemoteSubscriber
 
 class LocalCommunityRelaySourceActivity(Base):
     """Store one immutable inbound ActivityPub source activity for relay.

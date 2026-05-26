@@ -24,6 +24,10 @@ from ..fedify_gateway_client import FedifyGatewayClient
 from ..federation_policy import is_instance_allowed
 from ..lemmy_client import LemmyClient
 from ..operations import SubscribeInput, subscribe_operation
+from ..operations.subscribe_local_community import (
+    SubscribeLocalCommunityInput,
+    subscribe_local_community_operation,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -90,13 +94,19 @@ def register(
             return
 
         if resolved.source == "local_bridge":
-            # Local same-instance channel subscriptions are owned by the later
-            # local-subscription plan. This discovery plan must stop before it
-            # creates a fake ActivityPub self-follow row.
-            await interaction.response.send_message(
-                "This local community can be resolved, but local channel subscriptions are not implemented yet.",
-                ephemeral=True,
+            result = await run_operation_definition_async(
+                subscribe_local_community_operation,
+                SubscribeLocalCommunityInput(
+                    database=database,
+                    discord_user_id=str(interaction.user.id),
+                    guild_id=interaction.guild_id,
+                    channel_id=channel.id,
+                    channel_mention=channel.mention,
+                    local_community_id=int(resolved.local_community_id),
+                    local_community_name=resolved.name or resolved.handle,
+                ),
             )
+            await interaction.response.send_message(result.message, ephemeral=not result.applied)
             return
 
         if resolved.source == "remote_lemmy" and resolved.numeric_id is None:

@@ -10,6 +10,10 @@ from ..db import Database
 from ..config import Settings
 from ..fedify_gateway_client import FedifyGatewayClient
 from ..operations import UnsubscribeInput, unsubscribe_operation
+from ..operations.unsubscribe_local_community import (
+    UnsubscribeLocalCommunityInput,
+    unsubscribe_local_community_operation,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -37,15 +41,33 @@ def register(
         """Handle the /unsubscribe-channel slash command."""
         # The command adapter only supplies Discord-facing context; the
         # operation decides whether deletion is allowed and what result to show.
-        result = await run_operation_definition_async(
-            unsubscribe_operation,
-            UnsubscribeInput(
-                database=database,
-                fedify_gateway=fedify_gateway,
-                channel_id=channel.id,
-                channel_mention=channel.mention,
-            ),
-        )
+        remote_subscription = database.get_subscription_by_channel(channel.id)
+        local_subscriber = database.get_local_subscriber_by_channel(channel.id)
+        if remote_subscription is not None:
+            result = await run_operation_definition_async(
+                unsubscribe_operation,
+                UnsubscribeInput(
+                    database=database,
+                    fedify_gateway=fedify_gateway,
+                    channel_id=channel.id,
+                    channel_mention=channel.mention,
+                ),
+            )
+        elif local_subscriber is not None:
+            result = await run_operation_definition_async(
+                unsubscribe_local_community_operation,
+                UnsubscribeLocalCommunityInput(
+                    database=database,
+                    channel_id=channel.id,
+                    channel_mention=channel.mention,
+                ),
+            )
+        else:
+            await interaction.response.send_message(
+                f"Channel {channel.mention} has no active subscription.",
+                ephemeral=True,
+            )
+            return
         await interaction.response.send_message(result.message, ephemeral=not result.applied)
         if result.applied:
             logger.info("Unsubscribed channel %s", channel.id)

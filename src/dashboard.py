@@ -25,12 +25,12 @@ def build_dashboard_payload(runtime: Any) -> dict[str, object]:
     actor_identifier = getattr(settings, "fedify_actor_identifier", "bridge")
     local_communities = runtime.database.list_local_communities()
     registered_users = runtime.database.list_users()
-    followers = runtime.database.list_local_community_followers_for_all(status="accepted")
+    remote_subscribers = runtime.database.list_remote_subscribers_for_all(status="accepted")
     bridge_follows = runtime.database.list_bridge_actor_follows()
 
-    followers_by_community: dict[int, list[object]] = defaultdict(list)
-    for follower in followers:
-        followers_by_community[getattr(follower, "local_community_id")].append(follower)
+    remote_subscribers_by_community: dict[int, list[object]] = defaultdict(list)
+    for remote_subscriber in remote_subscribers:
+        remote_subscribers_by_community[getattr(remote_subscriber, "local_community_id")].append(remote_subscriber)
 
     community_payloads = []
     for community in sorted(
@@ -40,20 +40,21 @@ def build_dashboard_payload(runtime: Any) -> dict[str, object]:
             str(getattr(row, "slug", "")).lower(),
         ),
     ):
-        community_followers = followers_by_community.get(getattr(community, "id"), [])
-        follower_payloads = []
-        for follower in sorted(
-            community_followers,
+        community_remote_subscribers = remote_subscribers_by_community.get(getattr(community, "id"), [])
+        remote_subscriber_payloads = []
+        for remote_subscriber in sorted(
+            community_remote_subscribers,
             key=lambda row: str(getattr(row, "remote_actor_id", "")).lower(),
         ):
-            actor_url = getattr(follower, "remote_actor_id")
-            follower_payloads.append(
+            actor_url = getattr(remote_subscriber, "remote_actor_id")
+            remote_subscriber_payloads.append(
                 {
                     "actorUrl": actor_url,
                     "instanceHost": _hostname_from_url(actor_url)
-                    or _hostname_from_url(getattr(follower, "remote_inbox_url", "")),
+                    or _hostname_from_url(getattr(remote_subscriber, "remote_inbox_url", "")),
                 }
             )
+        local_subscriber_count = runtime.database.count_local_subscribers(getattr(community, "id"))
         community_payloads.append(
             {
                 "slug": getattr(community, "slug"),
@@ -66,11 +67,12 @@ def build_dashboard_payload(runtime: Any) -> dict[str, object]:
                 "actorUrl": getattr(community, "actor_url"),
                 "aliasUrl": f"{origin}/c/{getattr(community, 'slug')}",
                 "followersUrl": getattr(community, "followers_url"),
-                # The dashboard uses one accepted-follower list, so this count
-                # mirrors the visible follower disclosure rather than a hidden
-                # technical metric with a different definition.
-                "subscriberCount": len(community_followers),
-                "followers": follower_payloads,
+                # Stage 1 keeps participant types explicit. A later read model
+                # may add a combined total, but the payload should not imply
+                # that remote and local participants are the same stored state.
+                "remoteSubscriberCount": len(community_remote_subscribers),
+                "localSubscriberCount": local_subscriber_count,
+                "followers": remote_subscriber_payloads,
             }
         )
 
@@ -94,7 +96,7 @@ def build_dashboard_payload(runtime: Any) -> dict[str, object]:
             "bridgeActorUrl": f"{origin}/actors/{actor_identifier}",
             "registeredUserCount": len(registered_users),
             "localCommunityCount": len(community_payloads),
-            "localCommunityFollowerCount": len(followers),
+            "localCommunityFollowerCount": len(remote_subscribers),
             "bridgeActorFollowCount": len(bridge_follow_payloads),
         },
         "localCommunities": community_payloads,

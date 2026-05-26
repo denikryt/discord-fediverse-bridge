@@ -12,7 +12,14 @@ Primary files: `src/commands/subscribe.py`, `src/operations/subscribe.py`, `src/
 
 ## Local community hosting mode
 
-A Discord forum channel is exposed as a local ActivityPub Group actor. Remote actors can follow the local community. Discord forum posts and comments become ActivityPub content served under local actor/object URLs. Remote inbound ActivityPub content can appear in Discord and can be relayed to followers when appropriate.
+A Discord forum channel is exposed as a local ActivityPub Group actor. Remote actors can follow the local community. Discord forum posts and comments become ActivityPub content served under local actor/object URLs. Remote inbound ActivityPub content can appear in Discord and can be relayed to remote subscribers when appropriate.
+
+Stage 1 of local-subscriber work adds a second participant type for this mode:
+
+- `RemoteSubscriber` — one remote ActivityPub actor following the local community.
+- `LocalSubscriber` — one same-instance Discord forum subscribed to the local community.
+
+In Stage 1, `LocalSubscriber` is control-plane state only. It is created and removed through the existing subscribe/unsubscribe commands, but it does not yet make that forum a live runtime source or fanout target. Later stages will extend local-community runtime behavior to consume that participant state.
 
 Primary files: `src/commands/create_community.py`, `src/operations/create_community.py`, `src/local_communities/service.py`, `src/local_communities/runtime.py`, `src/local_communities/federation_fanout.py`, `src/local_communities/activitypub_renderers.py`, `fedify-gateway/src/actor-store.ts`, `fedify-gateway/src/server.ts`, and `fedify-gateway/src/federation-outbound.ts`.
 

@@ -8,7 +8,7 @@ import type { Federation } from "@fedify/fedify";
 import type { GatewayConfig } from "./config.js";
 import { appendDebugFileLog } from "./debug-file-log.js";
 import { loadActorKeyPair } from "./actor-store.js";
-import { loadAcceptedLocalCommunityFollowersByActorUrl } from "./db.js";
+import { loadAcceptedRemoteSubscribersByActorUrl } from "./db.js";
 import {
   loadLocalCommunitySigningKey,
   loadLocalCommunitySigningKeyByActorUrl,
@@ -254,7 +254,7 @@ export async function publishLocalCommunityContent(
   // Local-community fanout is performed by the bridge-owned community actor.
   // The embedded Create remains user-authored, while the outer Announce makes
   // delivery look like Lemmy Group fanout to Mastodon and other followers.
-  const followers = await loadAcceptedLocalCommunityFollowersByActorUrl(
+  const followers = await loadAcceptedRemoteSubscribersByActorUrl(
     config,
     request.communityActorUrl,
   );

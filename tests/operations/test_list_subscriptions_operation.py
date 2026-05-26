@@ -27,7 +27,8 @@ def test_list_subscriptions_operation_rejects_empty_state() -> None:
 
 def test_list_subscriptions_operation_returns_embed_payload_data() -> None:
     # Success returns raw subscription rows in extra_kwargs so the command can
-    # render an embed without recomputing policy decisions.
+    # render separate remote/local sections without recomputing policy
+    # decisions in the Discord adapter layer.
     subscriptions = [
         SimpleNamespace(
             discord_channel_id=111,
@@ -44,5 +45,8 @@ def test_list_subscriptions_operation_returns_embed_payload_data() -> None:
     )
 
     assert result.applied is True
-    assert result.extra_kwargs == {"subscriptions": subscriptions}
+    assert result.extra_kwargs == {
+        "remote_subscriptions": subscriptions,
+        "local_subscribers": [],
+    }
     database.get_all_subscriptions.assert_called_once_with()

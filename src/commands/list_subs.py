@@ -3,6 +3,7 @@ from __future__ import annotations
 import discord
 from discord import app_commands
 from discordops import run_operation_definition_async
+from urllib.parse import urlparse
 
 from ..db import Database
 from ..operations import ListSubscriptionsInput, list_subscriptions_operation
@@ -23,20 +24,38 @@ def register(tree: app_commands.CommandTree, database: Database) -> None:
             await interaction.response.send_message(result.message, ephemeral=True)
             return
 
-        subscriptions = result.extra_kwargs["subscriptions"] if result.extra_kwargs is not None else []
-        lines = []
-        for sub in subscriptions:
-            # Use channel mention so Discord renders it as a clickable link.
-            channel_mention = f"<#{sub.discord_channel_id}>"
-            community_label = sub.lemmy_community_name or sub.lemmy_community_actor_id
-            lines.append(f"• {channel_mention} → **{community_label}**")
+        remote_subscriptions = result.extra_kwargs["remote_subscriptions"] if result.extra_kwargs is not None else []
+        local_subscribers = result.extra_kwargs["local_subscribers"] if result.extra_kwargs is not None else []
+        lines: list[str] = []
+        if remote_subscriptions:
+            lines.append("Remote community subscriptions")
+            for sub in remote_subscriptions:
+                # Use channel mention so Discord renders it as a clickable link.
+                channel_mention = f"<#{sub.discord_channel_id}>"
+                community_label = sub.lemmy_community_name or sub.lemmy_community_actor_id
+                lines.append(f"• {channel_mention} → **{community_label}**")
+        if local_subscribers:
+            if lines:
+                lines.append("")
+            lines.append("Local community subscribers")
+            for sub in local_subscribers:
+                # The list command can safely resolve the local community label
+                # server-side because it is a moderator-only surface.
+                channel_mention = f"<#{sub.discord_channel_id}>"
+                local_community = database.get_local_community_by_id(sub.local_community_id)
+                if local_community is not None:
+                    actor_host = urlparse(local_community.actor_url).hostname or "unknown-host"
+                    community_label = f"!{local_community.slug}@{actor_host}"
+                else:
+                    community_label = f"local community #{sub.local_community_id}"
+                lines.append(f"• {channel_mention} → **{community_label}**")
 
         embed = discord.Embed(
             title="Active Subscriptions",
             description="\n".join(lines),
             color=discord.Color.blurple(),
         )
-        embed.set_footer(text=f"{len(subscriptions)} subscription(s)")
+        embed.set_footer(text=f"{len(remote_subscriptions) + len(local_subscribers)} subscription(s)")
         # ephemeral=True keeps the output visible only to the invoking user to
         # avoid cluttering the channel with a potentially long list.
         await interaction.response.send_message(embed=embed, ephemeral=True)

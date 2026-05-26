@@ -65,7 +65,11 @@ fetch(endpoint)
     document.getElementById("summary").innerHTML = [
       ["Registered users", data.instance.registeredUserCount],
       ["Local communities", data.instance.localCommunityCount],
-      ["Local followers", data.instance.localCommunityFollowerCount],
+      ["Remote subscribers", data.instance.localCommunityFollowerCount],
+      ["Local subscribers", data.localCommunities.reduce(
+        (count, community) => count + (community.localSubscriberCount || 0),
+        0,
+      )],
       ["Bridge follows", data.instance.bridgeActorFollowCount],
     ]
       .map(
@@ -87,7 +91,7 @@ fetch(endpoint)
       </div>
       <p class="description">${community.description || "No description."}</p>
       <details>
-        <summary>Followers (${community.followers.length})</summary>
+        <summary>Remote subscribers (${community.remoteSubscriberCount || community.followers.length})</summary>
         ${list(community.followers, (follower) => `<li>${link(follower.actorUrl, follower.actorUrl)}</li>`)}
       </details>
     </article>`,

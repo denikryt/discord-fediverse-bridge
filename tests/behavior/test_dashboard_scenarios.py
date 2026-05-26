@@ -132,7 +132,8 @@ def test_local_communities_show_safe_public_metadata_and_counts(tmp_path: Path) 
     assert community_payload["relayHandle"] == "!hackers@discrod-bridge.example.com"
     assert community_payload["actorUrl"] == "https://discrod-bridge.example.com/communities/hackers"
     assert community_payload["aliasUrl"] == "https://discrod-bridge.example.com/c/hackers"
-    assert community_payload["subscriberCount"] == 2
+    assert community_payload["remoteSubscriberCount"] == 2
+    assert community_payload["localSubscriberCount"] == 0
     assert len(community_payload["followers"]) == 2
     assert sorted(follower["actorUrl"] for follower in community_payload["followers"]) == [
         "https://beehaw.org/u/bob",

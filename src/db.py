@@ -20,7 +20,7 @@ from .models import (
     CommunityThreadGroup,
     CommunityThreadGroupDelivery,
     LocalCommunity,
-    LocalCommunityFollower,
+    LocalSubscriber,
     LocalCommunityMessage,
     LocalCommunityRelayDelivery,
     LocalCommunityRelaySourceActivity,
@@ -30,6 +30,7 @@ from .models import (
     PublishedActivityObject,
     RegistrationSession,
     RemoteActor,
+    RemoteSubscriber,
     User,
     utcnow,
 )
@@ -73,6 +74,55 @@ class Database:
             ),
         ]
         with self.engine.connect() as conn:
+            # Stage 1 renamed local_community_followers to remote_subscribers.
+            # Existing deployments call create_all() before migrate(), which
+            # means a fresh remote_subscribers table may already exist when the
+            # legacy table is still present. In that case we copy forward and
+            # drop the old table instead of relying on a plain ALTER RENAME.
+            existing_tables = {
+                str(row[0])
+                for row in conn.execute(
+                    text("SELECT name FROM sqlite_master WHERE type='table'")
+                ).fetchall()
+            }
+            if "local_community_followers" in existing_tables:
+                if "remote_subscribers" not in existing_tables:
+                    conn.execute(
+                        text("ALTER TABLE local_community_followers RENAME TO remote_subscribers")
+                    )
+                else:
+                    remote_count = conn.execute(
+                        text("SELECT COUNT(*) FROM remote_subscribers")
+                    ).scalar_one()
+                    if int(remote_count) == 0:
+                        conn.execute(
+                            text(
+                                """
+                                INSERT INTO remote_subscribers (
+                                  id,
+                                  local_community_id,
+                                  remote_actor_id,
+                                  remote_inbox_url,
+                                  follow_activity_id,
+                                  status,
+                                  created_at,
+                                  updated_at
+                                )
+                                SELECT
+                                  id,
+                                  local_community_id,
+                                  remote_actor_id,
+                                  remote_inbox_url,
+                                  follow_activity_id,
+                                  status,
+                                  created_at,
+                                  updated_at
+                                FROM local_community_followers
+                                """
+                            )
+                        )
+                    conn.execute(text("DROP TABLE local_community_followers"))
+
             for table, column, stmt in _migrations:
                 # PRAGMA table_info returns one row per column; skip if already present.
                 rows = conn.execute(text(f"PRAGMA table_info({table})")).fetchall()
@@ -648,6 +698,11 @@ class Database:
                 select(LocalCommunity).where(LocalCommunity.slug == slug)
             )
 
+    def get_local_community_by_id(self, local_community_id: int) -> LocalCommunity | None:
+        """Load one local community by its primary key."""
+        with self.session() as session:
+            return session.get(LocalCommunity, local_community_id)
+
     def list_local_communities(self) -> list[LocalCommunity]:
         """Return all local communities in stable creation order."""
         with self.session() as session:
@@ -655,7 +710,7 @@ class Database:
                 session.scalars(select(LocalCommunity).order_by(LocalCommunity.created_at, LocalCommunity.id))
             )
 
-    def create_local_community_follower(
+    def create_remote_subscriber(
         self,
         *,
         local_community_id: int,
@@ -663,10 +718,10 @@ class Database:
         remote_inbox_url: str,
         follow_activity_id: str,
         status: str = "accepted",
-    ) -> LocalCommunityFollower:
-        """Persist one accepted follower for a local community."""
+    ) -> RemoteSubscriber:
+        """Persist one remote subscriber for a local community."""
         with self.session() as session:
-            follower = LocalCommunityFollower(
+            follower = RemoteSubscriber(
                 local_community_id=local_community_id,
                 remote_actor_id=remote_actor_id,
                 remote_inbox_url=remote_inbox_url,
@@ -677,33 +732,33 @@ class Database:
             session.flush()
             return follower
 
-    def get_local_community_follower(
+    def get_remote_subscriber(
         self,
         *,
         local_community_id: int,
         remote_actor_id: str,
-    ) -> LocalCommunityFollower | None:
-        """Load the follower row for one remote actor and local community."""
+    ) -> RemoteSubscriber | None:
+        """Load the remote-subscriber row for one actor and local community."""
         with self.session() as session:
             return session.scalar(
-                select(LocalCommunityFollower).where(
-                    LocalCommunityFollower.local_community_id == local_community_id,
-                    LocalCommunityFollower.remote_actor_id == remote_actor_id,
+                select(RemoteSubscriber).where(
+                    RemoteSubscriber.local_community_id == local_community_id,
+                    RemoteSubscriber.remote_actor_id == remote_actor_id,
                 )
             )
 
-    def get_local_community_follower_by_follow_activity_id(
+    def get_remote_subscriber_by_follow_activity_id(
         self, follow_activity_id: str
-    ) -> LocalCommunityFollower | None:
-        """Load one local-community follower row by the original Follow ID."""
+    ) -> RemoteSubscriber | None:
+        """Load one remote-subscriber row by the original Follow ID."""
         with self.session() as session:
             return session.scalar(
-                select(LocalCommunityFollower).where(
-                    LocalCommunityFollower.follow_activity_id == follow_activity_id
+                select(RemoteSubscriber).where(
+                    RemoteSubscriber.follow_activity_id == follow_activity_id
                 )
             )
 
-    def update_local_community_follower_acceptance(
+    def update_remote_subscriber_acceptance(
         self,
         *,
         local_community_id: int,
@@ -711,8 +766,8 @@ class Database:
         remote_inbox_url: str,
         follow_activity_id: str,
         status: str = "accepted",
-    ) -> LocalCommunityFollower | None:
-        """Refresh one follower row before re-sending an idempotent Accept(Follow).
+    ) -> RemoteSubscriber | None:
+        """Refresh one remote-subscriber row before re-sending Accept(Follow).
 
         Mastodon and other ActivityPub servers can retry a Follow after the
         bridge already persisted the follower but the original Accept was lost
@@ -721,9 +776,9 @@ class Database:
         """
         with self.session() as session:
             follower = session.scalar(
-                select(LocalCommunityFollower).where(
-                    LocalCommunityFollower.local_community_id == local_community_id,
-                    LocalCommunityFollower.remote_actor_id == remote_actor_id,
+                select(RemoteSubscriber).where(
+                    RemoteSubscriber.local_community_id == local_community_id,
+                    RemoteSubscriber.remote_actor_id == remote_actor_id,
                 )
             )
             if follower is None:
@@ -738,23 +793,23 @@ class Database:
             session.flush()
             return follower
 
-    def delete_local_community_follower(
+    def delete_remote_subscriber(
         self,
         *,
         local_community_id: int,
         remote_actor_id: str,
     ) -> bool:
-        """Remove one accepted or pending follower row for a local community.
+        """Remove one accepted or pending remote-subscriber row.
 
         The delete is idempotent: callers get False when no row exists. Deleting
-        the row keeps accepted follower queries as the single source of truth for
-        future fanout.
+        the row keeps accepted remote-subscriber queries as the single source
+        of truth for future fanout.
         """
         with self.session() as session:
             follower = session.scalar(
-                select(LocalCommunityFollower).where(
-                    LocalCommunityFollower.local_community_id == local_community_id,
-                    LocalCommunityFollower.remote_actor_id == remote_actor_id,
+                select(RemoteSubscriber).where(
+                    RemoteSubscriber.local_community_id == local_community_id,
+                    RemoteSubscriber.remote_actor_id == remote_actor_id,
                 )
             )
             if follower is None:
@@ -763,45 +818,175 @@ class Database:
             session.flush()
             return True
 
+    def list_remote_subscribers(
+        self,
+        local_community_id: int,
+        *,
+        status: str | None = "accepted",
+    ) -> list[RemoteSubscriber]:
+        """Load remote subscribers for one local community by status."""
+        with self.session() as session:
+            statement = select(RemoteSubscriber).where(
+                RemoteSubscriber.local_community_id == local_community_id
+            )
+            if status is not None:
+                statement = statement.where(RemoteSubscriber.status == status)
+            return list(session.scalars(statement.order_by(RemoteSubscriber.created_at, RemoteSubscriber.id)))
+
+    def list_remote_subscribers_for_all(
+        self,
+        *,
+        status: str | None = "accepted",
+    ) -> list[RemoteSubscriber]:
+        """Load remote subscribers across every local community.
+
+        The public dashboard aggregates accepted remote-subscriber counts and
+        instance hosts across all local communities, so it needs one helper
+        with stable ordering and optional status filtering.
+        """
+        with self.session() as session:
+            statement = select(RemoteSubscriber)
+            if status is not None:
+                statement = statement.where(RemoteSubscriber.status == status)
+            return list(
+                session.scalars(
+                    statement.order_by(
+                        RemoteSubscriber.local_community_id,
+                        RemoteSubscriber.created_at,
+                        RemoteSubscriber.id,
+                    )
+                )
+            )
+
+    def create_local_subscriber(
+        self,
+        *,
+        local_community_id: int,
+        discord_guild_id: int | None,
+        discord_channel_id: int,
+        initiated_by_discord_user_id: str | None,
+        status: str = "active",
+    ) -> LocalSubscriber:
+        """Persist one same-instance local subscriber forum row."""
+        with self.session() as session:
+            row = LocalSubscriber(
+                local_community_id=local_community_id,
+                discord_guild_id=discord_guild_id,
+                discord_channel_id=discord_channel_id,
+                initiated_by_discord_user_id=initiated_by_discord_user_id,
+                status=status,
+            )
+            session.add(row)
+            session.flush()
+            return row
+
+    def get_local_subscriber(
+        self,
+        *,
+        local_community_id: int,
+        discord_channel_id: int,
+    ) -> LocalSubscriber | None:
+        """Load one local-subscriber row by community and channel id."""
+        with self.session() as session:
+            return session.scalar(
+                select(LocalSubscriber).where(
+                    LocalSubscriber.local_community_id == local_community_id,
+                    LocalSubscriber.discord_channel_id == discord_channel_id,
+                )
+            )
+
+    def get_local_subscriber_by_channel(self, discord_channel_id: int) -> LocalSubscriber | None:
+        """Load one local-subscriber row by its Discord forum channel."""
+        with self.session() as session:
+            return session.scalar(
+                select(LocalSubscriber).where(LocalSubscriber.discord_channel_id == discord_channel_id)
+            )
+
+    def list_local_subscribers(self, local_community_id: int) -> list[LocalSubscriber]:
+        """Load local subscribers for one community in stable creation order."""
+        with self.session() as session:
+            return list(
+                session.scalars(
+                    select(LocalSubscriber)
+                    .where(LocalSubscriber.local_community_id == local_community_id)
+                    .order_by(LocalSubscriber.created_at, LocalSubscriber.id)
+                )
+            )
+
+    def list_local_subscribers_by_guild(self, discord_guild_id: int) -> list[LocalSubscriber]:
+        """Load local subscribers scoped to one Discord guild."""
+        with self.session() as session:
+            return list(
+                session.scalars(
+                    select(LocalSubscriber)
+                    .where(LocalSubscriber.discord_guild_id == discord_guild_id)
+                    .order_by(LocalSubscriber.created_at, LocalSubscriber.id)
+                )
+            )
+
+    def delete_local_subscriber(self, discord_channel_id: int) -> bool:
+        """Delete one local-subscriber row by Discord forum channel id."""
+        with self.session() as session:
+            row = session.scalar(
+                select(LocalSubscriber).where(LocalSubscriber.discord_channel_id == discord_channel_id)
+            )
+            if row is None:
+                return False
+            session.delete(row)
+            session.flush()
+            return True
+
+    def count_local_subscribers(self, local_community_id: int) -> int:
+        """Return how many local subscriber forum rows exist for one community."""
+        with self.session() as session:
+            return len(
+                list(
+                    session.scalars(
+                        select(LocalSubscriber.id).where(
+                            LocalSubscriber.local_community_id == local_community_id
+                        )
+                    )
+                )
+            )
+
+    # Compatibility wrappers while Stage 1 finishes migrating the rest of the
+    # codebase from old follower terminology to explicit participant names.
+    def create_local_community_follower(self, **kwargs: object) -> RemoteSubscriber:
+        """Compatibility wrapper for old remote-follower repository naming."""
+        return self.create_remote_subscriber(**kwargs)
+
+    def get_local_community_follower(self, **kwargs: object) -> RemoteSubscriber | None:
+        """Compatibility wrapper for old remote-follower repository naming."""
+        return self.get_remote_subscriber(**kwargs)
+
+    def get_local_community_follower_by_follow_activity_id(self, follow_activity_id: str) -> RemoteSubscriber | None:
+        """Compatibility wrapper for old remote-follower repository naming."""
+        return self.get_remote_subscriber_by_follow_activity_id(follow_activity_id)
+
+    def update_local_community_follower_acceptance(self, **kwargs: object) -> RemoteSubscriber | None:
+        """Compatibility wrapper for old remote-follower repository naming."""
+        return self.update_remote_subscriber_acceptance(**kwargs)
+
+    def delete_local_community_follower(self, **kwargs: object) -> bool:
+        """Compatibility wrapper for old remote-follower repository naming."""
+        return self.delete_remote_subscriber(**kwargs)
+
     def list_local_community_followers(
         self,
         local_community_id: int,
         *,
         status: str | None = "accepted",
-    ) -> list[LocalCommunityFollower]:
-        """Load followers for one local community, optionally filtered by status."""
-        with self.session() as session:
-            statement = select(LocalCommunityFollower).where(
-                LocalCommunityFollower.local_community_id == local_community_id
-            )
-            if status is not None:
-                statement = statement.where(LocalCommunityFollower.status == status)
-            return list(session.scalars(statement.order_by(LocalCommunityFollower.created_at, LocalCommunityFollower.id)))
+    ) -> list[RemoteSubscriber]:
+        """Compatibility wrapper for old remote-follower repository naming."""
+        return self.list_remote_subscribers(local_community_id, status=status)
 
     def list_local_community_followers_for_all(
         self,
         *,
         status: str | None = "accepted",
-    ) -> list[LocalCommunityFollower]:
-        """Load followers across every local community, optionally by status.
-
-        The public dashboard aggregates follower counts and instance hosts across
-        all local communities, so it needs one repository helper that returns
-        follower rows with stable ordering and optional status filtering.
-        """
-        with self.session() as session:
-            statement = select(LocalCommunityFollower)
-            if status is not None:
-                statement = statement.where(LocalCommunityFollower.status == status)
-            return list(
-                session.scalars(
-                    statement.order_by(
-                        LocalCommunityFollower.local_community_id,
-                        LocalCommunityFollower.created_at,
-                        LocalCommunityFollower.id,
-                    )
-                )
-            )
+    ) -> list[RemoteSubscriber]:
+        """Compatibility wrapper for old remote-follower repository naming."""
+        return self.list_remote_subscribers_for_all(status=status)
 
     # ---------------------------------------------------------------------------
     # Local community content mapping helpers

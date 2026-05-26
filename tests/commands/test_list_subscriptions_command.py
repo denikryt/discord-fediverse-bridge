@@ -14,6 +14,7 @@ async def test_list_subscriptions_rejects_empty_state(command_tree, interaction,
     # The empty-state branch should stay private to avoid spamming the channel
     # with administrative noise when nothing is configured yet.
     database.get_subscriptions_by_guild.return_value = []
+    database.list_local_subscribers_by_guild.return_value = []
 
     list_subs.register(command_tree, database)
 
@@ -45,6 +46,7 @@ async def test_list_subscriptions_returns_embed_with_expected_items(command_tree
             lemmy_community_actor_id=void_actor_url,
         ),
     ]
+    database.list_local_subscribers_by_guild.return_value = []
 
     list_subs.register(command_tree, database)
 
@@ -56,6 +58,7 @@ async def test_list_subscriptions_returns_embed_with_expected_items(command_tree
 
     assert isinstance(embed, discord.Embed)
     assert embed.title == "Active Subscriptions"
+    assert "Remote community subscriptions" in embed.description
     assert "• <#111> → **hackers**" in embed.description
     assert f"• <#222> → **{void_actor_url}**" in embed.description
     assert embed.footer.text == "2 subscription(s)"

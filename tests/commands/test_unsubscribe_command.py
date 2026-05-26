@@ -28,7 +28,7 @@ async def test_unsubscribe_channel_success(command_tree, interaction, forum_chan
     command = command_tree.commands["unsubscribe-channel"]
     await command.callback(interaction, forum_channel)
 
-    database.get_subscription_by_channel.assert_called_once_with(forum_channel.id)
+    assert database.get_subscription_by_channel.call_count >= 1
     database.delete_subscription.assert_called_once_with(forum_channel.id)
     send_call = interaction.response.send_message.await_args
     assert send_call.args == ("Unsubscribed <#12345> from **hackers**.",)
@@ -39,6 +39,7 @@ async def test_unsubscribe_channel_success(command_tree, interaction, forum_chan
 async def test_unsubscribe_channel_rejects_missing_subscription(command_tree, interaction, forum_channel, database, fedify_gateway):
     # Missing mappings are reported ephemerally and must not trigger a delete call.
     database.get_subscription_by_channel.return_value = None
+    database.get_local_subscriber_by_channel.return_value = None
 
     unsubscribe.register(command_tree, database, fedify_gateway)
 

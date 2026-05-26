@@ -18,4 +18,4 @@ Discord bot behavior, registration pages, moderator policy, or Python-owned pers
 
 ## Important tables or payloads
 
-`users`, `local_communities`, `published_activity_objects`, `local_community_followers`, gateway internal route payloads, and normalized Python event types.
+`users`, `local_communities`, `published_activity_objects`, `remote_subscribers`, gateway internal route payloads, and normalized Python event types.

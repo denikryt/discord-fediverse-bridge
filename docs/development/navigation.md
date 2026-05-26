@@ -39,6 +39,9 @@ This document is a task-oriented reading guide for maintainers changing or debug
 ## Remote Follow handling for local communities
 1. `fedify-gateway/src/federation.ts`; 2. `fedify-gateway/src/normalize.ts`; 3. `src/activitypub_handlers.py`; 4. `src/local_communities/runtime.py`; 5. `src/fedify_gateway_client.py`.
 
+## Local subscriber control-plane
+1. `src/commands/subscribe.py`; 2. `src/operations/subscribe_local_community.py`; 3. `src/commands/unsubscribe.py`; 4. `src/operations/unsubscribe_local_community.py`; 5. `src/db.py`.
+
 ## Local community relay fanout
 1. `src/local_communities/federation_fanout.py`; 2. `src/local_communities/runtime.py`; 3. `src/local_communities/delivery_mapping.py`; 4. `src/db.py`; 5. `fedify-gateway/src/federation-outbound.ts`.
 

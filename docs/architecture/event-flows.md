@@ -67,7 +67,7 @@ This document explains the major runtime traces through the bridge: user/platfor
 ## Remote ActivityPub Follow -> local community follower flow
 
 1. Gateway receives Follow to a local community actor and emits `local.follow_requested`.
-2. Python stores `local_community_followers` and asks gateway to send Accept(Follow).
+2. Python stores `remote_subscribers` and asks gateway to send Accept(Follow).
 
 ## Accept local community follow flow
 
@@ -92,5 +92,5 @@ This document explains the major runtime traces through the bridge: user/platfor
 
 1. Gateway receives embedded Undo(Follow) addressed to a local community actor.
 2. Gateway emits `local.unfollow_requested` when the target actor is owned by this bridge.
-3. Python removes the remote actor from `local_community_followers`.
+3. Python removes the remote actor from `remote_subscribers`.
 4. Future create, update, and delete fanout uses current accepted followers and excludes the removed actor.

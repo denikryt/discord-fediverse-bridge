@@ -10,6 +10,7 @@ import pytest
 
 from src.commands import subscribe
 from src.db import Database
+from src.local_communities.service import LocalCommunityService
 
 
 def _database(tmp_path: Path) -> Database:
@@ -44,6 +45,33 @@ def _register_user(database: Database, discord_user_id: str = "1234567890") -> N
         public_key_pem="public-key",
         private_key_pem="private-key",
     )
+
+
+def _create_local_community(
+    database: Database,
+    *,
+    forum_channel_id: int = 100,
+    slug: str = "local-news",
+    display_name: str = "Local News",
+) -> object:
+    """Create one local community row used by same-instance discovery tests."""
+    # The discovery command can now transition directly into Stage 1 local
+    # subscriber persistence, so the behavior scenario must create the backing
+    # LocalCommunity row instead of expecting the removed placeholder branch.
+    LocalCommunityService(
+        database=database,
+        base_url="https://bot.example.com",
+        keypair_generator=lambda: ("public-key", "private-key"),
+    ).create_local_community(
+        discord_guild_id=99999,
+        discord_forum_channel_id=forum_channel_id,
+        slug=slug,
+        name=display_name,
+        description="Announcements",
+    )
+    community = database.get_local_community_by_slug(slug)
+    assert community is not None
+    return community
 
 
 @pytest.mark.asyncio
@@ -149,16 +177,17 @@ async def test_remote_bridge_handle_uses_remote_follow_path_without_numeric_id(
 
 
 @pytest.mark.asyncio
-async def test_same_instance_local_actor_url_reports_local_subscription_not_implemented(
+async def test_same_instance_local_actor_url_creates_local_subscriber_state(
     tmp_path: Path,
     command_tree,
     interaction,
     forum_channel,
     fedify_gateway,
 ) -> None:
-    """Same-instance local communities should resolve but must not create self-follow state yet."""
+    """Same-instance local discovery should create Stage 1 local-subscriber state."""
     database = _database(tmp_path)
     _register_user(database)
+    community = _create_local_community(database, forum_channel_id=100)
     settings = _settings(
         allowlist=["lemmy.world"],
         public_bridge_base_url="https://bot.example.com",
@@ -190,8 +219,16 @@ async def test_same_instance_local_actor_url_reports_local_subscription_not_impl
 
     assert database.get_subscription_by_channel(forum_channel.id) is None
     assert database.get_bridge_actor_follow("https://bot.example.com/communities/local-news") is None
+    local_subscriber = database.get_local_subscriber(
+        local_community_id=community.id,
+        discord_channel_id=forum_channel.id,
+    )
+    assert local_subscriber is not None
+    assert local_subscriber.local_community_id == community.id
+    assert local_subscriber.discord_channel_id == forum_channel.id
+    assert local_subscriber.status == "active"
     fedify_gateway.follow_community.assert_not_awaited()
     interaction.response.send_message.assert_awaited_once_with(
-        "This local community can be resolved, but local channel subscriptions are not implemented yet.",
-        ephemeral=True,
+        "Subscribed <#12345> to local community **local-news**.",
+        ephemeral=False,
     )
