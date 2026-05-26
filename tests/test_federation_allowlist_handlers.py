@@ -48,6 +48,27 @@ def _post_created_event(community_actor_id: str) -> ActivityPubEvent:
     )
 
 
+def _create_accepted_remote_subscription(db: Database, community_actor_id: str) -> None:
+    """Create active remote subscription state required for content dispatch."""
+    db.create_bridge_actor_follow(
+        community_actor_id=community_actor_id,
+        follow_activity_id=f"https://{BRIDGE_EXAMPLE_DOMAIN}/activities/follow/allowlist",
+        community_inbox_url=f"{community_actor_id}/inbox",
+        status="accepted",
+    )
+    db.create_subscription(
+        discord_channel_id=123,
+        lemmy_community_actor_id=community_actor_id,
+        lemmy_community_name="hackers",
+        lemmy_community_id=42,
+        community_handle=f"!hackers@{LEMMY_EXAMPLE_DOMAIN}",
+        community_inbox_url=f"{community_actor_id}/inbox",
+        follow_activity_id=f"https://{BRIDGE_EXAMPLE_DOMAIN}/activities/follow/allowlist",
+        initiated_by_discord_user_id="1234567890",
+        status="accepted",
+    )
+
+
 def _follow_accepted_event(community_actor_id: str) -> FollowLifecycleEvent:
     """Build a minimal follow.accepted event for the given community actor URL."""
     return FollowLifecycleEvent(
@@ -71,7 +92,9 @@ async def test_dispatch_skips_event_from_unlisted_instance(tmp_path: Path) -> No
         bot=AsyncMock(),
         community_runtime=AsyncMock(),
     )
-    event = _post_created_event(f"https://{LEMMY_EXAMPLE_DOMAIN}/c/hackers")
+    community_actor_id = f"https://{LEMMY_EXAMPLE_DOMAIN}/c/hackers"
+    _create_accepted_remote_subscription(db, community_actor_id)
+    event = _post_created_event(community_actor_id)
 
     result = await dispatch_activitypub_event(event, runtime)
 
@@ -94,7 +117,9 @@ async def test_dispatch_allows_event_from_listed_instance(tmp_path: Path) -> Non
         bot=AsyncMock(),
         community_runtime=community_runtime,
     )
-    event = _post_created_event(f"https://{LEMMY_EXAMPLE_DOMAIN}/c/hackers")
+    community_actor_id = f"https://{LEMMY_EXAMPLE_DOMAIN}/c/hackers"
+    _create_accepted_remote_subscription(db, community_actor_id)
+    event = _post_created_event(community_actor_id)
 
     result = await dispatch_activitypub_event(event, runtime)
 
@@ -117,7 +142,9 @@ async def test_dispatch_allows_all_when_allowlist_empty(tmp_path: Path) -> None:
         bot=AsyncMock(),
         community_runtime=community_runtime,
     )
-    event = _post_created_event("https://some.random.instance/c/news")
+    community_actor_id = "https://some.random.instance/c/news"
+    _create_accepted_remote_subscription(db, community_actor_id)
+    event = _post_created_event(community_actor_id)
 
     result = await dispatch_activitypub_event(event, runtime)
 
