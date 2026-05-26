@@ -14,8 +14,12 @@ Remote Lemmy subscription binding, gateway WebFinger routing, or generic content
 
 ## Primary entry points
 
-`service.py`, `runtime.py`, `federation_fanout.py`, `activitypub_renderers.py`, `delivery_mapping.py`, `inbound_mapping.py`, `reply_mapping.py`.
+`service.py`, `runtime.py`, `discord_fanout.py`, `federation_fanout.py`, `activitypub_renderers.py`, `delivery_mapping.py`, `inbound_mapping.py`, `reply_mapping.py`.
 
 ## Important tables or payloads
 
 `local_communities`, `remote_subscribers`, `local_subscribers`, canonical `local_community_threads` / `local_community_messages`, per-surface `local_community_thread_surfaces` / `local_community_message_surfaces`, relay tables, and `local.follow_requested` events.
+
+## Stage 3 local subscriber boundary
+
+Stage 3 creates synchronized Discord read surfaces in active local subscriber forums for host-originated and inbound remote-originated creates. Local subscriber forums are not source forums yet, and subscriber mirror edits/deletes are contained locally until later participant-wide stages.

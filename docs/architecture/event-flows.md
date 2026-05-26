@@ -60,9 +60,10 @@ This document explains the major runtime traces through the bridge: user/platfor
 
 ## Discord thread -> local ActivityPub community publish flow
 
-1. Router selects `src/local_communities/runtime.py` for a local community forum.
-2. Python records local thread/message mappings and calls gateway `/publish-local-community`.
-3. Gateway creates local ActivityPub content and delivers it to accepted followers.
+1. Router selects `src/local_communities/runtime.py` for the host forum of a local community.
+2. Python records one canonical local-community thread/message row and one host Discord surface.
+3. Python calls gateway `/publish-local-community`; gateway creates local ActivityPub content and delivers it to accepted remote subscribers.
+4. Stage 3 local Discord fanout creates missing `role="local_subscriber"` surfaces for active local subscriber forums. Local subscriber forums are read surfaces here, not source forums yet.
 
 ## Remote ActivityPub Follow -> local community follower flow
 
@@ -79,8 +80,9 @@ This document explains the major runtime traces through the bridge: user/platfor
 
 1. Gateway normalizes content addressed to a local community.
 2. Python routes by `community_actor_id` to local community runtime.
-3. Runtime mirrors into Discord and records relay targets.
-4. Gateway `/send-local-community-relay` signs and delivers rendered relay activities.
+3. Runtime mirrors into the host Discord forum and records canonical rows plus host surfaces.
+4. Stage 3 local Discord fanout creates missing local subscriber surfaces for active same-instance subscriber forums.
+5. Gateway `/send-local-community-relay` signs and delivers rendered relay activities to other accepted remote subscribers.
 
 ## Local community edit/delete flow
 

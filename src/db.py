@@ -149,6 +149,18 @@ class Database:
                 self._backfill_stage2_message_surfaces(conn)
             if "discord_thread_id" in thread_columns:
                 self._rebuild_stage2_local_community_threads(conn)
+            # Stage 3 stores the selected LocalSubscriber on subscriber surface
+            # rows. Existing host-only surface rows keep NULL, so this additive
+            # migration is safe to run before or after Stage 2 backfill.
+            for table in (
+                "local_community_thread_surfaces",
+                "local_community_message_surfaces",
+            ):
+                columns = self._table_columns(conn, table)
+                if "local_subscriber_id" not in columns:
+                    conn.execute(
+                        text(f"ALTER TABLE {table} ADD COLUMN local_subscriber_id INTEGER")
+                    )
             if "discord_message_id" in message_columns:
                 self._rebuild_stage2_local_community_messages(conn)
             self._verify_stage2_surface_invariants(conn)
@@ -1333,6 +1345,7 @@ class Database:
                     discord_thread_id=discord_thread_id,
                     discord_starter_message_id=discord_starter_message_id,
                     role="host",
+                    local_subscriber_id=None,
                 )
             )
             session.flush()
@@ -1346,6 +1359,7 @@ class Database:
         discord_thread_id: int,
         discord_starter_message_id: int,
         role: str,
+        local_subscriber_id: int | None = None,
     ) -> LocalCommunityThreadSurface:
         """Persist one explicit Discord thread surface for a canonical thread."""
         with self.session() as session:
@@ -1355,10 +1369,25 @@ class Database:
                 discord_thread_id=discord_thread_id,
                 discord_starter_message_id=discord_starter_message_id,
                 role=role,
+                local_subscriber_id=local_subscriber_id,
             )
             session.add(surface)
             session.flush()
             return surface
+
+    def get_local_community_thread_surface(
+        self, *, local_community_thread_id: int, discord_forum_channel_id: int
+    ) -> LocalCommunityThreadSurface | None:
+        """Return one thread surface for a canonical thread and forum target."""
+        with self.session() as session:
+            return session.scalar(
+                select(LocalCommunityThreadSurface).where(
+                    LocalCommunityThreadSurface.local_community_thread_id
+                    == local_community_thread_id,
+                    LocalCommunityThreadSurface.discord_forum_channel_id
+                    == discord_forum_channel_id,
+                )
+            )
 
     def get_local_community_thread_surface_by_discord_thread_id(
         self, discord_thread_id: int
@@ -1467,6 +1496,7 @@ class Database:
                     discord_message_id=discord_message_id,
                     parent_discord_message_id=parent_discord_message_id,
                     role="host",
+                    local_subscriber_id=None,
                 )
             )
             session.flush()
@@ -1481,6 +1511,7 @@ class Database:
         discord_message_id: int,
         parent_discord_message_id: int | None,
         role: str,
+        local_subscriber_id: int | None = None,
     ) -> LocalCommunityMessageSurface:
         """Persist one explicit Discord message surface for a canonical comment."""
         with self.session() as session:
@@ -1491,10 +1522,25 @@ class Database:
                 discord_message_id=discord_message_id,
                 parent_discord_message_id=parent_discord_message_id,
                 role=role,
+                local_subscriber_id=local_subscriber_id,
             )
             session.add(surface)
             session.flush()
             return surface
+
+    def get_local_community_message_surface(
+        self, *, local_community_message_id: int, local_community_thread_surface_id: int
+    ) -> LocalCommunityMessageSurface | None:
+        """Return one message surface for a canonical comment and thread surface."""
+        with self.session() as session:
+            return session.scalar(
+                select(LocalCommunityMessageSurface).where(
+                    LocalCommunityMessageSurface.local_community_message_id
+                    == local_community_message_id,
+                    LocalCommunityMessageSurface.local_community_thread_surface_id
+                    == local_community_thread_surface_id,
+                )
+            )
 
     def get_local_community_message_surface_by_discord_message_id(
         self, discord_message_id: int

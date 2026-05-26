@@ -23,6 +23,7 @@ from ..db import Database
 from ..discord_publish_service import ContentPublishService
 from ..fedify_gateway_client import DeleteContentRequest, FedifyGatewayClient, UpdateContentRequest
 from ..formatting import format_lemmy_comment_for_discord, format_lemmy_post_for_discord, normalize_text
+from .discord_fanout import LocalCommunityDiscordFanout
 from .federation_fanout import LocalCommunityFederationFanout
 from .delivery_mapping import (
     get_local_community_for_forum,
@@ -82,7 +83,15 @@ class LocalCommunityRuntime:
         local_community = get_local_community_for_forum(self.database, getattr(thread, "parent_id"))
         if local_community is None:
             return LocalCommunityRuntimeResult(status="ignored", reason="not_local_community")
-        if get_local_community_thread_for_discord_thread(self.database, getattr(thread, "id")) is not None:
+        existing_thread = get_local_community_thread_for_discord_thread(self.database, getattr(thread, "id"))
+        if existing_thread is not None:
+            await self._fanout_thread_to_local_subscribers(
+                local_community=local_community,
+                thread_row=existing_thread,
+                title=getattr(thread, "name", "Untitled thread"),
+                content=getattr(starter_message, "content", ""),
+                source_forum_channel_id=getattr(thread, "parent_id"),
+            )
             return LocalCommunityRuntimeResult(status="ignored", reason="duplicate_thread")
 
         # Shared create-path logic owns registration checks, formatting, gateway
@@ -100,7 +109,7 @@ class LocalCommunityRuntime:
 
         # The local-community runtime still owns the canonical post/thread row
         # that binds the Discord thread to the AP post object.
-        self.database.create_local_community_thread(
+        thread_row = self.database.create_local_community_thread(
             local_community_id=getattr(local_community, "id"),
             discord_thread_id=getattr(thread, "id"),
             discord_starter_message_id=getattr(starter_message, "id"),
@@ -108,6 +117,13 @@ class LocalCommunityRuntime:
             ap_object_id=publish_result.object_id,
             direction="discord_to_ap",
             origin_kind="discord_local",
+        )
+        await self._fanout_thread_to_local_subscribers(
+            local_community=local_community,
+            thread_row=thread_row,
+            title=getattr(thread, "name", "Untitled thread"),
+            content=getattr(starter_message, "content", ""),
+            source_forum_channel_id=getattr(thread, "parent_id"),
         )
         return LocalCommunityRuntimeResult(
             status="published",
@@ -122,7 +138,19 @@ class LocalCommunityRuntime:
         local_community = get_local_community_for_forum(self.database, getattr(thread, "parent_id"))
         if local_community is None:
             return LocalCommunityRuntimeResult(status="ignored", reason="not_local_community")
-        if get_local_community_message_for_discord_message(self.database, getattr(message, "id")) is not None:
+        existing_message = get_local_community_message_for_discord_message(self.database, getattr(message, "id"))
+        if existing_message is not None:
+            thread_row = self.database.get_local_community_thread_by_id(
+                getattr(existing_message, "local_community_thread_id")
+            )
+            if thread_row is not None:
+                await self._fanout_message_to_local_subscribers(
+                    local_community=local_community,
+                    thread_row=thread_row,
+                    message_row=existing_message,
+                    content=getattr(message, "content", ""),
+                    source_forum_channel_id=getattr(thread, "parent_id"),
+                )
             return LocalCommunityRuntimeResult(status="ignored", reason="duplicate_message")
 
         thread_row = get_local_community_thread_for_discord_thread(self.database, getattr(thread, "id"))
@@ -154,7 +182,7 @@ class LocalCommunityRuntime:
 
         # The local-community runtime still owns the canonical comment/message
         # row that binds the Discord reply to the AP comment object.
-        self.database.create_local_community_message(
+        message_row = self.database.create_local_community_message(
             local_community_thread_id=getattr(thread_row, "id"),
             discord_message_id=getattr(message, "id"),
             ap_activity_id=publish_result.activity_id,
@@ -162,6 +190,13 @@ class LocalCommunityRuntime:
             parent_ap_object_id=reply_context.parent_ap_object_id,
             parent_discord_message_id=reply_context.parent_discord_message_id,
             direction="discord_to_ap",
+        )
+        await self._fanout_message_to_local_subscribers(
+            local_community=local_community,
+            thread_row=thread_row,
+            message_row=message_row,
+            content=getattr(message, "content", ""),
+            source_forum_channel_id=getattr(thread, "parent_id"),
         )
         return LocalCommunityRuntimeResult(
             status="published",
@@ -179,6 +214,13 @@ class LocalCommunityRuntime:
             return _HandlerResult(status="skipped", detail="unknown local community")
         existing = get_local_community_thread_for_ap_object(self.database, getattr(getattr(event, "object"), "ap_id"))
         if existing is not None:
+            await self._fanout_thread_to_local_subscribers(
+                local_community=local_community,
+                thread_row=existing,
+                title=getattr(getattr(event, "object"), "title", None) or "Untitled remote post",
+                content=self._format_inbound_post_body(event),
+                source_forum_channel_id=None,
+            )
             await self.federation_fanout.relay_create(
                 event=event,
                 local_community=local_community,
@@ -202,7 +244,7 @@ class LocalCommunityRuntime:
             content=self._format_inbound_post_body(event),
         )
         created_thread, starter_message = self._unpack_created_thread(created)
-        self.database.create_local_community_thread(
+        thread_row = self.database.create_local_community_thread(
             local_community_id=getattr(local_community, "id"),
             discord_thread_id=getattr(created_thread, "id"),
             discord_starter_message_id=getattr(starter_message, "id"),
@@ -210,6 +252,13 @@ class LocalCommunityRuntime:
             ap_object_id=getattr(getattr(event, "object"), "ap_id"),
             direction="ap_to_discord",
             origin_kind="remote_follower",
+        )
+        await self._fanout_thread_to_local_subscribers(
+            local_community=local_community,
+            thread_row=thread_row,
+            title=thread_title,
+            content=self._format_inbound_post_body(event),
+            source_forum_channel_id=None,
         )
         await self.federation_fanout.relay_create(
             event=event,
@@ -225,7 +274,19 @@ class LocalCommunityRuntime:
         local_community = self.database.get_local_community_by_actor_url(getattr(event, "community_actor_id"))
         if local_community is None:
             return _HandlerResult(status="skipped", detail="unknown local community")
-        if self.database.get_local_community_message_by_ap_object_id(getattr(getattr(event, "object"), "ap_id")) is not None:
+        existing_message = self.database.get_local_community_message_by_ap_object_id(getattr(getattr(event, "object"), "ap_id"))
+        if existing_message is not None:
+            existing_thread = self.database.get_local_community_thread_by_id(
+                getattr(existing_message, "local_community_thread_id")
+            )
+            if existing_thread is not None:
+                await self._fanout_message_to_local_subscribers(
+                    local_community=local_community,
+                    thread_row=existing_thread,
+                    message_row=existing_message,
+                    content=self._format_inbound_comment_body(event),
+                    source_forum_channel_id=None,
+                )
             await self.federation_fanout.relay_create(
                 event=event,
                 local_community=local_community,
@@ -267,7 +328,7 @@ class LocalCommunityRuntime:
                 message_id=parent_discord_message_id,
             )
         created_message = await discord_thread.send(self._format_inbound_comment_body(event), **send_kwargs)
-        self.database.create_local_community_message(
+        message_row = self.database.create_local_community_message(
             local_community_thread_id=getattr(thread_row, "id"),
             discord_message_id=getattr(created_message, "id"),
             ap_activity_id=getattr(event, "delivery_id"),
@@ -281,12 +342,62 @@ class LocalCommunityRuntime:
             discord_thread_id=getattr(discord_thread, "id"),
             discord_message_id=getattr(created_message, "id"),
         )
+        await self._fanout_message_to_local_subscribers(
+            local_community=local_community,
+            thread_row=thread_row,
+            message_row=message_row,
+            content=self._format_inbound_comment_body(event),
+            source_forum_channel_id=None,
+        )
         await self.federation_fanout.relay_create(
             event=event,
             local_community=local_community,
             object_kind="comment",
         )
         return _HandlerResult(status="processed", detail="remote comment created message")
+
+
+    async def _fanout_thread_to_local_subscribers(
+        self,
+        *,
+        local_community: object,
+        thread_row: object,
+        title: str,
+        content: str,
+        source_forum_channel_id: int | None,
+    ) -> None:
+        """Best-effort fanout of one canonical post to local subscribers."""
+        if self.bot is None:
+            return
+        fanout = LocalCommunityDiscordFanout(database=self.database, bot=self.bot)
+        await fanout.fanout_thread_to_local_subscribers(
+            local_community=local_community,
+            thread_row=thread_row,
+            title=title,
+            content=content,
+            source_forum_channel_id=source_forum_channel_id,
+        )
+
+    async def _fanout_message_to_local_subscribers(
+        self,
+        *,
+        local_community: object,
+        thread_row: object,
+        message_row: object,
+        content: str,
+        source_forum_channel_id: int | None,
+    ) -> None:
+        """Best-effort fanout of one canonical comment to local subscribers."""
+        if self.bot is None:
+            return
+        fanout = LocalCommunityDiscordFanout(database=self.database, bot=self.bot)
+        await fanout.fanout_message_to_local_subscribers(
+            local_community=local_community,
+            thread_row=thread_row,
+            message_row=message_row,
+            content=content,
+            source_forum_channel_id=source_forum_channel_id,
+        )
 
 
     def _persist_inbound_activitypub_message_mapping(
@@ -346,8 +457,14 @@ class LocalCommunityRuntime:
         published = resolve_published_object_for_discord_message(self.database, discord_message_id=message_id)
         if published is None:
             return
-        if self.database.get_local_community_thread_surface_by_starter_message_id(message_id) is None and (
-            self.database.get_local_community_message_surface_by_discord_message_id(message_id) is None
+        thread_surface = self.database.get_local_community_thread_surface_by_starter_message_id(message_id)
+        message_surface = self.database.get_local_community_message_surface_by_discord_message_id(message_id)
+        if thread_surface is None and message_surface is None:
+            return
+        # Stage 3 creates mirrored local-subscriber surfaces, but those mirrors
+        # are not authoritative sources for AP Update in this stage.
+        if (thread_surface is not None and getattr(thread_surface, "role") == "local_subscriber") or (
+            message_surface is not None and getattr(message_surface, "role") == "local_subscriber"
         ):
             return
 
@@ -376,8 +493,14 @@ class LocalCommunityRuntime:
         published = resolve_published_object_for_discord_message(self.database, discord_message_id=message_id)
         if published is None:
             return
-        if self.database.get_local_community_thread_surface_by_starter_message_id(message_id) is None and (
-            self.database.get_local_community_message_surface_by_discord_message_id(message_id) is None
+        thread_surface = self.database.get_local_community_thread_surface_by_starter_message_id(message_id)
+        message_surface = self.database.get_local_community_message_surface_by_discord_message_id(message_id)
+        if thread_surface is None and message_surface is None:
+            return
+        # Stage 3 contains mirrored local-subscriber deletes locally. Stage 5
+        # will decide whether mirror edits/deletes should propagate outward.
+        if (thread_surface is not None and getattr(thread_surface, "role") == "local_subscriber") or (
+            message_surface is not None and getattr(message_surface, "role") == "local_subscriber"
         ):
             return
 

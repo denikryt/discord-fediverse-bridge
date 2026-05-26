@@ -550,8 +550,9 @@ class LocalCommunityThreadSurface(Base):
     discord_forum_channel_id: Mapped[int] = mapped_column(Integer, nullable=False)
     discord_thread_id: Mapped[int] = mapped_column(Integer, nullable=False)
     discord_starter_message_id: Mapped[int] = mapped_column(Integer, nullable=False)
-    # Stage 2 only creates "host" rows, but persisting the role now avoids
-    # another destructive migration when local-subscriber surfaces are added.
+    # Host surfaces keep this empty. Local-subscriber surfaces store the row
+    # that selected the target forum, preserving historical target identity.
+    local_subscriber_id: Mapped[int | None] = mapped_column(Integer, nullable=True)
     role: Mapped[str] = mapped_column(String(32), nullable=False)
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), default=utcnow, nullable=False
@@ -578,6 +579,9 @@ class LocalCommunityMessageSurface(Base):
     discord_forum_channel_id: Mapped[int] = mapped_column(Integer, nullable=False)
     discord_message_id: Mapped[int] = mapped_column(Integer, nullable=False)
     parent_discord_message_id: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    # Host surfaces keep this empty. Local-subscriber surfaces store the row
+    # that selected the target forum, preserving historical target identity.
+    local_subscriber_id: Mapped[int | None] = mapped_column(Integer, nullable=True)
     role: Mapped[str] = mapped_column(String(32), nullable=False)
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), default=utcnow, nullable=False

@@ -45,6 +45,9 @@ This document is a task-oriented reading guide for maintainers changing or debug
 ## Local community relay fanout
 1. `src/local_communities/federation_fanout.py`; 2. `src/local_communities/runtime.py`; 3. `src/local_communities/delivery_mapping.py`; 4. `src/local_communities/reply_mapping.py`; 5. `src/db.py`; 6. `fedify-gateway/src/federation-outbound.ts`.
 
+## Local subscriber Discord fanout
+1. `src/local_communities/discord_fanout.py`; 2. `src/local_communities/runtime.py`; 3. `src/local_communities/reply_mapping.py`; 4. `src/db.py`; 5. `tests/behavior/test_local_community_stage3_local_subscriber_sync_scenarios.py`.
+
 ## Edit/delete propagation
 1. `src/discord_event_router.py`; 2. `src/content_sync/edit_delete.py`; 3. `src/community_sync/edit_delete.py`; 4. `src/local_communities/runtime.py`; 5. `src/local_communities/delivery_mapping.py`; 6. `src/db.py`; 7. `fedify-gateway/src/server.ts`.
 
