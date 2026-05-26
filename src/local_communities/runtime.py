@@ -13,11 +13,6 @@ import logging
 from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
-from ..content_sync.edit_delete import (
-    edit_discord_message,
-    mark_discord_message_deleted,
-    resolve_published_object_for_discord_message,
-)
 from ..content_sync.inbound_references import build_message_reference
 from ..db import Database
 from ..discord_publish_service import ContentPublishService
@@ -603,6 +598,101 @@ class LocalCommunityRuntime:
         )
 
 
+    def _surface_can_mutate(self, surface: object, local_community_id: int) -> bool:
+        """Return whether one Discord surface can author canonical mutations.
+
+        Host surfaces are always authoritative.  Local-subscriber surfaces are
+        authoritative only while the matching local subscriber row remains
+        active, matching Stage 4's create-source routing invariant.
+        """
+        if getattr(surface, "role") != "local_subscriber":
+            return True
+        local_subscriber = self.database.get_local_subscriber(
+            local_community_id=local_community_id,
+            discord_channel_id=getattr(surface, "discord_forum_channel_id"),
+        )
+        return (
+            local_subscriber is not None
+            and getattr(local_subscriber, "status") == "active"
+            and getattr(local_subscriber, "id") == getattr(surface, "local_subscriber_id")
+        )
+
+    async def _send_update_request(self, *, runtime: object, published: object, new_content: str) -> None:
+        """Send one gateway Update request for a canonical published object."""
+        gateway = getattr(runtime, "fedify_gateway", self.fedify_gateway)
+        try:
+            await gateway.update_content(
+                UpdateContentRequest(
+                    actor_username=published.actor_username,
+                    community_actor_url=published.community_actor_url,
+                    ap_object_id=published.object_id,
+                    kind=published.kind,
+                    title=published.title,
+                    body_markdown=new_content,
+                    in_reply_to_object_id=published.in_reply_to_object_id,
+                )
+            )
+        except Exception:
+            logger.exception("Failed to send local-community edit for AP object %s", published.object_id)
+
+    async def _send_delete_request(self, *, runtime: object, published: object) -> None:
+        """Send one gateway Delete request for a canonical published object."""
+        gateway = getattr(runtime, "fedify_gateway", self.fedify_gateway)
+        try:
+            await gateway.delete_content(
+                DeleteContentRequest(
+                    actor_username=published.actor_username,
+                    community_actor_url=published.community_actor_url,
+                    ap_object_id=published.object_id,
+                )
+            )
+        except Exception:
+            logger.exception("Failed to send local-community delete for AP object %s", published.object_id)
+
+    async def _fanout_thread_edit(
+        self, *, runtime: object, thread_row: object, source_surface_id: int | None, new_content: str
+    ) -> None:
+        """Best-effort edit fanout for starter surfaces of one canonical post."""
+        bot = self.bot or getattr(runtime, "bot", None)
+        if bot is None:
+            return
+        fanout = LocalCommunityDiscordFanout(database=self.database, bot=bot)
+        await fanout.fanout_thread_starter_edit(
+            thread_row=thread_row,
+            source_surface_id=source_surface_id,
+            new_content=new_content,
+        )
+
+    async def _fanout_message_edit(
+        self, *, runtime: object, message_row: object, source_surface_id: int | None, new_content: str
+    ) -> None:
+        """Best-effort edit fanout for message surfaces of one canonical comment."""
+        bot = self.bot or getattr(runtime, "bot", None)
+        if bot is None:
+            return
+        fanout = LocalCommunityDiscordFanout(database=self.database, bot=bot)
+        await fanout.fanout_message_edit(
+            message_row=message_row,
+            source_surface_id=source_surface_id,
+            new_content=new_content,
+        )
+
+    async def _fanout_thread_delete(self, *, runtime: object, thread_row: object, source_surface_id: int | None) -> None:
+        """Best-effort delete marker fanout for starter surfaces."""
+        bot = self.bot or getattr(runtime, "bot", None)
+        if bot is None:
+            return
+        fanout = LocalCommunityDiscordFanout(database=self.database, bot=bot)
+        await fanout.fanout_thread_starter_delete(thread_row=thread_row, source_surface_id=source_surface_id)
+
+    async def _fanout_message_delete(self, *, runtime: object, message_row: object, source_surface_id: int | None) -> None:
+        """Best-effort delete marker fanout for message surfaces."""
+        bot = self.bot or getattr(runtime, "bot", None)
+        if bot is None:
+            return
+        fanout = LocalCommunityDiscordFanout(database=self.database, bot=bot)
+        await fanout.fanout_message_delete(message_row=message_row, source_surface_id=source_surface_id)
+
     def _persist_inbound_activitypub_message_mapping(
         self,
         *,
@@ -649,42 +739,51 @@ class LocalCommunityRuntime:
         runtime: object,
         author_display_name: str = "",
     ) -> None:
-        """Propagate one Discord-authored local-community edit to ActivityPub.
+        """Propagate one Discord-authored local-community edit to all participants.
 
-        Local-community mode has no sibling Discord mirrors, so this path only
-        sends the AP Update when the edited message belongs to a local
-        Discord-originated post or comment.
+        Stage 5 resolves the edited Discord message through surface rows first.
+        That lets host and local-subscriber copies both resolve the same
+        canonical AP object, while still excluding the user-edited source copy
+        from local Discord fanout.
         """
         del author_display_name
 
-        published = resolve_published_object_for_discord_message(self.database, discord_message_id=message_id)
-        if published is None:
-            return
         thread_surface = self.database.get_local_community_thread_surface_by_starter_message_id(message_id)
-        message_surface = self.database.get_local_community_message_surface_by_discord_message_id(message_id)
-        if thread_surface is None and message_surface is None:
-            return
-        # Stage 3 creates mirrored local-subscriber surfaces, but those mirrors
-        # are not authoritative sources for AP Update in this stage.
-        if (thread_surface is not None and getattr(thread_surface, "role") == "local_subscriber") or (
-            message_surface is not None and getattr(message_surface, "role") == "local_subscriber"
-        ):
+        if thread_surface is not None:
+            thread_row = self.database.get_local_community_thread_for_surface(getattr(thread_surface, "id"))
+            if thread_row is None or not self._surface_can_mutate(thread_surface, getattr(thread_row, "local_community_id")):
+                return
+            published = self.database.get_published_activity_object_by_object_id(getattr(thread_row, "ap_object_id"))
+            if published is None:
+                return
+            await self._send_update_request(runtime=runtime, published=published, new_content=new_content)
+            await self._fanout_thread_edit(
+                runtime=runtime,
+                thread_row=thread_row,
+                source_surface_id=getattr(thread_surface, "id"),
+                new_content=new_content,
+            )
             return
 
-        try:
-            await runtime.fedify_gateway.update_content(
-                UpdateContentRequest(
-                    actor_username=published.actor_username,
-                    community_actor_url=published.community_actor_url,
-                    ap_object_id=published.object_id,
-                    kind=published.kind,
-                    title=published.title,
-                    body_markdown=new_content,
-                    in_reply_to_object_id=published.in_reply_to_object_id,
-                )
-            )
-        except Exception:
-            logger.exception("Failed to send local-community edit for Discord message %s", message_id)
+        message_surface = self.database.get_local_community_message_surface_by_discord_message_id(message_id)
+        if message_surface is None:
+            return
+        message_row = self.database.get_local_community_message_for_surface(getattr(message_surface, "id"))
+        if message_row is None:
+            return
+        thread_row = self.database.get_local_community_thread_by_id(getattr(message_row, "local_community_thread_id"))
+        if thread_row is None or not self._surface_can_mutate(message_surface, getattr(thread_row, "local_community_id")):
+            return
+        published = self.database.get_published_activity_object_by_object_id(getattr(message_row, "ap_object_id"))
+        if published is None:
+            return
+        await self._send_update_request(runtime=runtime, published=published, new_content=new_content)
+        await self._fanout_message_edit(
+            runtime=runtime,
+            message_row=message_row,
+            source_surface_id=getattr(message_surface, "id"),
+            new_content=new_content,
+        )
 
     async def handle_discord_message_delete(
         self,
@@ -692,31 +791,41 @@ class LocalCommunityRuntime:
         message_id: int,
         runtime: object,
     ) -> None:
-        """Propagate one Discord-authored local-community delete to ActivityPub."""
-        published = resolve_published_object_for_discord_message(self.database, discord_message_id=message_id)
-        if published is None:
-            return
+        """Propagate one Discord-authored local-community delete to participants."""
         thread_surface = self.database.get_local_community_thread_surface_by_starter_message_id(message_id)
-        message_surface = self.database.get_local_community_message_surface_by_discord_message_id(message_id)
-        if thread_surface is None and message_surface is None:
-            return
-        # Stage 3 contains mirrored local-subscriber deletes locally. Stage 5
-        # will decide whether mirror edits/deletes should propagate outward.
-        if (thread_surface is not None and getattr(thread_surface, "role") == "local_subscriber") or (
-            message_surface is not None and getattr(message_surface, "role") == "local_subscriber"
-        ):
+        if thread_surface is not None:
+            thread_row = self.database.get_local_community_thread_for_surface(getattr(thread_surface, "id"))
+            if thread_row is None or not self._surface_can_mutate(thread_surface, getattr(thread_row, "local_community_id")):
+                return
+            published = self.database.get_published_activity_object_by_object_id(getattr(thread_row, "ap_object_id"))
+            if published is None:
+                return
+            await self._send_delete_request(runtime=runtime, published=published)
+            await self._fanout_thread_delete(
+                runtime=runtime,
+                thread_row=thread_row,
+                source_surface_id=getattr(thread_surface, "id"),
+            )
             return
 
-        try:
-            await runtime.fedify_gateway.delete_content(
-                DeleteContentRequest(
-                    actor_username=published.actor_username,
-                    community_actor_url=published.community_actor_url,
-                    ap_object_id=published.object_id,
-                )
-            )
-        except Exception:
-            logger.exception("Failed to send local-community delete for Discord message %s", message_id)
+        message_surface = self.database.get_local_community_message_surface_by_discord_message_id(message_id)
+        if message_surface is None:
+            return
+        message_row = self.database.get_local_community_message_for_surface(getattr(message_surface, "id"))
+        if message_row is None:
+            return
+        thread_row = self.database.get_local_community_thread_by_id(getattr(message_row, "local_community_thread_id"))
+        if thread_row is None or not self._surface_can_mutate(message_surface, getattr(thread_row, "local_community_id")):
+            return
+        published = self.database.get_published_activity_object_by_object_id(getattr(message_row, "ap_object_id"))
+        if published is None:
+            return
+        await self._send_delete_request(runtime=runtime, published=published)
+        await self._fanout_message_delete(
+            runtime=runtime,
+            message_row=message_row,
+            source_surface_id=getattr(message_surface, "id"),
+        )
 
     async def handle_inbound_post_update(self, event: object, runtime: object) -> HandlerResult:
         """Edit the starter message for one inbound remote post update."""
@@ -725,18 +834,12 @@ class LocalCommunityRuntime:
         thread_row = self.database.get_local_community_thread_by_ap_object_id(getattr(getattr(event, "object"), "ap_id"))
         if thread_row is None:
             return _HandlerResult(status="skipped", detail="post not yet mapped")
-        thread_surface = self.database.get_host_local_community_thread_surface(getattr(thread_row, "id"))
-        if thread_surface is None:
-            return _HandlerResult(status="skipped", detail="post host surface not mapped")
-
         local_community = self.database.get_local_community_by_actor_url(getattr(event, "community_actor_id"))
-        bot = self.bot or runtime.bot
-        await edit_discord_message(
-            bot=bot,
-            discord_thread_id=getattr(thread_surface, "discord_thread_id"),
-            discord_message_id=getattr(thread_surface, "discord_starter_message_id"),
+        await self._fanout_thread_edit(
+            runtime=runtime,
+            thread_row=thread_row,
+            source_surface_id=None,
             new_content=self._format_inbound_post_body(event),
-            preserve_header=False,
         )
         if local_community is not None:
             await self.federation_fanout.relay_update_or_delete(
@@ -754,16 +857,11 @@ class LocalCommunityRuntime:
         thread_row = self.database.get_local_community_thread_by_ap_object_id(getattr(getattr(event, "object"), "ap_id"))
         if thread_row is None:
             return _HandlerResult(status="skipped", detail="post not yet mapped")
-        thread_surface = self.database.get_host_local_community_thread_surface(getattr(thread_row, "id"))
-        if thread_surface is None:
-            return _HandlerResult(status="skipped", detail="post host surface not mapped")
-
         local_community = self.database.get_local_community_by_actor_url(getattr(event, "community_actor_id"))
-        bot = self.bot or runtime.bot
-        await mark_discord_message_deleted(
-            bot=bot,
-            discord_thread_id=getattr(thread_surface, "discord_thread_id"),
-            discord_message_id=getattr(thread_surface, "discord_starter_message_id"),
+        await self._fanout_thread_delete(
+            runtime=runtime,
+            thread_row=thread_row,
+            source_surface_id=None,
         )
         if local_community is not None:
             await self.federation_fanout.relay_update_or_delete(
@@ -784,19 +882,12 @@ class LocalCommunityRuntime:
         thread_row = self.database.get_local_community_thread_by_id(getattr(message_row, "local_community_thread_id"))
         if thread_row is None:
             return _HandlerResult(status="skipped", detail="comment thread not mapped")
-        thread_surface = self.database.get_host_local_community_thread_surface(getattr(thread_row, "id"))
-        message_surface = self.database.get_host_local_community_message_surface(getattr(message_row, "id"))
-        if thread_surface is None or message_surface is None:
-            return _HandlerResult(status="skipped", detail="comment host surface not mapped")
-
         local_community = self.database.get_local_community_by_actor_url(getattr(event, "community_actor_id"))
-        bot = self.bot or runtime.bot
-        await edit_discord_message(
-            bot=bot,
-            discord_thread_id=getattr(thread_surface, "discord_thread_id"),
-            discord_message_id=getattr(message_surface, "discord_message_id"),
+        await self._fanout_message_edit(
+            runtime=runtime,
+            message_row=message_row,
+            source_surface_id=None,
             new_content=self._format_inbound_comment_body(event),
-            preserve_header=False,
         )
         if local_community is not None:
             await self.federation_fanout.relay_update_or_delete(
@@ -817,17 +908,11 @@ class LocalCommunityRuntime:
         thread_row = self.database.get_local_community_thread_by_id(getattr(message_row, "local_community_thread_id"))
         if thread_row is None:
             return _HandlerResult(status="skipped", detail="comment thread not mapped")
-        thread_surface = self.database.get_host_local_community_thread_surface(getattr(thread_row, "id"))
-        message_surface = self.database.get_host_local_community_message_surface(getattr(message_row, "id"))
-        if thread_surface is None or message_surface is None:
-            return _HandlerResult(status="skipped", detail="comment host surface not mapped")
-
         local_community = self.database.get_local_community_by_actor_url(getattr(event, "community_actor_id"))
-        bot = self.bot or runtime.bot
-        await mark_discord_message_deleted(
-            bot=bot,
-            discord_thread_id=getattr(thread_surface, "discord_thread_id"),
-            discord_message_id=getattr(message_surface, "discord_message_id"),
+        await self._fanout_message_delete(
+            runtime=runtime,
+            message_row=message_row,
+            source_surface_id=None,
         )
         if local_community is not None:
             await self.federation_fanout.relay_update_or_delete(

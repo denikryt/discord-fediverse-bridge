@@ -86,9 +86,11 @@ This document explains the major runtime traces through the bridge: user/platfor
 
 ## Local community edit/delete flow
 
-1. Discord or remote update/delete routes to local community runtime.
-2. Runtime resolves local mappings, prepares delivery state, and calls gateway.
-3. Gateway signs Update/Delete or relay deliveries and Python records outcomes.
+1. Discord edit/delete enters through `src/discord_event_router.py` and resolves the starter/reply surface row for the raw message id.
+2. `src/local_communities/runtime.py` resolves the canonical post/comment and loads the `PublishedActivityObject` by canonical AP object id, not by the copied Discord message id.
+3. For host or active local-subscriber source surfaces, Python sends one gateway Update/Delete and `src/local_communities/discord_fanout.py` mutates every other persisted local Discord surface.
+4. For inbound remote update/delete, the runtime mutates every persisted local Discord surface, including host and local subscribers, then keeps the existing remote relay eligibility rule for remote subscribers.
+5. Inactive local-subscriber surfaces are historical copies, not authoritative mutation sources.
 
 ## Remote ActivityPub Undo(Follow) -> local community unfollow flow
 
@@ -104,4 +106,4 @@ This document explains the major runtime traces through the bridge: user/platfor
 2. Active `LocalSubscriber` forums route into `LocalCommunityRuntime`; inactive subscribers and unrelated forums do not.
 3. Runtime publishes the source Discord starter/reply through the existing local-community publish path and persists one canonical row.
 4. Runtime records the source `role="local_subscriber"` surface and then fans out to the host forum plus sibling active local subscribers.
-5. Edits/deletes of local-subscriber-originated surfaces remain contained until Stage 5.
+5. Stage 5 handles later edits/deletes from the source local-subscriber surface through the participant-wide mutation flow above.

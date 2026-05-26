@@ -63,3 +63,10 @@ Stage 2 local-community work also requires reading the canonical-vs-surface spli
 
 ## Public Python route changes
 1. `src/http_api.py`; 2. `src/app.py`; 3. `docs/architecture/http-routes.md`.
+
+## Local community participant edit/delete
+1. `src/discord_event_router.py` — raw Discord edit/delete ownership check.
+2. `src/local_communities/runtime.py` — canonical AP object resolution and gateway Update/Delete calls.
+3. `src/local_communities/discord_fanout.py` — per-surface local Discord edit/delete fanout.
+4. `src/local_communities/delivery_mapping.py` — surface/canonical lookup helpers.
+5. `src/content_sync/edit_delete.py` — shared Discord message edit/delete edge helpers.

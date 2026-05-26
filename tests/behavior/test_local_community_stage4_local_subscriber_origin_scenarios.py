@@ -328,8 +328,8 @@ async def test_remote_subscription_forum_with_bad_local_subscriber_row_stays_rem
 
 
 @pytest.mark.asyncio
-async def test_local_subscriber_source_edit_delete_remains_deferred(tmp_path: Path) -> None:
-    """Stage 4 creates source mappings but still contains edit/delete locally."""
+async def test_local_subscriber_source_edit_delete_is_stage5_authoritative(tmp_path: Path) -> None:
+    """Stage 5 supersedes Stage 4 deferral for active subscriber surfaces."""
     database, runtime = _runtime(tmp_path)
     local_community = _local_community(database)
     source, _ = _add_local_subscribers(database, local_community)
@@ -341,5 +341,5 @@ async def test_local_subscriber_source_edit_delete_remains_deferred(tmp_path: Pa
     await runtime.handle_discord_message_edit(message_id=2300, new_content="edited", runtime=SimpleNamespace(fedify_gateway=runtime.fedify_gateway))
     await runtime.handle_discord_message_delete(message_id=2300, runtime=SimpleNamespace(fedify_gateway=runtime.fedify_gateway))
 
-    runtime.fedify_gateway.update_content.assert_not_awaited()
-    runtime.fedify_gateway.delete_content.assert_not_awaited()
+    runtime.fedify_gateway.update_content.assert_awaited_once()
+    runtime.fedify_gateway.delete_content.assert_awaited_once()

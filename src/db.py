@@ -1639,6 +1639,13 @@ class Database:
                 )
             )
 
+    def get_local_community_thread_surface_by_id(
+        self, local_community_thread_surface_id: int
+    ) -> LocalCommunityThreadSurface | None:
+        """Load one local-community thread surface by primary key."""
+        with self.session() as session:
+            return session.get(LocalCommunityThreadSurface, local_community_thread_surface_id)
+
     def get_local_community_thread_for_surface(
         self, local_community_thread_surface_id: int
     ) -> LocalCommunityThread | None:

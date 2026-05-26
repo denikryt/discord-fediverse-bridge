@@ -406,8 +406,8 @@ async def test_local_subscriber_forum_creates_route_to_local_runtime_after_stage
 
 
 @pytest.mark.asyncio
-async def test_local_subscriber_mirror_edit_delete_is_contained(tmp_path: Path) -> None:
-    """Stage 3 mirrored subscriber surfaces must not publish AP edit/delete."""
+async def test_local_subscriber_mirror_edit_delete_is_stage5_authoritative(tmp_path: Path) -> None:
+    """Stage 5 supersedes Stage 3 containment for active subscriber surfaces."""
     database, runtime = _runtime(tmp_path)
     local_community = _local_community(database)
     thread_row = database.create_local_community_thread(
@@ -445,5 +445,5 @@ async def test_local_subscriber_mirror_edit_delete_is_contained(tmp_path: Path) 
     await runtime.handle_discord_message_edit(message_id=2300, new_content="edited", runtime=SimpleNamespace(fedify_gateway=runtime.fedify_gateway))
     await runtime.handle_discord_message_delete(message_id=2300, runtime=SimpleNamespace(fedify_gateway=runtime.fedify_gateway))
 
-    runtime.fedify_gateway.update_content.assert_not_awaited()
-    runtime.fedify_gateway.delete_content.assert_not_awaited()
+    runtime.fedify_gateway.update_content.assert_awaited_once()
+    runtime.fedify_gateway.delete_content.assert_awaited_once()

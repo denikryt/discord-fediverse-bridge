@@ -11,6 +11,10 @@ from __future__ import annotations
 import logging
 from dataclasses import dataclass
 
+from ..content_sync.edit_delete import (
+    edit_discord_message,
+    mark_discord_message_deleted,
+)
 from ..content_sync.inbound_references import build_message_reference
 from ..db import Database
 
@@ -34,6 +38,22 @@ class LocalDiscordFanoutSummary:
     skipped_missing_thread_surface: int = 0
     skipped_missing_parent_surface: int = 0
     failed: int = 0
+
+
+@dataclass(slots=True)
+class LocalDiscordMutationFanoutSummary:
+    """Report local Discord edit/delete attempts across persisted surfaces.
+
+    Stage 5 mutation fanout is best-effort per persisted surface.  The source
+    surface is skipped for Discord-originated mutations, while remote-originated
+    mutations target every local surface because no local Discord source exists.
+    """
+
+    attempted: int = 0
+    applied: int = 0
+    failed: int = 0
+    skipped_source: int = 0
+    skipped_missing_thread: int = 0
 
 
 @dataclass(slots=True)
@@ -217,6 +237,145 @@ class LocalCommunityDiscordFanout:
                     getattr(local_community, "id"),
                     target.discord_forum_channel_id,
                     target.role,
+                )
+        return summary
+
+    async def fanout_thread_starter_edit(
+        self,
+        *,
+        thread_row: object,
+        source_surface_id: int | None,
+        new_content: str,
+    ) -> LocalDiscordMutationFanoutSummary:
+        """Edit starter messages for all selected surfaces of one post.
+
+        The persisted surface rows are the authority for target selection.
+        Missing or failing Discord targets are isolated so one broken copy cannot
+        prevent the remaining local surfaces from receiving the mutation.
+        """
+        summary = LocalDiscordMutationFanoutSummary()
+        for surface in self.database.list_local_community_thread_surfaces(getattr(thread_row, "id")):
+            if source_surface_id is not None and getattr(surface, "id") == source_surface_id:
+                summary.skipped_source += 1
+                continue
+            summary.attempted += 1
+            try:
+                await edit_discord_message(
+                    bot=self.bot,
+                    discord_thread_id=getattr(surface, "discord_thread_id"),
+                    discord_message_id=getattr(surface, "discord_starter_message_id"),
+                    new_content=new_content,
+                    preserve_header=False,
+                )
+                summary.applied += 1
+            except Exception:
+                summary.failed += 1
+                logger.exception(
+                    "Failed to edit local thread surface thread_id=%s surface_id=%s",
+                    getattr(thread_row, "id"),
+                    getattr(surface, "id"),
+                )
+        return summary
+
+    async def fanout_message_edit(
+        self,
+        *,
+        message_row: object,
+        source_surface_id: int | None,
+        new_content: str,
+    ) -> LocalDiscordMutationFanoutSummary:
+        """Edit message surfaces for all selected copies of one comment."""
+        summary = LocalDiscordMutationFanoutSummary()
+        for surface in self.database.list_local_community_message_surfaces(getattr(message_row, "id")):
+            if source_surface_id is not None and getattr(surface, "id") == source_surface_id:
+                summary.skipped_source += 1
+                continue
+            thread_surface = self.database.get_local_community_thread_surface_by_id(
+                getattr(surface, "local_community_thread_surface_id")
+            )
+            if thread_surface is None:
+                summary.skipped_missing_thread += 1
+                continue
+            summary.attempted += 1
+            try:
+                await edit_discord_message(
+                    bot=self.bot,
+                    discord_thread_id=getattr(thread_surface, "discord_thread_id"),
+                    discord_message_id=getattr(surface, "discord_message_id"),
+                    new_content=new_content,
+                    preserve_header=False,
+                )
+                summary.applied += 1
+            except Exception:
+                summary.failed += 1
+                logger.exception(
+                    "Failed to edit local message surface message_id=%s surface_id=%s",
+                    getattr(message_row, "id"),
+                    getattr(surface, "id"),
+                )
+        return summary
+
+    async def fanout_thread_starter_delete(
+        self,
+        *,
+        thread_row: object,
+        source_surface_id: int | None,
+    ) -> LocalDiscordMutationFanoutSummary:
+        """Mark starter messages deleted for all selected surfaces of one post."""
+        summary = LocalDiscordMutationFanoutSummary()
+        for surface in self.database.list_local_community_thread_surfaces(getattr(thread_row, "id")):
+            if source_surface_id is not None and getattr(surface, "id") == source_surface_id:
+                summary.skipped_source += 1
+                continue
+            summary.attempted += 1
+            try:
+                await mark_discord_message_deleted(
+                    bot=self.bot,
+                    discord_thread_id=getattr(surface, "discord_thread_id"),
+                    discord_message_id=getattr(surface, "discord_starter_message_id"),
+                )
+                summary.applied += 1
+            except Exception:
+                summary.failed += 1
+                logger.exception(
+                    "Failed to delete-mark local thread surface thread_id=%s surface_id=%s",
+                    getattr(thread_row, "id"),
+                    getattr(surface, "id"),
+                )
+        return summary
+
+    async def fanout_message_delete(
+        self,
+        *,
+        message_row: object,
+        source_surface_id: int | None,
+    ) -> LocalDiscordMutationFanoutSummary:
+        """Mark message surfaces deleted for all selected copies of one comment."""
+        summary = LocalDiscordMutationFanoutSummary()
+        for surface in self.database.list_local_community_message_surfaces(getattr(message_row, "id")):
+            if source_surface_id is not None and getattr(surface, "id") == source_surface_id:
+                summary.skipped_source += 1
+                continue
+            thread_surface = self.database.get_local_community_thread_surface_by_id(
+                getattr(surface, "local_community_thread_surface_id")
+            )
+            if thread_surface is None:
+                summary.skipped_missing_thread += 1
+                continue
+            summary.attempted += 1
+            try:
+                await mark_discord_message_deleted(
+                    bot=self.bot,
+                    discord_thread_id=getattr(thread_surface, "discord_thread_id"),
+                    discord_message_id=getattr(surface, "discord_message_id"),
+                )
+                summary.applied += 1
+            except Exception:
+                summary.failed += 1
+                logger.exception(
+                    "Failed to delete-mark local message surface message_id=%s surface_id=%s",
+                    getattr(message_row, "id"),
+                    getattr(surface, "id"),
                 )
         return summary
 
