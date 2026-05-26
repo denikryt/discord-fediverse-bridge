@@ -106,6 +106,7 @@ The project runs as two processes:
 - [docs/architecture/http-routes.md](docs/architecture/http-routes.md) — Python/gateway route ownership
 - [docs/architecture/database-map.md](docs/architecture/database-map.md) — table ownership and invariants
 - [docs/architecture/gateway-python-contract.md](docs/architecture/gateway-python-contract.md) — internal API contract
+- [FEDERATION.md](FEDERATION.md) — supported federation profile and protocol scope
 - [docs/development/navigation.md](docs/development/navigation.md) — task-oriented reading guide
 
 ## Requirements
