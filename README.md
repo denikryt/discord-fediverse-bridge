@@ -63,6 +63,7 @@ Local community discovery is exposed through:
 
 - `acct:!slug@your-gateway-host` for Discord-backed community actors
 - `acct:username@your-gateway-host` for registered local Discord users
+- `GET /.well-known/discord-fediverse-bridge/communities` for bridge-specific public community discovery used by `/subscribe-channel`
 
 User handles are only local bridge identities for authorship and display in
 the fediverse. They are not a remote follow target.
@@ -142,7 +143,7 @@ PYTHON_BRIDGE_EVENTS_URL=http://127.0.0.1:8081/internal/activitypub/events
 
 `GATEWAY_UPSTREAM` and `PYTHON_BRIDGE_UPSTREAM` are optional overrides for nginx rendering. Keep the defaults unless the gateway or Python bridge listens on a different local address.
 
-The gateway keeps canonical ActivityPub routes such as `/.well-known/webfinger`, `/inbox`, `/actors/`, `/communities/`, `/c/`, and `/users/`. Python owns `/`, `/dashboard/...`, `/register`, and `/auth/discord/`. Do not expose `/internal/` publicly through nginx.
+The gateway keeps canonical ActivityPub routes such as `/.well-known/webfinger`, `/.well-known/discord-fediverse-bridge/communities`, `/inbox`, `/actors/`, `/communities/`, `/c/`, and `/users/`. Python owns `/`, `/dashboard/...`, `/register`, and `/auth/discord/`. Do not expose `/internal/` publicly through nginx.
 
 Changing `FEDIFY_ORIGIN` on an existing deployment changes ActivityPub actor and object IDs. Treat that as a federation identity migration, not a harmless nginx change.
 

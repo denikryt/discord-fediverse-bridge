@@ -33,6 +33,19 @@ class LemmyClient:
 
     async def resolve_community_id(self, *, name: str) -> int:
         """Resolve one public Lemmy community name into its numeric ID."""
+        community = await self.resolve_community(name=name)
+        community_id = community.get("id")
+        if community_id is None:
+            raise RuntimeError(f"Could not resolve Lemmy community ID for name '{name}'")
+        return int(community_id)
+
+    async def resolve_community(self, *, name: str) -> dict[str, Any]:
+        """Resolve one public Lemmy community name into its public community object.
+
+        The unified discovery layer needs the canonical actor URL and numeric id
+        for direct remote handles and URLs, so this helper returns the public
+        `community` object from Lemmy's `/api/v3/community` endpoint.
+        """
         response = await self._request_with_retry(
             "GET",
             "/api/v3/community",
@@ -43,10 +56,9 @@ class LemmyClient:
         payload = response.json()
         community_view = payload.get("community_view") or {}
         community = community_view.get("community") or {}
-        community_id = community.get("id")
-        if community_id is None:
-            raise RuntimeError(f"Could not resolve Lemmy community ID for name '{name}'")
-        return int(community_id)
+        if not community:
+            raise RuntimeError(f"Could not resolve Lemmy community '{name}'")
+        return community
 
     async def list_posts(
         self,

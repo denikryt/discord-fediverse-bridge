@@ -66,6 +66,16 @@ The WebFinger response points to the canonical ActivityPub actor URL through a `
 
 WebFinger support is limited to actor discovery needed by this bridge. It is not a general-purpose WebFinger identity service.
 
+The gateway also exposes one bridge-specific discovery endpoint:
+
+```text
+GET /.well-known/discord-fediverse-bridge/communities
+```
+
+This endpoint returns public local-community identity fields for `/subscribe-channel`
+discovery. It is not ActivityPub, not WebFinger, and not a claim of Lemmy API
+compatibility.
+
 ## Supported inbound ActivityPub
 
 The inbound federation profile is intentionally narrow. The gateway accepts selected ActivityPub activities, normalizes them into the Python bridge's internal event model, and forwards them to Python through the private `/internal/activitypub/events` route.

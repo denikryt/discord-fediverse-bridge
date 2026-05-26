@@ -5,6 +5,7 @@ import { fileURLToPath } from "node:url";
 import initSqlJs, { type Database, type SqlJsStatic } from "sql.js";
 
 import type { GatewayConfig } from "./config.js";
+import type { LocalCommunityDiscoveryRecord } from "./types.js";
 
 export interface RegisteredUserRow {
   // The gateway only needs the identity and key fields required to publish a
@@ -30,6 +31,16 @@ export interface LocalCommunityRow {
   summary: string;
   publicKeyPem: string;
   privateKeyPem: string;
+}
+
+export interface LocalCommunityDiscoveryRow {
+  // Discovery rows intentionally expose only public actor identity data needed
+  // by `/subscribe-channel` discovery, not Discord routing internals.
+  id: number;
+  slug: string;
+  displayName: string;
+  summary: string;
+  actorUrl: string;
 }
 
 export interface LocalCommunityFollowerRow {
@@ -233,6 +244,58 @@ export async function loadLocalCommunityByActorUrl(
   }
 }
 
+export async function listLocalCommunities(
+  config: GatewayConfig,
+): Promise<LocalCommunityDiscoveryRecord[]> {
+  // The bridge discovery endpoint is public, so this query must return only
+  // community identity fields that are already part of the public AP actor.
+  const database = await openConfiguredDatabase(config);
+  try {
+    let statement;
+    try {
+      statement = database.prepare(`
+        SELECT
+          id,
+          slug,
+          display_name,
+          summary,
+          actor_url
+        FROM local_communities
+        ORDER BY LOWER(display_name), LOWER(slug), id
+      `);
+    } catch (error) {
+      if (isMissingLocalCommunitiesTableError(error)) {
+        return [];
+      }
+      throw error;
+    }
+    try {
+      const hostname = new URL(config.fedifyOrigin).hostname;
+      const rows: LocalCommunityDiscoveryRecord[] = [];
+      while (statement.step()) {
+        const row = statement.getAsObject() as Record<string, unknown>;
+        const slug = asString(row.slug);
+        const actorUrl = asString(row.actor_url);
+        rows.push({
+          id: asNumber(row.id),
+          slug,
+          name: slug,
+          title: asString(row.display_name),
+          description: asString(row.summary),
+          actor_id: actorUrl,
+          alternate_actor_id: new URL(`/c/${slug}`, config.fedifyOrigin).href,
+          handle: `!${slug}@${hostname}`,
+        });
+      }
+      return rows;
+    } finally {
+      statement.free();
+    }
+  } finally {
+    database.close();
+  }
+}
+
 export async function loadAcceptedLocalCommunityFollowersByActorUrl(
   config: GatewayConfig,
   actorUrl: string,
@@ -403,14 +466,18 @@ function asNullableString(value: unknown): string | null {
   return asString(value);
 }
 
-function asNullableNumber(value: unknown): number | null {
-  if (value == null) {
-    return null;
-  }
+function asNumber(value: unknown): number {
   if (typeof value !== "number") {
     throw new Error("Expected a numeric column value from the shared database");
   }
   return value;
+}
+
+function asNullableNumber(value: unknown): number | null {
+  if (value == null) {
+    return null;
+  }
+  return asNumber(value);
 }
 
 type PublishedActivityObjectLookupColumn = "object_id" | "activity_id";

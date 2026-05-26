@@ -9,6 +9,15 @@ import discord
 from discord import app_commands
 from discordops import run_operation_definition_async
 
+from ..community_discovery import (
+    CommunityResolutionError,
+    autocomplete_communities,
+    fetch_bridge_community_summaries,
+    infer_reference_origin,
+    is_bridge_origin,
+    normalize_instance_domain,
+    resolve_selected_community,
+)
 from ..config import Settings
 from ..db import Database
 from ..fedify_gateway_client import FedifyGatewayClient
@@ -28,42 +37,79 @@ def register(
     """Register the subscribe-channel slash command on the Discord tree."""
     allowlist = settings.federation_allowlist if settings is not None else []
 
-    @tree.command(name="subscribe-channel", description="Subscribe a forum channel to a Lemmy community")
+    @tree.command(name="subscribe-channel", description="Subscribe a forum channel to a federated community")
     @app_commands.describe(
-        lemmy_instance="Lemmy instance URL (e.g. https://lemmy.world)",
-        community="Lemmy community",
+        instance_domain="Instance domain or URL (e.g. lemmy.world)",
+        community="Community handle, URL, or autocomplete choice",
         channel="Forum channel to subscribe",
     )
     @app_commands.autocomplete(
-        lemmy_instance=_instance_autocomplete(settings),
+        instance_domain=_instance_autocomplete(settings),
         community=_community_autocomplete(settings),
     )
     @app_commands.default_permissions(manage_channels=True)
     async def subscribe_channel(
         interaction: discord.Interaction,
-        lemmy_instance: str,
+        instance_domain: str,
         community: str,
         channel: discord.ForumChannel,
     ) -> None:
-        if not lemmy_instance.startswith(("http://", "https://")):
-            lemmy_instance = "https://" + lemmy_instance
-        if not is_instance_allowed(lemmy_instance, allowlist):
-            hostname = urlparse(lemmy_instance).hostname or lemmy_instance
+        # Remote hosts remain allowlist-gated, but the bridge's own origin is a
+        # local routing surface and must stay usable even when federation is
+        # restricted to an explicit remote allowlist.
+        inferred_origin = infer_reference_origin(community)
+        try:
+            selected_origin = normalize_instance_domain(instance_domain)
+        except CommunityResolutionError as error:
+            await interaction.response.send_message(str(error), ephemeral=True)
+            return
+
+        # Autocomplete payloads are already scoped to the selected instance, so
+        # the allowlist message should continue to reference that chosen host.
+        # Direct handles and actor URLs infer their own host instead.
+        candidate_origin = selected_origin if "|" in community else (inferred_origin or selected_origin)
+        if not is_bridge_origin(candidate_origin, settings) and not is_instance_allowed(candidate_origin, allowlist):
+            hostname = urlparse(candidate_origin).hostname or candidate_origin
             await interaction.response.send_message(
                 f"Instance **{hostname}** is not in the federation allowlist.",
                 ephemeral=True,
             )
             return
 
-        actor_id, community_name, community_id_str = _parse_community_value(community)
-        numeric_id: int | None = int(community_id_str) if community_id_str else None
+        try:
+            resolved = await resolve_selected_community(
+                settings,
+                instance_domain=instance_domain,
+                community_value=community,
+                fetch_bridge_communities=fetch_bridge_community_summaries,
+                lemmy_client_cls=LemmyClient,
+            )
+        except CommunityResolutionError as error:
+            logger.warning("Failed to resolve subscribe target %s: %s", community, error)
+            await interaction.response.send_message(str(error), ephemeral=True)
+            return
 
-        if numeric_id is None:
-            tmp_client = LemmyClient(lemmy_instance)
+        if resolved.source == "local_bridge":
+            # Local same-instance channel subscriptions are owned by the later
+            # local-subscription plan. This discovery plan must stop before it
+            # creates a fake ActivityPub self-follow row.
+            await interaction.response.send_message(
+                "This local community can be resolved, but local channel subscriptions are not implemented yet.",
+                ephemeral=True,
+            )
+            return
+
+        if resolved.source == "remote_lemmy" and resolved.numeric_id is None:
+            # Direct remote Lemmy URLs/handles and legacy autocomplete payloads
+            # may omit the numeric Lemmy id. Preserve the old contract by
+            # resolving it lazily before the operation layer persists the row.
+            tmp_client = LemmyClient(selected_origin)
             try:
-                numeric_id = await tmp_client.resolve_community_id(name=community_name or actor_id)
+                numeric_id = await tmp_client.resolve_community_id(
+                    name=resolved.name or resolved.actor_id
+                )
             except Exception:
-                logger.exception("Failed to resolve community ID for %s", actor_id)
+                logger.exception("Failed to resolve community ID for %s", resolved.actor_id)
                 await interaction.response.send_message(
                     "Could not resolve the Lemmy community ID. Please try again.",
                     ephemeral=True,
@@ -71,8 +117,16 @@ def register(
                 return
             finally:
                 await tmp_client.close()
+            resolved = type(resolved)(
+                source=resolved.source,
+                actor_id=resolved.actor_id,
+                name=resolved.name,
+                numeric_id=numeric_id,
+                handle=resolved.handle,
+                local_community_id=resolved.local_community_id,
+                remote_software=resolved.remote_software,
+            )
 
-        community_handle = _build_community_handle(actor_id, community_name or None)
         result = await run_operation_definition_async(
             subscribe_operation,
             SubscribeInput(
@@ -82,19 +136,19 @@ def register(
                 guild_id=interaction.guild_id,
                 channel_id=channel.id,
                 channel_mention=channel.mention,
-                actor_id=actor_id,
-                community_name=community_name or None,
-                numeric_id=numeric_id,
-                community_handle=community_handle,
+                actor_id=resolved.actor_id,
+                community_name=resolved.name,
+                numeric_id=resolved.numeric_id,
+                community_handle=resolved.handle,
             ),
         )
         if result.reason == "follow_dispatch_failed":
-            logger.error("Failed to send follow for community %s", actor_id)
+            logger.error("Failed to send follow for community %s", resolved.actor_id)
 
         is_ephemeral = not result.applied
         await interaction.response.send_message(result.message, ephemeral=is_ephemeral)
         if result.applied:
-            logger.info("Sent bridge follow for channel %s to community %s", channel.id, actor_id)
+            logger.info("Sent bridge follow for channel %s to community %s", channel.id, resolved.actor_id)
 
 
 def _instance_autocomplete(settings: Settings | None):
@@ -107,20 +161,28 @@ def _instance_autocomplete(settings: Settings | None):
     ) -> list[app_commands.Choice[str]]:
         if not allowlist:
             return []
-        return [
+        choices = [
             app_commands.Choice(name=hostname, value=f"https://{hostname}")
             for hostname in allowlist
         ]
+        # Same-instance local discovery should be discoverable from the same
+        # command surface even when remote federation uses a restrictive list.
+        if settings is not None:
+            local_origin = getattr(settings, "normalized_public_bridge_base_url", "")
+            local_hostname = urlparse(local_origin).hostname
+            if local_origin and local_hostname and all(choice.name != local_hostname for choice in choices):
+                choices.append(app_commands.Choice(name=local_hostname, value=local_origin))
+        return choices
 
     return autocomplete
 
 
 def _community_autocomplete(settings: Settings | None = None):
-    """Build the Discord autocomplete callback for Lemmy communities.
+    """Build the Discord autocomplete callback for unified community discovery.
 
-    When lemmy_instance is set and allowed, a temporary LemmyClient is created
-    for that instance URL and closed after the query so no connection is leaked.
-    When lemmy_instance is absent, returns [] — the user must pick an instance first.
+    The selected instance can resolve to this bridge, a remote bridge, or a
+    normal Lemmy host. The callback keeps network failures non-fatal so Discord
+    autocomplete degrades to an empty list instead of surfacing tracebacks.
     """
     allowlist = settings.federation_allowlist if settings is not None else []
 
@@ -128,60 +190,28 @@ def _community_autocomplete(settings: Settings | None = None):
         interaction: discord.Interaction,
         current: str,
     ) -> list[app_commands.Choice[str]]:
-        instance_url: str | None = getattr(interaction.namespace, "lemmy_instance", None)
+        instance_url: str | None = getattr(interaction.namespace, "instance_domain", None)
 
         if not instance_url:
             return []
 
-        if not instance_url.startswith(("http://", "https://")):
-            instance_url = "https://" + instance_url
-
-        if not is_instance_allowed(instance_url, allowlist):
-            return []
-
-        remote_client = LemmyClient(instance_url)
         try:
-            communities = await remote_client.list_communities(limit=50, type_="Local")
-        except Exception:
-            logger.exception("Failed to fetch communities from %s for autocomplete", instance_url)
+            normalized_origin = normalize_instance_domain(instance_url)
+        except CommunityResolutionError:
             return []
-        finally:
-            await remote_client.close()
-
-        choices = []
-        for item in communities:
-            community = item.get("community", {})
-            name: str = community.get("name", "")
-            title: str = community.get("title", "") or name
-            actor_id: str = community.get("actor_id", "")
-            numeric_id: int | None = community.get("id")
-
-            if current and current.lower() not in name.lower() and current.lower() not in title.lower():
-                continue
-
-            value = f"{actor_id}|{name}|{numeric_id or ''}"
-            choices.append(app_commands.Choice(name=f"{title} ({name})", value=value))
-            if len(choices) >= 25:
-                break
-
-        return choices
+        if not is_bridge_origin(normalized_origin, settings) and not is_instance_allowed(normalized_origin, allowlist):
+            return []
+        try:
+            raw_choices = await autocomplete_communities(
+                settings,
+                instance_domain=instance_url,
+                current=current,
+                fetch_bridge_communities=fetch_bridge_community_summaries,
+                lemmy_client_cls=LemmyClient,
+            )
+        except Exception:
+            logger.exception("Failed to autocomplete communities from %s", normalized_origin)
+            return []
+        return [app_commands.Choice(name=name, value=value) for name, value in raw_choices]
 
     return autocomplete
-
-
-def _parse_community_value(value: str) -> tuple[str, str, str]:
-    """Decode the autocomplete payload into actor ID, short name, and numeric ID."""
-    parts = value.split("|", 2)
-    actor_id = parts[0] if len(parts) > 0 else value
-    name = parts[1] if len(parts) > 1 else ""
-    numeric_id_str = parts[2] if len(parts) > 2 else ""
-    return actor_id, name, numeric_id_str
-
-
-def _build_community_handle(actor_id: str, community_name: str | None) -> str:
-    """Build a human-readable handle for one selected Lemmy community."""
-    parsed = urlparse(actor_id)
-    hostname = parsed.hostname
-    if community_name and hostname:
-        return f"!{community_name}@{hostname}"
-    return actor_id

@@ -18,6 +18,7 @@ This document explains HTTP route ownership between the Python bridge and the Fe
 | `/internal/activitypub/events` | POST | Python FastAPI | private | Gateway-to-Python AP event intake | `src/http_api.py` | Not publicly routed |
 | `/healthz` | GET | Fedify gateway | public | Gateway health | `fedify-gateway/src/server.ts` | Gateway |
 | `/.well-known/webfinger` | GET | Fedify gateway | public | Actor discovery | `fedify-gateway/src/server.ts` | Gateway |
+| `/.well-known/discord-fediverse-bridge/communities` | GET | Fedify gateway | public | Bridge-owned public local-community discovery | `fedify-gateway/src/server.ts` | Gateway |
 | `/inbox` | POST | Fedify gateway | public AP | Inbound ActivityPub | `fedify-gateway/src/federation.ts` | Gateway |
 | `/users/:username` | GET | Fedify gateway | public AP | Local user actor | `fedify-gateway/src/server.ts` | Gateway |
 | `/communities/:slug` | GET | Fedify gateway | public AP | Local community actor | `fedify-gateway/src/server.ts` | Gateway |
@@ -39,4 +40,4 @@ This document explains HTTP route ownership between the Python bridge and the Fe
 
 `/internal/activitypub/events` is authenticated with the shared gateway secret, but it is still a private gateway-to-Python route and should not be routed publicly by nginx.
 
-`/users/`, `/communities/`, `/c/`, `/.well-known/webfinger`, and `/inbox` are ActivityPub identity, object, discovery, or delivery paths and should stay gateway-owned.
+`/users/`, `/communities/`, `/c/`, `/.well-known/webfinger`, `/.well-known/discord-fediverse-bridge/communities`, and `/inbox` are gateway-owned public identity, discovery, or delivery paths and should stay out of the Python bridge namespace.

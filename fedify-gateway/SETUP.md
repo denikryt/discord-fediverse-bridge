@@ -57,6 +57,7 @@ The deployment model uses one public host. It installs one public site where Act
 ```text
 `/`                     -> Python bridge
 /.well-known/webfinger -> fedify-gateway
+/.well-known/discord-fediverse-bridge/communities -> fedify-gateway
 /inbox                 -> fedify-gateway
 /actors/...            -> fedify-gateway
 /communities/...       -> fedify-gateway

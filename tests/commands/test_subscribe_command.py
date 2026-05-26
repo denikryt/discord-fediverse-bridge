@@ -244,7 +244,7 @@ async def test_subscribe_channel_retries_failed_subscription(
 
 
 # ---------------------------------------------------------------------------
-# Helpers for allowlist / lemmy_instance tests
+# Helpers for allowlist / instance_domain tests
 # ---------------------------------------------------------------------------
 
 
@@ -253,14 +253,26 @@ def _settings(allowlist: list[str]) -> SimpleNamespace:
     return SimpleNamespace(federation_allowlist=allowlist)
 
 
-def _make_interaction(lemmy_instance: str | None) -> AsyncMock:
-    """Build an interaction stub that carries a namespace.lemmy_instance value."""
+def _make_interaction(instance_domain: str | None) -> AsyncMock:
+    """Build an interaction stub that carries a namespace.instance_domain value."""
     mock = AsyncMock()
     mock.response.send_message = AsyncMock()
     mock.user.id = "1234567890"
     mock.guild_id = 99999
-    mock.namespace = SimpleNamespace(lemmy_instance=lemmy_instance)
+    mock.namespace = SimpleNamespace(instance_domain=instance_domain)
     return mock
+
+
+def test_subscribe_command_callback_uses_instance_domain_parameter(
+    command_tree, database, fedify_gateway
+):
+    """The slash-command callback should expose the generic instance parameter name."""
+    subscribe.register(command_tree, database, fedify_gateway)
+
+    command = command_tree.commands["subscribe-channel"]
+
+    assert "instance_domain" in command.callback.__annotations__
+    assert "lemmy_instance" not in command.callback.__annotations__
 
 
 # ---------------------------------------------------------------------------
@@ -313,7 +325,7 @@ async def test_subscribe_instance_autocomplete_returns_empty_for_open_federation
 async def test_subscribe_autocomplete_uses_lemmy_instance_url(
     command_tree, database, lemmy, fedify_gateway
 ):
-    # When lemmy_instance is provided and the allowlist is empty, autocomplete
+    # When instance_domain is provided and the allowlist is empty, autocomplete
     # must create a temporary LemmyClient for that URL, query it, and return
     # its communities.
     remote_instance_url = "https://lemmy.world"
@@ -346,14 +358,14 @@ async def test_subscribe_autocomplete_uses_lemmy_instance_url(
 
     assert len(choices) == 1
     assert choices[0].name == "World News (worldnews)"
-    assert choices[0].value == f"{remote_instance_url}/c/worldnews|worldnews|42"
+    assert choices[0].value == f"lemmy:{remote_instance_url}/c/worldnews|worldnews|42"
 
 
 @pytest.mark.asyncio
 async def test_subscribe_autocomplete_returns_empty_when_no_instance(
     command_tree, database, fedify_gateway
 ):
-    # When lemmy_instance is absent (None), community autocomplete must return []
+    # When instance_domain is absent (None), community autocomplete must return []
     # because there is no default Lemmy client anymore.
     interaction = _make_interaction(None)
 
@@ -372,7 +384,7 @@ async def test_subscribe_autocomplete_returns_empty_when_no_instance(
 async def test_subscribe_autocomplete_rejects_unlisted_instance(
     command_tree, database, fedify_gateway
 ):
-    # When the allowlist is non-empty and lemmy_instance is not in it,
+    # When the allowlist is non-empty and instance_domain is not in it,
     # autocomplete must return an empty list without querying Lemmy.
     interaction = _make_interaction("https://forbidden.instance")
 
@@ -391,7 +403,7 @@ async def test_subscribe_autocomplete_rejects_unlisted_instance(
 async def test_subscribe_channel_rejects_unlisted_lemmy_instance(
     command_tree, interaction, forum_channel, database, lemmy, fedify_gateway
 ):
-    # When lemmy_instance is not in the allowlist, the command handler must
+    # When instance_domain is not in the allowlist, the command handler must
     # return an ephemeral error before touching the DB or Lemmy.
     settings = _settings(["allowed.example"])
     subscribe.register(command_tree, database, fedify_gateway, settings)

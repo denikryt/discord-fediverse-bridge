@@ -142,6 +142,17 @@ export interface AcceptLocalCommunityFollowRequest {
   followActivityId: string;
 }
 
+export interface LocalCommunityDiscoveryRecord {
+  id: number;
+  slug: string;
+  name: string;
+  title: string;
+  description: string | null;
+  actor_id: string;
+  alternate_actor_id: string;
+  handle: string;
+}
+
 
 export interface SendLocalCommunityRelayDelivery {
   deliveryId: number;

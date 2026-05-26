@@ -24,6 +24,7 @@ import {
   loadConfig,
 } from "./config.js";
 import {
+  listLocalCommunities,
   loadPublishedActivityObjectByActivityId,
   loadPublishedActivityObjectByObjectId,
 } from "./db.js";
@@ -95,6 +96,16 @@ export function createGatewayApp(config: GatewayConfig): Hono {
 
   app.get("/healthz", (context) => {
     return context.json({ status: "ok" });
+  });
+
+  app.get("/.well-known/discord-fediverse-bridge/communities", async (context) => {
+    // This bridge-specific discovery surface lets remote moderators discover
+    // bridge-owned communities without implying full Lemmy API compatibility.
+    const communities = await listLocalCommunities(config);
+    return context.json({
+      software: "discord-fediverse-bridge",
+      communities,
+    });
   });
 
   app.get("/.well-known/webfinger", async (context) => {
