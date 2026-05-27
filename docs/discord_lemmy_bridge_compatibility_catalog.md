@@ -8,7 +8,7 @@ The categories are intentionally separated because not every compatibility path 
 
 | Area | Compatibility type | Keep? |
 |---|---|---|
-| SQLite schema migrations | Real deployment compatibility | Keep while old DBs may exist |
+| SQLite schema migrations | Current additive maintenance only | Keep current-schema guards; old schema translators removed |
 | ActivityPub URL aliases and payload fallbacks | Federation compatibility | Keep long term unless migration is designed |
 | Old Python/TypeScript names after refactors | Temporary technical debt | Remove after call sites are renamed |
 | Discord formatting fallbacks | Historical message compatibility | Keep while old mirrored messages may be edited |
@@ -43,19 +43,19 @@ LocalSubscriber  = same-instance Discord forum subscribed to a bridge-owned loca
 
 **What the compatibility code does**
 
-`Database.migrate()` handles existing SQLite databases:
+No active runtime migration path remains for the legacy table. Stage 0 verified
+the deployment database against the current schema baseline, and Stage 5 removed
+this pre-Stage-1 SQLite upgrade branch from `Database.migrate()`.
 
-- if the legacy remote-participant table exists and `remote_subscribers` does not exist, it renames the table;
-- if `remote_subscribers` already exists because `create_all()` created it first, it copies rows from the legacy table into `remote_subscribers`;
-- then it drops the old table when safe.
+**Why it existed**
 
-**Why it exists**
-
-Deployments that already had accepted local-community followers must not lose remote subscriber state after upgrading.
+Deployments that already had accepted local-community followers needed a
+one-time migration path so remote subscriber state survived the rename.
 
 **Can it be removed?**
 
-Not yet. It can be removed only after the project no longer supports upgrading databases created before the rename.
+Already removed by Stage 5. Current deployments are expected to start from the
+verified schema baseline where `remote_subscribers` already exists.
 
 ---
 
@@ -102,21 +102,24 @@ local subscriber forum surface B
 
 **What the compatibility code does**
 
-`Database.migrate()` handles databases created before the surface refactor:
+`Database.migrate()` no longer upgrades pre-surface canonical rows. Stage 5
+removed the old backfill/rebuild helpers after Stage 0 selected the current
+migrated schema as the supported baseline.
 
-- creates the surface tables if missing;
-- backfills one host thread surface for each legacy `LocalCommunityThread` row;
-- backfills one host message surface for each legacy `LocalCommunityMessage` row;
-- rebuilds canonical tables without the old Discord-id columns when appropriate;
-- validates that every canonical row has the expected host surface.
+The current migration path still creates current surface tables for fresh or
+migrate-only callers and verifies that every canonical local-community thread
+and message has exactly one host surface.
 
-**Why it exists**
+**Why it existed**
 
-Without this migration, old local-community posts/comments would lose their Discord mapping and edit/delete/reply routing would stop working.
+Without the old migration, pre-surface local-community posts/comments would
+have lost their Discord mapping during the Stage 2 refactor. That upgrade path
+was needed while old databases were still in scope.
 
 **Can it be removed?**
 
-Not yet. It is required for upgrading existing databases created before Stage 2. It can be removed only if upgrade support from pre-surface databases is intentionally dropped.
+Already removed by Stage 5. Current deployments are expected to have canonical
+rows plus explicit host surface rows before running this code.
 
 ---
 
@@ -558,7 +561,7 @@ Suggested cleanup plan:
 2. Tests and fixtures use `RemoteSubscriber` terminology explicitly.
 3. The old Python alias and repository wrappers are removed.
 4. The old TypeScript reader alias is removed.
-5. The database migration from the legacy remote-participant table to `remote_subscribers` stays until old deployed DB upgrade support is intentionally dropped.
+5. The database migration from the legacy remote-participant table to `remote_subscribers` was removed in Stage 5 after Stage 0 selected the current schema baseline.
 
 Do not remove schema migrations just because runtime call sites no longer use old names. Runtime naming cleanup and deployed-database upgrade compatibility are separate concerns.
 
@@ -566,8 +569,8 @@ Do not remove schema migrations just because runtime call sites no longer use ol
 
 | Compatibility path | Safe to remove now? | Reason |
 |---|---:|---|
-| DB table rename/backfill migrations | No | Needed for old deployed SQLite databases |
-| Surface backfill migration | No | Needed for old local-community history |
+| DB table rename/backfill migrations | Removed | Stage 5 dropped pre-Stage-1 SQLite upgrade support after Stage 0 verified the DB baseline |
+| Surface backfill migration | Removed | Stage 5 dropped pre-Stage-2 canonical-column upgrade support after Stage 0 verified the DB baseline |
 | Legacy Python remote-subscriber alias | Yes | Stage 1 removed it after runtime/tests moved to explicit terminology |
 | `src/db.py` remote-subscriber wrappers | Yes | Stage 1 removed the old follower-named wrappers |
 | Gateway old reader alias | Yes | Stage 1 removed the alias after TS call sites switched |

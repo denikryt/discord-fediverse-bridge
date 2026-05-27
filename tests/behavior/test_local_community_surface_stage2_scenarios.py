@@ -132,127 +132,60 @@ async def test_host_forum_create_paths_write_exactly_one_host_surface_per_canoni
     assert message_surfaces[0].local_community_thread_surface_id == host_thread_surface.id
 
 
-def test_stage2_migrate_backfills_exactly_one_host_surface_and_drops_old_columns(
+def test_stage2_current_schema_migrate_keeps_host_surfaces_idempotent(
     tmp_path: Path,
 ) -> None:
-    """Migrating an old DB should backfill host surfaces exactly once.
+    """Current-schema migrate keeps canonical rows and host surfaces stable.
 
-    System state: the SQLite file contains the pre-Stage-2 local-community
-    schema where canonical rows still own Discord ids directly. Action: run the
-    real `create_all()` plus `migrate()` sequence twice. Assert: host surface
-    rows are backfilled exactly once, canonical lookups still work, and the old
-    canonical Discord-id columns are removed from the rebuilt tables.
+    Stage 5 removes the old pre-surface database upgrade guarantee. This Stage
+    2 regression check now protects the supported baseline instead: canonical
+    rows no longer own Discord ids, host surface rows preserve those ids,
+    repeated migrate calls do not duplicate surfaces, and migrate alone does
+    not create local-subscriber surfaces.
     """
-    database_path = tmp_path / "local-community-stage2-migrate.db"
-    database_url = f"sqlite:///{database_path}"
-    import sqlite3
+    migrated = build_database(tmp_path, "local-community-stage2-current-migrate.db")
+    community = _create_local_community(migrated, forum_channel_id=100)
+    migrated.create_local_subscriber(
+        local_community_id=community.id,
+        discord_guild_id=10,
+        discord_channel_id=101,
+        initiated_by_discord_user_id="456",
+    )
+    canonical_thread = migrated.create_local_community_thread(
+        local_community_id=community.id,
+        discord_thread_id=200,
+        discord_starter_message_id=300,
+        ap_activity_id="https://bridge.example/users/alice/activities/create/post/1",
+        ap_object_id="https://bridge.example/users/alice/post/1",
+        direction="discord_to_ap",
+        origin_kind="discord_local",
+    )
+    canonical_message = migrated.create_local_community_message(
+        local_community_thread_id=canonical_thread.id,
+        discord_message_id=301,
+        ap_activity_id="https://bridge.example/users/alice/activities/create/comment/1",
+        ap_object_id="https://bridge.example/users/alice/comment/1",
+        parent_ap_object_id="https://bridge.example/users/alice/post/1",
+        parent_discord_message_id=300,
+        direction="discord_to_ap",
+    )
 
-    connection = sqlite3.connect(database_path)
-    try:
-        connection.executescript(
-            """
-            CREATE TABLE local_communities (
-              id INTEGER PRIMARY KEY AUTOINCREMENT,
-              discord_guild_id INTEGER NOT NULL,
-              discord_forum_channel_id INTEGER NOT NULL,
-              slug VARCHAR(255) NOT NULL,
-              display_name VARCHAR(255) NOT NULL,
-              summary VARCHAR NOT NULL,
-              actor_url VARCHAR(512) NOT NULL,
-              inbox_url VARCHAR(512) NOT NULL,
-              outbox_url VARCHAR(512) NOT NULL,
-              followers_url VARCHAR(512) NOT NULL,
-              public_key_pem VARCHAR NOT NULL,
-              private_key_pem VARCHAR NOT NULL,
-              status VARCHAR(32) NOT NULL,
-              created_at DATETIME NOT NULL,
-              updated_at DATETIME NOT NULL
-            );
-            CREATE TABLE local_community_threads (
-              id INTEGER PRIMARY KEY AUTOINCREMENT,
-              local_community_id INTEGER NOT NULL,
-              discord_thread_id INTEGER NOT NULL,
-              discord_starter_message_id INTEGER NOT NULL,
-              ap_activity_id VARCHAR(512) NOT NULL,
-              ap_object_id VARCHAR(512) NOT NULL,
-              direction VARCHAR(32) NOT NULL,
-              origin_kind VARCHAR(32) NOT NULL,
-              created_at DATETIME NOT NULL
-            );
-            CREATE TABLE local_community_messages (
-              id INTEGER PRIMARY KEY AUTOINCREMENT,
-              local_community_thread_id INTEGER NOT NULL,
-              discord_message_id INTEGER NOT NULL,
-              ap_activity_id VARCHAR(512) NOT NULL,
-              ap_object_id VARCHAR(512) NOT NULL,
-              parent_ap_object_id VARCHAR(512),
-              parent_discord_message_id INTEGER,
-              direction VARCHAR(32) NOT NULL,
-              created_at DATETIME NOT NULL
-            );
-            INSERT INTO local_communities (
-              id, discord_guild_id, discord_forum_channel_id, slug, display_name,
-              summary, actor_url, inbox_url, outbox_url, followers_url,
-              public_key_pem, private_key_pem, status, created_at, updated_at
-            ) VALUES (
-              1, 10, 100, 'hackers', 'Hackers', 'A local hackerspace forum.',
-              'https://bridge.example/communities/hackers',
-              'https://bridge.example/communities/hackers/inbox',
-              'https://bridge.example/communities/hackers/outbox',
-              'https://bridge.example/communities/hackers/followers',
-              'public-key', 'private-key', 'active',
-              '2026-05-26T10:00:00Z', '2026-05-26T10:00:00Z'
-            );
-            INSERT INTO local_community_threads (
-              id, local_community_id, discord_thread_id, discord_starter_message_id,
-              ap_activity_id, ap_object_id, direction, origin_kind, created_at
-            ) VALUES (
-              1, 1, 200, 300,
-              'https://bridge.example/users/alice/activities/create/post/1',
-              'https://bridge.example/users/alice/post/1',
-              'discord_to_ap', 'discord_local', '2026-05-26T10:01:00Z'
-            );
-            INSERT INTO local_community_messages (
-              id, local_community_thread_id, discord_message_id, ap_activity_id,
-              ap_object_id, parent_ap_object_id, parent_discord_message_id,
-              direction, created_at
-            ) VALUES (
-              1, 1, 301,
-              'https://bridge.example/users/alice/activities/create/comment/1',
-              'https://bridge.example/users/alice/comment/1',
-              'https://bridge.example/users/alice/post/1', 300,
-              'discord_to_ap', '2026-05-26T10:02:00Z'
-            );
-            """
-        )
-        connection.commit()
-    finally:
-        connection.close()
-
-    migrated = build_database(tmp_path, "local-community-stage2-migrate.db")
     migrated.migrate()
     migrated.migrate()
 
-    canonical_thread = migrated.get_local_community_thread_by_ap_object_id(
-        "https://bridge.example/users/alice/post/1"
-    )
-    canonical_message = migrated.get_local_community_message_by_ap_object_id(
-        "https://bridge.example/users/alice/comment/1"
-    )
-    assert canonical_thread is not None
-    assert canonical_message is not None
+    thread_surfaces = migrated.list_local_community_thread_surfaces(canonical_thread.id)
+    assert len(thread_surfaces) == 1
+    assert thread_surfaces[0].role == "host"
+    assert thread_surfaces[0].discord_thread_id == 200
+    assert thread_surfaces[0].discord_starter_message_id == 300
+    assert thread_surfaces[0].local_subscriber_id is None
 
-    thread_surface = migrated.get_local_community_thread_surface_by_discord_thread_id(200)
-    assert thread_surface is not None
-    assert thread_surface.role == "host"
-    assert thread_surface.discord_starter_message_id == 300
-    assert len(migrated.list_local_community_thread_surfaces(canonical_thread.id)) == 1
-
-    message_surface = migrated.get_local_community_message_surface_by_discord_message_id(301)
-    assert message_surface is not None
-    assert message_surface.role == "host"
-    assert message_surface.parent_discord_message_id == 300
-    assert len(migrated.list_local_community_message_surfaces(canonical_message.id)) == 1
+    message_surfaces = migrated.list_local_community_message_surfaces(canonical_message.id)
+    assert len(message_surfaces) == 1
+    assert message_surfaces[0].role == "host"
+    assert message_surfaces[0].discord_message_id == 301
+    assert message_surfaces[0].parent_discord_message_id == 300
+    assert message_surfaces[0].local_subscriber_id is None
 
     with migrated.engine.connect() as connection_sql:
         thread_columns = {
