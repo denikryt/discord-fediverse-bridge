@@ -19,10 +19,10 @@ This document is a task-oriented reading guide for maintainers changing or debug
 3. `src/operations/` — business logic.
 
 ## Remote community subscription
-1. `src/commands/subscribe.py`; 2. `src/operations/subscribe.py`; 3. `src/lemmy_client.py`; 4. `src/fedify_gateway_client.py`; 5. `fedify-gateway/src/federation-outbound.ts`.
+1. `src/commands/subscribe.py`; 2. `src/operations/subscribe.py`; 3. `src/db/repositories/remote_subscriptions.py`; 4. `src/db/repositories/bridge_actor_follows.py`; 5. `src/lemmy_client.py`; 6. `src/fedify_gateway_client.py`; 7. `fedify-gateway/src/federation-outbound.ts`.
 
 ## Remote community unsubscribe
-1. `src/commands/unsubscribe.py`; 2. `src/operations/unsubscribe.py`; 3. `src/fedify_gateway_client.py`; 4. `fedify-gateway/src/server.ts`.
+1. `src/commands/unsubscribe.py`; 2. `src/operations/unsubscribe.py`; 3. `src/db/repositories/remote_subscriptions.py`; 4. `src/db/repositories/bridge_actor_follows.py`; 5. `src/fedify_gateway_client.py`; 6. `fedify-gateway/src/server.ts`.
 
 ## Discord -> remote ActivityPub publish
 1. `src/discord_bot.py`; 2. `src/discord_event_router.py`; 3. `src/community_sync/runtime.py`; 4. `src/content_sync/outbound_publish.py`; 5. `src/fedify_gateway_client.py`.
@@ -57,7 +57,7 @@ This document is a task-oriented reading guide for maintainers changing or debug
 ## Database schema and persistence navigation
 1. `src/models.py`; 2. `src/db/database.py`; 3. `src/db/repositories/`; 4. `src/db/schema.py`; 5. `src/db/migrations.py`; 6. `docs/architecture/database-map.md`; 7. `docs/architecture/database-method-inventory.md`.
 
-Use `docs/architecture/database-map.md` for table ownership and invariants. Use `docs/architecture/database-method-inventory.md` before changing `src/db/database.py`; it maps current `Database` methods to target repository groups, primary call sites, relevant tests, and extraction risks. Schema bootstrap lives in `src/db/schema.py`; additive migration checks live in `src/db/migrations.py`. Stage 3 local-community persistence lives in `src/db/repositories/local_communities.py`, `remote_subscribers.py`, `local_subscribers.py`, `local_community_content.py`, `local_community_surfaces.py`, and `local_community_relay.py`; matching `Database.*` methods are temporary forwarding wrappers until Stage 8. Stage 2 local-community work also requires reading the canonical-vs-surface split in `LocalCommunityThread`, `LocalCommunityMessage`, `LocalCommunityThreadSurface`, and `LocalCommunityMessageSurface`.
+Use `docs/architecture/database-map.md` for table ownership and invariants. Use `docs/architecture/database-method-inventory.md` before changing `src/db/database.py`; it maps current `Database` methods to target repository groups, primary call sites, relevant tests, and extraction risks. Schema bootstrap lives in `src/db/schema.py`; additive migration checks live in `src/db/migrations.py`. Stage 3 local-community persistence lives in `src/db/repositories/local_communities.py`, `remote_subscribers.py`, `local_subscribers.py`, `local_community_content.py`, `local_community_surfaces.py`, and `local_community_relay.py`; Stage 4 remote subscription persistence lives in `remote_subscriptions.py` and `bridge_actor_follows.py`; matching `Database.*` methods are temporary forwarding wrappers until Stage 8. Stage 2 local-community work also requires reading the canonical-vs-surface split in `LocalCommunityThread`, `LocalCommunityMessage`, `LocalCommunityThreadSurface`, and `LocalCommunityMessageSurface`.
 
 ## Gateway route changes
 1. `fedify-gateway/src/server.ts`; 2. `fedify-gateway/src/types.ts`; 3. `src/fedify_gateway_client.py`; 4. `docs/architecture/http-routes.md`.

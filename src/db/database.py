@@ -11,6 +11,8 @@ from sqlalchemy.orm import Session, sessionmaker
 
 from . import migrations, schema
 from .repositories import (
+    RemoteSubscriptionRepository,
+    BridgeActorFollowRepository,
     LocalCommunityContentRepository,
     LocalCommunityRelayRepository,
     LocalCommunityRepository,
@@ -70,6 +72,8 @@ class Database:
         self.local_community_content = LocalCommunityContentRepository(self.session)
         self.local_community_surfaces = LocalCommunitySurfaceRepository(self.session)
         self.local_community_relay = LocalCommunityRelayRepository(self.session)
+        self.remote_subscriptions = RemoteSubscriptionRepository(self.session)
+        self.bridge_actor_follows = BridgeActorFollowRepository(self.session)
 
     def create_all(self) -> None:
         """Create the full clean-schema set required by the current codebase."""
@@ -280,120 +284,32 @@ class Database:
     # ---------------------------------------------------------------------------
 
     def get_subscription_by_channel(self, discord_channel_id: int) -> ChannelCommunitySubscription | None:
-        """Load the single community subscription owned by one Discord channel."""
-        # Each channel maps to at most one community, so this is a point lookup.
-        with self.session() as session:
-            return session.scalar(select(ChannelCommunitySubscription).where(ChannelCommunitySubscription.discord_channel_id == discord_channel_id))
+        """Temporarily forward to the Stage 4 remote_subscriptions repository."""
+        return self.remote_subscriptions.get_subscription_by_channel(discord_channel_id)
 
     def get_subscriptions_by_community(self, lemmy_community_actor_id: str) -> list[ChannelCommunitySubscription]:
-        """Load every accepted Discord subscription for one Lemmy community."""
-        # Inbound routing only uses subscriptions that completed the Follow ->
-        # Accept lifecycle. Pending/failed rows are visible to moderator flows
-        # but must not fan out remote content into Discord.
-        with self.session() as session:
-            return list(
-                session.scalars(
-                    select(ChannelCommunitySubscription).where(
-                        ChannelCommunitySubscription.lemmy_community_actor_id
-                        == lemmy_community_actor_id,
-                        ChannelCommunitySubscription.status == "accepted",
-                    )
-                )
-            )
+        """Temporarily forward to the Stage 4 remote_subscriptions repository."""
+        return self.remote_subscriptions.get_subscriptions_by_community(lemmy_community_actor_id)
 
     def get_all_subscriptions(self) -> list[ChannelCommunitySubscription]:
-        """Return all subscription rows in stable creation order."""
-        # Ordered by creation time so the /list-subscriptions command shows a
-        # stable, predictable list.
-        with self.session() as session:
-            return list(session.scalars(select(ChannelCommunitySubscription).order_by(ChannelCommunitySubscription.created_at)))
+        """Temporarily forward to the Stage 4 remote_subscriptions repository."""
+        return self.remote_subscriptions.get_all_subscriptions()
 
     def get_subscriptions_by_guild(self, discord_guild_id: int) -> list[ChannelCommunitySubscription]:
-        """Return all subscription rows for one Discord guild in creation order.
+        """Temporarily forward to the Stage 4 remote_subscriptions repository."""
+        return self.remote_subscriptions.get_subscriptions_by_guild(discord_guild_id)
 
-        Used by /list-subscriptions to show only the subscriptions that belong
-        to the guild where the command was invoked.
-        """
-        with self.session() as session:
-            return list(session.scalars(
-                select(ChannelCommunitySubscription)
-                .where(ChannelCommunitySubscription.discord_guild_id == discord_guild_id)
-                .order_by(ChannelCommunitySubscription.created_at)
-            ))
+    def create_subscription(self, *, discord_channel_id: int, discord_guild_id: int | None=None, lemmy_community_actor_id: str, lemmy_community_name: str | None, lemmy_community_id: int | None, community_handle: str | None=None, community_inbox_url: str | None=None, follow_activity_id: str | None=None, initiated_by_discord_user_id: str | None=None, status: str='pending') -> ChannelCommunitySubscription:
+        """Temporarily forward to the Stage 4 remote_subscriptions repository."""
+        return self.remote_subscriptions.create_subscription(discord_channel_id=discord_channel_id, discord_guild_id=discord_guild_id, lemmy_community_actor_id=lemmy_community_actor_id, lemmy_community_name=lemmy_community_name, lemmy_community_id=lemmy_community_id, community_handle=community_handle, community_inbox_url=community_inbox_url, follow_activity_id=follow_activity_id, initiated_by_discord_user_id=initiated_by_discord_user_id, status=status)
 
-    def create_subscription(
-        self,
-        *,
-        discord_channel_id: int,
-        discord_guild_id: int | None = None,
-        lemmy_community_actor_id: str,
-        lemmy_community_name: str | None,
-        lemmy_community_id: int | None,
-        community_handle: str | None = None,
-        community_inbox_url: str | None = None,
-        follow_activity_id: str | None = None,
-        initiated_by_discord_user_id: str | None = None,
-        status: str = "pending",
-    ) -> ChannelCommunitySubscription:
-        """Create one channel-to-community subscription row with follow state."""
-        # Callers are responsible for checking uniqueness before calling this;
-        # the DB UNIQUE constraint on discord_channel_id is the final safety net
-        # and will raise IntegrityError if a duplicate is attempted.
-        with self.session() as session:
-            sub = ChannelCommunitySubscription(
-                discord_channel_id=discord_channel_id,
-                discord_guild_id=discord_guild_id,
-                lemmy_community_actor_id=lemmy_community_actor_id,
-                lemmy_community_name=lemmy_community_name,
-                lemmy_community_id=lemmy_community_id,
-                community_handle=community_handle,
-                community_inbox_url=community_inbox_url,
-                follow_activity_id=follow_activity_id,
-                initiated_by_discord_user_id=initiated_by_discord_user_id,
-                status=status,
-            )
-            session.add(sub)
-            session.flush()
-            return sub
-
-    def update_subscription_follow_state(
-        self,
-        *,
-        discord_channel_id: int,
-        community_handle: str | None = None,
-        community_inbox_url: str | None,
-        follow_activity_id: str | None,
-        status: str,
-    ) -> None:
-        """Update the federation follow state for one existing subscription."""
-        # Follow state lives on the subscription row because later stages need a
-        # single source of truth for whether the bridge is pending/accepted.
-        with self.session() as session:
-            subscription = session.scalar(
-                select(ChannelCommunitySubscription).where(
-                    ChannelCommunitySubscription.discord_channel_id
-                    == discord_channel_id
-                )
-            )
-            if subscription is None:
-                raise RuntimeError(
-                    f"Missing subscription for Discord channel {discord_channel_id}"
-                )
-            subscription.community_handle = community_handle
-            subscription.community_inbox_url = community_inbox_url
-            subscription.follow_activity_id = follow_activity_id
-            subscription.status = status
+    def update_subscription_follow_state(self, *, discord_channel_id: int, community_handle: str | None=None, community_inbox_url: str | None, follow_activity_id: str | None, status: str) -> None:
+        """Temporarily forward to the Stage 4 remote_subscriptions repository."""
+        return self.remote_subscriptions.update_subscription_follow_state(discord_channel_id=discord_channel_id, community_handle=community_handle, community_inbox_url=community_inbox_url, follow_activity_id=follow_activity_id, status=status)
 
     def delete_subscription(self, discord_channel_id: int) -> bool:
-        """Delete one channel subscription if it exists."""
-        # Returns False when no subscription exists so callers can give a
-        # meaningful response without a separate existence check.
-        with self.session() as session:
-            sub = session.scalar(select(ChannelCommunitySubscription).where(ChannelCommunitySubscription.discord_channel_id == discord_channel_id))
-            if sub is None:
-                return False
-            session.delete(sub)
-            return True
+        """Temporarily forward to the Stage 4 remote_subscriptions repository."""
+        return self.remote_subscriptions.delete_subscription(discord_channel_id)
 
     # ---------------------------------------------------------------------------
     # User identity and registration-session helpers
@@ -1306,150 +1222,33 @@ class Database:
     # ---------------------------------------------------------------------------
 
     def list_bridge_actor_follows(self) -> list[BridgeActorFollow]:
-        """Return all bridge-actor follow rows in stable creation order."""
-        with self.session() as session:
-            return list(
-                session.scalars(
-                    select(BridgeActorFollow).order_by(
-                        BridgeActorFollow.created_at,
-                        BridgeActorFollow.id,
-                    )
-                )
-            )
+        """Temporarily forward to the Stage 4 bridge_actor_follows repository."""
+        return self.bridge_actor_follows.list_bridge_actor_follows()
 
     def get_bridge_actor_follow(self, community_actor_id: str) -> BridgeActorFollow | None:
-        """Load the bridge-actor follow row for one remote community, if it exists."""
-        with self.session() as session:
-            return session.scalar(
-                select(BridgeActorFollow).where(
-                    BridgeActorFollow.community_actor_id == community_actor_id
-                )
-            )
+        """Temporarily forward to the Stage 4 bridge_actor_follows repository."""
+        return self.bridge_actor_follows.get_bridge_actor_follow(community_actor_id)
 
-    def get_bridge_actor_follow_by_follow_activity_id(
-        self, follow_activity_id: str
-    ) -> BridgeActorFollow | None:
-        """Load the bridge-actor follow row that owns one outbound Follow activity."""
-        # Accept handlers match on follow_activity_id rather than community URL
-        # to stay correct even if the canonical community ID differs from the
-        # URL we originally used to send the Follow.
-        with self.session() as session:
-            return session.scalar(
-                select(BridgeActorFollow).where(
-                    BridgeActorFollow.follow_activity_id == follow_activity_id
-                )
-            )
+    def get_bridge_actor_follow_by_follow_activity_id(self, follow_activity_id: str) -> BridgeActorFollow | None:
+        """Temporarily forward to the Stage 4 bridge_actor_follows repository."""
+        return self.bridge_actor_follows.get_bridge_actor_follow_by_follow_activity_id(follow_activity_id)
 
-    def create_bridge_actor_follow(
-        self,
-        *,
-        community_actor_id: str,
-        follow_activity_id: str | None,
-        community_inbox_url: str | None,
-        status: str = "pending",
-    ) -> BridgeActorFollow:
-        """Create the AP-level follow row for a remote community.
-
-        Callers must verify no existing row exists before calling; the UNIQUE
-        constraint on community_actor_id will raise IntegrityError on duplicates.
-        """
-        with self.session() as session:
-            follow = BridgeActorFollow(
-                community_actor_id=community_actor_id,
-                follow_activity_id=follow_activity_id,
-                community_inbox_url=community_inbox_url,
-                status=status,
-            )
-            session.add(follow)
-            session.flush()
-            return follow
+    def create_bridge_actor_follow(self, *, community_actor_id: str, follow_activity_id: str | None, community_inbox_url: str | None, status: str='pending') -> BridgeActorFollow:
+        """Temporarily forward to the Stage 4 bridge_actor_follows repository."""
+        return self.bridge_actor_follows.create_bridge_actor_follow(community_actor_id=community_actor_id, follow_activity_id=follow_activity_id, community_inbox_url=community_inbox_url, status=status)
 
     def mark_bridge_actor_follow_accepted(self, community_actor_id: str) -> BridgeActorFollow:
-        """Mark the bridge-actor follow row accepted after the remote instance confirms.
-
-        Also marks all pending ChannelCommunitySubscription rows for this
-        community as accepted so every waiting channel activates at once.
-        """
-        # Accepting the follow at the AP level means every channel that was
-        # waiting on this community should transition simultaneously — they share
-        # the same underlying federation state.
-        with self.session() as session:
-            follow = session.scalar(
-                select(BridgeActorFollow).where(
-                    BridgeActorFollow.community_actor_id == community_actor_id
-                )
-            )
-            if follow is None:
-                raise RuntimeError(
-                    f"Missing BridgeActorFollow for community {community_actor_id}"
-                )
-            follow.status = "accepted"
-            follow.updated_at = utcnow()
-
-            # Mark all pending channel subscriptions for this community accepted.
-            # Only pending rows are updated; accepted rows keep their status.
-            pending_subs = list(
-                session.scalars(
-                    select(ChannelCommunitySubscription).where(
-                        ChannelCommunitySubscription.lemmy_community_actor_id == community_actor_id,
-                        ChannelCommunitySubscription.status == "pending",
-                    )
-                )
-            )
-            for sub in pending_subs:
-                sub.status = "accepted"
-                sub.updated_at = utcnow()
-
-            session.flush()
-            return follow
+        """Temporarily forward to the Stage 4 bridge_actor_follows repository."""
+        return self.bridge_actor_follows.mark_bridge_actor_follow_accepted(community_actor_id)
 
     def delete_bridge_actor_follow(self, community_actor_id: str) -> bool:
-        """Delete the bridge-actor follow row for one remote community.
-
-        Called after the last ChannelCommunitySubscription for a community is
-        removed and an Undo(Follow) has been dispatched to the remote instance.
-        Returns False if no row exists.
-        """
-        with self.session() as session:
-            follow = session.scalar(
-                select(BridgeActorFollow).where(
-                    BridgeActorFollow.community_actor_id == community_actor_id
-                )
-            )
-            if follow is None:
-                return False
-            session.delete(follow)
-            return True
+        """Temporarily forward to the Stage 4 bridge_actor_follows repository."""
+        return self.bridge_actor_follows.delete_bridge_actor_follow(community_actor_id)
 
     def count_subscriptions_for_community(self, community_actor_id: str) -> int:
-        """Return the number of channel subscriptions pointing at one community.
+        """Temporarily forward to the Stage 4 remote_subscriptions repository."""
+        return self.remote_subscriptions.count_subscriptions_for_community(community_actor_id)
 
-        Used by the unsubscribe flow to decide whether to send Undo(Follow):
-        an Undo is only dispatched when this count drops to zero.
-        """
-        from sqlalchemy import func
-        with self.session() as session:
-            result = session.scalar(
-                select(func.count()).select_from(ChannelCommunitySubscription).where(
-                    ChannelCommunitySubscription.lemmy_community_actor_id == community_actor_id
-                )
-            )
-            return result or 0
-
-    def get_pending_channel_subscriptions_for_community(
-        self, community_actor_id: str
-    ) -> list[ChannelCommunitySubscription]:
-        """Return all pending channel subscriptions for one community.
-
-        Used by handle_follow_accepted to DM each initiating Discord user when
-        the bridge actor follow is confirmed by the remote instance.
-        """
-        with self.session() as session:
-            return list(
-                session.scalars(
-                    select(ChannelCommunitySubscription).where(
-                        ChannelCommunitySubscription.lemmy_community_actor_id == community_actor_id,
-                        ChannelCommunitySubscription.status == "pending",
-                    )
-                )
-            )
+    def get_pending_channel_subscriptions_for_community(self, community_actor_id: str) -> list[ChannelCommunitySubscription]:
+        """Temporarily forward to the Stage 4 remote_subscriptions repository."""
+        return self.remote_subscriptions.get_pending_channel_subscriptions_for_community(community_actor_id)
