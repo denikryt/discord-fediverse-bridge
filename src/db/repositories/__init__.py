@@ -19,6 +19,8 @@ from .registration_sessions import RegistrationSessionRepository
 from .message_mappings import MessageMappingRepository
 from .activitypub_objects import ActivityPubObjectRepository
 from .remote_actors import RemoteActorRepository
+from .legacy_lemmy_mappings import LegacyLemmyMappingRepository
+from .discord_fanout_groups import DiscordFanoutGroupRepository
 __all__ = [
     "LocalCommunityRepository",
     "RemoteSubscriberRepository",
@@ -34,4 +36,6 @@ __all__ = [
     "MessageMappingRepository",
     "ActivityPubObjectRepository",
     "RemoteActorRepository",
+    "LegacyLemmyMappingRepository",
+    "DiscordFanoutGroupRepository",
 ]

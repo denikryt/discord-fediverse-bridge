@@ -11,6 +11,8 @@ from sqlalchemy.orm import Session, sessionmaker
 
 from . import migrations, schema
 from .repositories import (
+    LegacyLemmyMappingRepository,
+    DiscordFanoutGroupRepository,
     RemoteActorRepository,
     MessageMappingRepository,
     ActivityPubObjectRepository,
@@ -86,6 +88,8 @@ class Database:
         self.message_mappings = MessageMappingRepository(self.session)
         self.activitypub_objects = ActivityPubObjectRepository(self.session)
         self.remote_actors = RemoteActorRepository(self.session)
+        self.legacy_lemmy_mappings = LegacyLemmyMappingRepository(self.session)
+        self.discord_fanout_groups = DiscordFanoutGroupRepository(self.session)
 
     def create_all(self) -> None:
         """Create the full clean-schema set required by the current codebase."""
@@ -119,137 +123,52 @@ class Database:
     # ---------------------------------------------------------------------------
 
     def get_post_link_by_thread_id(self, discord_thread_id: int) -> PostLink | None:
-        """Load the post-link row for one Discord thread, if it exists."""
-        with self.session() as session:
-            return session.scalar(select(PostLink).where(PostLink.discord_forum_thread_id == discord_thread_id))
+        """Temporarily forward to the Stage 7 legacy_lemmy_mappings repository."""
+        return self.legacy_lemmy_mappings.get_post_link_by_thread_id(discord_thread_id)
 
     def get_post_link_by_lemmy_post_id(self, lemmy_post_id: int) -> PostLink | None:
-        """Load the post-link row for one numeric Lemmy post ID."""
-        with self.session() as session:
-            return session.scalar(select(PostLink).where(PostLink.lemmy_post_id == lemmy_post_id))
+        """Temporarily forward to the Stage 7 legacy_lemmy_mappings repository."""
+        return self.legacy_lemmy_mappings.get_post_link_by_lemmy_post_id(lemmy_post_id)
 
     def get_post_link_by_lemmy_post_ap_id(self, lemmy_post_ap_id: str) -> PostLink | None:
-        """Load one post-link row for an ActivityPub Lemmy post ID.
-
-        This compatibility helper returns the first matching row. Newer
-        multi-target inbound routing should prefer
-        `get_post_links_by_lemmy_post_ap_id()`.
-        """
-        with self.session() as session:
-            return session.scalar(select(PostLink).where(PostLink.lemmy_post_ap_id == lemmy_post_ap_id))
+        """Temporarily forward to the Stage 7 legacy_lemmy_mappings repository."""
+        return self.legacy_lemmy_mappings.get_post_link_by_lemmy_post_ap_id(lemmy_post_ap_id)
 
     def get_post_links_by_lemmy_post_ap_id(self, lemmy_post_ap_id: str) -> list[PostLink]:
-        """Load every post-link row for one ActivityPub Lemmy post ID."""
-        # Multi-channel inbound fanout needs every Discord thread that already
-        # represents the same remote post, not just the first row.
-        with self.session() as session:
-            return list(
-                session.scalars(
-                    select(PostLink).where(PostLink.lemmy_post_ap_id == lemmy_post_ap_id)
-                )
-            )
+        """Temporarily forward to the Stage 7 legacy_lemmy_mappings repository."""
+        return self.legacy_lemmy_mappings.get_post_links_by_lemmy_post_ap_id(lemmy_post_ap_id)
 
-    def get_post_link_by_lemmy_post_ap_id_and_channel_id(
-        self,
-        lemmy_post_ap_id: str,
-        discord_forum_channel_id: int,
-    ) -> PostLink | None:
-        """Load the post-link row for one remote post delivered into one forum channel."""
-        # Fanout retries must be able to see whether a specific subscribed
-        # target channel already received the remote post.
-        with self.session() as session:
-            return session.scalar(
-                select(PostLink).where(
-                    PostLink.lemmy_post_ap_id == lemmy_post_ap_id,
-                    PostLink.discord_forum_channel_id == discord_forum_channel_id,
-                )
-            )
+    def get_post_link_by_lemmy_post_ap_id_and_channel_id(self, lemmy_post_ap_id: str, discord_forum_channel_id: int) -> PostLink | None:
+        """Temporarily forward to the Stage 7 legacy_lemmy_mappings repository."""
+        return self.legacy_lemmy_mappings.get_post_link_by_lemmy_post_ap_id_and_channel_id(lemmy_post_ap_id, discord_forum_channel_id)
 
-    def create_post_link(
-        self,
-        *,
-        lemmy_post_id: int,
-        lemmy_post_ap_id: str | None,
-        discord_forum_channel_id: int | None = None,
-        discord_forum_thread_id: int,
-        discord_starter_message_id: int | None,
-        direction: str,
-    ) -> PostLink:
-        """Persist the thread-level mapping created by the existing bridge."""
-        with self.session() as session:
-            link = PostLink(
-                lemmy_post_id=lemmy_post_id,
-                lemmy_post_ap_id=lemmy_post_ap_id,
-                discord_forum_channel_id=discord_forum_channel_id,
-                discord_forum_thread_id=discord_forum_thread_id,
-                discord_starter_message_id=discord_starter_message_id,
-                direction=direction,
-            )
-            session.add(link)
-            session.flush()
-            return link
+    def create_post_link(self, *, lemmy_post_id: int, lemmy_post_ap_id: str | None, discord_forum_channel_id: int | None=None, discord_forum_thread_id: int, discord_starter_message_id: int | None, direction: str) -> PostLink:
+        """Temporarily forward to the Stage 7 legacy_lemmy_mappings repository."""
+        return self.legacy_lemmy_mappings.create_post_link(lemmy_post_id=lemmy_post_id, lemmy_post_ap_id=lemmy_post_ap_id, discord_forum_channel_id=discord_forum_channel_id, discord_forum_thread_id=discord_forum_thread_id, discord_starter_message_id=discord_starter_message_id, direction=direction)
 
     def has_comment_link_for_discord_message(self, discord_message_id: int) -> bool:
-        """Return whether one Discord message is already mapped as a comment."""
-        with self.session() as session:
-            return session.scalar(select(CommentLink.id).where(CommentLink.discord_message_id == discord_message_id)) is not None
+        """Temporarily forward to the Stage 7 legacy_lemmy_mappings repository."""
+        return self.legacy_lemmy_mappings.has_comment_link_for_discord_message(discord_message_id)
 
     def has_comment_link_for_lemmy_comment(self, lemmy_comment_id: int) -> bool:
-        """Return whether one Lemmy comment is already mapped into Discord."""
-        with self.session() as session:
-            return session.scalar(select(CommentLink.id).where(CommentLink.lemmy_comment_id == lemmy_comment_id)) is not None
+        """Temporarily forward to the Stage 7 legacy_lemmy_mappings repository."""
+        return self.legacy_lemmy_mappings.has_comment_link_for_lemmy_comment(lemmy_comment_id)
 
     def get_comment_link_by_lemmy_comment_ap_id(self, lemmy_comment_ap_id: str) -> CommentLink | None:
-        """Load one comment-link row for one ActivityPub comment ID.
-
-        This compatibility helper returns the first matching row. Newer
-        multi-target inbound routing should prefer
-        `get_comment_links_by_lemmy_comment_ap_id()`.
-        """
-        with self.session() as session:
-            return session.scalar(select(CommentLink).where(CommentLink.lemmy_comment_ap_id == lemmy_comment_ap_id))
+        """Temporarily forward to the Stage 7 legacy_lemmy_mappings repository."""
+        return self.legacy_lemmy_mappings.get_comment_link_by_lemmy_comment_ap_id(lemmy_comment_ap_id)
 
     def get_comment_links_by_lemmy_comment_ap_id(self, lemmy_comment_ap_id: str) -> list[CommentLink]:
-        """Load every comment-link row for one ActivityPub comment ID."""
-        # Fanout routing and parent resolution both need to see all thread-local
-        # copies of the same remote comment.
-        with self.session() as session:
-            return list(
-                session.scalars(
-                    select(CommentLink).where(CommentLink.lemmy_comment_ap_id == lemmy_comment_ap_id)
-                )
-            )
+        """Temporarily forward to the Stage 7 legacy_lemmy_mappings repository."""
+        return self.legacy_lemmy_mappings.get_comment_links_by_lemmy_comment_ap_id(lemmy_comment_ap_id)
 
     def get_comment_link_by_discord_message_id(self, discord_message_id: int) -> CommentLink | None:
-        """Load the comment-link row for one Discord message ID."""
-        with self.session() as session:
-            return session.scalar(select(CommentLink).where(CommentLink.discord_message_id == discord_message_id))
+        """Temporarily forward to the Stage 7 legacy_lemmy_mappings repository."""
+        return self.legacy_lemmy_mappings.get_comment_link_by_discord_message_id(discord_message_id)
 
-    def create_comment_link(
-        self,
-        *,
-        lemmy_comment_id: int,
-        lemmy_comment_ap_id: str | None,
-        lemmy_parent_comment_ap_id: str | None,
-        lemmy_post_id: int,
-        discord_forum_thread_id: int,
-        discord_message_id: int,
-        direction: str,
-    ) -> CommentLink:
-        """Persist the message-level mapping created by the existing bridge."""
-        with self.session() as session:
-            link = CommentLink(
-                lemmy_comment_id=lemmy_comment_id,
-                lemmy_comment_ap_id=lemmy_comment_ap_id,
-                lemmy_parent_comment_ap_id=lemmy_parent_comment_ap_id,
-                lemmy_post_id=lemmy_post_id,
-                discord_forum_thread_id=discord_forum_thread_id,
-                discord_message_id=discord_message_id,
-                direction=direction,
-            )
-            session.add(link)
-            session.flush()
-            return link
+    def create_comment_link(self, *, lemmy_comment_id: int, lemmy_comment_ap_id: str | None, lemmy_parent_comment_ap_id: str | None, lemmy_post_id: int, discord_forum_thread_id: int, discord_message_id: int, direction: str) -> CommentLink:
+        """Temporarily forward to the Stage 7 legacy_lemmy_mappings repository."""
+        return self.legacy_lemmy_mappings.create_comment_link(lemmy_comment_id=lemmy_comment_id, lemmy_comment_ap_id=lemmy_comment_ap_id, lemmy_parent_comment_ap_id=lemmy_parent_comment_ap_id, lemmy_post_id=lemmy_post_id, discord_forum_thread_id=discord_forum_thread_id, discord_message_id=discord_message_id, direction=direction)
 
     # ---------------------------------------------------------------------------
     # Inbound ActivityPub event receipt helpers
@@ -685,135 +604,37 @@ class Database:
     # group helpers while preserving dedup and reply/edit/delete lookup paths.
     # ---------------------------------------------------------------------------
 
-    def create_thread_group(
-        self,
-        *,
-        community_actor_id: str,
-        source_channel_id: int | None,
-        source_thread_id: int | None,
-        source_starter_message_id: int | None,
-        ap_activity_id: str | None = None,
-        ap_object_id: str | None = None,
-    ) -> CommunityThreadGroup:
-        """Create the canonical thread-group record for one source thread event.
+    def create_thread_group(self, *, community_actor_id: str, source_channel_id: int | None, source_thread_id: int | None, source_starter_message_id: int | None, ap_activity_id: str | None=None, ap_object_id: str | None=None) -> CommunityThreadGroup:
+        """Temporarily forward to the Stage 7 discord_fanout_groups repository."""
+        return self.discord_fanout_groups.create_thread_group(community_actor_id=community_actor_id, source_channel_id=source_channel_id, source_thread_id=source_thread_id, source_starter_message_id=source_starter_message_id, ap_activity_id=ap_activity_id, ap_object_id=ap_object_id)
 
-        source_* fields are None for inbound AP events, which create Discord threads
-        in all subscribed channels simultaneously without a single source channel.
-        """
-        with self.session() as session:
-            group = CommunityThreadGroup(
-                community_actor_id=community_actor_id,
-                source_channel_id=source_channel_id,
-                source_thread_id=source_thread_id,
-                source_starter_message_id=source_starter_message_id,
-                ap_activity_id=ap_activity_id,
-                ap_object_id=ap_object_id,
-            )
-            session.add(group)
-            session.flush()
-            return group
+    def get_thread_group_by_source_thread(self, source_thread_id: int) -> CommunityThreadGroup | None:
+        """Temporarily forward to the Stage 7 discord_fanout_groups repository."""
+        return self.discord_fanout_groups.get_thread_group_by_source_thread(source_thread_id)
 
-    def get_thread_group_by_source_thread(
-        self, source_thread_id: int
-    ) -> CommunityThreadGroup | None:
-        """Load the thread group that owns one source Discord thread."""
-        with self.session() as session:
-            return session.scalar(
-                select(CommunityThreadGroup).where(
-                    CommunityThreadGroup.source_thread_id == source_thread_id
-                )
-            )
+    def get_thread_group_by_ap_object(self, ap_object_id: str) -> CommunityThreadGroup | None:
+        """Temporarily forward to the Stage 7 discord_fanout_groups repository."""
+        return self.discord_fanout_groups.get_thread_group_by_ap_object(ap_object_id)
 
-    def get_thread_group_by_ap_object(
-        self, ap_object_id: str
-    ) -> CommunityThreadGroup | None:
-        """Load the thread group that maps to one ActivityPub object ID."""
-        # Inbound AP→Discord routing uses the AP object ID to check whether a
-        # thread was already processed to avoid duplicate Discord threads.
-        with self.session() as session:
-            return session.scalar(
-                select(CommunityThreadGroup).where(
-                    CommunityThreadGroup.ap_object_id == ap_object_id
-                )
-            )
+    def get_thread_group_by_id(self, thread_group_id: int) -> CommunityThreadGroup | None:
+        """Temporarily forward to the Stage 7 discord_fanout_groups repository."""
+        return self.discord_fanout_groups.get_thread_group_by_id(thread_group_id)
 
-    def get_thread_group_by_id(
-        self, thread_group_id: int
-    ) -> CommunityThreadGroup | None:
-        """Retrieve a thread group by its primary key ID."""
-        with self.session() as session:
-            return session.get(CommunityThreadGroup, thread_group_id)
+    def get_thread_group_by_any_thread(self, discord_thread_id: int) -> CommunityThreadGroup | None:
+        """Temporarily forward to the Stage 7 discord_fanout_groups repository."""
+        return self.discord_fanout_groups.get_thread_group_by_any_thread(discord_thread_id)
 
-    def get_thread_group_by_any_thread(
-        self, discord_thread_id: int
-    ) -> CommunityThreadGroup | None:
-        """Load the thread group for any thread (source, mirror, or inbound).
+    def add_thread_delivery(self, *, thread_group_id: int, discord_channel_id: int, discord_thread_id: int, discord_starter_message_id: int, role: str) -> CommunityThreadGroupDelivery:
+        """Temporarily forward to the Stage 7 discord_fanout_groups repository."""
+        return self.discord_fanout_groups.add_thread_delivery(thread_group_id=thread_group_id, discord_channel_id=discord_channel_id, discord_thread_id=discord_thread_id, discord_starter_message_id=discord_starter_message_id, role=role)
 
-        Phase 9: Looks up the thread group via CommunityThreadGroupDelivery,
-        allowing mirror and inbound threads to resolve their post context.
-        Unlike get_thread_group_by_source_thread, this works for any role.
-        """
-        with self.session() as session:
-            delivery = session.scalar(
-                select(CommunityThreadGroupDelivery).where(
-                    CommunityThreadGroupDelivery.discord_thread_id == discord_thread_id
-                )
-            )
-            if delivery is None:
-                return None
-            return session.scalar(
-                select(CommunityThreadGroup).where(
-                    CommunityThreadGroup.id == delivery.thread_group_id
-                )
-            )
+    def get_thread_deliveries(self, thread_group_id: int) -> list[CommunityThreadGroupDelivery]:
+        """Temporarily forward to the Stage 7 discord_fanout_groups repository."""
+        return self.discord_fanout_groups.get_thread_deliveries(thread_group_id)
 
-    def add_thread_delivery(
-        self,
-        *,
-        thread_group_id: int,
-        discord_channel_id: int,
-        discord_thread_id: int,
-        discord_starter_message_id: int,
-        role: str,
-    ) -> CommunityThreadGroupDelivery:
-        """Record one per-channel thread delivery for a CommunityThreadGroup."""
-        with self.session() as session:
-            delivery = CommunityThreadGroupDelivery(
-                thread_group_id=thread_group_id,
-                discord_channel_id=discord_channel_id,
-                discord_thread_id=discord_thread_id,
-                discord_starter_message_id=discord_starter_message_id,
-                role=role,
-            )
-            session.add(delivery)
-            session.flush()
-            return delivery
-
-    def get_thread_deliveries(
-        self, thread_group_id: int
-    ) -> list[CommunityThreadGroupDelivery]:
-        """Load all delivery rows for one thread group."""
-        # Fanout routing needs to know which channels have already received
-        # a thread so it can skip those and only deliver to remaining targets.
-        with self.session() as session:
-            return list(
-                session.scalars(
-                    select(CommunityThreadGroupDelivery).where(
-                        CommunityThreadGroupDelivery.thread_group_id == thread_group_id
-                    )
-                )
-            )
-
-    def get_thread_delivery_by_thread(
-        self, discord_thread_id: int
-    ) -> CommunityThreadGroupDelivery | None:
-        """Load the delivery row for one Discord thread ID."""
-        with self.session() as session:
-            return session.scalar(
-                select(CommunityThreadGroupDelivery).where(
-                    CommunityThreadGroupDelivery.discord_thread_id == discord_thread_id
-                )
-            )
+    def get_thread_delivery_by_thread(self, discord_thread_id: int) -> CommunityThreadGroupDelivery | None:
+        """Temporarily forward to the Stage 7 discord_fanout_groups repository."""
+        return self.discord_fanout_groups.get_thread_delivery_by_thread(discord_thread_id)
 
     # ---------------------------------------------------------------------------
     # Shared Discord message fanout group helpers
@@ -823,153 +644,41 @@ class Database:
     # Stage 7 DiscordFanoutGroupRepository extraction.
     # ---------------------------------------------------------------------------
 
-    def create_message_group(
-        self,
-        *,
-        community_actor_id: str,
-        thread_group_id: int,
-        source_channel_id: int | None,
-        source_thread_id: int | None,
-        source_message_id: int | None,
-        ap_activity_id: str | None = None,
-        ap_object_id: str | None = None,
-        parent_message_group_id: int | None = None,
-    ) -> CommunityMessageGroup:
-        """Create the canonical message-group record for one source message event.
+    def create_message_group(self, *, community_actor_id: str, thread_group_id: int, source_channel_id: int | None, source_thread_id: int | None, source_message_id: int | None, ap_activity_id: str | None=None, ap_object_id: str | None=None, parent_message_group_id: int | None=None) -> CommunityMessageGroup:
+        """Temporarily forward to the Stage 7 discord_fanout_groups repository."""
+        return self.discord_fanout_groups.create_message_group(community_actor_id=community_actor_id, thread_group_id=thread_group_id, source_channel_id=source_channel_id, source_thread_id=source_thread_id, source_message_id=source_message_id, ap_activity_id=ap_activity_id, ap_object_id=ap_object_id, parent_message_group_id=parent_message_group_id)
 
-        source_* fields are None for inbound AP events, which deliver into all
-        subscribed threads simultaneously without a single source message.
-        """
-        with self.session() as session:
-            group = CommunityMessageGroup(
-                community_actor_id=community_actor_id,
-                thread_group_id=thread_group_id,
-                source_channel_id=source_channel_id,
-                source_thread_id=source_thread_id,
-                source_message_id=source_message_id,
-                ap_activity_id=ap_activity_id,
-                ap_object_id=ap_object_id,
-                parent_message_group_id=parent_message_group_id,
-            )
-            session.add(group)
-            session.flush()
-            return group
+    def get_message_group_by_id(self, message_group_id: int) -> CommunityMessageGroup | None:
+        """Temporarily forward to the Stage 7 discord_fanout_groups repository."""
+        return self.discord_fanout_groups.get_message_group_by_id(message_group_id)
 
-    def get_message_group_by_id(
-        self, message_group_id: int
-    ) -> CommunityMessageGroup | None:
-        """Retrieve a message group by its primary key ID."""
-        with self.session() as session:
-            return session.get(CommunityMessageGroup, message_group_id)
+    def get_message_group_by_source_message(self, source_message_id: int) -> CommunityMessageGroup | None:
+        """Temporarily forward to the Stage 7 discord_fanout_groups repository."""
+        return self.discord_fanout_groups.get_message_group_by_source_message(source_message_id)
 
-    def get_message_group_by_source_message(
-        self, source_message_id: int
-    ) -> CommunityMessageGroup | None:
-        """Load the message group that owns one source Discord message."""
-        with self.session() as session:
-            return session.scalar(
-                select(CommunityMessageGroup).where(
-                    CommunityMessageGroup.source_message_id == source_message_id
-                )
-            )
+    def get_message_group_by_ap_object(self, ap_object_id: str) -> CommunityMessageGroup | None:
+        """Temporarily forward to the Stage 7 discord_fanout_groups repository."""
+        return self.discord_fanout_groups.get_message_group_by_ap_object(ap_object_id)
 
-    def get_message_group_by_ap_object(
-        self, ap_object_id: str
-    ) -> CommunityMessageGroup | None:
-        """Load the message group that maps to one ActivityPub object ID."""
-        # Echo suppression for inbound AP→Discord uses this lookup to detect
-        # whether a comment was already processed from this bridge's own publish.
-        with self.session() as session:
-            return session.scalar(
-                select(CommunityMessageGroup).where(
-                    CommunityMessageGroup.ap_object_id == ap_object_id
-                )
-            )
+    def get_message_group_by_delivered_message(self, discord_message_id: int) -> CommunityMessageGroup | None:
+        """Temporarily forward to the Stage 7 discord_fanout_groups repository."""
+        return self.discord_fanout_groups.get_message_group_by_delivered_message(discord_message_id)
 
-    def get_message_group_by_delivered_message(
-        self, discord_message_id: int
-    ) -> CommunityMessageGroup | None:
-        """Load the message group that has one Discord message as a delivery."""
-        # Reply-chain resolution needs to find the parent message group by the
-        # Discord message ID so the parent AP object ID can be resolved.
-        with self.session() as session:
-            delivery = session.scalar(
-                select(CommunityMessageGroupDelivery).where(
-                    CommunityMessageGroupDelivery.discord_message_id == discord_message_id
-                )
-            )
-            if delivery is None:
-                return None
-            return session.scalar(
-                select(CommunityMessageGroup).where(
-                    CommunityMessageGroup.id == delivery.message_group_id
-                )
-            )
+    def add_message_delivery(self, *, message_group_id: int, discord_channel_id: int, discord_thread_id: int, discord_message_id: int, role: str) -> CommunityMessageGroupDelivery:
+        """Temporarily forward to the Stage 7 discord_fanout_groups repository."""
+        return self.discord_fanout_groups.add_message_delivery(message_group_id=message_group_id, discord_channel_id=discord_channel_id, discord_thread_id=discord_thread_id, discord_message_id=discord_message_id, role=role)
 
-    def add_message_delivery(
-        self,
-        *,
-        message_group_id: int,
-        discord_channel_id: int,
-        discord_thread_id: int,
-        discord_message_id: int,
-        role: str,
-    ) -> CommunityMessageGroupDelivery:
-        """Record one per-channel message delivery for a CommunityMessageGroup."""
-        with self.session() as session:
-            delivery = CommunityMessageGroupDelivery(
-                message_group_id=message_group_id,
-                discord_channel_id=discord_channel_id,
-                discord_thread_id=discord_thread_id,
-                discord_message_id=discord_message_id,
-                role=role,
-            )
-            session.add(delivery)
-            session.flush()
-            return delivery
+    def get_message_delivery_by_message(self, discord_message_id: int) -> CommunityMessageGroupDelivery | None:
+        """Temporarily forward to the Stage 7 discord_fanout_groups repository."""
+        return self.discord_fanout_groups.get_message_delivery_by_message(discord_message_id)
 
-    def get_message_delivery_by_message(
-        self, discord_message_id: int
-    ) -> CommunityMessageGroupDelivery | None:
-        """Load the delivery row for one Discord message ID.
+    def get_message_deliveries(self, message_group_id: int) -> list[CommunityMessageGroupDelivery]:
+        """Temporarily forward to the Stage 7 discord_fanout_groups repository."""
+        return self.discord_fanout_groups.get_message_deliveries(message_group_id)
 
-        Used by on_raw_message_edit and on_raw_message_delete to check the
-        delivery role before deciding whether to propagate the event to AP.
-        Returns None if the message is not part of any tracked delivery.
-        """
-        with self.session() as session:
-            return session.scalar(
-                select(CommunityMessageGroupDelivery).where(
-                    CommunityMessageGroupDelivery.discord_message_id == discord_message_id
-                )
-            )
-
-    def get_message_deliveries(
-        self, message_group_id: int
-    ) -> list[CommunityMessageGroupDelivery]:
-        """Load all delivery rows for one message group."""
-        with self.session() as session:
-            return list(
-                session.scalars(
-                    select(CommunityMessageGroupDelivery).where(
-                        CommunityMessageGroupDelivery.message_group_id == message_group_id
-                    )
-                )
-            )
-
-    def get_message_delivery_in_thread(
-        self, message_group_id: int, discord_thread_id: int
-    ) -> CommunityMessageGroupDelivery | None:
-        """Load the delivery row for one message group in one specific thread."""
-        # Used by fanout retry logic to check whether a specific thread already
-        # received this message before attempting a duplicate delivery.
-        with self.session() as session:
-            return session.scalar(
-                select(CommunityMessageGroupDelivery).where(
-                    CommunityMessageGroupDelivery.message_group_id == message_group_id,
-                    CommunityMessageGroupDelivery.discord_thread_id == discord_thread_id,
-                )
-            )
+    def get_message_delivery_in_thread(self, message_group_id: int, discord_thread_id: int) -> CommunityMessageGroupDelivery | None:
+        """Temporarily forward to the Stage 7 discord_fanout_groups repository."""
+        return self.discord_fanout_groups.get_message_delivery_in_thread(message_group_id, discord_thread_id)
 
     # ---------------------------------------------------------------------------
     # Bridge actor follow helpers
