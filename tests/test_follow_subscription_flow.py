@@ -98,6 +98,52 @@ async def test_follow_accept_event_marks_bridge_follow_and_channel_accepted(
     )
 
 
+@pytest.mark.asyncio
+async def test_follow_accept_without_bridge_follow_does_not_accept_channel_subscription(
+    tmp_path: Path,
+) -> None:
+    """Unknown Accept(Follow) replies must not mutate subscription rows directly."""
+    database = _database(tmp_path)
+    lemmy_actor_url = f"https://{LEMMY_EXAMPLE_DOMAIN}/c/hackers"
+    follow_activity_id = f"https://{BRIDGE_EXAMPLE_DOMAIN}/activities/follow/legacy"
+    dm_user = SimpleNamespace(send=AsyncMock())
+    database.create_subscription(
+        discord_channel_id=123,
+        lemmy_community_actor_id=lemmy_actor_url,
+        lemmy_community_name="hackers",
+        lemmy_community_id=42,
+        community_handle=f"!hackers@{LEMMY_EXAMPLE_DOMAIN}",
+        community_inbox_url=f"{lemmy_actor_url}/inbox",
+        follow_activity_id=follow_activity_id,
+        initiated_by_discord_user_id="1234567890",
+        status="pending",
+    )
+    runtime = SimpleNamespace(
+        database=database,
+        bot=SimpleNamespace(
+            fetch_user=AsyncMock(return_value=dm_user),
+        ),
+    )
+    event = FollowLifecycleEvent(
+        event_type="follow.accepted",
+        delivery_id=f"https://{LEMMY_EXAMPLE_DOMAIN}/activities/accept/legacy",
+        occurred_at=datetime.now(UTC),
+        community_actor_id=lemmy_actor_url,
+        actor_id=lemmy_actor_url,
+        object={"follow_activity_id": follow_activity_id},
+    )
+
+    result = await dispatch_activitypub_event(event, runtime)
+    subscription = database.get_subscription_by_channel(123)
+
+    assert result.status == "skipped"
+    assert result.detail == "bridge follow activity is not mapped"
+    assert subscription is not None
+    assert subscription.status == "pending"
+    runtime.bot.fetch_user.assert_not_awaited()
+    dm_user.send.assert_not_awaited()
+
+
 def test_only_accepted_subscriptions_are_routed_for_inbound_community_events(
     tmp_path: Path,
 ) -> None:

@@ -741,39 +741,6 @@ class Database:
             subscription.follow_activity_id = follow_activity_id
             subscription.status = status
 
-    def get_subscription_by_follow_activity_id(
-        self, follow_activity_id: str
-    ) -> ChannelCommunitySubscription | None:
-        """Load the subscription row that owns one outbound Follow activity."""
-        with self.session() as session:
-            return session.scalar(
-                select(ChannelCommunitySubscription).where(
-                    ChannelCommunitySubscription.follow_activity_id
-                    == follow_activity_id
-                )
-            )
-
-    def mark_subscription_accepted_by_follow_activity_id(
-        self, follow_activity_id: str
-    ) -> ChannelCommunitySubscription:
-        """Mark one subscription as accepted after Lemmy confirms the follow."""
-        # Matching by follow activity ID makes the Accept handler idempotent and
-        # avoids guessing based only on community actor or channel.
-        with self.session() as session:
-            subscription = session.scalar(
-                select(ChannelCommunitySubscription).where(
-                    ChannelCommunitySubscription.follow_activity_id
-                    == follow_activity_id
-                )
-            )
-            if subscription is None:
-                raise RuntimeError(
-                    f"Missing subscription for follow activity {follow_activity_id}"
-                )
-            subscription.status = "accepted"
-            session.flush()
-            return subscription
-
     def delete_subscription(self, discord_channel_id: int) -> bool:
         """Delete one channel subscription if it exists."""
         # Returns False when no subscription exists so callers can give a

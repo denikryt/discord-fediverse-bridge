@@ -160,6 +160,12 @@ async def test_dispatch_follow_accepted_bypasses_allowlist(tmp_path: Path) -> No
     db = _database(tmp_path)
     follow_activity_id = f"https://{BRIDGE_EXAMPLE_DOMAIN}/activities/follow/1"
     community_actor_id = f"https://{LEMMY_EXAMPLE_DOMAIN}/c/hackers"
+    db.create_bridge_actor_follow(
+        community_actor_id=community_actor_id,
+        follow_activity_id=follow_activity_id,
+        community_inbox_url=f"{community_actor_id}/inbox",
+        status="pending",
+    )
     db.create_subscription(
         discord_channel_id=123,
         lemmy_community_actor_id=community_actor_id,

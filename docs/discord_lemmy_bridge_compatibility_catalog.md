@@ -10,7 +10,6 @@ The categories are intentionally separated because not every compatibility path 
 |---|---|---|
 | SQLite schema migrations | Real deployment compatibility | Keep while old DBs may exist |
 | ActivityPub URL aliases and payload fallbacks | Federation compatibility | Keep long term unless migration is designed |
-| Remote subscription legacy `Accept(Follow)` handling | Old pending-subscription compatibility | Keep until old pending rows are impossible |
 | Old Python/TypeScript names after refactors | Temporary technical debt | Remove after call sites are renamed |
 | Discord formatting fallbacks | Historical message compatibility | Keep while old mirrored messages may be edited |
 | Old nginx split-host settings | Not compatibility; intentional rejection | Keep as guardrail or remove only if split-host is restored |
@@ -256,18 +255,14 @@ Yes, after all call sites use the new signature.
 
 ## 3. Remote subscription lifecycle compatibility
 
-### 3.1 Legacy `Accept(Follow)` path without `BridgeActorFollow`
+No remote-subscription lifecycle compatibility path remains for `Accept(Follow)`.
+The current handler accepts remote follow confirmations only through the
+`BridgeActorFollow` lifecycle row. An `Accept(Follow)` whose `follow_activity_id`
+does not map to a bridge follow is treated as stale or unknown and is skipped
+without mutating channel subscription rows directly.
 
-**Where**
-
-- `src/activitypub_handlers.py`, `handle_follow_accepted()`
-- `src/db.py`, subscription acceptance helpers
-
-**What it does**
-
-The newer remote-subscription lifecycle stores one shared bridge actor follow in `BridgeActorFollow`. When a remote instance accepts the follow, the code accepts the bridge follow and all pending channel subscriptions attached to it.
-
-The compatibility path handles older pending subscriptions that predate `BridgeActorFollow`:
+The older direct subscription-acceptance path was intentionally removed during
+Stage 4 cleanup because it preserved a pre-`BridgeActorFollow` ownership model:
 
 ```text
 Accept(Follow)
@@ -276,13 +271,10 @@ Accept(Follow)
   -> mark that subscription accepted directly
 ```
 
-**Why it exists**
-
-Pending follows created by older versions could still receive an `Accept(Follow)` after the upgrade. Without this fallback, those subscriptions would remain pending forever.
-
-**Can it be removed?**
-
-Only after it is impossible for deployed databases to contain old pending `ChannelCommunitySubscription.follow_activity_id` rows without corresponding `BridgeActorFollow` rows.
+That path is no longer part of the compatibility catalog. Remote subscription
+acceptance now has one invariant: federation follow lifecycle state belongs to
+`BridgeActorFollow`, while channel subscription rows depend on that bridge-level
+state.
 
 ## 4. Command and discovery compatibility
 
@@ -581,7 +573,7 @@ Do not remove schema migrations just because runtime call sites no longer use ol
 | Gateway old reader alias | Yes | Stage 1 removed the alias after TS call sites switched |
 | `DiscordPublishService` alias | Removed | Stage 2 moved call sites and runtime wiring to `ContentPublishService` |
 | Old autocomplete payload parser | Later | Useful for stale Discord choices |
-| Legacy `Accept(Follow)` path | Later | Protects old pending follows |
+| Legacy `Accept(Follow)` path | Removed | Stage 4 now skips unknown accepts unless a `BridgeActorFollow` exists |
 | `/users/{username}` route | No | Federated URL compatibility |
 | Published object actor/timestamp normalization | No | Old persisted object compatibility |
 | ActivityPub payload fallbacks | No | Real fediverse interop |

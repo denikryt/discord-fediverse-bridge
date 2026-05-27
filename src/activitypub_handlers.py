@@ -154,31 +154,20 @@ async def handle_follow_accepted(
     """
     follow_activity_id = event.object.follow_activity_id
 
-    # Look up by follow_activity_id first; fall back to community_actor_id if
-    # the bridge_actor_follows table is not yet populated (migration path).
+    # Accept(Follow) is now valid only when it matches the bridge-level
+    # lifecycle row.  Older direct subscription acceptance has been removed so
+    # a missing BridgeActorFollow is treated as a stale or unknown remote reply,
+    # not as permission to mutate channel subscription rows directly.
     bridge_follow = runtime.database.get_bridge_actor_follow_by_follow_activity_id(
         follow_activity_id
     )
 
     if bridge_follow is None:
-        # Legacy path: Accept arrived for a follow that predates the
-        # bridge_actor_follows table. Fall back to the old channel-row lookup.
-        subscription = runtime.database.get_subscription_by_follow_activity_id(follow_activity_id)
-        if subscription is None:
-            logger.info(
-                "Skipping follow acceptance for unknown follow activity %s",
-                follow_activity_id,
-            )
-            return HandlerResult(status="skipped", detail="follow activity is not mapped")
-        if subscription.status == "accepted":
-            return HandlerResult(status="skipped", detail="subscription already accepted")
-
-        runtime.database.mark_subscription_accepted_by_follow_activity_id(follow_activity_id)
-        await _notify_channel_accepted(subscription, runtime)
-        return HandlerResult(
-            status="processed",
-            detail="subscription accepted and channel notified (legacy path)",
+        logger.info(
+            "Skipping follow acceptance for unknown bridge follow activity %s",
+            follow_activity_id,
         )
+        return HandlerResult(status="skipped", detail="bridge follow activity is not mapped")
 
     if bridge_follow.status == "accepted":
         return HandlerResult(status="skipped", detail="bridge follow already accepted")
