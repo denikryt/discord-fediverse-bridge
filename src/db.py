@@ -44,9 +44,12 @@ class Database:
     # Database is a small repository-style wrapper that keeps bridge code away
     # from session management and direct ORM details.
     # ---------------------------------------------------------------------------
-    # Engine/session/migration helpers
+    # Engine, session, and schema lifecycle helpers
     #
-    # Navigation marker for repository helpers in this persistence area.
+    # Database owns engine construction, session factory construction, schema
+    # bootstrap, migration checks, and transactional session cleanup. Later
+    # repositories must share this ownership instead of creating independent
+    # engines or session factories.
     # ---------------------------------------------------------------------------
 
     def __init__(self, url: str) -> None:
@@ -166,9 +169,11 @@ class Database:
             session.close()
 
     # ---------------------------------------------------------------------------
-    # Legacy direct Lemmy mapping helpers
+    # Legacy direct Lemmy post/comment mapping helpers
     #
-    # Navigation marker for repository helpers in this persistence area.
+    # These helpers own the older PostLink and CommentLink rows used by direct
+    # remote-community publish/fanout paths. They preserve existing Discord
+    # thread/message dedup keys until Stage 7 moves them into a repository.
     # ---------------------------------------------------------------------------
 
     def get_post_link_by_thread_id(self, discord_thread_id: int) -> PostLink | None:
@@ -307,7 +312,9 @@ class Database:
     # ---------------------------------------------------------------------------
     # Inbound ActivityPub event receipt helpers
     #
-    # Navigation marker for repository helpers in this persistence area.
+    # These helpers persist delivery receipts so inbound ActivityPub processing
+    # can remain idempotent across retries. Stage 5 moves them to the event
+    # receipt repository without changing delivery-id decisions.
     # ---------------------------------------------------------------------------
 
     def get_event_receipt(self, delivery_id: str) -> ActivityPubEventReceipt | None:
@@ -341,7 +348,9 @@ class Database:
     # ---------------------------------------------------------------------------
     # Remote community subscription helpers
     #
-    # Navigation marker for repository helpers in this persistence area.
+    # These helpers own ChannelCommunitySubscription lifecycle state for
+    # /subscribe-channel, /unsubscribe-channel, inbound fanout selection, and
+    # stale inbound filtering. Stage 4 extracts them with bridge-follow state.
     # ---------------------------------------------------------------------------
 
     def get_subscription_by_channel(self, discord_channel_id: int) -> ChannelCommunitySubscription | None:
@@ -461,9 +470,11 @@ class Database:
             return True
 
     # ---------------------------------------------------------------------------
-    # Registration and local user identity helpers
+    # User identity and registration-session helpers
     #
-    # Navigation marker for repository helpers in this persistence area.
+    # These helpers create local ActivityPub users and persist browser/OAuth
+    # registration state. Stage 5 separates user rows from registration-session
+    # rows while preserving the current HTTP registration flow.
     # ---------------------------------------------------------------------------
 
     def create_user(
@@ -614,9 +625,11 @@ class Database:
             return session.scalar(select(User).where(User.actor_url == actor_url))
 
     # ---------------------------------------------------------------------------
-    # Local community identity and remote-subscriber helpers
+    # Local community identity helpers
     #
-    # Navigation marker for repository helpers in this persistence area.
+    # These helpers own Discord-backed local community actor rows and lookup
+    # paths used by create-community, actor rendering, dashboard navigation, and
+    # local runtime routing. Stage 3 moves them to LocalCommunityRepository.
     # ---------------------------------------------------------------------------
 
     def create_local_community(
@@ -695,6 +708,14 @@ class Database:
             return list(
                 session.scalars(select(LocalCommunity).order_by(LocalCommunity.created_at, LocalCommunity.id))
             )
+
+    # ---------------------------------------------------------------------------
+    # Remote subscriber helpers
+    #
+    # These helpers own ActivityPub actors that follow bridge-hosted local
+    # communities. Accepted remote subscribers remain the fanout source of truth
+    # until Stage 3 moves the methods to RemoteSubscriberRepository.
+    # ---------------------------------------------------------------------------
 
     def create_remote_subscriber(
         self,
@@ -844,6 +865,14 @@ class Database:
                 )
             )
 
+    # ---------------------------------------------------------------------------
+    # Local subscriber helpers
+    #
+    # These helpers own same-instance Discord forum subscriptions to local
+    # communities. They support participant routing, dashboard counts, and
+    # source-authority checks for local-subscriber edits/deletes.
+    # ---------------------------------------------------------------------------
+
     def create_local_subscriber(
         self,
         *,
@@ -936,9 +965,11 @@ class Database:
             )
 
     # ---------------------------------------------------------------------------
-    # Local community content mapping helpers
+    # Local-community canonical content helpers
     #
-    # Navigation marker for repository helpers in this persistence area.
+    # These helpers own canonical local-community thread/message rows and their
+    # ActivityPub IDs. Discord-specific delivery surfaces are marked separately
+    # below so Stage 3 can preserve the canonical-vs-surface boundary.
     # ---------------------------------------------------------------------------
 
     def create_local_community_thread(
@@ -1013,6 +1044,14 @@ class Database:
             session.add(thread)
             session.flush()
             return thread
+
+    # ---------------------------------------------------------------------------
+    # Local-community thread surface helpers
+    #
+    # These helpers map one canonical local-community thread to concrete Discord
+    # thread/starter-message surfaces. Surface rows carry host/subscriber role
+    # and local_subscriber_id ownership; canonical AP IDs stay on content rows.
+    # ---------------------------------------------------------------------------
 
     def create_local_community_thread_surface(
         self,
@@ -1118,6 +1157,13 @@ class Database:
                 )
             )
 
+    # ---------------------------------------------------------------------------
+    # Local-community canonical message helpers
+    #
+    # These helpers own canonical local-community comment rows and AP object IDs.
+    # Message surface helpers below keep Discord message placement separate.
+    # ---------------------------------------------------------------------------
+
     def create_local_community_message(
         self,
         *,
@@ -1191,6 +1237,13 @@ class Database:
             session.add(message)
             session.flush()
             return message
+
+    # ---------------------------------------------------------------------------
+    # Local-community message surface helpers
+    #
+    # These helpers map canonical local-community comments to concrete Discord
+    # message surfaces for host and local-subscriber forums.
+    # ---------------------------------------------------------------------------
 
     def create_local_community_message_surface(
         self,
@@ -1337,9 +1390,11 @@ class Database:
 
 
     # ---------------------------------------------------------------------------
-    # Local community relay delivery helpers
+    # Local-community relay source and delivery helpers
     #
-    # Navigation marker for repository helpers in this persistence area.
+    # These helpers persist source activity rows and per-follower delivery
+    # attempts for local-community federation fanout. Stage 3 extracts them
+    # without changing accepted-subscriber targeting or retry semantics.
     # ---------------------------------------------------------------------------
 
     def get_or_create_local_community_relay_source_activity(
@@ -1501,9 +1556,10 @@ class Database:
             )
 
     # ---------------------------------------------------------------------------
-    # Generic ActivityPub object mapping helpers
+    # User listing helper
     #
-    # Navigation marker for repository helpers in this persistence area.
+    # This dashboard/export helper remains with user persistence in the Stage 0
+    # inventory. Message mapping and published object helpers start below.
     # ---------------------------------------------------------------------------
 
     def list_users(self) -> list[User]:
@@ -1514,6 +1570,14 @@ class Database:
             return list(
                 session.scalars(select(User).order_by(User.created_at, User.id))
             )
+
+    # ---------------------------------------------------------------------------
+    # Generic source-to-ActivityPub message mapping helpers
+    #
+    # These helpers own source/activity/object/Discord ID mappings used for
+    # deduplication and edit/delete lookup. Stage 6 extracts them without
+    # changing generated ActivityPub IDs or fallback compatibility.
+    # ---------------------------------------------------------------------------
 
     def create_message_mapping(
         self,
@@ -1571,6 +1635,14 @@ class Database:
                     MessageMapping.discord_message_id == discord_message_id
                 )
             )
+
+    # ---------------------------------------------------------------------------
+    # Published ActivityPub object helpers
+    #
+    # These helpers persist gateway-published ActivityPub objects for later
+    # resolution and serving. Stage 6 extracts them without changing stored JSON
+    # lookup semantics or object URL compatibility.
+    # ---------------------------------------------------------------------------
 
     def create_published_activity_object(
         self,
@@ -1633,7 +1705,9 @@ class Database:
     # ---------------------------------------------------------------------------
     # Remote actor cache helpers
     #
-    # Navigation marker for repository helpers in this persistence area.
+    # These helpers cache remote ActivityPub actor addressing and public-key
+    # metadata. Stage 6 extracts them without changing actor URL, inbox, shared
+    # inbox, or key lookup semantics.
     # ---------------------------------------------------------------------------
 
     def upsert_remote_actor(
@@ -1679,15 +1753,12 @@ class Database:
                 select(RemoteActor).where(RemoteActor.actor_url == actor_url)
             )
 
-    # --- CommunityThreadGroup repository methods ---
-    # These methods are the Phase 2+ replacement for PostLink queries. All
-    # methods are fully implemented so Phase 2 can start writing rows without
-    # further schema changes. They return empty/None until rows exist.
-
     # ---------------------------------------------------------------------------
-    # Shared Discord thread/message fanout helpers
+    # Shared Discord thread fanout group helpers
     #
-    # Navigation marker for repository helpers in this persistence area.
+    # These helpers own logical thread groups and per-channel thread deliveries
+    # for remote ActivityPub fanout. Stage 7 extracts them with message fanout
+    # group helpers while preserving dedup and reply/edit/delete lookup paths.
     # ---------------------------------------------------------------------------
 
     def create_thread_group(
@@ -1820,8 +1891,13 @@ class Database:
                 )
             )
 
-    # --- CommunityMessageGroup repository methods ---
-    # These methods are the Phase 2+ replacement for CommentLink queries.
+    # ---------------------------------------------------------------------------
+    # Shared Discord message fanout group helpers
+    #
+    # These helpers own logical message groups and per-channel Discord message
+    # deliveries for remote ActivityPub fanout. They stay in-place until the
+    # Stage 7 DiscordFanoutGroupRepository extraction.
+    # ---------------------------------------------------------------------------
 
     def create_message_group(
         self,
@@ -1971,15 +2047,12 @@ class Database:
                 )
             )
 
-    # --- BridgeActorFollow repository methods ---
-    # These methods manage the AP-level follow state for the bridge actor.
-    # A BridgeActorFollow row exists as long as at least one
-    # ChannelCommunitySubscription references the same community_actor_id.
-
     # ---------------------------------------------------------------------------
     # Bridge actor follow helpers
     #
-    # Navigation marker for repository helpers in this persistence area.
+    # These helpers own the shared bridge actor Follow lifecycle for remote
+    # communities. Stage 4 extracts them with remote subscriptions without
+    # reintroducing legacy direct-follow acceptance behavior.
     # ---------------------------------------------------------------------------
 
     def list_bridge_actor_follows(self) -> list[BridgeActorFollow]:

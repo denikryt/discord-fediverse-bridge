@@ -54,9 +54,10 @@ This document is a task-oriented reading guide for maintainers changing or debug
 ## Deduplication and idempotency
 1. `src/activitypub_handlers.py`; 2. `src/content_sync/persistence.py`; 3. `src/db.py`; 4. `fedify-gateway/src/normalize.ts`.
 
-## Database schema
-1. `src/models.py`; 2. `src/db.py`; 3. `docs/architecture/database-map.md`.
-Stage 2 local-community work also requires reading the canonical-vs-surface split in `LocalCommunityThread`, `LocalCommunityMessage`, `LocalCommunityThreadSurface`, and `LocalCommunityMessageSurface`.
+## Database schema and persistence navigation
+1. `src/models.py`; 2. `src/db.py`; 3. `docs/architecture/database-map.md`; 4. `docs/architecture/database-method-inventory.md`.
+
+Use `docs/architecture/database-map.md` for table ownership and invariants. Use `docs/architecture/database-method-inventory.md` before changing `src/db.py`; it maps current `Database` methods to target repository groups, primary call sites, relevant tests, and extraction risks. Stage 2 local-community work also requires reading the canonical-vs-surface split in `LocalCommunityThread`, `LocalCommunityMessage`, `LocalCommunityThreadSurface`, and `LocalCommunityMessageSurface`.
 
 ## Gateway route changes
 1. `fedify-gateway/src/server.ts`; 2. `fedify-gateway/src/types.ts`; 3. `src/fedify_gateway_client.py`; 4. `docs/architecture/http-routes.md`.
