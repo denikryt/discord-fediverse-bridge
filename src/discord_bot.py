@@ -21,7 +21,7 @@ class BridgeBot(discord.Client):
 
     # BridgeBot owns the Discord-side event loop and forwards forum channel/thread
     # activity to Lemmy based on persisted subscriptions. All publish decisions
-    # go through CommunityRuntime rather than DiscordPublishService directly.
+    # go through CommunityRuntime rather than ContentPublishService directly.
     def __init__(
         self,
         *,

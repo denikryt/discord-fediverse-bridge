@@ -15,7 +15,7 @@ from src.activitypub_models import ActivityPubEvent, FollowLifecycleEvent
 from src.commands import subscribe
 from src.community_sync.runtime import CommunityRuntime
 from src.db import Database
-from src.discord_publish_service import DiscordPublishService
+from src.content_publish_service import ContentPublishService
 from src.fedify_gateway_client import PublishContentResult
 from src.http_api import create_http_app
 from src.registration_service import RegistrationService
@@ -74,14 +74,14 @@ def _registration_runtime(database: Database) -> SimpleNamespace:
         base_url=settings.normalized_public_bridge_base_url,
         keypair_generator=lambda: ("test-public-key", "test-private-key"),
     )
-    publish_service = DiscordPublishService(
+    publish_service = ContentPublishService(
         database=database,
         fedify_gateway=AsyncMock(),
         bridge_prefix="[bridge]",
     )
     community_runtime = CommunityRuntime(
         database=database,
-        discord_publish_service=publish_service,
+        content_publish_service=publish_service,
     )
     return SimpleNamespace(
         settings=settings,
@@ -223,7 +223,7 @@ async def test_register_subscribe_accept_publish_then_echo_is_suppressed(
         object_id=f"https://{BRIDGE_HOST_DOMAIN}/users/alice/objects/post/1",
         community_actor_url=community_actor_url,
     )
-    publish_service = DiscordPublishService(
+    publish_service = ContentPublishService(
         database=database,
         fedify_gateway=publish_gateway,
         bridge_prefix="[bridge]",
@@ -233,7 +233,7 @@ async def test_register_subscribe_accept_publish_then_echo_is_suppressed(
         starter_message=_starter_message(),
     )
 
-    echo_publish_service = DiscordPublishService(
+    echo_publish_service = ContentPublishService(
         database=database,
         fedify_gateway=AsyncMock(),
         bridge_prefix="[bridge]",
@@ -246,7 +246,7 @@ async def test_register_subscribe_accept_publish_then_echo_is_suppressed(
         ),
         community_runtime=CommunityRuntime(
             database=database,
-            discord_publish_service=echo_publish_service,
+            content_publish_service=echo_publish_service,
         ),
     )
     echo_result = await dispatch_activitypub_event(
@@ -306,7 +306,7 @@ async def test_lemmy_announce_of_local_post_is_suppressed_via_actor_check(
         }
     )
 
-    announce_publish_service = DiscordPublishService(
+    announce_publish_service = ContentPublishService(
         database=database,
         fedify_gateway=AsyncMock(),
         bridge_prefix="[bridge]",
@@ -319,7 +319,7 @@ async def test_lemmy_announce_of_local_post_is_suppressed_via_actor_check(
         ),
         community_runtime=CommunityRuntime(
             database=database,
-            discord_publish_service=announce_publish_service,
+            content_publish_service=announce_publish_service,
         ),
     )
     result = await dispatch_activitypub_event(lemmy_rewritten_event, runtime)
@@ -405,7 +405,7 @@ async def test_failed_subscribe_retry_then_accept_allows_publish(
         object_id=f"https://{BRIDGE_HOST_DOMAIN}/users/alice/objects/post/2",
         community_actor_url=community_actor_url,
     )
-    publish_service = DiscordPublishService(
+    publish_service = ContentPublishService(
         database=database,
         fedify_gateway=publish_gateway,
         bridge_prefix="[bridge]",

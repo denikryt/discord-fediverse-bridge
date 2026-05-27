@@ -43,7 +43,7 @@ if TYPE_CHECKING:
     from ..activitypub_handlers import HandlerResult
     from ..activitypub_models import ActivityPubEvent
     from ..db import Database
-    from ..discord_publish_service import ContentPublishService, PublishResult
+    from ..content_publish_service import ContentPublishService, PublishResult
     from ..fedify_gateway_client import DeleteContentRequest, UpdateContentRequest
     from ..runtime import Runtime
     from .discord_fanout import DiscordFanout
@@ -64,7 +64,6 @@ class CommunityRuntime:
         *,
         database: Database,
         content_publish_service: ContentPublishService | None = None,
-        discord_publish_service: ContentPublishService | None = None,
         discord_fanout: DiscordFanout | None = None,
         bot: object | None = None,
     ) -> None:
@@ -79,15 +78,9 @@ class CommunityRuntime:
         tests that only exercise outbound paths.
         """
         self.database = database
-        # Accept the old keyword for test compatibility while the rest of the
-        # suite migrates to the clearer `content_publish_service` name.
-        self.content_publish_service = content_publish_service or discord_publish_service
+        self.content_publish_service = content_publish_service
         if self.content_publish_service is None:
             raise ValueError("CommunityRuntime requires a content publish service")
-        # Keep the old attribute name as an alias so older tests and helpers
-        # that patch `.discord_publish_service` continue to work during the
-        # migration to the clearer service name.
-        self.discord_publish_service = self.content_publish_service
         self.discord_fanout = discord_fanout
         self.bot = bot
 
@@ -180,7 +173,7 @@ class CommunityRuntime:
         """Handle a new Discord thread message from a subscribed channel.
 
         Deduplicates via CommunityMessageGroup, publishes to AP via
-        DiscordPublishService, creates the canonical message-group row, records
+        ContentPublishService, creates the canonical message-group row, records
         source delivery, then fans out to all sibling mirror threads and records
         each mirror delivery. If the source thread has no CommunityThreadGroup
         (pre-Phase-2 / legacy thread), AP publish happens but no message-group
@@ -713,5 +706,5 @@ def _ignored_result(reason: str) -> PublishResult:
     Used when handle_discord_thread_create detects a duplicate and exits early
     without touching the AP gateway or creating any DB rows.
     """
-    from ..discord_publish_service import PublishResult
+    from ..content_publish_service import PublishResult
     return PublishResult(status="ignored", reason=reason)

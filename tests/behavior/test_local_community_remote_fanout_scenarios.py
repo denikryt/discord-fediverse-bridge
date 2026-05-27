@@ -10,7 +10,7 @@ import pytest
 
 from src.activitypub_models import ActivityPubEvent
 from src.fedify_gateway_client import SendLocalCommunityRelayResult, SendLocalCommunityRelayOutcome
-from src.discord_publish_service import ContentPublishService
+from src.content_publish_service import ContentPublishService
 from src.local_communities.runtime import LocalCommunityRuntime
 from src.local_communities.service import LocalCommunityService
 from support.db import build_database

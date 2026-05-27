@@ -14,7 +14,7 @@ from .db import Database
 from .discord_bot import BridgeBot
 from .discord_event_router import DiscordEventRouter
 from .discord_oauth_client import DiscordOAuthClient
-from .discord_publish_service import ContentPublishService
+from .content_publish_service import ContentPublishService
 from .fedify_gateway_client import FedifyGatewayClient
 from .http_api import create_http_app
 from .local_communities.runtime import LocalCommunityRuntime

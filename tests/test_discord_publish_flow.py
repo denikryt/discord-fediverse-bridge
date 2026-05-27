@@ -7,16 +7,16 @@ from unittest.mock import AsyncMock
 
 import pytest
 
-from src.discord_publish_service import DiscordPublishService, UNREGISTERED_REPLY
+from src.content_publish_service import ContentPublishService, UNREGISTERED_REPLY
 from support.db import add_accepted_subscription, add_registered_user, build_database
 from support.discord import build_starter_message, build_thread, build_thread_message
 from support.gateway import build_publish_result
 from tests_constants import BRIDGE_HOST_DOMAIN, LEMMY_EXAMPLE_DOMAIN
 
 
-def _service(database, fedify_gateway: AsyncMock) -> DiscordPublishService:
+def _service(database, fedify_gateway: AsyncMock) -> ContentPublishService:
     """Build the Stage 6 publish service with one fake gateway boundary."""
-    return DiscordPublishService(
+    return ContentPublishService(
         database=database,
         fedify_gateway=fedify_gateway,
         bridge_prefix="[bridge]",

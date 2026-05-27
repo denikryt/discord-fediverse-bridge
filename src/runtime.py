@@ -9,7 +9,7 @@ from .config import Settings
 from .db import Database
 from .discord_bot import BridgeBot
 from .discord_oauth_client import DiscordOAuthClient
-from .discord_publish_service import ContentPublishService
+from .content_publish_service import ContentPublishService
 from .fedify_gateway_client import FedifyGatewayClient
 from .local_communities.runtime import LocalCommunityRuntime
 from .registration_service import RegistrationService

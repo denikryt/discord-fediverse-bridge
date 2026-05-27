@@ -2,7 +2,7 @@
 
 Each test exercises a concrete action in a defined system state and asserts
 observable DB effects. All five tests use a real SQLite DB, real CommunityRuntime,
-and real DiscordPublishService. Mock only outer boundaries: FedifyGatewayClient,
+and real ContentPublishService. Mock only outer boundaries: FedifyGatewayClient,
 bot.fetch_forum_channel, and forum_channel.create_thread.
 """
 

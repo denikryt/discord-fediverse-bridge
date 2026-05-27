@@ -15,7 +15,7 @@ from typing import TYPE_CHECKING
 
 from ..content_sync.inbound_references import build_message_reference
 from ..db import Database
-from ..discord_publish_service import ContentPublishService
+from ..content_publish_service import ContentPublishService
 from ..fedify_gateway_client import DeleteContentRequest, FedifyGatewayClient, UpdateContentRequest
 from ..formatting import format_lemmy_comment_for_discord, format_lemmy_post_for_discord, normalize_text
 from .discord_fanout import LocalCommunityDiscordFanout

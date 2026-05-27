@@ -10,7 +10,7 @@ import pytest
 from sqlalchemy import func, select
 
 from src.db import Database
-from src.discord_publish_service import DiscordPublishService, UNREGISTERED_REPLY
+from src.content_publish_service import ContentPublishService, UNREGISTERED_REPLY
 from src.fedify_gateway_client import PublishContentResult
 from src.models import MessageMapping, PublishedActivityObject
 from tests_constants import BRIDGE_HOST_DOMAIN, LEMMY_EXAMPLE_DOMAIN
@@ -53,9 +53,9 @@ def _registered_user(database: Database) -> None:
     )
 
 
-def _service(database: Database, fedify_gateway: AsyncMock) -> DiscordPublishService:
+def _service(database: Database, fedify_gateway: AsyncMock) -> ContentPublishService:
     """Build the real publish service with only the gateway boundary mocked."""
-    return DiscordPublishService(
+    return ContentPublishService(
         database=database,
         fedify_gateway=fedify_gateway,
         bridge_prefix="[bridge]",

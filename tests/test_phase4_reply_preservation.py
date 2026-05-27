@@ -2,7 +2,7 @@
 
 Each test exercises a concrete action in a defined system state and asserts
 observable DB effects and Discord send call arguments. All tests use a real
-SQLite DB, real CommunityRuntime, and real DiscordPublishService. Mock only
+SQLite DB, real CommunityRuntime, and real ContentPublishService. Mock only
 outer boundaries: FedifyGatewayClient, bot.get_thread_by_id, and thread.send.
 
 The send mock captures the `reference` kwarg so tests can assert the correct
@@ -20,7 +20,7 @@ import pytest
 from src.community_sync.discord_fanout import DiscordFanout
 from src.community_sync.runtime import CommunityRuntime
 from src.db import Database
-from src.discord_publish_service import DiscordPublishService
+from src.content_publish_service import ContentPublishService
 from src.fedify_gateway_client import PublishContentResult
 from tests_constants import BRIDGE_HOST_DOMAIN, LEMMY_EXAMPLE_DOMAIN
 
@@ -83,9 +83,9 @@ def _publish_gateway(
     return gateway
 
 
-def _publish_service(database: Database, gateway: AsyncMock) -> DiscordPublishService:
-    """Build a DiscordPublishService wired to one fake gateway boundary."""
-    return DiscordPublishService(
+def _publish_service(database: Database, gateway: AsyncMock) -> ContentPublishService:
+    """Build a ContentPublishService wired to one fake gateway boundary."""
+    return ContentPublishService(
         database=database,
         fedify_gateway=gateway,
         bridge_prefix="[bridge]",
@@ -101,7 +101,7 @@ def _community_runtime(
     """Build a real CommunityRuntime with optional DiscordFanout."""
     return CommunityRuntime(
         database=database,
-        discord_publish_service=_publish_service(database, gateway),
+        content_publish_service=_publish_service(database, gateway),
         discord_fanout=discord_fanout,
     )
 

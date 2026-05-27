@@ -19,7 +19,7 @@ from fastapi.testclient import TestClient
 from src.activitypub_models import ActivityPubEvent
 from src.community_sync.runtime import CommunityRuntime
 from src.db import Database
-from src.discord_publish_service import DiscordPublishService
+from src.content_publish_service import ContentPublishService
 from src.http_api import create_http_app
 from tests_constants import BRIDGE_HOST_DOMAIN, LEMMY_EXAMPLE_DOMAIN
 
@@ -78,12 +78,12 @@ def _database(tmp_path: Path) -> Database:
 
 def _community_runtime(database: Database, *, bot: object) -> CommunityRuntime:
     """Build a real CommunityRuntime for backfill routing scenarios."""
-    publish_service = DiscordPublishService(
+    publish_service = ContentPublishService(
         database=database,
         fedify_gateway=AsyncMock(),
         bridge_prefix="[bridge]",
     )
-    return CommunityRuntime(database=database, discord_publish_service=publish_service, bot=bot)
+    return CommunityRuntime(database=database, content_publish_service=publish_service, bot=bot)
 
 
 def _accepted_subscription(database: Database, *, channel_id: int = 100) -> None:

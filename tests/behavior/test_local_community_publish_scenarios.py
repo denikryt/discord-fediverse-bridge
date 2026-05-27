@@ -8,7 +8,7 @@ from unittest.mock import AsyncMock
 import pytest
 from sqlalchemy import func, select
 
-from src.discord_publish_service import ContentPublishService
+from src.content_publish_service import ContentPublishService
 from src.fedify_gateway_client import PublishLocalCommunityContentResult
 from src.local_communities.runtime import LocalCommunityRuntime
 from src.local_communities.service import LocalCommunityService

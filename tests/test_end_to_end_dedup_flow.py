@@ -13,7 +13,7 @@ from src.activitypub_handlers import dispatch_activitypub_event
 from src.activitypub_models import ActivityPubEvent
 from src.community_sync.runtime import CommunityRuntime
 from src.db import Database
-from src.discord_publish_service import DiscordPublishService
+from src.content_publish_service import ContentPublishService
 from src.http_api import create_http_app
 from tests_constants import BRIDGE_HOST_DOMAIN, LEMMY_EXAMPLE_DOMAIN
 
@@ -28,15 +28,15 @@ def _database(tmp_path: Path) -> Database:
 def _community_runtime(database: Database) -> CommunityRuntime:
     """Build a real CommunityRuntime for inbound routing scenarios.
 
-    DiscordPublishService is not called for inbound events, so it is
+    ContentPublishService is not called for inbound events, so it is
     constructed with a stub gateway.
     """
-    publish_service = DiscordPublishService(
+    publish_service = ContentPublishService(
         database=database,
         fedify_gateway=AsyncMock(),
         bridge_prefix="[bridge]",
     )
-    return CommunityRuntime(database=database, discord_publish_service=publish_service)
+    return CommunityRuntime(database=database, content_publish_service=publish_service)
 
 
 def _accepted_subscription(database: Database) -> None:

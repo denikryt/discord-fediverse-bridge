@@ -16,7 +16,7 @@ import pytest
 from sqlalchemy import text
 
 from src.discord_event_router import DiscordEventRouter
-from src.discord_publish_service import ContentPublishService
+from src.content_publish_service import ContentPublishService
 from src.local_communities.runtime import LocalCommunityRuntime
 from src.local_communities.service import LocalCommunityService
 from support.db import add_registered_user, build_database

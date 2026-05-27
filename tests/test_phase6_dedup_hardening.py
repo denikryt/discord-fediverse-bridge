@@ -30,7 +30,7 @@ import sqlalchemy.exc
 
 from src.community_sync.runtime import CommunityRuntime
 from src.db import Database
-from src.discord_publish_service import DiscordPublishService
+from src.content_publish_service import ContentPublishService
 from src.activitypub_models import ActivityPubEvent
 from src.activitypub_handlers import dispatch_activitypub_event
 from tests_constants import BRIDGE_HOST_DOMAIN, LEMMY_EXAMPLE_DOMAIN
@@ -68,14 +68,14 @@ def _accepted_subscription(database: Database, *, channel_id: int = 100) -> None
 
 def _community_runtime(database: Database, *, bot: object | None = None) -> CommunityRuntime:
     """Build a real CommunityRuntime with a stub publish service (inbound paths only)."""
-    publish_service = DiscordPublishService(
+    publish_service = ContentPublishService(
         database=database,
         fedify_gateway=AsyncMock(),
         bridge_prefix="[bridge]",
     )
     return CommunityRuntime(
         database=database,
-        discord_publish_service=publish_service,
+        content_publish_service=publish_service,
         discord_fanout=None,
         bot=bot,
     )

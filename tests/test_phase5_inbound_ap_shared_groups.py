@@ -17,7 +17,7 @@ import pytest
 
 from src.community_sync.runtime import CommunityRuntime
 from src.db import Database
-from src.discord_publish_service import DiscordPublishService
+from src.content_publish_service import ContentPublishService
 from src.fedify_gateway_client import PublishContentResult
 from src.activitypub_models import ActivityPubEvent
 from tests_constants import BRIDGE_HOST_DOMAIN, LEMMY_EXAMPLE_DOMAIN
@@ -80,9 +80,9 @@ def _publish_gateway() -> AsyncMock:
     return gateway
 
 
-def _publish_service(database: Database, gateway: AsyncMock) -> DiscordPublishService:
-    """Build a DiscordPublishService wired to a fake gateway."""
-    return DiscordPublishService(
+def _publish_service(database: Database, gateway: AsyncMock) -> ContentPublishService:
+    """Build a ContentPublishService wired to a fake gateway."""
+    return ContentPublishService(
         database=database,
         fedify_gateway=gateway,
         bridge_prefix="[bridge]",
@@ -93,7 +93,7 @@ def _community_runtime(database: Database, gateway: AsyncMock, *, bot: object) -
     """Build a real CommunityRuntime with a fake bot."""
     return CommunityRuntime(
         database=database,
-        discord_publish_service=_publish_service(database, gateway),
+        content_publish_service=_publish_service(database, gateway),
         discord_fanout=None,
         bot=bot,
     )

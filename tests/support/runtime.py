@@ -7,7 +7,7 @@ from unittest.mock import AsyncMock
 
 from src.community_sync.runtime import CommunityRuntime
 from src.db import Database
-from src.discord_publish_service import ContentPublishService
+from src.content_publish_service import ContentPublishService
 
 
 def build_publish_service(database: Database, fedify_gateway: object | None = None) -> ContentPublishService:

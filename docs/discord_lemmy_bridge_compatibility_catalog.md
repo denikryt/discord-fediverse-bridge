@@ -198,41 +198,41 @@ owned by Python-side migration code, not by gateway reader aliases.
 
 ---
 
-### 2.3 `DiscordPublishService` alias for `ContentPublishService`
+### 2.3 Content publish service naming cleanup
 
 **Where**
 
-- `src/discord_publish_service.py`
+- `src/content_publish_service.py`
 - `src/community_sync/runtime.py`
-- tests/support and older tests
+- tests/support and behavior tests
 
-**What it does**
+**What changed**
 
-`ContentPublishService` is the newer name, but the module still exposes:
-
-```python
-DiscordPublishService = ContentPublishService
-```
-
-`CommunityRuntime` also accepts the old constructor keyword:
+The temporary `DiscordPublishService` compatibility layer has been removed. The
+canonical service name and constructor wiring are now:
 
 ```python
-discord_publish_service=...
+ContentPublishService
+content_publish_service=...
 ```
 
-and keeps an instance alias:
+`CommunityRuntime` no longer accepts `discord_publish_service=...`, no longer
+keeps `self.discord_publish_service`, and tests no longer import the old class
+name. The module path was renamed from `src/discord_publish_service.py` to
+`src/content_publish_service.py` so the import path matches the canonical
+service responsibility.
 
-```python
-self.discord_publish_service = self.content_publish_service
-```
+**Why the cleanup was safe**
 
-**Why it exists**
-
-Older tests and internal helper code still instantiate or patch the old name. The alias avoids a large mechanical rename in unrelated feature work.
+This compatibility layer only protected in-repository call sites and tests. It
+did not protect deployed database state, remote federation URLs, or external
+ActivityPub payloads. After all call sites moved to the canonical name, keeping
+the old alias would only preserve ambiguous terminology.
 
 **Can it be removed?**
 
-Yes, after all call sites and tests use `ContentPublishService` and `content_publish_service` consistently.
+It has been removed by Stage 2 of the compatibility cleanup. Future code should
+use only `ContentPublishService` and `content_publish_service`.
 
 ---
 
@@ -579,7 +579,7 @@ Do not remove schema migrations just because runtime call sites no longer use ol
 | Legacy Python remote-subscriber alias | Yes | Stage 1 removed it after runtime/tests moved to explicit terminology |
 | `src/db.py` remote-subscriber wrappers | Yes | Stage 1 removed the old follower-named wrappers |
 | Gateway old reader alias | Yes | Stage 1 removed the alias after TS call sites switched |
-| `DiscordPublishService` alias | Later | Remove after tests/helpers use `ContentPublishService` |
+| `DiscordPublishService` alias | Removed | Stage 2 moved call sites and runtime wiring to `ContentPublishService` |
 | Old autocomplete payload parser | Later | Useful for stale Discord choices |
 | Legacy `Accept(Follow)` path | Later | Protects old pending follows |
 | `/users/{username}` route | No | Federated URL compatibility |

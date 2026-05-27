@@ -1,9 +1,9 @@
-"""Shared outbound AP publish service for Discord-authored content.
+"""Shared outbound ActivityPub publish service for Discord-authored content.
 
-The historic module name is kept because many tests and integrations still
-import from it, but the service itself is now `ContentPublishService`. It owns
-the generic Discord -> ActivityPub create path used by both remote-subscription
-mode and local-community mode.
+The module owns the generic Discord -> ActivityPub create path used by both
+remote-subscription mode and local-community mode. Runtime layers call this
+service by its canonical `ContentPublishService` name so publish terminology is
+no longer tied to the older Discord-only service label.
 """
 
 from __future__ import annotations
@@ -314,8 +314,3 @@ class ContentPublishService:
             body_markdown=body_markdown,
             in_reply_to_object_id=in_reply_to_object_id,
         )
-
-
-# Backward-compat alias while the rest of the codebase and older tests migrate
-# to the clearer `ContentPublishService` name.
-DiscordPublishService = ContentPublishService
