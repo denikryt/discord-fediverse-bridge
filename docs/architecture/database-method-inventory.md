@@ -6,7 +6,7 @@ Runtime behavior is not changed by this inventory. The repository names below de
 
 ## Coverage check
 
-- Public/non-private `Database` methods found in `src/db.py`: 117.
+- Public/non-private `Database` methods found in `src/db/database.py`: 117.
 - Public methods assigned to exactly one owner below: 117.
 - Private helpers such as `_table_columns()` and `_verify_stage2_surface_invariants()` are excluded from the method inventory and are owned by Stage 2 schema/migration extraction.
 

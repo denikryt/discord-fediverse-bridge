@@ -12,7 +12,7 @@ This document explains the major runtime traces through the bridge: user/platfor
 
 1. `src/commands/subscribe.py` calls `src/operations/subscribe.py`.
 2. `src/lemmy_client.py` resolves the remote community when needed.
-3. `src/db.py` records `channel_community_subscriptions` and bridge follow state.
+3. `src/db/database.py` records `channel_community_subscriptions` and bridge follow state.
 4. `src/fedify_gateway_client.py` calls gateway `/follow-community`; gateway sends the Follow.
 5. Accept returns through gateway `/inbox`, `src/http_api.py`, and `src/activitypub_handlers.py`.
 
@@ -48,7 +48,7 @@ This document explains the major runtime traces through the bridge: user/platfor
 ## Discord edit/delete -> ActivityPub update/delete flow
 
 1. Discord edit/delete enters `src/discord_bot.py` and routes through `src/discord_event_router.py`.
-2. Runtime resolves persisted ActivityPub object ids through `src/db.py`.
+2. Runtime resolves persisted ActivityPub object ids through `src/db/database.py`.
 3. `src/content_sync/edit_delete.py` prepares the request.
 4. Gateway `/update` or `/delete` signs and sends the ActivityPub operation.
 

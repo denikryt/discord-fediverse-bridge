@@ -35,7 +35,7 @@ The Fedify gateway is the ActivityPub/WebFinger edge. It owns public actor/objec
 - `src/http_api.py` — exposes public registration/OAuth routes and the private gateway-to-Python ActivityPub event route.
 - `src/discord_bot.py` — connects Discord callbacks to bridge code.
 - `src/discord_event_router.py` — chooses remote subscription mode or local community mode for Discord events.
-- `src/db.py` and `src/models.py` — persistence API and schema.
+- `src/db/database.py` and `src/models.py` — persistence API and schema.
 
 ## Main gateway entry points
 

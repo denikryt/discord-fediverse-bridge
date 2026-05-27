@@ -20,7 +20,7 @@ The categories are intentionally separated because not every compatibility path 
 
 **Where**
 
-- `src/db.py`, `Database.migrate()`
+- `src/db/migrations.py`, `Database.migrate()`
 - `src/models.py`, `RemoteSubscriber`
 - `fedify-gateway/src/db.ts`, remote-subscriber readers
 
@@ -63,7 +63,7 @@ verified schema baseline where `remote_subscribers` already exists.
 
 **Where**
 
-- `src/db.py`, `Database.migrate()`
+- `src/db/migrations.py`, `Database.migrate()`
 - `src/models.py`, `LocalCommunityThread`, `LocalCommunityMessage`, `LocalCommunityThreadSurface`, `LocalCommunityMessageSurface`
 - `src/local_communities/delivery_mapping.py`
 - `src/local_communities/reply_mapping.py`
@@ -127,7 +127,7 @@ rows plus explicit host surface rows before running this code.
 
 **Where**
 
-- `src/db.py`, `Database.migrate()`
+- `src/db/migrations.py`, `Database.migrate()`
 - `src/models.py`, `ChannelCommunitySubscription`
 
 **What it does**
@@ -151,7 +151,7 @@ These paths are not protecting external federation identity or old database shap
 **Where**
 
 - `src/models.py`
-- `src/db.py`
+- `src/db/database.py`
 - `src/local_communities/runtime.py`
 - `src/local_communities/federation_fanout.py`
 - several behavior tests
@@ -572,7 +572,7 @@ Do not remove schema migrations just because runtime call sites no longer use ol
 | DB table rename/backfill migrations | Removed | Stage 5 dropped pre-Stage-1 SQLite upgrade support after Stage 0 verified the DB baseline |
 | Surface backfill migration | Removed | Stage 5 dropped pre-Stage-2 canonical-column upgrade support after Stage 0 verified the DB baseline |
 | Legacy Python remote-subscriber alias | Yes | Stage 1 removed it after runtime/tests moved to explicit terminology |
-| `src/db.py` remote-subscriber wrappers | Yes | Stage 1 removed the old follower-named wrappers |
+| `src/db/database.py` remote-subscriber wrappers | Yes | Stage 1 removed the old follower-named wrappers |
 | Gateway old reader alias | Yes | Stage 1 removed the alias after TS call sites switched |
 | `DiscordPublishService` alias | Removed | Stage 2 moved call sites and runtime wiring to `ContentPublishService` |
 | Old autocomplete payload parser | Later | Useful for stale Discord choices |

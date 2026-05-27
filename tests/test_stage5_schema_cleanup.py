@@ -109,10 +109,10 @@ def test_stage5_current_schema_migrate_remains_idempotent(tmp_path: Path) -> Non
 
 
 def test_stage5_removes_obsolete_stage1_table_upgrade_source() -> None:
-    """The runtime DB repository should no longer reference the old table name."""
+    """The runtime DB migrations should no longer reference the old table name."""
     # This static guard makes the policy decision explicit: Stage 5 no longer
     # supports translating the pre-Stage-1 table into the current schema.
-    db_source = Path("src/db.py").read_text()
+    db_source = Path("src/db/migrations.py").read_text()
     assert "local_community_followers" not in db_source
 
 
