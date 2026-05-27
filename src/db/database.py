@@ -11,6 +11,9 @@ from sqlalchemy.orm import Session, sessionmaker
 
 from . import migrations, schema
 from .repositories import (
+    UserRepository,
+    RegistrationSessionRepository,
+    EventReceiptRepository,
     RemoteSubscriptionRepository,
     BridgeActorFollowRepository,
     LocalCommunityContentRepository,
@@ -74,6 +77,9 @@ class Database:
         self.local_community_relay = LocalCommunityRelayRepository(self.session)
         self.remote_subscriptions = RemoteSubscriptionRepository(self.session)
         self.bridge_actor_follows = BridgeActorFollowRepository(self.session)
+        self.event_receipts = EventReceiptRepository(self.session)
+        self.users = UserRepository(self.session)
+        self.registration_sessions = RegistrationSessionRepository(self.session)
 
     def create_all(self) -> None:
         """Create the full clean-schema set required by the current codebase."""
@@ -248,32 +254,16 @@ class Database:
     # ---------------------------------------------------------------------------
 
     def get_event_receipt(self, delivery_id: str) -> ActivityPubEventReceipt | None:
-        """Load the receipt row for one inbound delivery ID."""
-        with self.session() as session:
-            return session.scalar(select(ActivityPubEventReceipt).where(ActivityPubEventReceipt.delivery_id == delivery_id))
+        """Temporarily forward to the Stage 5 event_receipts repository."""
+        return self.event_receipts.get_event_receipt(delivery_id)
 
-    def create_event_receipt(self, *, delivery_id: str, event_type: str, object_ap_id: str, status: str, detail: str | None = None) -> ActivityPubEventReceipt:
-        """Create the receipt row that gates idempotent event processing."""
-        with self.session() as session:
-            receipt = ActivityPubEventReceipt(
-                delivery_id=delivery_id,
-                event_type=event_type,
-                object_ap_id=object_ap_id,
-                status=status,
-                detail=detail,
-            )
-            session.add(receipt)
-            session.flush()
-            return receipt
+    def create_event_receipt(self, *, delivery_id: str, event_type: str, object_ap_id: str, status: str, detail: str | None=None) -> ActivityPubEventReceipt:
+        """Temporarily forward to the Stage 5 event_receipts repository."""
+        return self.event_receipts.create_event_receipt(delivery_id=delivery_id, event_type=event_type, object_ap_id=object_ap_id, status=status, detail=detail)
 
-    def update_event_receipt(self, *, delivery_id: str, status: str, detail: str | None = None) -> None:
-        """Update one inbound delivery receipt after processing progresses."""
-        with self.session() as session:
-            receipt = session.scalar(select(ActivityPubEventReceipt).where(ActivityPubEventReceipt.delivery_id == delivery_id))
-            if receipt is None:
-                raise RuntimeError(f"Missing receipt for delivery {delivery_id}")
-            receipt.status = status
-            receipt.detail = detail
+    def update_event_receipt(self, *, delivery_id: str, status: str, detail: str | None=None) -> None:
+        """Temporarily forward to the Stage 5 event_receipts repository."""
+        return self.event_receipts.update_event_receipt(delivery_id=delivery_id, status=status, detail=detail)
 
     # ---------------------------------------------------------------------------
     # Remote community subscription helpers
@@ -319,152 +309,41 @@ class Database:
     # rows while preserving the current HTTP registration flow.
     # ---------------------------------------------------------------------------
 
-    def create_user(
-        self,
-        *,
-        discord_user_id: str,
-        activitypub_username: str,
-        actor_url: str,
-        inbox_url: str,
-        outbox_url: str,
-        followers_url: str,
-        public_key_pem: str,
-        private_key_pem: str,
-    ) -> User:
-        """Create the shared identity record for one registered Discord user."""
-        with self.session() as session:
-            user = User(
-                discord_user_id=discord_user_id,
-                activitypub_username=activitypub_username,
-                actor_url=actor_url,
-                inbox_url=inbox_url,
-                outbox_url=outbox_url,
-                followers_url=followers_url,
-                public_key_pem=public_key_pem,
-                private_key_pem=private_key_pem,
-            )
-            session.add(user)
-            session.flush()
-            return user
+    def create_user(self, *, discord_user_id: str, activitypub_username: str, actor_url: str, inbox_url: str, outbox_url: str, followers_url: str, public_key_pem: str, private_key_pem: str) -> User:
+        """Temporarily forward to the Stage 5 users repository."""
+        return self.users.create_user(discord_user_id=discord_user_id, activitypub_username=activitypub_username, actor_url=actor_url, inbox_url=inbox_url, outbox_url=outbox_url, followers_url=followers_url, public_key_pem=public_key_pem, private_key_pem=private_key_pem)
 
-    def create_registration_session(
-        self, *, session_token: str, expires_at: datetime
-    ) -> RegistrationSession:
-        """Create one server-side registration session row."""
-        with self.session() as session:
-            registration_session = RegistrationSession(
-                session_token=session_token,
-                expires_at=expires_at,
-            )
-            session.add(registration_session)
-            session.flush()
-            return registration_session
+    def create_registration_session(self, *, session_token: str, expires_at: datetime) -> RegistrationSession:
+        """Temporarily forward to the Stage 5 registration_sessions repository."""
+        return self.registration_sessions.create_registration_session(session_token=session_token, expires_at=expires_at)
 
-    def get_registration_session_by_token(
-        self, session_token: str | None
-    ) -> RegistrationSession | None:
-        """Load one registration session by its opaque browser token."""
-        if session_token is None:
-            return None
-        with self.session() as session:
-            return session.scalar(
-                select(RegistrationSession).where(
-                    RegistrationSession.session_token == session_token
-                )
-            )
+    def get_registration_session_by_token(self, session_token: str | None) -> RegistrationSession | None:
+        """Temporarily forward to the Stage 5 registration_sessions repository."""
+        return self.registration_sessions.get_registration_session_by_token(session_token)
 
-    def update_registration_session_oauth_state(
-        self, *, session_token: str, oauth_state: str, expires_at: datetime
-    ) -> RegistrationSession:
-        """Persist the latest OAuth state for one browser registration flow."""
-        # OAuth state must be stored server-side so the callback can reject
-        # forged or replayed redirect attempts from outside Discord.
-        with self.session() as session:
-            registration_session = session.scalar(
-                select(RegistrationSession).where(
-                    RegistrationSession.session_token == session_token
-                )
-            )
-            if registration_session is None:
-                raise RuntimeError(
-                    f"Missing registration session for token {session_token}"
-                )
-            registration_session.oauth_state = oauth_state
-            registration_session.expires_at = expires_at
-            registration_session.status = "oauth_started"
-            session.flush()
-            return registration_session
+    def update_registration_session_oauth_state(self, *, session_token: str, oauth_state: str, expires_at: datetime) -> RegistrationSession:
+        """Temporarily forward to the Stage 5 registration_sessions repository."""
+        return self.registration_sessions.update_registration_session_oauth_state(session_token=session_token, oauth_state=oauth_state, expires_at=expires_at)
 
-    def update_registration_session_discord_identity(
-        self,
-        *,
-        session_token: str,
-        discord_user_id: str,
-        discord_username: str,
-        discord_avatar_url: str | None,
-        expires_at: datetime,
-    ) -> RegistrationSession:
-        """Attach the authenticated Discord identity to one session."""
-        with self.session() as session:
-            registration_session = session.scalar(
-                select(RegistrationSession).where(
-                    RegistrationSession.session_token == session_token
-                )
-            )
-            if registration_session is None:
-                raise RuntimeError(
-                    f"Missing registration session for token {session_token}"
-                )
-            registration_session.discord_user_id = discord_user_id
-            registration_session.discord_username = discord_username
-            registration_session.discord_avatar_url = discord_avatar_url
-            registration_session.expires_at = expires_at
-            registration_session.status = "discord_authenticated"
-            session.flush()
-            return registration_session
+    def update_registration_session_discord_identity(self, *, session_token: str, discord_user_id: str, discord_username: str, discord_avatar_url: str | None, expires_at: datetime) -> RegistrationSession:
+        """Temporarily forward to the Stage 5 registration_sessions repository."""
+        return self.registration_sessions.update_registration_session_discord_identity(session_token=session_token, discord_user_id=discord_user_id, discord_username=discord_username, discord_avatar_url=discord_avatar_url, expires_at=expires_at)
 
-    def mark_registration_session_completed(
-        self, *, session_token: str, activitypub_username: str, expires_at: datetime
-    ) -> RegistrationSession:
-        """Mark one registration session complete after the user row is created."""
-        with self.session() as session:
-            registration_session = session.scalar(
-                select(RegistrationSession).where(
-                    RegistrationSession.session_token == session_token
-                )
-            )
-            if registration_session is None:
-                raise RuntimeError(
-                    f"Missing registration session for token {session_token}"
-                )
-            registration_session.activitypub_username = activitypub_username
-            registration_session.expires_at = expires_at
-            registration_session.status = "completed"
-            session.flush()
-            return registration_session
+    def mark_registration_session_completed(self, *, session_token: str, activitypub_username: str, expires_at: datetime) -> RegistrationSession:
+        """Temporarily forward to the Stage 5 registration_sessions repository."""
+        return self.registration_sessions.mark_registration_session_completed(session_token=session_token, activitypub_username=activitypub_username, expires_at=expires_at)
 
     def get_user_by_discord_user_id(self, discord_user_id: str) -> User | None:
-        """Load the registered user that owns one Discord account ID."""
-        with self.session() as session:
-            return session.scalar(
-                select(User).where(User.discord_user_id == discord_user_id)
-            )
+        """Temporarily forward to the Stage 5 users repository."""
+        return self.users.get_user_by_discord_user_id(discord_user_id)
 
-    def get_user_by_activitypub_username(
-        self, activitypub_username: str
-    ) -> User | None:
-        """Load the registered user that owns one local AP username."""
-        with self.session() as session:
-            return session.scalar(
-                select(User).where(
-                    User.activitypub_username == activitypub_username
-                )
-            )
+    def get_user_by_activitypub_username(self, activitypub_username: str) -> User | None:
+        """Temporarily forward to the Stage 5 users repository."""
+        return self.users.get_user_by_activitypub_username(activitypub_username)
 
     def get_user_by_actor_url(self, actor_url: str) -> User | None:
-        """Load the registered user that owns one actor URL."""
-        with self.session() as session:
-            return session.scalar(select(User).where(User.actor_url == actor_url))
+        """Temporarily forward to the Stage 5 users repository."""
+        return self.users.get_user_by_actor_url(actor_url)
 
     # ---------------------------------------------------------------------------
     # Local community identity helpers
@@ -729,13 +608,8 @@ class Database:
     # ---------------------------------------------------------------------------
 
     def list_users(self) -> list[User]:
-        """Return all registered users in stable creation order."""
-        # User identity export needs a deterministic ordering so repeated dumps
-        # can be diffed and restored without hidden row-order changes.
-        with self.session() as session:
-            return list(
-                session.scalars(select(User).order_by(User.created_at, User.id))
-            )
+        """Temporarily forward to the Stage 5 users repository."""
+        return self.users.list_users()
 
     # ---------------------------------------------------------------------------
     # Generic source-to-ActivityPub message mapping helpers

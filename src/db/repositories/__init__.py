@@ -13,6 +13,9 @@ from .local_community_relay import LocalCommunityRelayRepository
 
 from .remote_subscriptions import RemoteSubscriptionRepository
 from .bridge_actor_follows import BridgeActorFollowRepository
+from .event_receipts import EventReceiptRepository
+from .users import UserRepository
+from .registration_sessions import RegistrationSessionRepository
 __all__ = [
     "LocalCommunityRepository",
     "RemoteSubscriberRepository",
@@ -22,4 +25,7 @@ __all__ = [
     "LocalCommunityRelayRepository",
     "RemoteSubscriptionRepository",
     "BridgeActorFollowRepository",
+    "EventReceiptRepository",
+    "UserRepository",
+    "RegistrationSessionRepository",
 ]
