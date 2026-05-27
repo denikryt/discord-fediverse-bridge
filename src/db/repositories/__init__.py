@@ -16,6 +16,9 @@ from .bridge_actor_follows import BridgeActorFollowRepository
 from .event_receipts import EventReceiptRepository
 from .users import UserRepository
 from .registration_sessions import RegistrationSessionRepository
+from .message_mappings import MessageMappingRepository
+from .activitypub_objects import ActivityPubObjectRepository
+from .remote_actors import RemoteActorRepository
 __all__ = [
     "LocalCommunityRepository",
     "RemoteSubscriberRepository",
@@ -28,4 +31,7 @@ __all__ = [
     "EventReceiptRepository",
     "UserRepository",
     "RegistrationSessionRepository",
+    "MessageMappingRepository",
+    "ActivityPubObjectRepository",
+    "RemoteActorRepository",
 ]

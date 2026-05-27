@@ -11,6 +11,9 @@ from sqlalchemy.orm import Session, sessionmaker
 
 from . import migrations, schema
 from .repositories import (
+    RemoteActorRepository,
+    MessageMappingRepository,
+    ActivityPubObjectRepository,
     UserRepository,
     RegistrationSessionRepository,
     EventReceiptRepository,
@@ -80,6 +83,9 @@ class Database:
         self.event_receipts = EventReceiptRepository(self.session)
         self.users = UserRepository(self.session)
         self.registration_sessions = RegistrationSessionRepository(self.session)
+        self.message_mappings = MessageMappingRepository(self.session)
+        self.activitypub_objects = ActivityPubObjectRepository(self.session)
+        self.remote_actors = RemoteActorRepository(self.session)
 
     def create_all(self) -> None:
         """Create the full clean-schema set required by the current codebase."""
@@ -619,62 +625,21 @@ class Database:
     # changing generated ActivityPub IDs or fallback compatibility.
     # ---------------------------------------------------------------------------
 
-    def create_message_mapping(
-        self,
-        *,
-        source_platform: str,
-        source_id: str,
-        activity_id: str,
-        object_id: str,
-        actor_url: str,
-        community_actor_url: str,
-        discord_channel_id: int | None,
-        discord_message_id: int | None,
-    ) -> MessageMapping:
-        """Create the generic dedup record used by later AP publish flows."""
-        with self.session() as session:
-            mapping = MessageMapping(
-                source_platform=source_platform,
-                source_id=source_id,
-                activity_id=activity_id,
-                object_id=object_id,
-                actor_url=actor_url,
-                community_actor_url=community_actor_url,
-                discord_channel_id=discord_channel_id,
-                discord_message_id=discord_message_id,
-            )
-            session.add(mapping)
-            session.flush()
-            return mapping
+    def create_message_mapping(self, *, source_platform: str, source_id: str, activity_id: str, object_id: str, actor_url: str, community_actor_url: str, discord_channel_id: int | None, discord_message_id: int | None) -> MessageMapping:
+        """Temporarily forward to the Stage 6 message_mappings repository."""
+        return self.message_mappings.create_message_mapping(source_platform=source_platform, source_id=source_id, activity_id=activity_id, object_id=object_id, actor_url=actor_url, community_actor_url=community_actor_url, discord_channel_id=discord_channel_id, discord_message_id=discord_message_id)
 
-    def get_message_mapping_by_activity_id(
-        self, activity_id: str
-    ) -> MessageMapping | None:
-        """Load a generic mapping row by ActivityPub activity ID."""
-        with self.session() as session:
-            return session.scalar(
-                select(MessageMapping).where(MessageMapping.activity_id == activity_id)
-            )
+    def get_message_mapping_by_activity_id(self, activity_id: str) -> MessageMapping | None:
+        """Temporarily forward to the Stage 6 message_mappings repository."""
+        return self.message_mappings.get_message_mapping_by_activity_id(activity_id)
 
-    def get_message_mapping_by_object_id(
-        self, object_id: str
-    ) -> MessageMapping | None:
-        """Load a generic mapping row by ActivityPub object ID."""
-        with self.session() as session:
-            return session.scalar(
-                select(MessageMapping).where(MessageMapping.object_id == object_id)
-            )
+    def get_message_mapping_by_object_id(self, object_id: str) -> MessageMapping | None:
+        """Temporarily forward to the Stage 6 message_mappings repository."""
+        return self.message_mappings.get_message_mapping_by_object_id(object_id)
 
-    def get_message_mapping_by_discord_message_id(
-        self, discord_message_id: int
-    ) -> MessageMapping | None:
-        """Load a generic mapping row by Discord message ID."""
-        with self.session() as session:
-            return session.scalar(
-                select(MessageMapping).where(
-                    MessageMapping.discord_message_id == discord_message_id
-                )
-            )
+    def get_message_mapping_by_discord_message_id(self, discord_message_id: int) -> MessageMapping | None:
+        """Temporarily forward to the Stage 6 message_mappings repository."""
+        return self.message_mappings.get_message_mapping_by_discord_message_id(discord_message_id)
 
     # ---------------------------------------------------------------------------
     # Published ActivityPub object helpers
@@ -684,63 +649,17 @@ class Database:
     # lookup semantics or object URL compatibility.
     # ---------------------------------------------------------------------------
 
-    def create_published_activity_object(
-        self,
-        *,
-        actor_username: str,
-        actor_url: str,
-        community_actor_url: str,
-        activity_id: str,
-        object_id: str,
-        kind: str,
-        title: str | None,
-        body_markdown: str,
-        in_reply_to_object_id: str | None,
-        discord_channel_id: int | None,
-        discord_message_id: int | None,
-        published_at: datetime | None = None,
-    ) -> PublishedActivityObject:
-        """Persist one canonical AP object emitted by the gateway publish path."""
-        with self.session() as session:
-            published_object = PublishedActivityObject(
-                actor_username=actor_username,
-                actor_url=actor_url,
-                community_actor_url=community_actor_url,
-                activity_id=activity_id,
-                object_id=object_id,
-                kind=kind,
-                title=title,
-                body_markdown=body_markdown,
-                in_reply_to_object_id=in_reply_to_object_id,
-                discord_channel_id=discord_channel_id,
-                discord_message_id=discord_message_id,
-                published_at=published_at or utcnow(),
-            )
-            session.add(published_object)
-            session.flush()
-            return published_object
+    def create_published_activity_object(self, *, actor_username: str, actor_url: str, community_actor_url: str, activity_id: str, object_id: str, kind: str, title: str | None, body_markdown: str, in_reply_to_object_id: str | None, discord_channel_id: int | None, discord_message_id: int | None, published_at: datetime | None=None) -> PublishedActivityObject:
+        """Temporarily forward to the Stage 6 activitypub_objects repository."""
+        return self.activitypub_objects.create_published_activity_object(actor_username=actor_username, actor_url=actor_url, community_actor_url=community_actor_url, activity_id=activity_id, object_id=object_id, kind=kind, title=title, body_markdown=body_markdown, in_reply_to_object_id=in_reply_to_object_id, discord_channel_id=discord_channel_id, discord_message_id=discord_message_id, published_at=published_at)
 
-    def get_published_activity_object_by_object_id(
-        self, object_id: str
-    ) -> PublishedActivityObject | None:
-        """Load one stored gateway-published object by its canonical AP URL."""
-        with self.session() as session:
-            return session.scalar(
-                select(PublishedActivityObject).where(
-                    PublishedActivityObject.object_id == object_id
-                )
-            )
+    def get_published_activity_object_by_object_id(self, object_id: str) -> PublishedActivityObject | None:
+        """Temporarily forward to the Stage 6 activitypub_objects repository."""
+        return self.activitypub_objects.get_published_activity_object_by_object_id(object_id)
 
-    def get_published_activity_object_by_discord_message_id(
-        self, discord_message_id: int
-    ) -> PublishedActivityObject | None:
-        """Load one stored gateway-published object by Discord message ID."""
-        with self.session() as session:
-            return session.scalar(
-                select(PublishedActivityObject).where(
-                    PublishedActivityObject.discord_message_id == discord_message_id
-                )
-            )
+    def get_published_activity_object_by_discord_message_id(self, discord_message_id: int) -> PublishedActivityObject | None:
+        """Temporarily forward to the Stage 6 activitypub_objects repository."""
+        return self.activitypub_objects.get_published_activity_object_by_discord_message_id(discord_message_id)
 
     # ---------------------------------------------------------------------------
     # Remote actor cache helpers
@@ -750,48 +669,13 @@ class Database:
     # inbox, or key lookup semantics.
     # ---------------------------------------------------------------------------
 
-    def upsert_remote_actor(
-        self,
-        *,
-        actor_url: str,
-        preferred_username: str | None,
-        inbox_url: str,
-        shared_inbox_url: str | None,
-        public_key_pem: str,
-    ) -> RemoteActor:
-        """Insert or refresh one cached remote actor record in place."""
-        # Remote actor fetches are repeatable, so this method updates the
-        # mutable addressing and key fields instead of creating duplicates.
-        with self.session() as session:
-            actor = session.scalar(
-                select(RemoteActor).where(RemoteActor.actor_url == actor_url)
-            )
-            if actor is None:
-                actor = RemoteActor(
-                    actor_url=actor_url,
-                    preferred_username=preferred_username,
-                    inbox_url=inbox_url,
-                    shared_inbox_url=shared_inbox_url,
-                    public_key_pem=public_key_pem,
-                )
-                session.add(actor)
-                session.flush()
-                return actor
-
-            actor.preferred_username = preferred_username
-            actor.inbox_url = inbox_url
-            actor.shared_inbox_url = shared_inbox_url
-            actor.public_key_pem = public_key_pem
-            actor.last_fetched_at = utcnow()
-            session.flush()
-            return actor
+    def upsert_remote_actor(self, *, actor_url: str, preferred_username: str | None, inbox_url: str, shared_inbox_url: str | None, public_key_pem: str) -> RemoteActor:
+        """Temporarily forward to the Stage 6 remote_actors repository."""
+        return self.remote_actors.upsert_remote_actor(actor_url=actor_url, preferred_username=preferred_username, inbox_url=inbox_url, shared_inbox_url=shared_inbox_url, public_key_pem=public_key_pem)
 
     def get_remote_actor_by_actor_url(self, actor_url: str) -> RemoteActor | None:
-        """Load the cached record for one remote ActivityPub actor."""
-        with self.session() as session:
-            return session.scalar(
-                select(RemoteActor).where(RemoteActor.actor_url == actor_url)
-            )
+        """Temporarily forward to the Stage 6 remote_actors repository."""
+        return self.remote_actors.get_remote_actor_by_actor_url(actor_url)
 
     # ---------------------------------------------------------------------------
     # Shared Discord thread fanout group helpers
