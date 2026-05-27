@@ -42,7 +42,7 @@ async function main(): Promise<void> {
 
 /**
  * Action: a Discord-authored post is published into a local community.
- * Expected: each accepted follower receives a community Announce wrapping the
+ * Expected: each accepted remote subscriber receives a community Announce wrapping the
  * user-authored Create(Page), and Python-facing ids remain the embedded ids.
  */
 async function testLocalCommunityPostPublishesAnnounceCreatePage(): Promise<void> {
@@ -149,7 +149,7 @@ async function testLocalCommunityCommentPublishesAnnounceCreateNote(): Promise<v
 }
 
 /**
- * Action: one accepted follower inbox rejects the announced activity.
+ * Action: one accepted remote-subscriber inbox rejects the announced activity.
  * Expected: fanout continues to healthy followers and reports per-target counts.
  */
 async function testLocalCommunityPublishReportsPartialFailure(): Promise<void> {
@@ -282,7 +282,7 @@ async function buildConfig(logLevel: "info" | "debug" = "info"): Promise<Gateway
       )
     `);
     db.run(`
-      CREATE TABLE local_community_followers (
+      CREATE TABLE remote_subscribers (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
         local_community_id INTEGER NOT NULL,
         remote_actor_id VARCHAR(512) NOT NULL,
@@ -326,7 +326,7 @@ async function buildConfig(logLevel: "info" | "debug" = "info"): Promise<Gateway
     );
     db.run(
       `
-        INSERT INTO local_community_followers (
+        INSERT INTO remote_subscribers (
           local_community_id,
           remote_actor_id,
           remote_inbox_url,

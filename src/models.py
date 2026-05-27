@@ -420,11 +420,6 @@ class LocalSubscriber(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, nullable=False)
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, onupdate=utcnow, nullable=False)
 
-
-# Compatibility alias while Stage 1 migrates old follower terminology to the
-# explicit remote-subscriber name across the rest of the codebase.
-LocalCommunityFollower = RemoteSubscriber
-
 class LocalCommunityRelaySourceActivity(Base):
     """Store one immutable inbound ActivityPub source activity for relay.
 

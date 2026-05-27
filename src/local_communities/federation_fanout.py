@@ -36,8 +36,8 @@ class LocalCommunityFederationFanout:
         self.fedify_gateway = fedify_gateway
 
     async def relay_create(self, *, event: object, local_community: object, object_kind: str) -> RelayFanoutSummary:
-        """Relay one inbound remote create to other accepted followers."""
-        return await self._relay_to_accepted_followers(
+        """Relay one inbound remote create to other accepted remote subscribers."""
+        return await self._relay_to_accepted_remote_subscribers(
             event=event,
             local_community=local_community,
             object_kind=object_kind,
@@ -50,18 +50,18 @@ class LocalCommunityFederationFanout:
             local_community_id=getattr(local_community, "id"),
             source_object_ap_id=getattr(getattr(event, "object"), "ap_id"),
         )
-        accepted_followers = {
-            follower.remote_actor_id: follower
-            for follower in self.database.list_local_community_followers(
+        accepted_remote_subscribers = {
+            remote_subscriber.remote_actor_id: remote_subscriber
+            for remote_subscriber in self.database.list_remote_subscribers(
                 getattr(local_community, "id"), status="accepted"
             )
         }
         targets = []
         for row in delivered_create_targets:
             # Historical delivery rows prove the original create reached this
-            # actor. Current follower rows decide whether update/delete relay is
+            # actor. Current remote-subscriber rows decide whether update/delete relay is
             # still allowed after an unfollow or re-follow.
-            current = accepted_followers.get(row.target_remote_actor_id)
+            current = accepted_remote_subscribers.get(row.target_remote_actor_id)
             if current is None:
                 continue
             targets.append({
@@ -77,20 +77,22 @@ class LocalCommunityFederationFanout:
             targets=targets,
         )
 
-    async def _relay_to_accepted_followers(self, *, event: object, local_community: object, object_kind: str, operation: str) -> RelayFanoutSummary:
-        """Select accepted targets excluding the origin actor, then relay."""
-        followers = self.database.list_local_community_followers(getattr(local_community, "id"), status="accepted")
+    async def _relay_to_accepted_remote_subscribers(self, *, event: object, local_community: object, object_kind: str, operation: str) -> RelayFanoutSummary:
+        """Select accepted remote-subscriber targets excluding the origin actor, then relay."""
+        remote_subscribers = self.database.list_remote_subscribers(
+            getattr(local_community, "id"), status="accepted"
+        )
         targets = []
-        for follower in followers:
+        for remote_subscriber in remote_subscribers:
             # Never send the relayed activity back to the actor that authored it;
             # this avoids loops and duplicate UI entries on the origin instance.
-            if follower.remote_actor_id == getattr(event, "actor_id"):
+            if remote_subscriber.remote_actor_id == getattr(event, "actor_id"):
                 continue
             targets.append(
                 {
-                    "remote_actor_id": follower.remote_actor_id,
-                    "remote_inbox_url": follower.remote_inbox_url,
-                    "delivery_profile": getattr(follower, "delivery_profile", "threadiverse_group"),
+                    "remote_actor_id": remote_subscriber.remote_actor_id,
+                    "remote_inbox_url": remote_subscriber.remote_inbox_url,
+                    "delivery_profile": getattr(remote_subscriber, "delivery_profile", "threadiverse_group"),
                 }
             )
         return await self._relay_to_targets(

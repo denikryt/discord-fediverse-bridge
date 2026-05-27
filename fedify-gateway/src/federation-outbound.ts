@@ -183,7 +183,7 @@ export function buildLemmyCompatibleUnfollowActivity(
   // Lemmy 0.19.x models Undo(Follow) with an embedded Follow object rather
   // than an IRI. Including the community in both outer and inner `to` mirrors
   // Lemmy's own fixture shape and lets Lemmy resolve the target community
-  // before it deletes the corresponding community_follower row.
+  // before it deletes the corresponding remote-subscriber row.
   const communityActorUrl = new URL(communityId);
   return new Undo({
     id: new URL(
@@ -253,13 +253,13 @@ export async function publishLocalCommunityContent(
 ): Promise<PublishLocalCommunityContentResult> {
   // Local-community fanout is performed by the bridge-owned community actor.
   // The embedded Create remains user-authored, while the outer Announce makes
-  // delivery look like Lemmy Group fanout to Mastodon and other followers.
-  const followers = await loadAcceptedRemoteSubscribersByActorUrl(
+  // delivery look like Lemmy Group fanout to Mastodon and other remote subscribers.
+  const remoteSubscribers = await loadAcceptedRemoteSubscribersByActorUrl(
     config,
     request.communityActorUrl,
   );
-  if (followers.length === 0) {
-    throw new Error("Local community has no accepted followers");
+  if (remoteSubscribers.length === 0) {
+    throw new Error("Local community has no accepted remote subscribers");
   }
 
   const signingKey = await loadLocalCommunitySigningKeyByActorUrl(
@@ -288,35 +288,35 @@ export async function publishLocalCommunityContent(
   const objectId = builtCreate.objectId;
   const activityId = builtCreate.activityId;
 
-  let deliveredFollowerCount = 0;
-  let failedFollowerCount = 0;
+  let deliveredRemoteSubscriberCount = 0;
+  let failedRemoteSubscriberCount = 0;
 
   const debugDelivery = shouldLogSignedJsonDelivery(config);
 
-  for (const follower of followers) {
+  for (const remoteSubscriber of remoteSubscribers) {
     try {
       await sendSignedJsonActivity(
         "LocalCommunityPublish",
-        follower.remoteInboxUrl,
+        remoteSubscriber.remoteInboxUrl,
         signingKey,
         activityJson,
         { debugDelivery },
       );
       console.log("[LocalCommunityPublish] delivery completed:", {
-        remoteActorId: follower.remoteActorId,
-        remoteInboxUrl: follower.remoteInboxUrl,
+        remoteActorId: remoteSubscriber.remoteActorId,
+        remoteInboxUrl: remoteSubscriber.remoteInboxUrl,
         signingKeyId: signingKey.keyId.href,
         deliveryBackend: "signed-json",
         debugDelivery,
       });
-      deliveredFollowerCount += 1;
+      deliveredRemoteSubscriberCount += 1;
     } catch (error) {
-      // Fanout must continue toward healthy followers even if one target
+      // Fanout must continue toward healthy remote subscribers even if one target
       // rejects the activity or is temporarily unreachable.
-      failedFollowerCount += 1;
+      failedRemoteSubscriberCount += 1;
       console.error("[LocalCommunityPublish] signed JSON delivery failed:", {
-        remoteActorId: follower.remoteActorId,
-        remoteInboxUrl: follower.remoteInboxUrl,
+        remoteActorId: remoteSubscriber.remoteActorId,
+        remoteInboxUrl: remoteSubscriber.remoteInboxUrl,
         signingKeyId: signingKey.keyId.href,
         deliveryBackend: "signed-json",
         debugDelivery,
@@ -325,16 +325,16 @@ export async function publishLocalCommunityContent(
     }
   }
 
-  if (deliveredFollowerCount === 0) {
-    throw new Error("Local community publish failed for all accepted followers");
+  if (deliveredRemoteSubscriberCount === 0) {
+    throw new Error("Local community publish failed for all accepted remote subscribers");
   }
 
   return {
     activityId: activityId.href,
     objectId: objectId.href,
     communityActorUrl: request.communityActorUrl,
-    deliveredFollowerCount,
-    failedFollowerCount,
+    deliveredFollowerCount: deliveredRemoteSubscriberCount,
+    failedFollowerCount: failedRemoteSubscriberCount,
   };
 }
 

@@ -939,7 +939,7 @@ class Database:
             return session.scalar(select(User).where(User.actor_url == actor_url))
 
     # ---------------------------------------------------------------------------
-    # Local community identity and follower helpers
+    # Local community identity and remote-subscriber helpers
     #
     # Navigation marker for repository helpers in this persistence area.
     # ---------------------------------------------------------------------------
@@ -1032,16 +1032,16 @@ class Database:
     ) -> RemoteSubscriber:
         """Persist one remote subscriber for a local community."""
         with self.session() as session:
-            follower = RemoteSubscriber(
+            remote_subscriber = RemoteSubscriber(
                 local_community_id=local_community_id,
                 remote_actor_id=remote_actor_id,
                 remote_inbox_url=remote_inbox_url,
                 follow_activity_id=follow_activity_id,
                 status=status,
             )
-            session.add(follower)
+            session.add(remote_subscriber)
             session.flush()
-            return follower
+            return remote_subscriber
 
     def get_remote_subscriber(
         self,
@@ -1081,28 +1081,28 @@ class Database:
         """Refresh one remote-subscriber row before re-sending Accept(Follow).
 
         Mastodon and other ActivityPub servers can retry a Follow after the
-        bridge already persisted the follower but the original Accept was lost
+        bridge already persisted the remote subscriber but the original Accept was lost
         or rejected. Updating the inbox and Follow ID keeps the recovery Accept
-        tied to the latest request while preserving the existing follower row.
+        tied to the latest request while preserving the existing subscriber row.
         """
         with self.session() as session:
-            follower = session.scalar(
+            remote_subscriber = session.scalar(
                 select(RemoteSubscriber).where(
                     RemoteSubscriber.local_community_id == local_community_id,
                     RemoteSubscriber.remote_actor_id == remote_actor_id,
                 )
             )
-            if follower is None:
+            if remote_subscriber is None:
                 return None
             # The remote actor can send a fresh Follow with a different activity
             # ID or inbox; the Accept must target the current request, not stale
             # values from an earlier delivery attempt.
-            follower.remote_inbox_url = remote_inbox_url
-            follower.follow_activity_id = follow_activity_id
-            follower.status = status
-            follower.updated_at = utcnow()
+            remote_subscriber.remote_inbox_url = remote_inbox_url
+            remote_subscriber.follow_activity_id = follow_activity_id
+            remote_subscriber.status = status
+            remote_subscriber.updated_at = utcnow()
             session.flush()
-            return follower
+            return remote_subscriber
 
     def delete_remote_subscriber(
         self,
@@ -1117,15 +1117,15 @@ class Database:
         of truth for future fanout.
         """
         with self.session() as session:
-            follower = session.scalar(
+            remote_subscriber = session.scalar(
                 select(RemoteSubscriber).where(
                     RemoteSubscriber.local_community_id == local_community_id,
                     RemoteSubscriber.remote_actor_id == remote_actor_id,
                 )
             )
-            if follower is None:
+            if remote_subscriber is None:
                 return False
-            session.delete(follower)
+            session.delete(remote_subscriber)
             session.flush()
             return True
 
@@ -1259,45 +1259,6 @@ class Database:
                     )
                 )
             )
-
-    # Compatibility wrappers while Stage 1 finishes migrating the rest of the
-    # codebase from old follower terminology to explicit participant names.
-    def create_local_community_follower(self, **kwargs: object) -> RemoteSubscriber:
-        """Compatibility wrapper for old remote-follower repository naming."""
-        return self.create_remote_subscriber(**kwargs)
-
-    def get_local_community_follower(self, **kwargs: object) -> RemoteSubscriber | None:
-        """Compatibility wrapper for old remote-follower repository naming."""
-        return self.get_remote_subscriber(**kwargs)
-
-    def get_local_community_follower_by_follow_activity_id(self, follow_activity_id: str) -> RemoteSubscriber | None:
-        """Compatibility wrapper for old remote-follower repository naming."""
-        return self.get_remote_subscriber_by_follow_activity_id(follow_activity_id)
-
-    def update_local_community_follower_acceptance(self, **kwargs: object) -> RemoteSubscriber | None:
-        """Compatibility wrapper for old remote-follower repository naming."""
-        return self.update_remote_subscriber_acceptance(**kwargs)
-
-    def delete_local_community_follower(self, **kwargs: object) -> bool:
-        """Compatibility wrapper for old remote-follower repository naming."""
-        return self.delete_remote_subscriber(**kwargs)
-
-    def list_local_community_followers(
-        self,
-        local_community_id: int,
-        *,
-        status: str | None = "accepted",
-    ) -> list[RemoteSubscriber]:
-        """Compatibility wrapper for old remote-follower repository naming."""
-        return self.list_remote_subscribers(local_community_id, status=status)
-
-    def list_local_community_followers_for_all(
-        self,
-        *,
-        status: str | None = "accepted",
-    ) -> list[RemoteSubscriber]:
-        """Compatibility wrapper for old remote-follower repository naming."""
-        return self.list_remote_subscribers_for_all(status=status)
 
     # ---------------------------------------------------------------------------
     # Local community content mapping helpers

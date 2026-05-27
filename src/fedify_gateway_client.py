@@ -57,7 +57,7 @@ class PublishLocalCommunityContentResult:
     """Describe one local-community publish fanout outcome.
 
     Local-community publishes still produce one canonical AP activity/object id
-    pair, but the gateway also reports how many accepted followers received the
+    pair, but the gateway also reports how many accepted remote subscribers received the
     delivery so Python can distinguish this path from ordinary remote-community
     publishes.
     """

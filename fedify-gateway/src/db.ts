@@ -302,43 +302,19 @@ export async function loadAcceptedRemoteSubscribersByActorUrl(
 ): Promise<RemoteSubscriberRow[]> {
   const database = await openConfiguredDatabase(config);
   try {
-    let statement;
-    try {
-      statement = database.prepare(`
-        SELECT
-          follower.remote_actor_id,
-          follower.remote_inbox_url,
-          follower.follow_activity_id,
-          follower.status
-        FROM remote_subscribers AS follower
-        JOIN local_communities AS community
-          ON community.id = follower.local_community_id
-        WHERE community.actor_url = ?
-          AND follower.status = 'accepted'
-        ORDER BY follower.created_at, follower.id
-      `);
-    } catch (error) {
-      if (
-        isMissingLocalCommunitiesTableError(error) ||
-        isMissingRemoteSubscribersTableError(error)
-      ) {
-        statement = database.prepare(`
-          SELECT
-            follower.remote_actor_id,
-            follower.remote_inbox_url,
-            follower.follow_activity_id,
-            follower.status
-          FROM local_community_followers AS follower
-          JOIN local_communities AS community
-            ON community.id = follower.local_community_id
-          WHERE community.actor_url = ?
-            AND follower.status = 'accepted'
-          ORDER BY follower.created_at, follower.id
-        `);
-      } else {
-        throw error;
-      }
-    }
+    const statement = database.prepare(`
+      SELECT
+        follower.remote_actor_id,
+        follower.remote_inbox_url,
+        follower.follow_activity_id,
+        follower.status
+      FROM remote_subscribers AS follower
+      JOIN local_communities AS community
+        ON community.id = follower.local_community_id
+      WHERE community.actor_url = ?
+        AND follower.status = 'accepted'
+      ORDER BY follower.created_at, follower.id
+    `);
     try {
       statement.bind([actorUrl]);
       const rows: RemoteSubscriberRow[] = [];
@@ -688,20 +664,6 @@ function isMissingRemoteSubscribersTableError(error: unknown): boolean {
     error.message.includes("no such table: remote_subscribers")
   );
 }
-
-function isMissingLocalCommunityFollowersTableError(error: unknown): boolean {
-  return (
-    error instanceof Error &&
-    error.message.includes("no such table: local_community_followers")
-  );
-}
-
-/**
- * Compatibility export while Stage 1 callers finish moving from the old
- * follower terminology to explicit remote-subscriber naming.
- */
-export const loadAcceptedLocalCommunityFollowersByActorUrl =
-  loadAcceptedRemoteSubscribersByActorUrl;
 
 function isMissingUsersTableError(error: unknown): boolean {
   return (

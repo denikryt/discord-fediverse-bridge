@@ -65,7 +65,7 @@ This document explains the major runtime traces through the bridge: user/platfor
 3. Python calls gateway `/publish-local-community`; gateway creates local ActivityPub content and delivers it to accepted remote subscribers.
 4. Local Discord fanout creates missing target surfaces: host sources copy to local subscribers, while local subscriber sources copy to the host forum and sibling local subscribers.
 
-## Remote ActivityPub Follow -> local community follower flow
+## Remote ActivityPub Follow -> local community remote-subscriber flow
 
 1. Gateway receives Follow to a local community actor and emits `local.follow_requested`.
 2. Python stores `remote_subscribers` and asks gateway to send Accept(Follow).
@@ -97,7 +97,7 @@ This document explains the major runtime traces through the bridge: user/platfor
 1. Gateway receives embedded Undo(Follow) addressed to a local community actor.
 2. Gateway emits `local.unfollow_requested` when the target actor is owned by this bridge.
 3. Python removes the remote actor from `remote_subscribers`.
-4. Future create, update, and delete fanout uses current accepted followers and excludes the removed actor.
+4. Future create, update, and delete fanout uses current accepted remote subscribers and excludes the removed actor.
 
 
 ## Local subscriber Discord post/comment -> local community flow

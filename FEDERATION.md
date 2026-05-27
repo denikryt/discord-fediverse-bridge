@@ -124,14 +124,14 @@ Supported outbound activity patterns include:
 | --- | --- |
 | `Follow` | Bridge actor follows a remote community. |
 | `Undo(Follow)` | Bridge actor unfollows a remote community. |
-| `Accept(Follow)` | Local community accepts a remote follower. |
+| `Accept(Follow)` | Local community accepts a remote subscriber. |
 | `Create(Page)` | Discord forum thread published as a post-compatible object. |
 | `Create(Note)` | Discord message/reply published as a comment-compatible object. |
 | `Update(Page|Note)` | Edit propagation for supported post/comment objects. |
 | `Delete` | Delete propagation for supported post/comment objects. |
-| `Announce(Create(...))` | Local community relays supported content to followers. |
-| `Announce(Update(...))` | Local community relays supported edits to followers. |
-| `Announce(Delete(...))` | Local community relays supported deletes to followers. |
+| `Announce(Create(...))` | Local community relays supported content to remote subscribers. |
+| `Announce(Update(...))` | Local community relays supported edits to remote subscribers. |
+| `Announce(Delete(...))` | Local community relays supported deletes to remote subscribers. |
 
 Some outbound delivery uses Fedify's federation APIs. Some compatibility paths use manually rendered ActivityStreams JSON and signed HTTP delivery where the bridge needs precise Lemmy/threadiverse-compatible payload shapes.
 

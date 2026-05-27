@@ -2,7 +2,7 @@
 
 LocalCommunityRuntime owns the local-community domain boundary: routing from
 Discord forum channels into a local federated community actor, and routing from
-remote followers back into Discord. Shared content mechanics are delegated to
+remote subscribers back into Discord. Shared content mechanics are delegated to
 the common content-sync layer so this runtime only owns local-community policy
 and canonical local-community mapping rows.
 """
@@ -383,12 +383,12 @@ class LocalCommunityRuntime:
                 object_kind="post",
             )
             return _HandlerResult(status="skipped", detail="post already mapped")
-        follower = self.database.get_local_community_follower(
+        remote_subscriber = self.database.get_remote_subscriber(
             local_community_id=getattr(local_community, "id"),
             remote_actor_id=getattr(event, "actor_id"),
         )
-        if follower is None or getattr(follower, "status") != "accepted":
-            return _HandlerResult(status="skipped", detail="remote actor is not an accepted follower")
+        if remote_subscriber is None or getattr(remote_subscriber, "status") != "accepted":
+            return _HandlerResult(status="skipped", detail="remote actor is not an accepted remote subscriber")
         if self.bot is None:
             raise RuntimeError("LocalCommunityRuntime requires bot for inbound Discord delivery")
 
@@ -449,12 +449,12 @@ class LocalCommunityRuntime:
                 object_kind="comment",
             )
             return _HandlerResult(status="skipped", detail="comment already mapped")
-        follower = self.database.get_local_community_follower(
+        remote_subscriber = self.database.get_remote_subscriber(
             local_community_id=getattr(local_community, "id"),
             remote_actor_id=getattr(event, "actor_id"),
         )
-        if follower is None or getattr(follower, "status") != "accepted":
-            return _HandlerResult(status="skipped", detail="remote actor is not an accepted follower")
+        if remote_subscriber is None or getattr(remote_subscriber, "status") != "accepted":
+            return _HandlerResult(status="skipped", detail="remote actor is not an accepted remote subscriber")
 
         thread_row = self.database.get_local_community_thread_by_ap_object_id(getattr(getattr(event, "object"), "post_ap_id"))
         if thread_row is None:
@@ -937,33 +937,33 @@ class LocalCommunityRuntime:
         local_community = self.database.get_local_community_by_actor_url(local_community_actor_id)
         if local_community is None:
             return _HandlerResult(status="skipped", detail="unknown local community")
-        existing = self.database.get_local_community_follower(
+        existing = self.database.get_remote_subscriber(
             local_community_id=getattr(local_community, "id"),
             remote_actor_id=remote_actor_id,
         )
         if existing is not None:
             # Accept(Follow) delivery is intentionally idempotent. A remote
             # server such as Mastodon can remain in a "requested" state if the
-            # bridge persisted the follower but the original Accept was lost, so
+            # bridge persisted the remote subscriber but the original Accept was lost, so
             # repeated Follow deliveries must refresh the stored request details
             # and re-send the Accept instead of returning early.
-            self.database.update_local_community_follower_acceptance(
+            self.database.update_remote_subscriber_acceptance(
                 local_community_id=getattr(local_community, "id"),
                 remote_actor_id=remote_actor_id,
                 remote_inbox_url=remote_inbox_url,
                 follow_activity_id=follow_activity_id,
                 status="accepted",
             )
-            detail = "local community follower accepted again"
+            detail = "local community remote subscriber accepted again"
         else:
-            self.database.create_local_community_follower(
+            self.database.create_remote_subscriber(
                 local_community_id=getattr(local_community, "id"),
                 remote_actor_id=remote_actor_id,
                 remote_inbox_url=remote_inbox_url,
                 follow_activity_id=follow_activity_id,
                 status="accepted",
             )
-            detail = "local community follower accepted"
+            detail = "local community remote subscriber accepted"
 
         logger.info(
             "Accepting local-community Follow community=%s remote_actor=%s inbox=%s follow_activity=%s",
@@ -988,28 +988,28 @@ class LocalCommunityRuntime:
         remote_actor_id: str,
         follow_activity_id: str | None,
     ) -> HandlerResult:
-        """Remove one remote actor from a local community follower set."""
+        """Remove one remote actor from a local community remote-subscriber set."""
         from ..activitypub_handlers import HandlerResult as _HandlerResult
 
         local_community = self.database.get_local_community_by_actor_url(local_community_actor_id)
         if local_community is None:
             return _HandlerResult(status="skipped", detail="unknown local community")
-        follower = self.database.get_local_community_follower(
+        remote_subscriber = self.database.get_remote_subscriber(
             local_community_id=getattr(local_community, "id"),
             remote_actor_id=remote_actor_id,
         )
-        if follower is None:
-            return _HandlerResult(status="skipped", detail="local community follower not found")
-        if follow_activity_id is not None and getattr(follower, "follow_activity_id") != follow_activity_id:
+        if remote_subscriber is None:
+            return _HandlerResult(status="skipped", detail="local community remote subscriber not found")
+        if follow_activity_id is not None and getattr(remote_subscriber, "follow_activity_id") != follow_activity_id:
             logger.info(
                 "Local-community unfollow Follow ID mismatch community=%s remote_actor=%s stored=%s incoming=%s",
-                getattr(local_community, "slug"), remote_actor_id, getattr(follower, "follow_activity_id"), follow_activity_id,
+                getattr(local_community, "slug"), remote_actor_id, getattr(remote_subscriber, "follow_activity_id"), follow_activity_id,
             )
-        self.database.delete_local_community_follower(
+        self.database.delete_remote_subscriber(
             local_community_id=getattr(local_community, "id"),
             remote_actor_id=remote_actor_id,
         )
-        return _HandlerResult(status="processed", detail="local community follower removed")
+        return _HandlerResult(status="processed", detail="local community remote subscriber removed")
 
     @staticmethod
     def _unpack_created_thread(created: object) -> tuple[object, object]:

@@ -236,7 +236,7 @@ async def test_inbound_remote_post_fans_out_locally_and_still_relays_remotely(tm
     local_community = _local_community(database)
     _add_local_subscribers(database, local_community)
     for name in ["bob", "alice"]:
-        database.create_local_community_follower(
+        database.create_remote_subscriber(
             local_community_id=local_community.id,
             remote_actor_id=f"https://lemmy.example/u/{name}",
             remote_inbox_url=f"https://lemmy.example/u/{name}/inbox",
@@ -264,7 +264,7 @@ async def test_inbound_remote_comment_creates_local_subscriber_message_surfaces(
     database, runtime = _runtime(tmp_path)
     local_community = _local_community(database)
     _add_local_subscribers(database, local_community)
-    database.create_local_community_follower(
+    database.create_remote_subscriber(
         local_community_id=local_community.id,
         remote_actor_id="https://lemmy.example/u/bob",
         remote_inbox_url="https://lemmy.example/u/bob/inbox",

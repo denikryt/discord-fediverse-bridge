@@ -102,19 +102,19 @@ def test_local_communities_show_safe_public_metadata_and_counts(tmp_path: Path) 
         public_key_pem="public-key",
         private_key_pem="private-key",
     )
-    database.create_local_community_follower(
+    database.create_remote_subscriber(
         local_community_id=community.id,
         remote_actor_id="https://lemmy.world/u/alice",
         remote_inbox_url="https://lemmy.world/u/alice/inbox",
         follow_activity_id="https://lemmy.world/activities/follow/alice",
     )
-    database.create_local_community_follower(
+    database.create_remote_subscriber(
         local_community_id=community.id,
         remote_actor_id="https://beehaw.org/u/bob",
         remote_inbox_url="https://beehaw.org/u/bob/inbox",
         follow_activity_id="https://beehaw.org/activities/follow/bob",
     )
-    database.create_local_community_follower(
+    database.create_remote_subscriber(
         local_community_id=community.id,
         remote_actor_id="https://pending.example/u/carol",
         remote_inbox_url="https://pending.example/u/carol/inbox",
@@ -155,7 +155,7 @@ def test_bridge_actor_follows_do_not_change_federation_policy_payload(tmp_path: 
         community_inbox_url="https://lemmy.world/c/news/inbox",
         status="accepted",
     )
-    database.create_local_community_follower(
+    database.create_remote_subscriber(
         local_community_id=community.id,
         remote_actor_id="https://beehaw.org/u/bob",
         remote_inbox_url="https://beehaw.org/u/bob/inbox",

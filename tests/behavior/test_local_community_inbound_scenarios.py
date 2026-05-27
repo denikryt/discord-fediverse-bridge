@@ -112,10 +112,10 @@ def _comment_event(
 
 
 @pytest.mark.asyncio
-async def test_remote_follow_to_local_community_persists_follower_and_sends_accept(
+async def test_remote_follow_to_local_community_persists_remote_subscriber_and_sends_accept(
     tmp_path: Path,
 ) -> None:
-    """A local-community follow request should persist the follower and accept it."""
+    """A local-community follow request should persist the remote subscriber and accept it."""
     database, runtime = _runtime(tmp_path)
     local_community = _local_community(database)
 
@@ -125,13 +125,13 @@ async def test_remote_follow_to_local_community_persists_follower_and_sends_acce
         remote_inbox_url="https://lemmy.example/u/bob/inbox",
         follow_activity_id="https://lemmy.example/activities/follow/1",
     )
-    follower = database.get_local_community_follower(
+    remote_subscriber = database.get_remote_subscriber(
         local_community_id=local_community.id,
         remote_actor_id="https://lemmy.example/u/bob",
     )
 
     assert result.status == "processed"
-    assert follower is not None
+    assert remote_subscriber is not None
     runtime.fedify_gateway.accept_local_community_follow.assert_awaited_once()
 
 
@@ -142,7 +142,7 @@ async def test_repeated_remote_follow_resends_accept_and_refreshes_request_detai
     """A repeated Follow should recover a lost Accept without duplicating rows."""
     database, runtime = _runtime(tmp_path)
     local_community = _local_community(database)
-    database.create_local_community_follower(
+    database.create_remote_subscriber(
         local_community_id=local_community.id,
         remote_actor_id="https://mastodon.social/ap/users/116015738644832902",
         remote_inbox_url="https://mastodon.social/ap/users/116015738644832902/old-inbox",
@@ -156,17 +156,17 @@ async def test_repeated_remote_follow_resends_accept_and_refreshes_request_detai
         remote_inbox_url="https://mastodon.social/ap/users/116015738644832902/inbox",
         follow_activity_id="https://mastodon.social/new-follow",
     )
-    follower = database.get_local_community_follower(
+    remote_subscriber = database.get_remote_subscriber(
         local_community_id=local_community.id,
         remote_actor_id="https://mastodon.social/ap/users/116015738644832902",
     )
-    followers = database.list_local_community_followers(local_community.id, status=None)
+    remote_subscribers = database.list_remote_subscribers(local_community.id, status=None)
 
     assert result.status == "processed"
-    assert follower is not None
-    assert follower.remote_inbox_url == "https://mastodon.social/ap/users/116015738644832902/inbox"
-    assert follower.follow_activity_id == "https://mastodon.social/new-follow"
-    assert len(followers) == 1
+    assert remote_subscriber is not None
+    assert remote_subscriber.remote_inbox_url == "https://mastodon.social/ap/users/116015738644832902/inbox"
+    assert remote_subscriber.follow_activity_id == "https://mastodon.social/new-follow"
+    assert len(remote_subscribers) == 1
     runtime.fedify_gateway.accept_local_community_follow.assert_awaited_once_with(
         community_slug="hackers",
         community_actor_url=local_community.actor_url,
@@ -180,10 +180,10 @@ async def test_repeated_remote_follow_resends_accept_and_refreshes_request_detai
 async def test_remote_follower_top_level_post_creates_new_discord_thread(
     tmp_path: Path,
 ) -> None:
-    """An accepted remote follower should create a Discord thread for a new post."""
+    """An accepted remote subscriber should create a Discord thread for a new post."""
     database, runtime = _runtime(tmp_path)
     local_community = _local_community(database)
-    database.create_local_community_follower(
+    database.create_remote_subscriber(
         local_community_id=local_community.id,
         remote_actor_id="https://lemmy.example/u/bob",
         remote_inbox_url="https://lemmy.example/u/bob/inbox",
@@ -210,7 +210,7 @@ async def test_remote_follower_nested_reply_uses_real_discord_message_reference(
     """A nested remote reply must pass a real discord.py MessageReference."""
     database, runtime = _runtime(tmp_path)
     local_community = _local_community(database)
-    database.create_local_community_follower(
+    database.create_remote_subscriber(
         local_community_id=local_community.id,
         remote_actor_id="https://lemmy.example/u/bob",
         remote_inbox_url="https://lemmy.example/u/bob/inbox",
@@ -272,7 +272,7 @@ async def test_remote_follower_nested_reply_uses_real_discord_message_reference(
 async def test_remote_non_follower_top_level_post_is_skipped(
     tmp_path: Path,
 ) -> None:
-    """A remote actor without an accepted follower row should not create a thread."""
+    """A remote actor without an accepted remote-subscriber row should not create a thread."""
     database, runtime = _runtime(tmp_path)
     _local_community(database)
     forum_channel = build_forum_channel_tuple_result(
@@ -292,10 +292,10 @@ async def test_remote_non_follower_top_level_post_is_skipped(
 async def test_remote_follower_reply_creates_message_in_mapped_thread(
     tmp_path: Path,
 ) -> None:
-    """An accepted remote follower reply should create a Discord message in the mapped thread."""
+    """An accepted remote subscriber reply should create a Discord message in the mapped thread."""
     database, runtime = _runtime(tmp_path)
     local_community = _local_community(database)
-    database.create_local_community_follower(
+    database.create_remote_subscriber(
         local_community_id=local_community.id,
         remote_actor_id="https://lemmy.example/u/bob",
         remote_inbox_url="https://lemmy.example/u/bob/inbox",
@@ -342,7 +342,7 @@ async def test_remote_follower_reply_keeps_existing_generic_mapping(
     """
     database, runtime = _runtime(tmp_path)
     local_community = _local_community(database)
-    database.create_local_community_follower(
+    database.create_remote_subscriber(
         local_community_id=local_community.id,
         remote_actor_id="https://lemmy.example/u/bob",
         remote_inbox_url="https://lemmy.example/u/bob/inbox",
@@ -380,15 +380,15 @@ async def test_remote_follower_reply_keeps_existing_generic_mapping(
 
 
 @pytest.mark.asyncio
-async def test_remote_unfollow_to_local_community_removes_follower(tmp_path: Path) -> None:
-    """A local-community Undo(Follow) should remove the accepted follower row."""
+async def test_remote_unfollow_to_local_community_removes_remote_subscriber(tmp_path: Path) -> None:
+    """A local-community Undo(Follow) should remove the accepted remote-subscriber row."""
     database, runtime = _runtime(tmp_path)
     local_community = _local_community(database)
-    database.create_local_community_follower(local_community_id=local_community.id, remote_actor_id="https://lemmy.example/u/alice", remote_inbox_url="https://lemmy.example/u/alice/inbox", follow_activity_id="https://lemmy.example/activities/follow/abc", status="accepted")
+    database.create_remote_subscriber(local_community_id=local_community.id, remote_actor_id="https://lemmy.example/u/alice", remote_inbox_url="https://lemmy.example/u/alice/inbox", follow_activity_id="https://lemmy.example/activities/follow/abc", status="accepted")
     result = await runtime.handle_unfollow_request(local_community_actor_id=local_community.actor_url, remote_actor_id="https://lemmy.example/u/alice", follow_activity_id="https://lemmy.example/activities/follow/abc")
     assert result.status == "processed"
-    assert result.detail == "local community follower removed"
-    assert database.get_local_community_follower(local_community_id=local_community.id, remote_actor_id="https://lemmy.example/u/alice") is None
+    assert result.detail == "local community remote subscriber removed"
+    assert database.get_remote_subscriber(local_community_id=local_community.id, remote_actor_id="https://lemmy.example/u/alice") is None
 
 
 @pytest.mark.asyncio
@@ -398,19 +398,19 @@ async def test_duplicate_remote_unfollow_to_local_community_is_idempotent(tmp_pa
     local_community = _local_community(database)
     result = await runtime.handle_unfollow_request(local_community_actor_id=local_community.actor_url, remote_actor_id="https://lemmy.example/u/alice", follow_activity_id="https://lemmy.example/activities/follow/abc")
     assert result.status == "skipped"
-    assert result.detail == "local community follower not found"
+    assert result.detail == "local community remote subscriber not found"
 
 
 @pytest.mark.asyncio
-async def test_follow_after_unfollow_recreates_local_community_follower(tmp_path: Path) -> None:
-    """A fresh Follow after removal should recreate the follower row."""
+async def test_follow_after_unfollow_recreates_local_community_remote_subscriber(tmp_path: Path) -> None:
+    """A fresh Follow after removal should recreate the remote-subscriber row."""
     database, runtime = _runtime(tmp_path)
     local_community = _local_community(database)
-    database.create_local_community_follower(local_community_id=local_community.id, remote_actor_id="https://lemmy.example/u/alice", remote_inbox_url="https://lemmy.example/u/alice/old-inbox", follow_activity_id="https://lemmy.example/activities/follow/old", status="accepted")
+    database.create_remote_subscriber(local_community_id=local_community.id, remote_actor_id="https://lemmy.example/u/alice", remote_inbox_url="https://lemmy.example/u/alice/old-inbox", follow_activity_id="https://lemmy.example/activities/follow/old", status="accepted")
     await runtime.handle_unfollow_request(local_community_actor_id=local_community.actor_url, remote_actor_id="https://lemmy.example/u/alice", follow_activity_id="https://lemmy.example/activities/follow/old")
     result = await runtime.handle_follow_request(local_community_actor_id=local_community.actor_url, remote_actor_id="https://lemmy.example/u/alice", remote_inbox_url="https://lemmy.example/u/alice/new-inbox", follow_activity_id="https://lemmy.example/activities/follow/new")
-    follower = database.get_local_community_follower(local_community_id=local_community.id, remote_actor_id="https://lemmy.example/u/alice")
+    remote_subscriber = database.get_remote_subscriber(local_community_id=local_community.id, remote_actor_id="https://lemmy.example/u/alice")
     assert result.status == "processed"
-    assert follower is not None
-    assert follower.remote_inbox_url == "https://lemmy.example/u/alice/new-inbox"
-    assert follower.follow_activity_id == "https://lemmy.example/activities/follow/new"
+    assert remote_subscriber is not None
+    assert remote_subscriber.remote_inbox_url == "https://lemmy.example/u/alice/new-inbox"
+    assert remote_subscriber.follow_activity_id == "https://lemmy.example/activities/follow/new"
