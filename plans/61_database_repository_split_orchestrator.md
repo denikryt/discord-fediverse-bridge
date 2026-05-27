@@ -23,6 +23,15 @@ repeat from orchestrator for next stage
 The executor must follow this process until the database repository split is
 complete through Stage 8.
 
+The executor must continue through all remaining stages in one uninterrupted
+execution sequence unless an explicit blocker prevents safe progress. Finishing
+a stage, producing a commit, or producing a bundle is not a stopping point by
+itself. After each bundle, immediately restart the loop from this orchestrator
+and continue with the next stage. Stop only for a concrete blocker such as an
+unresolvable test failure, missing required project files, unavailable tooling,
+a conflict with these rules or the umbrella scope, or an explicit user request
+to pause or stop.
+
 ## Scope
 
 This orchestrator applies only to the database repository split described by:
