@@ -2,6 +2,8 @@
 
 This document explains the SQLAlchemy schema by ownership area, primary writers/readers, and invariants. It owns table-level navigation and persistence concepts; it does not define migrations or runtime algorithms.
 
+Method-level repository split planning lives in `docs/architecture/database-method-inventory.md`. That inventory maps every public `Database` method to its target repository owner, primary call-site areas, relevant tests, and extraction risks.
+
 | Table | SQLAlchemy model | Area | Primary writer | Primary readers | Why it exists | Important invariants |
 | --- | --- | --- | --- | --- | --- | --- |
 | `post_links` | `PostLink` | Legacy/direct Lemmy mapping | Remote sync runtime | Remote sync runtime | Map Lemmy posts to Discord forum threads | Unique target thread; one row per post/channel copy |
