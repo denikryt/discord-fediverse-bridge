@@ -69,17 +69,17 @@ class LocalCommunityService:
             raise LocalCommunityError("Community name is required.")
         if not normalized_description:
             raise LocalCommunityError("Community description is required.")
-        if self.database.get_local_community_by_slug(normalized_slug) is not None:
+        if self.database.local_communities.get_local_community_by_slug(normalized_slug) is not None:
             raise LocalCommunityError("That community slug is already taken.")
         if (
-            self.database.get_local_community_by_forum_channel_id(discord_forum_channel_id)
+            self.database.local_communities.get_local_community_by_forum_channel_id(discord_forum_channel_id)
             is not None
         ):
             raise LocalCommunityError("That forum channel is already bound to a local community.")
 
         actor_url, inbox_url, outbox_url, followers_url = self.build_actor_urls(normalized_slug)
         public_key_pem, private_key_pem = self.keypair_generator()
-        created = self.database.create_local_community(
+        created = self.database.local_communities.create_local_community(
             discord_guild_id=discord_guild_id,
             discord_forum_channel_id=discord_forum_channel_id,
             slug=normalized_slug,

@@ -75,9 +75,9 @@ async def test_registered_user_thread_starter_in_local_community_publishes_post(
         thread=build_thread(),
         starter_message=build_starter_message(),
     )
-    thread_surface = database.get_local_community_thread_surface_by_discord_thread_id(200)
+    thread_surface = database.local_community_surfaces.get_local_community_thread_surface_by_discord_thread_id(200)
     assert thread_surface is not None
-    created = database.get_local_community_thread_for_surface(thread_surface.id)
+    created = database.local_community_surfaces.get_local_community_thread_for_surface(thread_surface.id)
 
     assert result.status == "published"
     assert created is not None
@@ -103,7 +103,7 @@ async def test_unregistered_user_thread_starter_in_local_community_is_rejected(
     )
 
     assert result.reason == "unregistered_user"
-    assert database.get_local_community_thread_surface_by_discord_thread_id(200) is None
+    assert database.local_community_surfaces.get_local_community_thread_surface_by_discord_thread_id(200) is None
     starter_message.reply.assert_awaited_once()
 
 
@@ -141,9 +141,9 @@ async def test_discord_reply_in_local_community_thread_publishes_comment_with_pa
     result = await runtime.handle_discord_message(
         message=build_thread_message(),
     )
-    message_surface = database.get_local_community_message_surface_by_discord_message_id(301)
+    message_surface = database.local_community_surfaces.get_local_community_message_surface_by_discord_message_id(301)
     assert message_surface is not None
-    created = database.get_local_community_message_for_surface(message_surface.id)
+    created = database.local_community_surfaces.get_local_community_message_for_surface(message_surface.id)
 
     assert result.status == "published"
     assert created is not None

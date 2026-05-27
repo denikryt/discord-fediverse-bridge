@@ -117,7 +117,7 @@ def test_oauth_success_then_registration_complete_creates_user_actor(
     client.get("/register")
     client.get("/auth/discord/start", follow_redirects=False)
     session_token = client.cookies.get("bridge_registration_session")
-    session = database.get_registration_session_by_token(session_token)
+    session = database.registration_sessions.get_registration_session_by_token(session_token)
     assert session is not None
     client.get(
         f"/auth/discord/callback?code=oauth-code&state={session.oauth_state}",
@@ -130,7 +130,7 @@ def test_oauth_success_then_registration_complete_creates_user_actor(
         headers={"content-type": "application/x-www-form-urlencoded"},
         follow_redirects=False,
     )
-    user = database.get_user_by_activitypub_username("alice")
+    user = database.users.get_user_by_activitypub_username("alice")
     success_page = client.get("/register/success")
 
     assert response.status_code == 303
@@ -152,7 +152,7 @@ def test_duplicate_discord_user_repeat_registration_shows_existing_actor(
 ) -> None:
     """A repeat registration must reuse the original actor instead of forking identity."""
     client, database = _client(tmp_path)
-    database.create_user(
+    database.users.create_user(
         discord_user_id="1234567890",
         activitypub_username="alice",
         actor_url=f"https://{BRIDGE_HOST_DOMAIN}/actors/alice",
@@ -166,7 +166,7 @@ def test_duplicate_discord_user_repeat_registration_shows_existing_actor(
     client.get("/register")
     client.get("/auth/discord/start", follow_redirects=False)
     session_token = client.cookies.get("bridge_registration_session")
-    session = database.get_registration_session_by_token(session_token)
+    session = database.registration_sessions.get_registration_session_by_token(session_token)
     assert session is not None
     client.get(
         f"/auth/discord/callback?code=oauth-code&state={session.oauth_state}",
@@ -182,7 +182,7 @@ def test_duplicate_discord_user_repeat_registration_shows_existing_actor(
     assert response.status_code == 200
     assert "Already registered" in response.text
     assert f"@alice@{BRIDGE_HOST_DOMAIN}" in response.text
-    assert database.get_user_by_activitypub_username("other-name") is None
+    assert database.users.get_user_by_activitypub_username("other-name") is None
 
 
 def test_invalid_oauth_state_is_rejected_without_creating_user(
@@ -199,4 +199,4 @@ def test_invalid_oauth_state_is_rejected_without_creating_user(
     )
 
     assert response.status_code == 400
-    assert database.get_user_by_discord_user_id("1234567890") is None
+    assert database.users.get_user_by_discord_user_id("1234567890") is None

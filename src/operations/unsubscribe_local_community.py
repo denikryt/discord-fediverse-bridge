@@ -26,7 +26,7 @@ class UnsubscribeLocalCommunityInput:
     def get_local_subscriber(self) -> object | None:
         """Load and memoize the local-subscriber row for the target channel."""
         if not self._local_subscriber_loaded:
-            self._local_subscriber = self.database.get_local_subscriber_by_channel(self.channel_id)
+            self._local_subscriber = self.database.local_subscribers.get_local_subscriber_by_channel(self.channel_id)
             self._local_subscriber_loaded = True
         return self._local_subscriber
 
@@ -57,11 +57,11 @@ def _body(operation_input: UnsubscribeLocalCommunityInput) -> OperationResult:
             reason="local_subscriber_missing_during_delete",
         )
 
-    local_community = operation_input.database.get_local_community_by_id(
+    local_community = operation_input.database.local_communities.get_local_community_by_id(
         getattr(local_subscriber, "local_community_id")
     )
     display_name = getattr(local_community, "display_name", "local community")
-    deleted = operation_input.database.delete_local_subscriber(operation_input.channel_id)
+    deleted = operation_input.database.local_subscribers.delete_local_subscriber(operation_input.channel_id)
     if not deleted:
         return OperationResult(
             applied=False,

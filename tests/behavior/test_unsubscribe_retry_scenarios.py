@@ -37,13 +37,13 @@ async def test_last_channel_remote_unfollow_failure_keeps_bridge_follow_for_retr
     database = _database(tmp_path)
     community_actor_url = _community_actor_url()
     follow_activity_id = f"https://{BRIDGE_EXAMPLE_DOMAIN}/activities/follow/1"
-    database.create_bridge_actor_follow(
+    database.bridge_actor_follows.create_bridge_actor_follow(
         community_actor_id=community_actor_url,
         follow_activity_id=follow_activity_id,
         community_inbox_url=f"{community_actor_url}/inbox",
         status="accepted",
     )
-    database.create_subscription(
+    database.remote_subscriptions.create_subscription(
         discord_channel_id=forum_channel.id,
         lemmy_community_actor_id=community_actor_url,
         lemmy_community_name="hackers",
@@ -66,8 +66,8 @@ async def test_last_channel_remote_unfollow_failure_keeps_bridge_follow_for_retr
 
     # Local channel cleanup still applies, but the shared follow row remains so
     # operators can retry the remote Undo(Follow) later.
-    assert database.get_subscription_by_channel(forum_channel.id) is None
-    assert database.get_bridge_actor_follow(community_actor_url) is not None
+    assert database.remote_subscriptions.get_subscription_by_channel(forum_channel.id) is None
+    assert database.bridge_actor_follows.get_bridge_actor_follow(community_actor_url) is not None
     interaction.response.send_message.assert_awaited_once()
     send_call = interaction.response.send_message.await_args
     assert "remote Undo(Follow) failed" in send_call.args[0]
@@ -85,13 +85,13 @@ async def test_last_channel_missing_follow_activity_id_blocks_local_cleanup(
     """Missing follow state should stop the last-channel unsubscribe early."""
     database = _database(tmp_path)
     community_actor_url = _community_actor_url()
-    database.create_bridge_actor_follow(
+    database.bridge_actor_follows.create_bridge_actor_follow(
         community_actor_id=community_actor_url,
         follow_activity_id=None,
         community_inbox_url=f"{community_actor_url}/inbox",
         status="accepted",
     )
-    database.create_subscription(
+    database.remote_subscriptions.create_subscription(
         discord_channel_id=forum_channel.id,
         lemmy_community_actor_id=community_actor_url,
         lemmy_community_name="hackers",
@@ -110,8 +110,8 @@ async def test_last_channel_missing_follow_activity_id_blocks_local_cleanup(
 
     # Without a follow activity id the bridge cannot perform safe remote
     # cleanup, so the local subscription must remain visible to operators.
-    assert database.get_subscription_by_channel(forum_channel.id) is not None
-    assert database.get_bridge_actor_follow(community_actor_url) is not None
+    assert database.remote_subscriptions.get_subscription_by_channel(forum_channel.id) is not None
+    assert database.bridge_actor_follows.get_bridge_actor_follow(community_actor_url) is not None
     fedify_gateway.unfollow_community.assert_not_awaited()
     interaction.response.send_message.assert_awaited_once()
     send_call = interaction.response.send_message.await_args

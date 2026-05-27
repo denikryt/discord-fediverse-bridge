@@ -41,7 +41,7 @@ def _database(tmp_path: Path) -> Database:
 
 def _accepted_subscription(database: Database, *, channel_id: int) -> None:
     """Insert one accepted community subscription for the shared hackers community."""
-    database.create_subscription(
+    database.remote_subscriptions.create_subscription(
         discord_channel_id=channel_id,
         lemmy_community_actor_id=COMMUNITY_ACTOR_URL,
         lemmy_community_name="hackers",
@@ -56,7 +56,7 @@ def _accepted_subscription(database: Database, *, channel_id: int) -> None:
 def _registered_user(database: Database) -> None:
     """Insert one registered local user actor for outbound publish scenarios."""
     actor_url = f"https://{BRIDGE_HOST_DOMAIN}/users/alice"
-    database.create_user(
+    database.users.create_user(
         discord_user_id="123",
         activitypub_username="alice",
         actor_url=actor_url,
@@ -149,7 +149,7 @@ def _create_thread_group_with_source_delivery(
     """
     ap_object_id = f"https://{BRIDGE_HOST_DOMAIN}/objects/post/1"
     ap_activity_id = f"https://{BRIDGE_HOST_DOMAIN}/activities/create/post/1"
-    database.create_post_link(
+    database.legacy_lemmy_mappings.create_post_link(
         lemmy_post_id=-thread_id,
         lemmy_post_ap_id=ap_object_id,
         discord_forum_channel_id=channel_id,
@@ -157,7 +157,7 @@ def _create_thread_group_with_source_delivery(
         discord_starter_message_id=starter_message_id,
         direction="discord_to_activitypub",
     )
-    thread_group = database.create_thread_group(
+    thread_group = database.discord_fanout_groups.create_thread_group(
         community_actor_id=COMMUNITY_ACTOR_URL,
         source_channel_id=channel_id,
         source_thread_id=thread_id,
@@ -165,7 +165,7 @@ def _create_thread_group_with_source_delivery(
         ap_activity_id=ap_activity_id,
         ap_object_id=ap_object_id,
     )
-    database.add_thread_delivery(
+    database.discord_fanout_groups.add_thread_delivery(
         thread_group_id=thread_group.id,
         discord_channel_id=channel_id,
         discord_thread_id=thread_id,
@@ -184,7 +184,7 @@ def _add_mirror_delivery(
     starter_message_id: int = 501,
 ) -> None:
     """Insert one mirror thread delivery row for a thread group."""
-    database.add_thread_delivery(
+    database.discord_fanout_groups.add_thread_delivery(
         thread_group_id=thread_group_id,
         discord_channel_id=channel_id,
         discord_thread_id=thread_id,
@@ -247,7 +247,7 @@ async def test_phase4_root_message_mirrored_flat(tmp_path: Path) -> None:
 
     result = await runtime.handle_discord_message(message=message)
 
-    message_group = database.get_message_group_by_source_message(400)
+    message_group = database.discord_fanout_groups.get_message_group_by_source_message(400)
     assert result.status == "published"
     assert message_group is not None
     # Root message: no parent message group.
@@ -294,7 +294,7 @@ async def test_phase4_reply_to_starter_references_mirror_starter(tmp_path: Path)
 
     result = await runtime.handle_discord_message(message=message)
 
-    message_group = database.get_message_group_by_source_message(400)
+    message_group = database.discord_fanout_groups.get_message_group_by_source_message(400)
     assert result.status == "published"
     assert message_group is not None
     # Starter reply: parent_message_group_id is None (starter is not a message group).
@@ -331,7 +331,7 @@ async def test_phase4_reply_to_mirrored_message_references_mirror_delivery(tmp_p
     )
 
     # Insert prior message group M (message 400 was already mirrored as 600 in thread 500).
-    prior_group = database.create_message_group(
+    prior_group = database.discord_fanout_groups.create_message_group(
         community_actor_id=COMMUNITY_ACTOR_URL,
         thread_group_id=thread_group.id,
         source_channel_id=100,
@@ -341,7 +341,7 @@ async def test_phase4_reply_to_mirrored_message_references_mirror_delivery(tmp_p
         ap_object_id=f"https://{BRIDGE_HOST_DOMAIN}/objects/comment/prior",
     )
     # Source delivery for prior message.
-    database.add_message_delivery(
+    database.discord_fanout_groups.add_message_delivery(
         message_group_id=prior_group.id,
         discord_channel_id=100,
         discord_thread_id=200,
@@ -349,7 +349,7 @@ async def test_phase4_reply_to_mirrored_message_references_mirror_delivery(tmp_p
         role="source",
     )
     # Mirror delivery for prior message.
-    database.add_message_delivery(
+    database.discord_fanout_groups.add_message_delivery(
         message_group_id=prior_group.id,
         discord_channel_id=101,
         discord_thread_id=500,
@@ -370,7 +370,7 @@ async def test_phase4_reply_to_mirrored_message_references_mirror_delivery(tmp_p
 
     result = await runtime.handle_discord_message(message=message)
 
-    new_group = database.get_message_group_by_source_message(401)
+    new_group = database.discord_fanout_groups.get_message_group_by_source_message(401)
     assert result.status == "published"
     assert new_group is not None
     # parent_message_group_id must point to M (the prior group).
@@ -415,7 +415,7 @@ async def test_phase4_reply_to_unknown_message_mirrored_flat(tmp_path: Path) -> 
 
     result = await runtime.handle_discord_message(message=message)
 
-    message_group = database.get_message_group_by_source_message(400)
+    message_group = database.discord_fanout_groups.get_message_group_by_source_message(400)
     assert result.status == "published"
     assert message_group is not None
     # Unknown reference: parent_message_group_id stays None.
@@ -451,7 +451,7 @@ async def test_phase4_reply_db_consistency_mirror_delivery_recorded(tmp_path: Pa
     )
 
     # Insert prior message group M.
-    prior_group = database.create_message_group(
+    prior_group = database.discord_fanout_groups.create_message_group(
         community_actor_id=COMMUNITY_ACTOR_URL,
         thread_group_id=thread_group.id,
         source_channel_id=100,
@@ -460,14 +460,14 @@ async def test_phase4_reply_db_consistency_mirror_delivery_recorded(tmp_path: Pa
         ap_activity_id=f"https://{BRIDGE_HOST_DOMAIN}/activities/create/comment/prior",
         ap_object_id=f"https://{BRIDGE_HOST_DOMAIN}/objects/comment/prior",
     )
-    database.add_message_delivery(
+    database.discord_fanout_groups.add_message_delivery(
         message_group_id=prior_group.id,
         discord_channel_id=100,
         discord_thread_id=200,
         discord_message_id=400,
         role="source",
     )
-    database.add_message_delivery(
+    database.discord_fanout_groups.add_message_delivery(
         message_group_id=prior_group.id,
         discord_channel_id=101,
         discord_thread_id=500,
@@ -488,13 +488,13 @@ async def test_phase4_reply_db_consistency_mirror_delivery_recorded(tmp_path: Pa
 
     result = await runtime.handle_discord_message(message=message)
 
-    new_group = database.get_message_group_by_source_message(401)
+    new_group = database.discord_fanout_groups.get_message_group_by_source_message(401)
     assert result.status == "published"
     assert new_group is not None
     assert new_group.parent_message_group_id == prior_group.id
 
     # Mirror delivery for message 401 in thread 500 must exist with message_id=700.
-    new_deliveries = database.get_message_deliveries(new_group.id)
+    new_deliveries = database.discord_fanout_groups.get_message_deliveries(new_group.id)
     mirror_deliveries = [d for d in new_deliveries if d.role == "mirror"]
     assert len(mirror_deliveries) == 1
     assert mirror_deliveries[0].discord_thread_id == 500

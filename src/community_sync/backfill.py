@@ -45,9 +45,9 @@ async def backfill_post_as_thread_group(
         logger.exception("Backfill parse failed for post %s", post_ap_id)
         return None
 
-    thread_group = database.get_thread_group_by_ap_object(post_ap_id)
+    thread_group = database.discord_fanout_groups.get_thread_group_by_ap_object(post_ap_id)
     if thread_group is None:
-        thread_group = database.create_thread_group(
+        thread_group = database.discord_fanout_groups.create_thread_group(
             community_actor_id=community_actor_id,
             source_channel_id=None,
             source_thread_id=None,
@@ -57,7 +57,7 @@ async def backfill_post_as_thread_group(
         )
 
     already_delivered_channels = {
-        delivery.discord_channel_id for delivery in database.get_thread_deliveries(thread_group.id)
+        delivery.discord_channel_id for delivery in database.discord_fanout_groups.get_thread_deliveries(thread_group.id)
     }
     accepted = get_accepted_subscriptions(database, community_actor_id)
 
@@ -72,7 +72,7 @@ async def backfill_post_as_thread_group(
                 forum_channel=forum_channel,
                 event=post_event,
             )
-            database.add_thread_delivery(
+            database.discord_fanout_groups.add_thread_delivery(
                 thread_group_id=thread_group.id,
                 discord_channel_id=subscription.discord_channel_id,
                 discord_thread_id=thread_id,

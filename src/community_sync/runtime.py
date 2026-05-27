@@ -115,10 +115,10 @@ class CommunityRuntime:
         # Resolve subscription for the source channel to get community_actor_id.
         # subscription is guaranteed non-None here: publish_thread_starter already
         # validated it and returned status="published" only when it was accepted.
-        subscription = self.database.get_subscription_by_channel(thread.parent_id)
+        subscription = self.database.remote_subscriptions.get_subscription_by_channel(thread.parent_id)
 
         # Create the canonical thread group for this source event.
-        thread_group = self.database.create_thread_group(
+        thread_group = self.database.discord_fanout_groups.create_thread_group(
             community_actor_id=subscription.lemmy_community_actor_id,
             source_channel_id=thread.parent_id,
             source_thread_id=thread.id,
@@ -128,7 +128,7 @@ class CommunityRuntime:
         )
 
         # Record source delivery row for this channel.
-        self.database.add_thread_delivery(
+        self.database.discord_fanout_groups.add_thread_delivery(
             thread_group_id=thread_group.id,
             discord_channel_id=thread.parent_id,
             discord_thread_id=thread.id,
@@ -138,7 +138,7 @@ class CommunityRuntime:
 
         # Resolve sibling subscriptions: all accepted subscriptions for the same
         # community except the source channel.
-        all_subs = self.database.get_subscriptions_by_community(
+        all_subs = self.database.remote_subscriptions.get_subscriptions_by_community(
             subscription.lemmy_community_actor_id
         )
         sibling_channel_ids = [
@@ -156,7 +156,7 @@ class CommunityRuntime:
             for mirror in mirror_results:
                 # Record each mirror delivery so the on_message guard can
                 # identify mirror threads and skip re-publishing to AP.
-                self.database.add_thread_delivery(
+                self.database.discord_fanout_groups.add_thread_delivery(
                     thread_group_id=thread_group.id,
                     discord_channel_id=mirror.channel_id,
                     discord_thread_id=mirror.thread_id,
@@ -217,7 +217,7 @@ class CommunityRuntime:
 
         # Create the canonical message group for this source event, recording the
         # parent message group when this is a reply to a known mirrored message.
-        message_group = self.database.create_message_group(
+        message_group = self.database.discord_fanout_groups.create_message_group(
             community_actor_id=thread_group.community_actor_id,
             thread_group_id=thread_group.id,
             source_channel_id=thread.parent_id,
@@ -229,7 +229,7 @@ class CommunityRuntime:
         )
         # Record the source delivery so reply-chain resolution and dedup can find
         # this message by its Discord message ID later.
-        self.database.add_message_delivery(
+        self.database.discord_fanout_groups.add_message_delivery(
             message_group_id=message_group.id,
             discord_channel_id=thread.parent_id,
             discord_thread_id=thread.id,
@@ -248,7 +248,7 @@ class CommunityRuntime:
                 # Each successfully delivered mirror message gets its own
                 # delivery row so the on_message guard can identify mirror-thread
                 # messages and the reply chain can be resolved correctly.
-                self.database.add_message_delivery(
+                self.database.discord_fanout_groups.add_message_delivery(
                     message_group_id=message_group.id,
                     discord_channel_id=mirror.channel_id,
                     discord_thread_id=mirror.thread_id,
@@ -301,7 +301,7 @@ class CommunityRuntime:
         # Create the canonical thread group. source_* fields are None because
         # inbound AP events have no single source Discord channel.
         # delivery_id is the closest equivalent to an activity_id for inbound events.
-        thread_group = self.database.create_thread_group(
+        thread_group = self.database.discord_fanout_groups.create_thread_group(
             community_actor_id=event.community_actor_id,
             source_channel_id=None,
             source_thread_id=None,
@@ -319,7 +319,7 @@ class CommunityRuntime:
                 forum_channel=forum_channel,
                 event=event,
             )
-            self.database.add_thread_delivery(
+            self.database.discord_fanout_groups.add_thread_delivery(
                 thread_group_id=thread_group.id,
                 discord_channel_id=subscription.discord_channel_id,
                 discord_thread_id=thread_id,
@@ -411,7 +411,7 @@ class CommunityRuntime:
         logger.debug(
             "[handle_inbound_comment] thread_group=%s deliveries=%s",
             thread_group.id,
-            [d.discord_thread_id for d in self.database.get_thread_deliveries(thread_group.id)],
+            [d.discord_thread_id for d in self.database.discord_fanout_groups.get_thread_deliveries(thread_group.id)],
         )
 
         bot = self.bot or runtime.bot
@@ -422,7 +422,7 @@ class CommunityRuntime:
         # itself (root comment), which is the correct flat-send fallback.
         parent_group = get_parent_message_group(self.database, event.object.parent_ap_id)
 
-        message_group = self.database.create_message_group(
+        message_group = self.database.discord_fanout_groups.create_message_group(
             community_actor_id=event.community_actor_id,
             thread_group_id=thread_group.id,
             source_channel_id=None,
@@ -435,7 +435,7 @@ class CommunityRuntime:
 
         from ..bridge_lemmy_to_discord import _send_inbound_comment
 
-        thread_deliveries = self.database.get_thread_deliveries(thread_group.id)
+        thread_deliveries = self.database.discord_fanout_groups.get_thread_deliveries(thread_group.id)
         for thread_delivery in thread_deliveries:
             thread = await bot.get_thread_by_id(thread_delivery.discord_thread_id)
             # Resolve the per-thread Discord reply reference. Returns None when the
@@ -448,7 +448,7 @@ class CommunityRuntime:
                 event=event,
                 reference=reference,
             )
-            self.database.add_message_delivery(
+            self.database.discord_fanout_groups.add_message_delivery(
                 message_group_id=message_group.id,
                 discord_channel_id=thread_delivery.discord_channel_id,
                 discord_thread_id=thread_delivery.discord_thread_id,
@@ -493,7 +493,7 @@ class CommunityRuntime:
         # Mirror deliveries are the bot-owned copies that need to be updated.
         # Only role="mirror" — inbound deliveries are owned by the AP sender,
         # not the bot, so editing them would result in a 403 Forbidden.
-        all_deliveries = self.database.get_message_deliveries(message_group.id)
+        all_deliveries = self.database.discord_fanout_groups.get_message_deliveries(message_group.id)
         mirror_deliveries = get_outbound_edit_deliveries(all_deliveries)
 
         if self.discord_fanout is not None and mirror_deliveries:
@@ -516,11 +516,11 @@ class CommunityRuntime:
                     # For comments, resolve the parent post AP object ID
                     in_reply_to_object_id = None
                     if message_group.parent_message_group_id:
-                        parent = self.database.get_message_group_by_id(message_group.parent_message_group_id)
+                        parent = self.database.discord_fanout_groups.get_message_group_by_id(message_group.parent_message_group_id)
                         if parent:
                             in_reply_to_object_id = parent.ap_object_id
                     elif message_group.thread_group_id:
-                        thread_group = self.database.get_thread_group_by_id(message_group.thread_group_id)
+                        thread_group = self.database.discord_fanout_groups.get_thread_group_by_id(message_group.thread_group_id)
                         if thread_group:
                             in_reply_to_object_id = thread_group.ap_object_id
 
@@ -555,7 +555,7 @@ class CommunityRuntime:
         if message_group is None:
             return
 
-        all_deliveries = self.database.get_message_deliveries(message_group.id)
+        all_deliveries = self.database.discord_fanout_groups.get_message_deliveries(message_group.id)
         mirror_deliveries = get_outbound_delete_deliveries(all_deliveries)
 
         if self.discord_fanout is not None and mirror_deliveries:
@@ -593,7 +593,7 @@ class CommunityRuntime:
             logger.info("Post update for %s — no thread group found, skipping", event.object.ap_id)
             return _HandlerResult(status="skipped", detail="post not yet mapped")
 
-        thread_deliveries = self.database.get_thread_deliveries(thread_group.id)
+        thread_deliveries = self.database.discord_fanout_groups.get_thread_deliveries(thread_group.id)
         if not thread_deliveries:
             return _HandlerResult(status="skipped", detail="no thread deliveries")
 
@@ -624,7 +624,7 @@ class CommunityRuntime:
             logger.info("Post delete for %s — no thread group found, skipping", event.object.ap_id)
             return _HandlerResult(status="skipped", detail="post not yet mapped")
 
-        thread_deliveries = self.database.get_thread_deliveries(thread_group.id)
+        thread_deliveries = self.database.discord_fanout_groups.get_thread_deliveries(thread_group.id)
 
         bot = self.bot or runtime.bot
 
@@ -652,7 +652,7 @@ class CommunityRuntime:
             )
             return _HandlerResult(status="skipped", detail="comment not yet mapped")
 
-        all_deliveries = self.database.get_message_deliveries(message_group.id)
+        all_deliveries = self.database.discord_fanout_groups.get_message_deliveries(message_group.id)
         # Only edit messages the bot itself wrote: inbound (created by bot from AP)
         # and mirror (bot-owned copies in sibling channels).
         # Source messages are user-authored — editing them returns 403 Forbidden.
@@ -690,7 +690,7 @@ class CommunityRuntime:
             )
             return _HandlerResult(status="skipped", detail="comment not yet mapped")
 
-        all_deliveries = self.database.get_message_deliveries(message_group.id)
+        all_deliveries = self.database.discord_fanout_groups.get_message_deliveries(message_group.id)
         # Only edit messages the bot itself wrote — source messages are user-authored.
         deliveries = get_inbound_comment_edit_deliveries(all_deliveries)
 

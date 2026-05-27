@@ -24,16 +24,16 @@ class ListSubscriptionsInput:
         """Load and memoize remote subscriptions scoped to the guild."""
         if self._remote_subscriptions is None:
             if self.guild_id is not None:
-                self._remote_subscriptions = self.database.get_subscriptions_by_guild(self.guild_id)
+                self._remote_subscriptions = self.database.remote_subscriptions.get_subscriptions_by_guild(self.guild_id)
             else:
-                self._remote_subscriptions = self.database.get_all_subscriptions()
+                self._remote_subscriptions = self.database.remote_subscriptions.get_all_subscriptions()
         return self._remote_subscriptions
 
     def get_local_subscribers(self) -> list[object]:
         """Load and memoize local subscribers scoped to the guild."""
         if self._local_subscribers is None:
             if self.guild_id is not None:
-                self._local_subscribers = self.database.list_local_subscribers_by_guild(self.guild_id)
+                self._local_subscribers = self.database.local_subscribers.list_local_subscribers_by_guild(self.guild_id)
             else:
                 self._local_subscribers = []
         return self._local_subscribers

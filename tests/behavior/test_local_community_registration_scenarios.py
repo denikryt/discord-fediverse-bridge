@@ -53,7 +53,7 @@ def test_allowlisted_operator_creates_local_community_and_persists_actor_metadat
             description="A local hackerspace forum.",
         )
     )
-    created = database.get_local_community_by_slug("hackers")
+    created = database.local_communities.get_local_community_by_slug("hackers")
 
     assert result.applied is True
     assert created is not None
@@ -82,7 +82,7 @@ def test_non_allowlisted_operator_cannot_create_local_community(
 
     assert result.applied is False
     assert result.reason == "operator_not_allowlisted"
-    assert database.get_local_community_by_slug("hackers") is None
+    assert database.local_communities.get_local_community_by_slug("hackers") is None
 
 
 def test_service_rejects_duplicate_forum_binding(

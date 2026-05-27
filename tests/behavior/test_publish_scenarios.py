@@ -26,7 +26,7 @@ def _database(tmp_path: Path) -> Database:
 def _accepted_subscription(database: Database) -> None:
     """Seed one active channel subscription used by publish behavior tests."""
     community_actor_url = f"https://{LEMMY_EXAMPLE_DOMAIN}/c/hackers"
-    database.create_subscription(
+    database.remote_subscriptions.create_subscription(
         discord_channel_id=100,
         lemmy_community_actor_id=community_actor_url,
         lemmy_community_name="hackers",
@@ -41,7 +41,7 @@ def _accepted_subscription(database: Database) -> None:
 def _registered_user(database: Database) -> None:
     """Seed one local AP user actor for registered publish scenarios."""
     actor_url = f"https://{BRIDGE_HOST_DOMAIN}/users/alice"
-    database.create_user(
+    database.users.create_user(
         discord_user_id="123",
         activitypub_username="alice",
         actor_url=actor_url,
@@ -120,8 +120,8 @@ async def test_registered_user_with_accepted_subscription_publishes_thread_start
         thread=_thread(),
         starter_message=_starter_message(),
     )
-    mapping = database.get_message_mapping_by_discord_message_id(300)
-    stored_object = database.get_published_activity_object_by_object_id(
+    mapping = database.message_mappings.get_message_mapping_by_discord_message_id(300)
+    stored_object = database.activitypub_objects.get_published_activity_object_by_object_id(
         f"https://{BRIDGE_HOST_DOMAIN}/users/alice/objects/post/1"
     )
 
@@ -144,7 +144,7 @@ async def test_registered_user_with_accepted_subscription_publishes_thread_reply
     _accepted_subscription(database)
     _registered_user(database)
     post_object_url = f"https://{BRIDGE_HOST_DOMAIN}/users/alice/objects/post/1"
-    thread_group = database.create_thread_group(
+    thread_group = database.discord_fanout_groups.create_thread_group(
         community_actor_id=f"https://{LEMMY_EXAMPLE_DOMAIN}/c/hackers",
         source_channel_id=100,
         source_thread_id=200,
@@ -152,7 +152,7 @@ async def test_registered_user_with_accepted_subscription_publishes_thread_reply
         ap_activity_id=f"https://{BRIDGE_HOST_DOMAIN}/users/alice/activities/create/post/1",
         ap_object_id=post_object_url,
     )
-    database.add_thread_delivery(
+    database.discord_fanout_groups.add_thread_delivery(
         thread_group_id=thread_group.id,
         discord_channel_id=100,
         discord_thread_id=200,
@@ -170,8 +170,8 @@ async def test_registered_user_with_accepted_subscription_publishes_thread_reply
     result = await service.publish_thread_message(
         message=_thread_message(thread=_thread()),
     )
-    mapping = database.get_message_mapping_by_discord_message_id(301)
-    stored_object = database.get_published_activity_object_by_object_id(
+    mapping = database.message_mappings.get_message_mapping_by_discord_message_id(301)
+    stored_object = database.activitypub_objects.get_published_activity_object_by_object_id(
         f"https://{BRIDGE_HOST_DOMAIN}/users/alice/objects/comment/1"
     )
 
@@ -191,7 +191,7 @@ async def test_remote_subscription_reply_semantics_preserve_nested_and_unknown_f
     _accepted_subscription(database)
     _registered_user(database)
     post_object_url = f"https://{BRIDGE_HOST_DOMAIN}/users/alice/objects/post/1"
-    thread_group = database.create_thread_group(
+    thread_group = database.discord_fanout_groups.create_thread_group(
         community_actor_id=f"https://{LEMMY_EXAMPLE_DOMAIN}/c/hackers",
         source_channel_id=100,
         source_thread_id=200,
@@ -199,14 +199,14 @@ async def test_remote_subscription_reply_semantics_preserve_nested_and_unknown_f
         ap_activity_id=f"https://{BRIDGE_HOST_DOMAIN}/users/alice/activities/create/post/1",
         ap_object_id=post_object_url,
     )
-    database.add_thread_delivery(
+    database.discord_fanout_groups.add_thread_delivery(
         thread_group_id=thread_group.id,
         discord_channel_id=100,
         discord_thread_id=200,
         discord_starter_message_id=300,
         role="source",
     )
-    parent_group = database.create_message_group(
+    parent_group = database.discord_fanout_groups.create_message_group(
         community_actor_id=f"https://{LEMMY_EXAMPLE_DOMAIN}/c/hackers",
         thread_group_id=thread_group.id,
         source_channel_id=100,
@@ -215,7 +215,7 @@ async def test_remote_subscription_reply_semantics_preserve_nested_and_unknown_f
         ap_activity_id=f"https://{BRIDGE_HOST_DOMAIN}/users/alice/activities/create/comment/0",
         ap_object_id=f"https://{BRIDGE_HOST_DOMAIN}/users/alice/objects/comment/0",
     )
-    database.add_message_delivery(
+    database.discord_fanout_groups.add_message_delivery(
         message_group_id=parent_group.id,
         discord_channel_id=100,
         discord_thread_id=200,
@@ -272,7 +272,7 @@ async def test_unregistered_user_message_is_not_federated_and_gets_register_repl
     assert result.reason == "unregistered_user"
     fedify_gateway.publish_content.assert_not_awaited()
     starter_message.reply.assert_awaited_once_with(UNREGISTERED_REPLY)
-    assert database.get_message_mapping_by_discord_message_id(300) is None
+    assert database.message_mappings.get_message_mapping_by_discord_message_id(300) is None
 
 
 @pytest.mark.asyncio
@@ -293,7 +293,7 @@ async def test_registered_user_without_accepted_subscription_does_not_publish(
     assert result.status == "ignored"
     assert result.reason == "no_subscription"
     fedify_gateway.publish_content.assert_not_awaited()
-    assert database.get_message_mapping_by_discord_message_id(300) is None
+    assert database.message_mappings.get_message_mapping_by_discord_message_id(300) is None
 
 
 @pytest.mark.asyncio
@@ -314,4 +314,4 @@ async def test_gateway_publish_failure_does_not_persist_false_success(
             starter_message=_starter_message(),
         )
 
-    assert database.get_message_mapping_by_discord_message_id(300) is None
+    assert database.message_mappings.get_message_mapping_by_discord_message_id(300) is None

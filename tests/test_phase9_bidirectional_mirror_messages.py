@@ -150,7 +150,7 @@ def _setup_subscription(
     channel_id: int = 100,
 ) -> None:
     """Create a subscription for the given channel."""
-    database.create_subscription(
+    database.remote_subscriptions.create_subscription(
         discord_channel_id=channel_id,
         lemmy_community_actor_id=COMMUNITY_ACTOR_URL,
         lemmy_community_name="hackers",
@@ -168,7 +168,7 @@ def _setup_user(
 ) -> None:
     """Create a registered user for AP publishing."""
     actor_url = f"https://{BRIDGE_HOST_DOMAIN}/users/{username}"
-    database.create_user(
+    database.users.create_user(
         discord_user_id=discord_user_id,
         activitypub_username=username,
         actor_url=actor_url,
@@ -209,7 +209,7 @@ def _setup_thread_group_and_deliveries(
         source_channel_id: source_thread_id,
     }
 
-    thread_group = database.create_thread_group(
+    thread_group = database.discord_fanout_groups.create_thread_group(
         community_actor_id=COMMUNITY_ACTOR_URL,
         source_channel_id=source_channel_id,
         source_thread_id=source_thread_id,
@@ -218,7 +218,7 @@ def _setup_thread_group_and_deliveries(
         ap_object_id=POST_AP_ID,
     )
 
-    database.add_thread_delivery(
+    database.discord_fanout_groups.add_thread_delivery(
         thread_group_id=thread_group.id,
         discord_channel_id=source_channel_id,
         discord_thread_id=source_thread_id,
@@ -229,7 +229,7 @@ def _setup_thread_group_and_deliveries(
     if mirror_thread_id is not None and mirror_channel_id is not None:
         if mirror_starter_msg_id is None:
             mirror_starter_msg_id = mirror_thread_id + 100
-        database.add_thread_delivery(
+        database.discord_fanout_groups.add_thread_delivery(
             thread_group_id=thread_group.id,
             discord_channel_id=mirror_channel_id,
             discord_thread_id=mirror_thread_id,
@@ -241,7 +241,7 @@ def _setup_thread_group_and_deliveries(
     if inbound_thread_id is not None and inbound_channel_id is not None:
         if inbound_starter_msg_id is None:
             inbound_starter_msg_id = inbound_thread_id + 100
-        database.add_thread_delivery(
+        database.discord_fanout_groups.add_thread_delivery(
             thread_group_id=thread_group.id,
             discord_channel_id=inbound_channel_id,
             discord_thread_id=inbound_thread_id,
@@ -262,7 +262,7 @@ def _setup_message_group_with_source_and_mirror(
     ap_object_id: str = COMMENT_AP_ID,
 ) -> object:
     """Create a message group with source and mirror deliveries."""
-    message_group = database.create_message_group(
+    message_group = database.discord_fanout_groups.create_message_group(
         community_actor_id=COMMUNITY_ACTOR_URL,
         thread_group_id=thread_group.id,
         source_channel_id=100,
@@ -271,14 +271,14 @@ def _setup_message_group_with_source_and_mirror(
         ap_activity_id="activity-msg-1",
         ap_object_id=ap_object_id,
     )
-    database.add_message_delivery(
+    database.discord_fanout_groups.add_message_delivery(
         message_group_id=message_group.id,
         discord_channel_id=100,
         discord_thread_id=200,
         discord_message_id=source_msg_id,
         role="source",
     )
-    database.add_message_delivery(
+    database.discord_fanout_groups.add_message_delivery(
         message_group_id=message_group.id,
         discord_channel_id=101,
         discord_thread_id=500,
@@ -470,7 +470,7 @@ async def test_mirror_thread_message_fans_out_to_all_other_mirrors(tmp_path: Pat
     )
 
     # Add second mirror
-    database.add_thread_delivery(
+    database.discord_fanout_groups.add_thread_delivery(
         thread_group_id=thread_group.id,
         discord_channel_id=102,
         discord_thread_id=mirror2_thread_id,
@@ -657,7 +657,7 @@ async def test_bot_message_in_mirror_thread_is_not_re_published(tmp_path: Path) 
     # Bot message should be ignored (author guard in on_message)
     # This test verifies that handle_discord_message is never called for bot messages
     # The guard is in discord_bot.py on_message, but we verify the effect here
-    delivery = database.get_thread_delivery_by_thread(mirror_thread_id)
+    delivery = database.discord_fanout_groups.get_thread_delivery_by_thread(mirror_thread_id)
     assert delivery is not None
     # The old guard was: if delivery.role == "mirror": return
     # The new behavior should allow mirror threads through

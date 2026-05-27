@@ -41,8 +41,8 @@ def register(
         """Handle the /unsubscribe-channel slash command."""
         # The command adapter only supplies Discord-facing context; the
         # operation decides whether deletion is allowed and what result to show.
-        remote_subscription = database.get_subscription_by_channel(channel.id)
-        local_subscriber = database.get_local_subscriber_by_channel(channel.id)
+        remote_subscription = database.remote_subscriptions.get_subscription_by_channel(channel.id)
+        local_subscriber = database.local_subscribers.get_local_subscriber_by_channel(channel.id)
         if remote_subscription is not None:
             result = await run_operation_definition_async(
                 unsubscribe_operation,

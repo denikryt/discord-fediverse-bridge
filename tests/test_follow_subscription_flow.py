@@ -50,13 +50,13 @@ async def test_follow_accept_event_marks_bridge_follow_and_channel_accepted(
     lemmy_actor_url = f"https://{LEMMY_EXAMPLE_DOMAIN}/c/hackers"
     follow_activity_id = f"https://{BRIDGE_EXAMPLE_DOMAIN}/activities/follow/1"
     dm_user = SimpleNamespace(send=AsyncMock())
-    database.create_bridge_actor_follow(
+    database.bridge_actor_follows.create_bridge_actor_follow(
         community_actor_id=lemmy_actor_url,
         follow_activity_id=follow_activity_id,
         community_inbox_url=f"{lemmy_actor_url}/inbox",
         status="pending",
     )
-    database.create_subscription(
+    database.remote_subscriptions.create_subscription(
         discord_channel_id=123,
         lemmy_community_actor_id=lemmy_actor_url,
         lemmy_community_name="hackers",
@@ -83,8 +83,8 @@ async def test_follow_accept_event_marks_bridge_follow_and_channel_accepted(
     )
 
     result = await dispatch_activitypub_event(event, runtime)
-    subscription = database.get_subscription_by_channel(123)
-    bridge_follow = database.get_bridge_actor_follow(lemmy_actor_url)
+    subscription = database.remote_subscriptions.get_subscription_by_channel(123)
+    bridge_follow = database.bridge_actor_follows.get_bridge_actor_follow(lemmy_actor_url)
 
     assert result.status == "processed"
     assert subscription is not None
@@ -107,7 +107,7 @@ async def test_follow_accept_without_bridge_follow_does_not_accept_channel_subsc
     lemmy_actor_url = f"https://{LEMMY_EXAMPLE_DOMAIN}/c/hackers"
     follow_activity_id = f"https://{BRIDGE_EXAMPLE_DOMAIN}/activities/follow/legacy"
     dm_user = SimpleNamespace(send=AsyncMock())
-    database.create_subscription(
+    database.remote_subscriptions.create_subscription(
         discord_channel_id=123,
         lemmy_community_actor_id=lemmy_actor_url,
         lemmy_community_name="hackers",
@@ -134,7 +134,7 @@ async def test_follow_accept_without_bridge_follow_does_not_accept_channel_subsc
     )
 
     result = await dispatch_activitypub_event(event, runtime)
-    subscription = database.get_subscription_by_channel(123)
+    subscription = database.remote_subscriptions.get_subscription_by_channel(123)
 
     assert result.status == "skipped"
     assert result.detail == "bridge follow activity is not mapped"
@@ -150,21 +150,21 @@ def test_only_accepted_subscriptions_are_routed_for_inbound_community_events(
     """Inbound routing must ignore pending and failed subscriptions."""
     database = _database(tmp_path)
     lemmy_actor_url = f"https://{LEMMY_EXAMPLE_DOMAIN}/c/hackers"
-    database.create_subscription(
+    database.remote_subscriptions.create_subscription(
         discord_channel_id=1,
         lemmy_community_actor_id=lemmy_actor_url,
         lemmy_community_name="hackers",
         lemmy_community_id=42,
         status="pending",
     )
-    database.create_subscription(
+    database.remote_subscriptions.create_subscription(
         discord_channel_id=2,
         lemmy_community_actor_id=lemmy_actor_url,
         lemmy_community_name="hackers",
         lemmy_community_id=42,
         status="failed",
     )
-    database.create_subscription(
+    database.remote_subscriptions.create_subscription(
         discord_channel_id=3,
         lemmy_community_actor_id=lemmy_actor_url,
         lemmy_community_name="hackers",
@@ -172,7 +172,7 @@ def test_only_accepted_subscriptions_are_routed_for_inbound_community_events(
         status="accepted",
     )
 
-    accepted = database.get_subscriptions_by_community(lemmy_actor_url)
+    accepted = database.remote_subscriptions.get_subscriptions_by_community(lemmy_actor_url)
 
     assert len(accepted) == 1
     assert accepted[0].discord_channel_id == 3

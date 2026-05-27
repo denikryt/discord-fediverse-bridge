@@ -99,7 +99,7 @@ def _register_user(client: TestClient, database: Database, *, username: str) -> 
     client.get("/register")
     client.get("/auth/discord/start", follow_redirects=False)
     session_token = client.cookies.get("bridge_registration_session")
-    session = database.get_registration_session_by_token(session_token)
+    session = database.registration_sessions.get_registration_session_by_token(session_token)
     assert session is not None
     client.get(
         f"/auth/discord/callback?code=oauth-code&state={session.oauth_state}",
@@ -197,7 +197,7 @@ async def test_register_subscribe_accept_publish_then_echo_is_suppressed(
         f"{community_actor_url}|hackers|777",
         forum_channel,
     )
-    pending_subscription = database.get_subscription_by_channel(forum_channel.id)
+    pending_subscription = database.remote_subscriptions.get_subscription_by_channel(forum_channel.id)
     assert pending_subscription is not None
     assert pending_subscription.status == "pending"
 
@@ -212,7 +212,7 @@ async def test_register_subscribe_accept_publish_then_echo_is_suppressed(
             ),
         ),
     )
-    accepted_subscription = database.get_subscription_by_channel(forum_channel.id)
+    accepted_subscription = database.remote_subscriptions.get_subscription_by_channel(forum_channel.id)
     assert follow_result.status == "processed"
     assert accepted_subscription is not None
     assert accepted_subscription.status == "accepted"
@@ -340,7 +340,7 @@ async def test_failed_subscribe_retry_then_accept_allows_publish(
 ) -> None:
     """A failed subscribe retry should recover into accepted state and enable publish."""
     database = _database(tmp_path)
-    database.create_user(
+    database.users.create_user(
         discord_user_id="1234567890",
         activitypub_username="alice",
         actor_url=f"https://{BRIDGE_HOST_DOMAIN}/users/alice",
@@ -362,7 +362,7 @@ async def test_failed_subscribe_retry_then_accept_allows_publish(
         f"{community_actor_url}|hackers|777",
         forum_channel,
     )
-    failed_subscription = database.get_subscription_by_channel(forum_channel.id)
+    failed_subscription = database.remote_subscriptions.get_subscription_by_channel(forum_channel.id)
     assert failed_subscription is not None
     assert failed_subscription.status == "failed"
 
@@ -380,7 +380,7 @@ async def test_failed_subscribe_retry_then_accept_allows_publish(
         f"{community_actor_url}|hackers|777",
         forum_channel,
     )
-    pending_subscription = database.get_subscription_by_channel(forum_channel.id)
+    pending_subscription = database.remote_subscriptions.get_subscription_by_channel(forum_channel.id)
     assert pending_subscription is not None
     assert pending_subscription.status == "pending"
 
@@ -395,7 +395,7 @@ async def test_failed_subscribe_retry_then_accept_allows_publish(
             ),
         ),
     )
-    accepted_subscription = database.get_subscription_by_channel(forum_channel.id)
+    accepted_subscription = database.remote_subscriptions.get_subscription_by_channel(forum_channel.id)
     assert accepted_subscription is not None
     assert accepted_subscription.status == "accepted"
 
@@ -415,7 +415,7 @@ async def test_failed_subscribe_retry_then_accept_allows_publish(
         thread=_thread(),
         starter_message=_starter_message(),
     )
-    mapping = database.get_message_mapping_by_discord_message_id(300)
+    mapping = database.message_mappings.get_message_mapping_by_discord_message_id(300)
 
     assert publish_result.status == "published"
     assert mapping is not None

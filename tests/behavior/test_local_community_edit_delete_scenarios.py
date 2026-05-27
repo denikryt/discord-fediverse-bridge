@@ -55,7 +55,7 @@ def _local_community(database: object) -> object:
         name="Hackers",
         description="A local hackerspace forum.",
     )
-    return database.get_local_community_by_slug("hackers")
+    return database.local_communities.get_local_community_by_slug("hackers")
 
 
 def _local_post_event(*, event_type: str) -> ActivityPubEvent:
@@ -116,7 +116,7 @@ async def test_local_community_thread_starter_edit_updates_ap_post(tmp_path: Pat
     database, local_runtime = _runtime(tmp_path)
     local_community = _local_community(database)
     add_registered_user(database)
-    database.create_message_mapping(
+    database.message_mappings.create_message_mapping(
         source_platform="discord",
         source_id="300",
         activity_id="https://bridge.example/users/alice/activities/create/post/1",
@@ -126,7 +126,7 @@ async def test_local_community_thread_starter_edit_updates_ap_post(tmp_path: Pat
         discord_channel_id=100,
         discord_message_id=300,
     )
-    database.create_published_activity_object(
+    database.activitypub_objects.create_published_activity_object(
         actor_username="alice",
         actor_url="https://bridge.example/users/alice",
         community_actor_url=local_community.actor_url,
@@ -139,7 +139,7 @@ async def test_local_community_thread_starter_edit_updates_ap_post(tmp_path: Pat
         discord_channel_id=100,
         discord_message_id=300,
     )
-    database.create_local_community_thread(
+    database.local_community_content.create_local_community_thread(
         local_community_id=local_community.id,
         discord_thread_id=200,
         discord_starter_message_id=300,
@@ -169,7 +169,7 @@ async def test_local_community_comment_delete_sends_ap_delete(tmp_path: Path) ->
     database, local_runtime = _runtime(tmp_path)
     local_community = _local_community(database)
     add_registered_user(database)
-    thread_row = database.create_local_community_thread(
+    thread_row = database.local_community_content.create_local_community_thread(
         local_community_id=local_community.id,
         discord_thread_id=200,
         discord_starter_message_id=300,
@@ -178,7 +178,7 @@ async def test_local_community_comment_delete_sends_ap_delete(tmp_path: Path) ->
         direction="discord_to_ap",
         origin_kind="discord_local",
     )
-    database.create_message_mapping(
+    database.message_mappings.create_message_mapping(
         source_platform="discord",
         source_id="301",
         activity_id="https://bridge.example/users/alice/activities/create/comment/1",
@@ -188,7 +188,7 @@ async def test_local_community_comment_delete_sends_ap_delete(tmp_path: Path) ->
         discord_channel_id=100,
         discord_message_id=301,
     )
-    database.create_published_activity_object(
+    database.activitypub_objects.create_published_activity_object(
         actor_username="alice",
         actor_url="https://bridge.example/users/alice",
         community_actor_url=local_community.actor_url,
@@ -201,7 +201,7 @@ async def test_local_community_comment_delete_sends_ap_delete(tmp_path: Path) ->
         discord_channel_id=100,
         discord_message_id=301,
     )
-    database.create_local_community_message(
+    database.local_community_content.create_local_community_message(
         local_community_thread_id=thread_row.id,
         discord_message_id=301,
         ap_activity_id="https://bridge.example/users/alice/activities/create/comment/1",
@@ -227,7 +227,7 @@ async def test_inbound_local_community_post_update_edits_discord_starter(tmp_pat
     """A remote post update for a local community should edit the starter message."""
     database, local_runtime = _runtime(tmp_path)
     local_community = _local_community(database)
-    database.create_local_community_thread(
+    database.local_community_content.create_local_community_thread(
         local_community_id=local_community.id,
         discord_thread_id=200,
         discord_starter_message_id=300,
@@ -263,7 +263,7 @@ async def test_inbound_local_community_post_delete_marks_discord_starter_deleted
     """A remote post delete for a local community should mark the starter deleted."""
     database, local_runtime = _runtime(tmp_path)
     local_community = _local_community(database)
-    database.create_local_community_thread(
+    database.local_community_content.create_local_community_thread(
         local_community_id=local_community.id,
         discord_thread_id=200,
         discord_starter_message_id=300,
@@ -297,7 +297,7 @@ async def test_inbound_local_community_comment_update_edits_discord_message(
     """A remote comment update for a local community should edit the Discord copy."""
     database, local_runtime = _runtime(tmp_path)
     local_community = _local_community(database)
-    thread_row = database.create_local_community_thread(
+    thread_row = database.local_community_content.create_local_community_thread(
         local_community_id=local_community.id,
         discord_thread_id=200,
         discord_starter_message_id=300,
@@ -306,7 +306,7 @@ async def test_inbound_local_community_comment_update_edits_discord_message(
         direction="ap_to_discord",
         origin_kind="remote_follower",
     )
-    database.create_local_community_message(
+    database.local_community_content.create_local_community_message(
         local_community_thread_id=thread_row.id,
         discord_message_id=301,
         ap_activity_id="https://lemmy.example/activities/create/comment/1",
@@ -345,7 +345,7 @@ async def test_inbound_local_community_comment_delete_marks_discord_message_dele
     """A remote comment delete for a local community should mark the Discord copy deleted."""
     database, local_runtime = _runtime(tmp_path)
     local_community = _local_community(database)
-    thread_row = database.create_local_community_thread(
+    thread_row = database.local_community_content.create_local_community_thread(
         local_community_id=local_community.id,
         discord_thread_id=200,
         discord_starter_message_id=300,
@@ -354,7 +354,7 @@ async def test_inbound_local_community_comment_delete_marks_discord_message_dele
         direction="ap_to_discord",
         origin_kind="remote_follower",
     )
-    database.create_local_community_message(
+    database.local_community_content.create_local_community_message(
         local_community_thread_id=thread_row.id,
         discord_message_id=301,
         ap_activity_id="https://lemmy.example/activities/create/comment/1",

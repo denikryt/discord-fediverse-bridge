@@ -40,7 +40,7 @@ def test_registered_user_can_be_created_and_loaded_by_all_identity_keys(tmp_path
     database = _database(tmp_path)
     actor_url = f"https://{BRIDGE_HOST_DOMAIN}/users/alice"
 
-    created = database.create_user(
+    created = database.users.create_user(
         discord_user_id="1234567890",
         activitypub_username="alice",
         actor_url=actor_url,
@@ -51,9 +51,9 @@ def test_registered_user_can_be_created_and_loaded_by_all_identity_keys(tmp_path
         private_key_pem="private-key",
     )
 
-    by_discord_id = database.get_user_by_discord_user_id("1234567890")
-    by_username = database.get_user_by_activitypub_username("alice")
-    by_actor_url = database.get_user_by_actor_url(actor_url)
+    by_discord_id = database.users.get_user_by_discord_user_id("1234567890")
+    by_username = database.users.get_user_by_activitypub_username("alice")
+    by_actor_url = database.users.get_user_by_actor_url(actor_url)
 
     assert created.activitypub_username == "alice"
     assert by_discord_id is not None
@@ -68,7 +68,7 @@ def test_subscription_follow_state_is_persisted_for_existing_subscription(tmp_pa
     """Subscription rows must carry federation follow metadata for later stages."""
     database = _database(tmp_path)
     community_actor_url = f"https://{LEMMY_WORLD_DOMAIN}/c/hackers"
-    database.create_subscription(
+    database.remote_subscriptions.create_subscription(
         discord_channel_id=777,
         lemmy_community_actor_id=community_actor_url,
         lemmy_community_name="hackers",
@@ -79,7 +79,7 @@ def test_subscription_follow_state_is_persisted_for_existing_subscription(tmp_pa
         status="accepted",
     )
 
-    subscription = database.get_subscription_by_channel(777)
+    subscription = database.remote_subscriptions.get_subscription_by_channel(777)
 
     assert subscription is not None
     assert subscription.community_handle == f"!hackers@{LEMMY_WORLD_DOMAIN}"
@@ -87,14 +87,14 @@ def test_subscription_follow_state_is_persisted_for_existing_subscription(tmp_pa
     assert subscription.follow_activity_id == f"https://{BRIDGE_HOST_DOMAIN}/activities/follow-1"
     assert subscription.status == "accepted"
 
-    database.update_subscription_follow_state(
+    database.remote_subscriptions.update_subscription_follow_state(
         discord_channel_id=777,
         community_inbox_url=f"https://{LEMMY_WORLD_DOMAIN}/inbox/updated",
         follow_activity_id=f"https://{BRIDGE_HOST_DOMAIN}/activities/follow-2",
         status="pending",
     )
 
-    updated = database.get_subscription_by_channel(777)
+    updated = database.remote_subscriptions.get_subscription_by_channel(777)
 
     assert updated is not None
     assert updated.community_inbox_url == f"https://{LEMMY_WORLD_DOMAIN}/inbox/updated"
@@ -109,7 +109,7 @@ def test_message_mapping_lookup_supports_dedup_keys_used_by_bridge(tmp_path: Pat
     activity_id = f"https://{BRIDGE_HOST_DOMAIN}/activities/555"
     object_id = f"https://{BRIDGE_HOST_DOMAIN}/objects/555"
 
-    created = database.create_message_mapping(
+    created = database.message_mappings.create_message_mapping(
         source_platform="discord",
         source_id="discord-message-555",
         activity_id=activity_id,
@@ -120,9 +120,9 @@ def test_message_mapping_lookup_supports_dedup_keys_used_by_bridge(tmp_path: Pat
         discord_message_id=555,
     )
 
-    by_activity = database.get_message_mapping_by_activity_id(activity_id)
-    by_object = database.get_message_mapping_by_object_id(object_id)
-    by_discord_message = database.get_message_mapping_by_discord_message_id(555)
+    by_activity = database.message_mappings.get_message_mapping_by_activity_id(activity_id)
+    by_object = database.message_mappings.get_message_mapping_by_object_id(object_id)
+    by_discord_message = database.message_mappings.get_message_mapping_by_discord_message_id(555)
 
     assert created.source_platform == "discord"
     assert by_activity is not None
@@ -138,14 +138,14 @@ def test_remote_actor_upsert_refreshes_existing_record_without_duplicates(tmp_pa
     database = _database(tmp_path)
     actor_url = f"https://{LEMMY_WORLD_DOMAIN}/u/alice"
 
-    first = database.upsert_remote_actor(
+    first = database.remote_actors.upsert_remote_actor(
         actor_url=actor_url,
         preferred_username="alice",
         inbox_url=f"{actor_url}/inbox",
         shared_inbox_url=f"https://{LEMMY_WORLD_DOMAIN}/inbox",
         public_key_pem="public-key-v1",
     )
-    second = database.upsert_remote_actor(
+    second = database.remote_actors.upsert_remote_actor(
         actor_url=actor_url,
         preferred_username="alice-renamed",
         inbox_url=f"{actor_url}/inbox-v2",
@@ -153,7 +153,7 @@ def test_remote_actor_upsert_refreshes_existing_record_without_duplicates(tmp_pa
         public_key_pem="public-key-v2",
     )
 
-    loaded = database.get_remote_actor_by_actor_url(actor_url)
+    loaded = database.remote_actors.get_remote_actor_by_actor_url(actor_url)
 
     assert first.id == second.id
     assert loaded is not None
@@ -171,7 +171,7 @@ def test_published_activity_objects_can_be_loaded_by_canonical_object_id(
     database = _database(tmp_path)
     object_id = f"https://{BRIDGE_HOST_DOMAIN}/users/alice/post/555"
 
-    created = database.create_published_activity_object(
+    created = database.activitypub_objects.create_published_activity_object(
         actor_username="alice",
         actor_url=f"https://{BRIDGE_HOST_DOMAIN}/users/alice",
         community_actor_url=f"https://{LEMMY_WORLD_DOMAIN}/c/hackers",
@@ -185,7 +185,7 @@ def test_published_activity_objects_can_be_loaded_by_canonical_object_id(
         discord_message_id=555,
     )
 
-    loaded = database.get_published_activity_object_by_object_id(object_id)
+    loaded = database.activitypub_objects.get_published_activity_object_by_object_id(object_id)
 
     assert loaded is not None
     assert loaded.id == created.id

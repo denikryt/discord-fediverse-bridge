@@ -31,7 +31,7 @@ def add_accepted_subscription(
     community_id: int = 42,
 ) -> None:
     """Insert one accepted subscription row for the shared community."""
-    database.create_subscription(
+    database.remote_subscriptions.create_subscription(
         discord_channel_id=channel_id,
         lemmy_community_actor_id=community_actor_url,
         lemmy_community_name=community_name,
@@ -51,7 +51,7 @@ def add_registered_user(
 ) -> None:
     """Insert one registered local user actor used by outbound publish scenarios."""
     actor_url = f"https://{BRIDGE_HOST_DOMAIN}/actors/{username}"
-    database.create_user(
+    database.users.create_user(
         discord_user_id=discord_user_id,
         activitypub_username=username,
         actor_url=actor_url,
@@ -80,7 +80,7 @@ def create_source_thread_group(
     historically used it while the runtime moved to shared group tables.
     """
     if include_post_link:
-        database.create_post_link(
+        database.legacy_lemmy_mappings.create_post_link(
             lemmy_post_id=-thread_id,
             lemmy_post_ap_id=ap_object_id,
             discord_forum_channel_id=channel_id,
@@ -89,7 +89,7 @@ def create_source_thread_group(
             direction="discord_to_activitypub",
         )
 
-    thread_group = database.create_thread_group(
+    thread_group = database.discord_fanout_groups.create_thread_group(
         community_actor_id=community_actor_url,
         source_channel_id=channel_id,
         source_thread_id=thread_id,
@@ -97,7 +97,7 @@ def create_source_thread_group(
         ap_activity_id=ap_activity_id,
         ap_object_id=ap_object_id,
     )
-    database.add_thread_delivery(
+    database.discord_fanout_groups.add_thread_delivery(
         thread_group_id=thread_group.id,
         discord_channel_id=channel_id,
         discord_thread_id=thread_id,
@@ -117,7 +117,7 @@ def add_thread_delivery(
     role: str,
 ) -> None:
     """Insert one thread delivery row with the requested role."""
-    database.add_thread_delivery(
+    database.discord_fanout_groups.add_thread_delivery(
         thread_group_id=thread_group_id,
         discord_channel_id=channel_id,
         discord_thread_id=thread_id,
@@ -136,7 +136,7 @@ def create_inbound_thread_group(
     community_actor_url: str = COMMUNITY_ACTOR_URL,
 ) -> object:
     """Insert one inbound thread group with a single inbound delivery row."""
-    thread_group = database.create_thread_group(
+    thread_group = database.discord_fanout_groups.create_thread_group(
         community_actor_id=community_actor_url,
         source_channel_id=None,
         source_thread_id=None,

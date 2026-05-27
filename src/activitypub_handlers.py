@@ -158,7 +158,7 @@ async def handle_follow_accepted(
     # lifecycle row.  Older direct subscription acceptance has been removed so
     # a missing BridgeActorFollow is treated as a stale or unknown remote reply,
     # not as permission to mutate channel subscription rows directly.
-    bridge_follow = runtime.database.get_bridge_actor_follow_by_follow_activity_id(
+    bridge_follow = runtime.database.bridge_actor_follows.get_bridge_actor_follow_by_follow_activity_id(
         follow_activity_id
     )
 
@@ -176,10 +176,10 @@ async def handle_follow_accepted(
     # get_pending_channel_subscriptions_for_community must be called BEFORE
     # mark_bridge_actor_follow_accepted so we capture the pending rows that need DMs.
     community_actor_id = bridge_follow.community_actor_id
-    pending_subs = runtime.database.get_pending_channel_subscriptions_for_community(
+    pending_subs = runtime.database.remote_subscriptions.get_pending_channel_subscriptions_for_community(
         community_actor_id
     )
-    runtime.database.mark_bridge_actor_follow_accepted(community_actor_id)
+    runtime.database.bridge_actor_follows.mark_bridge_actor_follow_accepted(community_actor_id)
 
     # DM every Discord user who was waiting on this community.
     for sub in pending_subs:
@@ -201,7 +201,7 @@ async def _maybe_implicit_accept(
     comment from a community whose bridge-actor follow is still pending, we treat
     the delivery itself as implicit acceptance and activate all waiting channels.
     """
-    bridge_follow = runtime.database.get_bridge_actor_follow(community_actor_id)
+    bridge_follow = runtime.database.bridge_actor_follows.get_bridge_actor_follow(community_actor_id)
     if bridge_follow is None or bridge_follow.status != "pending":
         # Either already accepted/failed or no follow row at all — nothing to promote.
         return
@@ -213,10 +213,10 @@ async def _maybe_implicit_accept(
     )
 
     # Capture pending subs before marking accepted so DMs can be sent.
-    pending_subs = runtime.database.get_pending_channel_subscriptions_for_community(
+    pending_subs = runtime.database.remote_subscriptions.get_pending_channel_subscriptions_for_community(
         community_actor_id
     )
-    runtime.database.mark_bridge_actor_follow_accepted(community_actor_id)
+    runtime.database.bridge_actor_follows.mark_bridge_actor_follow_accepted(community_actor_id)
 
     for sub in pending_subs:
         await _notify_channel_accepted(sub, runtime)
@@ -242,7 +242,7 @@ def _should_skip_unsubscribed_remote_create(
     # `_maybe_implicit_accept()` runs before this helper. Keep the pending-follow
     # allowance here as a defensive rule so a future call-site reorder does not
     # accidentally skip valid content from a community that is still activating.
-    bridge_follow = runtime.database.get_bridge_actor_follow(event.community_actor_id)
+    bridge_follow = runtime.database.bridge_actor_follows.get_bridge_actor_follow(event.community_actor_id)
     if bridge_follow is not None and bridge_follow.status == "pending":
         return False
 
@@ -250,7 +250,7 @@ def _should_skip_unsubscribed_remote_create(
         # Unsubscribed posts are only relevant if they already map to a stored
         # bridge thread group. A brand-new remote post after unsubscribe should
         # be acknowledged and ignored locally.
-        return runtime.database.get_thread_group_by_ap_object(event.object.ap_id) is None
+        return runtime.database.discord_fanout_groups.get_thread_group_by_ap_object(event.object.ap_id) is None
 
     if event.event_type == "comment.created":
         # Comments that still belong to a mapped thread or a mapped parent
@@ -258,13 +258,13 @@ def _should_skip_unsubscribed_remote_create(
         # with no mapped bridge context are skipped here.
         if (
             event.object.post_ap_id
-            and runtime.database.get_thread_group_by_ap_object(event.object.post_ap_id)
+            and runtime.database.discord_fanout_groups.get_thread_group_by_ap_object(event.object.post_ap_id)
             is not None
         ):
             return False
         if (
             event.object.parent_ap_id
-            and runtime.database.get_message_group_by_ap_object(event.object.parent_ap_id)
+            and runtime.database.discord_fanout_groups.get_message_group_by_ap_object(event.object.parent_ap_id)
             is not None
         ):
             return False
@@ -311,14 +311,14 @@ def _is_discord_originated_echo(event: ActivityPubEvent, runtime: Runtime) -> bo
     """Return whether an inbound AP event matches a prior Discord-originated publish."""
     # Outbound Discord publishes persist both activity_id and object_id, so
     # inbound loop suppression checks both keys before any Discord fanout.
-    if runtime.database.get_message_mapping_by_object_id(event.object.ap_id) is not None:
+    if runtime.database.message_mappings.get_message_mapping_by_object_id(event.object.ap_id) is not None:
         return True
-    if runtime.database.get_message_mapping_by_activity_id(event.delivery_id) is not None:
+    if runtime.database.message_mappings.get_message_mapping_by_activity_id(event.delivery_id) is not None:
         return True
     # Lemmy re-wraps our outbound activities in an Announce with a new ap_id, so
     # the object_id check above misses the echo. If the actor is one of our own
     # registered users, the activity originated here and must be suppressed.
-    if runtime.database.get_user_by_actor_url(event.actor_id) is not None:
+    if runtime.database.users.get_user_by_actor_url(event.actor_id) is not None:
         return True
     return False
 

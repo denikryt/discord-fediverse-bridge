@@ -49,8 +49,8 @@ async def test_phase2_single_subscription_no_mirror_created(tmp_path: Path) -> N
 
     result = await runtime.handle_discord_thread_create(thread=thread, starter_message=starter)
 
-    thread_group = database.get_thread_group_by_source_thread(200)
-    deliveries = database.get_thread_deliveries(thread_group.id) if thread_group else []
+    thread_group = database.discord_fanout_groups.get_thread_group_by_source_thread(200)
+    deliveries = database.discord_fanout_groups.get_thread_deliveries(thread_group.id) if thread_group else []
     mirror_deliveries = [d for d in deliveries if d.role == "mirror"]
 
     assert result.status == "published"
@@ -101,8 +101,8 @@ async def test_phase2_two_subscriptions_mirror_thread_created_in_sibling(tmp_pat
 
     result = await runtime.handle_discord_thread_create(thread=thread, starter_message=starter)
 
-    thread_group = database.get_thread_group_by_source_thread(200)
-    deliveries = database.get_thread_deliveries(thread_group.id) if thread_group else []
+    thread_group = database.discord_fanout_groups.get_thread_group_by_source_thread(200)
+    deliveries = database.discord_fanout_groups.get_thread_deliveries(thread_group.id) if thread_group else []
     source_deliveries = [d for d in deliveries if d.role == "source"]
     mirror_deliveries = [d for d in deliveries if d.role == "mirror"]
 
@@ -136,7 +136,7 @@ async def test_phase2_duplicate_thread_create_is_ignored(tmp_path: Path) -> None
     add_accepted_subscription(database, channel_id=100)
     add_registered_user(database)
     # Pre-insert the thread group to simulate a prior successful publish.
-    database.create_thread_group(
+    database.discord_fanout_groups.create_thread_group(
         community_actor_id=COMMUNITY_ACTOR_URL,
         source_channel_id=100,
         source_thread_id=200,
@@ -151,9 +151,9 @@ async def test_phase2_duplicate_thread_create_is_ignored(tmp_path: Path) -> None
 
     result = await runtime.handle_discord_thread_create(thread=thread, starter_message=starter)
 
-    thread_group = database.get_thread_group_by_source_thread(200)
+    thread_group = database.discord_fanout_groups.get_thread_group_by_source_thread(200)
     # No delivery rows should have been created by the duplicate call.
-    deliveries = database.get_thread_deliveries(thread_group.id) if thread_group else []
+    deliveries = database.discord_fanout_groups.get_thread_deliveries(thread_group.id) if thread_group else []
 
     assert result.status == "ignored"
     # Gateway must not have been called — AP was already done on the first event.
@@ -191,8 +191,8 @@ async def test_phase2_mirror_failure_does_not_block_source_publish(tmp_path: Pat
 
     result = await runtime.handle_discord_thread_create(thread=thread, starter_message=starter)
 
-    thread_group = database.get_thread_group_by_source_thread(200)
-    deliveries = database.get_thread_deliveries(thread_group.id) if thread_group else []
+    thread_group = database.discord_fanout_groups.get_thread_group_by_source_thread(200)
+    deliveries = database.discord_fanout_groups.get_thread_deliveries(thread_group.id) if thread_group else []
     source_deliveries = [d for d in deliveries if d.role == "source"]
     mirror_deliveries = [d for d in deliveries if d.role == "mirror"]
 

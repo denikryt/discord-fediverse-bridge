@@ -86,15 +86,15 @@ def scenario(tmp_path: Path) -> SimpleNamespace:
         name="Hackers",
         description="A local hackerspace forum.",
     )
-    community = database.get_local_community_by_slug("hackers")
-    source = database.create_local_subscriber(
+    community = database.local_communities.get_local_community_by_slug("hackers")
+    source = database.local_subscribers.create_local_subscriber(
         local_community_id=community.id,
         discord_guild_id=10,
         discord_channel_id=200,
         initiated_by_discord_user_id="999",
         status="active",
     )
-    sibling = database.create_local_subscriber(
+    sibling = database.local_subscribers.create_local_subscriber(
         local_community_id=community.id,
         discord_guild_id=10,
         discord_channel_id=300,
@@ -114,14 +114,14 @@ def scenario(tmp_path: Path) -> SimpleNamespace:
 
 def _thread_with_surfaces(scenario: SimpleNamespace) -> object:
     """Create one canonical post with host/source/sibling Discord surfaces."""
-    thread_row = scenario.database.create_local_community_thread_canonical(
+    thread_row = scenario.database.local_community_content.create_local_community_thread_canonical(
         local_community_id=scenario.community.id,
         ap_activity_id="https://bridge.example/activities/create/post/1",
         ap_object_id="https://bridge.example/post/1",
         direction="discord_to_ap",
         origin_kind="discord_local_subscriber",
     )
-    scenario.database.create_local_community_thread_surface(
+    scenario.database.local_community_surfaces.create_local_community_thread_surface(
         local_community_thread_id=thread_row.id,
         discord_forum_channel_id=100,
         discord_thread_id=1100,
@@ -129,7 +129,7 @@ def _thread_with_surfaces(scenario: SimpleNamespace) -> object:
         role="host",
         local_subscriber_id=None,
     )
-    scenario.database.create_local_community_thread_surface(
+    scenario.database.local_community_surfaces.create_local_community_thread_surface(
         local_community_thread_id=thread_row.id,
         discord_forum_channel_id=200,
         discord_thread_id=2200,
@@ -137,7 +137,7 @@ def _thread_with_surfaces(scenario: SimpleNamespace) -> object:
         role="local_subscriber",
         local_subscriber_id=scenario.source.id,
     )
-    scenario.database.create_local_community_thread_surface(
+    scenario.database.local_community_surfaces.create_local_community_thread_surface(
         local_community_thread_id=thread_row.id,
         discord_forum_channel_id=300,
         discord_thread_id=3300,
@@ -145,7 +145,7 @@ def _thread_with_surfaces(scenario: SimpleNamespace) -> object:
         role="local_subscriber",
         local_subscriber_id=scenario.sibling.id,
     )
-    scenario.database.create_published_activity_object(
+    scenario.database.activitypub_objects.create_published_activity_object(
         actor_username="alice",
         actor_url="https://bridge.example/users/alice",
         community_actor_url=scenario.community.actor_url,
@@ -163,26 +163,26 @@ def _thread_with_surfaces(scenario: SimpleNamespace) -> object:
 
 def _comment_with_surfaces(scenario: SimpleNamespace, thread_row: object) -> object:
     """Create one canonical comment with host/source/sibling Discord surfaces."""
-    host_thread = scenario.database.get_local_community_thread_surface(
+    host_thread = scenario.database.local_community_surfaces.get_local_community_thread_surface(
         local_community_thread_id=thread_row.id,
         discord_forum_channel_id=100,
     )
-    source_thread = scenario.database.get_local_community_thread_surface(
+    source_thread = scenario.database.local_community_surfaces.get_local_community_thread_surface(
         local_community_thread_id=thread_row.id,
         discord_forum_channel_id=200,
     )
-    sibling_thread = scenario.database.get_local_community_thread_surface(
+    sibling_thread = scenario.database.local_community_surfaces.get_local_community_thread_surface(
         local_community_thread_id=thread_row.id,
         discord_forum_channel_id=300,
     )
-    message_row = scenario.database.create_local_community_message_canonical(
+    message_row = scenario.database.local_community_content.create_local_community_message_canonical(
         local_community_thread_id=thread_row.id,
         ap_activity_id="https://bridge.example/activities/create/comment/1",
         ap_object_id="https://bridge.example/comment/1",
         parent_ap_object_id="https://bridge.example/post/1",
         direction="discord_to_ap",
     )
-    scenario.database.create_local_community_message_surface(
+    scenario.database.local_community_surfaces.create_local_community_message_surface(
         local_community_message_id=message_row.id,
         local_community_thread_surface_id=host_thread.id,
         discord_forum_channel_id=100,
@@ -191,7 +191,7 @@ def _comment_with_surfaces(scenario: SimpleNamespace, thread_row: object) -> obj
         role="host",
         local_subscriber_id=None,
     )
-    scenario.database.create_local_community_message_surface(
+    scenario.database.local_community_surfaces.create_local_community_message_surface(
         local_community_message_id=message_row.id,
         local_community_thread_surface_id=source_thread.id,
         discord_forum_channel_id=200,
@@ -200,7 +200,7 @@ def _comment_with_surfaces(scenario: SimpleNamespace, thread_row: object) -> obj
         role="local_subscriber",
         local_subscriber_id=scenario.source.id,
     )
-    scenario.database.create_local_community_message_surface(
+    scenario.database.local_community_surfaces.create_local_community_message_surface(
         local_community_message_id=message_row.id,
         local_community_thread_surface_id=sibling_thread.id,
         discord_forum_channel_id=300,
@@ -209,7 +209,7 @@ def _comment_with_surfaces(scenario: SimpleNamespace, thread_row: object) -> obj
         role="local_subscriber",
         local_subscriber_id=scenario.sibling.id,
     )
-    scenario.database.create_published_activity_object(
+    scenario.database.activitypub_objects.create_published_activity_object(
         actor_username="alice",
         actor_url="https://bridge.example/users/alice",
         community_actor_url=scenario.community.actor_url,
@@ -472,7 +472,7 @@ async def test_inactive_local_subscriber_source_mutation_is_contained(scenario: 
     _thread_with_surfaces(scenario)
     bot, messages = _bot_for_surfaces()
     scenario.runtime.bot = bot
-    scenario.database.delete_local_subscriber(200)
+    scenario.database.local_subscribers.delete_local_subscriber(200)
 
     await scenario.runtime.handle_discord_message_edit(
         message_id=2300,

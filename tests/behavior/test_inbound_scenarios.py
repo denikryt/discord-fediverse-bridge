@@ -37,7 +37,7 @@ def _community_runtime(database: Database, *, bot: object | None = None) -> Comm
 
 def _accepted_subscription(database: Database) -> None:
     """Insert one accepted community subscription used for inbound routing."""
-    database.create_subscription(
+    database.remote_subscriptions.create_subscription(
         discord_channel_id=100,
         lemmy_community_actor_id=f"https://{LEMMY_EXAMPLE_DOMAIN}/c/hackers",
         lemmy_community_name="hackers",
@@ -51,7 +51,7 @@ def _accepted_subscription(database: Database) -> None:
 
 def _accepted_subscription_for_channel(database: Database, *, channel_id: int) -> None:
     """Insert one accepted subscription row for a specific Discord forum channel."""
-    database.create_subscription(
+    database.remote_subscriptions.create_subscription(
         discord_channel_id=channel_id,
         lemmy_community_actor_id=f"https://{LEMMY_EXAMPLE_DOMAIN}/c/hackers",
         lemmy_community_name="hackers",
@@ -167,15 +167,15 @@ def test_accepted_subscription_inbound_post_creates_discord_thread_and_receipt(
         headers=_event_headers(event.delivery_id),
         json=event.model_dump(mode="json"),
     )
-    thread_group = database.get_thread_group_by_ap_object(event.object.ap_id)
-    receipt = database.get_event_receipt(event.delivery_id)
+    thread_group = database.discord_fanout_groups.get_thread_group_by_ap_object(event.object.ap_id)
+    receipt = database.event_receipts.get_event_receipt(event.delivery_id)
 
     assert response.status_code == 200
     assert response.json()["status"] == "processed"
     # Mapping is now in CommunityThreadGroup, not PostLink.
     assert thread_group is not None
     assert thread_group.ap_object_id == event.object.ap_id
-    deliveries = database.get_thread_deliveries(thread_group.id)
+    deliveries = database.discord_fanout_groups.get_thread_deliveries(thread_group.id)
     assert len(deliveries) == 1
     assert deliveries[0].discord_thread_id == 200
     assert receipt is not None
@@ -266,8 +266,8 @@ def test_inbound_post_and_comment_fan_out_to_all_accepted_subscriptions(
         json=comment_event.model_dump(mode="json"),
     )
 
-    thread_group = database.get_thread_group_by_ap_object(post_event.object.ap_id)
-    message_group = database.get_message_group_by_ap_object(comment_event.object.ap_id)
+    thread_group = database.discord_fanout_groups.get_thread_group_by_ap_object(post_event.object.ap_id)
+    message_group = database.discord_fanout_groups.get_message_group_by_ap_object(comment_event.object.ap_id)
 
     assert post_response.status_code == 200
     assert post_response.json()["status"] == "processed"
@@ -275,11 +275,11 @@ def test_inbound_post_and_comment_fan_out_to_all_accepted_subscriptions(
     assert comment_response.json()["status"] == "processed"
 
     assert thread_group is not None
-    thread_deliveries = database.get_thread_deliveries(thread_group.id)
+    thread_deliveries = database.discord_fanout_groups.get_thread_deliveries(thread_group.id)
     assert {d.discord_thread_id for d in thread_deliveries} == {200, 201}
 
     assert message_group is not None
-    msg_deliveries = database.get_message_deliveries(message_group.id)
+    msg_deliveries = database.discord_fanout_groups.get_message_deliveries(message_group.id)
     assert {d.discord_thread_id for d in msg_deliveries} == {200, 201}
 
     assert thread_a.send.await_count == 1
@@ -298,14 +298,14 @@ def test_accepted_subscription_inbound_comment_creates_discord_message_and_recei
 
     # Pre-insert the thread group for the parent post (as Phase 5 inbound would do).
     post_ap_id = f"https://{LEMMY_EXAMPLE_DOMAIN}/post/111"
-    thread_group = database.create_thread_group(
+    thread_group = database.discord_fanout_groups.create_thread_group(
         community_actor_id=f"https://{LEMMY_EXAMPLE_DOMAIN}/c/hackers",
         source_channel_id=None,
         source_thread_id=None,
         source_starter_message_id=None,
         ap_object_id=post_ap_id,
     )
-    database.add_thread_delivery(
+    database.discord_fanout_groups.add_thread_delivery(
         thread_group_id=thread_group.id,
         discord_channel_id=100,
         discord_thread_id=200,
@@ -339,8 +339,8 @@ def test_accepted_subscription_inbound_comment_creates_discord_message_and_recei
         headers=_event_headers(event.delivery_id),
         json=event.model_dump(mode="json"),
     )
-    message_group = database.get_message_group_by_ap_object(event.object.ap_id)
-    receipt = database.get_event_receipt(event.delivery_id)
+    message_group = database.discord_fanout_groups.get_message_group_by_ap_object(event.object.ap_id)
+    receipt = database.event_receipts.get_event_receipt(event.delivery_id)
 
     assert response.status_code == 200
     assert response.json()["status"] == "processed"
@@ -432,7 +432,7 @@ async def test_discord_originated_echo_is_skipped_without_creating_duplicate(
     database = _database(tmp_path)
     _accepted_subscription(database)
     object_id = f"https://{BRIDGE_HOST_DOMAIN}/users/alice/objects/post/1"
-    database.create_message_mapping(
+    database.message_mappings.create_message_mapping(
         source_platform="discord",
         source_id="300",
         activity_id=f"https://{BRIDGE_HOST_DOMAIN}/users/alice/activities/create/post/1",
@@ -496,17 +496,17 @@ def test_comment_before_parent_mapping_becomes_deferred_then_retries_processed(
         headers=_event_headers(event.delivery_id),
         json=event.model_dump(mode="json"),
     )
-    first_receipt = database.get_event_receipt(event.delivery_id)
+    first_receipt = database.event_receipts.get_event_receipt(event.delivery_id)
 
     # Now create the thread group for the parent post.
-    thread_group = database.create_thread_group(
+    thread_group = database.discord_fanout_groups.create_thread_group(
         community_actor_id=f"https://{LEMMY_EXAMPLE_DOMAIN}/c/hackers",
         source_channel_id=None,
         source_thread_id=None,
         source_starter_message_id=None,
         ap_object_id=post_ap_id,
     )
-    database.add_thread_delivery(
+    database.discord_fanout_groups.add_thread_delivery(
         thread_group_id=thread_group.id,
         discord_channel_id=100,
         discord_thread_id=200,
@@ -520,8 +520,8 @@ def test_comment_before_parent_mapping_becomes_deferred_then_retries_processed(
         headers=_event_headers(event.delivery_id),
         json=event.model_dump(mode="json"),
     )
-    second_receipt = database.get_event_receipt(event.delivery_id)
-    message_group = database.get_message_group_by_ap_object(
+    second_receipt = database.event_receipts.get_event_receipt(event.delivery_id)
+    message_group = database.discord_fanout_groups.get_message_group_by_ap_object(
         f"https://{LEMMY_EXAMPLE_DOMAIN}/comment/222"
     )
 
@@ -569,7 +569,7 @@ def test_discord_target_failure_marks_inbound_receipt_failed(
         headers=_event_headers(event.delivery_id),
         json=event.model_dump(mode="json"),
     )
-    receipt = database.get_event_receipt(event.delivery_id)
+    receipt = database.event_receipts.get_event_receipt(event.delivery_id)
 
     assert response.status_code == 500
     assert receipt is not None

@@ -23,10 +23,10 @@ def build_dashboard_payload(runtime: Any) -> dict[str, object]:
     origin = str(getattr(settings, "normalized_fedify_origin", settings.fedify_origin)).rstrip("/")
     origin_host = _hostname_from_url(origin) or ""
     actor_identifier = getattr(settings, "fedify_actor_identifier", "bridge")
-    local_communities = runtime.database.list_local_communities()
-    registered_users = runtime.database.list_users()
-    remote_subscribers = runtime.database.list_remote_subscribers_for_all(status="accepted")
-    bridge_follows = runtime.database.list_bridge_actor_follows()
+    local_communities = runtime.database.local_communities.list_local_communities()
+    registered_users = runtime.database.users.list_users()
+    remote_subscribers = runtime.database.remote_subscribers.list_remote_subscribers_for_all(status="accepted")
+    bridge_follows = runtime.database.bridge_actor_follows.list_bridge_actor_follows()
 
     remote_subscribers_by_community: dict[int, list[object]] = defaultdict(list)
     for remote_subscriber in remote_subscribers:
@@ -54,7 +54,7 @@ def build_dashboard_payload(runtime: Any) -> dict[str, object]:
                     or _hostname_from_url(getattr(remote_subscriber, "remote_inbox_url", "")),
                 }
             )
-        local_subscriber_count = runtime.database.count_local_subscribers(getattr(community, "id"))
+        local_subscriber_count = runtime.database.local_subscribers.count_local_subscribers(getattr(community, "id"))
         community_payloads.append(
             {
                 "slug": getattr(community, "slug"),

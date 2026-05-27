@@ -33,7 +33,7 @@ def _database(tmp_path: Path) -> Database:
 
 def _accepted_subscription(database: Database, *, channel_id: int) -> None:
     """Insert one accepted community subscription for the shared hackers community."""
-    database.create_subscription(
+    database.remote_subscriptions.create_subscription(
         discord_channel_id=channel_id,
         lemmy_community_actor_id=COMMUNITY_ACTOR_URL,
         lemmy_community_name="hackers",
@@ -48,7 +48,7 @@ def _accepted_subscription(database: Database, *, channel_id: int) -> None:
 def _registered_user(database: Database) -> None:
     """Insert one registered local user actor for outbound publish scenarios."""
     actor_url = f"https://{BRIDGE_HOST_DOMAIN}/users/alice"
-    database.create_user(
+    database.users.create_user(
         discord_user_id="123",
         activitypub_username="alice",
         actor_url=actor_url,
@@ -135,7 +135,7 @@ def _create_thread_group_with_source_delivery(
     ap_object_id = f"https://{BRIDGE_HOST_DOMAIN}/objects/post/1"
     ap_activity_id = f"https://{BRIDGE_HOST_DOMAIN}/activities/create/post/1"
     # PostLink is required by publish_thread_message to resolve post context.
-    database.create_post_link(
+    database.legacy_lemmy_mappings.create_post_link(
         lemmy_post_id=-thread_id,
         lemmy_post_ap_id=ap_object_id,
         discord_forum_channel_id=channel_id,
@@ -143,7 +143,7 @@ def _create_thread_group_with_source_delivery(
         discord_starter_message_id=starter_message_id,
         direction="discord_to_activitypub",
     )
-    thread_group = database.create_thread_group(
+    thread_group = database.discord_fanout_groups.create_thread_group(
         community_actor_id=COMMUNITY_ACTOR_URL,
         source_channel_id=channel_id,
         source_thread_id=thread_id,
@@ -151,7 +151,7 @@ def _create_thread_group_with_source_delivery(
         ap_activity_id=ap_activity_id,
         ap_object_id=ap_object_id,
     )
-    database.add_thread_delivery(
+    database.discord_fanout_groups.add_thread_delivery(
         thread_group_id=thread_group.id,
         discord_channel_id=channel_id,
         discord_thread_id=thread_id,
@@ -182,8 +182,8 @@ async def test_phase3_single_subscription_message_published_no_mirror(tmp_path: 
 
     result = await runtime.handle_discord_message(message=message)
 
-    message_group = database.get_message_group_by_source_message(400)
-    deliveries = database.get_message_deliveries(message_group.id) if message_group else []
+    message_group = database.discord_fanout_groups.get_message_group_by_source_message(400)
+    deliveries = database.discord_fanout_groups.get_message_deliveries(message_group.id) if message_group else []
     mirror_deliveries = [d for d in deliveries if d.role == "mirror"]
 
     assert result.status == "published"
@@ -221,7 +221,7 @@ async def test_phase3_two_subscriptions_message_mirrored_to_sibling_thread(tmp_p
         database, channel_id=100, thread_id=200
     )
     # Add mirror delivery row for sibling thread 500 in channel 101.
-    database.add_thread_delivery(
+    database.discord_fanout_groups.add_thread_delivery(
         thread_group_id=thread_group.id,
         discord_channel_id=101,
         discord_thread_id=500,
@@ -245,8 +245,8 @@ async def test_phase3_two_subscriptions_message_mirrored_to_sibling_thread(tmp_p
 
     result = await runtime.handle_discord_message(message=message)
 
-    message_group = database.get_message_group_by_source_message(400)
-    deliveries = database.get_message_deliveries(message_group.id) if message_group else []
+    message_group = database.discord_fanout_groups.get_message_group_by_source_message(400)
+    deliveries = database.discord_fanout_groups.get_message_deliveries(message_group.id) if message_group else []
     source_deliveries = [d for d in deliveries if d.role == "source"]
     mirror_deliveries = [d for d in deliveries if d.role == "mirror"]
 
@@ -283,7 +283,7 @@ async def test_phase3_duplicate_message_is_ignored(tmp_path: Path) -> None:
         database, channel_id=100, thread_id=200
     )
     # Pre-insert the message group to simulate a prior successful publish.
-    database.create_message_group(
+    database.discord_fanout_groups.create_message_group(
         community_actor_id=COMMUNITY_ACTOR_URL,
         thread_group_id=thread_group.id,
         source_channel_id=100,
@@ -298,8 +298,8 @@ async def test_phase3_duplicate_message_is_ignored(tmp_path: Path) -> None:
 
     result = await runtime.handle_discord_message(message=message)
 
-    message_group = database.get_message_group_by_source_message(400)
-    deliveries = database.get_message_deliveries(message_group.id) if message_group else []
+    message_group = database.discord_fanout_groups.get_message_group_by_source_message(400)
+    deliveries = database.discord_fanout_groups.get_message_deliveries(message_group.id) if message_group else []
 
     assert result.status == "ignored"
     # Gateway must not have been called — AP was already done on the first event.
@@ -324,7 +324,7 @@ async def test_phase3_message_in_legacy_thread_is_ignored_without_thread_group(t
     # Insert a legacy PostLink for thread 200 but no CommunityThreadGroup.
     # Phase 5: publish_thread_message only consults CommunityThreadGroup, so this
     # thread has no resolvable post context and the message is ignored.
-    database.create_post_link(
+    database.legacy_lemmy_mappings.create_post_link(
         lemmy_post_id=-200,
         lemmy_post_ap_id=f"https://{BRIDGE_HOST_DOMAIN}/objects/post/legacy",
         discord_forum_channel_id=100,
@@ -338,7 +338,7 @@ async def test_phase3_message_in_legacy_thread_is_ignored_without_thread_group(t
 
     result = await runtime.handle_discord_message(message=message)
 
-    message_group = database.get_message_group_by_source_message(400)
+    message_group = database.discord_fanout_groups.get_message_group_by_source_message(400)
 
     assert result.status == "ignored"
     assert result.reason == "no_post_context"
@@ -367,7 +367,7 @@ async def test_phase3_mirror_message_failure_does_not_block_source_publish(tmp_p
         database, channel_id=100, thread_id=200
     )
     # Add mirror delivery row for sibling thread 500.
-    database.add_thread_delivery(
+    database.discord_fanout_groups.add_thread_delivery(
         thread_group_id=thread_group.id,
         discord_channel_id=101,
         discord_thread_id=500,
@@ -386,8 +386,8 @@ async def test_phase3_mirror_message_failure_does_not_block_source_publish(tmp_p
 
     result = await runtime.handle_discord_message(message=message)
 
-    message_group = database.get_message_group_by_source_message(400)
-    deliveries = database.get_message_deliveries(message_group.id) if message_group else []
+    message_group = database.discord_fanout_groups.get_message_group_by_source_message(400)
+    deliveries = database.discord_fanout_groups.get_message_deliveries(message_group.id) if message_group else []
     source_deliveries = [d for d in deliveries if d.role == "source"]
     mirror_deliveries = [d for d in deliveries if d.role == "mirror"]
 

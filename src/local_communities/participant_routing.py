@@ -44,7 +44,7 @@ def resolve_local_community_source_for_forum(
     if forum_channel_id is None:
         return None
 
-    local_community = database.get_local_community_by_forum_channel_id(forum_channel_id)
+    local_community = database.local_communities.get_local_community_by_forum_channel_id(forum_channel_id)
     if local_community is not None:
         return ResolvedLocalCommunitySource(
             local_community=local_community,
@@ -57,13 +57,13 @@ def resolve_local_community_source_for_forum(
     # switch runtimes in Stage 4.  Stage 1 rejects this during normal control
     # flow, and this defensive check keeps corrupted/manual rows on the older
     # remote-subscription path instead of treating them as local sources.
-    if database.get_subscription_by_channel(forum_channel_id) is not None:
+    if database.remote_subscriptions.get_subscription_by_channel(forum_channel_id) is not None:
         return None
 
-    local_subscriber = database.get_local_subscriber_by_channel(forum_channel_id)
+    local_subscriber = database.local_subscribers.get_local_subscriber_by_channel(forum_channel_id)
     if local_subscriber is None or getattr(local_subscriber, "status", "active") != "active":
         return None
-    local_community = database.get_local_community_by_id(getattr(local_subscriber, "local_community_id"))
+    local_community = database.local_communities.get_local_community_by_id(getattr(local_subscriber, "local_community_id"))
     if local_community is None:
         return None
     return ResolvedLocalCommunitySource(

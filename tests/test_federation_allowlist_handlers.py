@@ -50,13 +50,13 @@ def _post_created_event(community_actor_id: str) -> ActivityPubEvent:
 
 def _create_accepted_remote_subscription(db: Database, community_actor_id: str) -> None:
     """Create active remote subscription state required for content dispatch."""
-    db.create_bridge_actor_follow(
+    db.bridge_actor_follows.create_bridge_actor_follow(
         community_actor_id=community_actor_id,
         follow_activity_id=f"https://{BRIDGE_EXAMPLE_DOMAIN}/activities/follow/allowlist",
         community_inbox_url=f"{community_actor_id}/inbox",
         status="accepted",
     )
-    db.create_subscription(
+    db.remote_subscriptions.create_subscription(
         discord_channel_id=123,
         lemmy_community_actor_id=community_actor_id,
         lemmy_community_name="hackers",
@@ -160,13 +160,13 @@ async def test_dispatch_follow_accepted_bypasses_allowlist(tmp_path: Path) -> No
     db = _database(tmp_path)
     follow_activity_id = f"https://{BRIDGE_EXAMPLE_DOMAIN}/activities/follow/1"
     community_actor_id = f"https://{LEMMY_EXAMPLE_DOMAIN}/c/hackers"
-    db.create_bridge_actor_follow(
+    db.bridge_actor_follows.create_bridge_actor_follow(
         community_actor_id=community_actor_id,
         follow_activity_id=follow_activity_id,
         community_inbox_url=f"{community_actor_id}/inbox",
         status="pending",
     )
-    db.create_subscription(
+    db.remote_subscriptions.create_subscription(
         discord_channel_id=123,
         lemmy_community_actor_id=community_actor_id,
         lemmy_community_name="hackers",
@@ -191,5 +191,5 @@ async def test_dispatch_follow_accepted_bypasses_allowlist(tmp_path: Path) -> No
 
     # follow.accepted must still be processed even though the instance is not listed.
     assert result.status == "processed"
-    subscription = db.get_subscription_by_channel(123)
+    subscription = db.remote_subscriptions.get_subscription_by_channel(123)
     assert subscription.status == "accepted"

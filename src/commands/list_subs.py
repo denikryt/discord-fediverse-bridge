@@ -42,7 +42,7 @@ def register(tree: app_commands.CommandTree, database: Database) -> None:
                 # The list command can safely resolve the local community label
                 # server-side because it is a moderator-only surface.
                 channel_mention = f"<#{sub.discord_channel_id}>"
-                local_community = database.get_local_community_by_id(sub.local_community_id)
+                local_community = database.local_communities.get_local_community_by_id(sub.local_community_id)
                 if local_community is not None:
                     actor_host = urlparse(local_community.actor_url).hostname or "unknown-host"
                     community_label = f"!{local_community.slug}@{actor_host}"

@@ -156,7 +156,7 @@ def _setup_message_group_with_deliveries(
 
     Returns (thread_group, message_group).
     """
-    thread_group = database.create_thread_group(
+    thread_group = database.discord_fanout_groups.create_thread_group(
         community_actor_id=COMMUNITY_ACTOR_URL,
         source_channel_id=source_channel_id,
         source_thread_id=source_thread_id,
@@ -164,21 +164,21 @@ def _setup_message_group_with_deliveries(
         ap_activity_id="activity-thread-1",
         ap_object_id=POST_AP_ID,
     )
-    database.add_thread_delivery(
+    database.discord_fanout_groups.add_thread_delivery(
         thread_group_id=thread_group.id,
         discord_channel_id=source_channel_id,
         discord_thread_id=source_thread_id,
         discord_starter_message_id=source_msg_id - 1,
         role="source",
     )
-    database.add_thread_delivery(
+    database.discord_fanout_groups.add_thread_delivery(
         thread_group_id=thread_group.id,
         discord_channel_id=mirror_channel_id,
         discord_thread_id=mirror_thread_id,
         discord_starter_message_id=mirror_msg_id - 1,
         role="mirror",
     )
-    message_group = database.create_message_group(
+    message_group = database.discord_fanout_groups.create_message_group(
         community_actor_id=COMMUNITY_ACTOR_URL,
         thread_group_id=thread_group.id,
         source_channel_id=source_channel_id,
@@ -187,14 +187,14 @@ def _setup_message_group_with_deliveries(
         ap_activity_id="activity-msg-1",
         ap_object_id=ap_object_id,
     )
-    database.add_message_delivery(
+    database.discord_fanout_groups.add_message_delivery(
         message_group_id=message_group.id,
         discord_channel_id=source_channel_id,
         discord_thread_id=source_thread_id,
         discord_message_id=source_msg_id,
         role="source",
     )
-    database.add_message_delivery(
+    database.discord_fanout_groups.add_message_delivery(
         message_group_id=message_group.id,
         discord_channel_id=mirror_channel_id,
         discord_thread_id=mirror_thread_id,
@@ -330,7 +330,7 @@ async def test_mirror_edit_failure_does_not_block_ap_update(tmp_path: Path) -> N
     community_runtime = _community_runtime(database, bot=bot, discord_fanout=fanout)
 
     # Set up thread group and message group with two mirror deliveries.
-    thread_group = database.create_thread_group(
+    thread_group = database.discord_fanout_groups.create_thread_group(
         community_actor_id=COMMUNITY_ACTOR_URL,
         source_channel_id=100,
         source_thread_id=200,
@@ -338,12 +338,12 @@ async def test_mirror_edit_failure_does_not_block_ap_update(tmp_path: Path) -> N
         ap_activity_id="activity-thread-1",
         ap_object_id=POST_AP_ID,
     )
-    database.add_thread_delivery(
+    database.discord_fanout_groups.add_thread_delivery(
         thread_group_id=thread_group.id,
         discord_channel_id=100, discord_thread_id=200,
         discord_starter_message_id=300, role="source",
     )
-    message_group = database.create_message_group(
+    message_group = database.discord_fanout_groups.create_message_group(
         community_actor_id=COMMUNITY_ACTOR_URL,
         thread_group_id=thread_group.id,
         source_channel_id=100,
@@ -352,17 +352,17 @@ async def test_mirror_edit_failure_does_not_block_ap_update(tmp_path: Path) -> N
         ap_activity_id="activity-msg-1",
         ap_object_id=COMMENT_AP_ID,
     )
-    database.add_message_delivery(
+    database.discord_fanout_groups.add_message_delivery(
         message_group_id=message_group.id,
         discord_channel_id=100, discord_thread_id=200,
         discord_message_id=source_msg_id, role="source",
     )
-    database.add_message_delivery(
+    database.discord_fanout_groups.add_message_delivery(
         message_group_id=message_group.id,
         discord_channel_id=101, discord_thread_id=mirror_thread_id_1,
         discord_message_id=mirror_msg_id_1, role="mirror",
     )
-    database.add_message_delivery(
+    database.discord_fanout_groups.add_message_delivery(
         message_group_id=message_group.id,
         discord_channel_id=102, discord_thread_id=mirror_thread_id_2,
         discord_message_id=mirror_msg_id_2, role="mirror",
@@ -447,35 +447,35 @@ async def test_mirror_delete_failure_does_not_block_ap_delete(tmp_path: Path) ->
     fanout = _fake_fanout(bot=bot)
     community_runtime = _community_runtime(database, bot=bot, discord_fanout=fanout)
 
-    thread_group = database.create_thread_group(
+    thread_group = database.discord_fanout_groups.create_thread_group(
         community_actor_id=COMMUNITY_ACTOR_URL,
         source_channel_id=100, source_thread_id=200,
         source_starter_message_id=300,
         ap_activity_id="activity-thread-1", ap_object_id=POST_AP_ID,
     )
-    database.add_thread_delivery(
+    database.discord_fanout_groups.add_thread_delivery(
         thread_group_id=thread_group.id,
         discord_channel_id=100, discord_thread_id=200,
         discord_starter_message_id=300, role="source",
     )
-    message_group = database.create_message_group(
+    message_group = database.discord_fanout_groups.create_message_group(
         community_actor_id=COMMUNITY_ACTOR_URL,
         thread_group_id=thread_group.id,
         source_channel_id=100, source_thread_id=200,
         source_message_id=source_msg_id,
         ap_activity_id="activity-msg-1", ap_object_id=COMMENT_AP_ID,
     )
-    database.add_message_delivery(
+    database.discord_fanout_groups.add_message_delivery(
         message_group_id=message_group.id,
         discord_channel_id=100, discord_thread_id=200,
         discord_message_id=source_msg_id, role="source",
     )
-    database.add_message_delivery(
+    database.discord_fanout_groups.add_message_delivery(
         message_group_id=message_group.id,
         discord_channel_id=101, discord_thread_id=mirror_thread_id_1,
         discord_message_id=mirror_msg_id_1, role="mirror",
     )
-    database.add_message_delivery(
+    database.discord_fanout_groups.add_message_delivery(
         message_group_id=message_group.id,
         discord_channel_id=102, discord_thread_id=mirror_thread_id_2,
         discord_message_id=mirror_msg_id_2, role="mirror",
@@ -521,34 +521,34 @@ async def test_inbound_comment_update_edits_all_discord_deliveries(tmp_path: Pat
     community_runtime = _community_runtime(database, bot=bot)
 
     # Set up thread group with two inbound deliveries.
-    thread_group = database.create_thread_group(
+    thread_group = database.discord_fanout_groups.create_thread_group(
         community_actor_id=COMMUNITY_ACTOR_URL,
         source_channel_id=None, source_thread_id=None,
         source_starter_message_id=None,
         ap_activity_id="delivery-post-1", ap_object_id=POST_AP_ID,
     )
-    database.add_thread_delivery(
+    database.discord_fanout_groups.add_thread_delivery(
         thread_group_id=thread_group.id,
         discord_channel_id=100, discord_thread_id=thread_id_1,
         discord_starter_message_id=999, role="inbound",
     )
-    database.add_thread_delivery(
+    database.discord_fanout_groups.add_thread_delivery(
         thread_group_id=thread_group.id,
         discord_channel_id=101, discord_thread_id=thread_id_2,
         discord_starter_message_id=998, role="inbound",
     )
-    message_group = database.create_message_group(
+    message_group = database.discord_fanout_groups.create_message_group(
         community_actor_id=COMMUNITY_ACTOR_URL,
         thread_group_id=thread_group.id,
         source_channel_id=None, source_thread_id=None, source_message_id=None,
         ap_activity_id="delivery-comment-1", ap_object_id=COMMENT_AP_ID,
     )
-    database.add_message_delivery(
+    database.discord_fanout_groups.add_message_delivery(
         message_group_id=message_group.id,
         discord_channel_id=100, discord_thread_id=thread_id_1,
         discord_message_id=msg_id_1, role="inbound",
     )
-    database.add_message_delivery(
+    database.discord_fanout_groups.add_message_delivery(
         message_group_id=message_group.id,
         discord_channel_id=101, discord_thread_id=thread_id_2,
         discord_message_id=msg_id_2, role="inbound",
@@ -616,34 +616,34 @@ async def test_inbound_comment_delete_marks_all_discord_deliveries_deleted(tmp_p
 
     community_runtime = _community_runtime(database, bot=bot)
 
-    thread_group = database.create_thread_group(
+    thread_group = database.discord_fanout_groups.create_thread_group(
         community_actor_id=COMMUNITY_ACTOR_URL,
         source_channel_id=None, source_thread_id=None,
         source_starter_message_id=None,
         ap_activity_id="delivery-post-1", ap_object_id=POST_AP_ID,
     )
-    database.add_thread_delivery(
+    database.discord_fanout_groups.add_thread_delivery(
         thread_group_id=thread_group.id,
         discord_channel_id=100, discord_thread_id=thread_id_1,
         discord_starter_message_id=999, role="inbound",
     )
-    database.add_thread_delivery(
+    database.discord_fanout_groups.add_thread_delivery(
         thread_group_id=thread_group.id,
         discord_channel_id=101, discord_thread_id=thread_id_2,
         discord_starter_message_id=998, role="inbound",
     )
-    message_group = database.create_message_group(
+    message_group = database.discord_fanout_groups.create_message_group(
         community_actor_id=COMMUNITY_ACTOR_URL,
         thread_group_id=thread_group.id,
         source_channel_id=None, source_thread_id=None, source_message_id=None,
         ap_activity_id="delivery-comment-1", ap_object_id=COMMENT_AP_ID,
     )
-    database.add_message_delivery(
+    database.discord_fanout_groups.add_message_delivery(
         message_group_id=message_group.id,
         discord_channel_id=100, discord_thread_id=thread_id_1,
         discord_message_id=msg_id_1, role="inbound",
     )
-    database.add_message_delivery(
+    database.discord_fanout_groups.add_message_delivery(
         message_group_id=message_group.id,
         discord_channel_id=101, discord_thread_id=thread_id_2,
         discord_message_id=msg_id_2, role="inbound",
@@ -694,18 +694,18 @@ async def test_inbound_post_delete_marks_all_thread_starters_deleted(tmp_path: P
 
     community_runtime = _community_runtime(database, bot=bot)
 
-    thread_group = database.create_thread_group(
+    thread_group = database.discord_fanout_groups.create_thread_group(
         community_actor_id=COMMUNITY_ACTOR_URL,
         source_channel_id=None, source_thread_id=None,
         source_starter_message_id=None,
         ap_activity_id="delivery-post-1", ap_object_id=POST_AP_ID,
     )
-    database.add_thread_delivery(
+    database.discord_fanout_groups.add_thread_delivery(
         thread_group_id=thread_group.id,
         discord_channel_id=100, discord_thread_id=thread_id_1,
         discord_starter_message_id=starter_msg_id_1, role="inbound",
     )
-    database.add_thread_delivery(
+    database.discord_fanout_groups.add_thread_delivery(
         thread_group_id=thread_group.id,
         discord_channel_id=101, discord_thread_id=thread_id_2,
         discord_starter_message_id=starter_msg_id_2, role="inbound",
@@ -773,13 +773,13 @@ async def test_dispatch_routes_post_deleted_with_existing_thread_group(tmp_path:
     community_runtime = _community_runtime(database, bot=bot)
 
     # Seed a real thread group with one inbound delivery.
-    thread_group = database.create_thread_group(
+    thread_group = database.discord_fanout_groups.create_thread_group(
         community_actor_id=COMMUNITY_ACTOR_URL,
         source_channel_id=None, source_thread_id=None,
         source_starter_message_id=None,
         ap_activity_id="delivery-post-dispatch", ap_object_id=POST_AP_ID,
     )
-    database.add_thread_delivery(
+    database.discord_fanout_groups.add_thread_delivery(
         thread_group_id=thread_group.id,
         discord_channel_id=100, discord_thread_id=thread_id,
         discord_starter_message_id=999, role="inbound",
@@ -837,18 +837,18 @@ async def test_inbound_post_update_edits_discord_thread_starters(tmp_path: Path)
     community_runtime = _community_runtime(database, bot=bot)
 
     # Seed thread group with two inbound deliveries, each having its own starter message.
-    thread_group = database.create_thread_group(
+    thread_group = database.discord_fanout_groups.create_thread_group(
         community_actor_id=COMMUNITY_ACTOR_URL,
         source_channel_id=None, source_thread_id=None,
         source_starter_message_id=None,
         ap_activity_id="delivery-post-update", ap_object_id=POST_AP_ID,
     )
-    database.add_thread_delivery(
+    database.discord_fanout_groups.add_thread_delivery(
         thread_group_id=thread_group.id,
         discord_channel_id=100, discord_thread_id=thread_id_1,
         discord_starter_message_id=starter_msg_id_1, role="inbound",
     )
-    database.add_thread_delivery(
+    database.discord_fanout_groups.add_thread_delivery(
         thread_group_id=thread_group.id,
         discord_channel_id=101, discord_thread_id=thread_id_2,
         discord_starter_message_id=starter_msg_id_2, role="inbound",
@@ -993,24 +993,24 @@ async def test_inbound_comment_update_preserves_username_header(tmp_path: Path) 
     community_runtime = _community_runtime(database, bot=bot)
 
     # Set up one inbound thread group and message group.
-    thread_group = database.create_thread_group(
+    thread_group = database.discord_fanout_groups.create_thread_group(
         community_actor_id=COMMUNITY_ACTOR_URL,
         source_channel_id=None, source_thread_id=None,
         source_starter_message_id=None,
         ap_activity_id="delivery-post-hdr", ap_object_id=POST_AP_ID,
     )
-    database.add_thread_delivery(
+    database.discord_fanout_groups.add_thread_delivery(
         thread_group_id=thread_group.id,
         discord_channel_id=100, discord_thread_id=thread_id,
         discord_starter_message_id=999, role="inbound",
     )
-    message_group = database.create_message_group(
+    message_group = database.discord_fanout_groups.create_message_group(
         community_actor_id=COMMUNITY_ACTOR_URL,
         thread_group_id=thread_group.id,
         source_channel_id=None, source_thread_id=None, source_message_id=None,
         ap_activity_id="delivery-comment-hdr", ap_object_id=COMMENT_AP_ID,
     )
-    database.add_message_delivery(
+    database.discord_fanout_groups.add_message_delivery(
         message_group_id=message_group.id,
         discord_channel_id=100, discord_thread_id=thread_id,
         discord_message_id=msg_id, role="inbound",

@@ -41,7 +41,7 @@ class DiscordEventRouter:
         """Return whether the given forum channel is subscribed to a remote community."""
         if forum_channel_id is None:
             return False
-        return self.database.get_subscription_by_channel(forum_channel_id) is not None
+        return self.database.remote_subscriptions.get_subscription_by_channel(forum_channel_id) is not None
 
     def is_local_community_message(self, message_id: int) -> bool:
         """Return whether one Discord message belongs to local-community mode.
@@ -51,9 +51,9 @@ class DiscordEventRouter:
         of checking canonical local-community rows directly.
         """
         return (
-            self.database.get_local_community_thread_surface_by_starter_message_id(message_id)
+            self.database.local_community_surfaces.get_local_community_thread_surface_by_starter_message_id(message_id)
             is not None
-            or self.database.get_local_community_message_surface_by_discord_message_id(
+            or self.database.local_community_surfaces.get_local_community_message_surface_by_discord_message_id(
                 message_id
             )
             is not None

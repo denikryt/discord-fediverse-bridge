@@ -59,7 +59,7 @@ def _create_local_community(database: Database) -> object:
         name="Hackers",
         description="A local hackerspace forum.",
     )
-    return database.get_local_community_by_slug("hackers")
+    return database.local_communities.get_local_community_by_slug("hackers")
 
 
 def test_empty_dashboard_state_renders_open_federation(tmp_path: Path) -> None:
@@ -82,7 +82,7 @@ def test_local_communities_show_safe_public_metadata_and_counts(tmp_path: Path) 
     """Local communities include public metadata but not private Discord or key fields."""
     database = _database(tmp_path)
     community = _create_local_community(database)
-    database.create_user(
+    database.users.create_user(
         discord_user_id="1234567890",
         activitypub_username="alice",
         actor_url="https://discrod-bridge.example.com/users/alice",
@@ -92,7 +92,7 @@ def test_local_communities_show_safe_public_metadata_and_counts(tmp_path: Path) 
         public_key_pem="public-key",
         private_key_pem="private-key",
     )
-    database.create_user(
+    database.users.create_user(
         discord_user_id="9999999999",
         activitypub_username="bob",
         actor_url="https://discrod-bridge.example.com/users/bob",
@@ -102,19 +102,19 @@ def test_local_communities_show_safe_public_metadata_and_counts(tmp_path: Path) 
         public_key_pem="public-key",
         private_key_pem="private-key",
     )
-    database.create_remote_subscriber(
+    database.remote_subscribers.create_remote_subscriber(
         local_community_id=community.id,
         remote_actor_id="https://lemmy.world/u/alice",
         remote_inbox_url="https://lemmy.world/u/alice/inbox",
         follow_activity_id="https://lemmy.world/activities/follow/alice",
     )
-    database.create_remote_subscriber(
+    database.remote_subscribers.create_remote_subscriber(
         local_community_id=community.id,
         remote_actor_id="https://beehaw.org/u/bob",
         remote_inbox_url="https://beehaw.org/u/bob/inbox",
         follow_activity_id="https://beehaw.org/activities/follow/bob",
     )
-    database.create_remote_subscriber(
+    database.remote_subscribers.create_remote_subscriber(
         local_community_id=community.id,
         remote_actor_id="https://pending.example/u/carol",
         remote_inbox_url="https://pending.example/u/carol/inbox",
@@ -149,13 +149,13 @@ def test_bridge_actor_follows_do_not_change_federation_policy_payload(tmp_path: 
     """Outbound bridge follows stay separate from the public federation policy block."""
     database = _database(tmp_path)
     community = _create_local_community(database)
-    database.create_bridge_actor_follow(
+    database.bridge_actor_follows.create_bridge_actor_follow(
         community_actor_id="https://lemmy.world/c/news",
         follow_activity_id="https://discrod-bridge.example.com/activities/follow/news",
         community_inbox_url="https://lemmy.world/c/news/inbox",
         status="accepted",
     )
-    database.create_remote_subscriber(
+    database.remote_subscribers.create_remote_subscriber(
         local_community_id=community.id,
         remote_actor_id="https://beehaw.org/u/bob",
         remote_inbox_url="https://beehaw.org/u/bob/inbox",

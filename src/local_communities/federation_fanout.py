@@ -46,13 +46,13 @@ class LocalCommunityFederationFanout:
 
     async def relay_update_or_delete(self, *, event: object, local_community: object, object_kind: str, operation: str) -> RelayFanoutSummary:
         """Relay update/delete only to targets that received the original create."""
-        delivered_create_targets = self.database.list_delivered_local_community_create_relay_targets(
+        delivered_create_targets = self.database.local_community_relay.list_delivered_local_community_create_relay_targets(
             local_community_id=getattr(local_community, "id"),
             source_object_ap_id=getattr(getattr(event, "object"), "ap_id"),
         )
         accepted_remote_subscribers = {
             remote_subscriber.remote_actor_id: remote_subscriber
-            for remote_subscriber in self.database.list_remote_subscribers(
+            for remote_subscriber in self.database.remote_subscribers.list_remote_subscribers(
                 getattr(local_community, "id"), status="accepted"
             )
         }
@@ -79,7 +79,7 @@ class LocalCommunityFederationFanout:
 
     async def _relay_to_accepted_remote_subscribers(self, *, event: object, local_community: object, object_kind: str, operation: str) -> RelayFanoutSummary:
         """Select accepted remote-subscriber targets excluding the origin actor, then relay."""
-        remote_subscribers = self.database.list_remote_subscribers(
+        remote_subscribers = self.database.remote_subscribers.list_remote_subscribers(
             getattr(local_community, "id"), status="accepted"
         )
         targets = []
@@ -112,7 +112,7 @@ class LocalCommunityFederationFanout:
             return RelayFanoutSummary(attempted=0, delivered=0, failed=0)
 
         source_activity_id = getattr(event, "source_activity_id", None) or getattr(event, "delivery_id")
-        source = self.database.get_or_create_local_community_relay_source_activity(
+        source = self.database.local_community_relay.get_or_create_local_community_relay_source_activity(
             local_community_id=getattr(local_community, "id"),
             object_kind=object_kind,
             operation=operation,
@@ -122,7 +122,7 @@ class LocalCommunityFederationFanout:
             origin_remote_actor_id=getattr(event, "actor_id"),
             source_activity_json=source_json,
         )
-        deliveries = self.database.create_missing_local_community_relay_deliveries(
+        deliveries = self.database.local_community_relay.create_missing_local_community_relay_deliveries(
             source_activity=source,
             targets=targets,
         )
@@ -160,14 +160,14 @@ class LocalCommunityFederationFanout:
         for outcome in result.outcomes:
             if outcome.ok:
                 delivered += 1
-                self.database.mark_local_community_relay_delivery_result(
+                self.database.local_community_relay.mark_local_community_relay_delivery_result(
                     delivery_id=outcome.delivery_id,
                     status="delivered",
                     relay_activity_id=outcome.activity_id,
                 )
             else:
                 failed += 1
-                self.database.mark_local_community_relay_delivery_result(
+                self.database.local_community_relay.mark_local_community_relay_delivery_result(
                     delivery_id=outcome.delivery_id,
                     status="failed",
                     relay_activity_id=outcome.activity_id,

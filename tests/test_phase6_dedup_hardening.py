@@ -54,7 +54,7 @@ def _database(tmp_path: Path) -> Database:
 
 def _accepted_subscription(database: Database, *, channel_id: int = 100) -> None:
     """Insert one accepted community subscription for the shared hackers community."""
-    database.create_subscription(
+    database.remote_subscriptions.create_subscription(
         discord_channel_id=channel_id,
         lemmy_community_actor_id=COMMUNITY_ACTOR_URL,
         lemmy_community_name="hackers",
@@ -180,14 +180,14 @@ def _insert_thread_group_with_delivery(
     starter_message_id: int = 300,
 ) -> object:
     """Insert a CommunityThreadGroup and one inbound delivery row for it."""
-    thread_group = database.create_thread_group(
+    thread_group = database.discord_fanout_groups.create_thread_group(
         community_actor_id=COMMUNITY_ACTOR_URL,
         source_channel_id=None,
         source_thread_id=None,
         source_starter_message_id=None,
         ap_object_id=ap_object_id,
     )
-    database.add_thread_delivery(
+    database.discord_fanout_groups.add_thread_delivery(
         thread_group_id=thread_group.id,
         discord_channel_id=channel_id,
         discord_thread_id=thread_id,
@@ -227,8 +227,8 @@ async def test_replayed_inbound_post_returns_skipped(tmp_path: Path) -> None:
 
     assert result.status == "skipped"
     # The pre-existing delivery must be the only one — no new rows written.
-    thread_group = database.get_thread_group_by_ap_object(POST_AP_ID)
-    deliveries = database.get_thread_deliveries(thread_group.id)
+    thread_group = database.discord_fanout_groups.get_thread_group_by_ap_object(POST_AP_ID)
+    deliveries = database.discord_fanout_groups.get_thread_deliveries(thread_group.id)
     assert len(deliveries) == 1
     # Discord API must not have been called — dedup fired before any network call.
     forum_channel.create_thread.assert_not_awaited()
@@ -266,8 +266,8 @@ async def test_partial_delivery_retry_returns_skipped_not_delivered(tmp_path: Pa
 
     assert result.status == "skipped"
     # Still only one delivery — channel 101 must not have been reached.
-    thread_group = database.get_thread_group_by_ap_object(POST_AP_ID)
-    deliveries = database.get_thread_deliveries(thread_group.id)
+    thread_group = database.discord_fanout_groups.get_thread_group_by_ap_object(POST_AP_ID)
+    deliveries = database.discord_fanout_groups.get_thread_deliveries(thread_group.id)
     assert len(deliveries) == 1
     assert deliveries[0].discord_channel_id == 100
     # Discord API for the missing channel must not have been called.
@@ -295,7 +295,7 @@ async def test_replayed_inbound_comment_returns_skipped(tmp_path: Path) -> None:
         database, ap_object_id=POST_AP_ID, channel_id=100, thread_id=200,
     )
     # Pre-existing message group simulates a prior successful comment delivery.
-    database.create_message_group(
+    database.discord_fanout_groups.create_message_group(
         community_actor_id=COMMUNITY_ACTOR_URL,
         thread_group_id=thread_group.id,
         source_channel_id=None,
@@ -339,14 +339,14 @@ async def test_mirror_message_does_not_publish_to_ap(tmp_path: Path) -> None:
     _accepted_subscription(database, channel_id=100)
 
     # Insert a mirror delivery for thread 500 (belonging to channel 100's group).
-    thread_group = database.create_thread_group(
+    thread_group = database.discord_fanout_groups.create_thread_group(
         community_actor_id=COMMUNITY_ACTOR_URL,
         source_channel_id=100,
         source_thread_id=200,
         source_starter_message_id=300,
         ap_object_id=POST_AP_ID,
     )
-    database.add_thread_delivery(
+    database.discord_fanout_groups.add_thread_delivery(
         thread_group_id=thread_group.id,
         discord_channel_id=100,
         discord_thread_id=500,
@@ -368,7 +368,7 @@ async def test_mirror_message_does_not_publish_to_ap(tmp_path: Path) -> None:
     # Directly call the on_message guard logic path rather than constructing
     # a full BridgeBot, to avoid needing a live Discord client.
     # The delivery row is checked: role='mirror' → must exit before handle_discord_message.
-    delivery = database.get_thread_delivery_by_thread(500)
+    delivery = database.discord_fanout_groups.get_thread_delivery_by_thread(500)
     assert delivery is not None
     assert delivery.role == "mirror"
 
@@ -400,14 +400,14 @@ async def test_source_message_passes_mirror_guard(tmp_path: Path) -> None:
     database = _database(tmp_path)
     _accepted_subscription(database, channel_id=100)
 
-    thread_group = database.create_thread_group(
+    thread_group = database.discord_fanout_groups.create_thread_group(
         community_actor_id=COMMUNITY_ACTOR_URL,
         source_channel_id=100,
         source_thread_id=200,
         source_starter_message_id=300,
         ap_object_id=POST_AP_ID,
     )
-    database.add_thread_delivery(
+    database.discord_fanout_groups.add_thread_delivery(
         thread_group_id=thread_group.id,
         discord_channel_id=100,
         discord_thread_id=200,
@@ -416,7 +416,7 @@ async def test_source_message_passes_mirror_guard(tmp_path: Path) -> None:
     )
 
     # Guard check: role='source' → must not block.
-    delivery = database.get_thread_delivery_by_thread(200)
+    delivery = database.discord_fanout_groups.get_thread_delivery_by_thread(200)
     assert delivery is not None
     assert delivery.role == "source"
 
@@ -448,7 +448,7 @@ def test_double_insert_thread_delivery_raises_integrity_error(tmp_path: Path) ->
     This test confirms the constraint is active and the error is observable at the DB level.
     """
     database = _database(tmp_path)
-    thread_group = database.create_thread_group(
+    thread_group = database.discord_fanout_groups.create_thread_group(
         community_actor_id=COMMUNITY_ACTOR_URL,
         source_channel_id=None,
         source_thread_id=None,
@@ -456,7 +456,7 @@ def test_double_insert_thread_delivery_raises_integrity_error(tmp_path: Path) ->
         ap_object_id=POST_AP_ID,
     )
     # First insert succeeds.
-    database.add_thread_delivery(
+    database.discord_fanout_groups.add_thread_delivery(
         thread_group_id=thread_group.id,
         discord_channel_id=100,
         discord_thread_id=200,
@@ -465,7 +465,7 @@ def test_double_insert_thread_delivery_raises_integrity_error(tmp_path: Path) ->
     )
     # Second insert with same (thread_group_id, discord_channel_id) must raise.
     with pytest.raises(sqlalchemy.exc.IntegrityError):
-        database.add_thread_delivery(
+        database.discord_fanout_groups.add_thread_delivery(
             thread_group_id=thread_group.id,
             discord_channel_id=100,
             discord_thread_id=201,  # different thread_id, same channel → still violates constraint
@@ -482,14 +482,14 @@ def test_double_insert_message_delivery_raises_integrity_error(tmp_path: Path) -
     the constraint is active and raises IntegrityError on direct double-insert.
     """
     database = _database(tmp_path)
-    thread_group = database.create_thread_group(
+    thread_group = database.discord_fanout_groups.create_thread_group(
         community_actor_id=COMMUNITY_ACTOR_URL,
         source_channel_id=None,
         source_thread_id=None,
         source_starter_message_id=None,
         ap_object_id=POST_AP_ID,
     )
-    message_group = database.create_message_group(
+    message_group = database.discord_fanout_groups.create_message_group(
         community_actor_id=COMMUNITY_ACTOR_URL,
         thread_group_id=thread_group.id,
         source_channel_id=None,
@@ -498,7 +498,7 @@ def test_double_insert_message_delivery_raises_integrity_error(tmp_path: Path) -
         ap_object_id=COMMENT_AP_ID,
     )
     # First insert succeeds.
-    database.add_message_delivery(
+    database.discord_fanout_groups.add_message_delivery(
         message_group_id=message_group.id,
         discord_channel_id=100,
         discord_thread_id=200,
@@ -507,7 +507,7 @@ def test_double_insert_message_delivery_raises_integrity_error(tmp_path: Path) -
     )
     # Second insert with same discord_message_id must raise regardless of other fields.
     with pytest.raises(sqlalchemy.exc.IntegrityError):
-        database.add_message_delivery(
+        database.discord_fanout_groups.add_message_delivery(
             message_group_id=message_group.id,
             discord_channel_id=100,
             discord_thread_id=200,
@@ -543,7 +543,7 @@ async def test_inbound_post_from_own_actor_is_suppressed_before_handler(
 
     # Register a local user actor — echo suppression checks actor_url ownership.
     actor_url = f"https://{BRIDGE_HOST_DOMAIN}/users/alice"
-    database.create_user(
+    database.users.create_user(
         discord_user_id="123",
         activitypub_username="alice",
         actor_url=actor_url,
@@ -556,7 +556,7 @@ async def test_inbound_post_from_own_actor_is_suppressed_before_handler(
 
     # The object_id that the bridge published — Lemmy will echo it back.
     object_id = f"https://{BRIDGE_HOST_DOMAIN}/users/alice/objects/post/1"
-    database.create_message_mapping(
+    database.message_mappings.create_message_mapping(
         source_platform="discord",
         source_id="300",
         activity_id=f"https://{BRIDGE_HOST_DOMAIN}/users/alice/activities/create/post/1",
@@ -603,5 +603,5 @@ async def test_inbound_post_from_own_actor_is_suppressed_before_handler(
     assert result.status == "skipped"
     assert result.detail == "discord-originated echo"
     # No thread group must exist — handler was not reached.
-    assert database.get_thread_group_by_ap_object(object_id) is None
+    assert database.discord_fanout_groups.get_thread_group_by_ap_object(object_id) is None
     fake_bot.fetch_forum_channel.assert_not_awaited()

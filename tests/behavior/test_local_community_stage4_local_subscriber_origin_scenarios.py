@@ -53,19 +53,19 @@ def _local_community(database: object) -> object:
         name="Hackers",
         description="A local hackerspace forum.",
     )
-    return database.get_local_community_by_slug("hackers")
+    return database.local_communities.get_local_community_by_slug("hackers")
 
 
 def _add_local_subscribers(database: object, local_community: object) -> tuple[object, object]:
     """Create the source and sibling local subscriber rows used by tests."""
-    source = database.create_local_subscriber(
+    source = database.local_subscribers.create_local_subscriber(
         local_community_id=local_community.id,
         discord_guild_id=10,
         discord_channel_id=200,
         initiated_by_discord_user_id="999",
         status="active",
     )
-    sibling = database.create_local_subscriber(
+    sibling = database.local_subscribers.create_local_subscriber(
         local_community_id=local_community.id,
         discord_guild_id=10,
         discord_channel_id=300,
@@ -82,7 +82,7 @@ def _publish_results(*pairs: tuple[str, str]) -> list[PublishLocalCommunityConte
 
 def _canonical_thread(database: object, local_community: object, *, activity: str = "a-post", obj: str = "o-post") -> object:
     """Create one canonical Stage 4 thread row without a host surface."""
-    return database.create_local_community_thread_canonical(
+    return database.local_community_content.create_local_community_thread_canonical(
         local_community_id=local_community.id,
         ap_activity_id=activity,
         ap_object_id=obj,
@@ -93,7 +93,7 @@ def _canonical_thread(database: object, local_community: object, *, activity: st
 
 def _thread_surface(database: object, thread_row: object, forum: int, thread: int, starter: int, role: str, subscriber_id: int | None) -> object:
     """Create one explicit thread surface using the keyword-only repository API."""
-    return database.create_local_community_thread_surface(
+    return database.local_community_surfaces.create_local_community_thread_surface(
         local_community_thread_id=thread_row.id,
         discord_forum_channel_id=forum,
         discord_thread_id=thread,
@@ -105,7 +105,7 @@ def _thread_surface(database: object, thread_row: object, forum: int, thread: in
 
 def _canonical_message(database: object, thread_row: object, *, activity: str, obj: str, parent: str) -> object:
     """Create one canonical Stage 4 message row without a host surface."""
-    return database.create_local_community_message_canonical(
+    return database.local_community_content.create_local_community_message_canonical(
         local_community_thread_id=thread_row.id,
         ap_activity_id=activity,
         ap_object_id=obj,
@@ -116,7 +116,7 @@ def _canonical_message(database: object, thread_row: object, *, activity: str, o
 
 def _message_surface(database: object, message_row: object, thread_surface: object, forum: int, message: int, parent: int, role: str, subscriber_id: int | None) -> object:
     """Create one explicit message surface using the keyword-only repository API."""
-    return database.create_local_community_message_surface(
+    return database.local_community_surfaces.create_local_community_message_surface(
         local_community_message_id=message_row.id,
         local_community_thread_surface_id=thread_surface.id,
         discord_forum_channel_id=forum,
@@ -147,8 +147,8 @@ async def test_local_subscriber_thread_create_creates_source_host_and_sibling_su
         starter_message=build_starter_message(message_id=2300, content="subscriber body"),
     )
 
-    thread_row = database.get_local_community_thread_by_ap_object_id("o-post")
-    surfaces = database.list_local_community_thread_surfaces(thread_row.id)
+    thread_row = database.local_community_content.get_local_community_thread_by_ap_object_id("o-post")
+    surfaces = database.local_community_surfaces.list_local_community_thread_surfaces(thread_row.id)
     assert result.status == "published"
     assert [(s.discord_forum_channel_id, s.role, s.local_subscriber_id) for s in surfaces] == [
         (200, "local_subscriber", source.id),
@@ -165,14 +165,14 @@ async def test_duplicate_local_subscriber_thread_retries_missing_targets_without
     local_community = _local_community(database)
     source, sibling = _add_local_subscribers(database, local_community)
     add_registered_user(database)
-    thread_row = database.create_local_community_thread_canonical(
+    thread_row = database.local_community_content.create_local_community_thread_canonical(
         local_community_id=local_community.id,
         ap_activity_id="a-post",
         ap_object_id="o-post",
         direction="discord_to_ap",
         origin_kind="discord_local_subscriber",
     )
-    database.create_local_community_thread_surface(
+    database.local_community_surfaces.create_local_community_thread_surface(
         local_community_thread_id=thread_row.id,
         discord_forum_channel_id=200,
         discord_thread_id=2200,
@@ -180,7 +180,7 @@ async def test_duplicate_local_subscriber_thread_retries_missing_targets_without
         role="local_subscriber",
         local_subscriber_id=source.id,
     )
-    database.create_local_community_thread_surface(
+    database.local_community_surfaces.create_local_community_thread_surface(
         local_community_thread_id=thread_row.id,
         discord_forum_channel_id=300,
         discord_thread_id=3300,
@@ -198,7 +198,7 @@ async def test_duplicate_local_subscriber_thread_retries_missing_targets_without
     with database.session() as session:
         assert session.scalar(select(func.count()).select_from(LocalCommunityThread)) == 1
         assert session.scalar(select(func.count()).select_from(LocalCommunityThreadSurface)) == 3
-    assert database.get_local_community_thread_surface(local_community_thread_id=thread_row.id, discord_forum_channel_id=100) is not None
+    assert database.local_community_surfaces.get_local_community_thread_surface(local_community_thread_id=thread_row.id, discord_forum_channel_id=100) is not None
     runtime.fedify_gateway.publish_local_community_content.assert_not_awaited()
 
 
@@ -209,7 +209,7 @@ async def test_local_subscriber_root_reply_fans_out_with_target_local_starter_pa
     local_community = _local_community(database)
     source, sibling = _add_local_subscribers(database, local_community)
     add_registered_user(database)
-    thread_row = database.create_local_community_thread_canonical(
+    thread_row = database.local_community_content.create_local_community_thread_canonical(
         local_community_id=local_community.id,
         ap_activity_id="a-post",
         ap_object_id="o-post",
@@ -226,10 +226,10 @@ async def test_local_subscriber_root_reply_fans_out_with_target_local_starter_pa
 
     result = await runtime.handle_discord_message(message=build_thread_message(message_id=2400, thread_id=2200, channel_id=200))
 
-    message_row = database.get_local_community_message_by_ap_object_id("o-comment")
-    source_message_surface = database.get_local_community_message_surface(local_community_message_id=message_row.id, local_community_thread_surface_id=source_surface.id)
-    host_surface = database.get_local_community_message_surface_by_discord_message_id(1300)
-    sibling_surface = database.get_local_community_message_surface_by_discord_message_id(3500)
+    message_row = database.local_community_content.get_local_community_message_by_ap_object_id("o-comment")
+    source_message_surface = database.local_community_surfaces.get_local_community_message_surface(local_community_message_id=message_row.id, local_community_thread_surface_id=source_surface.id)
+    host_surface = database.local_community_surfaces.get_local_community_message_surface_by_discord_message_id(1300)
+    sibling_surface = database.local_community_surfaces.get_local_community_message_surface_by_discord_message_id(3500)
     assert result.status == "published"
     assert source_message_surface.discord_message_id == 2400
     assert source_message_surface.parent_discord_message_id == 2300
@@ -257,8 +257,8 @@ async def test_local_subscriber_nested_reply_maps_parent_surface_per_target(tmp_
 
     await runtime.handle_discord_message(message=build_thread_message(message_id=2401, thread_id=2200, channel_id=200, reference_message_id=2400))
 
-    assert database.get_local_community_message_surface_by_discord_message_id(1301).parent_discord_message_id == 1300
-    assert database.get_local_community_message_surface_by_discord_message_id(3501).parent_discord_message_id == 3500
+    assert database.local_community_surfaces.get_local_community_message_surface_by_discord_message_id(1301).parent_discord_message_id == 1300
+    assert database.local_community_surfaces.get_local_community_message_surface_by_discord_message_id(3501).parent_discord_message_id == 3500
     assert runtime.fedify_gateway.publish_local_community_content.await_args.args[0].in_reply_to_object_id == "o-parent"
 
 
@@ -290,7 +290,7 @@ async def test_inactive_local_subscriber_is_not_routed_as_source(tmp_path: Path)
     """Inactive local subscribers must not become local-community source forums."""
     database, local_runtime = _runtime(tmp_path)
     local_community = _local_community(database)
-    database.create_local_subscriber(local_community_id=local_community.id, discord_guild_id=10, discord_channel_id=200, initiated_by_discord_user_id="999", status="inactive")
+    database.local_subscribers.create_local_subscriber(local_community_id=local_community.id, discord_guild_id=10, discord_channel_id=200, initiated_by_discord_user_id="999", status="inactive")
     remote_runtime = AsyncMock()
     router = DiscordEventRouter(database=database, community_runtime=remote_runtime, local_community_runtime=local_runtime)
     local_runtime.handle_discord_thread_create = AsyncMock()
@@ -306,7 +306,7 @@ async def test_remote_subscription_forum_with_bad_local_subscriber_row_stays_rem
     """Mixed-state forums should not silently become local-subscriber sources."""
     database, local_runtime = _runtime(tmp_path)
     local_community = _local_community(database)
-    database.create_local_subscriber(
+    database.local_subscribers.create_local_subscriber(
         local_community_id=local_community.id,
         discord_guild_id=10,
         discord_channel_id=200,
@@ -336,7 +336,7 @@ async def test_local_subscriber_source_edit_delete_is_stage5_authoritative(tmp_p
     add_registered_user(database)
     thread_row = _canonical_thread(database, local_community)
     _thread_surface(database, thread_row, 200, 2200, 2300, "local_subscriber", source.id)
-    database.create_published_activity_object(actor_username="alice", actor_url="https://bridge.example/actors/alice", community_actor_url=local_community.actor_url, activity_id="a-post", object_id="o-post", kind="post", title="Title", body_markdown="Body", in_reply_to_object_id=None, discord_channel_id=200, discord_message_id=2300)
+    database.activitypub_objects.create_published_activity_object(actor_username="alice", actor_url="https://bridge.example/actors/alice", community_actor_url=local_community.actor_url, activity_id="a-post", object_id="o-post", kind="post", title="Title", body_markdown="Body", in_reply_to_object_id=None, discord_channel_id=200, discord_message_id=2300)
 
     await runtime.handle_discord_message_edit(message_id=2300, new_content="edited", runtime=SimpleNamespace(fedify_gateway=runtime.fedify_gateway))
     await runtime.handle_discord_message_delete(message_id=2300, runtime=SimpleNamespace(fedify_gateway=runtime.fedify_gateway))

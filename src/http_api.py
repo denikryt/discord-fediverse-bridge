@@ -90,7 +90,7 @@ def create_http_app(runtime: Runtime) -> FastAPI:
         """Start the Discord OAuth redirect flow for one browser session."""
         session = _load_or_create_registration_session(runtime, request)
         oauth_state = generate_oauth_state()
-        runtime.database.update_registration_session_oauth_state(
+        runtime.database.registration_sessions.update_registration_session_oauth_state(
             session_token=session.session_token,
             oauth_state=oauth_state,
             expires_at=_registration_session_expiry(runtime),
@@ -122,7 +122,7 @@ def create_http_app(runtime: Runtime) -> FastAPI:
             code
         )
         profile = await runtime.discord_oauth_client.fetch_user_profile(access_token)
-        runtime.database.update_registration_session_discord_identity(
+        runtime.database.registration_sessions.update_registration_session_discord_identity(
             session_token=session.session_token,
             discord_user_id=profile.user_id,
             discord_username=profile.username,
@@ -169,7 +169,7 @@ def create_http_app(runtime: Runtime) -> FastAPI:
                 ),
             )
 
-        runtime.database.mark_registration_session_completed(
+        runtime.database.registration_sessions.mark_registration_session_completed(
             session_token=session.session_token,
             activitypub_username=actor.activitypub_username,
             expires_at=_registration_session_expiry(runtime),
@@ -190,7 +190,7 @@ def create_http_app(runtime: Runtime) -> FastAPI:
                 status_code=status.HTTP_400_BAD_REQUEST,
                 detail="Registration has not completed yet",
             )
-        user = runtime.database.get_user_by_activitypub_username(
+        user = runtime.database.users.get_user_by_activitypub_username(
             session.activitypub_username
         )
         if user is None:
@@ -256,10 +256,10 @@ def _load_or_create_registration_session(
     """Load the current session cookie or create a fresh registration session."""
     session_cookie_name = runtime.settings.registration_session_cookie_name
     session_token = request.cookies.get(session_cookie_name)
-    session = runtime.database.get_registration_session_by_token(session_token)
+    session = runtime.database.registration_sessions.get_registration_session_by_token(session_token)
     if session is None or _registration_session_is_expired(session):
         session_token = generate_session_token()
-        session = runtime.database.create_registration_session(
+        session = runtime.database.registration_sessions.create_registration_session(
             session_token=session_token,
             expires_at=_registration_session_expiry(runtime),
         )
@@ -269,7 +269,7 @@ def _load_or_create_registration_session(
 
 def _require_registration_session(runtime: Runtime, request: Request) -> RegistrationSession:
     """Load the active registration session or reject the request."""
-    session = runtime.database.get_registration_session_by_token(
+    session = runtime.database.registration_sessions.get_registration_session_by_token(
         request.cookies.get(runtime.settings.registration_session_cookie_name)
     )
     if session is None or _registration_session_is_expired(session):
@@ -321,7 +321,7 @@ def _existing_registration_for_session(runtime: Runtime, session: RegistrationSe
     """Return the already-created actor for the current Discord identity, if any."""
     if session.discord_user_id is None:
         return None
-    return runtime.database.get_user_by_discord_user_id(session.discord_user_id)
+    return runtime.database.users.get_user_by_discord_user_id(session.discord_user_id)
 
 
 def _actor_handle(runtime: Runtime, username: str) -> str:
@@ -363,9 +363,9 @@ def _begin_event_processing(
 ) -> dict[str, str] | None:
     # Receipt state is the source of truth for idempotency across duplicate and
     # retry deliveries from the gateway.
-    existing = runtime.database.get_event_receipt(event.delivery_id)
+    existing = runtime.database.event_receipts.get_event_receipt(event.delivery_id)
     if existing is None:
-        runtime.database.create_event_receipt(
+        runtime.database.event_receipts.create_event_receipt(
             delivery_id=event.delivery_id,
             event_type=event.event_type,
             object_ap_id=_event_object_id(event),
@@ -378,14 +378,14 @@ def _begin_event_processing(
     if existing.status in {"processed", "skipped"}:
         return {"status": "duplicate", "detail": existing.detail or existing.status}
     if existing.status == "deferred":
-        runtime.database.update_event_receipt(
+        runtime.database.event_receipts.update_event_receipt(
             delivery_id=event.delivery_id,
             status="in_progress",
             detail="retrying deferred delivery",
         )
         return None
 
-    runtime.database.update_event_receipt(
+    runtime.database.event_receipts.update_event_receipt(
         delivery_id=event.delivery_id,
         status="in_progress",
         detail="retrying failed delivery",
@@ -402,7 +402,7 @@ def _event_object_id(event: BridgeGatewayEvent) -> str:
 
 
 def _finish_event_processing(runtime: Runtime, delivery_id: str, status_value: str, detail: str) -> None:
-    runtime.database.update_event_receipt(
+    runtime.database.event_receipts.update_event_receipt(
         delivery_id=delivery_id,
         status=status_value,
         detail=detail,
@@ -410,7 +410,7 @@ def _finish_event_processing(runtime: Runtime, delivery_id: str, status_value: s
 
 
 def _mark_event_failed(runtime: Runtime, delivery_id: str, detail: str) -> None:
-    runtime.database.update_event_receipt(
+    runtime.database.event_receipts.update_event_receipt(
         delivery_id=delivery_id,
         status="failed",
         detail=detail,

@@ -35,7 +35,7 @@ def _settings(*, allowlist: list[str], public_bridge_base_url: str, fedify_origi
 
 def _register_user(database: Database, discord_user_id: str = "1234567890") -> None:
     """Create the minimum registered bridge user required by subscribe-channel."""
-    database.create_user(
+    database.users.create_user(
         discord_user_id=discord_user_id,
         activitypub_username="alice",
         actor_url="https://bridge.example.com/users/alice",
@@ -69,7 +69,7 @@ def _create_local_community(
         name=display_name,
         description="Announcements",
     )
-    community = database.get_local_community_by_slug(slug)
+    community = database.local_communities.get_local_community_by_slug(slug)
     assert community is not None
     return community
 
@@ -164,7 +164,7 @@ async def test_remote_bridge_handle_uses_remote_follow_path_without_numeric_id(
 
     lemmy_client_mock.assert_not_called()
     fetch_mock.assert_awaited_once_with("https://remote.bridge.example")
-    subscription = database.get_subscription_by_channel(forum_channel.id)
+    subscription = database.remote_subscriptions.get_subscription_by_channel(forum_channel.id)
     assert subscription is not None
     assert subscription.lemmy_community_actor_id == remote_actor_id
     assert subscription.lemmy_community_id is None
@@ -217,9 +217,9 @@ async def test_same_instance_local_actor_url_creates_local_subscriber_state(
             forum_channel,
         )
 
-    assert database.get_subscription_by_channel(forum_channel.id) is None
-    assert database.get_bridge_actor_follow("https://bot.example.com/communities/local-news") is None
-    local_subscriber = database.get_local_subscriber(
+    assert database.remote_subscriptions.get_subscription_by_channel(forum_channel.id) is None
+    assert database.bridge_actor_follows.get_bridge_actor_follow("https://bot.example.com/communities/local-news") is None
+    local_subscriber = database.local_subscribers.get_local_subscriber(
         local_community_id=community.id,
         discord_channel_id=forum_channel.id,
     )

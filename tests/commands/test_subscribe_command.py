@@ -17,8 +17,8 @@ async def test_subscribe_channel_success(
     # bridge Follow, persist the pending lifecycle state, and return the
     # moderator-facing pending message.
     community_actor_url = f"https://{LEMMY_EXAMPLE_DOMAIN}/c/hackers"
-    database.get_user_by_discord_user_id.return_value = SimpleNamespace(id=1)
-    database.get_subscription_by_channel.return_value = None
+    database.users.get_user_by_discord_user_id.return_value = SimpleNamespace(id=1)
+    database.remote_subscriptions.get_subscription_by_channel.return_value = None
     fedify_gateway.follow_community.return_value = SimpleNamespace(
         community_actor_url=community_actor_url,
         community_inbox_url=f"{community_actor_url}/inbox",
@@ -39,9 +39,9 @@ async def test_subscribe_channel_success(
             forum_channel,
         )
 
-    database.get_subscription_by_channel.assert_called_once_with(forum_channel.id)
+    database.remote_subscriptions.get_subscription_by_channel.assert_called_once_with(forum_channel.id)
     fake_client.resolve_community_id.assert_awaited_once_with(name="hackers")
-    database.create_subscription.assert_called_once_with(
+    database.remote_subscriptions.create_subscription.assert_called_once_with(
         discord_channel_id=forum_channel.id,
         discord_guild_id=interaction.guild_id,
         lemmy_community_actor_id=community_actor_url,
@@ -67,7 +67,7 @@ async def test_subscribe_channel_rejects_duplicate_accepted(
 ):
     # Accepted subscriptions do not trigger a second Follow and return an
     # ephemeral message that the channel is already active.
-    database.get_subscription_by_channel.return_value = SimpleNamespace(
+    database.remote_subscriptions.get_subscription_by_channel.return_value = SimpleNamespace(
         status="accepted",
         community_handle=f"!hackers@{LEMMY_EXAMPLE_DOMAIN}",
         lemmy_community_name="hackers",
@@ -84,7 +84,7 @@ async def test_subscribe_channel_rejects_duplicate_accepted(
         forum_channel,
     )
 
-    database.create_subscription.assert_not_called()
+    database.remote_subscriptions.create_subscription.assert_not_called()
     fedify_gateway.follow_community.assert_not_awaited()
     interaction.response.send_message.assert_awaited_once_with(
         f"Channel <#12345> is already subscribed to **!hackers@{LEMMY_EXAMPLE_DOMAIN}**.",
@@ -98,7 +98,7 @@ async def test_subscribe_channel_rejects_duplicate_pending(
 ):
     # Pending subscriptions do not trigger a second Follow and tell the
     # moderator that federation acceptance is still outstanding.
-    database.get_subscription_by_channel.return_value = SimpleNamespace(
+    database.remote_subscriptions.get_subscription_by_channel.return_value = SimpleNamespace(
         status="pending",
         community_handle=f"!hackers@{LEMMY_EXAMPLE_DOMAIN}",
         lemmy_community_name="hackers",
@@ -115,7 +115,7 @@ async def test_subscribe_channel_rejects_duplicate_pending(
         forum_channel,
     )
 
-    database.create_subscription.assert_not_called()
+    database.remote_subscriptions.create_subscription.assert_not_called()
     fedify_gateway.follow_community.assert_not_awaited()
     interaction.response.send_message.assert_awaited_once_with(
         f"Channel <#12345> is still waiting for **!hackers@{LEMMY_EXAMPLE_DOMAIN}** to accept the bridge follow.",
@@ -134,7 +134,7 @@ async def test_subscribe_channel_rejects_when_community_resolution_fails(
 ):
     # Manual text input can omit the numeric ID, so a Lemmy resolution failure
     # must stop the flow before any DB mutation is attempted.
-    database.get_subscription_by_channel.return_value = None
+    database.remote_subscriptions.get_subscription_by_channel.return_value = None
 
     subscribe.register(command_tree, database, fedify_gateway)
 
@@ -150,7 +150,7 @@ async def test_subscribe_channel_rejects_when_community_resolution_fails(
             forum_channel,
         )
 
-    database.create_subscription.assert_not_called()
+    database.remote_subscriptions.create_subscription.assert_not_called()
     interaction.response.send_message.assert_awaited_once_with(
         "Could not resolve the Lemmy community ID. Please try again.",
         ephemeral=True,
@@ -164,7 +164,7 @@ async def test_subscribe_channel_marks_failed_when_follow_dispatch_fails(
     # Follow dispatch failures must create a failed subscription row so retries
     # are explicit instead of leaving a fake pending state behind.
     community_actor_url = f"https://{LEMMY_EXAMPLE_DOMAIN}/c/hackers"
-    database.get_subscription_by_channel.return_value = None
+    database.remote_subscriptions.get_subscription_by_channel.return_value = None
     fedify_gateway.follow_community.side_effect = RuntimeError("boom")
 
     subscribe.register(command_tree, database, fedify_gateway)
@@ -181,7 +181,7 @@ async def test_subscribe_channel_marks_failed_when_follow_dispatch_fails(
             forum_channel,
         )
 
-    database.create_subscription.assert_called_once_with(
+    database.remote_subscriptions.create_subscription.assert_called_once_with(
         discord_channel_id=forum_channel.id,
         discord_guild_id=interaction.guild_id,
         lemmy_community_actor_id=community_actor_url,
@@ -205,8 +205,8 @@ async def test_subscribe_channel_retries_failed_subscription(
     # Failed subscriptions are retriable. The old failed row is removed before
     # the new pending attempt is written.
     community_actor_url = f"https://{LEMMY_EXAMPLE_DOMAIN}/c/hackers"
-    database.get_user_by_discord_user_id.return_value = SimpleNamespace(id=1)
-    database.get_subscription_by_channel.return_value = SimpleNamespace(
+    database.users.get_user_by_discord_user_id.return_value = SimpleNamespace(id=1)
+    database.remote_subscriptions.get_subscription_by_channel.return_value = SimpleNamespace(
         status="failed",
         community_handle=f"!hackers@{LEMMY_EXAMPLE_DOMAIN}",
         lemmy_community_name="hackers",
@@ -228,8 +228,8 @@ async def test_subscribe_channel_retries_failed_subscription(
         forum_channel,
     )
 
-    database.delete_subscription.assert_called_once_with(forum_channel.id)
-    database.create_subscription.assert_called_once_with(
+    database.remote_subscriptions.delete_subscription.assert_called_once_with(forum_channel.id)
+    database.remote_subscriptions.create_subscription.assert_called_once_with(
         discord_channel_id=forum_channel.id,
         discord_guild_id=interaction.guild_id,
         lemmy_community_actor_id=community_actor_url,
@@ -416,7 +416,7 @@ async def test_subscribe_channel_rejects_unlisted_lemmy_instance(
         forum_channel,
     )
 
-    database.create_subscription.assert_not_called()
+    database.remote_subscriptions.create_subscription.assert_not_called()
     interaction.response.send_message.assert_awaited_once_with(
         "Instance **forbidden.instance** is not in the federation allowlist.",
         ephemeral=True,

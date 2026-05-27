@@ -42,7 +42,7 @@ def _database(tmp_path: Path) -> Database:
 
 def _accepted_subscription(database: Database, *, channel_id: int) -> None:
     """Insert one accepted community subscription for the shared hackers community."""
-    database.create_subscription(
+    database.remote_subscriptions.create_subscription(
         discord_channel_id=channel_id,
         lemmy_community_actor_id=COMMUNITY_ACTOR_URL,
         lemmy_community_name="hackers",
@@ -57,7 +57,7 @@ def _accepted_subscription(database: Database, *, channel_id: int) -> None:
 def _registered_user(database: Database) -> None:
     """Insert one registered local user actor for outbound publish scenarios."""
     actor_url = f"https://{BRIDGE_HOST_DOMAIN}/users/alice"
-    database.create_user(
+    database.users.create_user(
         discord_user_id="123",
         activitypub_username="alice",
         actor_url=actor_url,
@@ -214,14 +214,14 @@ def _create_thread_group_for_inbound(
     starter_message_id: int = 300,
 ) -> object:
     """Insert a CommunityThreadGroup with one inbound delivery row."""
-    thread_group = database.create_thread_group(
+    thread_group = database.discord_fanout_groups.create_thread_group(
         community_actor_id=COMMUNITY_ACTOR_URL,
         source_channel_id=None,
         source_thread_id=None,
         source_starter_message_id=None,
         ap_object_id=ap_object_id,
     )
-    database.add_thread_delivery(
+    database.discord_fanout_groups.add_thread_delivery(
         thread_group_id=thread_group.id,
         discord_channel_id=channel_id,
         discord_thread_id=thread_id,
@@ -270,12 +270,12 @@ async def test_phase5_inbound_post_creates_thread_group_and_deliveries(
     result = await runtime.handle_inbound_post(event, fake_runtime)
 
     assert result.status == "processed"
-    thread_group = database.get_thread_group_by_ap_object(POST_AP_ID)
+    thread_group = database.discord_fanout_groups.get_thread_group_by_ap_object(POST_AP_ID)
     assert thread_group is not None
     assert thread_group.ap_object_id == POST_AP_ID
     assert thread_group.source_thread_id is None
 
-    deliveries = database.get_thread_deliveries(thread_group.id)
+    deliveries = database.discord_fanout_groups.get_thread_deliveries(thread_group.id)
     assert len(deliveries) == 2
     assert all(d.role == "inbound" for d in deliveries)
     thread_ids = {d.discord_thread_id for d in deliveries}
@@ -317,8 +317,8 @@ async def test_phase5_inbound_post_dedup_skips_on_existing_thread_group(
 
     assert result.status == "skipped"
     # Only the pre-existing delivery row — no new rows.
-    thread_group = database.get_thread_group_by_ap_object(POST_AP_ID)
-    deliveries = database.get_thread_deliveries(thread_group.id)
+    thread_group = database.discord_fanout_groups.get_thread_group_by_ap_object(POST_AP_ID)
+    deliveries = database.discord_fanout_groups.get_thread_deliveries(thread_group.id)
     assert len(deliveries) == 1
     forum_ch.create_thread.assert_not_awaited()
 
@@ -352,11 +352,11 @@ async def test_phase5_inbound_comment_root_creates_message_group_flat(
     result = await runtime.handle_inbound_comment(event, fake_runtime)
 
     assert result.status == "processed"
-    message_group = database.get_message_group_by_ap_object(COMMENT_AP_ID)
+    message_group = database.discord_fanout_groups.get_message_group_by_ap_object(COMMENT_AP_ID)
     assert message_group is not None
     assert message_group.parent_message_group_id is None
 
-    deliveries = database.get_message_deliveries(message_group.id)
+    deliveries = database.discord_fanout_groups.get_message_deliveries(message_group.id)
     assert len(deliveries) == 1
     assert deliveries[0].discord_thread_id == 200
     assert deliveries[0].role == "inbound"
@@ -393,21 +393,21 @@ async def test_phase5_inbound_comment_reply_chain_resolves_to_prior_delivery(
     _accepted_subscription(database, channel_id=100)
     _accepted_subscription(database, channel_id=101)
 
-    thread_group = database.create_thread_group(
+    thread_group = database.discord_fanout_groups.create_thread_group(
         community_actor_id=COMMUNITY_ACTOR_URL,
         source_channel_id=None,
         source_thread_id=None,
         source_starter_message_id=None,
         ap_object_id=POST_AP_ID,
     )
-    database.add_thread_delivery(
+    database.discord_fanout_groups.add_thread_delivery(
         thread_group_id=thread_group.id,
         discord_channel_id=100,
         discord_thread_id=200,
         discord_starter_message_id=201,
         role="inbound",
     )
-    database.add_thread_delivery(
+    database.discord_fanout_groups.add_thread_delivery(
         thread_group_id=thread_group.id,
         discord_channel_id=101,
         discord_thread_id=500,
@@ -416,7 +416,7 @@ async def test_phase5_inbound_comment_reply_chain_resolves_to_prior_delivery(
     )
 
     # Prior message group M (parent comment that was already delivered).
-    prior_group = database.create_message_group(
+    prior_group = database.discord_fanout_groups.create_message_group(
         community_actor_id=COMMUNITY_ACTOR_URL,
         thread_group_id=thread_group.id,
         source_channel_id=None,
@@ -424,14 +424,14 @@ async def test_phase5_inbound_comment_reply_chain_resolves_to_prior_delivery(
         source_message_id=None,
         ap_object_id=COMMENT_AP_ID,
     )
-    database.add_message_delivery(
+    database.discord_fanout_groups.add_message_delivery(
         message_group_id=prior_group.id,
         discord_channel_id=100,
         discord_thread_id=200,
         discord_message_id=300,
         role="inbound",
     )
-    database.add_message_delivery(
+    database.discord_fanout_groups.add_message_delivery(
         message_group_id=prior_group.id,
         discord_channel_id=101,
         discord_thread_id=500,
@@ -450,7 +450,7 @@ async def test_phase5_inbound_comment_reply_chain_resolves_to_prior_delivery(
     result = await runtime.handle_inbound_comment(event, fake_runtime)
 
     assert result.status == "processed"
-    new_group = database.get_message_group_by_ap_object(COMMENT2_AP_ID)
+    new_group = database.discord_fanout_groups.get_message_group_by_ap_object(COMMENT2_AP_ID)
     assert new_group is not None
     assert new_group.parent_message_group_id == prior_group.id
 
@@ -484,7 +484,7 @@ async def test_phase5_inbound_comment_dedup_skips_on_existing_message_group(
     )
 
     # Pre-insert message group for this comment AP ID.
-    database.create_message_group(
+    database.discord_fanout_groups.create_message_group(
         community_actor_id=COMMUNITY_ACTOR_URL,
         thread_group_id=thread_group.id,
         source_channel_id=None,
@@ -523,7 +523,7 @@ async def test_phase5_outbound_publish_does_not_create_post_link(
 
     ap_object_id = f"https://{BRIDGE_HOST_DOMAIN}/objects/post/1"
     ap_activity_id = f"https://{BRIDGE_HOST_DOMAIN}/activities/create/post/1"
-    thread_group = database.create_thread_group(
+    thread_group = database.discord_fanout_groups.create_thread_group(
         community_actor_id=COMMUNITY_ACTOR_URL,
         source_channel_id=100,
         source_thread_id=200,
@@ -531,7 +531,7 @@ async def test_phase5_outbound_publish_does_not_create_post_link(
         ap_activity_id=ap_activity_id,
         ap_object_id=ap_object_id,
     )
-    database.add_thread_delivery(
+    database.discord_fanout_groups.add_thread_delivery(
         thread_group_id=thread_group.id,
         discord_channel_id=100,
         discord_thread_id=200,
@@ -557,7 +557,7 @@ async def test_phase5_outbound_publish_does_not_create_post_link(
     result = await runtime.handle_discord_message(message=message)
 
     assert result.status == "published"
-    message_group = database.get_message_group_by_source_message(400)
+    message_group = database.discord_fanout_groups.get_message_group_by_source_message(400)
     assert message_group is not None
     gateway.publish_content.assert_awaited_once()
 

@@ -13,7 +13,7 @@ def test_list_subscriptions_operation_rejects_empty_state() -> None:
     # Empty-state logic lives in the operation so the command adapter can stay
     # focused on Discord rendering only.
     database = Mock()
-    database.get_all_subscriptions.return_value = []
+    database.remote_subscriptions.get_all_subscriptions.return_value = []
 
     result = run_operation_definition(
         list_subscriptions_operation,
@@ -37,7 +37,7 @@ def test_list_subscriptions_operation_returns_embed_payload_data() -> None:
         ),
     ]
     database = Mock()
-    database.get_all_subscriptions.return_value = subscriptions
+    database.remote_subscriptions.get_all_subscriptions.return_value = subscriptions
 
     result = run_operation_definition(
         list_subscriptions_operation,
@@ -49,4 +49,4 @@ def test_list_subscriptions_operation_returns_embed_payload_data() -> None:
         "remote_subscriptions": subscriptions,
         "local_subscribers": [],
     }
-    database.get_all_subscriptions.assert_called_once_with()
+    database.remote_subscriptions.get_all_subscriptions.assert_called_once_with()

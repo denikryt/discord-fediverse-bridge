@@ -48,8 +48,8 @@ async def test_thread_starter_from_registered_user_publishes_and_persists_mappin
         starter_message=starter_message,
     )
 
-    mapping = database.get_message_mapping_by_discord_message_id(starter_message.id)
-    stored_object = database.get_published_activity_object_by_object_id(
+    mapping = database.message_mappings.get_message_mapping_by_discord_message_id(starter_message.id)
+    stored_object = database.activitypub_objects.get_published_activity_object_by_object_id(
         post_object_url
     )
 
@@ -101,7 +101,7 @@ async def test_thread_message_from_registered_user_publishes_as_comment(
     comment_activity_url = (
         f"https://{BRIDGE_HOST_DOMAIN}/users/alice/activities/create/comment/1"
     )
-    thread_group = database.create_thread_group(
+    thread_group = database.discord_fanout_groups.create_thread_group(
         community_actor_id=f"https://{LEMMY_EXAMPLE_DOMAIN}/c/hackers",
         source_channel_id=100,
         source_thread_id=thread.id,
@@ -109,7 +109,7 @@ async def test_thread_message_from_registered_user_publishes_as_comment(
         ap_activity_id=f"https://{BRIDGE_HOST_DOMAIN}/users/alice/activities/create/post/1",
         ap_object_id=post_object_url,
     )
-    database.add_thread_delivery(
+    database.discord_fanout_groups.add_thread_delivery(
         thread_group_id=thread_group.id,
         discord_channel_id=100,
         discord_thread_id=thread.id,
@@ -125,8 +125,8 @@ async def test_thread_message_from_registered_user_publishes_as_comment(
 
     result = await service.publish_thread_message(message=message)
 
-    mapping = database.get_message_mapping_by_discord_message_id(message.id)
-    stored_object = database.get_published_activity_object_by_object_id(
+    mapping = database.message_mappings.get_message_mapping_by_discord_message_id(message.id)
+    stored_object = database.activitypub_objects.get_published_activity_object_by_object_id(
         comment_object_url
     )
 
@@ -153,7 +153,7 @@ async def test_thread_reply_uses_parent_comment_object_id_when_available(
     parent_comment_object_url = (
         f"https://{BRIDGE_HOST_DOMAIN}/users/alice/objects/comment/parent"
     )
-    thread_group = database.create_thread_group(
+    thread_group = database.discord_fanout_groups.create_thread_group(
         community_actor_id=f"https://{LEMMY_EXAMPLE_DOMAIN}/c/hackers",
         source_channel_id=100,
         source_thread_id=thread.id,
@@ -161,14 +161,14 @@ async def test_thread_reply_uses_parent_comment_object_id_when_available(
         ap_activity_id=f"https://{BRIDGE_HOST_DOMAIN}/users/alice/activities/create/post/1",
         ap_object_id=post_object_url,
     )
-    database.add_thread_delivery(
+    database.discord_fanout_groups.add_thread_delivery(
         thread_group_id=thread_group.id,
         discord_channel_id=100,
         discord_thread_id=thread.id,
         discord_starter_message_id=300,
         role="source",
     )
-    parent_message_group = database.create_message_group(
+    parent_message_group = database.discord_fanout_groups.create_message_group(
         community_actor_id=f"https://{LEMMY_EXAMPLE_DOMAIN}/c/hackers",
         thread_group_id=thread_group.id,
         source_channel_id=100,
@@ -177,7 +177,7 @@ async def test_thread_reply_uses_parent_comment_object_id_when_available(
         ap_activity_id=f"https://{BRIDGE_HOST_DOMAIN}/users/alice/activities/create/comment/parent",
         ap_object_id=parent_comment_object_url,
     )
-    database.add_message_delivery(
+    database.discord_fanout_groups.add_message_delivery(
         message_group_id=parent_message_group.id,
         discord_channel_id=100,
         discord_thread_id=thread.id,
@@ -201,7 +201,7 @@ async def test_thread_reply_uses_parent_comment_object_id_when_available(
     await service.publish_thread_message(message=message)
 
     request = fedify_gateway.publish_content.await_args.args[0]
-    stored_object = database.get_published_activity_object_by_object_id(
+    stored_object = database.activitypub_objects.get_published_activity_object_by_object_id(
         f"https://{BRIDGE_HOST_DOMAIN}/users/alice/objects/comment/2"
     )
     assert request.in_reply_to_object_id == parent_comment_object_url
@@ -215,7 +215,7 @@ async def test_thread_message_in_pending_subscription_is_ignored(
 ) -> None:
     """Pending subscriptions must not publish Discord messages yet."""
     database = build_database(tmp_path, "bridge-stage6.db")
-    database.create_subscription(
+    database.remote_subscriptions.create_subscription(
         discord_channel_id=100,
         lemmy_community_actor_id=f"https://{LEMMY_EXAMPLE_DOMAIN}/c/hackers",
         lemmy_community_name="hackers",
@@ -278,6 +278,6 @@ async def test_gateway_publish_failure_does_not_store_false_success_mapping(
         )
 
     assert (
-        database.get_message_mapping_by_discord_message_id(starter_message.id)
+        database.message_mappings.get_message_mapping_by_discord_message_id(starter_message.id)
         is None
     )

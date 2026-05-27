@@ -69,7 +69,7 @@ class ContentPublishService:
         starter_message: object,
     ) -> PublishResult:
         """Publish one Discord forum-thread starter into a remote subscribed community."""
-        subscription = self.database.get_subscription_by_channel(getattr(thread, "parent_id"))
+        subscription = self.database.remote_subscriptions.get_subscription_by_channel(getattr(thread, "parent_id"))
         if subscription is None:
             return PublishResult(status="ignored", reason="no_subscription")
         if subscription.status != "accepted":
@@ -85,13 +85,13 @@ class ContentPublishService:
     async def publish_thread_message(self, *, message: object) -> PublishResult:
         """Publish one Discord thread message into a remote subscribed community."""
         thread = getattr(message, "channel")
-        subscription = self.database.get_subscription_by_channel(getattr(thread, "parent_id"))
+        subscription = self.database.remote_subscriptions.get_subscription_by_channel(getattr(thread, "parent_id"))
         if subscription is None:
             return PublishResult(status="ignored", reason="no_subscription")
         if subscription.status != "accepted":
             return PublishResult(status="ignored", reason="subscription_not_active")
 
-        thread_group = self.database.get_thread_group_by_any_thread(getattr(thread, "id"))
+        thread_group = self.database.discord_fanout_groups.get_thread_group_by_any_thread(getattr(thread, "id"))
         if thread_group is None or thread_group.ap_object_id is None:
             return PublishResult(status="ignored", reason="no_post_context")
 
@@ -273,12 +273,12 @@ class ContentPublishService:
         if referenced_id is None:
             return post_ap_id
 
-        thread_deliveries = self.database.get_thread_deliveries(thread_group.id)
+        thread_deliveries = self.database.discord_fanout_groups.get_thread_deliveries(thread_group.id)
         for delivery in thread_deliveries:
             if referenced_id == delivery.discord_starter_message_id:
                 return post_ap_id
 
-        parent_group = self.database.get_message_group_by_delivered_message(referenced_id)
+        parent_group = self.database.discord_fanout_groups.get_message_group_by_delivered_message(referenced_id)
         if parent_group is None or parent_group.ap_object_id is None:
             return post_ap_id
         return parent_group.ap_object_id

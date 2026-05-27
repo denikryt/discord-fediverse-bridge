@@ -121,7 +121,7 @@ class LocalCommunityRuntime:
         if publish_result.status != "published":
             return LocalCommunityRuntimeResult(status=publish_result.status, reason=publish_result.reason)
 
-        thread_row = self.database.create_local_community_thread(
+        thread_row = self.database.local_community_content.create_local_community_thread(
             local_community_id=getattr(local_community, "id"),
             discord_thread_id=getattr(thread, "id"),
             discord_starter_message_id=getattr(starter_message, "id"),
@@ -159,7 +159,7 @@ class LocalCommunityRuntime:
             self.database, getattr(thread, "id")
         )
         if source_surface is not None:
-            thread_row = self.database.get_local_community_thread_for_surface(source_surface.id)
+            thread_row = self.database.local_community_surfaces.get_local_community_thread_for_surface(source_surface.id)
             if thread_row is not None:
                 await self._fanout_thread_to_local_participants(
                     local_community=local_community,
@@ -179,14 +179,14 @@ class LocalCommunityRuntime:
         if publish_result.status != "published":
             return LocalCommunityRuntimeResult(status=publish_result.status, reason=publish_result.reason)
 
-        thread_row = self.database.create_local_community_thread_canonical(
+        thread_row = self.database.local_community_content.create_local_community_thread_canonical(
             local_community_id=getattr(local_community, "id"),
             ap_activity_id=publish_result.activity_id,
             ap_object_id=publish_result.object_id,
             direction="discord_to_ap",
             origin_kind="discord_local_subscriber",
         )
-        self.database.create_local_community_thread_surface(
+        self.database.local_community_surfaces.create_local_community_thread_surface(
             local_community_thread_id=getattr(thread_row, "id"),
             discord_forum_channel_id=getattr(thread, "parent_id"),
             discord_thread_id=getattr(thread, "id"),
@@ -230,7 +230,7 @@ class LocalCommunityRuntime:
         thread = getattr(message, "channel")
         existing_message = get_local_community_message_for_discord_message(self.database, getattr(message, "id"))
         if existing_message is not None:
-            thread_row = self.database.get_local_community_thread_by_id(getattr(existing_message, "local_community_thread_id"))
+            thread_row = self.database.local_community_content.get_local_community_thread_by_id(getattr(existing_message, "local_community_thread_id"))
             if thread_row is not None:
                 await self._fanout_message_to_local_subscribers(
                     local_community=local_community,
@@ -259,7 +259,7 @@ class LocalCommunityRuntime:
         if publish_result.status != "published":
             return LocalCommunityRuntimeResult(status=publish_result.status, reason=publish_result.reason)
 
-        message_row = self.database.create_local_community_message(
+        message_row = self.database.local_community_content.create_local_community_message(
             local_community_thread_id=getattr(thread_row, "id"),
             discord_message_id=getattr(message, "id"),
             ap_activity_id=publish_result.activity_id,
@@ -295,7 +295,7 @@ class LocalCommunityRuntime:
         thread = getattr(message, "channel")
         existing_message = get_local_community_message_for_discord_message(self.database, getattr(message, "id"))
         if existing_message is not None:
-            thread_row = self.database.get_local_community_thread_by_id(getattr(existing_message, "local_community_thread_id"))
+            thread_row = self.database.local_community_content.get_local_community_thread_by_id(getattr(existing_message, "local_community_thread_id"))
             if thread_row is not None:
                 await self._fanout_message_to_local_participants(
                     local_community=local_community,
@@ -312,7 +312,7 @@ class LocalCommunityRuntime:
             return LocalCommunityRuntimeResult(status="ignored", reason="no_thread_surface")
         if getattr(thread_surface, "discord_starter_message_id") == getattr(message, "id"):
             return LocalCommunityRuntimeResult(status="ignored", reason="starter_message_already_handled")
-        thread_row = self.database.get_local_community_thread_for_surface(getattr(thread_surface, "id"))
+        thread_row = self.database.local_community_surfaces.get_local_community_thread_for_surface(getattr(thread_surface, "id"))
         if thread_row is None:
             return LocalCommunityRuntimeResult(status="ignored", reason="no_thread_context")
 
@@ -330,14 +330,14 @@ class LocalCommunityRuntime:
         if publish_result.status != "published":
             return LocalCommunityRuntimeResult(status=publish_result.status, reason=publish_result.reason)
 
-        message_row = self.database.create_local_community_message_canonical(
+        message_row = self.database.local_community_content.create_local_community_message_canonical(
             local_community_thread_id=getattr(thread_row, "id"),
             ap_activity_id=publish_result.activity_id,
             ap_object_id=publish_result.object_id,
             parent_ap_object_id=reply_context.parent_ap_object_id,
             direction="discord_to_ap",
         )
-        self.database.create_local_community_message_surface(
+        self.database.local_community_surfaces.create_local_community_message_surface(
             local_community_message_id=getattr(message_row, "id"),
             local_community_thread_surface_id=getattr(thread_surface, "id"),
             discord_forum_channel_id=getattr(thread, "parent_id"),
@@ -365,7 +365,7 @@ class LocalCommunityRuntime:
         """Mirror one remote top-level post into a new Discord forum thread."""
         from ..activitypub_handlers import HandlerResult as _HandlerResult
 
-        local_community = self.database.get_local_community_by_actor_url(getattr(event, "community_actor_id"))
+        local_community = self.database.local_communities.get_local_community_by_actor_url(getattr(event, "community_actor_id"))
         if local_community is None:
             return _HandlerResult(status="skipped", detail="unknown local community")
         existing = get_local_community_thread_for_ap_object(self.database, getattr(getattr(event, "object"), "ap_id"))
@@ -383,7 +383,7 @@ class LocalCommunityRuntime:
                 object_kind="post",
             )
             return _HandlerResult(status="skipped", detail="post already mapped")
-        remote_subscriber = self.database.get_remote_subscriber(
+        remote_subscriber = self.database.remote_subscribers.get_remote_subscriber(
             local_community_id=getattr(local_community, "id"),
             remote_actor_id=getattr(event, "actor_id"),
         )
@@ -400,7 +400,7 @@ class LocalCommunityRuntime:
             content=self._format_inbound_post_body(event),
         )
         created_thread, starter_message = self._unpack_created_thread(created)
-        thread_row = self.database.create_local_community_thread(
+        thread_row = self.database.local_community_content.create_local_community_thread(
             local_community_id=getattr(local_community, "id"),
             discord_thread_id=getattr(created_thread, "id"),
             discord_starter_message_id=getattr(starter_message, "id"),
@@ -427,12 +427,12 @@ class LocalCommunityRuntime:
         """Mirror one remote comment into the mapped Discord thread."""
         from ..activitypub_handlers import HandlerResult as _HandlerResult
 
-        local_community = self.database.get_local_community_by_actor_url(getattr(event, "community_actor_id"))
+        local_community = self.database.local_communities.get_local_community_by_actor_url(getattr(event, "community_actor_id"))
         if local_community is None:
             return _HandlerResult(status="skipped", detail="unknown local community")
-        existing_message = self.database.get_local_community_message_by_ap_object_id(getattr(getattr(event, "object"), "ap_id"))
+        existing_message = self.database.local_community_content.get_local_community_message_by_ap_object_id(getattr(getattr(event, "object"), "ap_id"))
         if existing_message is not None:
-            existing_thread = self.database.get_local_community_thread_by_id(
+            existing_thread = self.database.local_community_content.get_local_community_thread_by_id(
                 getattr(existing_message, "local_community_thread_id")
             )
             if existing_thread is not None:
@@ -449,20 +449,20 @@ class LocalCommunityRuntime:
                 object_kind="comment",
             )
             return _HandlerResult(status="skipped", detail="comment already mapped")
-        remote_subscriber = self.database.get_remote_subscriber(
+        remote_subscriber = self.database.remote_subscribers.get_remote_subscriber(
             local_community_id=getattr(local_community, "id"),
             remote_actor_id=getattr(event, "actor_id"),
         )
         if remote_subscriber is None or getattr(remote_subscriber, "status") != "accepted":
             return _HandlerResult(status="skipped", detail="remote actor is not an accepted remote subscriber")
 
-        thread_row = self.database.get_local_community_thread_by_ap_object_id(getattr(getattr(event, "object"), "post_ap_id"))
+        thread_row = self.database.local_community_content.get_local_community_thread_by_ap_object_id(getattr(getattr(event, "object"), "post_ap_id"))
         if thread_row is None:
             return _HandlerResult(status="skipped", detail="comment parent post is not mapped")
         if self.bot is None:
             raise RuntimeError("LocalCommunityRuntime requires bot for inbound Discord delivery")
 
-        host_thread_surface = self.database.get_host_local_community_thread_surface(
+        host_thread_surface = self.database.local_community_surfaces.get_host_local_community_thread_surface(
             getattr(thread_row, "id")
         )
         if host_thread_surface is None:
@@ -484,7 +484,7 @@ class LocalCommunityRuntime:
                 message_id=parent_discord_message_id,
             )
         created_message = await discord_thread.send(self._format_inbound_comment_body(event), **send_kwargs)
-        message_row = self.database.create_local_community_message(
+        message_row = self.database.local_community_content.create_local_community_message(
             local_community_thread_id=getattr(thread_row, "id"),
             discord_message_id=getattr(created_message, "id"),
             ap_activity_id=getattr(event, "delivery_id"),
@@ -607,7 +607,7 @@ class LocalCommunityRuntime:
         """
         if getattr(surface, "role") != "local_subscriber":
             return True
-        local_subscriber = self.database.get_local_subscriber(
+        local_subscriber = self.database.local_subscribers.get_local_subscriber(
             local_community_id=local_community_id,
             discord_channel_id=getattr(surface, "discord_forum_channel_id"),
         )
@@ -715,12 +715,12 @@ class LocalCommunityRuntime:
         # ActivityPub deliveries are replayable.  Check both unique AP columns
         # before inserting so a duplicate relay cannot turn a successfully
         # mirrored comment into an integrity error.
-        if self.database.get_message_mapping_by_object_id(object_id) is not None:
+        if self.database.message_mappings.get_message_mapping_by_object_id(object_id) is not None:
             return
-        if self.database.get_message_mapping_by_activity_id(activity_id) is not None:
+        if self.database.message_mappings.get_message_mapping_by_activity_id(activity_id) is not None:
             return
 
-        self.database.create_message_mapping(
+        self.database.message_mappings.create_message_mapping(
             source_platform="activitypub",
             source_id=object_id,
             activity_id=activity_id,
@@ -748,12 +748,12 @@ class LocalCommunityRuntime:
         """
         del author_display_name
 
-        thread_surface = self.database.get_local_community_thread_surface_by_starter_message_id(message_id)
+        thread_surface = self.database.local_community_surfaces.get_local_community_thread_surface_by_starter_message_id(message_id)
         if thread_surface is not None:
-            thread_row = self.database.get_local_community_thread_for_surface(getattr(thread_surface, "id"))
+            thread_row = self.database.local_community_surfaces.get_local_community_thread_for_surface(getattr(thread_surface, "id"))
             if thread_row is None or not self._surface_can_mutate(thread_surface, getattr(thread_row, "local_community_id")):
                 return
-            published = self.database.get_published_activity_object_by_object_id(getattr(thread_row, "ap_object_id"))
+            published = self.database.activitypub_objects.get_published_activity_object_by_object_id(getattr(thread_row, "ap_object_id"))
             if published is None:
                 return
             await self._send_update_request(runtime=runtime, published=published, new_content=new_content)
@@ -765,16 +765,16 @@ class LocalCommunityRuntime:
             )
             return
 
-        message_surface = self.database.get_local_community_message_surface_by_discord_message_id(message_id)
+        message_surface = self.database.local_community_surfaces.get_local_community_message_surface_by_discord_message_id(message_id)
         if message_surface is None:
             return
-        message_row = self.database.get_local_community_message_for_surface(getattr(message_surface, "id"))
+        message_row = self.database.local_community_surfaces.get_local_community_message_for_surface(getattr(message_surface, "id"))
         if message_row is None:
             return
-        thread_row = self.database.get_local_community_thread_by_id(getattr(message_row, "local_community_thread_id"))
+        thread_row = self.database.local_community_content.get_local_community_thread_by_id(getattr(message_row, "local_community_thread_id"))
         if thread_row is None or not self._surface_can_mutate(message_surface, getattr(thread_row, "local_community_id")):
             return
-        published = self.database.get_published_activity_object_by_object_id(getattr(message_row, "ap_object_id"))
+        published = self.database.activitypub_objects.get_published_activity_object_by_object_id(getattr(message_row, "ap_object_id"))
         if published is None:
             return
         await self._send_update_request(runtime=runtime, published=published, new_content=new_content)
@@ -792,12 +792,12 @@ class LocalCommunityRuntime:
         runtime: object,
     ) -> None:
         """Propagate one Discord-authored local-community delete to participants."""
-        thread_surface = self.database.get_local_community_thread_surface_by_starter_message_id(message_id)
+        thread_surface = self.database.local_community_surfaces.get_local_community_thread_surface_by_starter_message_id(message_id)
         if thread_surface is not None:
-            thread_row = self.database.get_local_community_thread_for_surface(getattr(thread_surface, "id"))
+            thread_row = self.database.local_community_surfaces.get_local_community_thread_for_surface(getattr(thread_surface, "id"))
             if thread_row is None or not self._surface_can_mutate(thread_surface, getattr(thread_row, "local_community_id")):
                 return
-            published = self.database.get_published_activity_object_by_object_id(getattr(thread_row, "ap_object_id"))
+            published = self.database.activitypub_objects.get_published_activity_object_by_object_id(getattr(thread_row, "ap_object_id"))
             if published is None:
                 return
             await self._send_delete_request(runtime=runtime, published=published)
@@ -808,16 +808,16 @@ class LocalCommunityRuntime:
             )
             return
 
-        message_surface = self.database.get_local_community_message_surface_by_discord_message_id(message_id)
+        message_surface = self.database.local_community_surfaces.get_local_community_message_surface_by_discord_message_id(message_id)
         if message_surface is None:
             return
-        message_row = self.database.get_local_community_message_for_surface(getattr(message_surface, "id"))
+        message_row = self.database.local_community_surfaces.get_local_community_message_for_surface(getattr(message_surface, "id"))
         if message_row is None:
             return
-        thread_row = self.database.get_local_community_thread_by_id(getattr(message_row, "local_community_thread_id"))
+        thread_row = self.database.local_community_content.get_local_community_thread_by_id(getattr(message_row, "local_community_thread_id"))
         if thread_row is None or not self._surface_can_mutate(message_surface, getattr(thread_row, "local_community_id")):
             return
-        published = self.database.get_published_activity_object_by_object_id(getattr(message_row, "ap_object_id"))
+        published = self.database.activitypub_objects.get_published_activity_object_by_object_id(getattr(message_row, "ap_object_id"))
         if published is None:
             return
         await self._send_delete_request(runtime=runtime, published=published)
@@ -831,10 +831,10 @@ class LocalCommunityRuntime:
         """Edit the starter message for one inbound remote post update."""
         from ..activitypub_handlers import HandlerResult as _HandlerResult
 
-        thread_row = self.database.get_local_community_thread_by_ap_object_id(getattr(getattr(event, "object"), "ap_id"))
+        thread_row = self.database.local_community_content.get_local_community_thread_by_ap_object_id(getattr(getattr(event, "object"), "ap_id"))
         if thread_row is None:
             return _HandlerResult(status="skipped", detail="post not yet mapped")
-        local_community = self.database.get_local_community_by_actor_url(getattr(event, "community_actor_id"))
+        local_community = self.database.local_communities.get_local_community_by_actor_url(getattr(event, "community_actor_id"))
         await self._fanout_thread_edit(
             runtime=runtime,
             thread_row=thread_row,
@@ -854,10 +854,10 @@ class LocalCommunityRuntime:
         """Mark the starter message deleted for one inbound remote post delete."""
         from ..activitypub_handlers import HandlerResult as _HandlerResult
 
-        thread_row = self.database.get_local_community_thread_by_ap_object_id(getattr(getattr(event, "object"), "ap_id"))
+        thread_row = self.database.local_community_content.get_local_community_thread_by_ap_object_id(getattr(getattr(event, "object"), "ap_id"))
         if thread_row is None:
             return _HandlerResult(status="skipped", detail="post not yet mapped")
-        local_community = self.database.get_local_community_by_actor_url(getattr(event, "community_actor_id"))
+        local_community = self.database.local_communities.get_local_community_by_actor_url(getattr(event, "community_actor_id"))
         await self._fanout_thread_delete(
             runtime=runtime,
             thread_row=thread_row,
@@ -876,13 +876,13 @@ class LocalCommunityRuntime:
         """Edit the mirrored Discord copy for one inbound remote comment update."""
         from ..activitypub_handlers import HandlerResult as _HandlerResult
 
-        message_row = self.database.get_local_community_message_by_ap_object_id(getattr(getattr(event, "object"), "ap_id"))
+        message_row = self.database.local_community_content.get_local_community_message_by_ap_object_id(getattr(getattr(event, "object"), "ap_id"))
         if message_row is None:
             return _HandlerResult(status="skipped", detail="comment not yet mapped")
-        thread_row = self.database.get_local_community_thread_by_id(getattr(message_row, "local_community_thread_id"))
+        thread_row = self.database.local_community_content.get_local_community_thread_by_id(getattr(message_row, "local_community_thread_id"))
         if thread_row is None:
             return _HandlerResult(status="skipped", detail="comment thread not mapped")
-        local_community = self.database.get_local_community_by_actor_url(getattr(event, "community_actor_id"))
+        local_community = self.database.local_communities.get_local_community_by_actor_url(getattr(event, "community_actor_id"))
         await self._fanout_message_edit(
             runtime=runtime,
             message_row=message_row,
@@ -902,13 +902,13 @@ class LocalCommunityRuntime:
         """Mark the mirrored Discord copy deleted for one inbound remote comment delete."""
         from ..activitypub_handlers import HandlerResult as _HandlerResult
 
-        message_row = self.database.get_local_community_message_by_ap_object_id(getattr(getattr(event, "object"), "ap_id"))
+        message_row = self.database.local_community_content.get_local_community_message_by_ap_object_id(getattr(getattr(event, "object"), "ap_id"))
         if message_row is None:
             return _HandlerResult(status="skipped", detail="comment not yet mapped")
-        thread_row = self.database.get_local_community_thread_by_id(getattr(message_row, "local_community_thread_id"))
+        thread_row = self.database.local_community_content.get_local_community_thread_by_id(getattr(message_row, "local_community_thread_id"))
         if thread_row is None:
             return _HandlerResult(status="skipped", detail="comment thread not mapped")
-        local_community = self.database.get_local_community_by_actor_url(getattr(event, "community_actor_id"))
+        local_community = self.database.local_communities.get_local_community_by_actor_url(getattr(event, "community_actor_id"))
         await self._fanout_message_delete(
             runtime=runtime,
             message_row=message_row,
@@ -934,10 +934,10 @@ class LocalCommunityRuntime:
         """Persist and accept one remote follow request for a local community."""
         from ..activitypub_handlers import HandlerResult as _HandlerResult
 
-        local_community = self.database.get_local_community_by_actor_url(local_community_actor_id)
+        local_community = self.database.local_communities.get_local_community_by_actor_url(local_community_actor_id)
         if local_community is None:
             return _HandlerResult(status="skipped", detail="unknown local community")
-        existing = self.database.get_remote_subscriber(
+        existing = self.database.remote_subscribers.get_remote_subscriber(
             local_community_id=getattr(local_community, "id"),
             remote_actor_id=remote_actor_id,
         )
@@ -947,7 +947,7 @@ class LocalCommunityRuntime:
             # bridge persisted the remote subscriber but the original Accept was lost, so
             # repeated Follow deliveries must refresh the stored request details
             # and re-send the Accept instead of returning early.
-            self.database.update_remote_subscriber_acceptance(
+            self.database.remote_subscribers.update_remote_subscriber_acceptance(
                 local_community_id=getattr(local_community, "id"),
                 remote_actor_id=remote_actor_id,
                 remote_inbox_url=remote_inbox_url,
@@ -956,7 +956,7 @@ class LocalCommunityRuntime:
             )
             detail = "local community remote subscriber accepted again"
         else:
-            self.database.create_remote_subscriber(
+            self.database.remote_subscribers.create_remote_subscriber(
                 local_community_id=getattr(local_community, "id"),
                 remote_actor_id=remote_actor_id,
                 remote_inbox_url=remote_inbox_url,
@@ -991,10 +991,10 @@ class LocalCommunityRuntime:
         """Remove one remote actor from a local community remote-subscriber set."""
         from ..activitypub_handlers import HandlerResult as _HandlerResult
 
-        local_community = self.database.get_local_community_by_actor_url(local_community_actor_id)
+        local_community = self.database.local_communities.get_local_community_by_actor_url(local_community_actor_id)
         if local_community is None:
             return _HandlerResult(status="skipped", detail="unknown local community")
-        remote_subscriber = self.database.get_remote_subscriber(
+        remote_subscriber = self.database.remote_subscribers.get_remote_subscriber(
             local_community_id=getattr(local_community, "id"),
             remote_actor_id=remote_actor_id,
         )
@@ -1005,7 +1005,7 @@ class LocalCommunityRuntime:
                 "Local-community unfollow Follow ID mismatch community=%s remote_actor=%s stored=%s incoming=%s",
                 getattr(local_community, "slug"), remote_actor_id, getattr(remote_subscriber, "follow_activity_id"), follow_activity_id,
             )
-        self.database.delete_remote_subscriber(
+        self.database.remote_subscribers.delete_remote_subscriber(
             local_community_id=getattr(local_community, "id"),
             remote_actor_id=remote_actor_id,
         )

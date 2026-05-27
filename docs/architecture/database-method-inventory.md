@@ -286,4 +286,10 @@ Target owner: `BridgeActorFollowRepository`.
 - Exact call-token search can miss dynamically dispatched calls or direct ORM access through `Database.session()`. Later stages must inspect the relevant runtime modules manually before moving code.
 - Some tests create rows through helper functions in `tests/support/`; extraction stages should treat those as compatibility call sites, not only assertions.
 - `Database.session()` is used directly in several tests and runtime edge paths; Stage 2 must preserve it as an infrastructure facade rather than treating it as a domain repository method.
-- Methods without exact current source call sites are still part of the supported internal surface until Stage 8 removes temporary wrappers or migrates all callers.
+- Methods without exact Stage 0 source call sites were treated as compatibility call sites during extraction; after Stage 8, repository properties are the supported domain API.
+
+## Final repository API status
+
+Stage 8 removed the temporary `Database.*` domain forwarding wrappers. `Database` now owns only engine/session/schema lifecycle plus repository construction; domain persistence operations are supported through repository properties such as `database.local_communities`, `database.remote_subscriptions`, `database.activitypub_objects`, and `database.discord_fanout_groups`.
+
+This inventory remains a migration/history map from the former facade methods to the final repository owners. It should not be read as a supported `Database.method(...)` API list after Stage 8.

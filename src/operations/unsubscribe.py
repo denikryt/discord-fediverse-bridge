@@ -36,7 +36,7 @@ class UnsubscribeInput:
         # Preconditions and success messaging both depend on the current row, so
         # the input memoizes the DB lookup.
         if not self._subscription_loaded:
-            self._subscription = self.database.get_subscription_by_channel(self.channel_id)
+            self._subscription = self.database.remote_subscriptions.get_subscription_by_channel(self.channel_id)
             self._subscription_loaded = True
         return self._subscription
 
@@ -84,7 +84,7 @@ async def _body(operation_input: UnsubscribeInput) -> OperationResult:
 
     community_actor_id = subscription.lemmy_community_actor_id
     label = _community_label(subscription)
-    subscription_count = operation_input.database.count_subscriptions_for_community(
+    subscription_count = operation_input.database.remote_subscriptions.count_subscriptions_for_community(
         community_actor_id
     )
     is_last_channel = subscription_count <= 1
@@ -94,7 +94,7 @@ async def _body(operation_input: UnsubscribeInput) -> OperationResult:
     if is_last_channel:
         # Last-channel cleanup is only safe when the shared follow row still
         # knows the exact outbound Follow activity that must be undone.
-        bridge_follow = operation_input.database.get_bridge_actor_follow(community_actor_id)
+        bridge_follow = operation_input.database.bridge_actor_follows.get_bridge_actor_follow(community_actor_id)
         if bridge_follow is not None:
             follow_activity_id = bridge_follow.follow_activity_id
         if follow_activity_id is None:
@@ -108,7 +108,7 @@ async def _body(operation_input: UnsubscribeInput) -> OperationResult:
                 reason="follow_activity_id_missing",
             )
 
-    deleted = operation_input.database.delete_subscription(operation_input.channel_id)
+    deleted = operation_input.database.remote_subscriptions.delete_subscription(operation_input.channel_id)
     if not deleted:
         return OperationResult(
             applied=False,
@@ -130,7 +130,7 @@ async def _body(operation_input: UnsubscribeInput) -> OperationResult:
         follow_activity_id=follow_activity_id,
     )
     if cleanup_result.accepted:
-        operation_input.database.delete_bridge_actor_follow(community_actor_id)
+        operation_input.database.bridge_actor_follows.delete_bridge_actor_follow(community_actor_id)
         return OperationResult(
             applied=True,
             message=f"Unsubscribed {operation_input.channel_mention} from **{label}**.",

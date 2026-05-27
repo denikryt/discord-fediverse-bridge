@@ -51,13 +51,13 @@ def _local_community(database: object) -> object:
         name="Hackers",
         description="A local hackerspace forum.",
     )
-    return database.get_local_community_by_slug("hackers")
+    return database.local_communities.get_local_community_by_slug("hackers")
 
 
 def _add_followers(database: object, local_community: object) -> None:
     """Create one origin follower and two relay targets."""
     for name in ["bob", "alice", "carol"]:
-        database.create_remote_subscriber(
+        database.remote_subscribers.create_remote_subscriber(
             local_community_id=local_community.id,
             remote_actor_id=f"https://lemmy.example/u/{name}",
             remote_inbox_url=f"https://lemmy.example/u/{name}/inbox",
@@ -325,7 +325,7 @@ async def test_accepted_remote_post_relays_to_other_followers_only(tmp_path: Pat
     ]
     assert all(delivery.activity_json["type"] == "Announce" for delivery in request["deliveries"])
     assert all(delivery.activity_json["object"]["actor"] == "https://lemmy.example/u/bob" for delivery in request["deliveries"])
-    delivered = database.list_delivered_local_community_create_relay_targets(
+    delivered = database.local_community_relay.list_delivered_local_community_create_relay_targets(
         local_community_id=local_community.id,
         source_object_ap_id="https://lemmy.example/post/1",
     )
@@ -337,19 +337,19 @@ async def test_mastodon_shaped_comment_relay_to_lemmy_gets_threadiverse_payload(
     """A Mastodon-shaped comment should relay to Lemmy as a minimal Create(Note)."""
     database, runtime = _runtime(tmp_path)
     local_community = _local_community(database)
-    database.create_remote_subscriber(
+    database.remote_subscribers.create_remote_subscriber(
         local_community_id=local_community.id,
         remote_actor_id="https://mastodon.example/ap/users/alice",
         remote_inbox_url="https://mastodon.example/ap/users/alice/inbox",
         follow_activity_id="https://mastodon.example/follows/1",
     )
-    database.create_remote_subscriber(
+    database.remote_subscribers.create_remote_subscriber(
         local_community_id=local_community.id,
         remote_actor_id="https://lemmy.example/u/admin",
         remote_inbox_url="https://lemmy.example/u/admin/inbox",
         follow_activity_id="https://lemmy.example/follows/admin",
     )
-    database.create_local_community_thread(
+    database.local_community_content.create_local_community_thread(
         local_community_id=local_community.id,
         discord_thread_id=200,
         discord_starter_message_id=300,
@@ -426,19 +426,19 @@ async def test_mastodon_shaped_top_level_comment_relay_uses_post_as_in_reply_to(
     """A Mastodon reply directly to a post must keep inReplyTo pointing at that post."""
     database, runtime = _runtime(tmp_path)
     local_community = _local_community(database)
-    database.create_remote_subscriber(
+    database.remote_subscribers.create_remote_subscriber(
         local_community_id=local_community.id,
         remote_actor_id="https://mastodon.example/ap/users/alice",
         remote_inbox_url="https://mastodon.example/ap/users/alice/inbox",
         follow_activity_id="https://mastodon.example/follows/1",
     )
-    database.create_remote_subscriber(
+    database.remote_subscribers.create_remote_subscriber(
         local_community_id=local_community.id,
         remote_actor_id="https://lemmy.example/u/admin",
         remote_inbox_url="https://lemmy.example/u/admin/inbox",
         follow_activity_id="https://lemmy.example/follows/admin",
     )
-    database.create_local_community_thread(
+    database.local_community_content.create_local_community_thread(
         local_community_id=local_community.id,
         discord_thread_id=200,
         discord_starter_message_id=300,
@@ -480,19 +480,19 @@ async def test_lemmy_shaped_comment_relay_preserves_source_activity(tmp_path: Pa
     """A Lemmy-shaped comment should keep the existing preserve-and-announce relay."""
     database, runtime = _runtime(tmp_path)
     local_community = _local_community(database)
-    database.create_remote_subscriber(
+    database.remote_subscribers.create_remote_subscriber(
         local_community_id=local_community.id,
         remote_actor_id="https://lemmy.example/u/bob",
         remote_inbox_url="https://lemmy.example/u/bob/inbox",
         follow_activity_id="https://lemmy.example/follows/bob",
     )
-    database.create_remote_subscriber(
+    database.remote_subscribers.create_remote_subscriber(
         local_community_id=local_community.id,
         remote_actor_id="https://mastodon.example/ap/users/alice",
         remote_inbox_url="https://mastodon.example/ap/users/alice/inbox",
         follow_activity_id="https://mastodon.example/follows/alice",
     )
-    database.create_local_community_thread(
+    database.local_community_content.create_local_community_thread(
         local_community_id=local_community.id,
         discord_thread_id=200,
         discord_starter_message_id=300,
@@ -536,7 +536,7 @@ async def test_duplicate_post_recovers_missing_relay_rows_without_discord_duplic
     database, runtime = _runtime(tmp_path)
     local_community = _local_community(database)
     _add_followers(database, local_community)
-    database.create_local_community_thread(
+    database.local_community_content.create_local_community_thread(
         local_community_id=local_community.id,
         discord_thread_id=200,
         discord_starter_message_id=300,
@@ -566,7 +566,7 @@ async def test_duplicate_post_recovers_missing_relay_rows_without_discord_duplic
 
     assert result.status == "skipped"
     runtime.fedify_gateway.send_local_community_relay.assert_awaited_once()
-    delivered = database.list_delivered_local_community_create_relay_targets(
+    delivered = database.local_community_relay.list_delivered_local_community_create_relay_targets(
         local_community_id=local_community.id,
         source_object_ap_id="https://lemmy.example/post/1",
     )
@@ -685,7 +685,7 @@ async def test_inbound_post_update_skips_unfollowed_delivered_targets(tmp_path: 
 
     runtime.fedify_gateway.send_local_community_relay.side_effect = gateway_result
     await runtime.handle_inbound_post(_post_event(), SimpleNamespace())
-    database.delete_remote_subscriber(
+    database.remote_subscribers.delete_remote_subscriber(
         local_community_id=local_community.id,
         remote_actor_id="https://lemmy.example/u/alice",
     )

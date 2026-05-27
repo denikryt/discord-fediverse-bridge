@@ -32,9 +32,9 @@ def _create_current_local_community_activity(database: Database) -> None:
         name="Hackers",
         description="A local hackerspace forum.",
     )
-    community = database.get_local_community_by_slug("hackers")
+    community = database.local_communities.get_local_community_by_slug("hackers")
     assert community is not None
-    thread = database.create_local_community_thread(
+    thread = database.local_community_content.create_local_community_thread(
         local_community_id=community.id,
         discord_thread_id=200,
         discord_starter_message_id=300,
@@ -43,7 +43,7 @@ def _create_current_local_community_activity(database: Database) -> None:
         direction="discord_to_ap",
         origin_kind="discord_local",
     )
-    database.create_local_community_message(
+    database.local_community_content.create_local_community_message(
         local_community_thread_id=thread.id,
         discord_message_id=301,
         ap_activity_id="https://bridge.example/users/alice/activities/create/comment/1",

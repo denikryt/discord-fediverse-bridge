@@ -23,7 +23,7 @@ async def resolve_registered_user(
     Discord-authored post or comment can be federated. The caller supplies the
     reply boundary so the same rejection contract is preserved everywhere.
     """
-    user = database.get_user_by_discord_user_id(str(getattr(author, "id")))
+    user = database.users.get_user_by_discord_user_id(str(getattr(author, "id")))
     if user is not None:
         return user
 

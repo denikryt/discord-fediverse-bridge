@@ -44,7 +44,7 @@ def _settings() -> SimpleNamespace:
 def _register_user(database: Database, discord_user_id: str = "1234567890") -> None:
     """Seed one registered moderator for subscribe-channel authorization."""
     actor_url = f"https://{BRIDGE_EXAMPLE_DOMAIN}/users/alice"
-    database.create_user(
+    database.users.create_user(
         discord_user_id=discord_user_id,
         activitypub_username="alice",
         actor_url=actor_url,
@@ -69,7 +69,7 @@ def _create_local_community(database: Database, *, forum_channel_id: int = 100) 
         name="Great Community",
         description="A bridge-owned local community.",
     )
-    community = database.get_local_community_by_slug("great_community")
+    community = database.local_communities.get_local_community_by_slug("great_community")
     assert community is not None
     return community
 
@@ -107,12 +107,12 @@ async def test_subscribe_channel_persists_local_subscriber_without_remote_follow
             forum_channel,
         )
 
-    local_subscriber = database.get_local_subscriber_by_channel(forum_channel.id)
+    local_subscriber = database.local_subscribers.get_local_subscriber_by_channel(forum_channel.id)
     assert local_subscriber is not None
     assert local_subscriber.local_community_id == community.id
     assert local_subscriber.status == "active"
-    assert database.get_bridge_actor_follow(community.actor_url) is None
-    assert database.get_remote_subscriber(
+    assert database.bridge_actor_follows.get_bridge_actor_follow(community.actor_url) is None
+    assert database.remote_subscribers.get_remote_subscriber(
         local_community_id=community.id,
         remote_actor_id=f"https://{BRIDGE_EXAMPLE_DOMAIN}/actors/bridge",
     ) is None
@@ -156,7 +156,7 @@ async def test_subscribe_channel_rejects_host_forum_as_local_subscriber_target(
             host_forum,
         )
 
-    assert database.get_local_subscriber_by_channel(host_forum.id) is None
+    assert database.local_subscribers.get_local_subscriber_by_channel(host_forum.id) is None
     fedify_gateway.follow_community.assert_not_awaited()
     interaction.response.send_message.assert_awaited_once_with(
         "Channel <#12345> is the host forum for this local community and cannot subscribe to itself.",
@@ -175,7 +175,7 @@ async def test_unsubscribe_channel_removes_only_local_subscriber_state(
     """Removing a local subscriber should not dispatch remote Undo(Follow)."""
     database = _database(tmp_path)
     community = _create_local_community(database, forum_channel_id=100)
-    database.create_local_subscriber(
+    database.local_subscribers.create_local_subscriber(
         local_community_id=community.id,
         discord_guild_id=interaction.guild_id,
         discord_channel_id=forum_channel.id,
@@ -188,7 +188,7 @@ async def test_unsubscribe_channel_removes_only_local_subscriber_state(
     command = command_tree.commands["unsubscribe-channel"]
     await command.callback(interaction, forum_channel)
 
-    assert database.get_local_subscriber_by_channel(forum_channel.id) is None
+    assert database.local_subscribers.get_local_subscriber_by_channel(forum_channel.id) is None
     fedify_gateway.unfollow_community.assert_not_awaited()
     interaction.response.send_message.assert_awaited_once_with(
         "Unsubscribed <#12345> from local community **Great Community**.",
@@ -205,7 +205,7 @@ async def test_list_subscriptions_renders_remote_and_local_sections(
     """The list command should separate remote subscriptions from local subscribers."""
     database = _database(tmp_path)
     community = _create_local_community(database, forum_channel_id=100)
-    database.create_subscription(
+    database.remote_subscriptions.create_subscription(
         discord_channel_id=222,
         discord_guild_id=interaction.guild_id,
         lemmy_community_actor_id=f"https://{LEMMY_EXAMPLE_DOMAIN}/c/worldnews",
@@ -217,7 +217,7 @@ async def test_list_subscriptions_renders_remote_and_local_sections(
         initiated_by_discord_user_id="4444",
         status="accepted",
     )
-    database.create_local_subscriber(
+    database.local_subscribers.create_local_subscriber(
         local_community_id=community.id,
         discord_guild_id=interaction.guild_id,
         discord_channel_id=333,

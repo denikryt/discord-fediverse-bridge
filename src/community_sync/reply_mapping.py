@@ -58,7 +58,7 @@ def resolve_reply_context(
             per_thread_references={d.discord_thread_id: None for d in sibling_deliveries},
         )
 
-    thread_deliveries = database.get_thread_deliveries(thread_group.id)
+    thread_deliveries = database.discord_fanout_groups.get_thread_deliveries(thread_group.id)
     for delivery in thread_deliveries:
         if referenced_id == delivery.discord_starter_message_id:
             return ReplyContext(
@@ -69,7 +69,7 @@ def resolve_reply_context(
                 },
             )
 
-    parent_group = database.get_message_group_by_delivered_message(referenced_id)
+    parent_group = database.discord_fanout_groups.get_message_group_by_delivered_message(referenced_id)
     if parent_group is None:
         return ReplyContext(
             parent_message_group_id=None,
@@ -78,7 +78,7 @@ def resolve_reply_context(
 
     per_thread: dict[int, int | None] = {}
     for delivery in sibling_deliveries:
-        mirror_delivery = database.get_message_delivery_in_thread(
+        mirror_delivery = database.discord_fanout_groups.get_message_delivery_in_thread(
             parent_group.id, delivery.discord_thread_id
         )
         per_thread[delivery.discord_thread_id] = (
@@ -105,7 +105,7 @@ def resolve_inbound_reference(
     if parent_group is None:
         return None
 
-    delivery = database.get_message_delivery_in_thread(
+    delivery = database.discord_fanout_groups.get_message_delivery_in_thread(
         parent_group.id, thread_delivery.discord_thread_id
     )
     if delivery is None:

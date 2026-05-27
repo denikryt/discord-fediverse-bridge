@@ -30,7 +30,7 @@ def _community_actor_url() -> str:
 
 def _register_user(database: Database, discord_user_id: str = "1234567890") -> None:
     """Create the minimum registered user required by subscribe-channel."""
-    database.create_user(
+    database.users.create_user(
         discord_user_id=discord_user_id,
         activitypub_username="alice",
         actor_url=f"https://{BRIDGE_EXAMPLE_DOMAIN}/users/alice",
@@ -71,8 +71,8 @@ async def test_no_subscription_subscribe_command_sends_follow_and_marks_pending(
         f"{community_actor_url}|hackers|777",
         forum_channel,
     )
-    subscription = database.get_subscription_by_channel(forum_channel.id)
-    bridge_follow = database.get_bridge_actor_follow(community_actor_url)
+    subscription = database.remote_subscriptions.get_subscription_by_channel(forum_channel.id)
+    bridge_follow = database.bridge_actor_follows.get_bridge_actor_follow(community_actor_url)
 
     assert subscription is not None
     assert subscription.status == "pending"
@@ -102,14 +102,14 @@ async def test_second_channel_reuses_existing_accepted_bridge_follow(
     community_actor_url = _community_actor_url()
     follow_activity_id = f"https://{BRIDGE_EXAMPLE_DOMAIN}/activities/follow/1"
     # Pre-seed: bridge actor already accepted for this community, first channel active.
-    database.create_bridge_actor_follow(
+    database.bridge_actor_follows.create_bridge_actor_follow(
         community_actor_id=community_actor_url,
         follow_activity_id=follow_activity_id,
         community_inbox_url=f"{community_actor_url}/inbox",
         status="accepted",
     )
     # Different channel from forum_channel — first one is already subscribed.
-    database.create_subscription(
+    database.remote_subscriptions.create_subscription(
         discord_channel_id=99999,
         lemmy_community_actor_id=community_actor_url,
         lemmy_community_name="hackers",
@@ -130,7 +130,7 @@ async def test_second_channel_reuses_existing_accepted_bridge_follow(
         f"{community_actor_url}|hackers|777",
         forum_channel,
     )
-    new_subscription = database.get_subscription_by_channel(forum_channel.id)
+    new_subscription = database.remote_subscriptions.get_subscription_by_channel(forum_channel.id)
 
     # No new Follow sent — bridge actor already federated.
     fedify_gateway.follow_community.assert_not_awaited()
@@ -138,7 +138,7 @@ async def test_second_channel_reuses_existing_accepted_bridge_follow(
     # Second channel is immediately accepted — no need to wait.
     assert new_subscription.status == "accepted"
     # Still only one bridge_actor_follows row.
-    bridge_follow = database.get_bridge_actor_follow(community_actor_url)
+    bridge_follow = database.bridge_actor_follows.get_bridge_actor_follow(community_actor_url)
     assert bridge_follow is not None
     assert bridge_follow.status == "accepted"
 
@@ -155,7 +155,7 @@ async def test_pending_subscription_second_subscribe_does_not_send_follow(
     """A pending subscription should return a waiting message instead of a second follow."""
     database = _database(tmp_path)
     _register_user(database)
-    database.create_subscription(
+    database.remote_subscriptions.create_subscription(
         discord_channel_id=forum_channel.id,
         lemmy_community_actor_id=_community_actor_url(),
         lemmy_community_name="hackers",
@@ -193,7 +193,7 @@ async def test_accepted_subscription_second_subscribe_does_not_send_follow(
     """An already active subscription should report success without refollowing."""
     database = _database(tmp_path)
     _register_user(database)
-    database.create_subscription(
+    database.remote_subscriptions.create_subscription(
         discord_channel_id=forum_channel.id,
         lemmy_community_actor_id=_community_actor_url(),
         lemmy_community_name="hackers",
@@ -243,8 +243,8 @@ async def test_follow_dispatch_failure_marks_subscription_failed(
         f"{_community_actor_url()}|hackers|777",
         forum_channel,
     )
-    subscription = database.get_subscription_by_channel(forum_channel.id)
-    bridge_follow = database.get_bridge_actor_follow(_community_actor_url())
+    subscription = database.remote_subscriptions.get_subscription_by_channel(forum_channel.id)
+    bridge_follow = database.bridge_actor_follows.get_bridge_actor_follow(_community_actor_url())
 
     assert subscription is not None
     assert subscription.status == "failed"
@@ -265,13 +265,13 @@ async def test_follow_accepted_event_promotes_all_pending_subscriptions(
     follow_activity_id = f"https://{BRIDGE_EXAMPLE_DOMAIN}/activities/follow/1"
     community_actor_url = _community_actor_url()
     # Two channels both waiting for acceptance on the same community.
-    database.create_bridge_actor_follow(
+    database.bridge_actor_follows.create_bridge_actor_follow(
         community_actor_id=community_actor_url,
         follow_activity_id=follow_activity_id,
         community_inbox_url=f"{community_actor_url}/inbox",
         status="pending",
     )
-    database.create_subscription(
+    database.remote_subscriptions.create_subscription(
         discord_channel_id=12345,
         lemmy_community_actor_id=community_actor_url,
         lemmy_community_name="hackers",
@@ -282,7 +282,7 @@ async def test_follow_accepted_event_promotes_all_pending_subscriptions(
         initiated_by_discord_user_id="1111",
         status="pending",
     )
-    database.create_subscription(
+    database.remote_subscriptions.create_subscription(
         discord_channel_id=99999,
         lemmy_community_actor_id=community_actor_url,
         lemmy_community_name="hackers",
@@ -313,12 +313,12 @@ async def test_follow_accepted_event_promotes_all_pending_subscriptions(
 
     assert result.status == "processed"
     # Both channel subscriptions must be accepted.
-    sub1 = database.get_subscription_by_channel(12345)
-    sub2 = database.get_subscription_by_channel(99999)
+    sub1 = database.remote_subscriptions.get_subscription_by_channel(12345)
+    sub2 = database.remote_subscriptions.get_subscription_by_channel(99999)
     assert sub1.status == "accepted"
     assert sub2.status == "accepted"
     # The bridge-actor follow row must be accepted.
-    bridge_follow = database.get_bridge_actor_follow(community_actor_url)
+    bridge_follow = database.bridge_actor_follows.get_bridge_actor_follow(community_actor_url)
     assert bridge_follow.status == "accepted"
     # Both initiating users should receive a DM.
     assert runtime.bot.fetch_user.await_count == 2
@@ -337,13 +337,13 @@ async def test_unsubscribe_last_channel_sends_undo_follow(
     database = _database(tmp_path)
     community_actor_url = _community_actor_url()
     follow_activity_id = f"https://{BRIDGE_EXAMPLE_DOMAIN}/activities/follow/1"
-    database.create_bridge_actor_follow(
+    database.bridge_actor_follows.create_bridge_actor_follow(
         community_actor_id=community_actor_url,
         follow_activity_id=follow_activity_id,
         community_inbox_url=f"{community_actor_url}/inbox",
         status="accepted",
     )
-    database.create_subscription(
+    database.remote_subscriptions.create_subscription(
         discord_channel_id=forum_channel.id,
         lemmy_community_actor_id=community_actor_url,
         lemmy_community_name="hackers",
@@ -361,13 +361,13 @@ async def test_unsubscribe_last_channel_sends_undo_follow(
     await command.callback(interaction, forum_channel)
 
     # Channel subscription must be gone.
-    assert database.get_subscription_by_channel(forum_channel.id) is None
+    assert database.remote_subscriptions.get_subscription_by_channel(forum_channel.id) is None
     # Undo(Follow) must be dispatched.
     fedify_gateway.unfollow_community.assert_awaited_once_with(
         community_actor_url, follow_activity_id
     )
     # Bridge follow row must be cleaned up.
-    assert database.get_bridge_actor_follow(community_actor_url) is None
+    assert database.bridge_actor_follows.get_bridge_actor_follow(community_actor_url) is None
 
 
 @pytest.mark.asyncio
@@ -382,14 +382,14 @@ async def test_unsubscribe_one_of_two_channels_keeps_bridge_follow(
     database = _database(tmp_path)
     community_actor_url = _community_actor_url()
     follow_activity_id = f"https://{BRIDGE_EXAMPLE_DOMAIN}/activities/follow/1"
-    database.create_bridge_actor_follow(
+    database.bridge_actor_follows.create_bridge_actor_follow(
         community_actor_id=community_actor_url,
         follow_activity_id=follow_activity_id,
         community_inbox_url=f"{community_actor_url}/inbox",
         status="accepted",
     )
     # Two channels subscribed to the same community.
-    database.create_subscription(
+    database.remote_subscriptions.create_subscription(
         discord_channel_id=forum_channel.id,
         lemmy_community_actor_id=community_actor_url,
         lemmy_community_name="hackers",
@@ -400,7 +400,7 @@ async def test_unsubscribe_one_of_two_channels_keeps_bridge_follow(
         initiated_by_discord_user_id="1234567890",
         status="accepted",
     )
-    database.create_subscription(
+    database.remote_subscriptions.create_subscription(
         discord_channel_id=99999,
         lemmy_community_actor_id=community_actor_url,
         lemmy_community_name="hackers",
@@ -418,9 +418,9 @@ async def test_unsubscribe_one_of_two_channels_keeps_bridge_follow(
     await command.callback(interaction, forum_channel)
 
     # Only the target channel subscription is removed.
-    assert database.get_subscription_by_channel(forum_channel.id) is None
-    assert database.get_subscription_by_channel(99999) is not None
+    assert database.remote_subscriptions.get_subscription_by_channel(forum_channel.id) is None
+    assert database.remote_subscriptions.get_subscription_by_channel(99999) is not None
     # No Undo dispatched — the other channel still subscribes.
     fedify_gateway.unfollow_community.assert_not_awaited()
     # Bridge follow row is preserved.
-    assert database.get_bridge_actor_follow(community_actor_url) is not None
+    assert database.bridge_actor_follows.get_bridge_actor_follow(community_actor_url) is not None

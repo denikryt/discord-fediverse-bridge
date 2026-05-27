@@ -54,7 +54,7 @@ class RegistrationService:
         """Create a local actor or return the existing actor for one Discord user."""
         # Duplicate Discord IDs must resolve to the existing actor so a repeated
         # web registration cannot create split ownership for one account.
-        existing_by_discord_id = self.database.get_user_by_discord_user_id(
+        existing_by_discord_id = self.database.users.get_user_by_discord_user_id(
             discord_user_id
         )
         if existing_by_discord_id is not None:
@@ -63,14 +63,14 @@ class RegistrationService:
         username = requested_username.strip().lower()
         self.validate_username(username)
 
-        if self.database.get_user_by_activitypub_username(username) is not None:
+        if self.database.users.get_user_by_activitypub_username(username) is not None:
             raise RegistrationError("That username is already taken.")
 
         actor_url, inbox_url, outbox_url, followers_url = self.build_actor_urls(
             username
         )
         public_key_pem, private_key_pem = self.keypair_generator()
-        created = self.database.create_user(
+        created = self.database.users.create_user(
             discord_user_id=discord_user_id,
             activitypub_username=username,
             actor_url=actor_url,

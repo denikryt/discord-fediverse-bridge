@@ -104,7 +104,7 @@ class BridgeBot(discord.Client):
             # Re-check both the in-memory set and the DB inside the lock.
             if thread.id in self._synced_threads:
                 return
-            if self.database.get_post_link_by_thread_id(thread.id) is not None:
+            if self.database.legacy_lemmy_mappings.get_post_link_by_thread_id(thread.id) is not None:
                 self._synced_threads.add(thread.id)
                 return
 
@@ -139,7 +139,7 @@ class BridgeBot(discord.Client):
         ):
             return
 
-        delivery = self.database.get_thread_delivery_by_thread(message.channel.id)
+        delivery = self.database.discord_fanout_groups.get_thread_delivery_by_thread(message.channel.id)
         logger.info(
             "[on_message] msg=%s thread=%s channel=%s author=%s delivery_role=%s",
             getattr(message, "id", None), message.channel.id, message.channel.parent_id,
@@ -177,7 +177,7 @@ class BridgeBot(discord.Client):
                 return
 
         is_local_message = self.event_router.is_local_community_message(payload.message_id)
-        delivery = None if is_local_message else self.database.get_message_delivery_by_message(payload.message_id)
+        delivery = None if is_local_message else self.database.discord_fanout_groups.get_message_delivery_by_message(payload.message_id)
         if delivery is None and not is_local_message:
             logger.debug("[on_raw_message_edit] no delivery found for msg=%s", payload.message_id)
             return
@@ -246,7 +246,7 @@ class BridgeBot(discord.Client):
                 return
 
         is_local_message = self.event_router.is_local_community_message(payload.message_id)
-        delivery = None if is_local_message else self.database.get_message_delivery_by_message(payload.message_id)
+        delivery = None if is_local_message else self.database.discord_fanout_groups.get_message_delivery_by_message(payload.message_id)
         if delivery is None and not is_local_message:
             logger.debug("[on_raw_message_delete] no delivery found for msg=%s", payload.message_id)
             return

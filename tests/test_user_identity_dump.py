@@ -27,7 +27,7 @@ def test_write_user_identity_backup_creates_restore_usable_sqlite_db(
     """A user-only backup should preserve all identity/key fields in SQLite."""
 
     database = _database(tmp_path)
-    database.create_user(
+    database.users.create_user(
         discord_user_id="123456789",
         activitypub_username="alice",
         actor_url="https://bridge.example/users/alice",
@@ -71,7 +71,7 @@ def test_dump_local_users_cli_writes_users_db_backup(tmp_path: Path) -> None:
     """The CLI should write a standalone SQLite file with the users table only."""
 
     database = _database(tmp_path)
-    database.create_user(
+    database.users.create_user(
         discord_user_id="999",
         activitypub_username="bob",
         actor_url="https://bridge.example/users/bob",
@@ -117,7 +117,7 @@ def test_dump_local_users_entrypoint_writes_users_db_backup(tmp_path: Path) -> N
     """The packaged CLI entry point should write the same backup artifact."""
 
     database = _database(tmp_path)
-    database.create_user(
+    database.users.create_user(
         discord_user_id="555",
         activitypub_username="carol",
         actor_url="https://bridge.example/users/carol",
@@ -152,7 +152,7 @@ def test_dump_local_users_entrypoint_uses_default_paths(tmp_path: Path) -> None:
 
     database = Database(f"sqlite:///{tmp_path / 'bridge.db'}")
     database.create_all()
-    database.create_user(
+    database.users.create_user(
         discord_user_id="777",
         activitypub_username="dave",
         actor_url="https://bridge.example/users/dave",

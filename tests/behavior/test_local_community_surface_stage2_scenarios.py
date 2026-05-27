@@ -54,7 +54,7 @@ def _create_local_community(database: object, *, forum_channel_id: int = 100) ->
         name="Hackers",
         description="A local hackerspace forum.",
     )
-    return database.get_local_community_by_slug("hackers")
+    return database.local_communities.get_local_community_by_slug("hackers")
 
 
 @pytest.mark.asyncio
@@ -72,7 +72,7 @@ async def test_host_forum_create_paths_write_exactly_one_host_surface_per_canoni
     """
     database, runtime = _runtime(tmp_path)
     community = _create_local_community(database, forum_channel_id=100)
-    database.create_local_subscriber(
+    database.local_subscribers.create_local_subscriber(
         local_community_id=community.id,
         discord_guild_id=10,
         discord_channel_id=101,
@@ -102,32 +102,32 @@ async def test_host_forum_create_paths_write_exactly_one_host_surface_per_canoni
     )
     await runtime.handle_discord_message(message=build_thread_message())
 
-    canonical_thread = database.get_local_community_thread_by_ap_object_id(
+    canonical_thread = database.local_community_content.get_local_community_thread_by_ap_object_id(
         "https://bridge.example/users/alice/post/1"
     )
     assert canonical_thread is not None
     assert not hasattr(canonical_thread, "discord_thread_id")
     assert not hasattr(canonical_thread, "discord_starter_message_id")
 
-    host_thread_surface = database.get_local_community_thread_surface_by_discord_thread_id(200)
+    host_thread_surface = database.local_community_surfaces.get_local_community_thread_surface_by_discord_thread_id(200)
     assert host_thread_surface is not None
     assert host_thread_surface.role == "host"
     assert host_thread_surface.discord_forum_channel_id == 100
-    thread_surfaces = database.list_local_community_thread_surfaces(canonical_thread.id)
+    thread_surfaces = database.local_community_surfaces.list_local_community_thread_surfaces(canonical_thread.id)
     assert len(thread_surfaces) == 1
 
-    canonical_message = database.get_local_community_message_by_ap_object_id(
+    canonical_message = database.local_community_content.get_local_community_message_by_ap_object_id(
         "https://bridge.example/users/alice/comment/1"
     )
     assert canonical_message is not None
     assert not hasattr(canonical_message, "discord_message_id")
     assert not hasattr(canonical_message, "parent_discord_message_id")
 
-    host_message_surface = database.get_local_community_message_surface_by_discord_message_id(301)
+    host_message_surface = database.local_community_surfaces.get_local_community_message_surface_by_discord_message_id(301)
     assert host_message_surface is not None
     assert host_message_surface.role == "host"
     assert host_message_surface.parent_discord_message_id == 300
-    message_surfaces = database.list_local_community_message_surfaces(canonical_message.id)
+    message_surfaces = database.local_community_surfaces.list_local_community_message_surfaces(canonical_message.id)
     assert len(message_surfaces) == 1
     assert message_surfaces[0].local_community_thread_surface_id == host_thread_surface.id
 
@@ -145,13 +145,13 @@ def test_stage2_current_schema_migrate_keeps_host_surfaces_idempotent(
     """
     migrated = build_database(tmp_path, "local-community-stage2-current-migrate.db")
     community = _create_local_community(migrated, forum_channel_id=100)
-    migrated.create_local_subscriber(
+    migrated.local_subscribers.create_local_subscriber(
         local_community_id=community.id,
         discord_guild_id=10,
         discord_channel_id=101,
         initiated_by_discord_user_id="456",
     )
-    canonical_thread = migrated.create_local_community_thread(
+    canonical_thread = migrated.local_community_content.create_local_community_thread(
         local_community_id=community.id,
         discord_thread_id=200,
         discord_starter_message_id=300,
@@ -160,7 +160,7 @@ def test_stage2_current_schema_migrate_keeps_host_surfaces_idempotent(
         direction="discord_to_ap",
         origin_kind="discord_local",
     )
-    canonical_message = migrated.create_local_community_message(
+    canonical_message = migrated.local_community_content.create_local_community_message(
         local_community_thread_id=canonical_thread.id,
         discord_message_id=301,
         ap_activity_id="https://bridge.example/users/alice/activities/create/comment/1",
@@ -173,14 +173,14 @@ def test_stage2_current_schema_migrate_keeps_host_surfaces_idempotent(
     migrated.migrate()
     migrated.migrate()
 
-    thread_surfaces = migrated.list_local_community_thread_surfaces(canonical_thread.id)
+    thread_surfaces = migrated.local_community_surfaces.list_local_community_thread_surfaces(canonical_thread.id)
     assert len(thread_surfaces) == 1
     assert thread_surfaces[0].role == "host"
     assert thread_surfaces[0].discord_thread_id == 200
     assert thread_surfaces[0].discord_starter_message_id == 300
     assert thread_surfaces[0].local_subscriber_id is None
 
-    message_surfaces = migrated.list_local_community_message_surfaces(canonical_message.id)
+    message_surfaces = migrated.local_community_surfaces.list_local_community_message_surfaces(canonical_message.id)
     assert len(message_surfaces) == 1
     assert message_surfaces[0].role == "host"
     assert message_surfaces[0].discord_message_id == 301
@@ -215,7 +215,7 @@ async def test_local_subscriber_forum_is_stage4_runtime_source(
     """
     database = build_database(tmp_path, "local-community-stage2-router.db")
     community = _create_local_community(database, forum_channel_id=100)
-    database.create_local_subscriber(
+    database.local_subscribers.create_local_subscriber(
         local_community_id=community.id,
         discord_guild_id=10,
         discord_channel_id=101,

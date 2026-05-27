@@ -41,7 +41,7 @@ def _community_runtime(database: Database) -> CommunityRuntime:
 
 def _accepted_subscription(database: Database) -> None:
     """Insert one active accepted subscription for inbound community routing."""
-    database.create_subscription(
+    database.remote_subscriptions.create_subscription(
         discord_channel_id=100,
         lemmy_community_actor_id=f"https://{LEMMY_EXAMPLE_DOMAIN}/c/hackers",
         lemmy_community_name="hackers",
@@ -119,7 +119,7 @@ async def test_inbound_post_with_discord_originated_mapping_is_skipped_as_echo(
     database = _database(tmp_path)
     _accepted_subscription(database)
     object_id = f"https://{BRIDGE_HOST_DOMAIN}/users/alice/objects/post/1"
-    database.create_message_mapping(
+    database.message_mappings.create_message_mapping(
         source_platform="discord",
         source_id="300",
         activity_id=f"https://{BRIDGE_HOST_DOMAIN}/users/alice/activities/create/post/1",
@@ -155,7 +155,7 @@ async def test_inbound_comment_with_discord_originated_mapping_is_skipped_as_ech
     database = _database(tmp_path)
     _accepted_subscription(database)
     object_id = f"https://{BRIDGE_HOST_DOMAIN}/users/alice/objects/comment/1"
-    database.create_message_mapping(
+    database.message_mappings.create_message_mapping(
         source_platform="discord",
         source_id="301",
         activity_id=f"https://{BRIDGE_HOST_DOMAIN}/users/alice/activities/create/comment/1",
@@ -223,7 +223,7 @@ def test_out_of_order_comment_receipt_becomes_deferred_and_retries_successfully(
         headers=headers,
         json=event.model_dump(mode="json"),
     )
-    receipt_after_first = database.get_event_receipt(event.delivery_id)
+    receipt_after_first = database.event_receipts.get_event_receipt(event.delivery_id)
 
     assert first_response.status_code == 200
     assert first_response.json()["status"] == "deferred"
@@ -231,7 +231,7 @@ def test_out_of_order_comment_receipt_becomes_deferred_and_retries_successfully(
     assert receipt_after_first.status == "deferred"
 
     post_ap_id = f"https://{LEMMY_EXAMPLE_DOMAIN}/post/111"
-    thread_group = database.create_thread_group(
+    thread_group = database.discord_fanout_groups.create_thread_group(
         community_actor_id=f"https://{LEMMY_EXAMPLE_DOMAIN}/c/hackers",
         source_channel_id=None,
         source_thread_id=None,
@@ -239,7 +239,7 @@ def test_out_of_order_comment_receipt_becomes_deferred_and_retries_successfully(
         ap_activity_id=f"https://{LEMMY_EXAMPLE_DOMAIN}/activities/create/post/111",
         ap_object_id=post_ap_id,
     )
-    database.add_thread_delivery(
+    database.discord_fanout_groups.add_thread_delivery(
         thread_group_id=thread_group.id,
         discord_channel_id=100,
         discord_thread_id=200,
@@ -251,9 +251,9 @@ def test_out_of_order_comment_receipt_becomes_deferred_and_retries_successfully(
         headers=headers,
         json=event.model_dump(mode="json"),
     )
-    receipt_after_second = database.get_event_receipt(event.delivery_id)
+    receipt_after_second = database.event_receipts.get_event_receipt(event.delivery_id)
     comment_ap_id = f"https://{LEMMY_EXAMPLE_DOMAIN}/comment/222"
-    created_message_group = database.get_message_group_by_ap_object(comment_ap_id)
+    created_message_group = database.discord_fanout_groups.get_message_group_by_ap_object(comment_ap_id)
 
     assert second_response.status_code == 200
     assert second_response.json()["status"] == "processed"
@@ -293,7 +293,7 @@ def test_failed_inbound_discord_fanout_marks_receipt_failed(tmp_path: Path) -> N
         },
         json=event.model_dump(mode="json"),
     )
-    receipt = database.get_event_receipt(event.delivery_id)
+    receipt = database.event_receipts.get_event_receipt(event.delivery_id)
 
     assert response.status_code == 500
     assert receipt is not None

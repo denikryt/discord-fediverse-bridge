@@ -30,7 +30,7 @@ def persist_publish_artifacts(
     groups or local-community thread/message rows. Those remain the owning
     runtime's responsibility.
     """
-    database.create_message_mapping(
+    database.message_mappings.create_message_mapping(
         source_platform="discord",
         source_id=source_id,
         activity_id=activity_id,
@@ -40,7 +40,7 @@ def persist_publish_artifacts(
         discord_channel_id=discord_channel_id,
         discord_message_id=discord_message_id,
     )
-    database.create_published_activity_object(
+    database.activitypub_objects.create_published_activity_object(
         actor_username=actor_username,
         actor_url=actor_url,
         community_actor_url=community_actor_url,

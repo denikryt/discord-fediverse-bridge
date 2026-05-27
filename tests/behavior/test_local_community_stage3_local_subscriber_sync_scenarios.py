@@ -59,19 +59,19 @@ def _local_community(database: object) -> object:
         name="Hackers",
         description="A local hackerspace forum.",
     )
-    return database.get_local_community_by_slug("hackers")
+    return database.local_communities.get_local_community_by_slug("hackers")
 
 
 def _add_local_subscribers(database: object, local_community: object) -> None:
     """Create two active local subscriber forums for Stage 3 fanout tests."""
-    database.create_local_subscriber(
+    database.local_subscribers.create_local_subscriber(
         local_community_id=local_community.id,
         discord_guild_id=10,
         discord_channel_id=200,
         initiated_by_discord_user_id="999",
         status="active",
     )
-    database.create_local_subscriber(
+    database.local_subscribers.create_local_subscriber(
         local_community_id=local_community.id,
         discord_guild_id=10,
         discord_channel_id=300,
@@ -174,8 +174,8 @@ async def test_host_thread_create_fans_out_to_local_subscriber_thread_surfaces(t
         starter_message=build_starter_message(message_id=1200, content="host body"),
     )
 
-    surfaces = database.list_local_community_thread_surfaces(
-        database.get_local_community_thread_by_ap_object_id("https://bridge.example/users/alice/post/1").id
+    surfaces = database.local_community_surfaces.list_local_community_thread_surfaces(
+        database.local_community_content.get_local_community_thread_by_ap_object_id("https://bridge.example/users/alice/post/1").id
     )
     assert [(s.discord_forum_channel_id, s.role) for s in surfaces] == [
         (100, "host"),
@@ -219,10 +219,10 @@ async def test_host_root_and_nested_replies_use_surface_local_parent_ids(tmp_pat
         message=build_thread_message(message_id=1301, thread_id=1100, channel_id=100, reference_message_id=1300)
     )
 
-    first_200 = database.get_local_community_message_surface_by_discord_message_id(2400)
-    nested_200 = database.get_local_community_message_surface_by_discord_message_id(2401)
-    first_300 = database.get_local_community_message_surface_by_discord_message_id(3500)
-    nested_300 = database.get_local_community_message_surface_by_discord_message_id(3501)
+    first_200 = database.local_community_surfaces.get_local_community_message_surface_by_discord_message_id(2400)
+    nested_200 = database.local_community_surfaces.get_local_community_message_surface_by_discord_message_id(2401)
+    first_300 = database.local_community_surfaces.get_local_community_message_surface_by_discord_message_id(3500)
+    nested_300 = database.local_community_surfaces.get_local_community_message_surface_by_discord_message_id(3501)
     assert first_200.parent_discord_message_id == 2300
     assert first_300.parent_discord_message_id == 3400
     assert nested_200.parent_discord_message_id == 2400
@@ -236,7 +236,7 @@ async def test_inbound_remote_post_fans_out_locally_and_still_relays_remotely(tm
     local_community = _local_community(database)
     _add_local_subscribers(database, local_community)
     for name in ["bob", "alice"]:
-        database.create_remote_subscriber(
+        database.remote_subscribers.create_remote_subscriber(
             local_community_id=local_community.id,
             remote_actor_id=f"https://lemmy.example/u/{name}",
             remote_inbox_url=f"https://lemmy.example/u/{name}/inbox",
@@ -251,10 +251,10 @@ async def test_inbound_remote_post_fans_out_locally_and_still_relays_remotely(tm
     )
 
     result = await runtime.handle_inbound_post(_post_event(), SimpleNamespace())
-    thread_row = database.get_local_community_thread_by_ap_object_id("https://lemmy.example/post/1")
+    thread_row = database.local_community_content.get_local_community_thread_by_ap_object_id("https://lemmy.example/post/1")
 
     assert result.status == "processed"
-    assert len(database.list_local_community_thread_surfaces(thread_row.id)) == 3
+    assert len(database.local_community_surfaces.list_local_community_thread_surfaces(thread_row.id)) == 3
     assert runtime.fedify_gateway.send_local_community_relay.await_count == 1
 
 
@@ -264,13 +264,13 @@ async def test_inbound_remote_comment_creates_local_subscriber_message_surfaces(
     database, runtime = _runtime(tmp_path)
     local_community = _local_community(database)
     _add_local_subscribers(database, local_community)
-    database.create_remote_subscriber(
+    database.remote_subscribers.create_remote_subscriber(
         local_community_id=local_community.id,
         remote_actor_id="https://lemmy.example/u/bob",
         remote_inbox_url="https://lemmy.example/u/bob/inbox",
         follow_activity_id="https://lemmy.example/follow/bob",
     )
-    thread_row = database.create_local_community_thread(
+    thread_row = database.local_community_content.create_local_community_thread(
         local_community_id=local_community.id,
         discord_thread_id=1100,
         discord_starter_message_id=1200,
@@ -279,9 +279,9 @@ async def test_inbound_remote_comment_creates_local_subscriber_message_surfaces(
         direction="ap_to_discord",
         origin_kind="remote_follower",
     )
-    subscriber_200 = database.get_local_subscriber_by_channel(200)
-    subscriber_300 = database.get_local_subscriber_by_channel(300)
-    database.create_local_community_thread_surface(
+    subscriber_200 = database.local_subscribers.get_local_subscriber_by_channel(200)
+    subscriber_300 = database.local_subscribers.get_local_subscriber_by_channel(300)
+    database.local_community_surfaces.create_local_community_thread_surface(
         local_community_thread_id=thread_row.id,
         discord_forum_channel_id=200,
         discord_thread_id=2200,
@@ -289,7 +289,7 @@ async def test_inbound_remote_comment_creates_local_subscriber_message_surfaces(
         role="local_subscriber",
         local_subscriber_id=subscriber_200.id,
     )
-    database.create_local_community_thread_surface(
+    database.local_community_surfaces.create_local_community_thread_surface(
         local_community_thread_id=thread_row.id,
         discord_forum_channel_id=300,
         discord_thread_id=3300,
@@ -306,17 +306,17 @@ async def test_inbound_remote_comment_creates_local_subscriber_message_surfaces(
     )
 
     result = await runtime.handle_inbound_comment(_comment_event(), SimpleNamespace())
-    message_row = database.get_local_community_message_by_ap_object_id("https://lemmy.example/comment/1")
+    message_row = database.local_community_content.get_local_community_message_by_ap_object_id("https://lemmy.example/comment/1")
 
     assert result.status == "processed"
-    surfaces = database.list_local_community_message_surfaces(message_row.id)
+    surfaces = database.local_community_surfaces.list_local_community_message_surfaces(message_row.id)
     assert [(surface.discord_forum_channel_id, surface.role) for surface in surfaces] == [
         (100, "host"),
         (200, "local_subscriber"),
         (300, "local_subscriber"),
     ]
-    assert database.get_local_community_message_surface_by_discord_message_id(2400).parent_discord_message_id == 2300
-    assert database.get_local_community_message_surface_by_discord_message_id(3500).parent_discord_message_id == 3400
+    assert database.local_community_surfaces.get_local_community_message_surface_by_discord_message_id(2400).parent_discord_message_id == 2300
+    assert database.local_community_surfaces.get_local_community_message_surface_by_discord_message_id(3500).parent_discord_message_id == 3400
 
 
 @pytest.mark.asyncio
@@ -339,10 +339,10 @@ async def test_partial_local_fanout_failure_allows_healthy_subscriber_surface(tm
     )
 
     await runtime.handle_discord_thread_create(thread=build_thread(thread_id=1100, channel_id=100), starter_message=build_starter_message(message_id=1200))
-    thread_row = database.get_local_community_thread_by_ap_object_id("o-post")
+    thread_row = database.local_community_content.get_local_community_thread_by_ap_object_id("o-post")
 
-    assert database.get_local_community_thread_surface(local_community_thread_id=thread_row.id, discord_forum_channel_id=200) is None
-    assert database.get_local_community_thread_surface(local_community_thread_id=thread_row.id, discord_forum_channel_id=300) is not None
+    assert database.local_community_surfaces.get_local_community_thread_surface(local_community_thread_id=thread_row.id, discord_forum_channel_id=200) is None
+    assert database.local_community_surfaces.get_local_community_thread_surface(local_community_thread_id=thread_row.id, discord_forum_channel_id=300) is not None
 
 
 @pytest.mark.asyncio
@@ -380,8 +380,8 @@ async def test_duplicate_source_processing_retries_missing_surfaces_only(tmp_pat
     with database.session() as session:
         assert session.scalar(select(func.count()).select_from(LocalCommunityThread)) == 1
         assert session.scalar(select(func.count()).select_from(LocalCommunityThreadSurface)) == 3
-    thread_row = database.get_local_community_thread_by_ap_object_id("o-post")
-    assert database.get_local_community_thread_surface(local_community_thread_id=thread_row.id, discord_forum_channel_id=200) is not None
+    thread_row = database.local_community_content.get_local_community_thread_by_ap_object_id("o-post")
+    assert database.local_community_surfaces.get_local_community_thread_surface(local_community_thread_id=thread_row.id, discord_forum_channel_id=200) is not None
 
 
 @pytest.mark.asyncio
@@ -389,7 +389,7 @@ async def test_local_subscriber_forum_creates_route_to_local_runtime_after_stage
     """Stage 4 intentionally widens active local subscriber forums into sources."""
     database, local_runtime = _runtime(tmp_path)
     local_community = _local_community(database)
-    database.create_local_subscriber(local_community_id=local_community.id, discord_guild_id=10, discord_channel_id=200, initiated_by_discord_user_id="999")
+    database.local_subscribers.create_local_subscriber(local_community_id=local_community.id, discord_guild_id=10, discord_channel_id=200, initiated_by_discord_user_id="999")
     remote_runtime = AsyncMock()
     router = DiscordEventRouter(database=database, community_runtime=remote_runtime, local_community_runtime=local_runtime)
     local_runtime.handle_discord_thread_create = AsyncMock()
@@ -410,7 +410,7 @@ async def test_local_subscriber_mirror_edit_delete_is_stage5_authoritative(tmp_p
     """Stage 5 supersedes Stage 3 containment for active subscriber surfaces."""
     database, runtime = _runtime(tmp_path)
     local_community = _local_community(database)
-    thread_row = database.create_local_community_thread(
+    thread_row = database.local_community_content.create_local_community_thread(
         local_community_id=local_community.id,
         discord_thread_id=1100,
         discord_starter_message_id=1200,
@@ -419,8 +419,8 @@ async def test_local_subscriber_mirror_edit_delete_is_stage5_authoritative(tmp_p
         direction="discord_to_ap",
         origin_kind="discord_local",
     )
-    subscriber = database.create_local_subscriber(local_community_id=local_community.id, discord_guild_id=10, discord_channel_id=200, initiated_by_discord_user_id="999")
-    database.create_local_community_thread_surface(
+    subscriber = database.local_subscribers.create_local_subscriber(local_community_id=local_community.id, discord_guild_id=10, discord_channel_id=200, initiated_by_discord_user_id="999")
+    database.local_community_surfaces.create_local_community_thread_surface(
         local_community_thread_id=thread_row.id,
         discord_forum_channel_id=200,
         discord_thread_id=2200,
@@ -428,7 +428,7 @@ async def test_local_subscriber_mirror_edit_delete_is_stage5_authoritative(tmp_p
         role="local_subscriber",
         local_subscriber_id=subscriber.id,
     )
-    database.create_published_activity_object(
+    database.activitypub_objects.create_published_activity_object(
         actor_username="alice",
         actor_url="https://bridge.example/actors/alice",
         community_actor_url=local_community.actor_url,
