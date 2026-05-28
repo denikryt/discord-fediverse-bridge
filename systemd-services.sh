@@ -7,8 +7,8 @@
 set -euo pipefail
 
 PROJECT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
-PYTHON_BRIDGE_SERVICE="${PYTHON_BRIDGE_SERVICE:-discord-lemmy-bridge.service}"
-FEDIFY_GATEWAY_SERVICE="${FEDIFY_GATEWAY_SERVICE:-discord-lemmy-bridge-fedify-gateway.service}"
+PYTHON_BRIDGE_SERVICE="${PYTHON_BRIDGE_SERVICE:-discord-fediverse-bridge.service}"
+FEDIFY_GATEWAY_SERVICE="${FEDIFY_GATEWAY_SERVICE:-discord-fediverse-bridge-fedify-gateway.service}"
 PYTHON_BRIDGE_UNIT_FILE="${PYTHON_BRIDGE_UNIT_FILE:-}"
 FEDIFY_GATEWAY_UNIT_FILE="${FEDIFY_GATEWAY_UNIT_FILE:-}"
 SERVICE_USER="${SERVICE_USER:-${SUDO_USER:-$USER}}"
@@ -43,8 +43,8 @@ Options:
   --no-autostart   With `install` or `start`, override the default and start without enabling autostart
 
 Optional environment overrides:
-  PYTHON_BRIDGE_SERVICE   Default: discord-lemmy-bridge.service
-  FEDIFY_GATEWAY_SERVICE  Default: discord-lemmy-bridge-fedify-gateway.service
+  PYTHON_BRIDGE_SERVICE   Default: discord-fediverse-bridge.service
+  FEDIFY_GATEWAY_SERVICE  Default: discord-fediverse-bridge-fedify-gateway.service
   PYTHON_BRIDGE_UNIT_FILE Default: /etc/systemd/system/<PYTHON_BRIDGE_SERVICE>
   FEDIFY_GATEWAY_UNIT_FILE Default: /etc/systemd/system/<FEDIFY_GATEWAY_SERVICE>
   SERVICE_USER            Default: current shell user (or SUDO_USER)
@@ -65,8 +65,8 @@ Examples:
   PYTHON_BRIDGE_SERVICE=bridge.service \
   FEDIFY_GATEWAY_SERVICE=gateway.service \
   ./systemd-services.sh restart
-  PYTHON_BRIDGE_UNIT_FILE=/etc/systemd/system/bridge.service \
-  FEDIFY_GATEWAY_UNIT_FILE=/etc/systemd/system/gateway.service \
+  PYTHON_BRIDGE_UNIT_FILE=/etc/systemd/system/discord-fediverse-bridge.service \
+  FEDIFY_GATEWAY_UNIT_FILE=/etc/systemd/system/discord-fediverse-bridge-fedify-gateway.service \
   ./systemd-services.sh remove
 EOF
 }
@@ -111,7 +111,7 @@ install_units() {
   # These units intentionally point at the checked-out repo and local env files
   # so one install command can materialize a working deployment from this tree.
   python_unit_body="[Unit]
-Description=Discord Lemmy Bridge Python service
+Description=Discord Fediverse Bridge Python service
 After=network.target
 
 [Service]
@@ -128,7 +128,7 @@ RestartSec=5
 WantedBy=multi-user.target"
 
   gateway_unit_body="[Unit]
-Description=Discord Lemmy Bridge Fedify gateway
+Description=Discord Fediverse Bridge Fedify gateway
 After=network.target
 
 [Service]
