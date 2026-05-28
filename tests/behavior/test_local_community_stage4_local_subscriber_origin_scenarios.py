@@ -159,6 +159,27 @@ async def test_local_subscriber_thread_create_creates_source_host_and_sibling_su
 
 
 @pytest.mark.asyncio
+async def test_local_subscriber_thread_create_renders_author_header_on_other_discord_surfaces(tmp_path: Path) -> None:
+    """Fanout starter copies should include the Discord author header."""
+    database, runtime = _runtime(tmp_path)
+    local_community = _local_community(database)
+    _add_local_subscribers(database, local_community)
+    add_registered_user(database)
+    host_forum = build_forum_channel_object_result(channel_id=100, thread_id=1100, starter_message_id=1200)
+    sibling_forum = build_forum_channel_object_result(channel_id=300, thread_id=3300, starter_message_id=3400)
+    runtime.bot = build_bot(forum_channels={100: host_forum, 300: sibling_forum})
+    runtime.fedify_gateway.publish_local_community_content.return_value = _publish_results(("a-post", "o-post"))[0]
+
+    await runtime.handle_discord_thread_create(
+        thread=build_thread(thread_id=2200, channel_id=200, name="Subscriber topic"),
+        starter_message=build_starter_message(message_id=2300, content="subscriber body", display_name="Alice"),
+    )
+
+    assert host_forum.create_thread.await_args.kwargs["content"] == "`Alice`\n\nsubscriber body"
+    assert sibling_forum.create_thread.await_args.kwargs["content"] == "`Alice`\n\nsubscriber body"
+
+
+@pytest.mark.asyncio
 async def test_duplicate_local_subscriber_thread_retries_missing_targets_without_republish(tmp_path: Path) -> None:
     """Duplicate source processing should only create missing target surfaces."""
     database, runtime = _runtime(tmp_path)
@@ -235,6 +256,42 @@ async def test_local_subscriber_root_reply_fans_out_with_target_local_starter_pa
     assert source_message_surface.parent_discord_message_id == 2300
     assert host_surface.parent_discord_message_id == 1200
     assert sibling_surface.parent_discord_message_id == 3400
+
+
+@pytest.mark.asyncio
+async def test_local_subscriber_reply_renders_author_header_on_other_discord_surfaces(tmp_path: Path) -> None:
+    """Fanout reply copies should include the Discord author header."""
+    database, runtime = _runtime(tmp_path)
+    local_community = _local_community(database)
+    source, sibling = _add_local_subscribers(database, local_community)
+    add_registered_user(database)
+    thread_row = database.local_community_content.create_local_community_thread_canonical(
+        local_community_id=local_community.id,
+        ap_activity_id="a-post",
+        ap_object_id="o-post",
+        direction="discord_to_ap",
+        origin_kind="discord_local_subscriber",
+    )
+    _thread_surface(database, thread_row, 200, 2200, 2300, "local_subscriber", source.id)
+    _thread_surface(database, thread_row, 100, 1100, 1200, "host", None)
+    _thread_surface(database, thread_row, 300, 3300, 3400, "local_subscriber", sibling.id)
+    host_thread = build_send_thread(thread_id=1100, sent_message_id=1300)
+    sibling_thread = build_send_thread(thread_id=3300, sent_message_id=3500)
+    runtime.bot = build_bot(threads={1100: host_thread, 3300: sibling_thread})
+    runtime.fedify_gateway.publish_local_community_content.return_value = _publish_results(("a-comment", "o-comment"))[0]
+
+    await runtime.handle_discord_message(
+        message=build_thread_message(
+            message_id=2400,
+            thread_id=2200,
+            channel_id=200,
+            content="subscriber reply",
+            display_name="Alice",
+        )
+    )
+
+    assert host_thread.send.await_args.args[0] == "`Alice`\n\nsubscriber reply"
+    assert sibling_thread.send.await_args.args[0] == "`Alice`\n\nsubscriber reply"
 
 
 @pytest.mark.asyncio

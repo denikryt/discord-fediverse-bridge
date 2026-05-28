@@ -3,7 +3,7 @@ import {
   InProcessMessageQueue,
   MemoryKvStore,
 } from "@fedify/fedify";
-import { Accept, Announce, Create, Follow, Undo } from "@fedify/vocab";
+import { Accept, Announce, Create, Delete, Follow, Undo, Update } from "@fedify/vocab";
 
 import { getRawActivity } from "./activitypub-raw-cache.js";
 import {
@@ -151,6 +151,23 @@ export function createGatewayFederation(
         });
       } catch (error) {
         console.error("[Fedify] Error processing direct Create activity", error);
+      }
+    })
+    .on(Update, async (_ctx, activity) => {
+      try {
+        // Direct Update must be forwarded even when the remote server does not
+        // wrap it inside Announce.
+        await deliverDirectUpdateActivity(config, activity, isDebug);
+      } catch (error) {
+        console.error("[Fedify] Error processing direct Update activity", error);
+      }
+    })
+    .on(Delete, async (_ctx, activity) => {
+      try {
+        // Direct Delete is the delete counterpart to direct Create/Update.
+        await deliverDirectDeleteActivity(config, activity, isDebug);
+      } catch (error) {
+        console.error("[Fedify] Error processing direct Delete activity", error);
       }
     })
     .on(Announce, async (ctx, activity) => {
@@ -309,6 +326,52 @@ async function deliverNormalizedEvent(
     config.pythonBridgeSharedSecret,
     event,
   );
+}
+
+export async function deliverDirectUpdateActivity(
+  config: GatewayContextData,
+  activity: Update,
+  isDebug = false,
+): Promise<void> {
+  /** Normalize one direct Update and deliver it to the Python bridge. */
+  const sourceActivityJson = await activity.toJsonLd() as Record<string, unknown>;
+  const event = await normalizeUpdateActivityFromJson(sourceActivityJson, {
+    databaseUrl: config.databaseUrl,
+  });
+  if (event == null) {
+    logDebug(isDebug, "normalizeUpdateActivityFromJson returned null for direct Update");
+    return;
+  }
+  event.source_activity_json = sourceActivityJson;
+  event.source_activity_id = typeof sourceActivityJson.id === "string" ? sourceActivityJson.id : event.delivery_id;
+  event.source_announce_id = null;
+  await deliverNormalizedEvent(config, event, {
+    deliveryId: event.delivery_id,
+    eventType: event.event_type,
+    objectId: event.object.ap_id,
+  });
+}
+
+export async function deliverDirectDeleteActivity(
+  config: GatewayContextData,
+  activity: Delete,
+  isDebug = false,
+): Promise<void> {
+  /** Normalize one direct Delete and deliver it to the Python bridge. */
+  const sourceActivityJson = await activity.toJsonLd() as Record<string, unknown>;
+  const event = normalizeDeleteActivityFromJson(sourceActivityJson);
+  if (event == null) {
+    logDebug(isDebug, "normalizeDeleteActivityFromJson returned null for direct Delete");
+    return;
+  }
+  event.source_activity_json = sourceActivityJson;
+  event.source_activity_id = typeof sourceActivityJson.id === "string" ? sourceActivityJson.id : event.delivery_id;
+  event.source_announce_id = null;
+  await deliverNormalizedEvent(config, event, {
+    deliveryId: event.delivery_id,
+    eventType: event.event_type,
+    objectId: event.object.ap_id,
+  });
 }
 
 function getAnnounceEnvelope(

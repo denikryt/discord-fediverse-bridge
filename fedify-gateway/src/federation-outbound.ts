@@ -69,8 +69,11 @@ export async function followCommunity(
   // Build a unique Follow id locally so retries and remote logs can refer to a
   // concrete outbound activity URL.
   const follow = new Follow({
+    // Compose from an absolute path instead of string concatenation so the
+    // operator-facing `FEDIFY_ORIGIN` works with or without a trailing slash.
     id: new URL(
-      `${config.fedifyOrigin}activities/follow/${Date.now()}/${Math.random().toString(36).slice(2)}`,
+      `/activities/follow/${Date.now()}/${Math.random().toString(36).slice(2)}`,
+      config.fedifyOrigin,
     ),
     actor: actorUri,
     object: new URL(communityId),
@@ -596,7 +599,7 @@ function normalizeActivityPubJson(value: ActivityJsonValue, key?: string): Activ
 export function buildLocalCommunityAnnounceActivity(
   config: GatewayConfig,
   communityActorUrl: string,
-  createActivity: Create,
+  embeddedActivity: Create | Update | Delete,
 ): Announce {
   const communityActor = new URL(communityActorUrl);
   const PUBLIC = new URL("https://www.w3.org/ns/activitystreams#Public");
@@ -606,12 +609,12 @@ export function buildLocalCommunityAnnounceActivity(
   );
 
   // The Announce is only a delivery envelope. User authorship and canonical
-  // object identity stay in the embedded Create(Page|Note), which keeps Lemmy
-  // author display and Python's Discord mapping ids stable.
+  // object identity stay in the embedded Create/Update/Delete activity, which
+  // keeps Lemmy author display and Python's Discord mapping ids stable.
   return new Announce({
     id: announceId,
     actor: communityActor,
-    object: createActivity,
+    object: embeddedActivity,
     tos: [PUBLIC],
     ccs: [new URL("followers", `${communityActor.href.replace(/\/$/, "")}/`)],
   });
@@ -655,6 +658,124 @@ function buildUserActorUri(config: GatewayConfig, actorUsername: string): URL {
   // Registered users are canonical Fedify actors. Their posts/comments can keep
   // /users object URLs, but author identity and signing use /actors.
   return new URL(`/actors/${actorUsername}`, config.fedifyOrigin);
+}
+
+function buildUpdateActivity(
+  config: GatewayConfig,
+  request: UpdateContentRequest,
+): { activity: Update; activityId: URL } {
+  /** Build one user-authored Update with the full object shape Lemmy expects. */
+  const actorUri = buildUserActorUri(config, request.actorUsername);
+  const objectId = new URL(request.apObjectId);
+  const activityId = new URL(
+    `/users/${request.actorUsername}/activities/update/${request.kind}/${Date.now()}-${Math.random().toString(36).slice(2)}`,
+    config.fedifyOrigin,
+  );
+  const htmlContent = markdownToHtml(request.bodyMarkdown);
+  const source = new Source({
+    content: request.bodyMarkdown,
+    mediaType: "text/markdown",
+  });
+  const PUBLIC = new URL("https://www.w3.org/ns/activitystreams#Public");
+  const community = new URL(request.communityActorUrl);
+  const updated = Temporal.Now.instant();
+
+  let object;
+  if (request.kind === "post") {
+    object = new Page({
+      id: objectId,
+      name: request.title ?? "Untitled Discord Post",
+      attribution: actorUri,
+      audience: community,
+      tos: [PUBLIC, community],
+      ccs: [actorUri],
+      source,
+      content: htmlContent,
+      updated,
+      url: objectId,
+    });
+  } else {
+    const noteParams: ConstructorParameters<typeof Note>[0] = {
+      id: objectId,
+      attribution: actorUri,
+      audience: community,
+      tos: [PUBLIC, community],
+      ccs: [actorUri],
+      source,
+      content: htmlContent,
+      updated,
+    };
+    if (request.inReplyToObjectId) {
+      noteParams.replyTarget = new URL(request.inReplyToObjectId);
+    }
+    object = new Note(noteParams);
+  }
+
+  return {
+    activityId,
+    activity: new Update({
+      id: activityId,
+      actor: actorUri,
+      object,
+      tos: [PUBLIC, community],
+      ccs: [actorUri],
+    }),
+  };
+}
+
+function buildDeleteActivity(
+  config: GatewayConfig,
+  request: DeleteContentRequest,
+): { activity: Delete; activityId: URL } {
+  /** Build one user-authored Delete using the Lemmy URL-object convention. */
+  const actorUri = buildUserActorUri(config, request.actorUsername);
+  const activityId = new URL(
+    `/users/${request.actorUsername}/activities/delete/${Date.now()}-${Math.random().toString(36).slice(2)}`,
+    config.fedifyOrigin,
+  );
+  const PUBLIC = new URL("https://www.w3.org/ns/activitystreams#Public");
+  const community = new URL(request.communityActorUrl);
+  return {
+    activityId,
+    activity: new Delete({
+      id: activityId,
+      actor: actorUri,
+      object: new URL(request.apObjectId),
+      tos: [PUBLIC, community],
+      ccs: [actorUri],
+    }),
+  };
+}
+
+async function maybeDeliverLocalCommunityMutation(
+  config: GatewayConfig,
+  communityActorUrl: string,
+  activity: Update | Delete,
+): Promise<boolean> {
+  /** Fan out one local-community mutation to accepted remote subscribers. */
+  const signingKey = await loadLocalCommunitySigningKeyByActorUrl(config, communityActorUrl);
+  if (signingKey == null) {
+    return false;
+  }
+
+  const remoteSubscribers = await loadAcceptedRemoteSubscribersByActorUrl(config, communityActorUrl);
+  const activityJson = await renderPublicActivityJson(
+    buildLocalCommunityAnnounceActivity(config, communityActorUrl, activity),
+  );
+  const debugDelivery = shouldLogSignedJsonDelivery(config);
+
+  for (const remoteSubscriber of remoteSubscribers) {
+    // Mutation fanout remains per-target best-effort so one bad inbox does not
+    // block every other accepted remote subscriber.
+    await sendSignedJsonActivity(
+      "LocalCommunityMutation",
+      remoteSubscriber.remoteInboxUrl,
+      signingKey,
+      activityJson,
+      { debugDelivery },
+    );
+  }
+  return true;
 }
 
 function buildPublishObject(
@@ -712,68 +833,13 @@ export async function updateContent(
 ): Promise<void> {
   // Update delivery mirrors publish delivery: same actor URI, same community
   // fetch, but wraps the object in an Update activity instead of Create.
-  const ctx = federation.createContext(new URL(config.fedifyOrigin), config);
-  const actorUri = buildUserActorUri(config, request.actorUsername);
-  const { communityId, inboxUrl } = await fetchRemoteCommunity(
-    request.communityActorUrl,
-  );
-
-  const objectId = new URL(request.apObjectId);
-  const activityId = new URL(
-    `/users/${request.actorUsername}/activities/update/${request.kind}/${Date.now()}-${Math.random().toString(36).slice(2)}`,
-    config.fedifyOrigin,
-  );
-  const htmlContent = markdownToHtml(request.bodyMarkdown);
-  const source = new Source({
-    content: request.bodyMarkdown,
-    mediaType: "text/markdown",
-  });
-  const PUBLIC = new URL("https://www.w3.org/ns/activitystreams#Public");
-  const community = new URL(communityId);
-  const updated = Temporal.Now.instant();
-
-  // Build the full updated object — Lemmy requires all original fields plus the
-  // updated timestamp and new content. The actor must match the original attributedTo.
-  let object;
-  if (request.kind === "post") {
-    object = new Page({
-      id: objectId,
-      name: request.title ?? "Untitled Discord Post",
-      attribution: actorUri,
-      audience: community,
-      tos: [PUBLIC, community],
-      ccs: [actorUri],
-      source,
-      content: htmlContent,
-      updated,
-      url: objectId,
-    });
-  } else {
-    const noteParams: ConstructorParameters<typeof Note>[0] = {
-      id: objectId,
-      attribution: actorUri,
-      audience: community,
-      tos: [PUBLIC, community],
-      ccs: [actorUri],
-      source,
-      content: htmlContent,
-      updated,
-    };
-    // For comments, inReplyTo is required by Lemmy to identify the parent post
-    // Lemmy expects inReplyTo as an array of URLs
-    if (request.inReplyToObjectId) {
-      noteParams.replyTarget = new URL(request.inReplyToObjectId);
-    }
-    object = new Note(noteParams);
+  const builtUpdate = buildUpdateActivity(config, request);
+  if (await maybeDeliverLocalCommunityMutation(config, request.communityActorUrl, builtUpdate.activity)) {
+    return;
   }
 
-  const activity = new Update({
-    id: activityId,
-    actor: actorUri,
-    object,
-    tos: [PUBLIC, community],
-    ccs: [actorUri],
-  });
+  const ctx = federation.createContext(new URL(config.fedifyOrigin), config);
+  const { communityId, inboxUrl } = await fetchRemoteCommunity(request.communityActorUrl);
 
   console.log("[Update] Sending Update activity:", {
     actorUsername: request.actorUsername,
@@ -782,17 +848,17 @@ export async function updateContent(
     inReplyToObjectId: request.inReplyToObjectId,
     bodyMarkdown: request.bodyMarkdown,
     communityId,
-    activityId: activityId.toString(),
+    activityId: builtUpdate.activityId.toString(),
   });
 
   try {
-    const activityJson = await activity.toJsonLd();
+    const activityJson = await builtUpdate.activity.toJsonLd();
     console.log("[Update] Activity JSON-LD (before sendActivity):", JSON.stringify(activityJson, null, 2));
 
     await ctx.sendActivity(
       { username: request.actorUsername },
       { id: new URL(communityId), inboxId: new URL(inboxUrl) },
-      activity,
+      builtUpdate.activity,
     );
     console.log("[Update] sendActivity completed successfully");
   } catch (err) {
@@ -808,40 +874,26 @@ export async function deleteContent(
 ): Promise<void> {
   // Delete delivery uses the AP object URL as the object field (string form, not
   // a full object), matching the Lemmy federation protocol for Delete activities.
+  const builtDelete = buildDeleteActivity(config, request);
+  if (await maybeDeliverLocalCommunityMutation(config, request.communityActorUrl, builtDelete.activity)) {
+    return;
+  }
+
   const ctx = federation.createContext(new URL(config.fedifyOrigin), config);
-  const actorUri = buildUserActorUri(config, request.actorUsername);
-  const { communityId, inboxUrl } = await fetchRemoteCommunity(
-    request.communityActorUrl,
-  );
-
-  const activityId = new URL(
-    `/users/${request.actorUsername}/activities/delete/${Date.now()}-${Math.random().toString(36).slice(2)}`,
-    config.fedifyOrigin,
-  );
-  const PUBLIC = new URL("https://www.w3.org/ns/activitystreams#Public");
-  const community = new URL(communityId);
-
-  const activity = new Delete({
-    id: activityId,
-    actor: actorUri,
-    // Lemmy Delete uses the object URL as a plain URL, not a full object body.
-    object: new URL(request.apObjectId),
-    tos: [PUBLIC, community],
-    ccs: [actorUri],
-  });
+  const { communityId, inboxUrl } = await fetchRemoteCommunity(request.communityActorUrl);
 
   console.log("[Delete] Sending Delete activity:", {
     actorUsername: request.actorUsername,
     apObjectId: request.apObjectId,
     communityId,
-    activityId: activityId.toString(),
+    activityId: builtDelete.activityId.toString(),
   });
 
   try {
     await ctx.sendActivity(
       { username: request.actorUsername },
       { id: new URL(communityId), inboxId: new URL(inboxUrl) },
-      activity,
+      builtDelete.activity,
     );
     console.log("[Delete] sendActivity completed successfully");
   } catch (err) {

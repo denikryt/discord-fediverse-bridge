@@ -36,6 +36,12 @@ if TYPE_CHECKING:
     from ..activitypub_handlers import HandlerResult
 
 
+def _discord_author_display_name(message: object) -> str | None:
+    """Return the best available Discord-side author label for local fanout."""
+    author = getattr(message, "author", None)
+    return getattr(author, "display_name", None) or getattr(author, "name", None)
+
+
 @dataclass(slots=True)
 class LocalCommunityRuntimeResult:
     """Report the observable result of one local-community runtime action."""
@@ -135,6 +141,7 @@ class LocalCommunityRuntime:
             thread_row=thread_row,
             title=getattr(thread, "name", "Untitled thread"),
             content=getattr(starter_message, "content", ""),
+            author_display_name=_discord_author_display_name(starter_message),
             source_forum_channel_id=getattr(thread, "parent_id"),
         )
         return LocalCommunityRuntimeResult(
@@ -166,6 +173,7 @@ class LocalCommunityRuntime:
                     thread_row=thread_row,
                     title=getattr(thread, "name", "Untitled thread"),
                     content=getattr(starter_message, "content", ""),
+                    author_display_name=_discord_author_display_name(starter_message),
                     source_forum_channel_id=getattr(thread, "parent_id"),
                     include_host=True,
                 )
@@ -199,6 +207,7 @@ class LocalCommunityRuntime:
             thread_row=thread_row,
             title=getattr(thread, "name", "Untitled thread"),
             content=getattr(starter_message, "content", ""),
+            author_display_name=_discord_author_display_name(starter_message),
             source_forum_channel_id=getattr(thread, "parent_id"),
             include_host=True,
         )
@@ -237,6 +246,7 @@ class LocalCommunityRuntime:
                     thread_row=thread_row,
                     message_row=existing_message,
                     content=getattr(message, "content", ""),
+                    author_display_name=_discord_author_display_name(message),
                     source_forum_channel_id=getattr(thread, "parent_id"),
                 )
             return LocalCommunityRuntimeResult(status="ignored", reason="duplicate_message")
@@ -273,6 +283,7 @@ class LocalCommunityRuntime:
             thread_row=thread_row,
             message_row=message_row,
             content=getattr(message, "content", ""),
+            author_display_name=_discord_author_display_name(message),
             source_forum_channel_id=getattr(thread, "parent_id"),
         )
         return LocalCommunityRuntimeResult(
@@ -302,6 +313,7 @@ class LocalCommunityRuntime:
                     thread_row=thread_row,
                     message_row=existing_message,
                     content=getattr(message, "content", ""),
+                    author_display_name=_discord_author_display_name(message),
                     source_forum_channel_id=getattr(thread, "parent_id"),
                     include_host=True,
                 )
@@ -351,6 +363,7 @@ class LocalCommunityRuntime:
             thread_row=thread_row,
             message_row=message_row,
             content=getattr(message, "content", ""),
+            author_display_name=_discord_author_display_name(message),
             source_forum_channel_id=getattr(thread, "parent_id"),
             include_host=True,
         )
@@ -375,6 +388,7 @@ class LocalCommunityRuntime:
                 thread_row=existing,
                 title=getattr(getattr(event, "object"), "title", None) or "Untitled remote post",
                 content=self._format_inbound_post_body(event),
+                author_display_name=None,
                 source_forum_channel_id=None,
             )
             await self.federation_fanout.relay_create(
@@ -414,6 +428,7 @@ class LocalCommunityRuntime:
             thread_row=thread_row,
             title=thread_title,
             content=self._format_inbound_post_body(event),
+            author_display_name=None,
             source_forum_channel_id=None,
         )
         await self.federation_fanout.relay_create(
@@ -441,6 +456,7 @@ class LocalCommunityRuntime:
                     thread_row=existing_thread,
                     message_row=existing_message,
                     content=self._format_inbound_comment_body(event),
+                    author_display_name=None,
                     source_forum_channel_id=None,
                 )
             await self.federation_fanout.relay_create(
@@ -503,6 +519,7 @@ class LocalCommunityRuntime:
             thread_row=thread_row,
             message_row=message_row,
             content=self._format_inbound_comment_body(event),
+            author_display_name=None,
             source_forum_channel_id=None,
         )
         await self.federation_fanout.relay_create(
@@ -520,6 +537,7 @@ class LocalCommunityRuntime:
         thread_row: object,
         title: str,
         content: str,
+        author_display_name: str | None,
         source_forum_channel_id: int | None,
     ) -> None:
         """Best-effort Stage 3 fanout of one canonical post to subscribers."""
@@ -528,6 +546,7 @@ class LocalCommunityRuntime:
             thread_row=thread_row,
             title=title,
             content=content,
+            author_display_name=author_display_name,
             source_forum_channel_id=source_forum_channel_id,
             include_host=False,
         )
@@ -539,6 +558,7 @@ class LocalCommunityRuntime:
         thread_row: object,
         title: str,
         content: str,
+        author_display_name: str | None,
         source_forum_channel_id: int | None,
         include_host: bool,
     ) -> None:
@@ -551,6 +571,7 @@ class LocalCommunityRuntime:
             thread_row=thread_row,
             title=title,
             content=content,
+            author_display_name=author_display_name,
             source_forum_channel_id=source_forum_channel_id,
             include_host=include_host,
         )
@@ -562,6 +583,7 @@ class LocalCommunityRuntime:
         thread_row: object,
         message_row: object,
         content: str,
+        author_display_name: str | None,
         source_forum_channel_id: int | None,
     ) -> None:
         """Best-effort Stage 3 fanout of one canonical comment to subscribers."""
@@ -570,6 +592,7 @@ class LocalCommunityRuntime:
             thread_row=thread_row,
             message_row=message_row,
             content=content,
+            author_display_name=author_display_name,
             source_forum_channel_id=source_forum_channel_id,
             include_host=False,
         )
@@ -581,6 +604,7 @@ class LocalCommunityRuntime:
         thread_row: object,
         message_row: object,
         content: str,
+        author_display_name: str | None,
         source_forum_channel_id: int | None,
         include_host: bool,
     ) -> None:
@@ -593,6 +617,7 @@ class LocalCommunityRuntime:
             thread_row=thread_row,
             message_row=message_row,
             content=content,
+            author_display_name=author_display_name,
             source_forum_channel_id=source_forum_channel_id,
             include_host=include_host,
         )
