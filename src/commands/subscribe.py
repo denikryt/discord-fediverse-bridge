@@ -21,6 +21,7 @@ from ..community_discovery import (
 from ..config import Settings
 from ..db import Database
 from ..fedify_gateway_client import FedifyGatewayClient
+from ..discord_directory import record_discord_placement_snapshot
 from ..federation_policy import is_instance_allowed
 from ..lemmy_client import LemmyClient
 from ..operations import SubscribeInput, subscribe_operation
@@ -106,6 +107,14 @@ def register(
                     local_community_name=resolved.name or resolved.handle,
                 ),
             )
+            if result.applied:
+                # Only successful local subscriptions should become dashboard
+                # placement rows; rejected attempts have no active routing state.
+                record_discord_placement_snapshot(
+                    database,
+                    guild=interaction.guild,
+                    channel=channel,
+                )
             await interaction.response.send_message(result.message, ephemeral=not result.applied)
             return
 
@@ -158,6 +167,13 @@ def register(
         is_ephemeral = not result.applied
         await interaction.response.send_message(result.message, ephemeral=is_ephemeral)
         if result.applied:
+            # The remote-subscription row is now committed, so expose its forum
+            # placement through the dashboard snapshot cache.
+            record_discord_placement_snapshot(
+                database,
+                guild=interaction.guild,
+                channel=channel,
+            )
             logger.info("Sent bridge follow for channel %s to community %s", channel.id, resolved.actor_id)
 
 

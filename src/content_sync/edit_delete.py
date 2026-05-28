@@ -35,8 +35,11 @@ async def edit_discord_message(
     thread = await bot.get_thread_by_id(discord_thread_id)
     message = await thread.fetch_message(discord_message_id)
     if preserve_header:
+        # Some test/runtime message doubles may not carry a cached content
+        # value. In that case preserve the supplied fallback header instead of
+        # failing before Discord edit can run.
         content = apply_edit_to_discord_message(
-            message.content,
+            getattr(message, "content", ""),
             new_content,
             fallback_header=fallback_header,
         )

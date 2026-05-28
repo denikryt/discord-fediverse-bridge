@@ -12,6 +12,7 @@ from .config import Settings
 from .db import Database
 from .discord_event_router import DiscordEventRouter
 from .fedify_gateway_client import FedifyGatewayClient
+from .discord_directory import refresh_discord_directory_from_bot
 
 logger = logging.getLogger(__name__)
 
@@ -72,6 +73,9 @@ class BridgeBot(discord.Client):
         # Signal inbound event handlers that the bot is connected and Discord
         # API calls (thread/message creation) can proceed.
         self.bridge_ready.set()
+        # Refresh last-known Discord labels at startup so old rows and renamed
+        # guilds/forums converge without live lookups during dashboard requests.
+        refresh_discord_directory_from_bot(self.database, self)
         logger.info("Bridge bot is ready as %s", self.user)
 
     async def close(self) -> None:

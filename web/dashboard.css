@@ -217,3 +217,20 @@ ul {
   max-width: 62rem;
   line-height: 1.5;
 }
+
+
+.guild-card {
+  background: color-mix(in srgb, var(--panel-soft) 94%, black);
+  border: 1px solid var(--line);
+  border-radius: 18px;
+  padding: 1.25rem;
+}
+
+.guild-card details,
+.placement {
+  margin-top: 0.85rem;
+}
+
+.placement {
+  color: var(--muted);
+}

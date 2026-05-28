@@ -45,6 +45,23 @@ class RemoteSubscriptionRepository(BaseRepository):
             with self.session() as session:
                 return list(session.scalars(select(ChannelCommunitySubscription).order_by(ChannelCommunitySubscription.created_at)))
 
+    def list_subscriptions(self, *, status: str | None = None) -> list[ChannelCommunitySubscription]:
+            """Return subscription rows, optionally filtered by lifecycle status."""
+            # Dashboard rendering uses accepted rows only because public guild
+            # placement should describe active routing, not failed/pending attempts.
+            with self.session() as session:
+                query = select(ChannelCommunitySubscription)
+                if status is not None:
+                    query = query.where(ChannelCommunitySubscription.status == status)
+                return list(
+                    session.scalars(
+                        query.order_by(
+                            ChannelCommunitySubscription.created_at,
+                            ChannelCommunitySubscription.id,
+                        )
+                    )
+                )
+
     def get_subscriptions_by_guild(self, discord_guild_id: int) -> list[ChannelCommunitySubscription]:
             """Return all subscription rows for one Discord guild in creation order.
 

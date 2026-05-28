@@ -18,6 +18,15 @@ function list(items, render) {
 }
 
 /**
+ * Render one placement list with a muted empty state.
+ */
+function renderPlacementList(items, render) {
+  return items.length
+    ? `<ul>${items.map(render).join("")}</ul>`
+    : "<p class='muted'>None.</p>";
+}
+
+/**
  * Build the copy affordance for one local-community relay handle.
  */
 function copyButton(value) {
@@ -90,6 +99,7 @@ fetch(endpoint)
         ${copyButton(community.relayHandle)}
       </div>
       <p class="description">${community.description || "No description."}</p>
+      <p class="placement">Hosted on: <strong>${community.hostDiscord?.guildName || "Unknown guild"}</strong> / ${community.hostDiscord?.forumChannelName || "Unknown forum channel"}</p>
       <details>
         <summary>Remote subscribers (${community.remoteSubscriberCount || community.followers.length})</summary>
         ${list(community.followers, (follower) => `<li>${link(follower.actorUrl, follower.actorUrl)}</li>`)}
@@ -109,6 +119,29 @@ fetch(endpoint)
           )
           .join("")}</div>`
       : "<p class='muted'>No bridge actor follows.</p>";
+
+    document.getElementById("discord-guilds").innerHTML = data.discordGuilds && data.discordGuilds.length
+      ? data.discordGuilds
+          .map(
+            (guild) => `
+    <article class="guild-card">
+      <h3>${guild.guildName}</h3>
+      <details open>
+        <summary>Hosted communities (${guild.hostedCommunities.length})</summary>
+        ${renderPlacementList(guild.hostedCommunities, (entry) => `<li>${entry.relayHandle} in ${entry.forumChannelName}</li>`)}
+      </details>
+      <details open>
+        <summary>Remote subscriptions (${guild.remoteSubscriptions.length})</summary>
+        ${renderPlacementList(guild.remoteSubscriptions, (entry) => `<li>${entry.forumChannelName} → ${entry.communityHandle}</li>`)}
+      </details>
+      <details open>
+        <summary>Local subscriptions (${guild.localSubscriptions.length})</summary>
+        ${renderPlacementList(guild.localSubscriptions, (entry) => `<li>${entry.forumChannelName} → ${entry.communityHandle}</li>`)}
+      </details>
+    </article>`,
+          )
+          .join("")
+      : "<p class='muted'>No Discord guild placements.</p>";
 
     document.getElementById("federation").innerHTML = `
     <p>Federation mode: <strong>${data.federation.mode === "open" ? "open" : "restricted allowlist"}</strong></p>

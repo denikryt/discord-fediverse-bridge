@@ -223,3 +223,167 @@ def test_dashboard_static_assets_are_served_under_dashboard_prefix(tmp_path: Pat
         "content-type"
     ].startswith("application/javascript")
     assert "data-dashboard-endpoint" in script.text
+
+
+def test_local_community_host_discord_names_appear_in_dashboard_payload(tmp_path: Path) -> None:
+    """A hosted local community shows last-known guild and forum names."""
+    database = _database(tmp_path)
+    _create_local_community(database)
+    database.discord_directory.upsert_guild_snapshot(
+        discord_guild_id=10,
+        guild_name="Guild 1",
+    )
+    database.discord_directory.upsert_channel_snapshot(
+        discord_channel_id=100,
+        discord_guild_id=10,
+        channel_name="community-host",
+        channel_type="forum",
+    )
+
+    payload = _client(database).get("/dashboard/data").json()
+
+    assert payload["localCommunities"][0]["hostDiscord"] == {
+        "guildName": "Guild 1",
+        "forumChannelName": "community-host",
+    }
+
+
+def test_accepted_remote_subscriptions_are_grouped_by_discord_guild(tmp_path: Path) -> None:
+    """Only accepted remote subscriptions appear in the guild placement section."""
+    database = _database(tmp_path)
+    database.discord_directory.upsert_guild_snapshot(discord_guild_id=55, guild_name="Guild 1")
+    database.discord_directory.upsert_channel_snapshot(
+        discord_channel_id=501,
+        discord_guild_id=55,
+        channel_name="lemmy-news",
+        channel_type="forum",
+    )
+    database.discord_directory.upsert_channel_snapshot(
+        discord_channel_id=502,
+        discord_guild_id=55,
+        channel_name="lemmy-tech",
+        channel_type="forum",
+    )
+    database.remote_subscriptions.create_subscription(
+        discord_channel_id=501,
+        discord_guild_id=55,
+        lemmy_community_actor_id="https://lemmy.world/c/news",
+        lemmy_community_name="news",
+        lemmy_community_id=1,
+        community_handle="!news@lemmy.world",
+        status="accepted",
+    )
+    database.remote_subscriptions.create_subscription(
+        discord_channel_id=502,
+        discord_guild_id=55,
+        lemmy_community_actor_id="https://lemmy.world/c/tech",
+        lemmy_community_name="tech",
+        lemmy_community_id=2,
+        community_handle="!tech@lemmy.world",
+        status="accepted",
+    )
+    database.remote_subscriptions.create_subscription(
+        discord_channel_id=503,
+        discord_guild_id=55,
+        lemmy_community_actor_id="https://lemmy.world/c/pending",
+        lemmy_community_name="pending",
+        lemmy_community_id=3,
+        community_handle="!pending@lemmy.world",
+        status="pending",
+    )
+
+    payload = _client(database).get("/dashboard/data").json()
+
+    guild = payload["discordGuilds"][0]
+    assert guild["guildName"] == "Guild 1"
+    assert guild["remoteSubscriptions"] == [
+        {"forumChannelName": "lemmy-news", "communityHandle": "!news@lemmy.world"},
+        {"forumChannelName": "lemmy-tech", "communityHandle": "!tech@lemmy.world"},
+    ]
+    assert "pending" not in json.dumps(guild)
+
+
+def test_active_local_subscribers_are_grouped_by_discord_guild(tmp_path: Path) -> None:
+    """Only active local subscribers appear with bridge-facing community handles."""
+    database = _database(tmp_path)
+    community = _create_local_community(database)
+    database.discord_directory.upsert_guild_snapshot(discord_guild_id=77, guild_name="Guild 2")
+    database.discord_directory.upsert_channel_snapshot(
+        discord_channel_id=701,
+        discord_guild_id=77,
+        channel_name="mirror-forum",
+        channel_type="forum",
+    )
+    database.discord_directory.upsert_channel_snapshot(
+        discord_channel_id=702,
+        discord_guild_id=77,
+        channel_name="inactive-forum",
+        channel_type="forum",
+    )
+    database.local_subscribers.create_local_subscriber(
+        local_community_id=community.id,
+        discord_guild_id=77,
+        discord_channel_id=701,
+        initiated_by_discord_user_id="123",
+        status="active",
+    )
+    database.local_subscribers.create_local_subscriber(
+        local_community_id=community.id,
+        discord_guild_id=77,
+        discord_channel_id=702,
+        initiated_by_discord_user_id="123",
+        status="inactive",
+    )
+
+    payload = _client(database).get("/dashboard/data").json()
+
+    guild = next(row for row in payload["discordGuilds"] if row["guildName"] == "Guild 2")
+    assert guild["localSubscriptions"] == [
+        {
+            "forumChannelName": "mirror-forum",
+            "communityHandle": "!hackers@discrod-bridge.example.com",
+        }
+    ]
+
+
+def test_dashboard_guild_visibility_redacts_numeric_discord_ids(tmp_path: Path) -> None:
+    """Guild visibility exposes names but not raw Discord identifiers."""
+    database = _database(tmp_path)
+    _create_local_community(database)
+    database.discord_directory.upsert_guild_snapshot(discord_guild_id=10, guild_name="Guild 1")
+    database.discord_directory.upsert_channel_snapshot(
+        discord_channel_id=100,
+        discord_guild_id=10,
+        channel_name="community-host",
+        channel_type="forum",
+    )
+
+    serialized = json.dumps(_client(database).get("/dashboard/data").json())
+
+    assert "Guild 1" in serialized
+    assert "community-host" in serialized
+    assert "discord_guild_id" not in serialized
+    assert "discord_channel_id" not in serialized
+    assert "private_key_pem" not in serialized
+    assert "fedify_shared_secret" not in serialized
+
+
+def test_missing_discord_snapshots_render_fallback_labels(tmp_path: Path) -> None:
+    """Rows without cached Discord names still produce stable public labels."""
+    database = _database(tmp_path)
+    community = _create_local_community(database)
+    database.local_subscribers.create_local_subscriber(
+        local_community_id=community.id,
+        discord_guild_id=None,
+        discord_channel_id=888,
+        initiated_by_discord_user_id="123",
+        status="active",
+    )
+
+    payload = _client(database).get("/dashboard/data").json()
+
+    assert payload["localCommunities"][0]["hostDiscord"] == {
+        "guildName": "Unknown guild",
+        "forumChannelName": "Unknown forum channel",
+    }
+    assert any(row["guildName"] == "Unknown guild" for row in payload["discordGuilds"])

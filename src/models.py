@@ -80,6 +80,39 @@ class ActivityPubEventReceipt(Base):
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, onupdate=utcnow, nullable=False)
 
 
+class DiscordGuildSnapshot(Base):
+    """Cache one Discord guild name for public dashboard placement labels."""
+
+    # The dashboard is public and must not resolve names through Discord APIs on
+    # request. This row stores the last-known public-readable guild label only.
+    __tablename__ = "discord_guild_snapshots"
+    __table_args__ = (UniqueConstraint("discord_guild_id"),)
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    discord_guild_id: Mapped[int] = mapped_column(Integer, nullable=False)
+    guild_name: Mapped[str] = mapped_column(String(255), nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, nullable=False)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, onupdate=utcnow, nullable=False)
+
+
+class DiscordChannelSnapshot(Base):
+    """Cache one Discord channel name for public dashboard placement labels."""
+
+    # Channel snapshots are generic enough to record a type, but dashboard
+    # rendering currently consumes forum-backed rows only. No foreign keys are
+    # used so this additive table follows the surrounding schema style.
+    __tablename__ = "discord_channel_snapshots"
+    __table_args__ = (UniqueConstraint("discord_channel_id"),)
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    discord_channel_id: Mapped[int] = mapped_column(Integer, nullable=False)
+    discord_guild_id: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    channel_name: Mapped[str] = mapped_column(String(255), nullable=False)
+    channel_type: Mapped[str] = mapped_column(String(64), nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, nullable=False)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, onupdate=utcnow, nullable=False)
+
+
 class ChannelCommunitySubscription(Base):
     """Store the Discord-channel to Lemmy-community binding and follow state."""
 

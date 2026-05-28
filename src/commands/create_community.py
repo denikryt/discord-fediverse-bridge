@@ -8,6 +8,7 @@ from discord import app_commands
 from ..config import Settings
 from ..db import Database
 from ..operations import CreateCommunityInput, create_community_operation
+from ..discord_directory import record_discord_placement_snapshot
 
 
 def register(
@@ -55,6 +56,14 @@ def register(
                 description=description,
             )
         )
+        if result.applied:
+            # Snapshot only committed moderation actions. Rejected attempts should
+            # not make the public dashboard claim a channel hosts a community.
+            record_discord_placement_snapshot(
+                database,
+                guild=interaction.guild,
+                channel=channel,
+            )
         await interaction.response.send_message(
             result.message,
             ephemeral=not result.applied,

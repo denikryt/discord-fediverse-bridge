@@ -103,6 +103,20 @@ class LocalSubscriberRepository(BaseRepository):
                 session.flush()
                 return True
 
+    def list_all_local_subscribers(self, *, status: str | None = None) -> list[LocalSubscriber]:
+            """Load local-subscriber rows, optionally filtered by active status."""
+            # The dashboard uses active rows only so public placement reflects
+            # current fanout targets instead of inactive historical rows.
+            with self.session() as session:
+                query = select(LocalSubscriber)
+                if status is not None:
+                    query = query.where(LocalSubscriber.status == status)
+                return list(
+                    session.scalars(
+                        query.order_by(LocalSubscriber.created_at, LocalSubscriber.id)
+                    )
+                )
+
     def count_local_subscribers(self, local_community_id: int) -> int:
             """Return how many local subscriber forum rows exist for one community."""
             with self.session() as session:

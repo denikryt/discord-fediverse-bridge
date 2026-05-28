@@ -13,6 +13,7 @@ from .repositories import (
     ActivityPubObjectRepository,
     BridgeActorFollowRepository,
     DiscordFanoutGroupRepository,
+    DiscordDirectoryRepository,
     EventReceiptRepository,
     LegacyLemmyMappingRepository,
     LocalCommunityContentRepository,
@@ -52,6 +53,7 @@ class Database:
         self.remote_actors = RemoteActorRepository(self.session)
         self.legacy_lemmy_mappings = LegacyLemmyMappingRepository(self.session)
         self.discord_fanout_groups = DiscordFanoutGroupRepository(self.session)
+        self.discord_directory = DiscordDirectoryRepository(self.session)
 
     def create_all(self) -> None:
         """Create the full clean-schema set required by the current codebase."""

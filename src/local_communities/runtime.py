@@ -115,6 +115,7 @@ class LocalCommunityRuntime:
                 thread_row=existing_thread,
                 title=getattr(thread, "name", "Untitled thread"),
                 content=getattr(starter_message, "content", ""),
+                author_display_name=_discord_author_display_name(starter_message),
                 source_forum_channel_id=getattr(thread, "parent_id"),
             )
             return LocalCommunityRuntimeResult(status="ignored", reason="duplicate_thread")

@@ -165,7 +165,7 @@ Changing `FEDIFY_ORIGIN` on an existing deployment changes ActivityPub actor and
 
 The Python bridge exposes a public dashboard on the root URL `/`. Legacy `/dashboard` links redirect to `/`. The JSON backing endpoint is `/dashboard/data`, and the dashboard web assets live under `/dashboard/static/`.
 
-The dashboard is intentionally public and omits Discord guild/channel IDs, private keys, shared secrets, database paths, and internal service URLs.
+The dashboard is intentionally public and omits Discord guild/channel IDs, private keys, shared secrets, database paths, and internal service URLs. It does show last-known Discord guild and forum-channel names for hosted local communities, accepted remote subscriptions, and active same-instance local subscribers so operators can see where public routing state lives without exposing raw Discord identifiers.
 
 ## Python Bridge Env
 
