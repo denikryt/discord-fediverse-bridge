@@ -1,55 +1,55 @@
 # Discord-Lemmy Bridge
 
-Python bridge plus a separate Fedify gateway that sync Discord forum threads with Lemmy communities.
+Python bridge plus a separate Fedify gateway that sync Discord forum threads with federated community actors such as Lemmy communities and compatible Mastodon-facing community flows.
 
 ## What This Service Enables
 
-This service lets one Lemmy community act as a shared discussion space across
-Discord and Lemmy.
+This service bridges Discord forum discussions with fediverse community-style
+discussion spaces.
 
-It allows you to:
+It can:
 
-- connect a Discord forum channel to one Lemmy community
-- expose a Discord forum channel as one local federated community that Lemmy
-  users can follow
-- send a message in one subscribed Discord channel and have it appear in all
-  other subscribed Discord channels for the same community
-- publish Discord posts and comments to Lemmy
-- mirror Lemmy posts and comments back into Discord
-- subscribe multiple Discord forum channels from different guilds to the same Lemmy community
-- keep those subscribed Discord channels in sync so posts and comments appear in all of them
+- connect a Discord forum channel to a remote community actor such as a Lemmy community
+- expose a Discord forum channel as a local federated community actor
+- publish Discord posts and comments into the fediverse
+- mirror fediverse posts and comments back into Discord
+- keep multiple subscribed Discord forum channels in sync for the same remote community
+- keep one local community in sync across its host forum, local subscriber forums, and remote ActivityPub subscribers
 
-The bridge keeps a single ActivityPub presence for the Lemmy community side and
-creates per-user ActivityPub identities for Discord users who publish content.
-It can also host a Discord forum channel as one local community actor with the
-`/create_community` command.
+The local community mode is designed to imitate the behavior of a Lemmy
+community actor. That is the primary compatibility target. The same community
+federation model also works with Mastodon in the supported flows, so the local
+community appears there as a community-style actor rather than as an ordinary
+single-user account.
 
 ## How It Works
 
-The bridge runs a single **bridge actor** - one ActivityPub identity that
-follows Lemmy communities on behalf of all subscribers. When a moderator runs
-`/subscribe-channel`, the bridge actor sends a `Follow` to the target
-community. Inbound posts and comments are delivered to this actor and then
-fanned out to every subscribed Discord channel. The `Follow` is shared across
-channels: if multiple channels subscribe to the same community, only one AP
-follow is sent.
+The bridge has two main modes.
 
-When the last subscribed Discord channel leaves one remote community, the
-bridge sends `Undo(Follow)` for the shared bridge actor. If that remote cleanup
-fails, the bridge keeps the shared follow row so operators can retry instead of
-silently losing federation state.
+### 1. Remote community subscription mode
 
-For outbound traffic, each registered Discord user gets their own **individual
-AP identity**. These identities are used to publish posts and comments so they
-appear attributed to the correct person in the fediverse. They are not used for
-`Follow` activities - that is handled exclusively by the bridge actor.
+The bridge runs one shared **bridge actor** that follows remote communities on
+behalf of Discord subscribers. When a moderator runs `/subscribe-channel`, the
+bridge actor sends one shared `Follow` to the target community. Inbound posts
+and comments are then fanned out to every subscribed Discord forum channel.
 
-Discord channels from different guilds can subscribe to the same Lemmy community. Inbound posts are delivered to all of them.
+When the last subscribed Discord channel leaves that remote community, the
+bridge sends `Undo(Follow)`.
 
-To send messages from Discord into Lemmy, a user must register on the bridge.
-Use the `/register` command - the bot replies with a registration link.
-Following it opens a web page where the user logs in with their Discord account
-and chooses a username.
+### 2. Local community hosting mode
+
+The bridge can expose a Discord forum as one local ActivityPub `Group` actor.
+Remote actors can follow it, and Discord activity in that forum is published as
+community content. Host forum messages, local subscriber forum messages, and
+remote inbound ActivityPub content can all be synchronized through that local
+community.
+
+For outbound authorship, registered Discord users publish through their own
+local ActivityPub user identities, so posts and comments stay attributed to the
+correct person.
+
+To send messages from Discord into the fediverse, a user must register on the
+bridge. Use `/register` and complete the Discord login flow in the browser.
 
 To expose a Discord forum as a local federated community, an allowlisted bot
 operator can run `/create_community` with:
@@ -68,17 +68,30 @@ Local community discovery is exposed through:
 User handles are only local bridge identities for authorship and display in
 the fediverse. They are not a remote follow target.
 
+## Access control and federation policy
+
+The bridge supports simple operator-side restrictions:
+
+- you can explicitly list Discord user ids that are allowed to create local communities and subscribe channels to remote communities
+- you can explicitly restrict federation to a specific allowlist of remote instance hostnames
+
+These limits are configured through environment variables, so the bridge can be
+run either in an open mode or in a tightly controlled mode.
+
 ## What Is Synced
 
-Discord → Lemmy + sibling Discord channels (registration required — messages are not forwarded without it):
-- forum thread starter → ActivityPub post, mirrored to all other subscribed channels
-- thread message → ActivityPub comment, mirrored to all sibling threads
-- edit / delete propagated to Lemmy and all sibling mirrors
+Remote community mode:
+- Discord forum thread starter → ActivityPub post
+- Discord thread message → ActivityPub comment
+- inbound federated post → Discord thread
+- inbound federated comment → Discord message
+- edit / delete propagate in both directions for supported flows
 
-Lemmy → all subscribed Discord channels:
-- inbound post → thread created in every subscribed forum channel
-- inbound comment → message in each mapped thread
-- edit / delete propagated to Discord
+Local community mode:
+- host Discord forum thread/message → local federated community content
+- local subscriber forum thread/message → same local federated community content
+- remote follower post/comment → mirrored into the local community's Discord surfaces
+- local community create, edit, and delete fan out to other Discord surfaces and remote ActivityPub subscribers
 
 Vote sync is not implemented.
 
@@ -95,7 +108,7 @@ The project runs as two processes:
 2. `fedify-gateway`
    - ActivityPub protocol edge
    - local actor documents and WebFinger
-   - outbound `Follow` and `Create`
+   - outbound `Follow`, `Undo(Follow)`, `Create`, `Update`, `Delete`, and local-community relay delivery
    - inbound federation intake forwarded to Python
 
 
@@ -181,6 +194,7 @@ Optional:
 
 - `FEDERATION_ALLOWLIST` — comma-separated Lemmy hostnames to accept; empty means all instances allowed
 - `LOCAL_COMMUNITY_OPERATOR_ALLOWLIST` — comma-separated Discord user ids allowed to manage local communities
+- `REMOTE_SUBSCRIPTION_OPERATOR_ALLOWLIST` — comma-separated Discord user ids allowed to subscribe channels to remote communities
 - `BRIDGE_DISPLAY_PREFIX`
 
 Needed only for web registration:
@@ -261,9 +275,7 @@ Gateway checks:
 ```bash
 cd fedify-gateway
 npm run check
-npm run verify:actor-layer
-npm run verify:python-contract
-npm run verify:publish-contract
+npm test
 ```
 
 ## Discord bot commands
@@ -284,5 +296,4 @@ The repository includes:
 
 ## Known issues
 
-- Mastodon replies to Lemmy-origin posts in the bridge community can bypass the bridge inbox.
-- Lemmy may receive those replies, but Discord will not see them because the gateway never receives the `Create(Note)`.
+See `notes/known_issues.md` for the current short issue journal and verified behavior notes.

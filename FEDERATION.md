@@ -87,6 +87,8 @@ Supported inbound activity patterns include:
 | `Create(Page)` | Remote post-compatible object. |
 | `Create(Article)` | Remote post-compatible object when a peer uses `Article`. |
 | `Create(Note)` | Remote comment-compatible object. |
+| `Update(Page|Article|Note)` | Direct inbound edit for supported post or comment objects. |
+| `Delete` | Direct inbound delete for supported post or comment objects. |
 | `Announce(Create(Page|Article|Note))` | Lemmy/threadiverse community fanout for post or comment creation. |
 | `Announce(Update(Page|Article|Note))` | Lemmy/threadiverse edit fanout. |
 | `Announce(Delete(...))` | Lemmy/threadiverse delete fanout. |
