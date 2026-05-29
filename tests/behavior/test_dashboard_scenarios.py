@@ -223,6 +223,14 @@ def test_dashboard_static_assets_are_served_under_dashboard_prefix(tmp_path: Pat
         "content-type"
     ].startswith("application/javascript")
     assert "data-dashboard-endpoint" in script.text
+    assert "Local subscribers" not in script.text
+    assert "discordChannelName" in script.text
+    assert "actorHandleFromUrl" in script.text
+    assert "communityHandleFromUrl" in script.text
+    assert "<details open>\n        <summary>Hosted communities" not in script.text
+    assert "<details open>\n        <summary>Remote subscriptions" not in script.text
+    assert "<details open>\n        <summary>Local subscriptions" not in script.text
+    assert "grid-template-columns: repeat(2, minmax(0, 1fr))" in css.text
 
 
 def test_local_community_host_discord_names_appear_in_dashboard_payload(tmp_path: Path) -> None:

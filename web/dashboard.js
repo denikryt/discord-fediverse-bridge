@@ -26,6 +26,46 @@ function renderPlacementList(items, render) {
     : "<p class='muted'>None.</p>";
 }
 
+
+/**
+ * Format Discord forum names with the public channel prefix used in Discord UI.
+ */
+function discordChannelName(name) {
+  const fallback = name || "Unknown forum channel";
+  if (fallback === "Unknown forum channel" || fallback.startsWith("#")) {
+    return fallback;
+  }
+  return `#${fallback}`;
+}
+
+/**
+ * Convert common ActivityPub actor URLs into compact public acct handles.
+ */
+function actorHandleFromUrl(actorUrl) {
+  try {
+    const url = new URL(actorUrl);
+    const parts = url.pathname.replace(/^\/+|\/+$/g, "").split("/").filter(Boolean);
+    const username = parts[parts.length - 1];
+    return username ? `${username}@${url.hostname}` : actorUrl;
+  } catch (_error) {
+    return actorUrl;
+  }
+}
+
+/**
+ * Convert community actor URLs into Lemmy-style public community handles.
+ */
+function communityHandleFromUrl(actorUrl) {
+  try {
+    const url = new URL(actorUrl);
+    const parts = url.pathname.replace(/^\/+|\/+$/g, "").split("/").filter(Boolean);
+    const community = parts[parts.length - 1];
+    return community ? `!${community}@${url.hostname}` : actorUrl;
+  } catch (_error) {
+    return actorUrl;
+  }
+}
+
 /**
  * Build the copy affordance for one local-community relay handle.
  */
@@ -75,10 +115,6 @@ fetch(endpoint)
       ["Registered users", data.instance.registeredUserCount],
       ["Local communities", data.instance.localCommunityCount],
       ["Remote subscribers", data.instance.localCommunityFollowerCount],
-      ["Local subscribers", data.localCommunities.reduce(
-        (count, community) => count + (community.localSubscriberCount || 0),
-        0,
-      )],
       ["Bridge follows", data.instance.bridgeActorFollowCount],
     ]
       .map(
@@ -99,10 +135,14 @@ fetch(endpoint)
         ${copyButton(community.relayHandle)}
       </div>
       <p class="description">${community.description || "No description."}</p>
-      <p class="placement">Hosted on: <strong>${community.hostDiscord?.guildName || "Unknown guild"}</strong> / ${community.hostDiscord?.forumChannelName || "Unknown forum channel"}</p>
+      <div class="placement">
+        <span>Hosted on:</span>
+        <strong>${community.hostDiscord?.guildName || "Unknown guild"}</strong>
+        <span>${discordChannelName(community.hostDiscord?.forumChannelName)}</span>
+      </div>
       <details>
         <summary>Remote subscribers (${community.remoteSubscriberCount || community.followers.length})</summary>
-        ${list(community.followers, (follower) => `<li>${link(follower.actorUrl, follower.actorUrl)}</li>`)}
+        ${list(community.followers, (follower) => `<li>${link(follower.actorUrl, actorHandleFromUrl(follower.actorUrl))}</li>`)}
       </details>
     </article>`,
           )
@@ -114,7 +154,7 @@ fetch(endpoint)
           .map(
             (follow) => `
     <div class="follow-row">
-      <p>${link(follow.communityActorUrl, follow.communityActorUrl)}</p>
+      <p>${link(follow.communityActorUrl, communityHandleFromUrl(follow.communityActorUrl))}</p>
     </div>`,
           )
           .join("")}</div>`
@@ -126,17 +166,17 @@ fetch(endpoint)
             (guild) => `
     <article class="guild-card">
       <h3>${guild.guildName}</h3>
-      <details open>
+      <details>
         <summary>Hosted communities (${guild.hostedCommunities.length})</summary>
-        ${renderPlacementList(guild.hostedCommunities, (entry) => `<li>${entry.relayHandle} in ${entry.forumChannelName}</li>`)}
+        ${renderPlacementList(guild.hostedCommunities, (entry) => `<li>${entry.relayHandle} in ${discordChannelName(entry.forumChannelName)}</li>`)}
       </details>
-      <details open>
+      <details>
         <summary>Remote subscriptions (${guild.remoteSubscriptions.length})</summary>
-        ${renderPlacementList(guild.remoteSubscriptions, (entry) => `<li>${entry.forumChannelName} → ${entry.communityHandle}</li>`)}
+        ${renderPlacementList(guild.remoteSubscriptions, (entry) => `<li>${discordChannelName(entry.forumChannelName)} → ${entry.communityHandle}</li>`)}
       </details>
-      <details open>
+      <details>
         <summary>Local subscriptions (${guild.localSubscriptions.length})</summary>
-        ${renderPlacementList(guild.localSubscriptions, (entry) => `<li>${entry.forumChannelName} → ${entry.communityHandle}</li>`)}
+        ${renderPlacementList(guild.localSubscriptions, (entry) => `<li>${discordChannelName(entry.forumChannelName)} → ${entry.communityHandle}</li>`)}
       </details>
     </article>`,
           )
