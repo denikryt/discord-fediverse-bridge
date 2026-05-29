@@ -201,6 +201,13 @@ async def test_remote_follower_top_level_post_creates_new_discord_thread(
 
     assert result.status == "processed"
     assert created is not None
+    forum_channel.create_thread.assert_awaited_once()
+    assert forum_channel.create_thread.await_args.kwargs["content"] == (
+        "**Remote topic**\n\n"
+        "Author: `bob@lemmy.example`\n\n"
+        "hello from lemmy\n\n"
+        "https://lemmy.example/post/1"
+    )
 
 
 @pytest.mark.asyncio

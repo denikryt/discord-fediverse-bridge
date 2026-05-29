@@ -426,7 +426,7 @@ async def test_inbound_remote_updates_edit_all_local_surfaces(scenario: SimpleNa
     assert comment_result.status == "processed"
     for message_id in (1200, 2300, 3400):
         messages[message_id].edit.assert_any_await(
-            content="**Remote title**\n\nAuthor: `bob`\n\nremote body\n\nhttps://remote.example/post/1"
+            content="**Remote title**\n\nAuthor: `bob@remote.example`\n\nremote body\n\nhttps://remote.example/post/1"
         )
     for message_id in (1300, 2400, 3500):
         messages[message_id].edit.assert_any_await(content="`bob@remote.example`\n\nremote comment")

@@ -121,6 +121,7 @@ async def _create_inbound_discord_thread(
         post.title or "Untitled Lemmy Post",
         normalize_text(post.body_markdown),
         post.url,
+        actor_id=event.actor_id,
     )
 
     result = await forum_channel.create_thread(name=title, content=body)

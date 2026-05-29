@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from html import unescape
+from urllib.parse import urlparse
 
 
 DISCORD_MESSAGE_LIMIT = 2000
@@ -26,8 +27,34 @@ def normalize_text(text: str | None) -> str:
     return unescape(text).strip()
 
 
-def format_lemmy_post_for_discord(author: str, title: str, body: str, url: str) -> str:
-    parts = [f"**{title.strip()}**", f"Author: `{author}`"]
+def format_fediverse_author_for_discord(author: str, actor_id: str = "") -> str:
+    """Render a Discord-safe fediverse author label from an AP actor id.
+
+    Comments already showed full remote handles when actor_id was available.
+    Posts use the same helper so inbound post and comment attribution stay
+    consistent while synthetic events without actor ids keep the old username
+    fallback.
+    """
+    if actor_id:
+        try:
+            domain = urlparse(actor_id).hostname or ""
+        except Exception:
+            domain = ""
+        if domain:
+            return f"`{author}@{domain}`"
+    return f"`{author}`"
+
+
+def format_lemmy_post_for_discord(
+    author: str,
+    title: str,
+    body: str,
+    url: str,
+    actor_id: str = "",
+) -> str:
+    """Render one remote Lemmy post for Discord thread starter content."""
+    display = format_fediverse_author_for_discord(author, actor_id)
+    parts = [f"**{title.strip()}**", f"Author: {display}"]
     if body.strip():
         parts.append(body.strip())
     parts.append(url)
@@ -35,18 +62,10 @@ def format_lemmy_post_for_discord(author: str, title: str, body: str, url: str) 
 
 
 def format_lemmy_comment_for_discord(author: str, body: str, url: str, actor_id: str = "") -> str:
+    """Render one remote Lemmy comment for Discord message content."""
     # Show full fediverse handle when we can derive the instance domain from actor_id.
     # Falls back to plain username when actor_id is absent (e.g. synthetic events).
-    if actor_id:
-        try:
-            from urllib.parse import urlparse
-            domain = urlparse(actor_id).hostname or ""
-            display = f"`{author}@{domain}`" if domain else f"`{author}`"
-        except Exception:
-            display = f"`{author}`"
-    else:
-        display = f"`{author}`"
-    parts = [display]
+    parts = [format_fediverse_author_for_discord(author, actor_id)]
     if body.strip():
         parts.append(body.strip())
     return truncate("\n\n".join(parts), DISCORD_MESSAGE_LIMIT)

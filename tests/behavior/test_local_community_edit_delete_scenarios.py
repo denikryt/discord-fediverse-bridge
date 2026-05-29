@@ -252,7 +252,7 @@ async def test_inbound_local_community_post_update_edits_discord_starter(tmp_pat
 
     assert result.status == "processed"
     starter_message.edit.assert_awaited_once_with(
-        content="**Remote topic**\n\nAuthor: `bob`\n\nupdated remote post body\n\nhttps://lemmy.example/post/1"
+        content="**Remote topic**\n\nAuthor: `bob@lemmy.example`\n\nupdated remote post body\n\nhttps://lemmy.example/post/1"
     )
 
 

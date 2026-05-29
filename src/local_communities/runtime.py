@@ -1053,6 +1053,7 @@ class LocalCommunityRuntime:
             getattr(object_payload, "title", None) or "Untitled remote post",
             normalize_text(getattr(object_payload, "body_markdown", None)),
             getattr(object_payload, "url", ""),
+            actor_id=getattr(event, "actor_id", ""),
         )
 
     @staticmethod
