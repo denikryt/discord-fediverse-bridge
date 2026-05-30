@@ -8,7 +8,7 @@ not create independent engines or session factories.
 from sqlalchemy import text
 from sqlalchemy.engine import Connection, Engine
 
-from ..models import Base, LocalCommunityMessageSurface, LocalCommunityThreadSurface
+from ..models import Base, CommunityActorBan, LocalCommunityMessageSurface, LocalCommunityThreadSurface
 
 
 def migrate(engine: Engine) -> None:
@@ -34,6 +34,7 @@ def migrate(engine: Engine) -> None:
     Base.metadata.create_all(
         engine,
         tables=[
+            CommunityActorBan.__table__,
             LocalCommunityThreadSurface.__table__,
             LocalCommunityMessageSurface.__table__,
         ],

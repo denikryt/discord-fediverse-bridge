@@ -11,6 +11,7 @@ from sqlalchemy.orm import Session, sessionmaker
 from . import migrations, schema
 from .repositories import (
     ActivityPubObjectRepository,
+    CommunityActorBanRepository,
     BridgeActorFollowRepository,
     DiscordFanoutGroupRepository,
     DiscordDirectoryRepository,
@@ -38,6 +39,7 @@ class Database:
         self.engine = create_engine(url, future=True, connect_args=connect_args)
         self.session_factory = sessionmaker(self.engine, expire_on_commit=False, class_=Session)
         self.local_communities = LocalCommunityRepository(self.session)
+        self.community_actor_bans = CommunityActorBanRepository(self.session)
         self.remote_subscribers = RemoteSubscriberRepository(self.session)
         self.local_subscribers = LocalSubscriberRepository(self.session)
         self.local_community_content = LocalCommunityContentRepository(self.session)

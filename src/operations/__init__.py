@@ -1,5 +1,6 @@
 """App-specific operation contracts for Discord command policy."""
 
+from .ban_user import BanUserInput, BanUserResult, ban_user_operation
 from .create_community import (
     CreateCommunityInput,
     CreateCommunityResult,
@@ -18,6 +19,8 @@ from .unsubscribe_local_community import (
 from .unsubscribe import UnsubscribeInput, unsubscribe_operation
 
 __all__ = [
+    "BanUserInput",
+    "BanUserResult",
     "CreateCommunityInput",
     "CreateCommunityResult",
     "ListSubscriptionsInput",
@@ -25,6 +28,7 @@ __all__ = [
     "SubscribeInput",
     "UnsubscribeLocalCommunityInput",
     "UnsubscribeInput",
+    "ban_user_operation",
     "create_community_operation",
     "list_subscriptions_operation",
     "subscribe_local_community_operation",

@@ -398,6 +398,8 @@ def _event_object_id(event: BridgeGatewayEvent) -> str:
     # lifecycle events do not carry post/comment objects.
     if event.event_type in {"follow.accepted", "local.follow_requested"}:
         return event.object.follow_activity_id
+    if event.event_type == "local.unfollow_requested":
+        return event.object.follow_activity_id or event.delivery_id
     return event.object.ap_id
 
 

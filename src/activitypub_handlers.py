@@ -9,6 +9,7 @@ from __future__ import annotations
 import logging
 from dataclasses import dataclass
 
+from .community_moderation import find_local_community_actor_ban_for_event
 from .activitypub_models import (
     ActivityPubEvent,
     BridgeGatewayEvent,
@@ -58,6 +59,21 @@ async def dispatch_activitypub_event(
                 _allowlist_subject(event, runtime),
             )
             return HandlerResult(status="skipped", detail="instance not in allowlist")
+
+    ban = find_local_community_actor_ban_for_event(event, runtime)
+    if ban is not None:
+        actor_handle = getattr(ban, "actor_handle", "unknown")
+        actor_url = getattr(event, "actor_id", None)
+        logger.info(
+            "Skipping inbound ActivityPub activity from banned actor "
+            "community=%s actor_handle=%s actor_url=%s event_type=%s delivery_id=%s",
+            getattr(event, "community_actor_id", None),
+            actor_handle,
+            actor_url,
+            getattr(event, "event_type", None),
+            getattr(event, "delivery_id", None),
+        )
+        return HandlerResult(status="skipped", detail="actor is banned for this community")
 
     # Keep dispatch explicit so supported inbound event types stay obvious.
     if event.event_type == "post.created":

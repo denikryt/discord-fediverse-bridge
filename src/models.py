@@ -406,6 +406,31 @@ class LocalCommunity(Base):
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, onupdate=utcnow, nullable=False)
 
 
+
+
+class CommunityActorBan(Base):
+    """Record one local-only remote actor ban scoped to one local community.
+
+    This is bridge moderation state, not a federated ActivityPub Block. V1 uses
+    it only to acknowledge and skip future inbound events before side effects.
+    """
+
+    __tablename__ = "community_actor_bans"
+    __table_args__ = (
+        UniqueConstraint("local_community_id", "actor_handle", "status"),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    local_community_id: Mapped[int] = mapped_column(Integer, nullable=False)
+    actor_handle: Mapped[str] = mapped_column(String(255), nullable=False)
+    actor_url: Mapped[str | None] = mapped_column(String(512), nullable=True)
+    status: Mapped[str] = mapped_column(String(32), nullable=False, default="active")
+    created_by_discord_user_id: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    reason: Mapped[str | None] = mapped_column(String(1024), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, nullable=False)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, onupdate=utcnow, nullable=False)
+
+
 class RemoteSubscriber(Base):
     """Persist one remote ActivityPub subscriber for a local community.
 

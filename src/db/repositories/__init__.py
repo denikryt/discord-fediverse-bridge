@@ -4,6 +4,7 @@ Repositories share Database session ownership; they do not create engines or
 session factories.
 """
 
+from .community_actor_bans import CommunityActorBanRepository
 from .local_communities import LocalCommunityRepository
 from .remote_subscribers import RemoteSubscriberRepository
 from .local_subscribers import LocalSubscriberRepository
@@ -23,6 +24,7 @@ from .legacy_lemmy_mappings import LegacyLemmyMappingRepository
 from .discord_fanout_groups import DiscordFanoutGroupRepository
 from .discord_directory import DiscordDirectoryRepository
 __all__ = [
+    "CommunityActorBanRepository",
     "LocalCommunityRepository",
     "RemoteSubscriberRepository",
     "LocalSubscriberRepository",
