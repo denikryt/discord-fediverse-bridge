@@ -27,6 +27,11 @@ def migrate(engine: Engine) -> None:
             "discord_guild_id",
             "ALTER TABLE channel_community_subscriptions ADD COLUMN discord_guild_id INTEGER",
         ),
+        (
+            "local_communities",
+            "created_by_discord_user_id",
+            "ALTER TABLE local_communities ADD COLUMN created_by_discord_user_id VARCHAR(64)",
+        ),
     ]
     # Stage 2 adds explicit local-community surface tables. Creating them here
     # keeps interrupted deployments and migrate-only test fixtures aligned with

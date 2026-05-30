@@ -379,7 +379,9 @@ class LocalCommunity(Base):
 
     LocalCommunity is the Python-owned source of truth for the community actor
     metadata that the gateway exposes publicly. The row binds one Discord forum
-    channel to one stable actor URL and one stable keypair.
+    channel to one stable actor URL and one stable keypair. Creator ownership is
+    stored as a Discord user id for local bridge management commands only; it is
+    not an ActivityPub identity.
     """
 
     __tablename__ = "local_communities"
@@ -395,6 +397,7 @@ class LocalCommunity(Base):
     slug: Mapped[str] = mapped_column(String(255), nullable=False)
     display_name: Mapped[str] = mapped_column(String(255), nullable=False)
     summary: Mapped[str] = mapped_column(String, nullable=False)
+    created_by_discord_user_id: Mapped[str | None] = mapped_column(String(64), nullable=True)
     actor_url: Mapped[str] = mapped_column(String(512), nullable=False)
     inbox_url: Mapped[str] = mapped_column(String(512), nullable=False)
     outbox_url: Mapped[str] = mapped_column(String(512), nullable=False)

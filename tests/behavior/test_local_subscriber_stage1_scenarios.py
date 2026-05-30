@@ -68,6 +68,7 @@ def _create_local_community(database: Database, *, forum_channel_id: int = 100) 
         slug="great_community",
         name="Great Community",
         description="A bridge-owned local community.",
+        created_by_discord_user_id="123",
     )
     community = database.local_communities.get_local_community_by_slug("great_community")
     assert community is not None

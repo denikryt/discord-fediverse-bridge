@@ -47,6 +47,7 @@ def _local_community(database: object, *, channel_id: int = 100) -> None:
         slug="hackers",
         name="Hackers",
         description="A local hackerspace forum.",
+        created_by_discord_user_id="123",
     )
 
 

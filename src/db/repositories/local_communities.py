@@ -33,6 +33,7 @@ class LocalCommunityRepository(BaseRepository):
             slug: str,
             display_name: str,
             summary: str,
+            created_by_discord_user_id: str,
             actor_url: str,
             inbox_url: str,
             outbox_url: str,
@@ -45,6 +46,8 @@ class LocalCommunityRepository(BaseRepository):
 
             The local-community creation flow persists the actor identity in Python
             so the gateway can read it later without owning any creation policy.
+            The creator id is copied from the command operation unchanged so
+            management permissions can compare Discord user ids as strings.
             """
             with self.session() as session:
                 community = LocalCommunity(
@@ -53,6 +56,7 @@ class LocalCommunityRepository(BaseRepository):
                     slug=slug,
                     display_name=display_name,
                     summary=summary,
+                    created_by_discord_user_id=created_by_discord_user_id,
                     actor_url=actor_url,
                     inbox_url=inbox_url,
                     outbox_url=outbox_url,

@@ -61,6 +61,7 @@ def _local_community(database: object, *, slug: str = "cats", forum_channel_id: 
         slug=slug,
         name=slug.title(),
         description=f"{slug} community.",
+        created_by_discord_user_id="123",
     )
     return database.local_communities.get_local_community_by_slug(slug)
 

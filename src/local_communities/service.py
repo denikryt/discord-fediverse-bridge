@@ -59,8 +59,14 @@ class LocalCommunityService:
         slug: str,
         name: str,
         description: str,
+        created_by_discord_user_id: str,
     ) -> CreatedLocalCommunity:
-        """Create one Discord-backed local community with stable actor metadata."""
+        """Create one Discord-backed local community with stable actor metadata.
+
+        The caller id is required for newly created rows but is not interpreted
+        here. Command operations own authorization policy; this service only
+        preserves the id alongside the local-community actor metadata.
+        """
         normalized_slug = slug.strip().lower()
         self.validate_slug(normalized_slug)
         normalized_name = name.strip()
@@ -85,6 +91,7 @@ class LocalCommunityService:
             slug=normalized_slug,
             display_name=normalized_name,
             summary=normalized_description,
+            created_by_discord_user_id=created_by_discord_user_id,
             actor_url=actor_url,
             inbox_url=inbox_url,
             outbox_url=outbox_url,

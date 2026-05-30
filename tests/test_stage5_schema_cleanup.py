@@ -31,6 +31,7 @@ def _create_current_local_community_activity(database: Database) -> None:
         slug="hackers",
         name="Hackers",
         description="A local hackerspace forum.",
+        created_by_discord_user_id="123",
     )
     community = database.local_communities.get_local_community_by_slug("hackers")
     assert community is not None

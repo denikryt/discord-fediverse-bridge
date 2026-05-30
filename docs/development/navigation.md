@@ -31,7 +31,7 @@ This document is a task-oriented reading guide for maintainers changing or debug
 1. `fedify-gateway/src/federation.ts`; 2. `fedify-gateway/src/normalize.ts`; 3. `fedify-gateway/src/python-bridge.ts`; 4. `src/activitypub_handlers.py`; 5. `src/community_sync/discord_fanout.py`; 6. `src/db/repositories/discord_fanout_groups.py`; 7. `src/db/repositories/legacy_lemmy_mappings.py`.
 
 ## Local community creation
-1. `src/commands/create_community.py`; 2. `src/operations/create_community.py`; 3. `src/local_communities/service.py`; 4. `src/db/database.py`; 5. `src/db/repositories/local_communities.py`.
+1. `src/commands/create_community.py`; 2. `src/operations/create_community.py`; 3. `src/local_communities/service.py`; 4. `src/db/database.py`; 5. `src/db/repositories/local_communities.py`; 6. `src/local_community_permissions.py` for later owner/super-admin management checks.
 
 ## Local community actor rendering
 1. `fedify-gateway/src/server.ts`; 2. `fedify-gateway/src/actor-store.ts`; 3. `fedify-gateway/src/actors.ts`; 4. `fedify-gateway/src/webfinger.ts`.
@@ -39,12 +39,13 @@ This document is a task-oriented reading guide for maintainers changing or debug
 
 ## Local community user bans
 1. `src/commands/ban_user.py` — Discord slash command adapter.
-2. `src/operations/ban_user.py` — allowlist, slug lookup, handle validation, duplicate behavior.
+2. `src/operations/ban_user.py` — `discordops` preconditions, owner/super-admin authorization, slug lookup, handle validation, duplicate behavior.
 3. `src/fediverse_identity.py` — command handle normalization and hot-path actor URL extraction.
-4. `src/community_moderation.py` — inbound ban resolution before local-community side effects.
-5. `src/activitypub_handlers.py` — dispatch integration after receipt/idempotency begins.
-6. `src/db/repositories/community_actor_bans.py` — scoped active-ban persistence.
-7. `tests/behavior/test_local_community_user_ban_scenarios.py`; 8. `tests/operations/test_ban_user_operation.py`; 9. `tests/commands/test_ban_user_command.py`; 10. `tests/test_fediverse_identity.py`.
+4. `src/local_community_permissions.py` — command-side owner-or-super-admin management policy.
+5. `src/community_moderation.py` — inbound ban resolution before local-community side effects.
+6. `src/activitypub_handlers.py` — dispatch integration after receipt/idempotency begins.
+7. `src/db/repositories/community_actor_bans.py` — scoped active-ban persistence.
+8. `tests/behavior/test_local_community_user_ban_scenarios.py`; 9. `tests/operations/test_ban_user_operation.py`; 10. `tests/commands/test_ban_user_command.py`; 11. `tests/test_local_community_permissions.py`; 12. `tests/test_fediverse_identity.py`.
 
 ## Remote Follow handling for local communities
 1. `fedify-gateway/src/federation.ts`; 2. `fedify-gateway/src/normalize.ts`; 3. `src/activitypub_handlers.py`; 4. `src/local_communities/runtime.py`; 5. `src/fedify_gateway_client.py`.

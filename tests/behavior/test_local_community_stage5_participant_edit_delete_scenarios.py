@@ -85,6 +85,7 @@ def scenario(tmp_path: Path) -> SimpleNamespace:
         slug="hackers",
         name="Hackers",
         description="A local hackerspace forum.",
+        created_by_discord_user_id="123",
     )
     community = database.local_communities.get_local_community_by_slug("hackers")
     source = database.local_subscribers.create_local_subscriber(

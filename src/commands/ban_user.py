@@ -26,7 +26,6 @@ def register(
         user="Remote author handle exactly as shown in Discord, for example alice@example.com",
         reason="Optional moderation note",
     )
-    @app_commands.default_permissions(manage_channels=True)
     async def ban_user(
         interaction: discord.Interaction,
         community: str,

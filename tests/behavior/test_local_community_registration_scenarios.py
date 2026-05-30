@@ -4,7 +4,10 @@ from __future__ import annotations
 
 from pathlib import Path
 
+from sqlalchemy import create_engine, text
+
 from src.config import Settings
+from src.db import Database
 from src.local_communities.service import LocalCommunityService
 from src.operations.create_community import (
     CreateCommunityInput,
@@ -59,6 +62,7 @@ def test_allowlisted_operator_creates_local_community_and_persists_actor_metadat
     assert created is not None
     assert created.display_name == "Hackers"
     assert created.summary == "A local hackerspace forum."
+    assert created.created_by_discord_user_id == "123"
     assert created.actor_url == "https://bridge.example/communities/hackers"
 
 
@@ -97,6 +101,7 @@ def test_service_rejects_duplicate_forum_binding(
         slug="hackers",
         name="Hackers",
         description="A local hackerspace forum.",
+        created_by_discord_user_id="123",
     )
 
     try:
@@ -106,8 +111,218 @@ def test_service_rejects_duplicate_forum_binding(
             slug="makers",
             name="Makers",
             description="Another forum.",
+            created_by_discord_user_id="123",
         )
     except Exception as exc:
         assert "already bound" in str(exc)
     else:
         raise AssertionError("Expected duplicate forum binding to fail")
+
+
+
+def test_duplicate_slug_does_not_modify_existing_owner_or_create_new_row(
+    tmp_path: Path,
+) -> None:
+    """A duplicate slug failure must not overwrite the existing community owner."""
+    database = build_database(tmp_path, "local-community-registration-duplicate-slug.db")
+    first = create_community_operation(
+        CreateCommunityInput(
+            database=database,
+            settings=_settings(),
+            discord_user_id="123",
+            discord_guild_id=10,
+            discord_forum_channel_id=100,
+            slug="hackers",
+            name="Hackers",
+            description="A local hackerspace forum.",
+        )
+    )
+    second = create_community_operation(
+        CreateCommunityInput(
+            database=database,
+            settings=_settings(allowlist="123,456"),
+            discord_user_id="456",
+            discord_guild_id=10,
+            discord_forum_channel_id=200,
+            slug="hackers",
+            name="Other Hackers",
+            description="Another forum.",
+        )
+    )
+    created = database.local_communities.get_local_community_by_slug("hackers")
+
+    assert first.applied is True
+    assert second.applied is False
+    assert second.reason == "validation_failed"
+    assert created.created_by_discord_user_id == "123"
+    assert database.local_communities.get_local_community_by_forum_channel_id(200) is None
+
+
+def test_invalid_slug_does_not_create_partial_owned_row(tmp_path: Path) -> None:
+    """Creation validation failures must not persist a local-community row."""
+    database = build_database(tmp_path, "local-community-registration-invalid-slug.db")
+
+    result = create_community_operation(
+        CreateCommunityInput(
+            database=database,
+            settings=_settings(),
+            discord_user_id="123",
+            discord_guild_id=10,
+            discord_forum_channel_id=100,
+            slug="Invalid Slug",
+            name="Hackers",
+            description="A local hackerspace forum.",
+        )
+    )
+
+    assert result.applied is False
+    assert database.local_communities.list_local_communities() == []
+
+
+def test_blank_name_or_description_does_not_create_partial_owned_row(tmp_path: Path) -> None:
+    """Missing required text must fail before actor or owner state is persisted."""
+    database = build_database(tmp_path, "local-community-registration-blank-text.db")
+
+    blank_name = create_community_operation(
+        CreateCommunityInput(
+            database=database,
+            settings=_settings(),
+            discord_user_id="123",
+            discord_guild_id=10,
+            discord_forum_channel_id=100,
+            slug="hackers",
+            name=" ",
+            description="A local hackerspace forum.",
+        )
+    )
+    blank_description = create_community_operation(
+        CreateCommunityInput(
+            database=database,
+            settings=_settings(),
+            discord_user_id="123",
+            discord_guild_id=10,
+            discord_forum_channel_id=101,
+            slug="makers",
+            name="Makers",
+            description=" ",
+        )
+    )
+
+    assert blank_name.applied is False
+    assert blank_description.applied is False
+    assert database.local_communities.list_local_communities() == []
+
+
+def test_existing_database_migration_adds_nullable_owner_column(tmp_path: Path) -> None:
+    """Migration adds creator ownership to existing local-community tables."""
+    db_path = tmp_path / "legacy-local-communities.db"
+    engine = create_engine(f"sqlite:///{db_path}", future=True)
+    with engine.begin() as conn:
+
+        conn.execute(
+            text(
+                """
+                CREATE TABLE channel_community_subscriptions (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    discord_channel_id INTEGER NOT NULL,
+                    lemmy_community_actor_id VARCHAR(512) NOT NULL,
+                    lemmy_community_name VARCHAR(255),
+                    lemmy_community_id INTEGER,
+                    community_handle VARCHAR(255),
+                    community_inbox_url VARCHAR(512),
+                    follow_activity_id VARCHAR(512),
+                    initiated_by_discord_user_id VARCHAR(64),
+                    status VARCHAR(32) NOT NULL,
+                    created_at DATETIME NOT NULL,
+                    updated_at DATETIME NOT NULL
+                )
+                """
+            )
+        )
+        conn.execute(
+            text(
+                """
+                CREATE TABLE local_communities (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    discord_guild_id INTEGER NOT NULL,
+                    discord_forum_channel_id INTEGER NOT NULL,
+                    slug VARCHAR(255) NOT NULL,
+                    display_name VARCHAR(255) NOT NULL,
+                    summary VARCHAR NOT NULL,
+                    actor_url VARCHAR(512) NOT NULL,
+                    inbox_url VARCHAR(512) NOT NULL,
+                    outbox_url VARCHAR(512) NOT NULL,
+                    followers_url VARCHAR(512) NOT NULL,
+                    public_key_pem VARCHAR NOT NULL,
+                    private_key_pem VARCHAR NOT NULL,
+                    status VARCHAR(32) NOT NULL,
+                    created_at DATETIME NOT NULL,
+                    updated_at DATETIME NOT NULL
+                )
+                """
+            )
+        )
+
+        conn.execute(text("CREATE TABLE local_community_threads (id INTEGER PRIMARY KEY AUTOINCREMENT)"))
+        conn.execute(text("CREATE TABLE local_community_messages (id INTEGER PRIMARY KEY AUTOINCREMENT)"))
+        conn.execute(
+            text(
+                """
+                INSERT INTO local_communities (
+                    discord_guild_id,
+                    discord_forum_channel_id,
+                    slug,
+                    display_name,
+                    summary,
+                    actor_url,
+                    inbox_url,
+                    outbox_url,
+                    followers_url,
+                    public_key_pem,
+                    private_key_pem,
+                    status,
+                    created_at,
+                    updated_at
+                ) VALUES (
+                    10,
+                    100,
+                    'cats',
+                    'Cats',
+                    'Cat photos.',
+                    'https://bridge.example/communities/cats',
+                    'https://bridge.example/communities/cats/inbox',
+                    'https://bridge.example/communities/cats/outbox',
+                    'https://bridge.example/communities/cats/followers',
+                    'public-key',
+                    'private-key',
+                    'active',
+                    '2026-01-01 00:00:00',
+                    '2026-01-01 00:00:00'
+                )
+                """
+            )
+        )
+    engine.dispose()
+
+    database = Database(f"sqlite:///{db_path}")
+    database.migrate()
+    migrated = database.local_communities.get_local_community_by_slug("cats")
+
+    assert migrated is not None
+    assert migrated.created_by_discord_user_id is None
+    assert migrated.display_name == "Cats"
+
+
+def test_owner_column_migration_is_idempotent(tmp_path: Path) -> None:
+    """Running migration repeatedly must preserve data and avoid duplicate columns."""
+    db_path = tmp_path / "idempotent-local-communities.db"
+    database = Database(f"sqlite:///{db_path}")
+    database.create_all()
+    database.migrate()
+    database.migrate()
+
+    with database.engine.connect() as conn:
+        columns = conn.execute(text("PRAGMA table_info(local_communities)")).fetchall()
+    owner_columns = [row for row in columns if row[1] == "created_by_discord_user_id"]
+
+    assert len(owner_columns) == 1

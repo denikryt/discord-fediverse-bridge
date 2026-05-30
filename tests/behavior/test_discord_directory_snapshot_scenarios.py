@@ -134,6 +134,7 @@ async def test_subscribe_channel_stores_snapshots_for_local_subscription(
         slug="hackers",
         name="Hackers",
         description="A local forum",
+        created_by_discord_user_id="123",
     )
     community = database.local_communities.get_local_community_by_slug("hackers")
     interaction = _interaction()

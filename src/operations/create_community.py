@@ -56,6 +56,7 @@ def create_community_operation(operation_input: CreateCommunityInput) -> CreateC
             slug=operation_input.slug,
             name=operation_input.name,
             description=operation_input.description,
+            created_by_discord_user_id=operation_input.discord_user_id,
         )
     except LocalCommunityError as exc:
         return CreateCommunityResult(

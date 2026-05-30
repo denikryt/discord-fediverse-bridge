@@ -68,6 +68,7 @@ def _create_local_community(
         slug=slug,
         name=display_name,
         description="Announcements",
+        created_by_discord_user_id="123",
     )
     community = database.local_communities.get_local_community_by_slug(slug)
     assert community is not None

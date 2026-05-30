@@ -53,6 +53,7 @@ def _create_local_community(database: object, *, forum_channel_id: int = 100) ->
         slug="hackers",
         name="Hackers",
         description="A local hackerspace forum.",
+        created_by_discord_user_id="123",
     )
     return database.local_communities.get_local_community_by_slug("hackers")
 
