@@ -1,9 +1,9 @@
 """Operation layer for the `/ban-user` local-community moderation command.
 
 The command is implemented as an ordered `discordops` operation because the
-precondition order is part of the security contract: once a community exists,
-callers who cannot manage it must be rejected before handle validation or
-moderation-state duplicate checks reveal extra information.
+precondition order is part of the security contract: callers must first be able
+to address an active community from the command guild, then be allowed to manage
+it, before handle validation or duplicate-ban checks can reveal extra state.
 """
 
 from __future__ import annotations
@@ -15,7 +15,11 @@ from discordops import Operation, Precondition
 from ..config import Settings
 from ..db import Database
 from ..fediverse_identity import InvalidRemoteActorHandle, normalize_remote_actor_handle
-from ..local_community_permissions import can_manage_local_community
+from ..local_community_permissions import (
+    can_access_local_community_from_guild,
+    can_manage_local_community,
+)
+from ..models import LocalCommunity
 
 
 @dataclass(slots=True)
@@ -25,10 +29,11 @@ class BanUserInput:
     database: Database
     settings: Settings
     discord_user_id: str
+    discord_guild_id: int | None
     community_slug: str
     actor_handle: str
     reason: str | None = None
-    _community: object | None = field(default=None, init=False, repr=False)
+    _community: LocalCommunity | None = field(default=None, init=False, repr=False)
     _community_loaded: bool = field(default=False, init=False, repr=False)
     _normalized_actor_handle: str | None = field(default=None, init=False, repr=False)
     _actor_handle_normalized: bool = field(default=False, init=False, repr=False)
@@ -41,8 +46,8 @@ class BanUserInput:
         """Return the command slug after trimming Discord input whitespace."""
         return self.community_slug.strip()
 
-    def get_local_community(self) -> object | None:
-        """Load and memoize the target local community by slug."""
+    def get_local_community(self) -> LocalCommunity | None:
+        """Load and memoize the target active local community by slug."""
         # Several preconditions need the same row. Memoizing preserves the
         # observable lookup order without repeating database reads.
         if not self._community_loaded:
@@ -54,8 +59,9 @@ class BanUserInput:
 
     def get_normalized_actor_handle(self) -> str | None:
         """Normalize and memoize the remote actor handle, or return None."""
-        # Normalization is delayed until after authorization. This prevents
-        # unauthorized callers from learning whether their handle input is valid.
+        # Normalization is delayed until after community access and management
+        # checks. This prevents unauthorized callers from learning whether their
+        # handle input is valid.
         if not self._actor_handle_normalized:
             try:
                 self._normalized_actor_handle = normalize_remote_actor_handle(self.actor_handle)
@@ -76,7 +82,7 @@ class BanUserInput:
                 self._existing_ban = None
             else:
                 self._existing_ban = self.database.community_actor_bans.get_active_ban_by_handle(
-                    local_community_id=getattr(community, "id"),
+                    local_community_id=community.id,
                     actor_handle=actor_handle,
                 )
             self._existing_ban_loaded = True
@@ -92,9 +98,17 @@ class BanUserResult:
     reason: str
 
 
-def _community_exists(operation_input: BanUserInput) -> bool:
-    """Return whether the requested local community slug exists."""
-    return operation_input.get_local_community() is not None
+def _community_accessible(operation_input: BanUserInput) -> bool:
+    """Return whether the caller may address this community from the guild."""
+    community = operation_input.get_local_community()
+    if community is None:
+        return False
+    return can_access_local_community_from_guild(
+        settings=operation_input.settings,
+        discord_user_id=operation_input.discord_user_id,
+        discord_guild_id=operation_input.discord_guild_id,
+        local_community=community,
+    )
 
 
 def _can_manage_community(operation_input: BanUserInput) -> bool:
@@ -119,6 +133,11 @@ def _no_duplicate_active_ban(operation_input: BanUserInput) -> bool:
     return operation_input.get_existing_active_ban() is None
 
 
+def _inaccessible_message(operation_input: BanUserInput) -> str:
+    """Build the shared inaccessible-community rejection text."""
+    return f"Unknown or inaccessible local community: {operation_input.normalized_community_slug}"
+
+
 def _duplicate_active_ban_message(operation_input: BanUserInput) -> str:
     """Build the duplicate-ban rejection message using the stored reason."""
     existing = operation_input.get_existing_active_ban()
@@ -135,16 +154,16 @@ class BanUserOperation(Operation):
 
     name = "ban_user"
     _REJECTION_REASONS = {
-        "community_exists": "unknown_community",
+        "community_accessible": "unknown_or_inaccessible_community",
         "can_manage_community": "cannot_manage_community",
         "valid_actor_handle": "invalid_handle",
         "no_duplicate_active_ban": "duplicate_active_ban",
     }
     preconditions = (
         Precondition(
-            name="community_exists",
-            message=lambda op: f"Unknown local community slug: {op.normalized_community_slug}",
-            predicate=_community_exists,
+            name="community_accessible",
+            message=_inaccessible_message,
+            predicate=_community_accessible,
         ),
         Precondition(
             name="can_manage_community",
@@ -173,7 +192,7 @@ class BanUserOperation(Operation):
     ) -> BanUserResult:
         """Return one rejected command result for the first failed precondition."""
         # discordops exposes the failed precondition name; command callers keep
-        # the historical reason codes from the ban-user operation contract.
+        # stable reason codes from the ban-user operation contract.
         return BanUserResult(
             applied=False,
             message=message,
@@ -196,7 +215,7 @@ class BanUserOperation(Operation):
 
         reason = operation_input.reason.strip() if operation_input.reason else None
         operation_input.database.community_actor_bans.create_active_ban(
-            local_community_id=getattr(community, "id"),
+            local_community_id=community.id,
             actor_handle=actor_handle,
             actor_url=None,
             created_by_discord_user_id=operation_input.discord_user_id,

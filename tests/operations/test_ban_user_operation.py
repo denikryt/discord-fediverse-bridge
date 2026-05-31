@@ -23,7 +23,9 @@ def _local_community(
     *,
     slug: str = "cats",
     owner_id: str | None = "111",
+    discord_guild_id: int = 10,
     forum_channel_id: int = 100,
+    status: str = "active",
 ) -> object:
     """Seed one bridge-hosted community for moderation command scenarios."""
     LocalCommunityService(
@@ -31,7 +33,7 @@ def _local_community(
         base_url="https://bridge.example",
         keypair_generator=lambda: ("public-key", "private-key"),
     ).create_local_community(
-        discord_guild_id=10,
+        discord_guild_id=discord_guild_id,
         discord_forum_channel_id=forum_channel_id,
         slug=slug,
         name=slug.title(),
@@ -39,6 +41,13 @@ def _local_community(
         created_by_discord_user_id=owner_id or "temporary-owner",
     )
     community = database.local_communities.get_local_community_by_slug(slug)
+    if status != "active":
+        # Inactive rows are existing moderation boundary cases. Creation always
+        # starts active, so tests adjust status directly to model that state.
+        with database.session() as session:
+            persisted = session.merge(community)
+            persisted.status = status
+        community = database.local_communities.get_local_community_by_slug(slug)
     if owner_id is None:
         # Legacy rows are represented by NULL creator ids after the migration.
         # Tests set this explicitly because new service-created rows must always
@@ -66,6 +75,7 @@ def test_owner_bans_remote_handle_in_own_community(tmp_path: Path) -> None:
             database=database,
             settings=_settings(super_admins=[]),
             discord_user_id="111",
+            discord_guild_id=10,
             community_slug="cats",
             actor_handle="Alice@Example.COM",
             reason="spam",
@@ -95,6 +105,7 @@ def test_super_admin_bans_in_someone_elses_community(tmp_path: Path) -> None:
             database=database,
             settings=_settings(super_admins=["999"]),
             discord_user_id="999",
+            discord_guild_id=10,
             community_slug="cats",
             actor_handle="alice@example.com",
             reason="spam",
@@ -110,6 +121,157 @@ def test_super_admin_bans_in_someone_elses_community(tmp_path: Path) -> None:
     assert ban.created_by_discord_user_id == "999"
 
 
+def test_owner_cannot_ban_in_own_community_from_another_guild(tmp_path: Path) -> None:
+    """Manual slugs from another guild are inaccessible to ordinary owners."""
+    database = build_database(tmp_path, "ban-user-owner-cross-guild.db")
+    _local_community(database, owner_id="111", discord_guild_id=111)
+
+    result = ban_user_operation(
+        BanUserInput(
+            database=database,
+            settings=_settings(super_admins=[]),
+            discord_user_id="111",
+            discord_guild_id=222,
+            community_slug="cats",
+            actor_handle="alice@example.com",
+            reason="spam",
+        )
+    )
+
+    assert result.applied is False
+    assert result.reason == "unknown_or_inaccessible_community"
+    assert result.message == "Unknown or inaccessible local community: cats"
+    assert _ban_count(database) == 0
+
+
+def test_super_admin_can_ban_cross_guild_by_manual_slug(tmp_path: Path) -> None:
+    """Super-admins can use globally unique slugs outside the command guild."""
+    database = build_database(tmp_path, "ban-user-admin-cross-guild.db")
+    community = _local_community(database, owner_id="111", discord_guild_id=111)
+
+    result = ban_user_operation(
+        BanUserInput(
+            database=database,
+            settings=_settings(super_admins=["999"]),
+            discord_user_id="999",
+            discord_guild_id=222,
+            community_slug="cats",
+            actor_handle="alice@example.com",
+            reason="spam",
+        )
+    )
+    ban = database.community_actor_bans.get_active_ban_by_handle(
+        local_community_id=community.id,
+        actor_handle="alice@example.com",
+    )
+
+    assert result.applied is True
+    assert ban is not None
+    assert ban.created_by_discord_user_id == "999"
+
+
+def test_inactive_community_is_inaccessible_for_owner_and_super_admin(tmp_path: Path) -> None:
+    """This stage treats inactive communities as unavailable to moderation."""
+    database = build_database(tmp_path, "ban-user-inactive.db")
+    _local_community(database, owner_id="111", status="inactive")
+
+    owner_result = ban_user_operation(
+        BanUserInput(
+            database=database,
+            settings=_settings(super_admins=[]),
+            discord_user_id="111",
+            discord_guild_id=10,
+            community_slug="cats",
+            actor_handle="alice@example.com",
+            reason=None,
+        )
+    )
+    admin_result = ban_user_operation(
+        BanUserInput(
+            database=database,
+            settings=_settings(super_admins=["999"]),
+            discord_user_id="999",
+            discord_guild_id=10,
+            community_slug="cats",
+            actor_handle="alice@example.com",
+            reason=None,
+        )
+    )
+
+    assert owner_result.reason == "unknown_or_inaccessible_community"
+    assert admin_result.reason == "unknown_or_inaccessible_community"
+    assert _ban_count(database) == 0
+
+
+def test_inaccessible_community_rejects_before_invalid_handle_validation(tmp_path: Path) -> None:
+    """Guild-scope failure must not reveal handle-validation results."""
+    database = build_database(tmp_path, "ban-user-cross-guild-invalid.db")
+    _local_community(database, owner_id="111", discord_guild_id=111)
+
+    result = ban_user_operation(
+        BanUserInput(
+            database=database,
+            settings=_settings(super_admins=[]),
+            discord_user_id="111",
+            discord_guild_id=222,
+            community_slug="cats",
+            actor_handle="https://example.com/u/alice",
+            reason=None,
+        )
+    )
+
+    assert result.applied is False
+    assert result.reason == "unknown_or_inaccessible_community"
+    assert result.message == "Unknown or inaccessible local community: cats"
+    assert _ban_count(database) == 0
+
+
+def test_guildless_owner_call_is_inaccessible(tmp_path: Path) -> None:
+    """Owner access is guild-scoped and requires Discord guild context."""
+    database = build_database(tmp_path, "ban-user-guildless-owner.db")
+    _local_community(database, owner_id="111", discord_guild_id=10)
+
+    result = ban_user_operation(
+        BanUserInput(
+            database=database,
+            settings=_settings(super_admins=[]),
+            discord_user_id="111",
+            discord_guild_id=None,
+            community_slug="cats",
+            actor_handle="alice@example.com",
+            reason=None,
+        )
+    )
+
+    assert result.applied is False
+    assert result.reason == "unknown_or_inaccessible_community"
+    assert _ban_count(database) == 0
+
+
+def test_guildless_super_admin_can_ban_active_community(tmp_path: Path) -> None:
+    """Super-admin access is not tied to one Discord guild context."""
+    database = build_database(tmp_path, "ban-user-guildless-admin.db")
+    community = _local_community(database, owner_id="111", discord_guild_id=10)
+
+    result = ban_user_operation(
+        BanUserInput(
+            database=database,
+            settings=_settings(super_admins=["999"]),
+            discord_user_id="999",
+            discord_guild_id=None,
+            community_slug="cats",
+            actor_handle="alice@example.com",
+            reason=None,
+        )
+    )
+
+    assert result.applied is True
+    assert database.community_actor_bans.get_active_ban_by_handle(
+        local_community_id=community.id,
+        actor_handle="alice@example.com",
+    ) is not None
+
+
 def test_non_owner_non_admin_cannot_ban_in_owned_community(tmp_path: Path) -> None:
     """An unrelated user is rejected and no moderation row is created."""
     database = build_database(tmp_path, "ban-user-denied.db")
@@ -120,6 +282,7 @@ def test_non_owner_non_admin_cannot_ban_in_owned_community(tmp_path: Path) -> No
             database=database,
             settings=_settings(super_admins=[]),
             discord_user_id="222",
+            discord_guild_id=10,
             community_slug="cats",
             actor_handle="alice@example.com",
             reason="spam",
@@ -142,6 +305,7 @@ def test_owner_can_manage_without_super_admin_status(tmp_path: Path) -> None:
             database=database,
             settings=_settings(super_admins=["999"]),
             discord_user_id="111",
+            discord_guild_id=10,
             community_slug="cats",
             actor_handle="alice@example.com",
             reason=None,
@@ -163,6 +327,7 @@ def test_super_admin_can_manage_without_being_owner(tmp_path: Path) -> None:
             database=database,
             settings=_settings(super_admins=["999"]),
             discord_user_id="999",
+            discord_guild_id=10,
             community_slug="cats",
             actor_handle="alice@example.com",
             reason=None,
@@ -183,6 +348,7 @@ def test_legacy_null_owned_community_can_be_managed_by_super_admin(tmp_path: Pat
             database=database,
             settings=_settings(super_admins=["999"]),
             discord_user_id="999",
+            discord_guild_id=10,
             community_slug="cats",
             actor_handle="alice@example.com",
             reason=None,
@@ -203,6 +369,7 @@ def test_legacy_null_owned_community_rejects_ordinary_user(tmp_path: Path) -> No
             database=database,
             settings=_settings(super_admins=[]),
             discord_user_id="111",
+            discord_guild_id=10,
             community_slug="cats",
             actor_handle="alice@example.com",
             reason=None,
@@ -223,6 +390,7 @@ def test_unknown_community_slug_is_rejected_before_other_checks(tmp_path: Path) 
             database=database,
             settings=_settings(super_admins=["123"]),
             discord_user_id="123",
+            discord_guild_id=10,
             community_slug="missing",
             actor_handle="not-a-handle",
             reason=None,
@@ -230,8 +398,8 @@ def test_unknown_community_slug_is_rejected_before_other_checks(tmp_path: Path) 
     )
 
     assert result.applied is False
-    assert result.reason == "unknown_community"
-    assert result.message == "Unknown local community slug: missing"
+    assert result.reason == "unknown_or_inaccessible_community"
+    assert result.message == "Unknown or inaccessible local community: missing"
     assert _ban_count(database) == 0
 
 
@@ -245,6 +413,7 @@ def test_unauthorized_caller_is_rejected_before_invalid_handle_validation(tmp_pa
             database=database,
             settings=_settings(super_admins=[]),
             discord_user_id="222",
+            discord_guild_id=10,
             community_slug="cats",
             actor_handle="https://example.com/u/alice",
             reason=None,
@@ -267,6 +436,7 @@ def test_authorized_caller_with_invalid_handle_is_rejected(tmp_path: Path) -> No
             database=database,
             settings=_settings(super_admins=[]),
             discord_user_id="111",
+            discord_guild_id=10,
             community_slug="cats",
             actor_handle="https://example.com/u/alice",
             reason=None,
@@ -296,6 +466,7 @@ def test_authorized_duplicate_active_ban_reports_existing_reason(tmp_path: Path)
             database=database,
             settings=_settings(super_admins=[]),
             discord_user_id="111",
+            discord_guild_id=10,
             community_slug="cats",
             actor_handle="alice@example.com",
             reason="new reason",
@@ -331,6 +502,7 @@ def test_duplicate_active_ban_without_reason_reports_not_specified(tmp_path: Pat
             database=database,
             settings=_settings(super_admins=[]),
             discord_user_id="111",
+            discord_guild_id=10,
             community_slug="cats",
             actor_handle="alice@example.com",
             reason="new reason",
@@ -352,6 +524,7 @@ def test_discord_user_id_comparison_is_string_exact(tmp_path: Path) -> None:
             database=database,
             settings=_settings(super_admins=[]),
             discord_user_id="0123",
+            discord_guild_id=10,
             community_slug="cats",
             actor_handle="alice@example.com",
             reason=None,
@@ -388,6 +561,7 @@ def test_ban_user_reactivates_inactive_row_after_unban(tmp_path: Path) -> None:
             database=database,
             settings=_settings(super_admins=[]),
             discord_user_id="222",
+            discord_guild_id=10,
             community_slug="cats",
             actor_handle="alice@example.com",
             reason="new reason",
@@ -427,6 +601,7 @@ def test_owner_reban_reactivates_inactive_row_and_updates_active_fields(tmp_path
             database=database,
             settings=_settings(super_admins=[]),
             discord_user_id="111",
+            discord_guild_id=10,
             community_slug="cats",
             actor_handle="alice@example.com",
             reason="new reason",

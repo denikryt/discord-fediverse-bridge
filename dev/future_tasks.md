@@ -38,15 +38,9 @@ This needs a migration/backfill decision for existing communities:
 
 ## 4. Community autocomplete for moderation commands
 
-After creator ownership exists, add autocomplete to `/ban-user` and related commands.
+Status: implemented for `/ban-user`, `/unban-user`, and `/list-banned-users` through plans 74 and 75.
 
-Desired behavior:
-
-- the command value remains the local community slug;
-- autocomplete lists only communities owned by `interaction.user.id`;
-- display labels can include slug, display name, and handle, but the submitted value should stay stable.
-
-Until this exists, v1 uses a manual `community:<slug>` argument.
+The moderation commands now submit stable community slugs, use autocomplete as UX only, and keep runtime preconditions as the security boundary. Remaining autocomplete work belongs to future management commands such as `/edit-community`, disable/archive, and subscription approvals.
 
 ## 5. Discord-originated moderation
 
@@ -272,26 +266,15 @@ Likely editable fields:
 
 ## 21. Unban and ban-list commands after ownership
 
-`/unban-user` and `/list-banned-users` should be implemented after ownership enforcement so they can use the same management permission policy.
+Status: implemented by plan 74.
 
-Expected authorization:
+`/unban-user` deactivates active rows without deleting moderation history. `/list-banned-users` shows active bans with reasons in an ephemeral response. Both commands use guild-aware runtime preconditions and autocomplete helpers.
 
-- community owner can manage bans for their own community;
-- super-admin can manage bans for any local community;
-- unrelated users are rejected at runtime through preconditions.
+## 22. Community autocomplete for future management commands
 
-## 22. Community autocomplete for moderation commands
+Status: moderation command autocomplete is implemented by plans 74 and 75.
 
-Future autocomplete should list communities the caller can manage.
-
-Desired behavior:
-
-- normal owners see their owned communities;
-- super-admins may see all communities;
-- submitted values remain stable community slugs;
-- display labels can include slug, display name, and handle.
-
-Autocomplete is UX only. Runtime preconditions must remain the security boundary.
+Future management commands should follow the same pattern: autocomplete lists context-appropriate communities, submitted values remain stable community slugs, and runtime preconditions remain the security boundary. This still applies to future commands such as `/edit-community`, disable/archive, subscription approvals, and any broader role-system command surface.
 
 ## 23. Dynamic Discord command visibility
 
