@@ -13,6 +13,16 @@ from .config import Settings
 from .models import LocalCommunity
 
 
+def is_super_admin(*, settings: Settings, discord_user_id: str) -> bool:
+    """Return whether the Discord user id is configured as a super-admin.
+
+    The project currently stores the super-admin ids in the historical
+    `local_community_operator_allowlist` setting. Keep comparison string-based
+    because Discord snowflakes are opaque identifiers, not numbers.
+    """
+    return discord_user_id in settings.local_community_operator_allowlist
+
+
 def can_manage_local_community(
     *,
     settings: Settings,
@@ -21,15 +31,10 @@ def can_manage_local_community(
 ) -> bool:
     """Return whether a Discord user may manage one local community.
 
-    The current configured local-community operator allowlist acts as the
-    bridge super-admin list for management commands. Super-admins can manage any
-    community, including legacy rows whose creator id is still NULL after the
-    additive ownership migration. Non-admin callers must match the stored
-    creator id exactly as a string.
+    Super-admins can manage any community, including legacy rows whose creator
+    id is NULL. Non-admin callers must match the stored creator id exactly.
     """
-    # Discord ids are opaque snowflake strings for this policy. Avoid integer
-    # coercion so ids such as "123" and "0123" never compare as equal.
-    if discord_user_id in settings.local_community_operator_allowlist:
+    if is_super_admin(settings=settings, discord_user_id=discord_user_id):
         return True
 
     owner_id = getattr(local_community, "created_by_discord_user_id", None)
@@ -39,3 +44,34 @@ def can_manage_local_community(
         return False
 
     return owner_id == discord_user_id
+
+
+def is_same_guild(
+    *,
+    discord_guild_id: int | None,
+    local_community: LocalCommunity,
+) -> bool:
+    """Return whether the command guild matches the community's owning guild."""
+    return discord_guild_id == getattr(local_community, "discord_guild_id", None)
+
+
+def can_access_local_community_from_guild(
+    *,
+    settings: Settings,
+    discord_user_id: str,
+    discord_guild_id: int | None,
+    local_community: LocalCommunity,
+) -> bool:
+    """Return whether a command may address a community from this guild.
+
+    Normal users are scoped to the current guild. Super-admins can manually
+    enter a globally unique slug from another guild, so cross-guild access is
+    allowed only through the explicit super-admin branch.
+    """
+    if getattr(local_community, "status", None) != "active":
+        # Management/list commands operate only on active communities in this
+        # stage. Inactive community lifecycle semantics belong to a later plan.
+        return False
+    if is_super_admin(settings=settings, discord_user_id=discord_user_id):
+        return True
+    return is_same_guild(discord_guild_id=discord_guild_id, local_community=local_community)

@@ -105,3 +105,52 @@ class LocalCommunityRepository(BaseRepository):
                 return list(
                     session.scalars(select(LocalCommunity).order_by(LocalCommunity.created_at, LocalCommunity.id))
                 )
+
+    def list_active_local_communities_by_guild(
+        self,
+        *,
+        discord_guild_id: int,
+    ) -> list[LocalCommunity]:
+            """Return active local communities for one Discord guild by slug."""
+            with self.session() as session:
+                return list(
+                    session.scalars(
+                        select(LocalCommunity)
+                        .where(
+                            LocalCommunity.discord_guild_id == discord_guild_id,
+                            LocalCommunity.status == "active",
+                        )
+                        .order_by(LocalCommunity.slug, LocalCommunity.id)
+                    )
+                )
+
+    def list_active_local_communities_owned_by_user_in_guild(
+        self,
+        *,
+        discord_guild_id: int,
+        created_by_discord_user_id: str,
+    ) -> list[LocalCommunity]:
+            """Return active guild communities owned by one Discord user id."""
+            with self.session() as session:
+                return list(
+                    session.scalars(
+                        select(LocalCommunity)
+                        .where(
+                            LocalCommunity.discord_guild_id == discord_guild_id,
+                            LocalCommunity.created_by_discord_user_id == created_by_discord_user_id,
+                            LocalCommunity.status == "active",
+                        )
+                        .order_by(LocalCommunity.slug, LocalCommunity.id)
+                    )
+                )
+
+    def list_active_local_communities(self) -> list[LocalCommunity]:
+            """Return every active local community across guilds by slug."""
+            with self.session() as session:
+                return list(
+                    session.scalars(
+                        select(LocalCommunity)
+                        .where(LocalCommunity.status == "active")
+                        .order_by(LocalCommunity.slug, LocalCommunity.id)
+                    )
+                )

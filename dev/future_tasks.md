@@ -6,41 +6,15 @@ This journal collects deferred work discovered while planning or implementing br
 
 ## 1. Unban command
 
-Add an explicit command for removing or deactivating a ban:
+Status: implemented by plan 74. The command deactivates active rows, keeps responses ephemeral, uses owner/super-admin runtime checks, and does not expose inactive historical rows through no-active-ban errors.
 
-```text
-/unban-user community:<slug> user:<user@example.com>
-```
-
-Preferred behavior: do not delete the ban row. Mark it inactive so moderation history remains available:
-
-```text
-community_actor_bans.status = inactive
-```
-
-The unban command should define:
-
-- whether it requires the same permission model as `/ban-user`;
-- whether it reports the original ban reason/date;
-- whether it can reactivate old rows or only deactivate active rows;
-- how duplicate unban attempts are reported.
+Remaining future work belongs under the audit/history and pagination items below rather than this completed command stub.
 
 ## 2. List banned users command
 
-Add a command for inspecting active bans:
+Status: implemented by plan 74 for active bans. The command is public to invoke within a guild, returns ephemeral output, shows handles and reasons, and limits visible rows to the first 20 active bans.
 
-```text
-/list-banned-users community:<slug>
-```
-
-Expected use: community operators should be able to see which remote actors are currently banned and why.
-
-Open details:
-
-- whether the response is ephemeral only;
-- how to paginate large ban lists;
-- whether to include `actor_url` cache values;
-- whether inactive historical bans should be visible in a separate command or option.
+Remaining future work: real pagination, inactive history listing, dashboard exposure decisions, and audit-log support.
 
 ## 3. Creator ownership persistence and enforcement
 

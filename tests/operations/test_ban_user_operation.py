@@ -361,3 +361,87 @@ def test_discord_user_id_comparison_is_string_exact(tmp_path: Path) -> None:
     assert result.applied is False
     assert result.reason == "cannot_manage_community"
     assert _ban_count(database) == 0
+
+
+def test_ban_user_reactivates_inactive_row_after_unban(tmp_path: Path) -> None:
+    """Repeated ban/unban reuses the inactive row under current uniqueness."""
+    database = build_database(tmp_path, "ban-user-reactivate.db")
+    community = _local_community(database, owner_id="111")
+    original = database.community_actor_bans.create_active_ban(
+        local_community_id=community.id,
+        actor_handle="alice@example.com",
+        actor_url=None,
+        created_by_discord_user_id="111",
+        reason="old reason",
+    )
+    database.community_actor_bans.deactivate_active_ban_by_handle(
+        local_community_id=community.id,
+        actor_handle="alice@example.com",
+    )
+    inactive = database.community_actor_bans.get_inactive_ban_by_handle(
+        local_community_id=community.id,
+        actor_handle="alice@example.com",
+    )
+
+    result = ban_user_operation(
+        BanUserInput(
+            database=database,
+            settings=_settings(super_admins=[]),
+            discord_user_id="222",
+            community_slug="cats",
+            actor_handle="alice@example.com",
+            reason="new reason",
+        )
+    )
+    active = database.community_actor_bans.get_active_ban_by_handle(
+        local_community_id=community.id,
+        actor_handle="alice@example.com",
+    )
+
+    assert result.applied is False
+    assert result.reason == "cannot_manage_community"
+    assert active is None
+    assert inactive is not None
+    assert inactive.id == original.id
+
+
+def test_owner_reban_reactivates_inactive_row_and_updates_active_fields(tmp_path: Path) -> None:
+    """Owner re-ban after unban reuses row and updates current active metadata."""
+    database = build_database(tmp_path, "ban-user-owner-reactivate.db")
+    community = _local_community(database, owner_id="111")
+    original = database.community_actor_bans.create_active_ban(
+        local_community_id=community.id,
+        actor_handle="alice@example.com",
+        actor_url=None,
+        created_by_discord_user_id="999",
+        reason="old reason",
+    )
+    original_created_at = original.created_at
+    database.community_actor_bans.deactivate_active_ban_by_handle(
+        local_community_id=community.id,
+        actor_handle="alice@example.com",
+    )
+
+    result = ban_user_operation(
+        BanUserInput(
+            database=database,
+            settings=_settings(super_admins=[]),
+            discord_user_id="111",
+            community_slug="cats",
+            actor_handle="alice@example.com",
+            reason="new reason",
+        )
+    )
+    active = database.community_actor_bans.get_active_ban_by_handle(
+        local_community_id=community.id,
+        actor_handle="alice@example.com",
+    )
+
+    assert result.applied is True
+    assert active is not None
+    assert active.id == original.id
+    assert active.status == "active"
+    assert active.reason == "new reason"
+    assert active.created_by_discord_user_id == "111"
+    assert active.created_at.replace(tzinfo=None) == original_created_at.replace(tzinfo=None)
+    assert _ban_count(database) == 1

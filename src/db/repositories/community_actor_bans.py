@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from sqlalchemy import select
+from sqlalchemy import func, select
 
 from ...models import CommunityActorBan, utcnow
 from .base import BaseRepository
@@ -20,13 +20,33 @@ class CommunityActorBanRepository(BaseRepository):
         created_by_discord_user_id: str,
         reason: str | None,
     ) -> CommunityActorBan:
-        """Create one active ban row scoped to one local community.
+        """Create or reactivate one active ban row scoped to one community.
 
-        Duplicate detection is performed by callers before this method so user
-        messages can include the existing reason. The database uniqueness rule
-        still protects the invariant under concurrent command attempts.
+        Duplicate active-ban detection is performed by callers before this
+        method so command messages can include the existing reason. If the same
+        actor was previously unbanned, this method reuses the inactive row. That
+        preserves the current `(community, handle, status)` uniqueness rule and
+        prevents repeated ban/unban cycles from colliding on multiple inactive
+        rows.
         """
         with self.session() as session:
+            inactive = session.scalar(
+                select(CommunityActorBan).where(
+                    CommunityActorBan.local_community_id == local_community_id,
+                    CommunityActorBan.actor_handle == actor_handle,
+                    CommunityActorBan.status == "inactive",
+                )
+            )
+            if inactive is not None:
+                inactive.status = "active"
+                inactive.reason = reason
+                inactive.created_by_discord_user_id = created_by_discord_user_id
+                if actor_url and not inactive.actor_url:
+                    inactive.actor_url = actor_url
+                inactive.updated_at = utcnow()
+                session.flush()
+                return inactive
+
             ban = CommunityActorBan(
                 local_community_id=local_community_id,
                 actor_handle=actor_handle,
@@ -55,6 +75,22 @@ class CommunityActorBanRepository(BaseRepository):
                 )
             )
 
+    def get_inactive_ban_by_handle(
+        self,
+        *,
+        local_community_id: int,
+        actor_handle: str,
+    ) -> CommunityActorBan | None:
+        """Load the inactive historical ban row for one community and handle."""
+        with self.session() as session:
+            return session.scalar(
+                select(CommunityActorBan).where(
+                    CommunityActorBan.local_community_id == local_community_id,
+                    CommunityActorBan.actor_handle == actor_handle,
+                    CommunityActorBan.status == "inactive",
+                )
+            )
+
     def get_active_ban_by_actor_url(
         self,
         *,
@@ -69,6 +105,63 @@ class CommunityActorBanRepository(BaseRepository):
                     CommunityActorBan.actor_url == actor_url,
                     CommunityActorBan.status == "active",
                 )
+            )
+
+    def deactivate_active_ban_by_handle(
+        self,
+        *,
+        local_community_id: int,
+        actor_handle: str,
+    ) -> CommunityActorBan | None:
+        """Mark an active ban inactive without deleting moderation history."""
+        with self.session() as session:
+            ban = session.scalar(
+                select(CommunityActorBan).where(
+                    CommunityActorBan.local_community_id == local_community_id,
+                    CommunityActorBan.actor_handle == actor_handle,
+                    CommunityActorBan.status == "active",
+                )
+            )
+            if ban is None:
+                return None
+            ban.status = "inactive"
+            ban.updated_at = utcnow()
+            session.flush()
+            return ban
+
+    def list_active_bans_for_community(
+        self,
+        *,
+        local_community_id: int,
+        limit: int | None = None,
+        offset: int = 0,
+    ) -> list[CommunityActorBan]:
+        """Return active bans for one community ordered newest first."""
+        statement = (
+            select(CommunityActorBan)
+            .where(
+                CommunityActorBan.local_community_id == local_community_id,
+                CommunityActorBan.status == "active",
+            )
+            .order_by(CommunityActorBan.created_at.desc(), CommunityActorBan.id.desc())
+            .offset(offset)
+        )
+        if limit is not None:
+            statement = statement.limit(limit)
+        with self.session() as session:
+            return list(session.scalars(statement))
+
+    def count_active_bans_for_community(self, *, local_community_id: int) -> int:
+        """Count active bans for one community without loading each row."""
+        with self.session() as session:
+            return int(
+                session.scalar(
+                    select(func.count(CommunityActorBan.id)).where(
+                        CommunityActorBan.local_community_id == local_community_id,
+                        CommunityActorBan.status == "active",
+                    )
+                )
+                or 0
             )
 
     def find_active_ban_for_actor(

@@ -38,14 +38,14 @@ This document is a task-oriented reading guide for maintainers changing or debug
 
 
 ## Local community user bans
-1. `src/commands/ban_user.py` — Discord slash command adapter.
-2. `src/operations/ban_user.py` — `discordops` preconditions, owner/super-admin authorization, slug lookup, handle validation, duplicate behavior.
+1. `src/commands/ban_user.py`; `src/commands/unban_user.py`; `src/commands/list_banned_users.py` — Discord slash command adapters and autocomplete.
+2. `src/operations/ban_user.py`; `src/operations/unban_user.py`; `src/operations/list_banned_users.py` — `discordops` preconditions, guild scoping, owner/super-admin authorization, handle validation, list formatting, and unban behavior.
 3. `src/fediverse_identity.py` — command handle normalization and hot-path actor URL extraction.
-4. `src/local_community_permissions.py` — command-side owner-or-super-admin management policy.
-5. `src/community_moderation.py` — inbound ban resolution before local-community side effects.
-6. `src/activitypub_handlers.py` — dispatch integration after receipt/idempotency begins.
-7. `src/db/repositories/community_actor_bans.py` — scoped active-ban persistence.
-8. `tests/behavior/test_local_community_user_ban_scenarios.py`; 9. `tests/operations/test_ban_user_operation.py`; 10. `tests/commands/test_ban_user_command.py`; 11. `tests/test_local_community_permissions.py`; 12. `tests/test_fediverse_identity.py`.
+4. `src/local_community_permissions.py` — command-side owner/super-admin and guild-access policy.
+5. `src/db/repositories/community_actor_bans.py` — scoped active-ban persistence, inactive-row reactivation, list/count/deactivate helpers.
+6. `src/community_moderation.py` — inbound ban resolution before local-community side effects.
+7. `src/activitypub_handlers.py` — dispatch integration after receipt/idempotency begins.
+8. `tests/behavior/test_local_community_user_ban_scenarios.py`; 9. `tests/operations/test_ban_user_operation.py`; 10. `tests/operations/test_unban_user_operation.py`; 11. `tests/operations/test_list_banned_users_operation.py`; 12. `tests/commands/test_ban_user_command.py`; 13. `tests/commands/test_unban_user_command.py`; 14. `tests/commands/test_list_banned_users_command.py`; 15. `tests/test_local_community_permissions.py`; 16. `tests/test_fediverse_identity.py`.
 
 ## Remote Follow handling for local communities
 1. `fedify-gateway/src/federation.ts`; 2. `fedify-gateway/src/normalize.ts`; 3. `src/activitypub_handlers.py`; 4. `src/local_communities/runtime.py`; 5. `src/fedify_gateway_client.py`.
