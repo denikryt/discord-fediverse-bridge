@@ -253,16 +253,9 @@ A later plan should define whether the project needs:
 
 ## 20. Edit community command
 
-Future `/edit-community` work should use the same owner-or-super-admin permission helper and `discordops` precondition style.
+Status: local metadata editing is planned by plan 76.
 
-The command should define which fields are editable and which edits affect federation-visible actor data.
-
-Likely editable fields:
-
-- display name;
-- summary/description;
-- visibility or subscription policy;
-- disabled/enabled state once disable/archive exists.
+`/edit-community` v1 edits only display name and summary through a Discord modal. It uses owner-or-super-admin runtime preconditions, keeps edits local-only, and allows clearing summary to NULL. Broader community settings remain future work.
 
 ## 21. Unban and ban-list commands after ownership
 
@@ -312,3 +305,28 @@ A future audit model could cover:
 - edit-community actions;
 - role and super-admin changes;
 - legacy claim/backfill actions.
+
+## 26. Federated community metadata updates
+
+`/edit-community` v1 is local-only. A later plan should research and implement outbound ActivityPub/Lemmy-compatible metadata updates when a local community display name or summary changes.
+
+Open details:
+
+- which ActivityPub object/activity shape compatible servers expect;
+- whether updates should be sent to all remote followers or only selected inboxes;
+- how to sign and deduplicate metadata update deliveries;
+- how failures should be retried or surfaced to operators;
+- whether local actor routes need explicit cache-control changes.
+
+## 27. Richer community settings editing
+
+After `/edit-community` v1, a later plan should decide how to edit settings beyond display metadata.
+
+Candidate fields:
+
+- visibility or subscription policy;
+- disabled/enabled/archive state;
+- Discord forum binding changes;
+- ownership transfer or moderator assignment.
+
+These should not be mixed into the local metadata edit because they affect lifecycle, authorization, routing, and possibly federation behavior.

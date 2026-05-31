@@ -179,8 +179,8 @@ def test_invalid_slug_does_not_create_partial_owned_row(tmp_path: Path) -> None:
     assert database.local_communities.list_local_communities() == []
 
 
-def test_blank_name_or_description_does_not_create_partial_owned_row(tmp_path: Path) -> None:
-    """Missing required text must fail before actor or owner state is persisted."""
+def test_blank_name_does_not_create_partial_owned_row(tmp_path: Path) -> None:
+    """Missing required display text must fail before actor state is persisted."""
     database = build_database(tmp_path, "local-community-registration-blank-text.db")
 
     blank_name = create_community_operation(
@@ -195,21 +195,65 @@ def test_blank_name_or_description_does_not_create_partial_owned_row(tmp_path: P
             description="A local hackerspace forum.",
         )
     )
-    blank_description = create_community_operation(
+
+    assert blank_name.applied is False
+    assert database.local_communities.list_local_communities() == []
+
+
+def test_create_local_community_allows_missing_or_blank_description(tmp_path: Path) -> None:
+    """Create-community now treats omitted and blank descriptions as NULL."""
+    database = build_database(tmp_path, "local-community-registration-null-summary.db")
+
+    omitted = create_community_operation(
+        CreateCommunityInput(
+            database=database,
+            settings=_settings(),
+            discord_user_id="123",
+            discord_guild_id=10,
+            discord_forum_channel_id=100,
+            slug="cats",
+            name="Cats",
+            description=None,
+        )
+    )
+    blank = create_community_operation(
         CreateCommunityInput(
             database=database,
             settings=_settings(),
             discord_user_id="123",
             discord_guild_id=10,
             discord_forum_channel_id=101,
-            slug="makers",
-            name="Makers",
-            description=" ",
+            slug="dogs",
+            name="Dogs",
+            description="   ",
         )
     )
 
-    assert blank_name.applied is False
-    assert blank_description.applied is False
+    assert omitted.applied is True
+    assert blank.applied is True
+    assert database.local_communities.get_local_community_by_slug("cats").summary is None
+    assert database.local_communities.get_local_community_by_slug("dogs").summary is None
+
+
+def test_create_local_community_rejects_too_long_description(tmp_path: Path) -> None:
+    """Description length validation protects the nullable summary column."""
+    database = build_database(tmp_path, "local-community-registration-long-summary.db")
+
+    result = create_community_operation(
+        CreateCommunityInput(
+            database=database,
+            settings=_settings(),
+            discord_user_id="123",
+            discord_guild_id=10,
+            discord_forum_channel_id=100,
+            slug="cats",
+            name="Cats",
+            description="x" * 1001,
+        )
+    )
+
+    assert result.applied is False
+    assert result.message == "Community summary must be 1000 characters or fewer."
     assert database.local_communities.list_local_communities() == []
 
 
@@ -311,6 +355,9 @@ def test_existing_database_migration_adds_nullable_owner_column(tmp_path: Path) 
     assert migrated is not None
     assert migrated.created_by_discord_user_id is None
     assert migrated.display_name == "Cats"
+    with database.engine.connect() as conn:
+        summary_column = [row for row in conn.execute(text("PRAGMA table_info(local_communities)")).fetchall() if row[1] == "summary"][0]
+    assert summary_column[3] == 0
 
 
 def test_owner_column_migration_is_idempotent(tmp_path: Path) -> None:
@@ -326,3 +373,117 @@ def test_owner_column_migration_is_idempotent(tmp_path: Path) -> None:
     owner_columns = [row for row in columns if row[1] == "created_by_discord_user_id"]
 
     assert len(owner_columns) == 1
+
+
+def test_summary_nullable_migration_preserves_unique_constraints(tmp_path: Path) -> None:
+    """Rebuilt local_communities table must keep identity uniqueness constraints."""
+    db_path = tmp_path / "summary-nullable-constraints.db"
+    engine = create_engine(f"sqlite:///{db_path}", future=True)
+    with engine.begin() as conn:
+        conn.execute(text("CREATE TABLE local_community_threads (id INTEGER PRIMARY KEY AUTOINCREMENT)"))
+        conn.execute(text("CREATE TABLE local_community_messages (id INTEGER PRIMARY KEY AUTOINCREMENT)"))
+        conn.execute(
+            text(
+                """
+                CREATE TABLE channel_community_subscriptions (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    discord_channel_id INTEGER NOT NULL,
+                    lemmy_community_actor_id VARCHAR(512) NOT NULL,
+                    status VARCHAR(32) NOT NULL,
+                    created_at DATETIME NOT NULL,
+                    updated_at DATETIME NOT NULL
+                )
+                """
+            )
+        )
+        conn.execute(
+            text(
+                """
+                CREATE TABLE local_communities (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    discord_guild_id INTEGER NOT NULL,
+                    discord_forum_channel_id INTEGER NOT NULL UNIQUE,
+                    slug VARCHAR(255) NOT NULL UNIQUE,
+                    display_name VARCHAR(255) NOT NULL,
+                    summary VARCHAR NOT NULL,
+                    actor_url VARCHAR(512) NOT NULL UNIQUE,
+                    inbox_url VARCHAR(512) NOT NULL,
+                    outbox_url VARCHAR(512) NOT NULL,
+                    followers_url VARCHAR(512) NOT NULL,
+                    public_key_pem VARCHAR NOT NULL,
+                    private_key_pem VARCHAR NOT NULL,
+                    status VARCHAR(32) NOT NULL,
+                    created_at DATETIME NOT NULL,
+                    updated_at DATETIME NOT NULL
+                )
+                """
+            )
+        )
+        conn.execute(
+            text(
+                """
+                INSERT INTO local_communities (
+                    discord_guild_id, discord_forum_channel_id, slug, display_name, summary,
+                    actor_url, inbox_url, outbox_url, followers_url, public_key_pem, private_key_pem,
+                    status, created_at, updated_at
+                ) VALUES (
+                    10, 100, 'cats', 'Cats', 'Cat photos.',
+                    'https://bridge.example/communities/cats',
+                    'https://bridge.example/communities/cats/inbox',
+                    'https://bridge.example/communities/cats/outbox',
+                    'https://bridge.example/communities/cats/followers',
+                    'public-key', 'private-key', 'active', '2026-01-01 00:00:00', '2026-01-01 00:00:00'
+                )
+                """
+            )
+        )
+    engine.dispose()
+
+    database = Database(f"sqlite:///{db_path}")
+    database.migrate()
+
+    with database.engine.begin() as conn:
+        summary_column = [row for row in conn.execute(text("PRAGMA table_info(local_communities)")).fetchall() if row[1] == "summary"][0]
+        assert summary_column[3] == 0
+        for duplicate_sql in (
+            """
+            INSERT INTO local_communities (
+                discord_guild_id, discord_forum_channel_id, slug, display_name, summary,
+                actor_url, inbox_url, outbox_url, followers_url, public_key_pem, private_key_pem,
+                status, created_at, updated_at
+            ) VALUES (10, 100, 'dogs', 'Dogs', NULL, 'https://bridge.example/communities/dogs',
+                'i', 'o', 'f', 'public', 'private', 'active', '2026-01-01', '2026-01-01')
+            """,
+            """
+            INSERT INTO local_communities (
+                discord_guild_id, discord_forum_channel_id, slug, display_name, summary,
+                actor_url, inbox_url, outbox_url, followers_url, public_key_pem, private_key_pem,
+                status, created_at, updated_at
+            ) VALUES (10, 101, 'cats', 'Cats 2', NULL, 'https://bridge.example/communities/cats-2',
+                'i', 'o', 'f', 'public', 'private', 'active', '2026-01-01', '2026-01-01')
+            """,
+            """
+            INSERT INTO local_communities (
+                discord_guild_id, discord_forum_channel_id, slug, display_name, summary,
+                actor_url, inbox_url, outbox_url, followers_url, public_key_pem, private_key_pem,
+                status, created_at, updated_at
+            ) VALUES (10, 102, 'birds', 'Birds', NULL, 'https://bridge.example/communities/cats',
+                'i', 'o', 'f', 'public', 'private', 'active', '2026-01-01', '2026-01-01')
+            """,
+        ):
+            try:
+                conn.execute(text(duplicate_sql))
+            except Exception as exc:
+                assert "UNIQUE" in str(exc).upper()
+            else:
+                raise AssertionError("Expected migrated unique constraint to reject duplicate identity")
+
+
+def test_fresh_database_local_community_summary_is_nullable(tmp_path: Path) -> None:
+    """Fresh schema created from current models should allow NULL summaries."""
+    database = build_database(tmp_path, "fresh-null-summary.db")
+
+    with database.engine.connect() as conn:
+        summary_column = [row for row in conn.execute(text("PRAGMA table_info(local_communities)")).fetchall() if row[1] == "summary"][0]
+
+    assert summary_column[3] == 0

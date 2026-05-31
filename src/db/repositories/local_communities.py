@@ -32,7 +32,7 @@ class LocalCommunityRepository(BaseRepository):
             discord_forum_channel_id: int,
             slug: str,
             display_name: str,
-            summary: str,
+            summary: str | None,
             created_by_discord_user_id: str,
             actor_url: str,
             inbox_url: str,
@@ -154,3 +154,25 @@ class LocalCommunityRepository(BaseRepository):
                         .order_by(LocalCommunity.slug, LocalCommunity.id)
                     )
                 )
+
+    def update_local_community_metadata(
+        self,
+        *,
+        local_community_id: int,
+        display_name: str,
+        summary: str | None,
+    ) -> LocalCommunity | None:
+            """Update editable metadata for one local community row.
+
+            The edit command intentionally mutates only local display metadata.
+            Slug, actor URLs, Discord binding, status, and ownership are stable
+            identity fields and must not be changed by this repository method.
+            """
+            with self.session() as session:
+                community = session.get(LocalCommunity, local_community_id)
+                if community is None:
+                    return None
+                community.display_name = display_name
+                community.summary = summary
+                session.flush()
+                return community

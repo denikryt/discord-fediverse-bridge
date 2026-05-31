@@ -76,7 +76,7 @@ async def test_create_community_command_stores_guild_and_forum_snapshots(
     create_community.register(command_tree, database, _settings())
 
     command = command_tree.commands["create_community"]
-    await command.callback(interaction, "hackers", "Hackers", "A local forum", forum)
+    await command.callback(interaction, "hackers", "Hackers", forum, "A local forum")
 
     guild_snapshot = database.discord_directory.get_guild_snapshot(99999)
     channel_snapshot = database.discord_directory.get_channel_snapshot(forum.id)

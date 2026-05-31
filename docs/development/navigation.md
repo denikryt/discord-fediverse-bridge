@@ -37,6 +37,16 @@ This document is a task-oriented reading guide for maintainers changing or debug
 1. `fedify-gateway/src/server.ts`; 2. `fedify-gateway/src/actor-store.ts`; 3. `fedify-gateway/src/actors.ts`; 4. `fedify-gateway/src/webfinger.ts`.
 
 
+
+## Local community metadata editing
+1. `src/commands/edit_community.py` — slash command, community autocomplete, Discord modal opening, and modal submit adapter.
+2. `src/operations/edit_community.py` — `discordops` runtime preconditions and metadata update behavior.
+3. `src/local_communities/service.py` — shared display-name and summary validation for create/edit flows.
+4. `src/db/repositories/local_communities.py` — local-community create/list/update persistence helpers.
+5. `src/local_community_permissions.py` — owner/super-admin and guild-access policy shared by management commands.
+6. `src/db/migrations.py` — nullable summary compatibility migration for existing SQLite DBs.
+7. `tests/commands/test_edit_community_command.py`; 8. `tests/operations/test_edit_community_operation.py`; 9. `tests/behavior/test_local_community_registration_scenarios.py`.
+
 ## Local community user bans
 1. `src/commands/ban_user.py`; `src/commands/unban_user.py`; `src/commands/list_banned_users.py` — Discord slash command adapters and autocomplete.
 2. `src/operations/ban_user.py`; `src/operations/unban_user.py`; `src/operations/list_banned_users.py` — `discordops` preconditions, guild scoping, owner/super-admin authorization, handle validation, list formatting, and unban behavior.

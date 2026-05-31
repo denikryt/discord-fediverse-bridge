@@ -24,7 +24,7 @@ class CreateCommunityInput:
     discord_forum_channel_id: int
     slug: str
     name: str
-    description: str
+    description: str | None
 
 
 @dataclass(slots=True)

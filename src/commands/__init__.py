@@ -3,6 +3,7 @@
 from . import (
     ban_user,
     create_community,
+    edit_community,
     list_banned_users,
     list_subs,
     register,
@@ -14,6 +15,7 @@ from . import (
 __all__ = [
     "ban_user",
     "create_community",
+    "edit_community",
     "list_banned_users",
     "list_subs",
     "register",

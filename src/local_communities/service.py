@@ -17,6 +17,38 @@ from ..registration_service import generate_rsa_keypair_pem
 SLUG_PATTERN = re.compile(r"^[a-z0-9_-]+$")
 
 
+def normalize_display_name(value: str) -> str:
+    """Normalize and validate a local-community display name.
+
+    Display names are user-visible metadata, so both create and edit flows use
+    the same constraints before persistence: trim whitespace, require a value,
+    and keep the stored string within the Discord modal v1 limit.
+    """
+    normalized = value.strip()
+    if not normalized:
+        raise LocalCommunityError("Community display name is required.")
+    if len(normalized) > 100:
+        raise LocalCommunityError("Community display name must be 100 characters or fewer.")
+    return normalized
+
+
+def normalize_summary(value: str | None) -> str | None:
+    """Normalize optional local-community summary text for create and edit.
+
+    A missing or whitespace-only summary is stored as NULL. Keeping this rule in
+    the domain service avoids drift between `/create_community` and the modal
+    submit path for `/edit-community`.
+    """
+    if value is None:
+        return None
+    normalized = value.strip()
+    if not normalized:
+        return None
+    if len(normalized) > 1000:
+        raise LocalCommunityError("Community summary must be 1000 characters or fewer.")
+    return normalized
+
+
 class LocalCommunityError(Exception):
     """Signal that a local-community creation request violates policy."""
 
@@ -27,7 +59,7 @@ class CreatedLocalCommunity:
 
     slug: str
     display_name: str
-    summary: str
+    summary: str | None
     actor_url: str
     inbox_url: str
     outbox_url: str
@@ -58,7 +90,7 @@ class LocalCommunityService:
         discord_forum_channel_id: int,
         slug: str,
         name: str,
-        description: str,
+        description: str | None,
         created_by_discord_user_id: str,
     ) -> CreatedLocalCommunity:
         """Create one Discord-backed local community with stable actor metadata.
@@ -69,12 +101,8 @@ class LocalCommunityService:
         """
         normalized_slug = slug.strip().lower()
         self.validate_slug(normalized_slug)
-        normalized_name = name.strip()
-        normalized_description = description.strip()
-        if not normalized_name:
-            raise LocalCommunityError("Community name is required.")
-        if not normalized_description:
-            raise LocalCommunityError("Community description is required.")
+        normalized_name = normalize_display_name(name)
+        normalized_description = normalize_summary(description)
         if self.database.local_communities.get_local_community_by_slug(normalized_slug) is not None:
             raise LocalCommunityError("That community slug is already taken.")
         if (

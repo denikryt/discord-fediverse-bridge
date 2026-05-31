@@ -396,7 +396,7 @@ class LocalCommunity(Base):
     discord_forum_channel_id: Mapped[int] = mapped_column(Integer, nullable=False)
     slug: Mapped[str] = mapped_column(String(255), nullable=False)
     display_name: Mapped[str] = mapped_column(String(255), nullable=False)
-    summary: Mapped[str] = mapped_column(String, nullable=False)
+    summary: Mapped[str | None] = mapped_column(String, nullable=True)
     created_by_discord_user_id: Mapped[str | None] = mapped_column(String(64), nullable=True)
     actor_url: Mapped[str] = mapped_column(String(512), nullable=False)
     inbox_url: Mapped[str] = mapped_column(String(512), nullable=False)

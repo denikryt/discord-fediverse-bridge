@@ -25,7 +25,7 @@ def register(
     @app_commands.describe(
         slug="Stable community slug used in handles and URLs",
         name="Human-readable community name",
-        description="Community description shown to Lemmy followers",
+        description="Optional community description shown to Lemmy followers",
         channel="Forum channel to bind to this local community",
     )
     @app_commands.default_permissions(manage_channels=True)
@@ -33,8 +33,8 @@ def register(
         interaction: discord.Interaction,
         slug: str,
         name: str,
-        description: str,
         channel: discord.ForumChannel,
+        description: str | None = None,
     ) -> None:
         guild_id = interaction.guild_id
         if guild_id is None:

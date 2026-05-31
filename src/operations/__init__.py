@@ -8,6 +8,7 @@ from .create_community import (
     CreateCommunityResult,
     create_community_operation,
 )
+from .edit_community import EditCommunityInput, EditCommunityResult, edit_community_operation
 from .list_subscriptions import ListSubscriptionsInput, list_subscriptions_operation
 from .subscribe_local_community import (
     SubscribeLocalCommunityInput,
@@ -29,6 +30,8 @@ __all__ = [
     "ListBannedUsersResult",
     "CreateCommunityInput",
     "CreateCommunityResult",
+    "EditCommunityInput",
+    "EditCommunityResult",
     "ListSubscriptionsInput",
     "SubscribeLocalCommunityInput",
     "SubscribeInput",
@@ -38,6 +41,7 @@ __all__ = [
     "unban_user_operation",
     "list_banned_users_operation",
     "create_community_operation",
+    "edit_community_operation",
     "list_subscriptions_operation",
     "subscribe_local_community_operation",
     "subscribe_operation",

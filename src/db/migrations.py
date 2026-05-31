@@ -1,9 +1,12 @@
-"""Additive schema migration helpers for the bridge database.
+"""Additive and compatibility schema migration helpers for bridge SQLite DBs.
 
 Database owns the engine and calls this module from `Database.migrate()`. The
-helpers here preserve the previous SQLite additive migration behavior and do
-not create independent engines or session factories.
+helpers preserve the previous additive migration behavior and include one narrow
+SQLite table-rebuild migration for the local-community summary nullability
+change, because SQLite cannot drop a NOT NULL constraint in place.
 """
+
+from __future__ import annotations
 
 from sqlalchemy import text
 from sqlalchemy.engine import Connection, Engine
@@ -12,15 +15,13 @@ from ..models import Base, CommunityActorBan, LocalCommunityMessageSurface, Loca
 
 
 def migrate(engine: Engine) -> None:
-    """Apply additive schema migrations that create_all cannot handle.
+    """Apply schema migrations that `create_all()` cannot handle.
 
-    create_all only creates missing tables — it never alters existing ones.
-    Each entry is a (table, column, ALTER statement) triple. The column is
-    checked via PRAGMA table_info before executing, making each migration
-    idempotent. SQLite does not support ALTER TABLE ... ADD COLUMN IF NOT EXISTS.
+    `create_all()` creates missing tables but does not alter existing columns.
+    Most migrations are additive column/table changes. The local-community
+    summary migration is intentionally handled separately because changing
+    nullable constraints in SQLite requires rebuilding the table.
     """
-    # discord_guild_id was added to channel_community_subscriptions after
-    # initial deployment; existing databases need the column added.
     migrations = [
         (
             "channel_community_subscriptions",
@@ -50,6 +51,7 @@ def migrate(engine: Engine) -> None:
             existing = _table_columns(conn, table)
             if column not in existing:
                 conn.execute(text(stmt))
+        _migrate_local_communities_summary_nullable(conn)
         # Stage 3 stores the selected LocalSubscriber on subscriber surface rows.
         # Existing host-only surface rows keep NULL, so this additive migration is
         # safe to run before or after Stage 2 backfill.
@@ -68,6 +70,106 @@ def _table_columns(conn: Connection, table: str) -> set[str]:
     """Return the current SQLite column names for one table."""
     rows = conn.execute(text(f"PRAGMA table_info({table})")).fetchall()
     return {str(row[1]) for row in rows}
+
+
+def _table_info(conn: Connection, table: str) -> list[object]:
+    """Return raw SQLite table-info rows for one table."""
+    return list(conn.execute(text(f"PRAGMA table_info({table})")).fetchall())
+
+
+def _migrate_local_communities_summary_nullable(conn: Connection) -> None:
+    """Rebuild `local_communities` when legacy schema has `summary NOT NULL`.
+
+    SQLite cannot drop a NOT NULL constraint with `ALTER TABLE`. The rebuild is
+    intentionally limited to this table and recreates the same identity
+    constraints the SQLAlchemy model declares. Existing summary values are
+    copied unchanged, while future rows may store NULL.
+    """
+    table_info = _table_info(conn, "local_communities")
+    if not table_info:
+        return
+    summary_row = next((row for row in table_info if row[1] == "summary"), None)
+    if summary_row is None or int(summary_row[3]) == 0:
+        return
+
+    existing_columns = {str(row[1]) for row in table_info}
+    conn.execute(text("PRAGMA foreign_keys=OFF"))
+    conn.execute(text("ALTER TABLE local_communities RENAME TO local_communities_legacy_summary_not_null"))
+    conn.execute(
+        text(
+            """
+            CREATE TABLE local_communities (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                discord_guild_id INTEGER NOT NULL,
+                discord_forum_channel_id INTEGER NOT NULL,
+                slug VARCHAR(255) NOT NULL,
+                display_name VARCHAR(255) NOT NULL,
+                summary VARCHAR,
+                created_by_discord_user_id VARCHAR(64),
+                actor_url VARCHAR(512) NOT NULL,
+                inbox_url VARCHAR(512) NOT NULL,
+                outbox_url VARCHAR(512) NOT NULL,
+                followers_url VARCHAR(512) NOT NULL,
+                public_key_pem VARCHAR NOT NULL,
+                private_key_pem VARCHAR NOT NULL,
+                status VARCHAR(32) NOT NULL,
+                created_at DATETIME NOT NULL,
+                updated_at DATETIME NOT NULL,
+                UNIQUE (discord_forum_channel_id),
+                UNIQUE (slug),
+                UNIQUE (actor_url)
+            )
+            """
+        )
+    )
+
+    created_by_expr = "created_by_discord_user_id" if "created_by_discord_user_id" in existing_columns else "NULL"
+    # Keep the column list explicit so future table changes do not get silently
+    # dropped into this compatibility path without a deliberate migration plan.
+    conn.execute(
+        text(
+            f"""
+            INSERT INTO local_communities (
+                id,
+                discord_guild_id,
+                discord_forum_channel_id,
+                slug,
+                display_name,
+                summary,
+                created_by_discord_user_id,
+                actor_url,
+                inbox_url,
+                outbox_url,
+                followers_url,
+                public_key_pem,
+                private_key_pem,
+                status,
+                created_at,
+                updated_at
+            )
+            SELECT
+                id,
+                discord_guild_id,
+                discord_forum_channel_id,
+                slug,
+                display_name,
+                summary,
+                {created_by_expr},
+                actor_url,
+                inbox_url,
+                outbox_url,
+                followers_url,
+                public_key_pem,
+                private_key_pem,
+                status,
+                created_at,
+                updated_at
+            FROM local_communities_legacy_summary_not_null
+            """
+        )
+    )
+    conn.execute(text("DROP TABLE local_communities_legacy_summary_not_null"))
+    conn.execute(text("PRAGMA foreign_keys=ON"))
 
 
 def _verify_stage2_surface_invariants(conn: Connection) -> None:
