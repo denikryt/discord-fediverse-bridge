@@ -36,6 +36,7 @@ async def test_edit_command_opens_prefilled_modal_without_defer(command_tree, in
     assert modal.community_slug == "cats"
     assert str(modal.display_name_input.default) == "Cats"
     assert str(modal.summary_input.default) == "Old summary"
+    assert [option.value for option in modal.status_select.options if option.default] == ["active"]
     interaction.response.send_message.assert_not_awaited()
 
 
@@ -97,10 +98,11 @@ async def test_edit_modal_submit_delegates_to_operation_and_responds_ephemeral(i
         created_by_discord_user_id="1234567890",
         status="active",
     )
-    database.local_communities.update_local_community_metadata.return_value = SimpleNamespace(
+    database.local_communities.update_local_community_settings.return_value = SimpleNamespace(
         slug="cats",
         display_name="New Cats",
         summary=None,
+        status="disabled",
     )
     modal = edit_community.EditCommunityModal(
         database=database,
@@ -108,19 +110,28 @@ async def test_edit_modal_submit_delegates_to_operation_and_responds_ephemeral(i
         community_slug="cats",
         display_name="Cats",
         summary="Old summary",
+        status="active",
     )
     modal.display_name_input._value = "New Cats"
     modal.summary_input._value = "   "
+    modal.status_select._values = ["disabled"]
 
     await modal.on_submit(interaction)
 
-    database.local_communities.update_local_community_metadata.assert_called_once_with(
+    database.local_communities.update_local_community_settings.assert_called_once_with(
         local_community_id=1,
         display_name="New Cats",
         summary=None,
+        status="disabled",
     )
     interaction.response.send_message.assert_awaited_once_with(
-        "Updated community cats.\nDisplay name: New Cats\nSummary: not specified",
+        (
+            "Updated community cats.\n"
+            "Display name: New Cats\n"
+            "Summary: not specified\n"
+            "Status: disabled\n"
+            "New posts, comments, follows, and subscriptions are now blocked."
+        ),
         ephemeral=True,
     )
 
@@ -129,14 +140,15 @@ async def test_edit_modal_submit_delegates_to_operation_and_responds_ephemeral(i
 async def test_edit_community_autocomplete_matches_management_scope(interaction, database) -> None:
     """Autocomplete lists editable active communities for owners and admins."""
     owner_settings = SimpleNamespace(local_community_operator_allowlist=[])
-    database.local_communities.list_active_local_communities_owned_by_user_in_guild.return_value = [
-        SimpleNamespace(slug="cats", display_name="Cats", discord_guild_id=99999),
+    database.local_communities.list_manageable_local_communities_owned_by_user_in_guild.return_value = [
+        SimpleNamespace(slug="cats", display_name="Cats", discord_guild_id=99999, status="active"),
+        SimpleNamespace(slug="dogs", display_name="Dogs", discord_guild_id=99999, status="disabled"),
     ]
 
     owner_choices = await edit_community._edit_community_autocomplete(database, owner_settings)(interaction, "cat")
 
-    assert [(choice.name, choice.value) for choice in owner_choices] == [("cats — Cats", "cats")]
-    database.local_communities.list_active_local_communities_owned_by_user_in_guild.assert_called_once_with(
+    assert [(choice.name, choice.value) for choice in owner_choices] == [("cats — Cats — active", "cats")]
+    database.local_communities.list_manageable_local_communities_owned_by_user_in_guild.assert_called_once_with(
         discord_guild_id=99999,
         created_by_discord_user_id="1234567890",
     )
@@ -146,16 +158,16 @@ async def test_edit_community_autocomplete_matches_management_scope(interaction,
 async def test_edit_community_autocomplete_super_admin_sees_all_guilds(interaction, database) -> None:
     """Super-admin autocomplete includes guild context for cross-guild choices."""
     settings = SimpleNamespace(local_community_operator_allowlist=["1234567890"])
-    database.local_communities.list_active_local_communities.return_value = [
-        SimpleNamespace(slug="cats", display_name="Cats", discord_guild_id=10),
-        SimpleNamespace(slug="dogs", display_name="Dogs", discord_guild_id=20),
+    database.local_communities.list_manageable_local_communities.return_value = [
+        SimpleNamespace(slug="cats", display_name="Cats", discord_guild_id=10, status="active"),
+        SimpleNamespace(slug="dogs", display_name="Dogs", discord_guild_id=20, status="disabled"),
     ]
 
     choices = await edit_community._edit_community_autocomplete(database, settings)(interaction, "")
 
     assert [(choice.name, choice.value) for choice in choices] == [
-        ("cats — Cats — guild 10", "cats"),
-        ("dogs — Dogs — guild 20", "dogs"),
+        ("cats — Cats — guild 10 — active", "cats"),
+        ("dogs — Dogs — guild 20 — disabled", "dogs"),
     ]
 
 
@@ -163,7 +175,7 @@ async def test_edit_community_autocomplete_super_admin_sees_all_guilds(interacti
 async def test_edit_community_autocomplete_returns_empty_on_error(interaction, database) -> None:
     """Autocomplete catches repository failures and returns no choices."""
     settings = SimpleNamespace(local_community_operator_allowlist=[])
-    database.local_communities.list_active_local_communities_owned_by_user_in_guild.side_effect = RuntimeError("db down")
+    database.local_communities.list_manageable_local_communities_owned_by_user_in_guild.side_effect = RuntimeError("db down")
 
     choices = await edit_community._edit_community_autocomplete(database, settings)(interaction, "")
 

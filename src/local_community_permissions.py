@@ -61,16 +61,20 @@ def can_access_local_community_from_guild(
     discord_user_id: str,
     discord_guild_id: int | None,
     local_community: LocalCommunity,
+    include_disabled: bool = False,
 ) -> bool:
     """Return whether a command may address a community from this guild.
 
     Normal users are scoped to the current guild. Super-admins can manually
-    enter a globally unique slug from another guild, so cross-guild access is
-    allowed only through the explicit super-admin branch.
+    enter a globally unique slug from another guild. Most moderation commands
+    operate only on active communities, while `/edit-community` opts into
+    disabled rows so owners can re-enable them.
     """
-    if getattr(local_community, "status", None) != "active":
-        # Management/list commands operate only on active communities in this
-        # stage. Inactive community lifecycle semantics belong to a later plan.
+    status = getattr(local_community, "status", None)
+    if include_disabled:
+        if status not in {"active", "disabled"}:
+            return False
+    elif status != "active":
         return False
     if is_super_admin(settings=settings, discord_user_id=discord_user_id):
         return True

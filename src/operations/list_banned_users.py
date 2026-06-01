@@ -8,6 +8,7 @@ from discordops import Operation, Precondition
 
 from ..config import Settings
 from ..db import Database
+from ..local_community_lifecycle import disabled_moderation_message, is_local_community_disabled
 from ..local_community_permissions import can_access_local_community_from_guild
 from ..models import LocalCommunity
 
@@ -64,7 +65,19 @@ def _community_accessible(operation_input: ListBannedUsersInput) -> bool:
         discord_user_id=operation_input.discord_user_id,
         discord_guild_id=operation_input.discord_guild_id,
         local_community=community,
+        include_disabled=True,
     )
+
+
+def _community_active(operation_input: ListBannedUsersInput) -> bool:
+    """Return whether moderation/list operations may act on this community."""
+    community = operation_input.get_local_community()
+    return community is not None and not is_local_community_disabled(community)
+
+
+def _disabled_message(operation_input: ListBannedUsersInput) -> str:
+    """Build the shared disabled-community moderation rejection text."""
+    return disabled_moderation_message(operation_input.normalized_community_slug)
 
 
 def _inaccessible_message(operation_input: ListBannedUsersInput) -> str:
@@ -90,6 +103,7 @@ class ListBannedUsersOperation(Operation):
     _REJECTION_REASONS = {
         "guild_context": "missing_guild_context",
         "community_accessible": "unknown_or_inaccessible_community",
+        "community_active": "community_disabled",
     }
     preconditions = (
         Precondition(
@@ -101,6 +115,11 @@ class ListBannedUsersOperation(Operation):
             name="community_accessible",
             message=_inaccessible_message,
             predicate=_community_accessible,
+        ),
+        Precondition(
+            name="community_active",
+            message=_disabled_message,
+            predicate=_community_active,
         ),
     )
 

@@ -620,3 +620,26 @@ def test_owner_reban_reactivates_inactive_row_and_updates_active_fields(tmp_path
     assert active.created_by_discord_user_id == "111"
     assert active.created_at.replace(tzinfo=None) == original_created_at.replace(tzinfo=None)
     assert _ban_count(database) == 1
+
+
+def test_disabled_community_rejects_ban_with_reenable_hint(tmp_path: Path) -> None:
+    """Disabled communities reject manual `/ban-user` before any mutation."""
+    database = build_database(tmp_path, "ban-user-disabled.db")
+    _local_community(database, owner_id="111", status="disabled")
+
+    result = ban_user_operation(
+        BanUserInput(
+            database=database,
+            settings=_settings(),
+            discord_user_id="111",
+            discord_guild_id=10,
+            community_slug="cats",
+            actor_handle="alice@example.com",
+            reason="spam",
+        )
+    )
+
+    assert result.applied is False
+    assert result.reason == "community_disabled"
+    assert result.message == "Community cats is disabled. Use /edit-community to re-enable it first."
+    assert _ban_count(database) == 0

@@ -13,6 +13,7 @@ from discordops import Operation, Precondition
 from ..config import Settings
 from ..db import Database
 from ..local_communities.service import LocalCommunityError, normalize_display_name, normalize_summary
+from ..local_community_lifecycle import normalize_local_community_status
 from ..local_community_permissions import can_access_local_community_from_guild, can_manage_local_community
 from ..models import LocalCommunity
 
@@ -28,6 +29,7 @@ class EditCommunityInput:
     community_slug: str
     display_name: str
     summary: str | None
+    status: str = "active"
     _community: LocalCommunity | None = field(default=None, init=False, repr=False)
     _community_loaded: bool = field(default=False, init=False, repr=False)
     _normalized_display_name: str | None = field(default=None, init=False, repr=False)
@@ -36,6 +38,8 @@ class EditCommunityInput:
     _normalized_summary: str | None = field(default=None, init=False, repr=False)
     _summary_error: LocalCommunityError | None = field(default=None, init=False, repr=False)
     _summary_loaded: bool = field(default=False, init=False, repr=False)
+    _normalized_status: str | None = field(default=None, init=False, repr=False)
+    _status_loaded: bool = field(default=False, init=False, repr=False)
 
     @property
     def normalized_community_slug(self) -> str:
@@ -73,6 +77,13 @@ class EditCommunityInput:
             self._summary_loaded = True
         return self._normalized_summary
 
+    def get_normalized_status(self) -> str | None:
+        """Return the validated lifecycle status submitted by the modal."""
+        if not self._status_loaded:
+            self._normalized_status = normalize_local_community_status(self.status)
+            self._status_loaded = True
+        return self._normalized_status
+
 
 @dataclass(slots=True)
 class EditCommunityResult:
@@ -98,6 +109,7 @@ def _community_accessible(operation_input: EditCommunityInput) -> bool:
         discord_user_id=operation_input.discord_user_id,
         discord_guild_id=operation_input.discord_guild_id,
         local_community=community,
+        include_disabled=True,
     )
 
 
@@ -122,6 +134,11 @@ def _summary_valid(operation_input: EditCommunityInput) -> bool:
     """Return whether summary input satisfies shared metadata rules."""
     operation_input.get_normalized_summary()
     return operation_input._summary_error is None
+
+
+def _status_valid(operation_input: EditCommunityInput) -> bool:
+    """Return whether the modal submitted a supported lifecycle status."""
+    return operation_input.get_normalized_status() is not None
 
 
 def _inaccessible_message(operation_input: EditCommunityInput) -> str:
@@ -149,6 +166,7 @@ class EditCommunityOperation(Operation):
         "can_manage_community": "cannot_manage_community",
         "display_name_valid": "invalid_display_name",
         "summary_valid": "invalid_summary",
+        "status_valid": "invalid_status",
     }
     preconditions = (
         Precondition(
@@ -176,6 +194,11 @@ class EditCommunityOperation(Operation):
             message=_summary_error_message,
             predicate=_summary_valid,
         ),
+        Precondition(
+            name="status_valid",
+            message="Community status must be active or disabled.",
+            predicate=_status_valid,
+        ),
     )
 
     def reject(
@@ -198,7 +221,8 @@ class EditCommunityOperation(Operation):
         community = operation_input.get_local_community()
         display_name = operation_input.get_normalized_display_name()
         summary = operation_input.get_normalized_summary()
-        if community is None or display_name is None:
+        status = operation_input.get_normalized_status()
+        if community is None or display_name is None or status is None:
             # Preconditions make this unreachable for normal command execution.
             # Keep a stable failure for future direct callers and test harnesses.
             return EditCommunityResult(
@@ -207,10 +231,11 @@ class EditCommunityOperation(Operation):
                 reason="invalid_operation_state",
             )
 
-        updated = operation_input.database.local_communities.update_local_community_metadata(
+        updated = operation_input.database.local_communities.update_local_community_settings(
             local_community_id=community.id,
             display_name=display_name,
             summary=summary,
+            status=status,
         )
         if updated is None:
             return EditCommunityResult(
@@ -220,12 +245,19 @@ class EditCommunityOperation(Operation):
             )
 
         summary_label = updated.summary if updated.summary else "not specified"
+        lifecycle_note = (
+            "New posts, comments, follows, and subscriptions are now blocked."
+            if updated.status == "disabled"
+            else "New posts, comments, follows, and subscriptions are now allowed."
+        )
         return EditCommunityResult(
             applied=True,
             message=(
                 f"Updated community {updated.slug}.\n"
                 f"Display name: {updated.display_name}\n"
-                f"Summary: {summary_label}"
+                f"Summary: {summary_label}\n"
+                f"Status: {updated.status}\n"
+                f"{lifecycle_note}"
             ),
             reason="updated",
         )

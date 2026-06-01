@@ -24,7 +24,7 @@ def _choice_label(label: str) -> str:
     return label if len(label) <= 100 else f"{label[:97]}..."
 
 
-def _community_label(community: object, *, include_guild: bool) -> str:
+def _community_label(community: object, *, include_guild: bool, include_status: bool = False) -> str:
     """Build the display label for one community autocomplete choice."""
     slug = getattr(community, "slug")
     display_name = getattr(community, "display_name", None)
@@ -33,6 +33,8 @@ def _community_label(community: object, *, include_guild: bool) -> str:
         pieces.append(display_name)
     if include_guild:
         pieces.append(f"guild {getattr(community, 'discord_guild_id', '')}")
+    if include_status:
+        pieces.append(getattr(community, "status", "active"))
     return _choice_label(" — ".join(str(piece) for piece in pieces if piece))
 
 
@@ -52,10 +54,10 @@ def _edit_community_autocomplete(database: Database, settings: Settings):
         try:
             discord_user_id = str(interaction.user.id)
             if is_super_admin(settings=settings, discord_user_id=discord_user_id):
-                communities = database.local_communities.list_active_local_communities()
+                communities = database.local_communities.list_manageable_local_communities()
                 include_guild = True
             elif interaction.guild_id is not None:
-                communities = database.local_communities.list_active_local_communities_owned_by_user_in_guild(
+                communities = database.local_communities.list_manageable_local_communities_owned_by_user_in_guild(
                     discord_guild_id=interaction.guild_id,
                     created_by_discord_user_id=discord_user_id,
                 )
@@ -74,7 +76,7 @@ def _edit_community_autocomplete(database: Database, settings: Settings):
                 # local_communities.slug globally unique across all guilds.
                 choices.append(
                     app_commands.Choice(
-                        name=_community_label(community, include_guild=include_guild),
+                        name=_community_label(community, include_guild=include_guild, include_status=True),
                         value=slug,
                     )
                 )
@@ -97,6 +99,7 @@ class EditCommunityModal(discord.ui.Modal):
         community_slug: str,
         display_name: str,
         summary: str | None,
+        status: str = "active",
     ) -> None:
         """Create prefilled TextInput fields from the selected community row."""
         super().__init__(title=f"Edit {community_slug}")
@@ -119,8 +122,23 @@ class EditCommunityModal(discord.ui.Modal):
             required=False,
             max_length=1000,
         )
+        active_default = status == "active"
+        self.status_select = discord.ui.Select(
+            custom_id="local_community_status",
+            placeholder="Status",
+            min_values=1,
+            max_values=1,
+            options=[
+                discord.SelectOption(label="Active", value="active", default=active_default),
+                discord.SelectOption(label="Disabled", value="disabled", default=not active_default),
+            ],
+        )
         self.add_item(self.display_name_input)
         self.add_item(self.summary_input)
+        # New Discord modal select components are wrapped in Label components.
+        # Keep the raw UI concern here so the operation layer stays SDK-free.
+        self.status_label = discord.ui.Label(text="Status", component=self.status_select)
+        self.add_item(self.status_label)
 
     async def on_submit(self, interaction: discord.Interaction) -> None:
         """Re-run runtime authorization and persist the submitted metadata."""
@@ -133,9 +151,24 @@ class EditCommunityModal(discord.ui.Modal):
                 community_slug=self.community_slug,
                 display_name=str(self.display_name_input.value),
                 summary=str(self.summary_input.value),
+                status=self._submitted_status(),
             )
         )
         await interaction.response.send_message(result.message, ephemeral=True)
+
+    def _submitted_status(self) -> str:
+        """Return the selected status, falling back to the default option.
+
+        Discord populates `values` during real modal submit. Tests that call
+        `on_submit` directly may leave it empty, so the selected default keeps
+        the modal's unchanged-save behavior deterministic.
+        """
+        if self.status_select.values:
+            return str(self.status_select.values[0])
+        for option in self.status_select.options:
+            if option.default:
+                return str(option.value)
+        return ""
 
 
 def _can_open_edit_modal(
@@ -161,6 +194,7 @@ def _can_open_edit_modal(
         discord_user_id=discord_user_id,
         discord_guild_id=discord_guild_id,
         local_community=community,
+        include_disabled=True,
     ):
         return None, f"Unknown or inaccessible local community: {normalized_slug}"
     if not can_manage_local_community(
@@ -211,6 +245,7 @@ def register(
             community_slug=getattr(community_row, "slug"),
             display_name=getattr(community_row, "display_name"),
             summary=getattr(community_row, "summary", None),
+            status=getattr(community_row, "status", "active"),
         )
         # Discord requires modals to be the initial interaction response. Do not
         # defer or open the modal through follow-up messages.

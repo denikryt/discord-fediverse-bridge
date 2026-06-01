@@ -40,7 +40,7 @@ def _community(
     return database.local_communities.get_local_community_by_slug(slug)
 
 
-def _edit(database: object, *, user_id: str = "111", guild_id: int | None = 10, slug: str = "cats", display_name: str = "New Cats", summary: str | None = "New summary", settings: SimpleNamespace | None = None):
+def _edit(database: object, *, user_id: str = "111", guild_id: int | None = 10, slug: str = "cats", display_name: str = "New Cats", summary: str | None = "New summary", status: str = "active", settings: SimpleNamespace | None = None):
     """Execute the edit operation with default owner/current-guild inputs."""
     return edit_community_operation(
         EditCommunityInput(
@@ -51,6 +51,7 @@ def _edit(database: object, *, user_id: str = "111", guild_id: int | None = 10, 
             community_slug=slug,
             display_name=display_name,
             summary=summary,
+            status=status,
         )
     )
 
@@ -65,7 +66,13 @@ def test_owner_updates_display_name_and_summary(tmp_path: Path) -> None:
 
     assert result.applied is True
     assert result.reason == "updated"
-    assert result.message == "Updated community cats.\nDisplay name: New Cats\nSummary: New summary"
+    assert result.message == (
+        "Updated community cats.\n"
+        "Display name: New Cats\n"
+        "Summary: New summary\n"
+        "Status: active\n"
+        "New posts, comments, follows, and subscriptions are now allowed."
+    )
     assert updated.display_name == "New Cats"
     assert updated.summary == "New summary"
 
@@ -80,7 +87,13 @@ def test_owner_clears_summary_to_null(tmp_path: Path) -> None:
 
     assert result.applied is True
     assert updated.summary is None
-    assert result.message == "Updated community cats.\nDisplay name: New Cats\nSummary: not specified"
+    assert result.message == (
+        "Updated community cats.\n"
+        "Display name: New Cats\n"
+        "Summary: not specified\n"
+        "Status: active\n"
+        "New posts, comments, follows, and subscriptions are now allowed."
+    )
 
 
 def test_unchanged_submit_succeeds(tmp_path: Path) -> None:
@@ -94,6 +107,44 @@ def test_unchanged_submit_succeeds(tmp_path: Path) -> None:
     assert result.applied is True
     assert updated.display_name == "Cats"
     assert updated.summary == "Old summary"
+
+
+def test_owner_disables_and_reenables_community(tmp_path: Path) -> None:
+    """Lifecycle status can be toggled without destroying community state."""
+    database = build_database(tmp_path, "edit-status.db")
+    _community(database)
+
+    disabled = _edit(database, status="disabled")
+    after_disabled = database.local_communities.get_local_community_by_slug("cats")
+    enabled = _edit(database, status="active", display_name="New Cats", summary="New summary")
+    after_enabled = database.local_communities.get_local_community_by_slug("cats")
+
+    assert disabled.applied is True
+    assert after_disabled.status == "disabled"
+    assert disabled.message == (
+        "Updated community cats.\n"
+        "Display name: New Cats\n"
+        "Summary: New summary\n"
+        "Status: disabled\n"
+        "New posts, comments, follows, and subscriptions are now blocked."
+    )
+    assert enabled.applied is True
+    assert after_enabled.status == "active"
+
+
+def test_invalid_status_does_not_mutate_db(tmp_path: Path) -> None:
+    """Only active and disabled are accepted lifecycle values."""
+    database = build_database(tmp_path, "edit-invalid-status.db")
+    _community(database)
+
+    result = _edit(database, status="archived")
+    unchanged = database.local_communities.get_local_community_by_slug("cats")
+
+    assert result.applied is False
+    assert result.reason == "invalid_status"
+    assert result.message == "Community status must be active or disabled."
+    assert unchanged.status == "active"
+    assert unchanged.display_name == "Cats"
 
 
 def test_display_name_and_summary_validation_do_not_mutate_db(tmp_path: Path) -> None:

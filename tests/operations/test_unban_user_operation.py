@@ -248,3 +248,22 @@ def test_inactive_community_is_inaccessible_for_unban(tmp_path: Path) -> None:
 
     assert result.reason == "unknown_or_inaccessible_community"
     assert _all_bans(database)[0].status == "active"
+
+
+def test_disabled_community_rejects_unban_without_changing_ban(tmp_path: Path) -> None:
+    """Disabled communities cannot be changed by `/unban-user`."""
+    database = build_database(tmp_path, "unban-disabled.db")
+    community = _community(database, owner_id="111")
+    _active_ban(database, community)
+    with database.session() as session:
+        persisted = session.merge(community)
+        persisted.status = "disabled"
+
+    result = unban_user_operation(
+        UnbanUserInput(database, _settings(), "111", 10, "cats", "alice@example.com")
+    )
+
+    assert result.applied is False
+    assert result.reason == "community_disabled"
+    assert result.message == "Community cats is disabled. Use /edit-community to re-enable it first."
+    assert _all_bans(database)[0].status == "active"

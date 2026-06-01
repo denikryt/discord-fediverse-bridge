@@ -17,6 +17,7 @@ from ...models import (
     utcnow,
 )
 from .base import BaseRepository
+from ...local_community_lifecycle import VALID_LOCAL_COMMUNITY_STATUSES
 
 
 """Local community identity persistence."""
@@ -155,6 +156,56 @@ class LocalCommunityRepository(BaseRepository):
                     )
                 )
 
+
+    def list_manageable_local_communities_by_guild(
+        self,
+        *,
+        discord_guild_id: int,
+    ) -> list[LocalCommunity]:
+            """Return active and disabled local communities for one guild by slug."""
+            with self.session() as session:
+                return list(
+                    session.scalars(
+                        select(LocalCommunity)
+                        .where(
+                            LocalCommunity.discord_guild_id == discord_guild_id,
+                            LocalCommunity.status.in_(["active", "disabled"]),
+                        )
+                        .order_by(LocalCommunity.slug, LocalCommunity.id)
+                    )
+                )
+
+    def list_manageable_local_communities_owned_by_user_in_guild(
+        self,
+        *,
+        discord_guild_id: int,
+        created_by_discord_user_id: str,
+    ) -> list[LocalCommunity]:
+            """Return owned active and disabled guild communities for management UI."""
+            with self.session() as session:
+                return list(
+                    session.scalars(
+                        select(LocalCommunity)
+                        .where(
+                            LocalCommunity.discord_guild_id == discord_guild_id,
+                            LocalCommunity.created_by_discord_user_id == created_by_discord_user_id,
+                            LocalCommunity.status.in_(["active", "disabled"]),
+                        )
+                        .order_by(LocalCommunity.slug, LocalCommunity.id)
+                    )
+                )
+
+    def list_manageable_local_communities(self) -> list[LocalCommunity]:
+            """Return every active or disabled local community across guilds by slug."""
+            with self.session() as session:
+                return list(
+                    session.scalars(
+                        select(LocalCommunity)
+                        .where(LocalCommunity.status.in_(["active", "disabled"]))
+                        .order_by(LocalCommunity.slug, LocalCommunity.id)
+                    )
+                )
+
     def update_local_community_metadata(
         self,
         *,
@@ -164,9 +215,8 @@ class LocalCommunityRepository(BaseRepository):
     ) -> LocalCommunity | None:
             """Update editable metadata for one local community row.
 
-            The edit command intentionally mutates only local display metadata.
-            Slug, actor URLs, Discord binding, status, and ownership are stable
-            identity fields and must not be changed by this repository method.
+            This compatibility method intentionally preserves lifecycle status;
+            status-aware edit flows use `update_local_community_settings`.
             """
             with self.session() as session:
                 community = session.get(LocalCommunity, local_community_id)
@@ -174,5 +224,31 @@ class LocalCommunityRepository(BaseRepository):
                     return None
                 community.display_name = display_name
                 community.summary = summary
+                session.flush()
+                return community
+
+    def update_local_community_settings(
+        self,
+        *,
+        local_community_id: int,
+        display_name: str,
+        summary: str | None,
+        status: str,
+    ) -> LocalCommunity | None:
+            """Update editable metadata and lifecycle status for one community.
+
+            Slug, actor URLs, Discord binding, and ownership remain stable
+            identity fields. Callers must validate status before this repository
+            method persists it.
+            """
+            with self.session() as session:
+                if status not in VALID_LOCAL_COMMUNITY_STATUSES:
+                    raise ValueError("Local community status must be active or disabled")
+                community = session.get(LocalCommunity, local_community_id)
+                if community is None:
+                    return None
+                community.display_name = display_name
+                community.summary = summary
+                community.status = status
                 session.flush()
                 return community

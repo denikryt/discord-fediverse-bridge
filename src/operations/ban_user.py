@@ -15,6 +15,7 @@ from discordops import Operation, Precondition
 from ..config import Settings
 from ..db import Database
 from ..fediverse_identity import InvalidRemoteActorHandle, normalize_remote_actor_handle
+from ..local_community_lifecycle import disabled_moderation_message, is_local_community_disabled
 from ..local_community_permissions import (
     can_access_local_community_from_guild,
     can_manage_local_community,
@@ -108,6 +109,7 @@ def _community_accessible(operation_input: BanUserInput) -> bool:
         discord_user_id=operation_input.discord_user_id,
         discord_guild_id=operation_input.discord_guild_id,
         local_community=community,
+        include_disabled=True,
     )
 
 
@@ -133,6 +135,17 @@ def _no_duplicate_active_ban(operation_input: BanUserInput) -> bool:
     return operation_input.get_existing_active_ban() is None
 
 
+def _community_active(operation_input: BanUserInput) -> bool:
+    """Return whether moderation/list operations may act on this community."""
+    community = operation_input.get_local_community()
+    return community is not None and not is_local_community_disabled(community)
+
+
+def _disabled_message(operation_input: BanUserInput) -> str:
+    """Build the shared disabled-community moderation rejection text."""
+    return disabled_moderation_message(operation_input.normalized_community_slug)
+
+
 def _inaccessible_message(operation_input: BanUserInput) -> str:
     """Build the shared inaccessible-community rejection text."""
     return f"Unknown or inaccessible local community: {operation_input.normalized_community_slug}"
@@ -156,6 +169,7 @@ class BanUserOperation(Operation):
     _REJECTION_REASONS = {
         "community_accessible": "unknown_or_inaccessible_community",
         "can_manage_community": "cannot_manage_community",
+        "community_active": "community_disabled",
         "valid_actor_handle": "invalid_handle",
         "no_duplicate_active_ban": "duplicate_active_ban",
     }
@@ -169,6 +183,11 @@ class BanUserOperation(Operation):
             name="can_manage_community",
             message="You are not allowed to manage this local community.",
             predicate=_can_manage_community,
+        ),
+        Precondition(
+            name="community_active",
+            message=_disabled_message,
+            predicate=_community_active,
         ),
         Precondition(
             name="valid_actor_handle",

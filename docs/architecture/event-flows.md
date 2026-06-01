@@ -107,3 +107,12 @@ This document explains the major runtime traces through the bridge: user/platfor
 3. Runtime publishes the source Discord starter/reply through the existing local-community publish path and persists one canonical row.
 4. Runtime records the source `role="local_subscriber"` surface and then fans out to the host forum plus sibling active local subscribers.
 5. Stage 5 handles later edits/deletes from the source local-subscriber surface through the participant-wide mutation flow above.
+
+
+## Disabled local community lifecycle flow
+
+1. `/edit-community` opens a Discord modal for owner/super-admin callers and can save `status=active` or `status=disabled` alongside display metadata.
+2. `src/local_community_lifecycle.py` is the shared lifecycle decision point; disabled communities keep existing DB state but reject new side effects.
+3. Inbound ActivityPub deliveries targeting a disabled local community are acknowledged and routed through the existing skipped result path before domain mutation, fanout, subscriber creation, or outbound federation.
+4. Discord-originated post, comment, edit, delete, and local subscription paths resolve the local community and stop before publish, persistence, relay, or Discord fanout when status is disabled.
+5. Existing actor/object routes, content rows, subscribers, and Discord surfaces remain readable and unchanged; re-enabling returns existing subscriber rows to normal fanout behavior.

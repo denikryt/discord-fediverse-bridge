@@ -163,3 +163,22 @@ def test_inactive_community_is_inaccessible_for_list(tmp_path: Path) -> None:
 
     assert result.reason == "unknown_or_inaccessible_community"
     assert result.message == "Unknown or inaccessible local community: cats"
+
+
+def test_disabled_community_rejects_list_banned_users(tmp_path: Path) -> None:
+    """Disabled communities do not expose ban-list output until re-enabled."""
+    database = build_database(tmp_path, "list-disabled.db")
+    community = _community(database)
+    _ban(database, community, handle="alice@example.com", reason="spam")
+    with database.session() as session:
+        persisted = session.merge(community)
+        persisted.status = "disabled"
+
+    result = list_banned_users_operation(
+        ListBannedUsersInput(database, _settings(), "ordinary", 10, "cats")
+    )
+
+    assert result.applied is False
+    assert result.reason == "community_disabled"
+    assert result.message == "Community cats is disabled. Use /edit-community to re-enable it first."
+    assert "alice@example.com" not in result.message

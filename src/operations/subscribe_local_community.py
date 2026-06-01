@@ -11,6 +11,7 @@ from dataclasses import dataclass, field
 from discordops import OperationDefinition, OperationResult, Precondition
 
 from ..db import Database
+from ..local_community_lifecycle import is_local_community_disabled
 
 
 @dataclass
@@ -86,6 +87,17 @@ def _host_forum_message(operation_input: SubscribeLocalCommunityInput) -> str:
     )
 
 
+def _disabled_community_message(operation_input: SubscribeLocalCommunityInput) -> str:
+    """Explain that disabled communities are unavailable for new subscribers."""
+    return f"Community {operation_input.local_community_name} is disabled and no longer available."
+
+
+def _target_community_active(operation_input: SubscribeLocalCommunityInput) -> bool:
+    """Return whether the target community currently accepts subscribers."""
+    community = operation_input.get_local_community()
+    return community is not None and not is_local_community_disabled(community)
+
+
 def _already_remote_message(operation_input: SubscribeLocalCommunityInput) -> str:
     """Explain that the channel already has a remote community role."""
     return f"Channel {operation_input.channel_mention} already has a remote community subscription."
@@ -136,6 +148,11 @@ subscribe_local_community_operation = OperationDefinition(
             name="local_community_exists",
             message=lambda _: "The selected local community no longer exists.",
             predicate=lambda op: op.get_local_community() is not None,
+        ),
+        Precondition(
+            name="local_community_active",
+            message=_disabled_community_message,
+            predicate=_target_community_active,
         ),
         Precondition(
             name="target_is_not_host_forum",

@@ -18,6 +18,7 @@ from ..db import Database
 from ..content_publish_service import ContentPublishService
 from ..fedify_gateway_client import DeleteContentRequest, FedifyGatewayClient, UpdateContentRequest
 from ..formatting import format_lemmy_comment_for_discord, format_lemmy_post_for_discord, normalize_text
+from ..local_community_lifecycle import evaluate_local_community_lifecycle
 from .discord_fanout import LocalCommunityDiscordFanout
 from .federation_fanout import LocalCommunityFederationFanout
 from .delivery_mapping import (
@@ -75,6 +76,22 @@ class LocalCommunityRuntime:
             fedify_gateway=fedify_gateway,
         )
 
+    def _disabled_result_if_needed(self, local_community: object) -> LocalCommunityRuntimeResult | None:
+        """Return an ignored result when a community is operationally disabled."""
+        decision = evaluate_local_community_lifecycle(local_community)
+        if decision.allowed:
+            return None
+        return LocalCommunityRuntimeResult(status="ignored", reason=decision.reason)
+
+    def _is_community_id_disabled(self, local_community_id: int | None) -> bool:
+        """Return whether a resolved canonical community id is disabled."""
+        if local_community_id is None:
+            return False
+        community = self.database.local_communities.get_local_community_by_id(local_community_id)
+        if community is None:
+            return False
+        return not evaluate_local_community_lifecycle(community).allowed
+
     async def handle_discord_thread_create(
         self,
         *,
@@ -87,6 +104,9 @@ class LocalCommunityRuntime:
         )
         if source is None:
             return LocalCommunityRuntimeResult(status="ignored", reason="not_local_community")
+        disabled = self._disabled_result_if_needed(source.local_community)
+        if disabled is not None:
+            return disabled
         if source.source_kind == "local_subscriber":
             return await self._handle_local_subscriber_thread_create(
                 thread=thread,
@@ -227,6 +247,9 @@ class LocalCommunityRuntime:
         )
         if source is None:
             return LocalCommunityRuntimeResult(status="ignored", reason="not_local_community")
+        disabled = self._disabled_result_if_needed(source.local_community)
+        if disabled is not None:
+            return disabled
         if source.source_kind == "local_subscriber":
             return await self._handle_local_subscriber_message(
                 message=message,
@@ -779,6 +802,8 @@ class LocalCommunityRuntime:
             thread_row = self.database.local_community_surfaces.get_local_community_thread_for_surface(getattr(thread_surface, "id"))
             if thread_row is None or not self._surface_can_mutate(thread_surface, getattr(thread_row, "local_community_id")):
                 return
+            if self._is_community_id_disabled(getattr(thread_row, "local_community_id", None)):
+                return
             published = self.database.activitypub_objects.get_published_activity_object_by_object_id(getattr(thread_row, "ap_object_id"))
             if published is None:
                 return
@@ -799,6 +824,8 @@ class LocalCommunityRuntime:
             return
         thread_row = self.database.local_community_content.get_local_community_thread_by_id(getattr(message_row, "local_community_thread_id"))
         if thread_row is None or not self._surface_can_mutate(message_surface, getattr(thread_row, "local_community_id")):
+            return
+        if self._is_community_id_disabled(getattr(thread_row, "local_community_id", None)):
             return
         published = self.database.activitypub_objects.get_published_activity_object_by_object_id(getattr(message_row, "ap_object_id"))
         if published is None:
@@ -823,6 +850,8 @@ class LocalCommunityRuntime:
             thread_row = self.database.local_community_surfaces.get_local_community_thread_for_surface(getattr(thread_surface, "id"))
             if thread_row is None or not self._surface_can_mutate(thread_surface, getattr(thread_row, "local_community_id")):
                 return
+            if self._is_community_id_disabled(getattr(thread_row, "local_community_id", None)):
+                return
             published = self.database.activitypub_objects.get_published_activity_object_by_object_id(getattr(thread_row, "ap_object_id"))
             if published is None:
                 return
@@ -842,6 +871,8 @@ class LocalCommunityRuntime:
             return
         thread_row = self.database.local_community_content.get_local_community_thread_by_id(getattr(message_row, "local_community_thread_id"))
         if thread_row is None or not self._surface_can_mutate(message_surface, getattr(thread_row, "local_community_id")):
+            return
+        if self._is_community_id_disabled(getattr(thread_row, "local_community_id", None)):
             return
         published = self.database.activitypub_objects.get_published_activity_object_by_object_id(getattr(message_row, "ap_object_id"))
         if published is None:

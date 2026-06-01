@@ -16,6 +16,7 @@ from .activitypub_models import (
     FollowLifecycleEvent,
 )
 from .community_sync.inbound_mapping import get_accepted_subscriptions
+from .local_community_lifecycle import evaluate_local_community_lifecycle
 from .local_communities.inbound_mapping import resolve_local_community_by_actor_url
 from .federation_policy import is_instance_allowed
 from .runtime import Runtime
@@ -59,6 +60,10 @@ async def dispatch_activitypub_event(
                 _allowlist_subject(event, runtime),
             )
             return HandlerResult(status="skipped", detail="instance not in allowlist")
+
+    disabled = _skip_disabled_local_community(event, runtime)
+    if disabled is not None:
+        return disabled
 
     ban = find_local_community_actor_ban_for_event(event, runtime)
     if ban is not None:
@@ -113,6 +118,35 @@ async def dispatch_activitypub_event(
         )
     raise RuntimeError(f"Unsupported event type: {event.event_type}")
 
+
+
+def _disabled_local_community_for_event(event: BridgeGatewayEvent, runtime: Runtime) -> object | None:
+    """Return disabled target local community for one inbound event, if known."""
+    community_actor_id = getattr(event, "community_actor_id", None)
+    if not community_actor_id:
+        return None
+    local_community = resolve_local_community_by_actor_url(runtime.database, community_actor_id)
+    if local_community is None:
+        return None
+    decision = evaluate_local_community_lifecycle(local_community)
+    if decision.allowed:
+        return None
+    return local_community
+
+
+def _skip_disabled_local_community(event: BridgeGatewayEvent, runtime: Runtime) -> HandlerResult | None:
+    """Return a skipped result when a known local community is disabled."""
+    local_community = _disabled_local_community_for_event(event, runtime)
+    if local_community is None:
+        return None
+    logger.info(
+        "Skipping inbound ActivityPub activity for disabled local community "
+        "community=%s event_type=%s delivery_id=%s",
+        getattr(local_community, "slug", getattr(event, "community_actor_id", None)),
+        getattr(event, "event_type", None),
+        getattr(event, "delivery_id", None),
+    )
+    return HandlerResult(status="skipped", detail="community is disabled")
 
 async def handle_post_created(event: ActivityPubEvent, runtime: Runtime) -> HandlerResult:
     """Route one inbound ActivityPub post through CommunityRuntime.

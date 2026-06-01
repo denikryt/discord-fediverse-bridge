@@ -325,8 +325,57 @@ After `/edit-community` v1, a later plan should decide how to edit settings beyo
 Candidate fields:
 
 - visibility or subscription policy;
-- disabled/enabled/archive state;
+- archive state beyond active/disabled;
 - Discord forum binding changes;
 - ownership transfer or moderator assignment.
 
-These should not be mixed into the local metadata edit because they affect lifecycle, authorization, routing, and possibly federation behavior.
+Active/disabled lifecycle editing is now part of `/edit-community` through plan 77. The remaining settings should still be planned separately because they affect authorization, routing, and possibly federation behavior.
+
+## 28. Federated disabled-community behavior
+
+Plan 77 keeps disabled local communities local-only. A later plan should research and implement Lemmy-compatible federation behavior for disabled communities.
+
+Open details:
+
+- whether remote Follow should receive Reject instead of local ACK-and-skip;
+- whether disabling should emit an ActivityPub Update, Delete, Tombstone-like object, or no outbound activity;
+- which inboxes should receive lifecycle updates;
+- how failures should be retried or surfaced to operators;
+- how this interacts with re-enable.
+
+
+## 29. Inbound activity outcome taxonomy
+
+Plan 77 follows the same decision as local user bans: use the existing skipped receipt/result path with detail/log reason instead of adding feature-specific receipt statuses.
+
+A later observability plan should decide whether to add explicit outcomes such as:
+
+```text
+ignored_by_ban
+ignored_by_disabled_community
+ignored_unknown_subscription
+ignored_unmapped_context
+```
+
+This should be separate because it changes receipt semantics, tests, dashboard/debug tooling, and operator observability.
+
+
+## 30. Subscriber cleanup on disabled communities
+
+Plan 77 leaves existing local and remote subscriber rows untouched when a community is disabled. Fanout is blocked while disabled and resumes after re-enable.
+
+A later plan should decide whether disable should optionally deactivate subscribers, notify them, or require resubscription after re-enable.
+
+
+## 31. Disabled-community dashboard UI
+
+Plan 77 does not add new dashboard UI for disabled communities. Existing dashboard routes should not break if disabled rows are present.
+
+A later UI plan should decide whether disabled communities are visible publicly, visible only to operators, hidden from normal lists, or shown with a lifecycle badge.
+
+
+## 32. Lifecycle audit log
+
+Plan 77 does not add disabled reason, disabled_at, or audit records.
+
+A future audit model could record who disabled or re-enabled a community, when it happened, optional reasons, and failed authorization attempts.
