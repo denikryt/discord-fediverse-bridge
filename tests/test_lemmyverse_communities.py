@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import gzip
 import json
+import os
 from dataclasses import dataclass
 
 import httpx
@@ -140,7 +141,7 @@ def test_parse_lemmyverse_communities_supports_gzip_and_exact_limit() -> None:
 
 
 @pytest.mark.asyncio
-async def test_autocomplete_ranking_limit_and_allowlist() -> None:
+async def test_autocomplete_ranking_limit_and_allowlist(tmp_path) -> None:
     """Global autocomplete ranks exact matches and filters disallowed hosts."""
     factory = _FakeClientFactory(
         _payload(
@@ -150,7 +151,7 @@ async def test_autocomplete_ranking_limit_and_allowlist() -> None:
             _row("mytechnology", "lemmy.world", title="My Technology"),
         )
     )
-    cache = LemmyverseCommunityCache(http_client_factory=factory)
+    cache = LemmyverseCommunityCache(http_client_factory=factory, cache_path=tmp_path / "lemmyverse.json")
 
     await cache.get_entries()
 
@@ -165,10 +166,13 @@ async def test_autocomplete_ranking_limit_and_allowlist() -> None:
 
 
 @pytest.mark.asyncio
-async def test_autocomplete_empty_query_preserves_feed_order_and_caps_choices() -> None:
+async def test_autocomplete_empty_query_preserves_feed_order_and_caps_choices(tmp_path) -> None:
     """Empty global query returns deterministic feed order with Discord's cap."""
     rows = [_row(f"community{i}", "lemmy.world") for i in range(30)]
-    cache = LemmyverseCommunityCache(http_client_factory=_FakeClientFactory(_payload(*rows)))
+    cache = LemmyverseCommunityCache(
+        http_client_factory=_FakeClientFactory(_payload(*rows)),
+        cache_path=tmp_path / "lemmyverse.json",
+    )
 
     await cache.get_entries()
 
@@ -180,17 +184,24 @@ async def test_autocomplete_empty_query_preserves_feed_order_and_caps_choices() 
 
 
 @pytest.mark.asyncio
-async def test_cache_ttl_stale_failure_and_cold_failure() -> None:
+async def test_cache_ttl_stale_failure_and_cold_failure(tmp_path) -> None:
     """Cache refreshes after one hour and degrades to stale/empty on errors."""
     clock = _FakeClock()
     factory = _FakeClientFactory(_payload(_row("one", "lemmy.world")))
-    cache = LemmyverseCommunityCache(http_client_factory=factory, monotonic=clock)
+    cache = LemmyverseCommunityCache(
+        http_client_factory=factory,
+        monotonic=clock,
+        wall_time=lambda: clock.now,
+        cache_path=tmp_path / "warm.json",
+    )
 
     assert LEMMYVERSE_CACHE_TTL_SECONDS == 3600
     assert [entry.name for entry in await cache.get_entries()] == ["one"]
     assert [entry.name for entry in await cache.get_entries()] == ["one"]
     assert factory.calls == 1
 
+    (tmp_path / "warm.json").touch()
+    os.utime(tmp_path / "warm.json", (0, 0))
     clock.now = 3601
     factory.error = RuntimeError("network down")
     assert [entry.name for entry in await cache.get_entries()] == ["one"]
@@ -198,17 +209,21 @@ async def test_cache_ttl_stale_failure_and_cold_failure() -> None:
 
     cold_factory = _FakeClientFactory(_payload(_row("unused", "lemmy.world")))
     cold_factory.error = RuntimeError("network down")
-    cold_cache = LemmyverseCommunityCache(http_client_factory=cold_factory)
+    cold_cache = LemmyverseCommunityCache(
+        http_client_factory=cold_factory,
+        cache_path=tmp_path / "cold.json",
+        retry_delays_seconds=(),
+    )
     assert await cold_cache.get_entries() == []
     assert await cold_cache.get_entries() == []
-    assert cold_factory.calls == 1
+    assert cold_factory.calls == 2
 
 
 @pytest.mark.asyncio
-async def test_cache_coalesces_concurrent_refreshes() -> None:
+async def test_cache_coalesces_concurrent_refreshes(tmp_path) -> None:
     """Concurrent cold autocomplete requests share one feed download."""
     factory = _FakeClientFactory(_payload(_row("one", "lemmy.world")))
-    cache = LemmyverseCommunityCache(http_client_factory=factory)
+    cache = LemmyverseCommunityCache(http_client_factory=factory, cache_path=tmp_path / "lemmyverse.json")
 
     results = await asyncio.gather(cache.get_entries(), cache.get_entries(), cache.get_entries())
 
@@ -255,10 +270,10 @@ class _BlockingClientFactory:
 
 
 @pytest.mark.asyncio
-async def test_autocomplete_does_not_wait_for_cold_cache_refresh() -> None:
+async def test_autocomplete_does_not_wait_for_cold_cache_refresh(tmp_path) -> None:
     """Cold global autocomplete returns quickly and refreshes for later calls."""
     factory = _BlockingClientFactory(_payload(_row("one", "lemmy.world")))
-    cache = LemmyverseCommunityCache(http_client_factory=factory)
+    cache = LemmyverseCommunityCache(http_client_factory=factory, cache_path=tmp_path / "lemmyverse.json")
 
     choices = await autocomplete_lemmyverse_communities(cache, current="one", allowlist=[])
 
@@ -279,3 +294,89 @@ async def test_autocomplete_does_not_wait_for_cold_cache_refresh() -> None:
 
     choices = await autocomplete_lemmyverse_communities(cache, current="one", allowlist=[])
     assert choices == [("One (one@lemmy.world)", "https://lemmy.world/c/one")]
+
+
+class _RetryClientFactory:
+    """Factory that fails a configured number of cold-refresh attempts."""
+
+    def __init__(self, payload: bytes, *, failures: int) -> None:
+        """Store the final payload and the number of errors to raise first."""
+        self.payload = payload
+        self.failures = failures
+        self.calls = 0
+
+    def __call__(self) -> "_RetryClient":
+        """Build one retry-aware fake client."""
+        return _RetryClient(self)
+
+
+class _RetryClient:
+    """Async fake client that errors before returning a final payload."""
+
+    def __init__(self, owner: _RetryClientFactory) -> None:
+        """Capture shared retry state for one request."""
+        self._owner = owner
+
+    async def __aenter__(self) -> "_RetryClient":
+        """Return the fake client for async-with usage."""
+        return self
+
+    async def __aexit__(self, exc_type, exc, tb) -> None:
+        """No cleanup is required for the retry fake."""
+        return None
+
+    async def get(self, url: str, headers: dict[str, str]) -> _FakeResponse:
+        """Raise until the configured failures are consumed, then succeed."""
+        self._owner.calls += 1
+        if self._owner.calls <= self._owner.failures:
+            raise RuntimeError("temporary network failure")
+        return _FakeResponse(self._owner.payload)
+
+
+class _SleepRecorder:
+    """Async sleep fake that records retry delays without slowing tests."""
+
+    def __init__(self) -> None:
+        """Start with no recorded retry delays."""
+        self.delays: list[float] = []
+
+    async def __call__(self, delay: float) -> None:
+        """Record the requested delay and return immediately."""
+        self.delays.append(delay)
+
+
+@pytest.mark.asyncio
+async def test_cold_cache_retries_one_two_three_then_writes_plain_json(tmp_path) -> None:
+    """Cold empty cache retries 1/2/3 seconds and persists decoded JSON."""
+    cache_path = tmp_path / "community.full.json"
+    sleeper = _SleepRecorder()
+    factory = _RetryClientFactory(gzip.compress(_payload(_row("one", "lemmy.world"))), failures=3)
+    cache = LemmyverseCommunityCache(
+        http_client_factory=factory,
+        cache_path=cache_path,
+        retry_delays_seconds=(1, 2, 3),
+        sleep=sleeper,
+    )
+
+    entries = await cache.get_entries()
+
+    assert [entry.name for entry in entries] == ["one"]
+    assert factory.calls == 4
+    assert sleeper.delays == [1, 2, 3]
+    assert cache_path.read_bytes().startswith(b"[")
+    assert not cache_path.read_bytes().startswith(b"\x1f\x8b")
+    assert json.loads(cache_path.read_text(encoding="utf-8"))[0]["community"]["name"] == "one"
+
+
+@pytest.mark.asyncio
+async def test_fresh_disk_cache_loads_without_network(tmp_path) -> None:
+    """A fresh JSON file is the lazy cache source and avoids HTTP fetches."""
+    cache_path = tmp_path / "community.full.json"
+    cache_path.write_text(json.dumps([_row("disk", "lemmy.world")]), encoding="utf-8")
+    factory = _FakeClientFactory(_payload(_row("network", "lemmy.world")))
+    cache = LemmyverseCommunityCache(http_client_factory=factory, cache_path=cache_path)
+
+    choices = await autocomplete_lemmyverse_communities(cache, current="disk", allowlist=[])
+
+    assert choices == [("Disk (disk@lemmy.world)", "https://lemmy.world/c/disk")]
+    assert factory.calls == 0

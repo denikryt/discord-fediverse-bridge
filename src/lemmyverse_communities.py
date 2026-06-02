@@ -14,7 +14,8 @@ import logging
 import time
 from contextlib import AbstractAsyncContextManager
 from dataclasses import dataclass
-from typing import Any, Callable, Iterable
+from pathlib import Path
+from typing import Any, Awaitable, Callable, Iterable
 from urllib.parse import urlparse
 
 import httpx
@@ -25,6 +26,8 @@ logger = logging.getLogger(__name__)
 
 LEMMYVERSE_COMMUNITY_FEED_URL = "https://data.lemmyverse.net/data/community.full.json"
 LEMMYVERSE_CACHE_TTL_SECONDS = 3600
+LEMMYVERSE_RETRY_DELAYS_SECONDS = (1.0, 2.0, 3.0)
+LEMMYVERSE_CACHE_FILE = Path(".cache/lemmyverse/community.full.json")
 DISCORD_CHOICE_VALUE_LIMIT = 100
 DISCORD_CHOICE_NAME_LIMIT = 100
 DISCORD_AUTOCOMPLETE_LIMIT = 25
@@ -35,8 +38,8 @@ class LemmyverseCommunityEntry:
     """Compact searchable representation of one Lemmyverse community row.
 
     The entry stores only fields required for autocomplete ranking and submit
-    resolution. It intentionally excludes the original feed row so the cache
-    remains small and does not become a broad external-data dump.
+    resolution. It intentionally excludes the original feed row so the in-memory
+    index remains smaller than the downloaded JSON cache file.
     """
 
     name: str
@@ -49,75 +52,117 @@ class LemmyverseCommunityEntry:
 
 
 class LemmyverseCommunityCache:
-    """Refresh and serve a process-local Lemmyverse community index.
+    """Refresh and serve a disk-backed Lemmyverse community index.
 
-    The cache coalesces concurrent refreshes so Discord autocomplete bursts do
-    not download the full feed multiple times. Refresh failures degrade to a
-    stale cache when one exists, or an empty cache on cold startup.
+    The downloaded feed is persisted as plain JSON on disk, not gzip and not as
+    the authoritative cache in RAM. Autocomplete serves a compact parsed index
+    from memory after loading that JSON file, while the file mtime decides when
+    lazy refresh should contact Lemmyverse again.
     """
 
     def __init__(
         self,
         *,
         feed_url: str = LEMMYVERSE_COMMUNITY_FEED_URL,
+        cache_path: str | Path = LEMMYVERSE_CACHE_FILE,
         ttl_seconds: int = LEMMYVERSE_CACHE_TTL_SECONDS,
+        retry_delays_seconds: Iterable[float] = LEMMYVERSE_RETRY_DELAYS_SECONDS,
         http_client_factory: Callable[[], AbstractAsyncContextManager[httpx.AsyncClient]] | None = None,
         monotonic: Callable[[], float] = time.monotonic,
+        wall_time: Callable[[], float] = time.time,
+        sleep: Callable[[float], Awaitable[object]] = asyncio.sleep,
     ) -> None:
-        """Create one process-local cache with injectable network/time edges."""
+        """Create one process-local cache with injectable filesystem/network edges."""
         self.feed_url = feed_url
+        self.cache_path = Path(cache_path)
         self.ttl_seconds = ttl_seconds
+        self.retry_delays_seconds = tuple(retry_delays_seconds)
         self._http_client_factory = http_client_factory or self._default_http_client_factory
         self._monotonic = monotonic
+        self._wall_time = wall_time
+        self._sleep = sleep
         self._entries: list[LemmyverseCommunityEntry] = []
-        self._last_refresh: float | None = None
+        self._loaded_mtime: float | None = None
         self._refresh_lock = asyncio.Lock()
         self._refresh_task: asyncio.Task[None] | None = None
 
     async def get_entries(self) -> list[LemmyverseCommunityEntry]:
-        """Return cached entries, refreshing once when the TTL has expired.
+        """Return cached entries, refreshing synchronously when no usable file exists.
 
-        This blocking method is kept for callers and tests that explicitly want
-        fresh data before continuing. Discord autocomplete must not use it on
-        the hot path because a cold Lemmyverse download can outlive Discord's
-        interaction response window.
+        This method is intended for tests and explicit warm-up paths. Discord
+        autocomplete uses ``get_entries_for_autocomplete`` so cold network work
+        never blocks an interaction response.
         """
-        if self._is_fresh():
-            return list(self._entries)
+        if self._ensure_memory_index_loaded():
+            if self._is_disk_cache_fresh():
+                return list(self._entries)
+            if self._entries:
+                await self._refresh_if_needed()
+                return list(self._entries)
+
         await self._refresh_if_needed()
+        self._ensure_memory_index_loaded()
         return list(self._entries)
 
     async def get_entries_for_autocomplete(self) -> list[LemmyverseCommunityEntry]:
         """Return the current index immediately and refresh stale data later.
 
-        Discord requires autocomplete responses to be sent quickly. A cold cache
-        therefore returns an empty list while a background task downloads and
-        parses the feed for the next autocomplete request. An expired cache
-        returns stale entries and refreshes them in the background.
+        The method first tries to load the JSON cache file from disk. When the
+        file is missing or expired it starts one background refresh and returns
+        immediately, preserving Discord's autocomplete response deadline.
         """
-        if not self._is_fresh():
+        loaded_from_disk = self._ensure_memory_index_loaded()
+        if not loaded_from_disk or not self._is_disk_cache_fresh():
             self._ensure_background_refresh()
         return list(self._entries)
 
     async def _refresh_if_needed(self) -> None:
         """Refresh stale cache data while coalescing concurrent refresh attempts."""
-        # Autocomplete calls can arrive concurrently while a user types. The
-        # lock guarantees one download/parse per cold or expired cache window.
         async with self._refresh_lock:
-            if self._is_fresh():
+            self._ensure_memory_index_loaded()
+            if self._is_disk_cache_fresh():
                 return
+            await self._refresh_from_network_with_retry()
+
+    async def _refresh_from_network_with_retry(self) -> None:
+        """Download the feed, retrying briefly when no cache is available."""
+        delays = self.retry_delays_seconds if not self._entries else ()
+        max_attempts = len(delays) + 1
+        started_at = self._monotonic()
+        for attempt in range(1, max_attempts + 1):
             try:
-                self._entries = await self._fetch_entries()
-                self._last_refresh = self._monotonic()
+                logger.info(
+                    "Starting Lemmyverse community cache refresh attempt %s/%s from %s",
+                    attempt,
+                    max_attempts,
+                    self.feed_url,
+                )
+                entries = await self._fetch_entries_to_disk()
+                self._entries = entries
+                self._loaded_mtime = self._cache_file_mtime()
+                logger.info(
+                    "Finished Lemmyverse community cache refresh: entries=%s cache_path=%s duration=%.3fs",
+                    len(entries),
+                    self.cache_path,
+                    self._monotonic() - started_at,
+                )
+                return
             except Exception:
-                logger.exception("Failed to refresh Lemmyverse community autocomplete cache")
-                # Stale entries are better than breaking autocomplete. A cold
-                # cache returns [] because there is no safe discovery data yet.
-                # The timestamp also throttles repeated cold failures so every
-                # autocomplete keystroke does not start another failed download.
-                self._last_refresh = self._monotonic()
-                if not self._entries:
-                    self._entries = []
+                logger.exception(
+                    "Failed Lemmyverse community cache refresh attempt %s/%s",
+                    attempt,
+                    max_attempts,
+                )
+                if attempt > len(delays):
+                    logger.warning(
+                        "Giving up Lemmyverse community cache refresh: entries_available=%s cache_path=%s",
+                        bool(self._entries),
+                        self.cache_path,
+                    )
+                    return
+                delay = delays[attempt - 1]
+                logger.info("Retrying Lemmyverse community cache refresh in %.1fs", delay)
+                await self._sleep(delay)
 
     def _ensure_background_refresh(self) -> None:
         """Start one non-blocking refresh task when no usable task is running."""
@@ -127,18 +172,59 @@ class LemmyverseCommunityCache:
             loop = asyncio.get_running_loop()
         except RuntimeError:
             return
+        logger.info("Scheduling Lemmyverse community cache background refresh")
         self._refresh_task = loop.create_task(self._refresh_if_needed())
 
-    def _is_fresh(self) -> bool:
-        """Return whether the cache can be used without another refresh."""
-        return self._last_refresh is not None and (self._monotonic() - self._last_refresh) < self.ttl_seconds
+    def _ensure_memory_index_loaded(self) -> bool:
+        """Load the compact in-memory index from the JSON cache file when needed."""
+        mtime = self._cache_file_mtime()
+        if mtime is None:
+            return False
+        if self._entries and self._loaded_mtime == mtime:
+            return True
+        try:
+            payload = self.cache_path.read_text(encoding="utf-8")
+            self._entries = parse_lemmyverse_communities(payload)
+            self._loaded_mtime = mtime
+            logger.info(
+                "Loaded Lemmyverse community cache from disk: entries=%s cache_path=%s",
+                len(self._entries),
+                self.cache_path,
+            )
+            return True
+        except Exception:
+            logger.exception("Failed to load Lemmyverse community cache file %s", self.cache_path)
+            self._entries = []
+            self._loaded_mtime = None
+            return False
 
-    async def _fetch_entries(self) -> list[LemmyverseCommunityEntry]:
-        """Download and parse the current Lemmyverse community feed."""
+    def _is_disk_cache_fresh(self) -> bool:
+        """Return whether the on-disk JSON cache file is within the TTL window."""
+        mtime = self._cache_file_mtime()
+        return mtime is not None and (self._wall_time() - mtime) < self.ttl_seconds
+
+    def _cache_file_mtime(self) -> float | None:
+        """Return cache-file modification time, or ``None`` when it is absent."""
+        try:
+            return self.cache_path.stat().st_mtime
+        except FileNotFoundError:
+            return None
+
+    async def _fetch_entries_to_disk(self) -> list[LemmyverseCommunityEntry]:
+        """Download the feed, save plain JSON to disk, then parse that file."""
         async with self._http_client_factory() as client:
             response = await client.get(self.feed_url, headers={"Accept": "application/json"})
             response.raise_for_status()
-            return parse_lemmyverse_communities(response.content)
+            payload = _load_feed_payload(response.content)
+        self._write_json_cache_file(payload)
+        return parse_lemmyverse_communities(self.cache_path.read_text(encoding="utf-8"))
+
+    def _write_json_cache_file(self, payload: Any) -> None:
+        """Persist the feed as a plain JSON file with an atomic replace."""
+        self.cache_path.parent.mkdir(parents=True, exist_ok=True)
+        tmp_path = self.cache_path.with_name(f"{self.cache_path.name}.tmp")
+        tmp_path.write_text(json.dumps(payload, ensure_ascii=False), encoding="utf-8")
+        tmp_path.replace(self.cache_path)
 
     @staticmethod
     def _default_http_client_factory() -> httpx.AsyncClient:
@@ -253,8 +339,8 @@ def _parse_entry(item: Any, *, feed_order: int) -> LemmyverseCommunityEntry | No
 
 
 def _rank_entries(entries: list[LemmyverseCommunityEntry], *, query: str) -> list[LemmyverseCommunityEntry]:
-    """Rank matching entries deterministically for Discord autocomplete."""
-    normalized = query.lower().strip()
+    """Return entries matching a query in deterministic autocomplete order."""
+    normalized = query.strip().lower()
     if not normalized:
         return sorted(entries, key=lambda entry: entry.feed_order)
 

@@ -16,3 +16,4 @@ CLAUDE.md
 logs/
 tmp/
 discord-fediverse-bridge
+.cache/
