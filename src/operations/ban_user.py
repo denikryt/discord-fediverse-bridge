@@ -16,6 +16,13 @@ from ..config import Settings
 from ..db import Database
 from ..fediverse_identity import InvalidRemoteActorHandle, normalize_remote_actor_handle
 from ..local_community_lifecycle import disabled_moderation_message, is_local_community_disabled
+from ..management_audit import (
+    ACTION_BAN_CREATE_FORBIDDEN,
+    REASON_COMMUNITY_DISABLED,
+    REASON_NOT_OWNER_OR_SUPER_ADMIN,
+    RESULT_FORBIDDEN,
+    TARGET_REMOTE_ACTOR,
+)
 from ..local_community_permissions import (
     can_access_local_community_from_guild,
     can_manage_local_community,
@@ -99,6 +106,11 @@ class BanUserResult:
     reason: str
 
 
+def _has_guild_context(operation_input: BanUserInput) -> bool:
+    """Return whether Discord supplied a guild id for this command."""
+    return operation_input.discord_guild_id is not None
+
+
 def _community_accessible(operation_input: BanUserInput) -> bool:
     """Return whether the caller may address this community from the guild."""
     community = operation_input.get_local_community()
@@ -167,6 +179,7 @@ class BanUserOperation(Operation):
 
     name = "ban_user"
     _REJECTION_REASONS = {
+        "guild_context": "missing_guild_context",
         "community_accessible": "unknown_or_inaccessible_community",
         "can_manage_community": "cannot_manage_community",
         "community_active": "community_disabled",
@@ -174,6 +187,11 @@ class BanUserOperation(Operation):
         "no_duplicate_active_ban": "duplicate_active_ban",
     }
     preconditions = (
+        Precondition(
+            name="guild_context",
+            message="This command can only be used inside a guild.",
+            predicate=_has_guild_context,
+        ),
         Precondition(
             name="community_accessible",
             message=_inaccessible_message,
@@ -212,6 +230,22 @@ class BanUserOperation(Operation):
         """Return one rejected command result for the first failed precondition."""
         # discordops exposes the failed precondition name; command callers keep
         # stable reason codes from the ban-user operation contract.
+        if reason in {"can_manage_community", "community_active"}:
+            community = operation_input.get_local_community()
+            if community is not None:
+                operation_input.database.management_audit_events.create_event(
+                    action=ACTION_BAN_CREATE_FORBIDDEN,
+                    result=RESULT_FORBIDDEN,
+                    actor_discord_user_id=operation_input.discord_user_id,
+                    local_community_id=community.id,
+                    target_type=TARGET_REMOTE_ACTOR,
+                    target_id=None,
+                    reason_code=(
+                        REASON_NOT_OWNER_OR_SUPER_ADMIN
+                        if reason == "can_manage_community"
+                        else REASON_COMMUNITY_DISABLED
+                    ),
+                )
         return BanUserResult(
             applied=False,
             message=message,
@@ -233,12 +267,13 @@ class BanUserOperation(Operation):
             )
 
         reason = operation_input.reason.strip() if operation_input.reason else None
-        operation_input.database.community_actor_bans.create_active_ban(
+        operation_input.database.community_actor_bans.create_active_ban_with_audit(
             local_community_id=community.id,
             actor_handle=actor_handle,
             actor_url=None,
             created_by_discord_user_id=operation_input.discord_user_id,
             reason=reason,
+            audit_repository=operation_input.database.management_audit_events,
         )
         return BanUserResult(
             applied=True,

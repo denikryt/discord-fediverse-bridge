@@ -5,6 +5,7 @@ session factories.
 """
 
 from .community_actor_bans import CommunityActorBanRepository
+from .management_audit_events import ManagementAuditEventRepository
 from .local_communities import LocalCommunityRepository
 from .remote_subscribers import RemoteSubscriberRepository
 from .local_subscribers import LocalSubscriberRepository
@@ -25,6 +26,7 @@ from .discord_fanout_groups import DiscordFanoutGroupRepository
 from .discord_directory import DiscordDirectoryRepository
 __all__ = [
     "CommunityActorBanRepository",
+    "ManagementAuditEventRepository",
     "LocalCommunityRepository",
     "RemoteSubscriberRepository",
     "LocalSubscriberRepository",

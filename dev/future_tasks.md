@@ -263,17 +263,14 @@ No dedicated dashboard UI exists for disabled communities.
 
 A later UI design should decide whether disabled communities are visible publicly, visible only to operators, hidden from normal lists, or shown with a lifecycle badge.
 
-## 22. Management audit log
+## 22. Extended management audit scope
 
-The project does not yet have a general audit log for management actions.
+The backend now records v1 audit rows for community creation, metadata/status edits, ban/unban mutations, and selected authorization denials.
 
-A future audit model could record:
+Later audit extensions may cover:
 
-- owner changes;
-- failed authorization attempts;
-- ban and unban actions;
-- ban reason changes;
-- community metadata edits;
-- community lifecycle status changes;
-- role and super-admin changes;
-- legacy claim/backfill actions.
+- ownership transfer or moderator assignment;
+- ban reason edits without status changes;
+- role and super-admin configuration changes;
+- legacy claim/backfill actions;
+- operator-facing audit search, retention, export, or dashboard UI.

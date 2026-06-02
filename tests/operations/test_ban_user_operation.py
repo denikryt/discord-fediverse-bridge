@@ -226,8 +226,8 @@ def test_inaccessible_community_rejects_before_invalid_handle_validation(tmp_pat
     assert _ban_count(database) == 0
 
 
-def test_guildless_owner_call_is_inaccessible(tmp_path: Path) -> None:
-    """Owner access is guild-scoped and requires Discord guild context."""
+def test_guildless_owner_call_is_rejected_before_authorization(tmp_path: Path) -> None:
+    """DM calls fail as command-context validation before authorization."""
     database = build_database(tmp_path, "ban-user-guildless-owner.db")
     _local_community(database, owner_id="111", discord_guild_id=10)
 
@@ -244,14 +244,15 @@ def test_guildless_owner_call_is_inaccessible(tmp_path: Path) -> None:
     )
 
     assert result.applied is False
-    assert result.reason == "unknown_or_inaccessible_community"
+    assert result.reason == "missing_guild_context"
+    assert result.message == "This command can only be used inside a guild."
     assert _ban_count(database) == 0
 
 
-def test_guildless_super_admin_can_ban_active_community(tmp_path: Path) -> None:
-    """Super-admin access is not tied to one Discord guild context."""
+def test_guildless_super_admin_call_is_rejected_before_authorization(tmp_path: Path) -> None:
+    """Super-admins also need guild context for state-changing moderation."""
     database = build_database(tmp_path, "ban-user-guildless-admin.db")
-    community = _local_community(database, owner_id="111", discord_guild_id=10)
+    _local_community(database, owner_id="111", discord_guild_id=10)
 
     result = ban_user_operation(
         BanUserInput(
@@ -265,11 +266,9 @@ def test_guildless_super_admin_can_ban_active_community(tmp_path: Path) -> None:
         )
     )
 
-    assert result.applied is True
-    assert database.community_actor_bans.get_active_ban_by_handle(
-        local_community_id=community.id,
-        actor_handle="alice@example.com",
-    ) is not None
+    assert result.applied is False
+    assert result.reason == "missing_guild_context"
+    assert _ban_count(database) == 0
 
 
 def test_non_owner_non_admin_cannot_ban_in_owned_community(tmp_path: Path) -> None:

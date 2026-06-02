@@ -98,7 +98,7 @@ async def test_edit_modal_submit_delegates_to_operation_and_responds_ephemeral(i
         created_by_discord_user_id="1234567890",
         status="active",
     )
-    database.local_communities.update_local_community_settings.return_value = SimpleNamespace(
+    database.local_communities.update_local_community_settings_with_audit.return_value = SimpleNamespace(
         slug="cats",
         display_name="New Cats",
         summary=None,
@@ -118,11 +118,13 @@ async def test_edit_modal_submit_delegates_to_operation_and_responds_ephemeral(i
 
     await modal.on_submit(interaction)
 
-    database.local_communities.update_local_community_settings.assert_called_once_with(
+    database.local_communities.update_local_community_settings_with_audit.assert_called_once_with(
         local_community_id=1,
         display_name="New Cats",
         summary=None,
         status="disabled",
+        actor_discord_user_id="1234567890",
+        audit_repository=database.management_audit_events,
     )
     interaction.response.send_message.assert_awaited_once_with(
         (

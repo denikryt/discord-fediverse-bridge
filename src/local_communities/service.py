@@ -113,7 +113,7 @@ class LocalCommunityService:
 
         actor_url, inbox_url, outbox_url, followers_url = self.build_actor_urls(normalized_slug)
         public_key_pem, private_key_pem = self.keypair_generator()
-        created = self.database.local_communities.create_local_community(
+        created = self.database.local_communities.create_local_community_with_audit(
             discord_guild_id=discord_guild_id,
             discord_forum_channel_id=discord_forum_channel_id,
             slug=normalized_slug,
@@ -126,6 +126,7 @@ class LocalCommunityService:
             followers_url=followers_url,
             public_key_pem=public_key_pem,
             private_key_pem=private_key_pem,
+            audit_repository=self.database.management_audit_events,
         )
         return CreatedLocalCommunity(
             slug=created.slug,

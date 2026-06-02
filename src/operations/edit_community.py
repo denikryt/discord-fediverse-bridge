@@ -15,6 +15,12 @@ from ..db import Database
 from ..local_communities.service import LocalCommunityError, normalize_display_name, normalize_summary
 from ..local_community_lifecycle import normalize_local_community_status
 from ..local_community_permissions import can_access_local_community_from_guild, can_manage_local_community
+from ..management_audit import (
+    ACTION_COMMUNITY_MANAGE_FORBIDDEN,
+    REASON_NOT_OWNER_OR_SUPER_ADMIN,
+    RESULT_FORBIDDEN,
+    TARGET_LOCAL_COMMUNITY,
+)
 from ..models import LocalCommunity
 
 
@@ -210,6 +216,18 @@ class EditCommunityOperation(Operation):
         **_: object,
     ) -> EditCommunityResult:
         """Return the first failed precondition as a command-visible result."""
+        if reason == "can_manage_community":
+            community = operation_input.get_local_community()
+            if community is not None:
+                operation_input.database.management_audit_events.create_event(
+                    action=ACTION_COMMUNITY_MANAGE_FORBIDDEN,
+                    result=RESULT_FORBIDDEN,
+                    actor_discord_user_id=operation_input.discord_user_id,
+                    local_community_id=community.id,
+                    target_type=TARGET_LOCAL_COMMUNITY,
+                    target_id=str(community.id),
+                    reason_code=REASON_NOT_OWNER_OR_SUPER_ADMIN,
+                )
         return EditCommunityResult(
             applied=False,
             message=message,
@@ -231,11 +249,13 @@ class EditCommunityOperation(Operation):
                 reason="invalid_operation_state",
             )
 
-        updated = operation_input.database.local_communities.update_local_community_settings(
+        updated = operation_input.database.local_communities.update_local_community_settings_with_audit(
             local_community_id=community.id,
             display_name=display_name,
             summary=summary,
             status=status,
+            actor_discord_user_id=operation_input.discord_user_id,
+            audit_repository=operation_input.database.management_audit_events,
         )
         if updated is None:
             return EditCommunityResult(

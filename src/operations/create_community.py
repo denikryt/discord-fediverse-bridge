@@ -11,6 +11,12 @@ from dataclasses import dataclass
 from ..config import Settings
 from ..db import Database
 from ..local_communities.service import LocalCommunityError, LocalCommunityService
+from ..management_audit import (
+    ACTION_COMMUNITY_CREATE_FORBIDDEN,
+    REASON_NOT_SUPER_ADMIN,
+    RESULT_FORBIDDEN,
+    TARGET_LOCAL_COMMUNITY,
+)
 
 
 @dataclass(slots=True)
@@ -39,6 +45,14 @@ class CreateCommunityResult:
 def create_community_operation(operation_input: CreateCommunityInput) -> CreateCommunityResult:
     """Validate one local-community creation request and persist the result."""
     if operation_input.discord_user_id not in operation_input.settings.local_community_operator_allowlist:
+        operation_input.database.management_audit_events.create_event(
+            action=ACTION_COMMUNITY_CREATE_FORBIDDEN,
+            result=RESULT_FORBIDDEN,
+            actor_discord_user_id=operation_input.discord_user_id,
+            target_type=TARGET_LOCAL_COMMUNITY,
+            target_id=operation_input.slug.strip().lower() or None,
+            reason_code=REASON_NOT_SUPER_ADMIN,
+        )
         return CreateCommunityResult(
             applied=False,
             message="You are not allowed to create local communities with this bot.",

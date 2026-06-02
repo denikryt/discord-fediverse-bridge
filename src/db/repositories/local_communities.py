@@ -252,3 +252,128 @@ class LocalCommunityRepository(BaseRepository):
                 community.status = status
                 session.flush()
                 return community
+    def create_local_community_with_audit(
+        self,
+        *,
+        discord_guild_id: int,
+        discord_forum_channel_id: int,
+        slug: str,
+        display_name: str,
+        summary: str | None,
+        created_by_discord_user_id: str,
+        actor_url: str,
+        inbox_url: str,
+        outbox_url: str,
+        followers_url: str,
+        public_key_pem: str,
+        private_key_pem: str,
+        audit_repository: object,
+        status: str = "active",
+    ) -> LocalCommunity:
+        """Create one local community and its audit row atomically."""
+        from ...management_audit import (
+            ACTION_COMMUNITY_CREATED,
+            RESULT_SUCCESS,
+            TARGET_LOCAL_COMMUNITY,
+            community_created_after,
+        )
+
+        with self.session() as session:
+            community = LocalCommunity(
+                discord_guild_id=discord_guild_id,
+                discord_forum_channel_id=discord_forum_channel_id,
+                slug=slug,
+                display_name=display_name,
+                summary=summary,
+                created_by_discord_user_id=created_by_discord_user_id,
+                actor_url=actor_url,
+                inbox_url=inbox_url,
+                outbox_url=outbox_url,
+                followers_url=followers_url,
+                public_key_pem=public_key_pem,
+                private_key_pem=private_key_pem,
+                status=status,
+            )
+            session.add(community)
+            session.flush()
+            # The audit insert uses the same session so any insert failure rolls
+            # back both the actor identity row and the audit row together.
+            audit_repository.add_event(
+                session,
+                action=ACTION_COMMUNITY_CREATED,
+                result=RESULT_SUCCESS,
+                actor_discord_user_id=created_by_discord_user_id,
+                local_community_id=community.id,
+                target_type=TARGET_LOCAL_COMMUNITY,
+                target_id=str(community.id),
+                after=community_created_after(community=community),
+            )
+            return community
+
+    def update_local_community_settings_with_audit(
+        self,
+        *,
+        local_community_id: int,
+        display_name: str,
+        summary: str | None,
+        status: str,
+        actor_discord_user_id: str,
+        audit_repository: object,
+    ) -> LocalCommunity | None:
+        """Update community settings and write any changed-field audit rows."""
+        from ...management_audit import (
+            ACTION_COMMUNITY_METADATA_UPDATED,
+            ACTION_COMMUNITY_STATUS_CHANGED,
+            RESULT_SUCCESS,
+            TARGET_LOCAL_COMMUNITY,
+            community_metadata_diff,
+            community_status_diff,
+        )
+
+        with self.session() as session:
+            if status not in VALID_LOCAL_COMMUNITY_STATUSES:
+                raise ValueError("Local community status must be active or disabled")
+            community = session.get(LocalCommunity, local_community_id)
+            if community is None:
+                return None
+            metadata_before, metadata_after = community_metadata_diff(
+                old_display_name=community.display_name,
+                old_summary=community.summary,
+                new_display_name=display_name,
+                new_summary=summary,
+            )
+            status_before, status_after = community_status_diff(
+                old_status=community.status,
+                new_status=status,
+            )
+            community.display_name = display_name
+            community.summary = summary
+            community.status = status
+            session.flush()
+            # Metadata and lifecycle status are separate actions so callers can
+            # filter by action without parsing before/after payloads.
+            if metadata_after:
+                audit_repository.add_event(
+                    session,
+                    action=ACTION_COMMUNITY_METADATA_UPDATED,
+                    result=RESULT_SUCCESS,
+                    actor_discord_user_id=actor_discord_user_id,
+                    local_community_id=community.id,
+                    target_type=TARGET_LOCAL_COMMUNITY,
+                    target_id=str(community.id),
+                    before=metadata_before,
+                    after=metadata_after,
+                )
+            if status_after:
+                audit_repository.add_event(
+                    session,
+                    action=ACTION_COMMUNITY_STATUS_CHANGED,
+                    result=RESULT_SUCCESS,
+                    actor_discord_user_id=actor_discord_user_id,
+                    local_community_id=community.id,
+                    target_type=TARGET_LOCAL_COMMUNITY,
+                    target_id=str(community.id),
+                    before=status_before,
+                    after=status_after,
+                )
+            return community

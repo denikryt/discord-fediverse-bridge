@@ -12,6 +12,7 @@ from . import migrations, schema
 from .repositories import (
     ActivityPubObjectRepository,
     CommunityActorBanRepository,
+    ManagementAuditEventRepository,
     BridgeActorFollowRepository,
     DiscordFanoutGroupRepository,
     DiscordDirectoryRepository,
@@ -40,6 +41,7 @@ class Database:
         self.session_factory = sessionmaker(self.engine, expire_on_commit=False, class_=Session)
         self.local_communities = LocalCommunityRepository(self.session)
         self.community_actor_bans = CommunityActorBanRepository(self.session)
+        self.management_audit_events = ManagementAuditEventRepository(self.session)
         self.remote_subscribers = RemoteSubscriberRepository(self.session)
         self.local_subscribers = LocalSubscriberRepository(self.session)
         self.local_community_content = LocalCommunityContentRepository(self.session)
