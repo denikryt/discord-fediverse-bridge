@@ -142,6 +142,35 @@ def test_parse_lemmyverse_communities_supports_lemmyverse_summary_wrapper() -> N
     assert entries[0].actor_id == "https://lemmy.world/c/technology"
 
 
+def test_parse_lemmyverse_communities_supports_public_flat_feed_rows() -> None:
+    """Parser reads the current data.lemmyverse.net community.full.json list rows."""
+    entries = parse_lemmyverse_communities(
+        [
+            {
+                "baseurl": "lemmy.world",
+                "url": "https://lemmy.world/c/planetoftheapes",
+                "name": "planetoftheapes",
+                "title": "Planet of the Apes",
+                "isSuspicious": False,
+            },
+            {
+                "baseurl": "bad.example",
+                "url": "https://bad.example/c/suspicious",
+                "name": "suspicious",
+                "title": "Suspicious",
+                "isSuspicious": True,
+            },
+        ]
+    )
+
+    assert len(entries) == 1
+    assert entries[0].name == "planetoftheapes"
+    assert entries[0].title == "Planet of the Apes"
+    assert entries[0].actor_id == "https://lemmy.world/c/planetoftheapes"
+    assert entries[0].host == "lemmy.world"
+    assert entries[0].handle == "!planetoftheapes@lemmy.world"
+
+
 def test_parse_lemmyverse_communities_supports_gzip_and_exact_limit() -> None:
     """Gzip bytes parse correctly and actor_id length 100 remains selectable."""
     actor_id = "https://lemmy.world/c/" + "a" * (100 - len("https://lemmy.world/c/"))

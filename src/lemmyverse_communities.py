@@ -295,26 +295,52 @@ def _iter_feed_rows(payload: Any) -> list[Any]:
 
 
 def _parse_entry(item: Any, *, feed_order: int) -> LemmyverseCommunityEntry | None:
-    """Parse one nested Lemmy community-view row into an autocomplete entry."""
+    """Parse one Lemmyverse row into an autocomplete entry."""
     if not isinstance(item, dict):
         return None
     community = item.get("community")
-    if not isinstance(community, dict):
-        return None
+    if isinstance(community, dict):
+        return _parse_lemmy_api_entry(community, feed_order=feed_order)
+    return _parse_lemmyverse_flat_entry(item, feed_order=feed_order)
+
+
+def _parse_lemmy_api_entry(community: dict[str, Any], *, feed_order: int) -> LemmyverseCommunityEntry | None:
+    """Parse a Lemmy ``CommunityView`` nested ``community`` object."""
     if community.get("deleted") is True or community.get("removed") is True:
         return None
 
     actor_id = str(community.get("actor_id") or "").strip()
+    name = str(community.get("name") or "").strip()
+    title = str(community.get("title") or name).strip() or name
+    return _build_entry(actor_id=actor_id, name=name, title=title, feed_order=feed_order)
+
+
+def _parse_lemmyverse_flat_entry(item: dict[str, Any], *, feed_order: int) -> LemmyverseCommunityEntry | None:
+    """Parse the public Lemmyverse ``community.full.json`` flat row shape."""
+    if item.get("isSuspicious") is True:
+        return None
+    actor_id = str(item.get("url") or "").strip()
+    name = str(item.get("name") or "").strip()
+    title = str(item.get("title") or name).strip() or name
+    return _build_entry(actor_id=actor_id, name=name, title=title, feed_order=feed_order)
+
+
+def _build_entry(
+    *,
+    actor_id: str,
+    name: str,
+    title: str,
+    feed_order: int,
+) -> LemmyverseCommunityEntry | None:
+    """Build one normalized autocomplete entry after row-shape extraction."""
     if not actor_id or len(actor_id) > DISCORD_CHOICE_VALUE_LIMIT:
         return None
     parsed = urlparse(actor_id)
     if parsed.scheme not in {"http", "https"} or not parsed.hostname:
         return None
 
-    name = str(community.get("name") or "").strip()
     if not name:
         return None
-    title = str(community.get("title") or name).strip() or name
     host = parsed.hostname.lower()
     handle = f"!{name}@{host}"
     search_text = "\n".join(
