@@ -8,6 +8,8 @@ from contextlib import contextmanager
 from sqlalchemy import create_engine
 from sqlalchemy.orm import Session, sessionmaker
 
+from ..management_actions import ManagementActions
+from ..management_audit_recorder import ManagementAuditRecorder
 from . import migrations, schema
 from .repositories import (
     ActivityPubObjectRepository,
@@ -42,6 +44,7 @@ class Database:
         self.local_communities = LocalCommunityRepository(self.session)
         self.community_actor_bans = CommunityActorBanRepository(self.session)
         self.management_audit_events = ManagementAuditEventRepository(self.session)
+        self.management_audit = ManagementAuditRecorder(self.management_audit_events)
         self.remote_subscribers = RemoteSubscriberRepository(self.session)
         self.local_subscribers = LocalSubscriberRepository(self.session)
         self.local_community_content = LocalCommunityContentRepository(self.session)
@@ -58,6 +61,12 @@ class Database:
         self.legacy_lemmy_mappings = LegacyLemmyMappingRepository(self.session)
         self.discord_fanout_groups = DiscordFanoutGroupRepository(self.session)
         self.discord_directory = DiscordDirectoryRepository(self.session)
+        self.management_actions = ManagementActions(
+            session_factory=self.session,
+            local_communities=self.local_communities,
+            community_actor_bans=self.community_actor_bans,
+            management_audit=self.management_audit,
+        )
 
     def create_all(self) -> None:
         """Create the full clean-schema set required by the current codebase."""

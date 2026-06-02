@@ -32,6 +32,11 @@ Runtime behavior is not changed by this inventory. The repository names below de
 | Discord fanout group repository | `DiscordFanoutGroupRepository` | 17 | `src/community_sync/runtime.py`, `src/community_sync/backfill.py`, `src/community_sync/delivery_mapping.py`, `src/activitypub_handlers.py`, `src/content_publish_service.py`, plus 3 more | `tests/test_phase8_edit_delete_sync.py`, `tests/test_phase9_bidirectional_mirror_messages.py`, `tests/test_phase6_dedup_hardening.py`, `tests/test_phase3_message_fanout_scenarios.py`, `tests/test_end_to_end_dedup_flow.py`, plus 10 more | Cross-channel fanout, reply preservation, and edit/delete lookup paths must keep the same dedup and delivery semantics. |
 | Bridge actor follow repository | `BridgeActorFollowRepository` | 6 | `src/dashboard.py`, `src/activitypub_handlers.py`, `src/operations/unsubscribe.py`, `src/operations/subscribe.py` | `tests/test_follow_subscription_flow.py`, `tests/behavior/test_unsubscribed_inbound_activity_skip.py`, `tests/behavior/test_local_subscriber_stage1_scenarios.py`, `tests/behavior/test_unsubscribe_retry_scenarios.py`, `tests/behavior/test_subscription_scenarios.py`, plus 3 more | Remote follow acceptance now requires matching BridgeActorFollow; extraction must not reintroduce direct-follow compatibility. |
 
+
+## Management action transaction boundary
+
+Management command mutations that require audit rows no longer live as `*_with_audit` repository variants. `src/management_actions.py` owns the application-service transaction boundary for local-community creation, community settings changes, ban activation/reactivation, and ban removal. Domain repositories remain persistence-only and expose session-aware helpers for that service. `src/management_audit_recorder.py` owns audit-row target/action/reason semantics and delegates low-level inserts to `ManagementAuditEventRepository`.
+
 ## Method inventory by target owner
 
 ### Database infrastructure

@@ -26,13 +26,12 @@ async def test_ban_user_command_passes_user_and_guild_and_returns_ephemeral(comm
     command = command_tree.commands["ban-user"]
     await command.callback(interaction, "cats", "alice@example.com", "spam")
 
-    database.community_actor_bans.create_active_ban_with_audit.assert_called_once_with(
+    database.management_actions.create_or_reactivate_ban.assert_called_once_with(
+        actor_discord_user_id="1234567890",
         local_community_id=1,
         actor_handle="alice@example.com",
         actor_url=None,
-        created_by_discord_user_id="1234567890",
         reason="spam",
-        audit_repository=database.management_audit_events,
     )
     interaction.response.send_message.assert_awaited_once_with(
         "Banned alice@example.com from community cats.\nReason: spam",
@@ -60,7 +59,7 @@ async def test_ban_user_command_rejection_stays_ephemeral(command_tree, interact
         "You are not allowed to manage this local community.",
         ephemeral=True,
     )
-    database.community_actor_bans.create_active_ban_with_audit.assert_not_called()
+    database.management_actions.create_or_reactivate_ban.assert_not_called()
 
 
 @pytest.mark.asyncio

@@ -30,11 +30,10 @@ async def test_unban_user_command_passes_user_and_guild_and_returns_ephemeral(co
     command = command_tree.commands["unban-user"]
     await command.callback(interaction, "cats", "alice@example.com")
 
-    database.community_actor_bans.deactivate_active_ban_by_handle_with_audit.assert_called_once_with(
+    database.management_actions.remove_ban.assert_called_once_with(
+        actor_discord_user_id="1234567890",
         local_community_id=1,
         actor_handle="alice@example.com",
-        actor_discord_user_id="1234567890",
-        audit_repository=database.management_audit_events,
     )
     interaction.response.send_message.assert_awaited_once_with(
         "Unbanned alice@example.com from community cats.",

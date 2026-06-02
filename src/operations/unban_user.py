@@ -14,13 +14,6 @@ from ..config import Settings
 from ..db import Database
 from ..fediverse_identity import InvalidRemoteActorHandle, normalize_remote_actor_handle
 from ..local_community_lifecycle import disabled_moderation_message, is_local_community_disabled
-from ..management_audit import (
-    ACTION_BAN_REMOVE_FORBIDDEN,
-    REASON_COMMUNITY_DISABLED,
-    REASON_NOT_OWNER_OR_SUPER_ADMIN,
-    RESULT_FORBIDDEN,
-    TARGET_REMOTE_ACTOR,
-)
 from ..local_community_permissions import (
     can_access_local_community_from_guild,
     can_manage_local_community,
@@ -219,18 +212,10 @@ class UnbanUserOperation(Operation):
         if reason in {"can_manage_community", "community_active"}:
             community = operation_input.get_local_community()
             if community is not None:
-                operation_input.database.management_audit_events.create_event(
-                    action=ACTION_BAN_REMOVE_FORBIDDEN,
-                    result=RESULT_FORBIDDEN,
+                operation_input.database.management_audit.ban_remove_forbidden(
                     actor_discord_user_id=operation_input.discord_user_id,
-                    local_community_id=community.id,
-                    target_type=TARGET_REMOTE_ACTOR,
-                    target_id=None,
-                    reason_code=(
-                        REASON_NOT_OWNER_OR_SUPER_ADMIN
-                        if reason == "can_manage_community"
-                        else REASON_COMMUNITY_DISABLED
-                    ),
+                    community=community,
+                    failed_precondition=reason,
                 )
         return UnbanUserResult(
             applied=False,
@@ -251,11 +236,10 @@ class UnbanUserOperation(Operation):
                 reason="invalid_operation_state",
             )
 
-        operation_input.database.community_actor_bans.deactivate_active_ban_by_handle_with_audit(
+        operation_input.database.management_actions.remove_ban(
+            actor_discord_user_id=operation_input.discord_user_id,
             local_community_id=community.id,
             actor_handle=actor_handle,
-            actor_discord_user_id=operation_input.discord_user_id,
-            audit_repository=operation_input.database.management_audit_events,
         )
         return UnbanUserResult(
             applied=True,

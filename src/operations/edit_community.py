@@ -15,12 +15,6 @@ from ..db import Database
 from ..local_communities.service import LocalCommunityError, normalize_display_name, normalize_summary
 from ..local_community_lifecycle import normalize_local_community_status
 from ..local_community_permissions import can_access_local_community_from_guild, can_manage_local_community
-from ..management_audit import (
-    ACTION_COMMUNITY_MANAGE_FORBIDDEN,
-    REASON_NOT_OWNER_OR_SUPER_ADMIN,
-    RESULT_FORBIDDEN,
-    TARGET_LOCAL_COMMUNITY,
-)
 from ..models import LocalCommunity
 
 
@@ -219,14 +213,9 @@ class EditCommunityOperation(Operation):
         if reason == "can_manage_community":
             community = operation_input.get_local_community()
             if community is not None:
-                operation_input.database.management_audit_events.create_event(
-                    action=ACTION_COMMUNITY_MANAGE_FORBIDDEN,
-                    result=RESULT_FORBIDDEN,
+                operation_input.database.management_audit.community_manage_forbidden(
                     actor_discord_user_id=operation_input.discord_user_id,
-                    local_community_id=community.id,
-                    target_type=TARGET_LOCAL_COMMUNITY,
-                    target_id=str(community.id),
-                    reason_code=REASON_NOT_OWNER_OR_SUPER_ADMIN,
+                    community=community,
                 )
         return EditCommunityResult(
             applied=False,
@@ -249,13 +238,12 @@ class EditCommunityOperation(Operation):
                 reason="invalid_operation_state",
             )
 
-        updated = operation_input.database.local_communities.update_local_community_settings_with_audit(
+        updated = operation_input.database.management_actions.update_local_community_settings(
+            actor_discord_user_id=operation_input.discord_user_id,
             local_community_id=community.id,
             display_name=display_name,
             summary=summary,
             status=status,
-            actor_discord_user_id=operation_input.discord_user_id,
-            audit_repository=operation_input.database.management_audit_events,
         )
         if updated is None:
             return EditCommunityResult(
