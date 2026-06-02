@@ -70,6 +70,15 @@
 - Preserve the established formatting style of the document family being edited.
 - If no documentation update is needed, understand and be able to explain why the change is outside the existing documentation boundaries.
 
+## Planning Clarification Workflow
+
+- When planning work, first study the relevant code, docs, notes, and existing plans before asking questions.
+- Ask clarification questions only for non-obvious product or architecture decisions that are not already answered by the codebase or these rules.
+- Ask one question at a time and wait for the answer before asking the next one.
+- Each clarification question must offer three concrete choices, unless the user explicitly requests a different format.
+- Do not ask obvious questions, repeat already answered questions, or ask questions whose answers are already specified by project rules.
+- Write the plan only after the necessary decisions are fixed.
+
 ## Plans
 
 - When explicitly asked to create a plan, create a new Markdown file in `plans/`.

@@ -1,78 +1,106 @@
 # Future tasks journal
 
-This journal collects deferred work discovered while planning or implementing bridge features. It is intentionally broader than a single implementation plan and should be updated when new future work appears.
+This journal collects deferred work discovered while planning or implementing bridge features.
 
-## Source: local community user ban v1
+## 1. Role system
 
-## 1. Unban command
+Replace the current overloaded configured user list with a real role model.
 
-Status: implemented by plan 74. The command deactivates active rows, keeps responses ephemeral, uses owner/super-admin runtime checks, and does not expose inactive historical rows through no-active-ban errors.
+The role model should separate at least these concerns:
 
-Remaining future work belongs under the audit/history and pagination items below rather than this completed command stub.
+- who can create communities;
+- who is a bridge-level super-admin;
+- who can moderate a community;
+- who can edit community settings;
+- whether roles are global, guild-scoped, or community-scoped.
 
-## 2. List banned users command
+## 2. Dedicated super-admin configuration
 
-Status: implemented by plan 74 for active bans. The command is public to invoke within a guild, returns ephemeral output, shows handles and reasons, and limits visible rows to the first 20 active bans.
+The current configuration uses an existing operator allowlist as the super-admin list for management commands.
 
-Remaining future work: real pagination, inactive history listing, dashboard exposure decisions, and audit-log support.
+A future migration may rename or split configuration keys once role policy is clearer.
 
-## 3. Creator ownership persistence and enforcement
+Open details:
 
-Status: planned separately in `plans/73_local_community_creator_ownership.md`. Keep this item here only as historical context until that plan is implemented and verified.
+- whether to preserve backward compatibility with the old key;
+- whether to support separate creator and super-admin allowlists;
+- how to document the transition for existing deployments.
 
-V1 cannot enforce “only the community creator can ban” because local communities do not yet persist the creator Discord user id.
+## 3. Legacy ownership claim/backfill
 
-Future work should add something like:
+Existing communities without a stored owner still need an explicit claim or backfill workflow if they should become owner-managed instead of only super-admin-managed.
 
-```text
-local_communities.created_by_discord_user_id
-```
+Open details:
 
-Then update `/create_community` to populate it and update moderation commands so only the creator/owner of that community can use them.
+- who is allowed to claim a legacy community;
+- whether claim should require super-admin approval;
+- whether ownership can be inferred from historical command metadata;
+- how to prevent two operators from claiming the same legacy community incorrectly.
 
-This needs a migration/backfill decision for existing communities:
+## 4. Ownership transfer and multiple moderators
 
-- require an operator to claim existing communities;
-- backfill from historical command metadata if available;
-- temporarily leave old rows ownerless and restrict owner-only commands until claimed.
+The project stores one creator owner per local community. It does not yet support transfer, co-owners, moderators, or per-community ACLs.
 
-## 4. Community autocomplete for moderation commands
+A later design should define whether the project needs:
 
-Status: implemented for `/ban-user`, `/unban-user`, and `/list-banned-users` through plans 74 and 75.
+- owner transfer;
+- additional community moderators;
+- temporary moderators;
+- per-command permissions;
+- owner removal or recovery when the owner leaves the Discord server.
 
-The moderation commands now submit stable community slugs, use autocomplete as UX only, and keep runtime preconditions as the security boundary. Remaining autocomplete work belongs to future management commands such as `/edit-community`, disable/archive, and subscription approvals.
+## 5. Dynamic Discord command visibility
 
-## 5. Discord-originated moderation
+Management command visibility could be improved so commands are shown only to super-admins and users who own at least one local community.
 
-V1 only blocks inbound ActivityPub activities from remote actors. It does not ban Discord users and does not block Discord-originated publish/edit/delete actions.
+This must remain best-effort only because:
 
-A later plan should define whether a remote actor ban should have any effect on:
+- command visibility is not the security boundary;
+- ownership checks depend on command input;
+- stale Discord command permission state must not grant access.
+
+## 6. Management autocomplete consistency
+
+Future management commands should follow the established autocomplete pattern:
+
+- submitted values remain stable community slugs;
+- autocomplete lists context-appropriate communities;
+- runtime preconditions remain the security boundary;
+- super-admin cross-guild behavior is explicit per command.
+
+This applies to future command surfaces such as subscription approvals, ownership transfer, and role-management commands.
+
+## 7. Discord/Fediverse identity moderation model
+
+Remote actor bans currently operate on Fediverse actor identity. The project still needs a separate design for Discord-originated moderation and future identity mapping.
+
+A later design should define whether a remote actor ban should have any effect on:
 
 - Discord users posting into a bridge-hosted community;
-- Discord users editing/deleting their own local-community surfaces;
+- Discord users editing or deleting their own local-community surfaces;
 - Discord users mapped to Fediverse identities later;
 - local subscriber channels sending content into the community.
 
 This should remain separate because Discord identity and Fediverse actor identity are different domains.
 
-## 6. Existing subscriber cleanup
+## 8. Existing subscriber cleanup after actor bans
 
-V1 does not remove or deactivate existing `RemoteSubscriber` rows when an actor is banned.
+Banning a remote actor does not remove or deactivate existing remote subscriber rows.
 
-A later plan should decide what should happen when a banned actor already follows a community:
+A later design should decide what should happen when a banned actor already follows a community:
 
 - leave the subscriber row as-is but ignore future activities;
 - mark the subscriber inactive locally;
-- send any federated Undo/Reject/Block-style activity if protocol research says that is correct;
+- send any federated Undo, Reject, Block, or compatible activity if protocol research says that is correct;
 - expose the existing subscription state to operators.
 
-This also affects future Follow/Undo(Follow) semantics and must be tested separately.
+This also affects future Follow and Undo(Follow) semantics.
 
-## 7. Federated moderation activities
+## 9. Federated moderation activities
 
-V1 does not send any outbound ActivityPub moderation object.
+The bridge does not yet send outbound ActivityPub moderation objects for local moderation actions.
 
-Out of scope for v1:
+Future research should define compatible behavior for actions such as:
 
 ```text
 Block
@@ -82,11 +110,11 @@ Delete
 federated ban announcement
 ```
 
-A later plan should research the correct ActivityPub/Fediverse behavior before implementing outbound federation for moderation actions. The project should avoid inventing protocol behavior that may conflict with Lemmy, Mastodon, or other Fediverse software expectations.
+The project should avoid inventing protocol behavior that may conflict with Lemmy, Mastodon, or other Fediverse software expectations.
 
-## 8. WebFinger and remote identity resolution
+## 10. WebFinger and remote identity resolution
 
-V1 does not use WebFinger or remote actor fetches. It accepts the same `user@example.com` handle shape that the bridge displays in Discord and does best-effort local extraction from incoming actor URLs.
+Remote actor moderation currently accepts the same `user@example.com` handle shape shown in Discord and uses local best-effort extraction from actor URLs.
 
 Future work may add network resolution:
 
@@ -96,17 +124,17 @@ user@example.com -> actor URL
 
 Open decisions:
 
-- whether ban command should fail when resolution fails;
+- whether a ban command should fail when resolution fails;
 - whether unresolved bans should remain pending;
 - whether resolution should retry in background;
 - timeout and rate-limit behavior;
 - whether resolution is safe to use in operator commands but never in inbound hot paths.
 
-## 9. Remote actor identity mapping table
+## 11. Remote actor identity mapping table
 
-V1 stores optional `actor_url` directly on the ban row as a small cache. It does not add a shared identity table.
+Actor URL data is cached directly on ban rows when available. The project does not yet have a shared remote actor identity table.
 
-A later plan may add a table such as:
+A later design may add a table such as:
 
 ```text
 remote_actor_identities
@@ -118,7 +146,7 @@ remote_actor_identities
 - resolution_status
 ```
 
-This is useful if multiple features need reliable handle-to-actor mapping, for example:
+This would be useful if multiple features need reliable handle-to-actor mapping, for example:
 
 - bans;
 - dashboards;
@@ -126,11 +154,22 @@ This is useful if multiple features need reliable handle-to-actor mapping, for e
 - subscription approval flows;
 - future actor profile displays.
 
-## 10. Ban list in dashboard or public UI
+## 12. Ban-list pagination and history views
 
-V1 does not expose ban data in the public dashboard.
+The ban-list command shows active bans only and limits output to a small number of rows.
 
-A later plan should decide whether ban data belongs in any UI at all. If it does, it should define:
+Future work should decide how to expose:
+
+- pagination for large active ban lists;
+- inactive historical bans;
+- filtering by actor handle or reason;
+- operator-only vs public visibility.
+
+## 13. Ban list in dashboard or public UI
+
+The public dashboard does not expose ban data.
+
+A later UI design should decide whether ban data belongs in any dashboard view. If it does, it should define:
 
 - public vs operator-only visibility;
 - whether reasons are sensitive;
@@ -138,202 +177,56 @@ A later plan should decide whether ban data belongs in any UI at all. If it does
 - whether inactive historical bans are visible;
 - how this interacts with dashboard redaction rules.
 
-## 11. Inbound activity outcome tracking
+## 14. Ban reason editing
 
-V1 does not add reason-specific receipt statuses such as `ignored_by_ban`.
+Duplicate active ban attempts are rejected and do not update the reason.
 
-Future work should design explicit inbound activity outcome tracking if the project needs better observability.
+Future work could add an explicit reason-editing command or allow a ban command to update an existing reason under a flag. This should be explicit rather than an accidental duplicate-ban side effect.
 
-Candidate statuses:
+## 15. Better actor handle parsing
 
-```text
-processed
-duplicate
-ignored_by_ban
-ignored_unknown_subscription
-ignored_unmapped_context
-failed
-```
+Current actor-handle parsing is intentionally best-effort. It works for common actor URL shapes but is not a full Fediverse identity resolver.
 
-This should be a separate plan because it changes event observability, receipt semantics, tests, and possibly dashboard/debug tooling.
-
-## 12. Ban audit/history model
-
-V1 stores the active ban row and optional reason, but it does not define a full audit log.
-
-Future work could add audit history for:
-
-- ban created;
-- duplicate ban attempted;
-- unban applied;
-- ban reason changed;
-- actor URL cache filled;
-- ownership/permission changes.
-
-This should be separate from v1 unless there is a concrete operator requirement.
-
-## 13. Ban reason editing
-
-V1 duplicate ban attempts are rejected and do not update the reason.
-
-Future work could add an explicit reason-editing command or allow `/ban-user` to update an existing reason under a flag. This should not be implicit in v1 because duplicate behavior is intentionally simple and explicit.
-
-## 14. Better actor handle parsing
-
-V1 uses the same handle format displayed in Discord and best-effort extraction from common actor URL shapes.
-
-Future work should revisit this if the bridge needs broader Fediverse compatibility. Cases to evaluate:
+Cases to evaluate:
 
 - actor URLs with non-standard paths;
 - usernames whose display casing differs from canonical actor id;
 - instances where `preferredUsername` is not the final URL segment;
 - actors whose canonical WebFinger handle differs from best-effort URL extraction.
 
-## 15. Owner-only moderation command suite
+## 16. Federated community metadata updates
 
-User ban is only one moderation action. Once community ownership exists, a broader owner-only command suite should be planned coherently:
+Community metadata edits are local-only.
 
-- `/ban-user`;
-- `/unban-user`;
-- `/list-banned-users`;
-- community visibility changes;
-- community disable/delete;
-- subscription approval settings;
-- manual subscriber approval/rejection.
-
-## Source: local community creator ownership
-
-## 16. Role system
-
-A future plan may replace the current overloaded configured list with a real role model.
-
-The role model should separate at least these concerns:
-
-- who can create communities;
-- who is a bridge-level super-admin;
-- who can moderate a community;
-- who can edit community settings.
-
-## 17. Dedicated super-admin configuration name
-
-The current config key remains `local_community_operator_allowlist`, but plan 73 treats it as the super-admin list for management commands.
-
-A future migration may rename or split config keys once role policy is clearer.
+A later design should research and implement outbound ActivityPub or Lemmy-compatible metadata updates when a local community display name, summary, or lifecycle-relevant metadata changes.
 
 Open details:
 
-- whether to preserve backward compatibility with the old key;
-- whether to support separate creator and super-admin allowlists;
-- how to document the transition for existing deployments.
-
-## 18. Legacy ownership claim/backfill
-
-Plan 73 does not add `/claim-community` or automatic backfill.
-
-Existing NULL-owned communities remain super-admin-managed until a separate plan defines claim, transfer, audit, and conflict behavior.
-
-Open details:
-
-- who is allowed to claim a legacy community;
-- whether claim should require super-admin approval;
-- whether ownership can be inferred from historical command metadata;
-- how to prevent two operators from claiming the same legacy community incorrectly.
-
-## 19. Ownership transfer and multiple moderators
-
-Plan 73 stores exactly one creator owner. It does not support transfer, co-owners, moderators, or per-community ACLs.
-
-A later plan should define whether the project needs:
-
-- owner transfer;
-- additional community moderators;
-- temporary moderators;
-- per-command permissions;
-- owner removal or recovery when the owner leaves the Discord server.
-
-## 20. Edit community command
-
-Status: local metadata editing is planned by plan 76.
-
-`/edit-community` v1 edits only display name and summary through a Discord modal. It uses owner-or-super-admin runtime preconditions, keeps edits local-only, and allows clearing summary to NULL. Broader community settings remain future work.
-
-## 21. Unban and ban-list commands after ownership
-
-Status: implemented by plan 74.
-
-`/unban-user` deactivates active rows without deleting moderation history. `/list-banned-users` shows active bans with reasons in an ephemeral response. Both commands use guild-aware runtime preconditions and autocomplete helpers.
-
-## 22. Community autocomplete for future management commands
-
-Status: moderation command autocomplete is implemented by plans 74 and 75.
-
-Future management commands should follow the same pattern: autocomplete lists context-appropriate communities, submitted values remain stable community slugs, and runtime preconditions remain the security boundary. This still applies to future commands such as `/edit-community`, disable/archive, subscription approvals, and any broader role-system command surface.
-
-## 23. Dynamic Discord command visibility
-
-Plan 73 does not dynamically hide `/ban-user`.
-
-A future UX plan may expose management commands only to super-admins and users who own at least one local community.
-
-This must remain best-effort only because:
-
-- command visibility is not the security boundary;
-- ownership checks depend on command input;
-- stale Discord command permission state must not grant access.
-
-## 24. Dashboard ownership display
-
-Plan 73 does not expose owner ids in the dashboard.
-
-A later UI plan should decide whether owner information belongs there.
-
-Open details:
-
-- whether raw Discord user ids should ever be displayed;
-- whether owner display belongs only in operator-only views;
-- whether owner ids should be redacted in public dashboard output.
-
-## 25. Audit log for management actions
-
-Ban rows already store who created a ban, but plan 73 does not add a broader audit model.
-
-A future audit model could cover:
-
-- owner changes;
-- failed authorization attempts;
-- unban actions;
-- edit-community actions;
-- role and super-admin changes;
-- legacy claim/backfill actions.
-
-## 26. Federated community metadata updates
-
-`/edit-community` v1 is local-only. A later plan should research and implement outbound ActivityPub/Lemmy-compatible metadata updates when a local community display name or summary changes.
-
-Open details:
-
-- which ActivityPub object/activity shape compatible servers expect;
+- which ActivityPub object or activity shape compatible servers expect;
 - whether updates should be sent to all remote followers or only selected inboxes;
 - how to sign and deduplicate metadata update deliveries;
 - how failures should be retried or surfaced to operators;
 - whether local actor routes need explicit cache-control changes.
 
-## 27. Richer community settings editing
+## 17. Richer community settings editing
 
-After `/edit-community` v1, a later plan should decide how to edit settings beyond display metadata.
+Community editing currently covers metadata and lifecycle status fields only.
 
-Candidate fields:
+Future settings may include:
 
 - visibility or subscription policy;
-- archive state beyond active/disabled;
 - Discord forum binding changes;
-- ownership transfer or moderator assignment.
+- ownership transfer or moderator assignment;
+- per-community moderation defaults;
+- subscription approval mode.
 
-Active/disabled lifecycle editing is now part of `/edit-community` through plan 77. The remaining settings should still be planned separately because they affect authorization, routing, and possibly federation behavior.
+These should be designed separately because they affect lifecycle, authorization, routing, and possibly federation behavior.
 
-## 28. Federated disabled-community behavior
+## 18. Federated disabled-community behavior
 
-Plan 77 keeps disabled local communities local-only. A later plan should research and implement Lemmy-compatible federation behavior for disabled communities.
+Disabled local communities currently use local-only behavior.
+
+A later design should research and implement compatible federation behavior.
 
 Open details:
 
@@ -343,12 +236,11 @@ Open details:
 - how failures should be retried or surfaced to operators;
 - how this interacts with re-enable.
 
+## 19. Inbound activity outcome taxonomy
 
-## 29. Inbound activity outcome taxonomy
+Inbound decisions currently use existing result and receipt paths with detail/log reasons instead of feature-specific receipt statuses.
 
-Plan 77 follows the same decision as local user bans: use the existing skipped receipt/result path with detail/log reason instead of adding feature-specific receipt statuses.
-
-A later observability plan should decide whether to add explicit outcomes such as:
+A later observability design should decide whether to add explicit outcomes such as:
 
 ```text
 ignored_by_ban
@@ -359,23 +251,29 @@ ignored_unmapped_context
 
 This should be separate because it changes receipt semantics, tests, dashboard/debug tooling, and operator observability.
 
+## 20. Subscriber cleanup on disabled communities
 
-## 30. Subscriber cleanup on disabled communities
+Disabling a community leaves existing local and remote subscriber rows untouched. Fanout is blocked while disabled and resumes after re-enable.
 
-Plan 77 leaves existing local and remote subscriber rows untouched when a community is disabled. Fanout is blocked while disabled and resumes after re-enable.
+A later design should decide whether disable should optionally deactivate subscribers, notify them, or require resubscription after re-enable.
 
-A later plan should decide whether disable should optionally deactivate subscribers, notify them, or require resubscription after re-enable.
+## 21. Disabled-community dashboard UI
 
+No dedicated dashboard UI exists for disabled communities.
 
-## 31. Disabled-community dashboard UI
+A later UI design should decide whether disabled communities are visible publicly, visible only to operators, hidden from normal lists, or shown with a lifecycle badge.
 
-Plan 77 does not add new dashboard UI for disabled communities. Existing dashboard routes should not break if disabled rows are present.
+## 22. Management audit log
 
-A later UI plan should decide whether disabled communities are visible publicly, visible only to operators, hidden from normal lists, or shown with a lifecycle badge.
+The project does not yet have a general audit log for management actions.
 
+A future audit model could record:
 
-## 32. Lifecycle audit log
-
-Plan 77 does not add disabled reason, disabled_at, or audit records.
-
-A future audit model could record who disabled or re-enabled a community, when it happened, optional reasons, and failed authorization attempts.
+- owner changes;
+- failed authorization attempts;
+- ban and unban actions;
+- ban reason changes;
+- community metadata edits;
+- community lifecycle status changes;
+- role and super-admin changes;
+- legacy claim/backfill actions.
