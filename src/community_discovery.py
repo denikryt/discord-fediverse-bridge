@@ -279,21 +279,28 @@ async def autocomplete_communities(
 async def resolve_selected_community(
     settings: Settings | None,
     *,
-    instance_domain: str,
+    instance_domain: str | None,
     community_value: str,
     fetch_bridge_communities: Any,
     lemmy_client_cls: type[LemmyClient],
 ) -> ResolvedCommunity:
-    """Resolve one moderator-entered community value into a typed target."""
+    """Resolve one moderator-entered community value into a typed target.
+
+    Encoded autocomplete payloads, direct actor URLs, and fediverse handles carry
+    their own origin. Plain names remain instance-scoped and therefore require
+    ``instance_domain`` so global Lemmyverse mode cannot guess between duplicate
+    community names on different hosts.
+    """
 
     encoded = _parse_encoded_community_value(community_value)
     if encoded is not None:
         return encoded
 
-    instance_origin = normalize_instance_domain(instance_domain)
+    raw_instance = (instance_domain or "").strip()
+    instance_origin = normalize_instance_domain(raw_instance) if raw_instance else None
     parsed_url = parse_actor_url(community_value)
     parsed_handle = parse_community_handle(community_value)
-    local_origin = is_bridge_origin(instance_origin, settings)
+    local_origin = is_bridge_origin(instance_origin, settings) if instance_origin is not None else False
 
     if parsed_url is not None:
         if is_bridge_origin(parsed_url.origin, settings):
@@ -347,6 +354,11 @@ async def resolve_selected_community(
             handle_origin,
             slug_or_name=parsed_handle.name,
             lemmy_client_cls=lemmy_client_cls,
+        )
+
+    if instance_origin is None:
+        raise CommunityResolutionError(
+            "Select a community from autocomplete, paste a full community URL, use !name@instance, or provide instance_domain."
         )
 
     if local_origin:

@@ -24,6 +24,10 @@ from ..fedify_gateway_client import FedifyGatewayClient
 from ..discord_directory import record_discord_placement_snapshot
 from ..federation_policy import is_instance_allowed
 from ..lemmy_client import LemmyClient
+from ..lemmyverse_communities import (
+    LemmyverseCommunityCache,
+    autocomplete_lemmyverse_communities,
+)
 from ..operations import SubscribeInput, subscribe_operation
 from ..operations.subscribe_local_community import (
     SubscribeLocalCommunityInput,
@@ -38,9 +42,16 @@ def register(
     database: Database,
     fedify_gateway: FedifyGatewayClient,
     settings: Settings | None = None,
+    lemmyverse_cache: LemmyverseCommunityCache | None = None,
 ) -> None:
-    """Register the subscribe-channel slash command on the Discord tree."""
+    """Register the subscribe-channel slash command on the Discord tree.
+
+    One Lemmyverse cache is created per registration so Discord autocomplete
+    keystrokes share the same process-local index instead of downloading the
+    public feed repeatedly.
+    """
     allowlist = settings.federation_allowlist if settings is not None else []
+    cache = lemmyverse_cache or LemmyverseCommunityCache()
 
     @tree.command(name="subscribe-channel", description="Subscribe a forum channel to a federated community")
     @app_commands.describe(
@@ -50,30 +61,46 @@ def register(
     )
     @app_commands.autocomplete(
         instance_domain=_instance_autocomplete(settings),
-        community=_community_autocomplete(settings),
+        community=_community_autocomplete(settings, lemmyverse_cache=cache),
     )
     @app_commands.default_permissions(manage_channels=True)
     async def subscribe_channel(
         interaction: discord.Interaction,
-        instance_domain: str,
         community: str,
         channel: discord.ForumChannel,
+        instance_domain: str | None = None,
     ) -> None:
+        if instance_domain is not None and hasattr(instance_domain, "id") and isinstance(channel, str):
+            # Older tests and stale command harnesses called the callback as
+            # (interaction, instance_domain, community, channel). The registered
+            # Discord command now has required options first, but this shim keeps
+            # direct callback invocations from breaking during the transition.
+            old_instance_domain = community
+            community = channel
+            channel = instance_domain
+            instance_domain = old_instance_domain
+
         # Remote hosts remain allowlist-gated, but the bridge's own origin is a
         # local routing surface and must stay usable even when federation is
-        # restricted to an explicit remote allowlist.
-        inferred_origin = infer_reference_origin(community)
+        # restricted to an explicit remote allowlist. ``instance_domain`` is now
+        # optional; direct URLs and handles carry their own origin.
         try:
-            selected_origin = normalize_instance_domain(instance_domain)
+            inferred_origin = infer_reference_origin(community)
+        except CommunityResolutionError as error:
+            await interaction.response.send_message(str(error), ephemeral=True)
+            return
+        raw_instance = (instance_domain or "").strip()
+        try:
+            selected_origin = normalize_instance_domain(raw_instance) if raw_instance else None
         except CommunityResolutionError as error:
             await interaction.response.send_message(str(error), ephemeral=True)
             return
 
-        # Autocomplete payloads are already scoped to the selected instance, so
-        # the allowlist message should continue to reference that chosen host.
-        # Direct handles and actor URLs infer their own host instead.
-        candidate_origin = selected_origin if "|" in community else (inferred_origin or selected_origin)
-        if not is_bridge_origin(candidate_origin, settings) and not is_instance_allowed(candidate_origin, allowlist):
+        # Encoded direct-mode payloads remain scoped to the selected instance
+        # when one exists. Plain Lemmyverse actor URLs are not encoded and infer
+        # their candidate origin from the URL itself.
+        candidate_origin = selected_origin if ("|" in community and selected_origin is not None) else inferred_origin
+        if candidate_origin is not None and not is_bridge_origin(candidate_origin, settings) and not is_instance_allowed(candidate_origin, allowlist):
             hostname = urlparse(candidate_origin).hostname or candidate_origin
             await interaction.response.send_message(
                 f"Instance **{hostname}** is not in the federation allowlist.",
@@ -118,11 +145,29 @@ def register(
             await interaction.response.send_message(result.message, ephemeral=not result.applied)
             return
 
+        resolved_origin = infer_reference_origin(resolved.actor_id) or selected_origin
+        if resolved_origin is not None and not is_bridge_origin(resolved_origin, settings) and not is_instance_allowed(resolved_origin, allowlist):
+            # Autocomplete choices and manual values are user-controlled at
+            # submit time, so the resolved actor URL is checked again before
+            # any DB mutation or outbound Follow can occur.
+            hostname = urlparse(resolved_origin).hostname or resolved_origin
+            await interaction.response.send_message(
+                f"Instance **{hostname}** is not in the federation allowlist.",
+                ephemeral=True,
+            )
+            return
+
         if resolved.source == "remote_lemmy" and resolved.numeric_id is None:
             # Direct remote Lemmy URLs/handles and legacy autocomplete payloads
             # may omit the numeric Lemmy id. Preserve the old contract by
             # resolving it lazily before the operation layer persists the row.
-            tmp_client = LemmyClient(selected_origin)
+            if resolved_origin is None:
+                await interaction.response.send_message(
+                    "Could not infer the Lemmy community origin. Please provide instance_domain.",
+                    ephemeral=True,
+                )
+                return
+            tmp_client = LemmyClient(resolved_origin)
             try:
                 numeric_id = await tmp_client.resolve_community_id(
                     name=resolved.name or resolved.actor_id
@@ -203,7 +248,11 @@ def _instance_autocomplete(settings: Settings | None):
     return autocomplete
 
 
-def _community_autocomplete(settings: Settings | None = None):
+def _community_autocomplete(
+    settings: Settings | None = None,
+    *,
+    lemmyverse_cache: LemmyverseCommunityCache | None = None,
+):
     """Build the Discord autocomplete callback for unified community discovery.
 
     The selected instance can resolve to this bridge, a remote bridge, or a
@@ -211,6 +260,7 @@ def _community_autocomplete(settings: Settings | None = None):
     autocomplete degrades to an empty list instead of surfacing tracebacks.
     """
     allowlist = settings.federation_allowlist if settings is not None else []
+    cache = lemmyverse_cache or LemmyverseCommunityCache()
 
     async def autocomplete(
         interaction: discord.Interaction,
@@ -218,8 +268,17 @@ def _community_autocomplete(settings: Settings | None = None):
     ) -> list[app_commands.Choice[str]]:
         instance_url: str | None = getattr(interaction.namespace, "instance_domain", None)
 
-        if not instance_url:
-            return []
+        if not instance_url or not instance_url.strip():
+            try:
+                raw_choices = await autocomplete_lemmyverse_communities(
+                    cache,
+                    current=current,
+                    allowlist=allowlist,
+                )
+            except Exception:
+                logger.exception("Failed to autocomplete communities from Lemmyverse")
+                return []
+            return [app_commands.Choice(name=name, value=value) for name, value in raw_choices]
 
         try:
             normalized_origin = normalize_instance_domain(instance_url)

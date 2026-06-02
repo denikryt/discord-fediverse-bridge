@@ -19,7 +19,7 @@ This document is a task-oriented reading guide for maintainers changing or debug
 3. `src/operations/` — business logic.
 
 ## Remote community subscription
-1. `src/commands/subscribe.py`; 2. `src/operations/subscribe.py`; 3. `src/db/repositories/remote_subscriptions.py`; 4. `src/db/repositories/bridge_actor_follows.py`; 5. `src/lemmy_client.py`; 6. `src/fedify_gateway_client.py`; 7. `fedify-gateway/src/federation-outbound.ts`.
+1. `src/commands/subscribe.py`; 2. `src/lemmyverse_communities.py` for global Lemmyverse autocomplete cache and ranking; 3. `src/community_discovery.py` for selected community resolution; 4. `src/operations/subscribe.py`; 5. `src/db/repositories/remote_subscriptions.py`; 6. `src/db/repositories/bridge_actor_follows.py`; 7. `src/lemmy_client.py`; 8. `src/fedify_gateway_client.py`; 9. `fedify-gateway/src/federation-outbound.ts`.
 
 ## Remote community unsubscribe
 1. `src/commands/unsubscribe.py`; 2. `src/operations/unsubscribe.py`; 3. `src/db/repositories/remote_subscriptions.py`; 4. `src/db/repositories/bridge_actor_follows.py`; 5. `src/fedify_gateway_client.py`; 6. `fedify-gateway/src/server.ts`.

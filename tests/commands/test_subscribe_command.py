@@ -362,16 +362,24 @@ async def test_subscribe_autocomplete_uses_lemmy_instance_url(
 
 
 @pytest.mark.asyncio
-async def test_subscribe_autocomplete_returns_empty_when_no_instance(
+async def test_subscribe_autocomplete_returns_empty_when_global_cache_is_empty(
     command_tree, database, fedify_gateway
 ):
-    # When instance_domain is absent (None), community autocomplete must return []
-    # because there is no default Lemmy client anymore.
+    # When instance_domain is absent, autocomplete now uses the global
+    # Lemmyverse cache. A cold/failed cache still degrades to empty choices
+    # without querying a per-instance Lemmy client.
+    class EmptyCache:
+        """Cache fake representing a cold failed Lemmyverse refresh."""
+
+        async def get_entries(self):
+            """Return no cached global discovery entries."""
+            return []
+
     interaction = _make_interaction(None)
 
     settings = _settings([])
     subscribe.register(command_tree, database, fedify_gateway, settings)
-    autocomplete_fn = subscribe._community_autocomplete(settings)
+    autocomplete_fn = subscribe._community_autocomplete(settings, lemmyverse_cache=EmptyCache())
 
     with patch("src.commands.subscribe.LemmyClient") as MockLemmyClient:
         choices = await autocomplete_fn(interaction, "")
@@ -421,3 +429,137 @@ async def test_subscribe_channel_rejects_unlisted_lemmy_instance(
         "Instance **forbidden.instance** is not in the federation allowlist.",
         ephemeral=True,
     )
+
+
+@pytest.mark.asyncio
+async def test_subscribe_global_autocomplete_uses_lemmyverse_without_instance(
+    command_tree, database, fedify_gateway
+):
+    """No-instance community autocomplete should use cached Lemmyverse actor URLs."""
+    from src.lemmyverse_communities import LemmyverseCommunityEntry
+
+    class FakeCache:
+        """Small cache fake exposing the get_entries contract used by autocomplete."""
+
+        async def get_entries(self):
+            """Return one global Lemmyverse entry without network access."""
+            return [
+                LemmyverseCommunityEntry(
+                    name="technology",
+                    title="Technology",
+                    actor_id="https://lemmy.world/c/technology",
+                    host="lemmy.world",
+                    handle="!technology@lemmy.world",
+                    search_text="technology\ntechnology@lemmy.world\n!technology@lemmy.world\nlemmy.world",
+                    feed_order=0,
+                )
+            ]
+
+    interaction = _make_interaction(None)
+    settings = _settings([])
+    autocomplete_fn = subscribe._community_autocomplete(settings, lemmyverse_cache=FakeCache())
+
+    with patch("src.commands.subscribe.LemmyClient") as MockLemmyClient:
+        with patch("src.commands.subscribe.fetch_bridge_community_summaries", new=AsyncMock()) as fetch_mock:
+            choices = await autocomplete_fn(interaction, "tech")
+
+    MockLemmyClient.assert_not_called()
+    fetch_mock.assert_not_awaited()
+    assert len(choices) == 1
+    assert choices[0].name == "Technology (technology@lemmy.world)"
+    assert choices[0].value == "https://lemmy.world/c/technology"
+
+
+@pytest.mark.asyncio
+async def test_subscribe_global_autocomplete_filters_allowlist(
+    command_tree, database, fedify_gateway
+):
+    """Global autocomplete should hide Lemmyverse communities from blocked hosts."""
+    from src.lemmyverse_communities import LemmyverseCommunityEntry
+
+    class FakeCache:
+        """Cache fake with allowed and forbidden hosts for policy filtering."""
+
+        async def get_entries(self):
+            """Return entries from two hosts so allowlist filtering is observable."""
+            return [
+                LemmyverseCommunityEntry("news", "News", "https://allowed.example/c/news", "allowed.example", "!news@allowed.example", "news allowed.example", 0),
+                LemmyverseCommunityEntry("news", "News", "https://blocked.example/c/news", "blocked.example", "!news@blocked.example", "news blocked.example", 1),
+            ]
+
+    interaction = _make_interaction(None)
+    settings = _settings(["allowed.example"])
+    autocomplete_fn = subscribe._community_autocomplete(settings, lemmyverse_cache=FakeCache())
+
+    choices = await autocomplete_fn(interaction, "news")
+
+    assert [choice.value for choice in choices] == ["https://allowed.example/c/news"]
+
+
+@pytest.mark.asyncio
+async def test_subscribe_channel_rejects_plain_name_without_instance(
+    command_tree, interaction, forum_channel, database, fedify_gateway
+):
+    """Plain community names are ambiguous when no instance_domain is provided."""
+    settings = _settings([])
+    subscribe.register(command_tree, database, fedify_gateway, settings)
+
+    command = command_tree.commands["subscribe-channel"]
+    await command.callback(interaction, "technology", forum_channel)
+
+    database.remote_subscriptions.create_subscription.assert_not_called()
+    interaction.response.send_message.assert_awaited_once_with(
+        "Select a community from autocomplete, paste a full community URL, use !name@instance, or provide instance_domain.",
+        ephemeral=True,
+    )
+
+
+@pytest.mark.asyncio
+async def test_subscribe_channel_rejects_forbidden_actor_url_without_instance(
+    command_tree, interaction, forum_channel, database, fedify_gateway
+):
+    """Submit must re-check allowlist even for manually supplied actor URLs."""
+    settings = _settings(["allowed.example"])
+    subscribe.register(command_tree, database, fedify_gateway, settings)
+
+    command = command_tree.commands["subscribe-channel"]
+    await command.callback(interaction, "https://blocked.example/c/news", forum_channel)
+
+    database.remote_subscriptions.create_subscription.assert_not_called()
+    fedify_gateway.follow_community.assert_not_awaited()
+    interaction.response.send_message.assert_awaited_once_with(
+        "Instance **blocked.example** is not in the federation allowlist.",
+        ephemeral=True,
+    )
+
+
+@pytest.mark.asyncio
+async def test_subscribe_channel_accepts_actor_url_without_instance(
+    command_tree, interaction, forum_channel, database, fedify_gateway
+):
+    """Selected Lemmyverse actor URLs should subscribe without instance_domain."""
+    community_actor_url = f"https://{LEMMY_EXAMPLE_DOMAIN}/c/hackers"
+    database.users.get_user_by_discord_user_id.return_value = SimpleNamespace(id=1)
+    database.remote_subscriptions.get_subscription_by_channel.return_value = None
+    fedify_gateway.follow_community.return_value = SimpleNamespace(
+        community_actor_url=community_actor_url,
+        community_inbox_url=f"{community_actor_url}/inbox",
+        follow_activity_id=f"https://{BRIDGE_EXAMPLE_DOMAIN}/activities/follow/1",
+    )
+    subscribe.register(command_tree, database, fedify_gateway, _settings([]))
+
+    command = command_tree.commands["subscribe-channel"]
+    with patch("src.commands.subscribe.LemmyClient") as MockLemmyClient:
+        fake_client = AsyncMock()
+        fake_client.resolve_community.return_value = {
+            "actor_id": community_actor_url,
+            "name": "hackers",
+            "id": 777,
+        }
+        MockLemmyClient.return_value = fake_client
+        await command.callback(interaction, community_actor_url, forum_channel)
+
+    MockLemmyClient.assert_called_once_with(f"https://{LEMMY_EXAMPLE_DOMAIN}")
+    fake_client.resolve_community.assert_awaited_once_with(name="hackers")
+    fedify_gateway.follow_community.assert_awaited_once_with(community_actor_url)
+    database.remote_subscriptions.create_subscription.assert_called_once()
