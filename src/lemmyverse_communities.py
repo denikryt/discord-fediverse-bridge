@@ -72,17 +72,40 @@ class LemmyverseCommunityCache:
         self._entries: list[LemmyverseCommunityEntry] = []
         self._last_refresh: float | None = None
         self._refresh_lock = asyncio.Lock()
+        self._refresh_task: asyncio.Task[None] | None = None
 
     async def get_entries(self) -> list[LemmyverseCommunityEntry]:
-        """Return cached entries, refreshing once when the TTL has expired."""
+        """Return cached entries, refreshing once when the TTL has expired.
+
+        This blocking method is kept for callers and tests that explicitly want
+        fresh data before continuing. Discord autocomplete must not use it on
+        the hot path because a cold Lemmyverse download can outlive Discord's
+        interaction response window.
+        """
         if self._is_fresh():
             return list(self._entries)
+        await self._refresh_if_needed()
+        return list(self._entries)
 
+    async def get_entries_for_autocomplete(self) -> list[LemmyverseCommunityEntry]:
+        """Return the current index immediately and refresh stale data later.
+
+        Discord requires autocomplete responses to be sent quickly. A cold cache
+        therefore returns an empty list while a background task downloads and
+        parses the feed for the next autocomplete request. An expired cache
+        returns stale entries and refreshes them in the background.
+        """
+        if not self._is_fresh():
+            self._ensure_background_refresh()
+        return list(self._entries)
+
+    async def _refresh_if_needed(self) -> None:
+        """Refresh stale cache data while coalescing concurrent refresh attempts."""
         # Autocomplete calls can arrive concurrently while a user types. The
         # lock guarantees one download/parse per cold or expired cache window.
         async with self._refresh_lock:
             if self._is_fresh():
-                return list(self._entries)
+                return
             try:
                 self._entries = await self._fetch_entries()
                 self._last_refresh = self._monotonic()
@@ -90,9 +113,21 @@ class LemmyverseCommunityCache:
                 logger.exception("Failed to refresh Lemmyverse community autocomplete cache")
                 # Stale entries are better than breaking autocomplete. A cold
                 # cache returns [] because there is no safe discovery data yet.
-                if self._last_refresh is None:
+                # The timestamp also throttles repeated cold failures so every
+                # autocomplete keystroke does not start another failed download.
+                self._last_refresh = self._monotonic()
+                if not self._entries:
                     self._entries = []
-            return list(self._entries)
+
+    def _ensure_background_refresh(self) -> None:
+        """Start one non-blocking refresh task when no usable task is running."""
+        if self._refresh_task is not None and not self._refresh_task.done():
+            return
+        try:
+            loop = asyncio.get_running_loop()
+        except RuntimeError:
+            return
+        self._refresh_task = loop.create_task(self._refresh_if_needed())
 
     def _is_fresh(self) -> bool:
         """Return whether the cache can be used without another refresh."""
@@ -136,7 +171,10 @@ async def autocomplete_lemmyverse_communities(
     allowlist: Iterable[str],
 ) -> list[tuple[str, str]]:
     """Return ``(choice_name, actor_url)`` pairs for global autocomplete."""
-    entries = await cache.get_entries()
+    if hasattr(cache, "get_entries_for_autocomplete"):
+        entries = await cache.get_entries_for_autocomplete()
+    else:
+        entries = await cache.get_entries()
     allowed_entries = [entry for entry in entries if is_instance_allowed(entry.actor_id, allowlist)]
     ranked_entries = _rank_entries(allowed_entries, query=current)
     return [(_choice_name(entry), entry.actor_id) for entry in ranked_entries[:DISCORD_AUTOCOMPLETE_LIMIT]]

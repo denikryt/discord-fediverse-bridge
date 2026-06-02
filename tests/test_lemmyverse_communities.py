@@ -152,6 +152,8 @@ async def test_autocomplete_ranking_limit_and_allowlist() -> None:
     )
     cache = LemmyverseCommunityCache(http_client_factory=factory)
 
+    await cache.get_entries()
+
     choices = await autocomplete_lemmyverse_communities(
         cache,
         current="technology@lemmy.world",
@@ -167,6 +169,8 @@ async def test_autocomplete_empty_query_preserves_feed_order_and_caps_choices() 
     """Empty global query returns deterministic feed order with Discord's cap."""
     rows = [_row(f"community{i}", "lemmy.world") for i in range(30)]
     cache = LemmyverseCommunityCache(http_client_factory=_FakeClientFactory(_payload(*rows)))
+
+    await cache.get_entries()
 
     choices = await autocomplete_lemmyverse_communities(cache, current="", allowlist=[])
 
@@ -196,6 +200,8 @@ async def test_cache_ttl_stale_failure_and_cold_failure() -> None:
     cold_factory.error = RuntimeError("network down")
     cold_cache = LemmyverseCommunityCache(http_client_factory=cold_factory)
     assert await cold_cache.get_entries() == []
+    assert await cold_cache.get_entries() == []
+    assert cold_factory.calls == 1
 
 
 @pytest.mark.asyncio
@@ -208,3 +214,68 @@ async def test_cache_coalesces_concurrent_refreshes() -> None:
 
     assert [[entry.name for entry in result] for result in results] == [["one"], ["one"], ["one"]]
     assert factory.calls == 1
+
+
+class _BlockingClient:
+    """Async fake that blocks feed download until the test releases it."""
+
+    def __init__(self, owner: "_BlockingClientFactory") -> None:
+        """Store the shared synchronization owner for the fake request."""
+        self._owner = owner
+
+    async def __aenter__(self) -> "_BlockingClient":
+        """Return the fake client for async-with usage."""
+        return self
+
+    async def __aexit__(self, exc_type, exc, tb) -> None:
+        """No cleanup is required for the blocking fake."""
+        return None
+
+    async def get(self, url: str, headers: dict[str, str]) -> _FakeResponse:
+        """Block the HTTP response so autocomplete responsiveness is observable."""
+        self._owner.calls += 1
+        self._owner.started.set()
+        await self._owner.release.wait()
+        return _FakeResponse(self._owner.payload)
+
+
+class _BlockingClientFactory:
+    """Factory that coordinates one delayed Lemmyverse feed download."""
+
+    def __init__(self, payload: bytes) -> None:
+        """Create per-test events after the event loop is running."""
+        self.payload = payload
+        self.calls = 0
+        self.started = asyncio.Event()
+        self.release = asyncio.Event()
+
+    def __call__(self) -> _BlockingClient:
+        """Build one blocking async HTTP client."""
+        return _BlockingClient(self)
+
+
+@pytest.mark.asyncio
+async def test_autocomplete_does_not_wait_for_cold_cache_refresh() -> None:
+    """Cold global autocomplete returns quickly and refreshes for later calls."""
+    factory = _BlockingClientFactory(_payload(_row("one", "lemmy.world")))
+    cache = LemmyverseCommunityCache(http_client_factory=factory)
+
+    choices = await autocomplete_lemmyverse_communities(cache, current="one", allowlist=[])
+
+    assert choices == []
+    await asyncio.wait_for(factory.started.wait(), timeout=1)
+    assert factory.calls == 1
+
+    # A second autocomplete while refresh is still in flight must not start a
+    # second full-feed download. It remains empty until the background task has
+    # parsed the first response.
+    choices = await autocomplete_lemmyverse_communities(cache, current="one", allowlist=[])
+    assert choices == []
+    assert factory.calls == 1
+
+    factory.release.set()
+    assert cache._refresh_task is not None
+    await asyncio.wait_for(cache._refresh_task, timeout=1)
+
+    choices = await autocomplete_lemmyverse_communities(cache, current="one", allowlist=[])
+    assert choices == [("One (one@lemmy.world)", "https://lemmy.world/c/one")]
