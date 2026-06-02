@@ -128,6 +128,20 @@ def test_parse_lemmyverse_communities_filters_and_derives_fields() -> None:
     assert entries[0].handle == "!technology@lemmy.world"
 
 
+def test_parse_lemmyverse_communities_supports_lemmyverse_summary_wrapper() -> None:
+    """Parser reads the public Lemmyverse full feed's community_details wrapper."""
+    entries = parse_lemmyverse_communities(
+        {
+            "crawled_communities": 1,
+            "subscribers": 10,
+            "community_details": [_row("technology", "lemmy.world", title="Technology")],
+        }
+    )
+
+    assert len(entries) == 1
+    assert entries[0].actor_id == "https://lemmy.world/c/technology"
+
+
 def test_parse_lemmyverse_communities_supports_gzip_and_exact_limit() -> None:
     """Gzip bytes parse correctly and actor_id length 100 remains selectable."""
     actor_id = "https://lemmy.world/c/" + "a" * (100 - len("https://lemmy.world/c/"))

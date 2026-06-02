@@ -284,7 +284,7 @@ def _iter_feed_rows(payload: Any) -> list[Any]:
     if isinstance(payload, list):
         return payload
     if isinstance(payload, dict):
-        for key in ("communities", "data", "items"):
+        for key in ("community_details", "communities", "data", "items"):
             value = payload.get(key)
             if isinstance(value, list):
                 return value
