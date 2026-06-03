@@ -26,11 +26,12 @@ def _row(
     *,
     title: str | None = None,
     actor_id: str | None = None,
+    active_month: int | None = None,
     deleted: bool = False,
     removed: bool = False,
 ) -> dict[str, object]:
     """Build one Lemmy community-view row for parser tests."""
-    return {
+    row: dict[str, object] = {
         "community": {
             "name": name,
             "title": title or name.title(),
@@ -39,6 +40,9 @@ def _row(
             "removed": removed,
         }
     }
+    if active_month is not None:
+        row["counts"] = {"users_active_month": active_month}
+    return row
 
 
 class _FakeClock:
@@ -211,9 +215,12 @@ async def test_autocomplete_ranking_limit_and_allowlist(tmp_path) -> None:
 
 
 @pytest.mark.asyncio
-async def test_autocomplete_empty_query_preserves_feed_order_and_caps_choices(tmp_path) -> None:
-    """Empty global query returns deterministic feed order with Discord's cap."""
-    rows = [_row(f"community{i}", "lemmy.world") for i in range(30)]
+async def test_autocomplete_empty_query_orders_by_monthly_active_users_and_caps_choices(tmp_path) -> None:
+    """Empty global query returns the most active communities before quieter rows."""
+    rows = [
+        _row(f"community{i}", "lemmy.world", active_month=i)
+        for i in range(30)
+    ]
     cache = LemmyverseCommunityCache(
         http_client_factory=_FakeClientFactory(_payload(*rows)),
         cache_path=tmp_path / "lemmyverse.json",
@@ -224,8 +231,33 @@ async def test_autocomplete_empty_query_preserves_feed_order_and_caps_choices(tm
     choices = await autocomplete_lemmyverse_communities(cache, current="", allowlist=[])
 
     assert len(choices) == 25
-    assert choices[0][1] == "https://lemmy.world/c/community0"
-    assert choices[-1][1] == "https://lemmy.world/c/community24"
+    assert choices[0][1] == "https://lemmy.world/c/community29"
+    assert choices[-1][1] == "https://lemmy.world/c/community5"
+
+
+@pytest.mark.asyncio
+async def test_autocomplete_filtered_query_orders_matches_by_monthly_active_users(tmp_path) -> None:
+    """Filtered global results still sort by monthly-active users descending."""
+    cache = LemmyverseCommunityCache(
+        http_client_factory=_FakeClientFactory(
+            _payload(
+                _row("python-small", "lemmy.world", title="Python", active_month=3),
+                _row("python-large", "lemmy.world", title="Python", active_month=300),
+                _row("python-medium", "lemmy.world", title="Python", active_month=30),
+            )
+        ),
+        cache_path=tmp_path / "lemmyverse.json",
+    )
+
+    await cache.get_entries()
+
+    choices = await autocomplete_lemmyverse_communities(cache, current="python", allowlist=[])
+
+    assert [choice[1] for choice in choices] == [
+        "https://lemmy.world/c/python-large",
+        "https://lemmy.world/c/python-medium",
+        "https://lemmy.world/c/python-small",
+    ]
 
 
 @pytest.mark.asyncio

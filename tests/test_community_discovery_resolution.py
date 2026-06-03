@@ -107,13 +107,22 @@ class FakeAutocompleteLemmyClient:
         return [
             {
                 "community": {
+                    "name": "quiet",
+                    "title": "Quiet Community",
+                    "actor_id": f"{self.origin}/c/quiet",
+                    "id": 41,
+                },
+                "counts": {"users_active_month": 12},
+            },
+            {
+                "community": {
                     "name": "worldnews",
                     "title": "World News",
                     "actor_id": f"{self.origin}/c/worldnews",
                     "id": 42,
                 },
                 "counts": {"users_active_month": 456},
-            }
+            },
         ]
 
     async def close(self) -> None:
@@ -138,5 +147,9 @@ async def test_direct_instance_autocomplete_labels_include_handle_and_monthly_ac
         (
             "World News (worldnews@lemmy.world · 456 active/mo)",
             "lemmy:https://lemmy.world/c/worldnews|worldnews|42",
-        )
+        ),
+        (
+            "Quiet Community (quiet@lemmy.world · 12 active/mo)",
+            "lemmy:https://lemmy.world/c/quiet|quiet|41",
+        ),
     ]

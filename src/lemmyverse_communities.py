@@ -389,17 +389,33 @@ def _build_entry(
 
 
 def _rank_entries(entries: list[LemmyverseCommunityEntry], *, query: str) -> list[LemmyverseCommunityEntry]:
-    """Return entries matching a query in deterministic autocomplete order."""
+    """Return matching entries with the most active communities first.
+
+    Lemmyverse autocomplete is primarily a discovery surface, so monthly-active
+    users is the main ranking signal both before and after textual filtering.
+    Match buckets are retained only as a deterministic tie-breaker for equally
+    active communities.
+    """
     normalized = query.strip().lower()
     if not normalized:
-        return sorted(entries, key=lambda entry: entry.feed_order)
+        return sorted(entries, key=_activity_rank_key)
 
-    scored: list[tuple[tuple[int, int], LemmyverseCommunityEntry]] = []
+    scored: list[tuple[tuple[int, int, int], LemmyverseCommunityEntry]] = []
     for entry in entries:
         score = _match_score(entry, normalized)
         if score is not None:
-            scored.append(((score, entry.feed_order), entry))
+            scored.append(((_activity_sort_value(entry.active_users_month), score, entry.feed_order), entry))
     return [entry for _, entry in sorted(scored, key=lambda item: item[0])]
+
+
+def _activity_rank_key(entry: LemmyverseCommunityEntry) -> tuple[int, int]:
+    """Sort by monthly-active users descending while preserving stable ties."""
+    return (_activity_sort_value(entry.active_users_month), entry.feed_order)
+
+
+def _activity_sort_value(value: int | None) -> int:
+    """Return the ascending sort value for a descending activity ranking."""
+    return -(value or 0)
 
 
 def _match_score(entry: LemmyverseCommunityEntry, query: str) -> int | None:

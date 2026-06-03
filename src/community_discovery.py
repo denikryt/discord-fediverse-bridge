@@ -261,8 +261,8 @@ async def autocomplete_communities(
     finally:
         await remote_client.close()
 
-    choices: list[tuple[str, str]] = []
-    for item in communities:
+    choices: list[tuple[int, int, tuple[str, str]]] = []
+    for feed_order, item in enumerate(communities):
         community = item.get("community", {})
         name = str(community.get("name", ""))
         title = str(community.get("title", "") or name)
@@ -271,18 +271,25 @@ async def autocomplete_communities(
         counts = item.get("counts") if isinstance(item.get("counts"), dict) else {}
         if query and query not in name.lower() and query not in title.lower():
             continue
+        active_month = _autocomplete_active_month_sort_value(counts.get("users_active_month"))
+        # Direct-instance autocomplete only receives a small remote page, but it
+        # should still show the most active matching communities before quieter
+        # rows so its ordering matches global Lemmyverse discovery.
         choices.append((
-            _build_lemmy_autocomplete_choice_name(
-                title=title,
-                name=name,
-                actor_id=actor_id,
-                users_active_month=counts.get("users_active_month"),
+            active_month,
+            feed_order,
+            (
+                _build_lemmy_autocomplete_choice_name(
+                    title=title,
+                    name=name,
+                    actor_id=actor_id,
+                    users_active_month=counts.get("users_active_month"),
+                ),
+                f"lemmy:{actor_id}|{name}|{numeric_id or ''}",
             ),
-            f"lemmy:{actor_id}|{name}|{numeric_id or ''}",
         ))
-        if len(choices) >= 25:
-            break
-    return choices
+    choices.sort(key=lambda item: (item[0], item[1]))
+    return [choice for _, _, choice in choices[:25]]
 
 
 async def resolve_selected_community(
@@ -421,6 +428,17 @@ def _build_bridge_autocomplete_choices(
     return choices
 
 
+
+
+def _autocomplete_active_month_sort_value(value: Any) -> int:
+    """Return an ascending sort key for descending monthly-active ranking."""
+    try:
+        parsed = int(value)
+    except (TypeError, ValueError):
+        return 0
+    if parsed < 0:
+        return 0
+    return -parsed
 
 def _format_autocomplete_active_month(value: Any) -> str | None:
     """Format one optional monthly-active counter for choice labels."""
