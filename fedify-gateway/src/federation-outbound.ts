@@ -26,6 +26,19 @@ import type {
 } from "./types.js";
 
 
+/**
+ * Build one bridge-owned URL under FEDIFY_ORIGIN from an absolute path.
+ *
+ * This helper preserves the invariant that outbound ActivityPub ids stay on
+ * the bridge domain regardless of whether FEDIFY_ORIGIN has a trailing slash.
+ */
+export function buildGatewayUrl(config: GatewayConfig, absolutePath: string): URL {
+  // Prefix a slash defensively so callers can pass either `activities/...` or
+  // `/activities/...` without risking host/path concatenation.
+  const path = absolutePath.startsWith("/") ? absolutePath : `/${absolutePath}`;
+  return new URL(path, config.fedifyOrigin);
+}
+
 export interface FollowCommunityResult {
   communityActorUrl: string;
   communityInboxUrl: string;
@@ -71,9 +84,9 @@ export async function followCommunity(
   const follow = new Follow({
     // Compose from an absolute path instead of string concatenation so the
     // operator-facing `FEDIFY_ORIGIN` works with or without a trailing slash.
-    id: new URL(
+    id: buildGatewayUrl(
+      config,
       `/activities/follow/${Date.now()}/${Math.random().toString(36).slice(2)}`,
-      config.fedifyOrigin,
     ),
     actor: actorUri,
     object: new URL(communityId),
@@ -189,8 +202,9 @@ export function buildLemmyCompatibleUnfollowActivity(
   // before it deletes the corresponding remote-subscriber row.
   const communityActorUrl = new URL(communityId);
   return new Undo({
-    id: new URL(
-      `${config.fedifyOrigin}activities/undo/${Date.now()}/${Math.random().toString(36).slice(2)}`,
+    id: buildGatewayUrl(
+      config,
+      `/activities/undo/${Date.now()}/${Math.random().toString(36).slice(2)}`,
     ),
     actor: actorUri,
     object: new Follow({
@@ -425,8 +439,9 @@ export async function acceptLocalCommunityFollow(
     throw new Error("communityActorUrl must match the canonical local community actor URL");
   }
   const sender = [{ keyId: signingKey.keyId, privateKey: signingKey.privateKey }];
-  const acceptId = new URL(
-    `${config.fedifyOrigin}communities/${request.communitySlug}/activities/accept/${Date.now()}-${Math.random().toString(36).slice(2)}`,
+  const acceptId = buildGatewayUrl(
+    config,
+    `/communities/${request.communitySlug}/activities/accept/${Date.now()}-${Math.random().toString(36).slice(2)}`,
   );
 
   const accept = new Accept({
@@ -603,9 +618,9 @@ export function buildLocalCommunityAnnounceActivity(
 ): Announce {
   const communityActor = new URL(communityActorUrl);
   const PUBLIC = new URL("https://www.w3.org/ns/activitystreams#Public");
-  const announceId = new URL(
+  const announceId = buildGatewayUrl(
+    config,
     `/communities/${encodeURIComponent(communityActor.pathname.split("/").filter(Boolean).at(-1) ?? "community")}/activities/announce/${Date.now()}-${Math.random().toString(36).slice(2)}`,
-    config.fedifyOrigin,
   );
 
   // The Announce is only a delivery envelope. User authorship and canonical
@@ -628,13 +643,13 @@ export function buildPublishCreateActivity(
 ) {
   const actorUri = buildUserActorUri(config, request.actorUsername);
   const objectNumericId = Date.now();
-  const objectId = new URL(
+  const objectId = buildGatewayUrl(
+    config,
     `/users/${request.actorUsername}/${request.kind}/${objectNumericId}`,
-    config.fedifyOrigin,
   );
-  const activityId = new URL(
+  const activityId = buildGatewayUrl(
+    config,
     `/users/${request.actorUsername}/activities/create/${request.kind}/${Date.now()}-${Math.random().toString(36).slice(2)}`,
-    config.fedifyOrigin,
   );
   const communityId = resolvedCommunityId ?? request.communityActorUrl;
   const object = buildPublishObject(request, actorUri, objectId, communityId);
@@ -657,7 +672,7 @@ export function buildPublishCreateActivity(
 function buildUserActorUri(config: GatewayConfig, actorUsername: string): URL {
   // Registered users are canonical Fedify actors. Their posts/comments can keep
   // /users object URLs, but author identity and signing use /actors.
-  return new URL(`/actors/${actorUsername}`, config.fedifyOrigin);
+  return buildGatewayUrl(config, `/actors/${actorUsername}`);
 }
 
 function buildUpdateActivity(
@@ -667,9 +682,9 @@ function buildUpdateActivity(
   /** Build one user-authored Update with the full object shape Lemmy expects. */
   const actorUri = buildUserActorUri(config, request.actorUsername);
   const objectId = new URL(request.apObjectId);
-  const activityId = new URL(
+  const activityId = buildGatewayUrl(
+    config,
     `/users/${request.actorUsername}/activities/update/${request.kind}/${Date.now()}-${Math.random().toString(36).slice(2)}`,
-    config.fedifyOrigin,
   );
   const htmlContent = markdownToHtml(request.bodyMarkdown);
   const source = new Source({
@@ -729,9 +744,9 @@ function buildDeleteActivity(
 ): { activity: Delete; activityId: URL } {
   /** Build one user-authored Delete using the Lemmy URL-object convention. */
   const actorUri = buildUserActorUri(config, request.actorUsername);
-  const activityId = new URL(
+  const activityId = buildGatewayUrl(
+    config,
     `/users/${request.actorUsername}/activities/delete/${Date.now()}-${Math.random().toString(36).slice(2)}`,
-    config.fedifyOrigin,
   );
   const PUBLIC = new URL("https://www.w3.org/ns/activitystreams#Public");
   const community = new URL(request.communityActorUrl);

@@ -2,19 +2,24 @@ import assert from "node:assert/strict";
 import { buildLemmyCompatibleUnfollowActivity, renderPublicActivityJson } from "../src/federation-outbound.js";
 import type { GatewayConfig } from "../src/config.js";
 
-const config: GatewayConfig = {
-  actorIdentifier: "bridge",
-  actorName: "Bridge",
-  actorSummary: "Bridge actor",
-  bridgePrivateKeyJwkJson: null,
-  bridgePublicKeyJwkJson: null,
-  databaseUrl: "sqlite:///../bridge.db",
-  fedifyOrigin: "https://bot-test.nachitima.com/",
-  port: 3000,
-  pythonBridgeEventsUrl: "http://127.0.0.1:8080/internal/activitypub/events",
-  pythonBridgeSharedSecret: "secret",
-  logLevel: "debug",
-};
+/** Build the smallest config object needed by the pure Undo(Follow) builder. */
+function makeConfig(fedifyOrigin: string): GatewayConfig {
+  return {
+    actorIdentifier: "bridge",
+    actorName: "Bridge",
+    actorSummary: "Bridge actor",
+    bridgePrivateKeyJwkJson: null,
+    bridgePublicKeyJwkJson: null,
+    databaseUrl: "sqlite:///../bridge.db",
+    fedifyOrigin,
+    port: 3000,
+    pythonBridgeEventsUrl: "http://127.0.0.1:8080/internal/activitypub/events",
+    pythonBridgeSharedSecret: "secret",
+    logLevel: "debug",
+  };
+}
+
+const config = makeConfig("https://bot-test.nachitima.com/");
 
 const actorUri = new URL("https://bot-test.nachitima.com/actors/bridge");
 const communityUri = "https://lemmy.example/c/hackers";
@@ -38,5 +43,27 @@ assert.equal(embeddedFollow.actor, actorUri.href);
 assert.equal(embeddedFollow.object, communityUri);
 assert.deepEqual(embeddedFollow.to, [communityUri]);
 assert.notEqual(typeof undoJson.object, "string");
+assert.match(String(undoJson.id), /^https:\/\/bot-test\.nachitima\.com\/activities\/undo\//);
+
+for (const fedifyOrigin of [
+  "https://bot-test.nachitima.com",
+  "https://bot-test.nachitima.com/",
+]) {
+  // Operators commonly configure FEDIFY_ORIGIN with or without a trailing
+  // slash. The Undo id must stay under the bridge origin either way so Lemmy's
+  // ActivityPub URL-domain verifier accepts the signed Undo(Follow).
+  const built = buildLemmyCompatibleUnfollowActivity(
+    makeConfig(fedifyOrigin),
+    actorUri,
+    communityUri,
+    followActivityId,
+  );
+  const builtJson = await renderPublicActivityJson(built);
+  assert.match(String(builtJson.id), /^https:\/\/bot-test\.nachitima\.com\/activities\/undo\//);
+  assert.ok(
+    !String(builtJson.id).includes(".comactivities"),
+    "Undo id must not concatenate FEDIFY_ORIGIN and activities without a slash",
+  );
+}
 
 console.log("verify-unfollow-activity passed");
