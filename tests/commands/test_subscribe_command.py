@@ -34,9 +34,9 @@ async def test_subscribe_community_success(
         MockLemmyClient.return_value = fake_client
         await command.callback(
             interaction,
-            f"https://{LEMMY_EXAMPLE_DOMAIN}",
-            f"{community_actor_url}|hackers|",
-            forum_channel,
+            community=f"{community_actor_url}|hackers|",
+            channel=forum_channel,
+            instance_domain=f"https://{LEMMY_EXAMPLE_DOMAIN}",
         )
 
     assert database.remote_subscriptions.get_subscription_by_channel.call_count == 2
@@ -81,9 +81,9 @@ async def test_subscribe_community_rejects_duplicate_accepted(
     command = command_tree.commands["subscribe-community"]
     await command.callback(
         interaction,
-        f"https://{LEMMY_EXAMPLE_DOMAIN}",
-        f"https://{LEMMY_EXAMPLE_DOMAIN}/c/hackers|hackers|777",
-        forum_channel,
+        community=f"https://{LEMMY_EXAMPLE_DOMAIN}/c/hackers|hackers|777",
+        channel=forum_channel,
+        instance_domain=f"https://{LEMMY_EXAMPLE_DOMAIN}",
     )
 
     database.remote_subscriptions.create_subscription.assert_not_called()
@@ -112,9 +112,9 @@ async def test_subscribe_community_rejects_duplicate_pending(
     command = command_tree.commands["subscribe-community"]
     await command.callback(
         interaction,
-        f"https://{LEMMY_EXAMPLE_DOMAIN}",
-        f"https://{LEMMY_EXAMPLE_DOMAIN}/c/hackers|hackers|777",
-        forum_channel,
+        community=f"https://{LEMMY_EXAMPLE_DOMAIN}/c/hackers|hackers|777",
+        channel=forum_channel,
+        instance_domain=f"https://{LEMMY_EXAMPLE_DOMAIN}",
     )
 
     database.remote_subscriptions.create_subscription.assert_not_called()
@@ -147,9 +147,9 @@ async def test_subscribe_community_rejects_when_community_resolution_fails(
         MockLemmyClient.return_value = fake_client
         await command.callback(
             interaction,
-            f"https://{LEMMY_EXAMPLE_DOMAIN}",
-            f"https://{LEMMY_EXAMPLE_DOMAIN}/c/hackers|hackers|",
-            forum_channel,
+            community=f"https://{LEMMY_EXAMPLE_DOMAIN}/c/hackers|hackers|",
+            channel=forum_channel,
+            instance_domain=f"https://{LEMMY_EXAMPLE_DOMAIN}",
         )
 
     database.remote_subscriptions.create_subscription.assert_not_called()
@@ -178,9 +178,9 @@ async def test_subscribe_community_marks_failed_when_follow_dispatch_fails(
         MockLemmyClient.return_value = fake_client
         await command.callback(
             interaction,
-            f"https://{LEMMY_EXAMPLE_DOMAIN}",
-            f"{community_actor_url}|hackers|",
-            forum_channel,
+            community=f"{community_actor_url}|hackers|",
+            channel=forum_channel,
+            instance_domain=f"https://{LEMMY_EXAMPLE_DOMAIN}",
         )
 
     database.remote_subscriptions.create_subscription.assert_called_once_with(
@@ -225,9 +225,9 @@ async def test_subscribe_community_retries_failed_subscription(
     command = command_tree.commands["subscribe-community"]
     await command.callback(
         interaction,
-        f"https://{LEMMY_EXAMPLE_DOMAIN}",
-        f"{community_actor_url}|hackers|777",
-        forum_channel,
+        community=f"{community_actor_url}|hackers|777",
+        channel=forum_channel,
+        instance_domain=f"https://{LEMMY_EXAMPLE_DOMAIN}",
     )
 
     database.remote_subscriptions.delete_subscription.assert_called_once_with(forum_channel.id)
@@ -468,9 +468,9 @@ async def test_subscribe_community_rejects_unlisted_lemmy_instance(
     command = command_tree.commands["subscribe-community"]
     await command.callback(
         interaction,
-        "https://forbidden.instance",
-        f"https://{LEMMY_EXAMPLE_DOMAIN}/c/hackers|hackers|777",
-        forum_channel,
+        community=f"https://{LEMMY_EXAMPLE_DOMAIN}/c/hackers|hackers|777",
+        channel=forum_channel,
+        instance_domain="https://forbidden.instance",
     )
 
     database.remote_subscriptions.create_subscription.assert_not_called()
@@ -555,7 +555,7 @@ async def test_subscribe_community_rejects_plain_name_without_instance(
     subscribe.register(command_tree, database, fedify_gateway, settings)
 
     command = command_tree.commands["subscribe-community"]
-    await command.callback(interaction, "technology", forum_channel)
+    await command.callback(interaction, community="technology", channel=forum_channel)
 
     database.remote_subscriptions.create_subscription.assert_not_called()
     interaction.response.send_message.assert_awaited_once_with(
@@ -573,7 +573,7 @@ async def test_subscribe_community_rejects_forbidden_actor_url_without_instance(
     subscribe.register(command_tree, database, fedify_gateway, settings)
 
     command = command_tree.commands["subscribe-community"]
-    await command.callback(interaction, "https://blocked.example/c/news", forum_channel)
+    await command.callback(interaction, community="https://blocked.example/c/news", channel=forum_channel)
 
     database.remote_subscriptions.create_subscription.assert_not_called()
     fedify_gateway.follow_community.assert_not_awaited()
@@ -607,7 +607,7 @@ async def test_subscribe_community_accepts_actor_url_without_instance(
             "id": 777,
         }
         MockLemmyClient.return_value = fake_client
-        await command.callback(interaction, community_actor_url, forum_channel)
+        await command.callback(interaction, community=community_actor_url, channel=forum_channel)
 
     MockLemmyClient.assert_called_once_with(f"https://{LEMMY_EXAMPLE_DOMAIN}")
     fake_client.resolve_community.assert_awaited_once_with(name="hackers")

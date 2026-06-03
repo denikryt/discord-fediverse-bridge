@@ -193,9 +193,9 @@ async def test_register_subscribe_accept_publish_then_echo_is_suppressed(
     subscribe_command = command_tree.commands["subscribe-community"]
     await subscribe_command.callback(
         interaction,
-        f"https://{LEMMY_EXAMPLE_DOMAIN}",
-        f"{community_actor_url}|hackers|777",
-        forum_channel,
+        community=f"{community_actor_url}|hackers|777",
+        channel=forum_channel,
+        instance_domain=f"https://{LEMMY_EXAMPLE_DOMAIN}",
     )
     pending_subscription = database.remote_subscriptions.get_subscription_by_channel(forum_channel.id)
     assert pending_subscription is not None
@@ -358,9 +358,9 @@ async def test_failed_subscribe_retry_then_accept_allows_publish(
     fedify_gateway.follow_community.side_effect = RuntimeError("boom")
     await subscribe_command.callback(
         interaction,
-        f"https://{LEMMY_EXAMPLE_DOMAIN}",
-        f"{community_actor_url}|hackers|777",
-        forum_channel,
+        community=f"{community_actor_url}|hackers|777",
+        channel=forum_channel,
+        instance_domain=f"https://{LEMMY_EXAMPLE_DOMAIN}",
     )
     failed_subscription = database.remote_subscriptions.get_subscription_by_channel(forum_channel.id)
     assert failed_subscription is not None
@@ -376,9 +376,9 @@ async def test_failed_subscribe_retry_then_accept_allows_publish(
     )
     await subscribe_command.callback(
         interaction,
-        f"https://{LEMMY_EXAMPLE_DOMAIN}",
-        f"{community_actor_url}|hackers|777",
-        forum_channel,
+        community=f"{community_actor_url}|hackers|777",
+        channel=forum_channel,
+        instance_domain=f"https://{LEMMY_EXAMPLE_DOMAIN}",
     )
     pending_subscription = database.remote_subscriptions.get_subscription_by_channel(forum_channel.id)
     assert pending_subscription is not None

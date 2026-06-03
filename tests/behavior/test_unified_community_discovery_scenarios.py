@@ -159,9 +159,9 @@ async def test_remote_bridge_handle_uses_remote_follow_path_without_numeric_id(
             command = command_tree.commands["subscribe-community"]
             await command.callback(
                 interaction,
-                "remote.bridge.example",
-                "!local-news@remote.bridge.example",
-                forum_channel,
+                community="!local-news@remote.bridge.example",
+                channel=forum_channel,
+                instance_domain="remote.bridge.example",
             )
 
     lemmy_client_mock.assert_not_called()
@@ -214,9 +214,9 @@ async def test_same_instance_local_actor_url_creates_local_subscriber_state(
         command = command_tree.commands["subscribe-community"]
         await command.callback(
             interaction,
-            "bot.example.com",
-            "https://bot.example.com/communities/local-news",
-            forum_channel,
+            community="https://bot.example.com/communities/local-news",
+            channel=forum_channel,
+            instance_domain="bot.example.com",
         )
 
     assert database.remote_subscriptions.get_subscription_by_channel(forum_channel.id) is None

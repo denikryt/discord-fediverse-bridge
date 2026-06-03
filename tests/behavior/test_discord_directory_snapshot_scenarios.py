@@ -114,9 +114,9 @@ async def test_subscribe_community_stores_snapshots_for_remote_subscription(
     command = command_tree.commands["subscribe-community"]
     await command.callback(
         interaction,
-        f"https://{LEMMY_EXAMPLE_DOMAIN}",
-        f"{community_actor_url}|news|1",
-        forum,
+        community=f"{community_actor_url}|news|1",
+        channel=forum,
+        instance_domain=f"https://{LEMMY_EXAMPLE_DOMAIN}",
     )
 
     assert database.discord_directory.get_guild_snapshot(99999).guild_name == "Guild Before"
@@ -162,9 +162,9 @@ async def test_subscribe_community_stores_snapshots_for_local_subscription(
     with patch("src.commands.subscribe.resolve_selected_community", new=AsyncMock(return_value=resolved)):
         await command.callback(
             interaction,
-            f"https://{BRIDGE_EXAMPLE_DOMAIN}",
-            f"!hackers@{BRIDGE_EXAMPLE_DOMAIN}",
-            forum,
+            community=f"!hackers@{BRIDGE_EXAMPLE_DOMAIN}",
+            channel=forum,
+            instance_domain=f"https://{BRIDGE_EXAMPLE_DOMAIN}",
         )
 
     assert database.discord_directory.get_channel_snapshot(forum.id).channel_name == "mirror-forum"

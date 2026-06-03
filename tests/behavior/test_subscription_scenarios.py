@@ -68,9 +68,9 @@ async def test_no_subscription_subscribe_command_sends_follow_and_marks_pending(
     command = command_tree.commands["subscribe-community"]
     await command.callback(
         interaction,
-        f"https://{LEMMY_EXAMPLE_DOMAIN}",
-        f"{community_actor_url}|hackers|777",
-        forum_channel,
+        community=f"{community_actor_url}|hackers|777",
+        channel=forum_channel,
+        instance_domain=f"https://{LEMMY_EXAMPLE_DOMAIN}",
     )
     subscription = database.remote_subscriptions.get_subscription_by_channel(forum_channel.id)
     bridge_follow = database.bridge_actor_follows.get_bridge_actor_follow(community_actor_url)
@@ -127,9 +127,9 @@ async def test_second_channel_reuses_existing_accepted_bridge_follow(
     command = command_tree.commands["subscribe-community"]
     await command.callback(
         interaction,
-        f"https://{LEMMY_EXAMPLE_DOMAIN}",
-        f"{community_actor_url}|hackers|777",
-        forum_channel,
+        community=f"{community_actor_url}|hackers|777",
+        channel=forum_channel,
+        instance_domain=f"https://{LEMMY_EXAMPLE_DOMAIN}",
     )
     new_subscription = database.remote_subscriptions.get_subscription_by_channel(forum_channel.id)
 
@@ -170,9 +170,9 @@ async def test_pending_subscription_second_subscribe_does_not_send_follow(
     command = command_tree.commands["subscribe-community"]
     await command.callback(
         interaction,
-        f"https://{LEMMY_EXAMPLE_DOMAIN}",
-        f"{_community_actor_url()}|hackers|777",
-        forum_channel,
+        community=f"{_community_actor_url()}|hackers|777",
+        channel=forum_channel,
+        instance_domain=f"https://{LEMMY_EXAMPLE_DOMAIN}",
     )
 
     fedify_gateway.follow_community.assert_not_awaited()
@@ -208,9 +208,9 @@ async def test_accepted_subscription_second_subscribe_does_not_send_follow(
     command = command_tree.commands["subscribe-community"]
     await command.callback(
         interaction,
-        f"https://{LEMMY_EXAMPLE_DOMAIN}",
-        f"{_community_actor_url()}|hackers|777",
-        forum_channel,
+        community=f"{_community_actor_url()}|hackers|777",
+        channel=forum_channel,
+        instance_domain=f"https://{LEMMY_EXAMPLE_DOMAIN}",
     )
 
     fedify_gateway.follow_community.assert_not_awaited()
@@ -240,9 +240,9 @@ async def test_follow_dispatch_failure_marks_subscription_failed(
     command = command_tree.commands["subscribe-community"]
     await command.callback(
         interaction,
-        f"https://{LEMMY_EXAMPLE_DOMAIN}",
-        f"{_community_actor_url()}|hackers|777",
-        forum_channel,
+        community=f"{_community_actor_url()}|hackers|777",
+        channel=forum_channel,
+        instance_domain=f"https://{LEMMY_EXAMPLE_DOMAIN}",
     )
     subscription = database.remote_subscriptions.get_subscription_by_channel(forum_channel.id)
     bridge_follow = database.bridge_actor_follows.get_bridge_actor_follow(_community_actor_url())

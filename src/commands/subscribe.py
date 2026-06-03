@@ -7,72 +7,27 @@ from urllib.parse import urlparse
 
 import discord
 from discord import app_commands
-from discordops import run_operation_definition_async
 
 from ..community_discovery import (
     CommunityResolutionError,
     autocomplete_communities,
     fetch_bridge_community_summaries,
-    infer_reference_origin,
     is_bridge_origin,
     normalize_instance_domain,
     resolve_selected_community,
 )
-from ..community_labels import community_relay_label
 from ..config import Settings
 from ..db import Database
 from ..fedify_gateway_client import FedifyGatewayClient
-from ..discord_directory import record_discord_placement_snapshot
-from ..discord_forum_placement import (
-    ForumPlacement,
-    ForumPlacementError,
-    cleanup_created_forum_channel,
-    derive_channel_name_from_community,
-    resolve_optional_forum_channel,
-)
 from ..federation_policy import is_instance_allowed
 from ..lemmy_client import LemmyClient
 from ..lemmyverse_communities import (
     LemmyverseCommunityCache,
     autocomplete_lemmyverse_communities,
 )
-from ..operations import SubscribeInput, subscribe_operation
-from ..operations.subscribe_local_community import (
-    SubscribeLocalCommunityInput,
-    subscribe_local_community_operation,
-)
+from .subscribe_community_handler import SubscribeCommunityCommandHandler
 
 logger = logging.getLogger(__name__)
-
-
-def _no_ping_allowed_mentions() -> discord.AllowedMentions:
-    """Suppress notification delivery for display-only user mentions."""
-    # The response content uses Discord's normal <@user_id> mention syntax so
-    # clients render a clickable user reference, but allowed_mentions disables
-    # parsing for notifications.
-    return discord.AllowedMentions.none()
-
-
-def _user_mention(user_id: object) -> str:
-    """Return Discord mention markup for a command initiator."""
-    return f"<@{user_id}>"
-
-
-def _subscribe_success_message(
-    *,
-    user_id: object,
-    channel_mention: str,
-    actor_id: str | None,
-    name: str | None,
-    handle: str | None,
-    waiting_for_accept: bool,
-) -> str:
-    """Build the public success message for /subscribe-community."""
-    label = community_relay_label(actor_id=actor_id, name=name, handle=handle)
-    message = f"{_user_mention(user_id)} subscribed {channel_mention} to **{label}**."
-    if waiting_for_accept:
-        return f"{message} Waiting for federation acceptance."
-    return message
 
 
 def register(
@@ -86,11 +41,18 @@ def register(
 
     One Lemmyverse cache is created per registration so Discord autocomplete
     keystrokes share the same process-local index instead of downloading the
-    public feed repeatedly. The public command now describes the domain action
-    (subscribing to a community) while the channel is only the delivery surface.
+    public feed repeatedly. The callback delegates submit handling to a command
+    handler, keeping this module focused on Discord registration and autocomplete.
     """
-    allowlist = settings.federation_allowlist if settings is not None else []
     cache = lemmyverse_cache or LemmyverseCommunityCache()
+    handler = SubscribeCommunityCommandHandler(
+        database=database,
+        fedify_gateway=fedify_gateway,
+        settings=settings,
+        lemmy_client_cls_getter=lambda: LemmyClient,
+        resolve_selected_community_getter=lambda: resolve_selected_community,
+        fetch_bridge_communities_getter=lambda: fetch_bridge_community_summaries,
+    )
 
     @tree.command(name="subscribe-community", description="Subscribe to a federated community")
     @app_commands.describe(
@@ -109,199 +71,13 @@ def register(
         channel: discord.ForumChannel | None = None,
         instance_domain: str | None = None,
     ) -> None:
-        """Resolve the community, choose/create a forum channel, and subscribe it."""
-        if instance_domain is not None and hasattr(instance_domain, "id") and isinstance(channel, str):
-            # Older direct test calls used (interaction, instance_domain, community,
-            # channel). The public command has been renamed, but this adapter shim
-            # keeps direct callback execution compatible while Discord registration
-            # exposes only /subscribe-community.
-            old_instance_domain = community
-            community = channel
-            channel = instance_domain
-            instance_domain = old_instance_domain
-
-        # Remote hosts remain allowlist-gated, but channel placement must wait
-        # until the community identity is resolved so auto-created channel names
-        # come from the selected community rather than from raw user text.
-        try:
-            inferred_origin = infer_reference_origin(community)
-        except CommunityResolutionError as error:
-            await interaction.response.send_message(str(error), ephemeral=True)
-            return
-        raw_instance = (instance_domain or "").strip()
-        try:
-            selected_origin = normalize_instance_domain(raw_instance) if raw_instance else None
-        except CommunityResolutionError as error:
-            await interaction.response.send_message(str(error), ephemeral=True)
-            return
-
-        # Encoded direct-mode payloads remain scoped to the selected instance
-        # when one exists. Plain Lemmyverse actor URLs are not encoded and infer
-        # their candidate origin from the URL itself.
-        candidate_origin = selected_origin if ("|" in community and selected_origin is not None) else inferred_origin
-        if candidate_origin is not None and not is_bridge_origin(candidate_origin, settings) and not is_instance_allowed(candidate_origin, allowlist):
-            hostname = urlparse(candidate_origin).hostname or candidate_origin
-            await interaction.response.send_message(
-                f"Instance **{hostname}** is not in the federation allowlist.",
-                ephemeral=True,
-            )
-            return
-
-        try:
-            resolved = await resolve_selected_community(
-                settings,
-                instance_domain=instance_domain,
-                community_value=community,
-                fetch_bridge_communities=fetch_bridge_community_summaries,
-                lemmy_client_cls=LemmyClient,
-            )
-        except CommunityResolutionError as error:
-            logger.warning("Failed to resolve subscribe target %s: %s", community, error)
-            await interaction.response.send_message(str(error), ephemeral=True)
-            return
-
-        resolved_origin = infer_reference_origin(resolved.actor_id) or selected_origin
-        if resolved_origin is not None and not is_bridge_origin(resolved_origin, settings) and not is_instance_allowed(resolved_origin, allowlist):
-            # Autocomplete choices and manual values are user-controlled at
-            # submit time, so the resolved actor URL is checked again before
-            # any DB mutation, Discord channel creation, or outbound Follow can occur.
-            hostname = urlparse(resolved_origin).hostname or resolved_origin
-            await interaction.response.send_message(
-                f"Instance **{hostname}** is not in the federation allowlist.",
-                ephemeral=True,
-            )
-            return
-
-        if resolved.source == "remote_lemmy" and resolved.numeric_id is None:
-            # Direct remote Lemmy URLs/handles and legacy autocomplete payloads
-            # may omit the numeric Lemmy id. Preserve the old contract by
-            # resolving it lazily before placement and persistence.
-            if resolved_origin is None:
-                await interaction.response.send_message(
-                    "Could not infer the Lemmy community origin. Please provide instance_domain.",
-                    ephemeral=True,
-                )
-                return
-            tmp_client = LemmyClient(resolved_origin)
-            try:
-                numeric_id = await tmp_client.resolve_community_id(
-                    name=resolved.name or resolved.actor_id
-                )
-            except Exception:
-                logger.exception("Failed to resolve community ID for %s", resolved.actor_id)
-                await interaction.response.send_message(
-                    "Could not resolve the Lemmy community ID. Please try again.",
-                    ephemeral=True,
-                )
-                return
-            finally:
-                await tmp_client.close()
-            resolved = type(resolved)(
-                source=resolved.source,
-                actor_id=resolved.actor_id,
-                name=resolved.name,
-                numeric_id=numeric_id,
-                handle=resolved.handle,
-                local_community_id=resolved.local_community_id,
-                remote_software=resolved.remote_software,
-            )
-
-        desired_name = derive_channel_name_from_community(
-            name=resolved.name,
-            handle=resolved.handle,
-            actor_id=resolved.actor_id,
+        """Delegate /subscribe-community submit handling to the command handler."""
+        await handler.handle(
+            interaction=interaction,
+            community=community,
+            channel=channel,
+            instance_domain=instance_domain,
         )
-        placement: ForumPlacement | None = None
-        try:
-            placement = await resolve_optional_forum_channel(
-                database=database,
-                guild=interaction.guild,
-                selected_channel=channel,
-                desired_name=desired_name,
-                command_name="subscribe-community",
-                remote_subscription_blocking_statuses={"pending", "accepted"},
-            )
-        except ForumPlacementError as error:
-            await interaction.response.send_message(error.message, ephemeral=True)
-            return
-
-        final_channel = placement.channel
-        try:
-            if resolved.source == "local_bridge":
-                result = await run_operation_definition_async(
-                    subscribe_local_community_operation,
-                    SubscribeLocalCommunityInput(
-                        database=database,
-                        discord_user_id=str(interaction.user.id),
-                        guild_id=interaction.guild_id,
-                        channel_id=final_channel.id,
-                        channel_mention=final_channel.mention,
-                        local_community_id=int(resolved.local_community_id),
-                        local_community_name=resolved.name or resolved.handle,
-                    ),
-                )
-            else:
-                result = await run_operation_definition_async(
-                    subscribe_operation,
-                    SubscribeInput(
-                        database=database,
-                        fedify_gateway=fedify_gateway,
-                        discord_user_id=str(interaction.user.id),
-                        guild_id=interaction.guild_id,
-                        channel_id=final_channel.id,
-                        channel_mention=final_channel.mention,
-                        actor_id=resolved.actor_id,
-                        community_name=resolved.name,
-                        numeric_id=resolved.numeric_id,
-                        community_handle=resolved.handle,
-                    ),
-                )
-        except Exception:
-            await cleanup_created_forum_channel(
-                placement,
-                database=database,
-                logger=logger,
-                guild_id=interaction.guild_id,
-                command_name="subscribe-community",
-                original_reason="unexpected_exception",
-            )
-            raise
-
-        if getattr(result, "reason", None) == "follow_dispatch_failed":
-            logger.error("Failed to send follow for community %s", resolved.actor_id)
-        if not result.applied:
-            await cleanup_created_forum_channel(
-                placement,
-                database=database,
-                logger=logger,
-                guild_id=interaction.guild_id,
-                command_name="subscribe-community",
-                original_reason=result.reason,
-            )
-        else:
-            # The operation has committed routing state, so expose the final
-            # forum placement through the dashboard snapshot cache.
-            record_discord_placement_snapshot(
-                database,
-                guild=interaction.guild,
-                channel=final_channel,
-            )
-            logger.info("Subscribed channel %s to community %s", final_channel.id, resolved.actor_id)
-
-        message = result.message
-        send_kwargs: dict[str, object] = {"ephemeral": not result.applied}
-        if result.applied:
-            message = _subscribe_success_message(
-                user_id=interaction.user.id,
-                channel_mention=final_channel.mention,
-                actor_id=resolved.actor_id,
-                name=resolved.name,
-                handle=resolved.handle,
-                waiting_for_accept="Waiting for federation acceptance." in result.message,
-            )
-            send_kwargs["allowed_mentions"] = _no_ping_allowed_mentions()
-
-        await interaction.response.send_message(message, **send_kwargs)
 
 
 def _extract_instance_domain_for_autocomplete(interaction: discord.Interaction) -> str | None:

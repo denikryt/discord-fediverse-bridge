@@ -103,9 +103,9 @@ async def test_subscribe_community_persists_local_subscriber_without_remote_foll
         )
         await command.callback(
             interaction,
-            f"https://{BRIDGE_EXAMPLE_DOMAIN}",
-            community.actor_url,
-            forum_channel,
+            community=community.actor_url,
+            channel=forum_channel,
+            instance_domain=f"https://{BRIDGE_EXAMPLE_DOMAIN}",
         )
 
     local_subscriber = database.local_subscribers.get_local_subscriber_by_channel(forum_channel.id)
@@ -152,9 +152,9 @@ async def test_subscribe_community_rejects_host_forum_as_local_subscriber_target
         )
         await command.callback(
             interaction,
-            f"https://{BRIDGE_EXAMPLE_DOMAIN}",
-            community.actor_url,
-            host_forum,
+            community=community.actor_url,
+            channel=host_forum,
+            instance_domain=f"https://{BRIDGE_EXAMPLE_DOMAIN}",
         )
 
     assert database.local_subscribers.get_local_subscriber_by_channel(host_forum.id) is None
