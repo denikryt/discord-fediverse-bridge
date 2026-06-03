@@ -39,7 +39,8 @@ async def test_subscribe_community_success(
             forum_channel,
         )
 
-    database.remote_subscriptions.get_subscription_by_channel.assert_called_once_with(forum_channel.id)
+    assert database.remote_subscriptions.get_subscription_by_channel.call_count == 2
+    database.remote_subscriptions.get_subscription_by_channel.assert_any_call(forum_channel.id)
     fake_client.resolve_community_id.assert_awaited_once_with(name="hackers")
     database.remote_subscriptions.create_subscription.assert_called_once_with(
         discord_channel_id=forum_channel.id,
@@ -228,12 +229,23 @@ async def test_subscribe_community_retries_failed_subscription(
         forum_channel,
     )
 
-    database.remote_subscriptions.delete_subscription.assert_not_called()
-    database.remote_subscriptions.create_subscription.assert_not_called()
-    fedify_gateway.follow_community.assert_not_awaited()
+    database.remote_subscriptions.delete_subscription.assert_called_once_with(forum_channel.id)
+    database.remote_subscriptions.create_subscription.assert_called_once_with(
+        discord_channel_id=forum_channel.id,
+        discord_guild_id=interaction.guild_id,
+        lemmy_community_actor_id=community_actor_url,
+        lemmy_community_name="hackers",
+        lemmy_community_id=777,
+        community_handle=f"!hackers@{LEMMY_EXAMPLE_DOMAIN}",
+        community_inbox_url=f"{community_actor_url}/inbox",
+        follow_activity_id=f"https://{BRIDGE_EXAMPLE_DOMAIN}/activities/follow/2",
+        initiated_by_discord_user_id=str(interaction.user.id),
+        status="pending",
+    )
+    fedify_gateway.follow_community.assert_awaited_once_with(community_actor_url)
     interaction.response.send_message.assert_awaited_once_with(
-        "Forum channel <#12345> is already used by another bridge community or subscription.",
-        ephemeral=True,
+        "Sent a bridge follow for <#12345> -> **hackers**. Waiting for federation acceptance.",
+        ephemeral=False,
     )
 
 

@@ -74,24 +74,43 @@ def derive_channel_name_from_community(*, name: str | None, handle: str | None, 
     return "community"
 
 
-def is_forum_channel_available(database: 'Database', channel_id: int) -> bool:
+def is_forum_channel_available(
+    database: 'Database',
+    channel_id: int,
+    *,
+    remote_subscription_blocking_statuses: set[str] | None = None,
+) -> bool:
     """Return whether no bridge binding currently owns ``channel_id``.
 
     Channel names are irrelevant for occupancy. The bridge can create suffixed
     names for Discord collisions, but a Discord channel ID may only appear in one
-    of the channel-binding tables at a time.
+    active bridge role at a time. ``remote_subscription_blocking_statuses`` lets
+    subscribe commands preserve failed-subscription retry behavior by treating
+    only pending/accepted remote rows as occupied before the operation layer runs.
     """
-    return _channel_binding_owner(database, channel_id) is None
+    return _channel_binding_owner(
+        database,
+        channel_id,
+        remote_subscription_blocking_statuses=remote_subscription_blocking_statuses,
+    ) is None
 
 
-def _channel_binding_owner(database: 'Database', channel_id: int) -> str | None:
+def _channel_binding_owner(
+    database: 'Database',
+    channel_id: int,
+    *,
+    remote_subscription_blocking_statuses: set[str] | None = None,
+) -> str | None:
     """Return the binding table that owns a channel, or ``None`` when free."""
     local = database.local_communities.get_local_community_by_forum_channel_id(channel_id)
     if local is not None:
         return "local_community"
     remote = database.remote_subscriptions.get_subscription_by_channel(channel_id)
     if remote is not None:
-        return "remote_subscription"
+        if remote_subscription_blocking_statuses is None:
+            return "remote_subscription"
+        if getattr(remote, "status", None) in remote_subscription_blocking_statuses:
+            return "remote_subscription"
     local_subscriber = database.local_subscribers.get_local_subscriber_by_channel(channel_id)
     if local_subscriber is not None:
         return "local_subscriber"
@@ -175,6 +194,7 @@ async def resolve_optional_forum_channel(
     selected_channel: Any | None,
     desired_name: str,
     command_name: str,
+    remote_subscription_blocking_statuses: set[str] | None = None,
 ) -> ForumPlacement:
     """Resolve optional command input into a free Discord forum channel.
 
@@ -200,7 +220,11 @@ async def resolve_optional_forum_channel(
                 message="Choose a Discord forum channel.",
                 reason="not_forum_channel",
             )
-        if not is_forum_channel_available(database, int(getattr(selected_channel, "id"))):
+        if not is_forum_channel_available(
+            database,
+            int(getattr(selected_channel, "id")),
+            remote_subscription_blocking_statuses=remote_subscription_blocking_statuses,
+        ):
             raise ForumPlacementError(
                 message=CHANNEL_UNAVAILABLE_MESSAGE.format(mention=_channel_mention(selected_channel)),
                 reason="channel_unavailable",

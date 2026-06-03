@@ -188,6 +188,7 @@ def register(
                 selected_channel=channel,
                 desired_name=desired_name,
                 command_name="subscribe-community",
+                remote_subscription_blocking_statuses={"pending", "accepted"},
             )
         except ForumPlacementError as error:
             await interaction.response.send_message(error.message, ephemeral=True)

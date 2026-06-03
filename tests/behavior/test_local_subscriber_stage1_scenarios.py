@@ -160,7 +160,7 @@ async def test_subscribe_community_rejects_host_forum_as_local_subscriber_target
     assert database.local_subscribers.get_local_subscriber_by_channel(host_forum.id) is None
     fedify_gateway.follow_community.assert_not_awaited()
     interaction.response.send_message.assert_awaited_once_with(
-        "Channel <#12345> is the host forum for this local community and cannot subscribe to itself.",
+        "Forum channel <#12345> is already used by another bridge community or subscription.",
         ephemeral=True,
     )
 

@@ -112,7 +112,7 @@ async def test_same_instance_autocomplete_uses_bridge_discovery(
     lemmy_client_mock.assert_not_called()
     fetch_mock.assert_awaited_once_with("https://bot.example.com")
     assert len(choices) == 1
-    assert choices[0].name == "Local News (local-news)"
+    assert choices[0].name == "Local News (local-news@bot.example.com)"
     assert choices[0].value == "bridge-local:https://bot.example.com/communities/local-news|local-news|1"
 
 

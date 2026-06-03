@@ -176,7 +176,7 @@ async def test_pending_subscription_second_subscribe_does_not_send_follow(
 
     fedify_gateway.follow_community.assert_not_awaited()
     interaction.response.send_message.assert_awaited_once_with(
-        f"Channel <#12345> is still waiting for **!hackers@{LEMMY_EXAMPLE_DOMAIN}** to accept the bridge follow.",
+        "Forum channel <#12345> is already used by another bridge community or subscription.",
         ephemeral=True,
     )
 
@@ -214,7 +214,7 @@ async def test_accepted_subscription_second_subscribe_does_not_send_follow(
 
     fedify_gateway.follow_community.assert_not_awaited()
     interaction.response.send_message.assert_awaited_once_with(
-        f"Channel <#12345> is already subscribed to **!hackers@{LEMMY_EXAMPLE_DOMAIN}**.",
+        "Forum channel <#12345> is already used by another bridge community or subscription.",
         ephemeral=True,
     )
 
