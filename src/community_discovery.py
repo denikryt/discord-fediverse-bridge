@@ -268,9 +268,18 @@ async def autocomplete_communities(
         title = str(community.get("title", "") or name)
         actor_id = str(community.get("actor_id", ""))
         numeric_id = community.get("id")
+        counts = item.get("counts") if isinstance(item.get("counts"), dict) else {}
         if query and query not in name.lower() and query not in title.lower():
             continue
-        choices.append((f"{title} ({name})", f"lemmy:{actor_id}|{name}|{numeric_id or ''}"))
+        choices.append((
+            _build_lemmy_autocomplete_choice_name(
+                title=title,
+                name=name,
+                actor_id=actor_id,
+                users_active_month=counts.get("users_active_month"),
+            ),
+            f"lemmy:{actor_id}|{name}|{numeric_id or ''}",
+        ))
         if len(choices) >= 25:
             break
     return choices
@@ -403,11 +412,60 @@ def _build_bridge_autocomplete_choices(
         if query and not any(query in candidate for candidate in haystacks):
             continue
         hidden_id = str(summary.id) if source == "local_bridge" else ""
-        choices.append((f"{summary.title} ({summary.name})", f"{prefix}:{summary.actor_id}|{summary.name}|{hidden_id}"))
+        choices.append((
+            _build_bridge_autocomplete_choice_name(summary),
+            f"{prefix}:{summary.actor_id}|{summary.name}|{hidden_id}",
+        ))
         if len(choices) >= 25:
             break
     return choices
 
+
+
+def _format_autocomplete_active_month(value: Any) -> str | None:
+    """Format one optional monthly-active counter for choice labels."""
+    try:
+        parsed = int(value)
+    except (TypeError, ValueError):
+        return None
+    if parsed < 0:
+        return None
+    return f"{parsed:,}".replace(",", " ") + " active/mo"
+
+
+def _truncate_choice_label(title: str, suffix: str, *, limit: int = 100) -> str:
+    """Keep Discord autocomplete labels inside the 100-character API limit."""
+    title_budget = limit - len(suffix)
+    if title_budget <= 0:
+        return suffix.strip()[:limit]
+    if len(title) > title_budget:
+        title = f"{title[: max(title_budget - 1, 0)]}…"
+    return f"{title}{suffix}"
+
+
+def _build_lemmy_autocomplete_choice_name(
+    *,
+    title: str,
+    name: str,
+    actor_id: str,
+    users_active_month: Any = None,
+) -> str:
+    """Return a direct-instance Lemmy label with the same handle context as Lemmyverse."""
+    hostname = urlparse(actor_id).hostname
+    handle = f"{name}@{hostname}" if name and hostname else name or actor_id
+    active = _format_autocomplete_active_month(users_active_month)
+    suffix = f" ({handle}"
+    if active is not None:
+        suffix += f" · {active}"
+    suffix += ")"
+    return _truncate_choice_label(title or name or actor_id, suffix)
+
+
+def _build_bridge_autocomplete_choice_name(summary: BridgeCommunitySummary) -> str:
+    """Return a bridge-discovery label that includes the community handle host."""
+    handle = summary.handle[1:] if summary.handle.startswith("!") else summary.handle
+    suffix = f" ({handle or summary.name})"
+    return _truncate_choice_label(summary.title, suffix)
 
 def _parse_encoded_community_value(value: str) -> ResolvedCommunity | None:
     """Decode one autocomplete payload into a typed community result."""

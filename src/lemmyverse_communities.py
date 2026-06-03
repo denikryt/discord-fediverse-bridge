@@ -47,6 +47,7 @@ class LemmyverseCommunityEntry:
     actor_id: str
     host: str
     handle: str
+    active_users_month: int | None
     search_text: str
     feed_order: int
 
@@ -300,11 +301,17 @@ def _parse_entry(item: Any, *, feed_order: int) -> LemmyverseCommunityEntry | No
         return None
     community = item.get("community")
     if isinstance(community, dict):
-        return _parse_lemmy_api_entry(community, feed_order=feed_order)
+        counts = item.get("counts") if isinstance(item.get("counts"), dict) else None
+        return _parse_lemmy_api_entry(community, counts=counts, feed_order=feed_order)
     return _parse_lemmyverse_flat_entry(item, feed_order=feed_order)
 
 
-def _parse_lemmy_api_entry(community: dict[str, Any], *, feed_order: int) -> LemmyverseCommunityEntry | None:
+def _parse_lemmy_api_entry(
+    community: dict[str, Any],
+    *,
+    counts: dict[str, Any] | None = None,
+    feed_order: int,
+) -> LemmyverseCommunityEntry | None:
     """Parse a Lemmy ``CommunityView`` nested ``community`` object."""
     if community.get("deleted") is True or community.get("removed") is True:
         return None
@@ -312,7 +319,14 @@ def _parse_lemmy_api_entry(community: dict[str, Any], *, feed_order: int) -> Lem
     actor_id = str(community.get("actor_id") or "").strip()
     name = str(community.get("name") or "").strip()
     title = str(community.get("title") or name).strip() or name
-    return _build_entry(actor_id=actor_id, name=name, title=title, feed_order=feed_order)
+    active_users_month = _parse_optional_int((counts or {}).get("users_active_month"))
+    return _build_entry(
+        actor_id=actor_id,
+        name=name,
+        title=title,
+        active_users_month=active_users_month,
+        feed_order=feed_order,
+    )
 
 
 def _parse_lemmyverse_flat_entry(item: dict[str, Any], *, feed_order: int) -> LemmyverseCommunityEntry | None:
@@ -322,7 +336,15 @@ def _parse_lemmyverse_flat_entry(item: dict[str, Any], *, feed_order: int) -> Le
     actor_id = str(item.get("url") or "").strip()
     name = str(item.get("name") or "").strip()
     title = str(item.get("title") or name).strip() or name
-    return _build_entry(actor_id=actor_id, name=name, title=title, feed_order=feed_order)
+    counts = item.get("counts") if isinstance(item.get("counts"), dict) else {}
+    active_users_month = _parse_optional_int(counts.get("users_active_month"))
+    return _build_entry(
+        actor_id=actor_id,
+        name=name,
+        title=title,
+        active_users_month=active_users_month,
+        feed_order=feed_order,
+    )
 
 
 def _build_entry(
@@ -330,6 +352,7 @@ def _build_entry(
     actor_id: str,
     name: str,
     title: str,
+    active_users_month: int | None = None,
     feed_order: int,
 ) -> LemmyverseCommunityEntry | None:
     """Build one normalized autocomplete entry after row-shape extraction."""
@@ -359,6 +382,7 @@ def _build_entry(
         actor_id=actor_id,
         host=host,
         handle=handle,
+        active_users_month=active_users_month,
         search_text=search_text,
         feed_order=feed_order,
     )
@@ -401,9 +425,29 @@ def _match_score(entry: LemmyverseCommunityEntry, query: str) -> int | None:
     return None
 
 
+def _parse_optional_int(value: Any) -> int | None:
+    """Return one non-negative integer from feed counters when available."""
+    try:
+        parsed = int(value)
+    except (TypeError, ValueError):
+        return None
+    return parsed if parsed >= 0 else None
+
+
+def _format_active_month(value: int | None) -> str | None:
+    """Format monthly-active users compactly for Discord choice names."""
+    if value is None:
+        return None
+    return f"{value:,}".replace(",", " ") + " active/mo"
+
+
 def _choice_name(entry: LemmyverseCommunityEntry) -> str:
-    """Build a Discord-safe display label while preserving handle context."""
-    suffix = f" ({entry.name}@{entry.host})"
+    """Build a Discord-safe display label while preserving handle and activity context."""
+    activity = _format_active_month(entry.active_users_month)
+    suffix = f" ({entry.name}@{entry.host}"
+    if activity is not None:
+        suffix += f" · {activity}"
+    suffix += ")"
     title_budget = DISCORD_CHOICE_NAME_LIMIT - len(suffix)
     if title_budget <= 0:
         return suffix.strip()[:DISCORD_CHOICE_NAME_LIMIT]

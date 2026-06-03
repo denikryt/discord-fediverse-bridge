@@ -357,7 +357,47 @@ async def test_subscribe_autocomplete_uses_lemmy_instance_url(
     fake_remote.close.assert_awaited_once()
 
     assert len(choices) == 1
-    assert choices[0].name == "World News (worldnews)"
+    assert choices[0].name == "World News (worldnews@lemmy.world)"
+    assert choices[0].value == f"lemmy:{remote_instance_url}/c/worldnews|worldnews|42"
+
+
+@pytest.mark.asyncio
+async def test_subscribe_autocomplete_reads_instance_domain_from_raw_payload_when_namespace_omits_it(
+    command_tree, database, lemmy, fedify_gateway
+):
+    """Community autocomplete should stay instance-scoped after clearing focused text."""
+    remote_instance_url = "https://lemmy.world"
+    interaction = _make_interaction(None)
+    interaction.data = {
+        "options": [
+            {"name": "instance_domain", "value": "lemmy.world"},
+            {"name": "community", "value": "", "focused": True},
+        ]
+    }
+    remote_communities = [
+        {
+            "community": {
+                "name": "worldnews",
+                "title": "World News",
+                "actor_id": f"{remote_instance_url}/c/worldnews",
+                "id": 42,
+            },
+            "counts": {"users_active_month": 456},
+        }
+    ]
+
+    settings = _settings([])
+    autocomplete_fn = subscribe._community_autocomplete(settings)
+
+    with patch("src.commands.subscribe.LemmyClient") as MockLemmyClient:
+        fake_remote = AsyncMock()
+        fake_remote.list_communities.return_value = remote_communities
+        MockLemmyClient.return_value = fake_remote
+
+        choices = await autocomplete_fn(interaction, "")
+
+    MockLemmyClient.assert_called_once_with(remote_instance_url)
+    assert choices[0].name == "World News (worldnews@lemmy.world · 456 active/mo)"
     assert choices[0].value == f"lemmy:{remote_instance_url}/c/worldnews|worldnews|42"
 
 
@@ -450,6 +490,7 @@ async def test_subscribe_global_autocomplete_uses_lemmyverse_without_instance(
                     actor_id="https://lemmy.world/c/technology",
                     host="lemmy.world",
                     handle="!technology@lemmy.world",
+                    active_users_month=123,
                     search_text="technology\ntechnology@lemmy.world\n!technology@lemmy.world\nlemmy.world",
                     feed_order=0,
                 )
@@ -466,7 +507,7 @@ async def test_subscribe_global_autocomplete_uses_lemmyverse_without_instance(
     MockLemmyClient.assert_not_called()
     fetch_mock.assert_not_awaited()
     assert len(choices) == 1
-    assert choices[0].name == "Technology (technology@lemmy.world)"
+    assert choices[0].name == "Technology (technology@lemmy.world · 123 active/mo)"
     assert choices[0].value == "https://lemmy.world/c/technology"
 
 
@@ -483,8 +524,8 @@ async def test_subscribe_global_autocomplete_filters_allowlist(
         async def get_entries(self):
             """Return entries from two hosts so allowlist filtering is observable."""
             return [
-                LemmyverseCommunityEntry("news", "News", "https://allowed.example/c/news", "allowed.example", "!news@allowed.example", "news allowed.example", 0),
-                LemmyverseCommunityEntry("news", "News", "https://blocked.example/c/news", "blocked.example", "!news@blocked.example", "news blocked.example", 1),
+                LemmyverseCommunityEntry("news", "News", "https://allowed.example/c/news", "allowed.example", "!news@allowed.example", None, "news allowed.example", 0),
+                LemmyverseCommunityEntry("news", "News", "https://blocked.example/c/news", "blocked.example", "!news@blocked.example", None, "news blocked.example", 1),
             ]
 
     interaction = _make_interaction(None)

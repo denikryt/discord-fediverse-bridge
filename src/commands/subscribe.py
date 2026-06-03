@@ -222,6 +222,45 @@ def register(
             logger.info("Sent bridge follow for channel %s to community %s", channel.id, resolved.actor_id)
 
 
+
+def _extract_instance_domain_for_autocomplete(interaction: discord.Interaction) -> str | None:
+    """Read ``instance_domain`` from Discord autocomplete state as defensively as possible.
+
+    discord.py usually exposes sibling option values through
+    ``interaction.namespace``. In live clients, especially after clearing the
+    focused community text, the namespace can omit optional sibling options even
+    though the raw interaction payload still carries them. Scanning the raw
+    option tree lets the community autocomplete keep using direct-instance mode
+    whenever the moderator has already filled ``instance_domain``.
+    """
+    namespace_value = getattr(getattr(interaction, "namespace", None), "instance_domain", None)
+    if isinstance(namespace_value, str) and namespace_value.strip():
+        return namespace_value
+
+    # The raw Discord interaction payload may contain nested subcommand option
+    # arrays. The command has no subcommands today, but recursive scanning keeps
+    # this helper correct if the command is reorganized later.
+    data = getattr(interaction, "data", None)
+    for value in _iter_option_values_by_name(data, "instance_domain"):
+        if isinstance(value, str) and value.strip():
+            return value
+    return None
+
+
+def _iter_option_values_by_name(payload: object, name: str):
+    """Yield raw Discord option values whose name matches ``name``."""
+    if not isinstance(payload, dict):
+        return
+    options = payload.get("options")
+    if not isinstance(options, list):
+        return
+    for option in options:
+        if not isinstance(option, dict):
+            continue
+        if option.get("name") == name and "value" in option:
+            yield option.get("value")
+        yield from _iter_option_values_by_name(option, name)
+
 def _instance_autocomplete(settings: Settings | None):
     """Return allowlist entries as Discord choices; empty list when allowlist is open."""
     allowlist = settings.federation_allowlist if settings is not None else []
@@ -266,7 +305,7 @@ def _community_autocomplete(
         interaction: discord.Interaction,
         current: str,
     ) -> list[app_commands.Choice[str]]:
-        instance_url: str | None = getattr(interaction.namespace, "instance_domain", None)
+        instance_url = _extract_instance_domain_for_autocomplete(interaction)
 
         if not instance_url or not instance_url.strip():
             try:

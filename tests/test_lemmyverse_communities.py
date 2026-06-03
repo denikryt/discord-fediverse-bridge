@@ -151,6 +151,7 @@ def test_parse_lemmyverse_communities_supports_public_flat_feed_rows() -> None:
                 "url": "https://lemmy.world/c/planetoftheapes",
                 "name": "planetoftheapes",
                 "title": "Planet of the Apes",
+                "counts": {"users_active_month": 12},
                 "isSuspicious": False,
             },
             {
@@ -169,6 +170,7 @@ def test_parse_lemmyverse_communities_supports_public_flat_feed_rows() -> None:
     assert entries[0].actor_id == "https://lemmy.world/c/planetoftheapes"
     assert entries[0].host == "lemmy.world"
     assert entries[0].handle == "!planetoftheapes@lemmy.world"
+    assert entries[0].active_users_month == 12
 
 
 def test_parse_lemmyverse_communities_supports_gzip_and_exact_limit() -> None:
