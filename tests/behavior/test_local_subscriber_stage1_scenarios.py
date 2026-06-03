@@ -118,10 +118,10 @@ async def test_subscribe_community_persists_local_subscriber_without_remote_foll
         remote_actor_id=f"https://{BRIDGE_EXAMPLE_DOMAIN}/actors/bridge",
     ) is None
     fedify_gateway.follow_community.assert_not_awaited()
-    interaction.response.send_message.assert_awaited_once_with(
-        "Subscribed <#12345> to local community **Great Community**.",
-        ephemeral=False,
-    )
+    send_call = interaction.response.send_message.await_args
+    assert send_call.args == ("<@1234567890> subscribed <#12345> to **great_community@bridge.example**.",)
+    assert send_call.kwargs.get("ephemeral", False) is False
+    assert send_call.kwargs["allowed_mentions"].users is False
 
 
 @pytest.mark.asyncio
@@ -191,10 +191,10 @@ async def test_unsubscribe_community_removes_only_local_subscriber_state(
 
     assert database.local_subscribers.get_local_subscriber_by_channel(forum_channel.id) is None
     fedify_gateway.unfollow_community.assert_not_awaited()
-    interaction.response.send_message.assert_awaited_once_with(
-        "Unsubscribed <#12345> from local community **Great Community**.",
-        ephemeral=False,
-    )
+    send_call = interaction.response.send_message.await_args
+    assert send_call.args == ("<@1234567890> unsubscribed <#12345> from **great_community@bridge.example**.",)
+    assert send_call.kwargs.get("ephemeral", False) is False
+    assert send_call.kwargs["allowed_mentions"].users is False
 
 
 @pytest.mark.asyncio
@@ -237,6 +237,6 @@ async def test_list_subscriptions_renders_remote_and_local_sections(
     assert isinstance(embed, discord.Embed)
     assert "Remote community subscriptions" in embed.description
     assert "Local community subscribers" in embed.description
-    assert "• <#222> → **worldnews**" in embed.description
-    assert "• <#333> → **!great_community@bridge.example**" in embed.description
+    assert "• <#222> → **worldnews@lemmy.example**" in embed.description
+    assert "• <#333> → **great_community@bridge.example**" in embed.description
     assert send_call.kwargs["ephemeral"] is True

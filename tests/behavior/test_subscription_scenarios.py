@@ -7,6 +7,7 @@ from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import AsyncMock
 
+import discord
 import pytest
 
 from src.activitypub_handlers import dispatch_activitypub_event
@@ -81,10 +82,10 @@ async def test_no_subscription_subscribe_command_sends_follow_and_marks_pending(
     assert bridge_follow.status == "pending"
     assert bridge_follow.community_actor_id == community_actor_url
     fedify_gateway.follow_community.assert_awaited_once_with(community_actor_url)
-    interaction.response.send_message.assert_awaited_once_with(
-        "Sent a bridge follow for <#12345> -> **hackers**. Waiting for federation acceptance.",
-        ephemeral=False,
-    )
+    send_call = interaction.response.send_message.await_args
+    assert send_call.args == ("<@1234567890> subscribed <#12345> to **hackers@lemmy.example**. Waiting for federation acceptance.",)
+    assert send_call.kwargs.get("ephemeral", False) is False
+    assert send_call.kwargs["allowed_mentions"].users is False
 
 
 @pytest.mark.asyncio

@@ -59,7 +59,7 @@ async def test_list_subscriptions_returns_embed_with_expected_items(command_tree
     assert isinstance(embed, discord.Embed)
     assert embed.title == "Active Subscriptions"
     assert "Remote community subscriptions" in embed.description
-    assert "• <#111> → **hackers**" in embed.description
-    assert f"• <#222> → **{void_actor_url}**" in embed.description
+    assert "• <#111> → **hackers@lemmy.example**" in embed.description
+    assert "• <#222> → **void@lemmy.example**" in embed.description
     assert embed.footer.text == "2 subscription(s)"
     assert send_call.kwargs["ephemeral"] is True

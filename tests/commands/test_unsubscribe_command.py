@@ -31,7 +31,8 @@ async def test_unsubscribe_channel_success(command_tree, interaction, forum_chan
     assert database.remote_subscriptions.get_subscription_by_channel.call_count >= 1
     database.remote_subscriptions.delete_subscription.assert_called_once_with(forum_channel.id)
     send_call = interaction.response.send_message.await_args
-    assert send_call.args == ("Unsubscribed <#12345> from **hackers**.",)
+    assert send_call.args == ("<@1234567890> unsubscribed <#12345> from **hackers@lemmy.example**.",)
+    assert send_call.kwargs["allowed_mentions"].users is False
     assert send_call.kwargs.get("ephemeral", False) is False
 
 

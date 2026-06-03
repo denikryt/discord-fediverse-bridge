@@ -3,8 +3,7 @@ from __future__ import annotations
 import discord
 from discord import app_commands
 from discordops import run_operation_definition_async
-from urllib.parse import urlparse
-
+from ..community_labels import community_relay_label
 from ..db import Database
 from ..operations import ListSubscriptionsInput, list_subscriptions_operation
 
@@ -32,7 +31,11 @@ def register(tree: app_commands.CommandTree, database: Database) -> None:
             for sub in remote_subscriptions:
                 # Use channel mention so Discord renders it as a clickable link.
                 channel_mention = f"<#{sub.discord_channel_id}>"
-                community_label = sub.lemmy_community_name or sub.lemmy_community_actor_id
+                community_label = community_relay_label(
+                    actor_id=getattr(sub, "lemmy_community_actor_id", None),
+                    name=getattr(sub, "lemmy_community_name", None),
+                    handle=getattr(sub, "community_handle", None),
+                )
                 lines.append(f"• {channel_mention} → **{community_label}**")
         if local_subscribers:
             if lines:
@@ -44,8 +47,10 @@ def register(tree: app_commands.CommandTree, database: Database) -> None:
                 channel_mention = f"<#{sub.discord_channel_id}>"
                 local_community = database.local_communities.get_local_community_by_id(sub.local_community_id)
                 if local_community is not None:
-                    actor_host = urlparse(local_community.actor_url).hostname or "unknown-host"
-                    community_label = f"!{local_community.slug}@{actor_host}"
+                    community_label = community_relay_label(
+                        actor_id=getattr(local_community, "actor_url", None),
+                        name=getattr(local_community, "slug", None),
+                    )
                 else:
                     community_label = f"local community #{sub.local_community_id}"
                 lines.append(f"• {channel_mention} → **{community_label}**")

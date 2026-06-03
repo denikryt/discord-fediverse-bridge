@@ -18,6 +18,7 @@ from ..community_discovery import (
     normalize_instance_domain,
     resolve_selected_community,
 )
+from ..community_labels import community_relay_label
 from ..config import Settings
 from ..db import Database
 from ..fedify_gateway_client import FedifyGatewayClient
@@ -42,6 +43,36 @@ from ..operations.subscribe_local_community import (
 )
 
 logger = logging.getLogger(__name__)
+
+
+def _no_ping_allowed_mentions() -> discord.AllowedMentions:
+    """Suppress notification delivery for display-only user mentions."""
+    # The response content uses Discord's normal <@user_id> mention syntax so
+    # clients render a clickable user reference, but allowed_mentions disables
+    # parsing for notifications.
+    return discord.AllowedMentions.none()
+
+
+def _user_mention(user_id: object) -> str:
+    """Return Discord mention markup for a command initiator."""
+    return f"<@{user_id}>"
+
+
+def _subscribe_success_message(
+    *,
+    user_id: object,
+    channel_mention: str,
+    actor_id: str | None,
+    name: str | None,
+    handle: str | None,
+    waiting_for_accept: bool,
+) -> str:
+    """Build the public success message for /subscribe-community."""
+    label = community_relay_label(actor_id=actor_id, name=name, handle=handle)
+    message = f"{_user_mention(user_id)} subscribed {channel_mention} to **{label}**."
+    if waiting_for_accept:
+        return f"{message} Waiting for federation acceptance."
+    return message
 
 
 def register(
@@ -257,7 +288,20 @@ def register(
             )
             logger.info("Subscribed channel %s to community %s", final_channel.id, resolved.actor_id)
 
-        await interaction.response.send_message(result.message, ephemeral=not result.applied)
+        message = result.message
+        send_kwargs: dict[str, object] = {"ephemeral": not result.applied}
+        if result.applied:
+            message = _subscribe_success_message(
+                user_id=interaction.user.id,
+                channel_mention=final_channel.mention,
+                actor_id=resolved.actor_id,
+                name=resolved.name,
+                handle=resolved.handle,
+                waiting_for_accept="Waiting for federation acceptance." in result.message,
+            )
+            send_kwargs["allowed_mentions"] = _no_ping_allowed_mentions()
+
+        await interaction.response.send_message(message, **send_kwargs)
 
 
 def _extract_instance_domain_for_autocomplete(interaction: discord.Interaction) -> str | None:

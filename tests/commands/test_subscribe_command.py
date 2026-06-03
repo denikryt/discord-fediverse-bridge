@@ -57,9 +57,10 @@ async def test_subscribe_community_success(
     fedify_gateway.follow_community.assert_awaited_once_with(community_actor_url)
     send_call = interaction.response.send_message.await_args
     assert send_call.args == (
-        "Sent a bridge follow for <#12345> -> **hackers**. Waiting for federation acceptance.",
+        "<@1234567890> subscribed <#12345> to **hackers@lemmy.example**. Waiting for federation acceptance.",
     )
     assert send_call.kwargs.get("ephemeral", False) is False
+    assert send_call.kwargs["allowed_mentions"].users is False
 
 
 @pytest.mark.asyncio
@@ -243,10 +244,12 @@ async def test_subscribe_community_retries_failed_subscription(
         status="pending",
     )
     fedify_gateway.follow_community.assert_awaited_once_with(community_actor_url)
-    interaction.response.send_message.assert_awaited_once_with(
-        "Sent a bridge follow for <#12345> -> **hackers**. Waiting for federation acceptance.",
-        ephemeral=False,
+    send_call = interaction.response.send_message.await_args
+    assert send_call.args == (
+        "<@1234567890> subscribed <#12345> to **hackers@lemmy.example**. Waiting for federation acceptance.",
     )
+    assert send_call.kwargs.get("ephemeral", False) is False
+    assert send_call.kwargs["allowed_mentions"].users is False
 
 
 # ---------------------------------------------------------------------------

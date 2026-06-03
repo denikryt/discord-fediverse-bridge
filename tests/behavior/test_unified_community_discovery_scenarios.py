@@ -6,6 +6,7 @@ from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, patch
 
+import discord
 import pytest
 
 from src.commands import subscribe
@@ -171,10 +172,10 @@ async def test_remote_bridge_handle_uses_remote_follow_path_without_numeric_id(
     assert subscription.lemmy_community_id is None
     assert subscription.community_handle == "!local-news@remote.bridge.example"
     fedify_gateway.follow_community.assert_awaited_once_with(remote_actor_id)
-    interaction.response.send_message.assert_awaited_once_with(
-        "Sent a bridge follow for <#12345> -> **local-news**. Waiting for federation acceptance.",
-        ephemeral=False,
-    )
+    send_call = interaction.response.send_message.await_args
+    assert send_call.args == ("<@1234567890> subscribed <#12345> to **local-news@remote.bridge.example**. Waiting for federation acceptance.",)
+    assert send_call.kwargs.get("ephemeral", False) is False
+    assert send_call.kwargs["allowed_mentions"].users is False
 
 
 @pytest.mark.asyncio
@@ -229,7 +230,7 @@ async def test_same_instance_local_actor_url_creates_local_subscriber_state(
     assert local_subscriber.discord_channel_id == forum_channel.id
     assert local_subscriber.status == "active"
     fedify_gateway.follow_community.assert_not_awaited()
-    interaction.response.send_message.assert_awaited_once_with(
-        "Subscribed <#12345> to local community **local-news**.",
-        ephemeral=False,
-    )
+    send_call = interaction.response.send_message.await_args
+    assert send_call.args == ("<@1234567890> subscribed <#12345> to **local-news@bot.example.com**.",)
+    assert send_call.kwargs.get("ephemeral", False) is False
+    assert send_call.kwargs["allowed_mentions"].users is False
