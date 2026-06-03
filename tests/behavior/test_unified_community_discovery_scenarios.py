@@ -1,4 +1,4 @@
-"""Behavior scenarios for unified community discovery in subscribe-channel."""
+"""Behavior scenarios for unified community discovery in subscribe-community."""
 
 from __future__ import annotations
 
@@ -34,7 +34,7 @@ def _settings(*, allowlist: list[str], public_bridge_base_url: str, fedify_origi
 
 
 def _register_user(database: Database, discord_user_id: str = "1234567890") -> None:
-    """Create the minimum registered bridge user required by subscribe-channel."""
+    """Create the minimum registered bridge user required by subscribe-community."""
     database.users.create_user(
         discord_user_id=discord_user_id,
         activitypub_username="alice",
@@ -155,7 +155,7 @@ async def test_remote_bridge_handle_uses_remote_follow_path_without_numeric_id(
                 )
             ]
 
-            command = command_tree.commands["subscribe-channel"]
+            command = command_tree.commands["subscribe-community"]
             await command.callback(
                 interaction,
                 "remote.bridge.example",
@@ -210,7 +210,7 @@ async def test_same_instance_local_actor_url_creates_local_subscriber_state(
             )
         ]
 
-        command = command_tree.commands["subscribe-channel"]
+        command = command_tree.commands["subscribe-community"]
         await command.callback(
             interaction,
             "bot.example.com",

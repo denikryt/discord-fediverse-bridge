@@ -200,7 +200,7 @@ async def handle_follow_accepted(
     Marks the BridgeActorFollow row accepted, which in turn marks all pending
     ChannelCommunitySubscription rows for the same community accepted. Then
     DMs every Discord user who initiated one of those subscriptions so they see
-    confirmation in the channel where they ran /subscribe-channel.
+    confirmation in the channel where they ran /subscribe-community.
     """
     follow_activity_id = event.object.follow_activity_id
 

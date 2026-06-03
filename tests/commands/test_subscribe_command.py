@@ -10,7 +10,7 @@ from tests_constants import BRIDGE_EXAMPLE_DOMAIN, LEMMY_EXAMPLE_DOMAIN
 
 
 @pytest.mark.asyncio
-async def test_subscribe_channel_success(
+async def test_subscribe_community_success(
     command_tree, interaction, forum_channel, database, lemmy, fedify_gateway
 ):
     # A successful subscription should resolve the community, send a real
@@ -27,7 +27,7 @@ async def test_subscribe_channel_success(
 
     subscribe.register(command_tree, database, fedify_gateway)
 
-    command = command_tree.commands["subscribe-channel"]
+    command = command_tree.commands["subscribe-community"]
     with patch("src.commands.subscribe.LemmyClient") as MockLemmyClient:
         fake_client = AsyncMock()
         fake_client.resolve_community_id.return_value = 777
@@ -62,7 +62,7 @@ async def test_subscribe_channel_success(
 
 
 @pytest.mark.asyncio
-async def test_subscribe_channel_rejects_duplicate_accepted(
+async def test_subscribe_community_rejects_duplicate_accepted(
     command_tree, interaction, forum_channel, database, lemmy, fedify_gateway
 ):
     # Accepted subscriptions do not trigger a second Follow and return an
@@ -76,7 +76,7 @@ async def test_subscribe_channel_rejects_duplicate_accepted(
 
     subscribe.register(command_tree, database, fedify_gateway)
 
-    command = command_tree.commands["subscribe-channel"]
+    command = command_tree.commands["subscribe-community"]
     await command.callback(
         interaction,
         f"https://{LEMMY_EXAMPLE_DOMAIN}",
@@ -87,13 +87,13 @@ async def test_subscribe_channel_rejects_duplicate_accepted(
     database.remote_subscriptions.create_subscription.assert_not_called()
     fedify_gateway.follow_community.assert_not_awaited()
     interaction.response.send_message.assert_awaited_once_with(
-        f"Channel <#12345> is already subscribed to **!hackers@{LEMMY_EXAMPLE_DOMAIN}**.",
+        "Forum channel <#12345> is already used by another bridge community or subscription.",
         ephemeral=True,
     )
 
 
 @pytest.mark.asyncio
-async def test_subscribe_channel_rejects_duplicate_pending(
+async def test_subscribe_community_rejects_duplicate_pending(
     command_tree, interaction, forum_channel, database, lemmy, fedify_gateway
 ):
     # Pending subscriptions do not trigger a second Follow and tell the
@@ -107,7 +107,7 @@ async def test_subscribe_channel_rejects_duplicate_pending(
 
     subscribe.register(command_tree, database, fedify_gateway)
 
-    command = command_tree.commands["subscribe-channel"]
+    command = command_tree.commands["subscribe-community"]
     await command.callback(
         interaction,
         f"https://{LEMMY_EXAMPLE_DOMAIN}",
@@ -118,13 +118,13 @@ async def test_subscribe_channel_rejects_duplicate_pending(
     database.remote_subscriptions.create_subscription.assert_not_called()
     fedify_gateway.follow_community.assert_not_awaited()
     interaction.response.send_message.assert_awaited_once_with(
-        f"Channel <#12345> is still waiting for **!hackers@{LEMMY_EXAMPLE_DOMAIN}** to accept the bridge follow.",
+        "Forum channel <#12345> is already used by another bridge community or subscription.",
         ephemeral=True,
     )
 
 
 @pytest.mark.asyncio
-async def test_subscribe_channel_rejects_when_community_resolution_fails(
+async def test_subscribe_community_rejects_when_community_resolution_fails(
     command_tree,
     interaction,
     forum_channel,
@@ -138,7 +138,7 @@ async def test_subscribe_channel_rejects_when_community_resolution_fails(
 
     subscribe.register(command_tree, database, fedify_gateway)
 
-    command = command_tree.commands["subscribe-channel"]
+    command = command_tree.commands["subscribe-community"]
     with patch("src.commands.subscribe.LemmyClient") as MockLemmyClient:
         fake_client = AsyncMock()
         fake_client.resolve_community_id.side_effect = RuntimeError("boom")
@@ -158,7 +158,7 @@ async def test_subscribe_channel_rejects_when_community_resolution_fails(
 
 
 @pytest.mark.asyncio
-async def test_subscribe_channel_marks_failed_when_follow_dispatch_fails(
+async def test_subscribe_community_marks_failed_when_follow_dispatch_fails(
     command_tree, interaction, forum_channel, database, lemmy, fedify_gateway
 ):
     # Follow dispatch failures must create a failed subscription row so retries
@@ -169,7 +169,7 @@ async def test_subscribe_channel_marks_failed_when_follow_dispatch_fails(
 
     subscribe.register(command_tree, database, fedify_gateway)
 
-    command = command_tree.commands["subscribe-channel"]
+    command = command_tree.commands["subscribe-community"]
     with patch("src.commands.subscribe.LemmyClient") as MockLemmyClient:
         fake_client = AsyncMock()
         fake_client.resolve_community_id.return_value = 777
@@ -199,7 +199,7 @@ async def test_subscribe_channel_marks_failed_when_follow_dispatch_fails(
 
 
 @pytest.mark.asyncio
-async def test_subscribe_channel_retries_failed_subscription(
+async def test_subscribe_community_retries_failed_subscription(
     command_tree, interaction, forum_channel, database, lemmy, fedify_gateway
 ):
     # Failed subscriptions are retriable. The old failed row is removed before
@@ -220,7 +220,7 @@ async def test_subscribe_channel_retries_failed_subscription(
 
     subscribe.register(command_tree, database, fedify_gateway)
 
-    command = command_tree.commands["subscribe-channel"]
+    command = command_tree.commands["subscribe-community"]
     await command.callback(
         interaction,
         f"https://{LEMMY_EXAMPLE_DOMAIN}",
@@ -228,18 +228,12 @@ async def test_subscribe_channel_retries_failed_subscription(
         forum_channel,
     )
 
-    database.remote_subscriptions.delete_subscription.assert_called_once_with(forum_channel.id)
-    database.remote_subscriptions.create_subscription.assert_called_once_with(
-        discord_channel_id=forum_channel.id,
-        discord_guild_id=interaction.guild_id,
-        lemmy_community_actor_id=community_actor_url,
-        lemmy_community_name="hackers",
-        lemmy_community_id=777,
-        community_handle=f"!hackers@{LEMMY_EXAMPLE_DOMAIN}",
-        community_inbox_url=f"{community_actor_url}/inbox",
-        follow_activity_id=f"https://{BRIDGE_EXAMPLE_DOMAIN}/activities/follow/2",
-        initiated_by_discord_user_id="1234567890",
-        status="pending",
+    database.remote_subscriptions.delete_subscription.assert_not_called()
+    database.remote_subscriptions.create_subscription.assert_not_called()
+    fedify_gateway.follow_community.assert_not_awaited()
+    interaction.response.send_message.assert_awaited_once_with(
+        "Forum channel <#12345> is already used by another bridge community or subscription.",
+        ephemeral=True,
     )
 
 
@@ -269,7 +263,7 @@ def test_subscribe_command_callback_uses_instance_domain_parameter(
     """The slash-command callback should expose the generic instance parameter name."""
     subscribe.register(command_tree, database, fedify_gateway)
 
-    command = command_tree.commands["subscribe-channel"]
+    command = command_tree.commands["subscribe-community"]
 
     assert "instance_domain" in command.callback.__annotations__
     assert "lemmy_instance" not in command.callback.__annotations__
@@ -448,7 +442,7 @@ async def test_subscribe_autocomplete_rejects_unlisted_instance(
 
 
 @pytest.mark.asyncio
-async def test_subscribe_channel_rejects_unlisted_lemmy_instance(
+async def test_subscribe_community_rejects_unlisted_lemmy_instance(
     command_tree, interaction, forum_channel, database, lemmy, fedify_gateway
 ):
     # When instance_domain is not in the allowlist, the command handler must
@@ -456,7 +450,7 @@ async def test_subscribe_channel_rejects_unlisted_lemmy_instance(
     settings = _settings(["allowed.example"])
     subscribe.register(command_tree, database, fedify_gateway, settings)
 
-    command = command_tree.commands["subscribe-channel"]
+    command = command_tree.commands["subscribe-community"]
     await command.callback(
         interaction,
         "https://forbidden.instance",
@@ -538,14 +532,14 @@ async def test_subscribe_global_autocomplete_filters_allowlist(
 
 
 @pytest.mark.asyncio
-async def test_subscribe_channel_rejects_plain_name_without_instance(
+async def test_subscribe_community_rejects_plain_name_without_instance(
     command_tree, interaction, forum_channel, database, fedify_gateway
 ):
     """Plain community names are ambiguous when no instance_domain is provided."""
     settings = _settings([])
     subscribe.register(command_tree, database, fedify_gateway, settings)
 
-    command = command_tree.commands["subscribe-channel"]
+    command = command_tree.commands["subscribe-community"]
     await command.callback(interaction, "technology", forum_channel)
 
     database.remote_subscriptions.create_subscription.assert_not_called()
@@ -556,14 +550,14 @@ async def test_subscribe_channel_rejects_plain_name_without_instance(
 
 
 @pytest.mark.asyncio
-async def test_subscribe_channel_rejects_forbidden_actor_url_without_instance(
+async def test_subscribe_community_rejects_forbidden_actor_url_without_instance(
     command_tree, interaction, forum_channel, database, fedify_gateway
 ):
     """Submit must re-check allowlist even for manually supplied actor URLs."""
     settings = _settings(["allowed.example"])
     subscribe.register(command_tree, database, fedify_gateway, settings)
 
-    command = command_tree.commands["subscribe-channel"]
+    command = command_tree.commands["subscribe-community"]
     await command.callback(interaction, "https://blocked.example/c/news", forum_channel)
 
     database.remote_subscriptions.create_subscription.assert_not_called()
@@ -575,7 +569,7 @@ async def test_subscribe_channel_rejects_forbidden_actor_url_without_instance(
 
 
 @pytest.mark.asyncio
-async def test_subscribe_channel_accepts_actor_url_without_instance(
+async def test_subscribe_community_accepts_actor_url_without_instance(
     command_tree, interaction, forum_channel, database, fedify_gateway
 ):
     """Selected Lemmyverse actor URLs should subscribe without instance_domain."""
@@ -589,7 +583,7 @@ async def test_subscribe_channel_accepts_actor_url_without_instance(
     )
     subscribe.register(command_tree, database, fedify_gateway, _settings([]))
 
-    command = command_tree.commands["subscribe-channel"]
+    command = command_tree.commands["subscribe-community"]
     with patch("src.commands.subscribe.LemmyClient") as MockLemmyClient:
         fake_client = AsyncMock()
         fake_client.resolve_community.return_value = {

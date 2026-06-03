@@ -190,7 +190,7 @@ async def test_register_subscribe_accept_publish_then_echo_is_suppressed(
         follow_activity_id=follow_activity_id,
     )
     subscribe.register(command_tree, database, fedify_gateway)
-    subscribe_command = command_tree.commands["subscribe-channel"]
+    subscribe_command = command_tree.commands["subscribe-community"]
     await subscribe_command.callback(
         interaction,
         f"https://{LEMMY_EXAMPLE_DOMAIN}",
@@ -353,7 +353,7 @@ async def test_failed_subscribe_retry_then_accept_allows_publish(
 
     community_actor_url = f"https://{LEMMY_EXAMPLE_DOMAIN}/c/hackers"
     subscribe.register(command_tree, database, fedify_gateway)
-    subscribe_command = command_tree.commands["subscribe-channel"]
+    subscribe_command = command_tree.commands["subscribe-community"]
 
     fedify_gateway.follow_community.side_effect = RuntimeError("boom")
     await subscribe_command.callback(

@@ -43,23 +43,35 @@ def command_tree() -> RecordingTree:
 def interaction() -> AsyncMock:
     # The response mock is the main contract surface these command tests verify.
     # user.id is set to a stable string so commands that record the initiator
-    # (e.g. subscribe-channel) get a deterministic value rather than an AsyncMock.
+    # (e.g. subscribe-community) get a deterministic value rather than an AsyncMock.
     mock_interaction = AsyncMock()
     mock_interaction.response.send_message = AsyncMock()
     mock_interaction.user.id = "1234567890"
     mock_interaction.guild_id = 99999
+    mock_interaction.guild = SimpleNamespace(
+        id=99999,
+        name="Test Guild",
+        me=SimpleNamespace(guild_permissions=SimpleNamespace(manage_channels=True)),
+    )
     return mock_interaction
 
 
 @pytest.fixture
 def forum_channel() -> SimpleNamespace:
     # Slash commands only rely on the channel identity and Discord mention.
-    return SimpleNamespace(id=12345, mention="<#12345>")
+    return SimpleNamespace(id=12345, name="forum", mention="<#12345>")
 
 
 @pytest.fixture
 def database() -> Mock:
-    return Mock()
+    # Commands treat an unset channel-binding repository result as available.
+    # Set explicit defaults so optional placement checks do not interpret an
+    # auto-created child Mock as an occupied channel.
+    database = Mock()
+    database.local_communities.get_local_community_by_forum_channel_id.return_value = None
+    database.remote_subscriptions.get_subscription_by_channel.return_value = None
+    database.local_subscribers.get_local_subscriber_by_channel.return_value = None
+    return database
 
 
 @pytest.fixture

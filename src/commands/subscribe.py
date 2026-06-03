@@ -1,4 +1,4 @@
-"""Discord slash command adapter for channel subscription moderation."""
+"""Discord slash command adapter for community subscription moderation."""
 
 from __future__ import annotations
 
@@ -22,6 +22,13 @@ from ..config import Settings
 from ..db import Database
 from ..fedify_gateway_client import FedifyGatewayClient
 from ..discord_directory import record_discord_placement_snapshot
+from ..discord_forum_placement import (
+    ForumPlacement,
+    ForumPlacementError,
+    cleanup_created_forum_channel,
+    derive_channel_name_from_community,
+    resolve_optional_forum_channel,
+)
 from ..federation_policy import is_instance_allowed
 from ..lemmy_client import LemmyClient
 from ..lemmyverse_communities import (
@@ -44,46 +51,47 @@ def register(
     settings: Settings | None = None,
     lemmyverse_cache: LemmyverseCommunityCache | None = None,
 ) -> None:
-    """Register the subscribe-channel slash command on the Discord tree.
+    """Register the subscribe-community slash command on the Discord tree.
 
     One Lemmyverse cache is created per registration so Discord autocomplete
     keystrokes share the same process-local index instead of downloading the
-    public feed repeatedly.
+    public feed repeatedly. The public command now describes the domain action
+    (subscribing to a community) while the channel is only the delivery surface.
     """
     allowlist = settings.federation_allowlist if settings is not None else []
     cache = lemmyverse_cache or LemmyverseCommunityCache()
 
-    @tree.command(name="subscribe-channel", description="Subscribe a forum channel to a federated community")
+    @tree.command(name="subscribe-community", description="Subscribe to a federated community")
     @app_commands.describe(
         instance_domain="Instance domain or URL (e.g. lemmy.world)",
         community="Community handle, URL, or autocomplete choice",
-        channel="Forum channel to subscribe",
+        channel="Choose an existing free forum channel, or leave empty and the bot will create a new forum channel named after the selected community.",
     )
     @app_commands.autocomplete(
         instance_domain=_instance_autocomplete(settings),
         community=_community_autocomplete(settings, lemmyverse_cache=cache),
     )
     @app_commands.default_permissions(manage_channels=True)
-    async def subscribe_channel(
+    async def subscribe_community(
         interaction: discord.Interaction,
         community: str,
-        channel: discord.ForumChannel,
+        channel: discord.ForumChannel | None = None,
         instance_domain: str | None = None,
     ) -> None:
+        """Resolve the community, choose/create a forum channel, and subscribe it."""
         if instance_domain is not None and hasattr(instance_domain, "id") and isinstance(channel, str):
-            # Older tests and stale command harnesses called the callback as
-            # (interaction, instance_domain, community, channel). The registered
-            # Discord command now has required options first, but this shim keeps
-            # direct callback invocations from breaking during the transition.
+            # Older direct test calls used (interaction, instance_domain, community,
+            # channel). The public command has been renamed, but this adapter shim
+            # keeps direct callback execution compatible while Discord registration
+            # exposes only /subscribe-community.
             old_instance_domain = community
             community = channel
             channel = instance_domain
             instance_domain = old_instance_domain
 
-        # Remote hosts remain allowlist-gated, but the bridge's own origin is a
-        # local routing surface and must stay usable even when federation is
-        # restricted to an explicit remote allowlist. ``instance_domain`` is now
-        # optional; direct URLs and handles carry their own origin.
+        # Remote hosts remain allowlist-gated, but channel placement must wait
+        # until the community identity is resolved so auto-created channel names
+        # come from the selected community rather than from raw user text.
         try:
             inferred_origin = infer_reference_origin(community)
         except CommunityResolutionError as error:
@@ -121,35 +129,11 @@ def register(
             await interaction.response.send_message(str(error), ephemeral=True)
             return
 
-        if resolved.source == "local_bridge":
-            result = await run_operation_definition_async(
-                subscribe_local_community_operation,
-                SubscribeLocalCommunityInput(
-                    database=database,
-                    discord_user_id=str(interaction.user.id),
-                    guild_id=interaction.guild_id,
-                    channel_id=channel.id,
-                    channel_mention=channel.mention,
-                    local_community_id=int(resolved.local_community_id),
-                    local_community_name=resolved.name or resolved.handle,
-                ),
-            )
-            if result.applied:
-                # Only successful local subscriptions should become dashboard
-                # placement rows; rejected attempts have no active routing state.
-                record_discord_placement_snapshot(
-                    database,
-                    guild=interaction.guild,
-                    channel=channel,
-                )
-            await interaction.response.send_message(result.message, ephemeral=not result.applied)
-            return
-
         resolved_origin = infer_reference_origin(resolved.actor_id) or selected_origin
         if resolved_origin is not None and not is_bridge_origin(resolved_origin, settings) and not is_instance_allowed(resolved_origin, allowlist):
             # Autocomplete choices and manual values are user-controlled at
             # submit time, so the resolved actor URL is checked again before
-            # any DB mutation or outbound Follow can occur.
+            # any DB mutation, Discord channel creation, or outbound Follow can occur.
             hostname = urlparse(resolved_origin).hostname or resolved_origin
             await interaction.response.send_message(
                 f"Instance **{hostname}** is not in the federation allowlist.",
@@ -160,7 +144,7 @@ def register(
         if resolved.source == "remote_lemmy" and resolved.numeric_id is None:
             # Direct remote Lemmy URLs/handles and legacy autocomplete payloads
             # may omit the numeric Lemmy id. Preserve the old contract by
-            # resolving it lazily before the operation layer persists the row.
+            # resolving it lazily before placement and persistence.
             if resolved_origin is None:
                 await interaction.response.send_message(
                     "Could not infer the Lemmy community origin. Please provide instance_domain.",
@@ -191,36 +175,88 @@ def register(
                 remote_software=resolved.remote_software,
             )
 
-        result = await run_operation_definition_async(
-            subscribe_operation,
-            SubscribeInput(
-                database=database,
-                fedify_gateway=fedify_gateway,
-                discord_user_id=str(interaction.user.id),
-                guild_id=interaction.guild_id,
-                channel_id=channel.id,
-                channel_mention=channel.mention,
-                actor_id=resolved.actor_id,
-                community_name=resolved.name,
-                numeric_id=resolved.numeric_id,
-                community_handle=resolved.handle,
-            ),
+        desired_name = derive_channel_name_from_community(
+            name=resolved.name,
+            handle=resolved.handle,
+            actor_id=resolved.actor_id,
         )
-        if result.reason == "follow_dispatch_failed":
-            logger.error("Failed to send follow for community %s", resolved.actor_id)
+        placement: ForumPlacement | None = None
+        try:
+            placement = await resolve_optional_forum_channel(
+                database=database,
+                guild=interaction.guild,
+                selected_channel=channel,
+                desired_name=desired_name,
+                command_name="subscribe-community",
+            )
+        except ForumPlacementError as error:
+            await interaction.response.send_message(error.message, ephemeral=True)
+            return
 
-        is_ephemeral = not result.applied
-        await interaction.response.send_message(result.message, ephemeral=is_ephemeral)
-        if result.applied:
-            # The remote-subscription row is now committed, so expose its forum
-            # placement through the dashboard snapshot cache.
+        final_channel = placement.channel
+        try:
+            if resolved.source == "local_bridge":
+                result = await run_operation_definition_async(
+                    subscribe_local_community_operation,
+                    SubscribeLocalCommunityInput(
+                        database=database,
+                        discord_user_id=str(interaction.user.id),
+                        guild_id=interaction.guild_id,
+                        channel_id=final_channel.id,
+                        channel_mention=final_channel.mention,
+                        local_community_id=int(resolved.local_community_id),
+                        local_community_name=resolved.name or resolved.handle,
+                    ),
+                )
+            else:
+                result = await run_operation_definition_async(
+                    subscribe_operation,
+                    SubscribeInput(
+                        database=database,
+                        fedify_gateway=fedify_gateway,
+                        discord_user_id=str(interaction.user.id),
+                        guild_id=interaction.guild_id,
+                        channel_id=final_channel.id,
+                        channel_mention=final_channel.mention,
+                        actor_id=resolved.actor_id,
+                        community_name=resolved.name,
+                        numeric_id=resolved.numeric_id,
+                        community_handle=resolved.handle,
+                    ),
+                )
+        except Exception:
+            await cleanup_created_forum_channel(
+                placement,
+                database=database,
+                logger=logger,
+                guild_id=interaction.guild_id,
+                command_name="subscribe-community",
+                original_reason="unexpected_exception",
+            )
+            raise
+
+        if getattr(result, "reason", None) == "follow_dispatch_failed":
+            logger.error("Failed to send follow for community %s", resolved.actor_id)
+        if not result.applied:
+            await cleanup_created_forum_channel(
+                placement,
+                database=database,
+                logger=logger,
+                guild_id=interaction.guild_id,
+                command_name="subscribe-community",
+                original_reason=result.reason,
+            )
+        else:
+            # The operation has committed routing state, so expose the final
+            # forum placement through the dashboard snapshot cache.
             record_discord_placement_snapshot(
                 database,
                 guild=interaction.guild,
-                channel=channel,
+                channel=final_channel,
             )
-            logger.info("Sent bridge follow for channel %s to community %s", channel.id, resolved.actor_id)
+            logger.info("Subscribed channel %s to community %s", final_channel.id, resolved.actor_id)
 
+        await interaction.response.send_message(result.message, ephemeral=not result.applied)
 
 
 def _extract_instance_domain_for_autocomplete(interaction: discord.Interaction) -> str | None:

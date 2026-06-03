@@ -9,7 +9,7 @@ description = "Discord forum to Lemmy community bridge"
 requires-python = ">=3.12"
 dependencies = [
   "alembic>=1.14.0",
-  "discord.py>=2.5.0",
+  "discord.py>=2.6.0",
   "fastapi>=0.115.0",
   "httpx>=0.28.0",
   "pydantic-settings>=2.8.0",

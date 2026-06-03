@@ -42,7 +42,7 @@ def _settings() -> SimpleNamespace:
 
 
 def _register_user(database: Database, discord_user_id: str = "1234567890") -> None:
-    """Seed one registered moderator for subscribe-channel authorization."""
+    """Seed one registered moderator for subscribe-community authorization."""
     actor_url = f"https://{BRIDGE_EXAMPLE_DOMAIN}/users/alice"
     database.users.create_user(
         discord_user_id=discord_user_id,
@@ -76,7 +76,7 @@ def _create_local_community(database: Database, *, forum_channel_id: int = 100) 
 
 
 @pytest.mark.asyncio
-async def test_subscribe_channel_persists_local_subscriber_without_remote_follow(
+async def test_subscribe_community_persists_local_subscriber_without_remote_follow(
     tmp_path: Path,
     command_tree,
     interaction,
@@ -90,7 +90,7 @@ async def test_subscribe_channel_persists_local_subscriber_without_remote_follow
 
     subscribe.register(command_tree, database, fedify_gateway, _settings())
 
-    command = command_tree.commands["subscribe-channel"]
+    command = command_tree.commands["subscribe-community"]
     with patch("src.commands.subscribe.resolve_selected_community") as resolve_selected:
         resolve_selected.return_value = SimpleNamespace(
             source="local_bridge",
@@ -125,7 +125,7 @@ async def test_subscribe_channel_persists_local_subscriber_without_remote_follow
 
 
 @pytest.mark.asyncio
-async def test_subscribe_channel_rejects_host_forum_as_local_subscriber_target(
+async def test_subscribe_community_rejects_host_forum_as_local_subscriber_target(
     tmp_path: Path,
     command_tree,
     interaction,
@@ -139,7 +139,7 @@ async def test_subscribe_channel_rejects_host_forum_as_local_subscriber_target(
 
     subscribe.register(command_tree, database, fedify_gateway, _settings())
 
-    command = command_tree.commands["subscribe-channel"]
+    command = command_tree.commands["subscribe-community"]
     with patch("src.commands.subscribe.resolve_selected_community") as resolve_selected:
         resolve_selected.return_value = SimpleNamespace(
             source="local_bridge",
@@ -166,7 +166,7 @@ async def test_subscribe_channel_rejects_host_forum_as_local_subscriber_target(
 
 
 @pytest.mark.asyncio
-async def test_unsubscribe_channel_removes_only_local_subscriber_state(
+async def test_unsubscribe_community_removes_only_local_subscriber_state(
     tmp_path: Path,
     command_tree,
     interaction,

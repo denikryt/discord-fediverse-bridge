@@ -298,3 +298,8 @@ Target owner: `BridgeActorFollowRepository`.
 Stage 8 removed the temporary `Database.*` domain forwarding wrappers. `Database` now owns only engine/session/schema lifecycle plus repository construction; domain persistence operations are supported through repository properties such as `database.local_communities`, `database.remote_subscriptions`, `database.activitypub_objects`, and `database.discord_fanout_groups`.
 
 This inventory remains a migration/history map from the former facade methods to the final repository owners. It should not be read as a supported `Database.method(...)` API list after Stage 8.
+
+
+## Cross-table Discord forum placement
+
+`src/discord_forum_placement.py` is the command-layer reader for channel exclusivity across `local_communities`, `channel_community_subscriptions`, and `local_subscribers`. It does not own schema or persistence; it calls repository methods to reject occupied selected channels and to decide whether a bot-created channel is safe to delete after a later command failure.

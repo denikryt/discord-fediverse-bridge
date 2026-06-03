@@ -76,7 +76,14 @@ async def test_create_community_command_stores_guild_and_forum_snapshots(
     create_community.register(command_tree, database, _settings())
 
     command = command_tree.commands["create_community"]
-    await command.callback(interaction, "hackers", "Hackers", forum, "A local forum")
+    interaction.response.send_modal = AsyncMock()
+    await command.callback(interaction)
+    modal = interaction.response.send_modal.await_args.args[0]
+    modal.slug_input._value = "hackers"
+    modal.display_name_input._value = "Hackers"
+    modal.summary_input._value = "A local forum"
+    modal.channel_select._values = [forum]
+    await modal.on_submit(interaction)
 
     guild_snapshot = database.discord_directory.get_guild_snapshot(99999)
     channel_snapshot = database.discord_directory.get_channel_snapshot(forum.id)
@@ -86,11 +93,11 @@ async def test_create_community_command_stores_guild_and_forum_snapshots(
 
 
 @pytest.mark.asyncio
-async def test_subscribe_channel_stores_snapshots_for_remote_subscription(
+async def test_subscribe_community_stores_snapshots_for_remote_subscription(
     tmp_path: Path,
     command_tree,
 ) -> None:
-    """A successful remote `/subscribe-channel` captures subscribed forum labels."""
+    """A successful remote `/subscribe-community` captures subscribed forum labels."""
     database = _database(tmp_path)
     _create_bridge_user(database)
     interaction = _interaction()
@@ -104,7 +111,7 @@ async def test_subscribe_channel_stores_snapshots_for_remote_subscription(
     )
     subscribe.register(command_tree, database, fedify_gateway, _settings())
 
-    command = command_tree.commands["subscribe-channel"]
+    command = command_tree.commands["subscribe-community"]
     await command.callback(
         interaction,
         f"https://{LEMMY_EXAMPLE_DOMAIN}",
@@ -117,7 +124,7 @@ async def test_subscribe_channel_stores_snapshots_for_remote_subscription(
 
 
 @pytest.mark.asyncio
-async def test_subscribe_channel_stores_snapshots_for_local_subscription(
+async def test_subscribe_community_stores_snapshots_for_local_subscription(
     tmp_path: Path,
     command_tree,
 ) -> None:
@@ -151,7 +158,7 @@ async def test_subscribe_channel_stores_snapshots_for_local_subscription(
     )
     subscribe.register(command_tree, database, fedify_gateway, _settings())
 
-    command = command_tree.commands["subscribe-channel"]
+    command = command_tree.commands["subscribe-community"]
     with patch("src.commands.subscribe.resolve_selected_community", new=AsyncMock(return_value=resolved)):
         await command.callback(
             interaction,

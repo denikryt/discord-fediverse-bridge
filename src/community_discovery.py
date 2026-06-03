@@ -1,6 +1,6 @@
 """Unified community discovery for remote Lemmy and bridge-owned communities.
 
-This module owns the pre-operation resolution logic behind `/subscribe-channel`.
+This module owns the pre-operation resolution logic behind `/subscribe-community`.
 It keeps Discord command adapters thin by centralizing:
 
 - instance-origin normalization;
@@ -75,7 +75,7 @@ class BridgeCommunitySummary:
 
 @dataclass(frozen=True)
 class ResolvedCommunity:
-    """Describe one community selected by `/subscribe-channel` before dispatch."""
+    """Describe one community selected by `/subscribe-community` before dispatch."""
 
     source: Literal["remote_lemmy", "remote_bridge", "local_bridge"]
     actor_id: str

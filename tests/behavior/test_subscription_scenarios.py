@@ -29,7 +29,7 @@ def _community_actor_url() -> str:
 
 
 def _register_user(database: Database, discord_user_id: str = "1234567890") -> None:
-    """Create the minimum registered user required by subscribe-channel."""
+    """Create the minimum registered user required by subscribe-community."""
     database.users.create_user(
         discord_user_id=discord_user_id,
         activitypub_username="alice",
@@ -53,7 +53,7 @@ async def test_no_subscription_subscribe_command_sends_follow_and_marks_pending(
 ) -> None:
     """A fresh moderator subscribe should create one pending follow lifecycle row."""
     database = _database(tmp_path)
-    # subscribe-channel requires a registered user; interaction.user.id is "1234567890"
+    # subscribe-community requires a registered user; interaction.user.id is "1234567890"
     _register_user(database)
     community_actor_url = _community_actor_url()
     fedify_gateway.follow_community.return_value = SimpleNamespace(
@@ -64,7 +64,7 @@ async def test_no_subscription_subscribe_command_sends_follow_and_marks_pending(
 
     subscribe.register(command_tree, database, fedify_gateway)
 
-    command = command_tree.commands["subscribe-channel"]
+    command = command_tree.commands["subscribe-community"]
     await command.callback(
         interaction,
         f"https://{LEMMY_EXAMPLE_DOMAIN}",
@@ -123,7 +123,7 @@ async def test_second_channel_reuses_existing_accepted_bridge_follow(
 
     subscribe.register(command_tree, database, fedify_gateway)
 
-    command = command_tree.commands["subscribe-channel"]
+    command = command_tree.commands["subscribe-community"]
     await command.callback(
         interaction,
         f"https://{LEMMY_EXAMPLE_DOMAIN}",
@@ -166,7 +166,7 @@ async def test_pending_subscription_second_subscribe_does_not_send_follow(
 
     subscribe.register(command_tree, database, fedify_gateway)
 
-    command = command_tree.commands["subscribe-channel"]
+    command = command_tree.commands["subscribe-community"]
     await command.callback(
         interaction,
         f"https://{LEMMY_EXAMPLE_DOMAIN}",
@@ -204,7 +204,7 @@ async def test_accepted_subscription_second_subscribe_does_not_send_follow(
 
     subscribe.register(command_tree, database, fedify_gateway)
 
-    command = command_tree.commands["subscribe-channel"]
+    command = command_tree.commands["subscribe-community"]
     await command.callback(
         interaction,
         f"https://{LEMMY_EXAMPLE_DOMAIN}",
@@ -230,13 +230,13 @@ async def test_follow_dispatch_failure_marks_subscription_failed(
 ) -> None:
     """A gateway follow failure should become explicit failed local state."""
     database = _database(tmp_path)
-    # subscribe-channel requires a registered user; interaction.user.id is "1234567890"
+    # subscribe-community requires a registered user; interaction.user.id is "1234567890"
     _register_user(database)
     fedify_gateway.follow_community.side_effect = RuntimeError("boom")
 
     subscribe.register(command_tree, database, fedify_gateway)
 
-    command = command_tree.commands["subscribe-channel"]
+    command = command_tree.commands["subscribe-community"]
     await command.callback(
         interaction,
         f"https://{LEMMY_EXAMPLE_DOMAIN}",

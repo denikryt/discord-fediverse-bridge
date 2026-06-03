@@ -1,4 +1,4 @@
-"""Tests for subscribe-channel community resolution without instance_domain."""
+"""Tests for subscribe-community community resolution without instance_domain."""
 
 from __future__ import annotations
 

@@ -8,7 +8,7 @@ This document explains the major runtime traces through the bridge: user/platfor
 2. Discord OAuth state is stored through `src/registration_service.py`.
 3. Successful completion creates a `users` row with stable local actor URLs and key material.
 
-## Remote /subscribe-channel flow
+## Remote /subscribe-community flow
 
 1. `src/commands/subscribe.py` calls `src/operations/subscribe.py`.
 2. `src/lemmy_client.py` resolves the remote community when needed.
