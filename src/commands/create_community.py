@@ -28,10 +28,7 @@ logger = logging.getLogger(__name__)
 
 SLUG_PATTERN = re.compile(r"^[a-z]+(?:_[a-z]+)*$")
 SLUG_RULE_MESSAGE = "Slug must use lowercase English letters only, with _ between words. No digits, spaces, hyphens, or symbols."
-CHANNEL_DESCRIPTION = (
-    "Choose an existing free forum channel, or leave empty and the bot will create "
-    "a new forum channel named after the community slug."
-)
+CHANNEL_DESCRIPTION = "Choose a free forum channel, or leave empty to create one named after the community slug."
 
 
 def _text_input_value(input_item: Any) -> str:

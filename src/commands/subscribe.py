@@ -58,7 +58,7 @@ def register(
     @app_commands.describe(
         instance_domain="Instance domain or URL (e.g. lemmy.world)",
         community="Community handle, URL, or autocomplete choice",
-        channel="Choose an existing free forum channel, or leave empty and the bot will create a new forum channel named after the selected community.",
+        channel="Choose a free forum channel, or leave empty to create one named after the selected community.",
     )
     @app_commands.autocomplete(
         instance_domain=_instance_autocomplete(settings),

@@ -613,3 +613,15 @@ async def test_subscribe_community_accepts_actor_url_without_instance(
     fake_client.resolve_community.assert_awaited_once_with(name="hackers")
     fedify_gateway.follow_community.assert_awaited_once_with(community_actor_url)
     database.remote_subscriptions.create_subscription.assert_called_once()
+
+
+def test_subscribe_community_channel_description_fits_discord_limit(command_tree, database, fedify_gateway) -> None:
+    """Slash option descriptions must satisfy Discord's 100 character limit."""
+    settings = SimpleNamespace(federation_allowlist=[])
+
+    subscribe.register(command_tree, database, fedify_gateway, settings)
+    command = command_tree.commands["subscribe-community"]
+    descriptions = getattr(command.callback, "__discord_app_commands_param_description__")
+
+    assert 1 <= len(descriptions["channel"]) <= 100
+    assert "leave empty" in descriptions["channel"]

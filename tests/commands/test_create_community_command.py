@@ -112,3 +112,16 @@ async def test_create_community_modal_selected_free_channel_snapshots_on_success
     assert submitted.discord_forum_channel_id == forum_channel.id
     snapshot.assert_called_once_with(database, guild=interaction.guild, channel=forum_channel)
     interaction.response.send_message.assert_awaited_once_with("created", ephemeral=False)
+
+
+def test_create_community_modal_label_descriptions_fit_discord_limit(database) -> None:
+    """Modal Label descriptions must satisfy Discord's 1..100 length limit."""
+    settings = SimpleNamespace(local_community_operator_allowlist=["1234567890"])
+    modal = create_community.CreateCommunityModal(database=database, settings=settings)
+
+    descriptions = [getattr(child, "description", None) for child in modal.children]
+    descriptions = [description for description in descriptions if description is not None]
+
+    assert descriptions
+    assert all(1 <= len(description) <= 100 for description in descriptions)
+    assert create_community.CHANNEL_DESCRIPTION in descriptions
