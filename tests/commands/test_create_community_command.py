@@ -4,17 +4,28 @@ from __future__ import annotations
 
 import inspect
 from types import SimpleNamespace
-from unittest.mock import AsyncMock, Mock, patch
+from unittest.mock import AsyncMock, patch
 
 import pytest
 
 from src.commands import create_community
+from src.commands.guild_guard import GUILD_NOT_ALLOWED_MESSAGE, GUILD_ONLY_MESSAGE, REGISTRATION_REQUIRED_MESSAGE
+
+
+def _settings() -> SimpleNamespace:
+    """Return command settings with no guild restriction for create tests."""
+    return SimpleNamespace(
+        discord_guild_allowlist=[],
+        local_community_operator_allowlist=[],
+        normalized_fedify_origin="https://bridge.example",
+    )
 
 
 @pytest.mark.asyncio
-async def test_create_community_opens_blank_modal(command_tree, interaction, database) -> None:
+async def test_create_community_opens_blank_modal_for_registered_user(command_tree, interaction, database) -> None:
     """The slash command is a launcher and no longer collects creation fields."""
-    settings = SimpleNamespace(local_community_operator_allowlist=["1234567890"])
+    settings = _settings()
+    database.users.get_user_by_discord_user_id.return_value = SimpleNamespace(id=1)
     interaction.response.send_modal = AsyncMock()
 
     create_community.register(command_tree, database, settings)
@@ -23,6 +34,7 @@ async def test_create_community_opens_blank_modal(command_tree, interaction, dat
 
     await command.callback(interaction)
 
+    database.users.get_user_by_discord_user_id.assert_called_once_with("1234567890")
     interaction.response.send_modal.assert_awaited_once()
     modal = interaction.response.send_modal.await_args.args[0]
     assert isinstance(modal, create_community.CreateCommunityModal)
@@ -31,8 +43,8 @@ async def test_create_community_opens_blank_modal(command_tree, interaction, dat
 
 @pytest.mark.asyncio
 async def test_create_community_rejects_dm_before_modal(command_tree, interaction, database) -> None:
-    """Guild context is required before Discord can choose/create a forum channel."""
-    settings = SimpleNamespace(local_community_operator_allowlist=["1234567890"])
+    """Guild context is required before registration lookup or modal open."""
+    settings = _settings()
     interaction.guild_id = None
     interaction.response.send_modal = AsyncMock()
 
@@ -40,9 +52,73 @@ async def test_create_community_rejects_dm_before_modal(command_tree, interactio
     command = command_tree.commands["create_community"]
     await command.callback(interaction)
 
+    database.users.get_user_by_discord_user_id.assert_not_called()
     interaction.response.send_modal.assert_not_awaited()
     interaction.response.send_message.assert_awaited_once_with(
-        "This command can only be used inside a guild.",
+        GUILD_ONLY_MESSAGE,
+        ephemeral=True,
+    )
+
+
+@pytest.mark.asyncio
+async def test_create_community_rejects_disallowed_guild_before_registration_lookup(command_tree, interaction, database) -> None:
+    """Guild allowlist failures stop before onboarding checks or modal open."""
+    settings = SimpleNamespace(
+        discord_guild_allowlist=["111"],
+        local_community_operator_allowlist=[],
+        normalized_fedify_origin="https://bridge.example",
+    )
+    interaction.guild_id = 99999
+    interaction.response.send_modal = AsyncMock()
+
+    create_community.register(command_tree, database, settings)
+    command = command_tree.commands["create_community"]
+    await command.callback(interaction)
+
+    database.users.get_user_by_discord_user_id.assert_not_called()
+    interaction.response.send_modal.assert_not_awaited()
+    interaction.response.send_message.assert_awaited_once_with(
+        GUILD_NOT_ALLOWED_MESSAGE,
+        ephemeral=True,
+    )
+
+
+@pytest.mark.asyncio
+async def test_create_community_rejects_unregistered_user_before_modal(command_tree, interaction, database) -> None:
+    """Unregistered callers should not open a modal or reach creation logic."""
+    settings = _settings()
+    database.users.get_user_by_discord_user_id.return_value = None
+    interaction.response.send_modal = AsyncMock()
+
+    create_community.register(command_tree, database, settings)
+    command = command_tree.commands["create_community"]
+    await command.callback(interaction)
+
+    database.users.get_user_by_discord_user_id.assert_called_once_with("1234567890")
+    interaction.response.send_modal.assert_not_awaited()
+    interaction.response.send_message.assert_awaited_once_with(
+        REGISTRATION_REQUIRED_MESSAGE,
+        ephemeral=True,
+    )
+
+
+@pytest.mark.asyncio
+async def test_create_community_modal_rejects_unregistered_user_before_slug_validation(interaction, database) -> None:
+    """Modal submit repeats the registration guard before field processing."""
+    settings = _settings()
+    database.users.get_user_by_discord_user_id.return_value = None
+    modal = create_community.CreateCommunityModal(database=database, settings=settings)
+    modal.slug_input._value = "Tech-News2"
+    modal.display_name_input._value = "Tech News"
+    modal.summary_input._value = ""
+    modal.channel_select._values = []
+
+    with patch("src.commands.create_community.resolve_optional_forum_channel", new=AsyncMock()) as placement:
+        await modal.on_submit(interaction)
+
+    placement.assert_not_awaited()
+    interaction.response.send_message.assert_awaited_once_with(
+        REGISTRATION_REQUIRED_MESSAGE,
         ephemeral=True,
     )
 
@@ -50,7 +126,8 @@ async def test_create_community_rejects_dm_before_modal(command_tree, interactio
 @pytest.mark.asyncio
 async def test_create_community_modal_rejects_invalid_slug_before_placement(interaction, database) -> None:
     """Invalid slug feedback happens before channel creation or operation calls."""
-    settings = SimpleNamespace(local_community_operator_allowlist=["1234567890"])
+    settings = _settings()
+    database.users.get_user_by_discord_user_id.return_value = SimpleNamespace(id=1)
     modal = create_community.CreateCommunityModal(database=database, settings=settings)
     modal.slug_input._value = "Tech-News2"
     modal.display_name_input._value = "Tech News"
@@ -69,9 +146,10 @@ async def test_create_community_modal_rejects_invalid_slug_before_placement(inte
 
 
 @pytest.mark.asyncio
-async def test_create_community_modal_non_operator_audits_before_placement(interaction, database) -> None:
-    """Unauthorized submit records forbidden audit and does not create channels."""
-    settings = SimpleNamespace(local_community_operator_allowlist=[])
+async def test_create_community_modal_registered_user_reaches_placement(interaction, database) -> None:
+    """Registered users may create communities without operator allowlist membership."""
+    settings = _settings()
+    database.users.get_user_by_discord_user_id.return_value = SimpleNamespace(id=1)
     modal = create_community.CreateCommunityModal(database=database, settings=settings)
     modal.slug_input._value = "technology_news"
     modal.display_name_input._value = "Technology News"
@@ -79,23 +157,19 @@ async def test_create_community_modal_non_operator_audits_before_placement(inter
     modal.channel_select._values = []
 
     with patch("src.commands.create_community.resolve_optional_forum_channel", new=AsyncMock()) as placement:
-        await modal.on_submit(interaction)
+        placement.side_effect = RuntimeError("stop after guard")
+        with pytest.raises(RuntimeError):
+            await modal.on_submit(interaction)
 
-    placement.assert_not_awaited()
-    database.management_audit.community_create_forbidden.assert_called_once_with(
-        actor_discord_user_id="1234567890",
-        attempted_slug="technology_news",
-    )
-    interaction.response.send_message.assert_awaited_once_with(
-        "You are not allowed to create local communities with this bot.",
-        ephemeral=True,
-    )
+    placement.assert_awaited_once()
+    database.management_audit.community_create_forbidden.assert_not_called()
 
 
 @pytest.mark.asyncio
 async def test_create_community_modal_selected_free_channel_snapshots_on_success(interaction, database, forum_channel) -> None:
     """Successful modal submit binds the selected channel and snapshots it."""
-    settings = SimpleNamespace(local_community_operator_allowlist=["1234567890"])
+    settings = _settings()
+    database.users.get_user_by_discord_user_id.return_value = SimpleNamespace(id=1)
     modal = create_community.CreateCommunityModal(database=database, settings=settings)
     modal.slug_input._value = "technology_news"
     modal.display_name_input._value = "Technology News"
@@ -116,7 +190,7 @@ async def test_create_community_modal_selected_free_channel_snapshots_on_success
 
 def test_create_community_modal_label_descriptions_fit_discord_limit(database) -> None:
     """Modal Label descriptions must satisfy Discord's 1..100 length limit."""
-    settings = SimpleNamespace(local_community_operator_allowlist=["1234567890"])
+    settings = _settings()
     modal = create_community.CreateCommunityModal(database=database, settings=settings)
 
     descriptions = [getattr(child, "description", None) for child in modal.children]

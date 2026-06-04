@@ -131,26 +131,14 @@ def test_repository_stores_canonical_json_and_rejects_invalid_vocabulary(tmp_pat
         )
 
 
-def test_create_community_success_and_forbidden_attempts_are_audited(tmp_path: Path) -> None:
-    """Community creation writes safe success rows and non-admin denials."""
+def test_create_community_success_is_audited_for_registered_user_flow(tmp_path: Path) -> None:
+    """Community creation now writes only safe success rows at operation level."""
     database = build_database(tmp_path, "audit-create-community.db")
 
-    denied = create_community_operation(
-        CreateCommunityInput(
-            database=database,
-            settings=_settings(super_admins=["999"]),
-            discord_user_id="111",
-            discord_guild_id=10,
-            discord_forum_channel_id=100,
-            slug=" Hackers ",
-            name="Hackers",
-            description="A local forum.",
-        )
-    )
     created = create_community_operation(
         CreateCommunityInput(
             database=database,
-            settings=_settings(super_admins=["111"]),
+            settings=_settings(super_admins=[]),
             discord_user_id="111",
             discord_guild_id=10,
             discord_forum_channel_id=100,
@@ -160,17 +148,13 @@ def test_create_community_success_and_forbidden_attempts_are_audited(tmp_path: P
         )
     )
     rows = _audit_rows(database)
-    after = json.loads(rows[1].after_json or "{}")
+    after = json.loads(rows[0].after_json or "{}")
 
-    assert denied.reason == "operator_not_allowlisted"
     assert created.applied is True
-    assert [row.action for row in rows] == [ACTION_COMMUNITY_CREATE_FORBIDDEN, ACTION_COMMUNITY_CREATED]
-    assert rows[0].result == RESULT_FORBIDDEN
-    assert rows[0].reason_code == REASON_NOT_SUPER_ADMIN
-    assert rows[0].target_id == "hackers"
-    assert rows[1].result == RESULT_SUCCESS
-    assert rows[1].local_community_id is not None
-    assert rows[1].target_id == str(rows[1].local_community_id)
+    assert [row.action for row in rows] == [ACTION_COMMUNITY_CREATED]
+    assert rows[0].result == RESULT_SUCCESS
+    assert rows[0].local_community_id is not None
+    assert rows[0].target_id == str(rows[0].local_community_id)
     assert after["slug"] == "hackers"
     assert after["created_by_discord_user_id"] == "111"
     assert "private_key_pem" not in after

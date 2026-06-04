@@ -36,33 +36,11 @@ class CreateCommunityResult:
     reason: str
 
 
-def create_community_authorization_precheck(operation_input: CreateCommunityInput) -> CreateCommunityResult | None:
-    """Return a forbidden result before Discord placement when creation is unauthorized.
-
-    The create-community modal needs the attempted slug for audit, but it must
-    not create a Discord forum channel before authorization has been evaluated.
-    This helper preserves the existing forbidden audit semantics while allowing
-    the command adapter to order local validation before external side effects.
-    """
-    if operation_input.discord_user_id in operation_input.settings.local_community_operator_allowlist:
-        return None
-    operation_input.database.management_audit.community_create_forbidden(
-        actor_discord_user_id=operation_input.discord_user_id,
-        attempted_slug=operation_input.slug,
-    )
-    return CreateCommunityResult(
-        applied=False,
-        message="You are not allowed to create local communities with this bot.",
-        reason="operator_not_allowlisted",
-    )
-
-
 def create_community_operation(operation_input: CreateCommunityInput) -> CreateCommunityResult:
     """Validate one local-community creation request and persist the result."""
-    forbidden = create_community_authorization_precheck(operation_input)
-    if forbidden is not None:
-        return forbidden
-
+    # Local-community creation is available to registered users after the
+    # command-layer onboarding guard. The historical operator allowlist remains
+    # only as a super-admin list for later management commands.
     service = LocalCommunityService(
         database=operation_input.database,
         base_url=operation_input.settings.normalized_fedify_origin,

@@ -9,6 +9,7 @@ from discord import app_commands
 
 from ..config import Settings
 from ..db import Database
+from .guild_guard import check_guild_autocomplete_disallowed, reject_if_guild_not_allowed
 from ..operations import ListBannedUsersInput, list_banned_users_operation
 
 logger = logging.getLogger(__name__)
@@ -24,7 +25,7 @@ def _matches_current(value: str, current: str) -> bool:
     return current.casefold() in value.casefold()
 
 
-def _list_community_autocomplete(database: Database):
+def _list_community_autocomplete(database: Database, settings: Settings | None = None):
     """Build autocomplete for `/list-banned-users community` in one guild."""
 
     async def autocomplete(
@@ -33,6 +34,8 @@ def _list_community_autocomplete(database: Database):
     ) -> list[app_commands.Choice[str]]:
         """Return active local communities in the current Discord guild."""
         try:
+            if check_guild_autocomplete_disallowed(interaction, settings):
+                return []
             if interaction.guild_id is None:
                 return []
             communities = database.local_communities.list_active_local_communities_by_guild(
@@ -66,12 +69,14 @@ def register(
         description="List active remote user bans for a local community",
     )
     @app_commands.describe(community="Local community slug")
-    @app_commands.autocomplete(community=_list_community_autocomplete(database))
+    @app_commands.autocomplete(community=_list_community_autocomplete(database, settings))
     async def list_banned_users(
         interaction: discord.Interaction,
         community: str,
     ) -> None:
         """Run the list operation and return an ephemeral command reply."""
+        if await reject_if_guild_not_allowed(interaction, settings=settings):
+            return
         result = list_banned_users_operation(
             ListBannedUsersInput(
                 database=database,

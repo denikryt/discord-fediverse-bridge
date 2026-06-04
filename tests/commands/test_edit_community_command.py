@@ -53,7 +53,7 @@ async def test_edit_command_rejects_dm_before_modal(command_tree, interaction, d
 
     interaction.response.send_modal.assert_not_awaited()
     interaction.response.send_message.assert_awaited_once_with(
-        "This command can only be used inside a guild.",
+        "This command can only be used inside an allowed Discord server.",
         ephemeral=True,
     )
     database.local_communities.get_local_community_by_slug.assert_not_called()

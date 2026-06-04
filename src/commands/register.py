@@ -6,6 +6,7 @@ import discord
 from discord import app_commands
 
 from ..config import Settings
+from .guild_guard import reject_if_guild_not_allowed
 
 
 def register(tree: app_commands.CommandTree, settings: Settings) -> None:
@@ -15,6 +16,8 @@ def register(tree: app_commands.CommandTree, settings: Settings) -> None:
     # bridge-owned web URL where Discord OAuth and username validation happen.
     @tree.command(name="register", description="Get a link to register your ActivityPub identity")
     async def register_identity(interaction: discord.Interaction) -> None:
+        if await reject_if_guild_not_allowed(interaction, settings=settings):
+            return
         await interaction.response.defer(ephemeral=True, thinking=False)
 
         registration_url = f"{settings.normalized_public_bridge_base_url}/register"

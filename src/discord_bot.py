@@ -65,7 +65,7 @@ class BridgeBot(discord.Client):
         register.register(self.tree, self.settings)
         subscribe.register(self.tree, self.database, self.fedify_gateway, self.settings)
         unsubscribe.register(self.tree, self.database, self.fedify_gateway, self.settings)
-        list_subs.register(self.tree, self.database)
+        list_subs.register(self.tree, self.database, self.settings)
         create_community.register(self.tree, self.database, self.settings)
         edit_community.register(self.tree, self.database, self.settings)
         ban_user.register(self.tree, self.database, self.settings)

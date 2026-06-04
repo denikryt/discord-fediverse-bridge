@@ -36,6 +36,9 @@ class Settings(BaseSettings):
         default_factory=list,
         alias="LOCAL_COMMUNITY_OPERATOR_ALLOWLIST",
     )
+    # Comma-separated Discord guild IDs allowed to use slash commands. Empty
+    # means the bot remains usable in any guild where it is installed.
+    discord_guild_allowlist: list[str] = Field(default_factory=list, alias="DISCORD_GUILD_ALLOWLIST")
 
     @field_validator("federation_allowlist", "local_community_operator_allowlist", mode="before")
     @classmethod
@@ -56,6 +59,33 @@ class Settings(BaseSettings):
             return [str(v)]
 
         return [str(entry).strip() for entry in v if str(entry).strip()]
+
+
+    @field_validator("discord_guild_allowlist", mode="before")
+    @classmethod
+    def _split_discord_guild_allowlist(cls, v: object) -> list[str]:
+        """Parse and validate comma-separated Discord guild IDs.
+
+        Discord snowflakes are opaque string identifiers in the rest of the
+        command layer. Strict decimal validation makes deployment mistakes fail
+        at startup instead of silently blocking every guild command.
+        """
+        if v is None or v == "":
+            return []
+
+        if isinstance(v, str):
+            entries = [entry.strip() for entry in v.split(",") if entry.strip()]
+        elif isinstance(v, int):
+            entries = [str(v)]
+        else:
+            entries = [str(entry).strip() for entry in v if str(entry).strip()]
+
+        invalid = [entry for entry in entries if not entry.isdecimal()]
+        if invalid:
+            raise ValueError(
+                "DISCORD_GUILD_ALLOWLIST must contain comma-separated decimal Discord guild IDs"
+            )
+        return entries
 
     @property
     def normalized_public_bridge_base_url(self) -> str:

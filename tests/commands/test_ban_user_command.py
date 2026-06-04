@@ -153,7 +153,8 @@ async def test_ban_community_autocomplete_supports_guildless_super_admin(interac
 
     choices = await ban_user._ban_community_autocomplete(database, settings)(interaction, "")
 
-    assert [(choice.name, choice.value) for choice in choices] == [("cats — Cats — guild 10", "cats")]
+    assert choices == []
+    database.local_communities.list_active_local_communities.assert_not_called()
 
 
 @pytest.mark.asyncio

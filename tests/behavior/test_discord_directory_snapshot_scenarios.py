@@ -71,6 +71,7 @@ async def test_create_community_command_stores_guild_and_forum_snapshots(
 ) -> None:
     """A successful `/create_community` captures the host guild/forum labels."""
     database = _database(tmp_path)
+    _create_bridge_user(database)
     interaction = _interaction()
     forum = _forum_channel(name="community-host")
     create_community.register(command_tree, database, _settings())

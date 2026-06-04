@@ -4,15 +4,20 @@ import discord
 from discord import app_commands
 from discordops import run_operation_definition_async
 from ..community_labels import community_relay_label
+from ..config import Settings
 from ..db import Database
+from .guild_guard import reject_if_guild_not_allowed
 from ..operations import ListSubscriptionsInput, list_subscriptions_operation
 
 
-def register(tree: app_commands.CommandTree, database: Database) -> None:
+def register(tree: app_commands.CommandTree, database: Database, settings: Settings | None = None) -> None:
     # The registered slash command delegates empty-state policy to the
     # operation layer and keeps Discord embed rendering in the adapter.
     @tree.command(name="list-subscriptions", description="List all active channel-community subscriptions")
     async def list_subscriptions(interaction: discord.Interaction) -> None:
+        if await reject_if_guild_not_allowed(interaction, settings=settings):
+            return
+
         # The operation determines whether the list is empty; the command keeps
         # ownership of Discord embed rendering for successful responses.
         result = await run_operation_definition_async(

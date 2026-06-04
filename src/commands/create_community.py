@@ -18,11 +18,8 @@ from ..discord_forum_placement import (
     cleanup_created_forum_channel,
     resolve_optional_forum_channel,
 )
-from ..operations import (
-    CreateCommunityInput,
-    create_community_authorization_precheck,
-    create_community_operation,
-)
+from ..operations import CreateCommunityInput, create_community_operation
+from .guild_guard import reject_if_guild_not_allowed, reject_if_user_not_registered
 
 logger = logging.getLogger(__name__)
 
@@ -97,10 +94,15 @@ class CreateCommunityModal(discord.ui.Modal):
 
     async def on_submit(self, interaction: discord.Interaction) -> None:
         """Validate modal input, resolve channel placement, and create the community."""
+        if await reject_if_guild_not_allowed(interaction, settings=self.settings):
+            return
+        if await reject_if_user_not_registered(interaction, database=self.database):
+            return
+
         guild_id = interaction.guild_id
-        if guild_id is None or interaction.guild is None:
+        if interaction.guild is None:
             await interaction.response.send_message(
-                "This command can only be used inside a guild.",
+                "This command can only be used inside an allowed Discord server.",
                 ephemeral=True,
             )
             return
@@ -112,21 +114,6 @@ class CreateCommunityModal(discord.ui.Modal):
             # Slug validation is local and cheap, so it runs before any Discord
             # channel creation, DB mutation, directory snapshot, or success audit.
             await interaction.response.send_message(SLUG_RULE_MESSAGE, ephemeral=True)
-            return
-
-        precheck_input = CreateCommunityInput(
-            database=self.database,
-            settings=self.settings,
-            discord_user_id=str(interaction.user.id),
-            discord_guild_id=guild_id,
-            discord_forum_channel_id=0,
-            slug=slug,
-            name=name,
-            description=summary,
-        )
-        forbidden = create_community_authorization_precheck(precheck_input)
-        if forbidden is not None:
-            await interaction.response.send_message(forbidden.message, ephemeral=True)
             return
 
         placement: ForumPlacement | None = None
@@ -197,13 +184,10 @@ def register(
         name="create_community",
         description="Create a Discord-backed local federated community",
     )
-    @app_commands.default_permissions(manage_channels=True)
     async def create_community(interaction: discord.Interaction) -> None:
-        """Open the local-community creation modal in guild contexts only."""
-        if interaction.guild_id is None:
-            await interaction.response.send_message(
-                "This command can only be used inside a guild.",
-                ephemeral=True,
-            )
+        """Open the local-community creation modal for registered guild users."""
+        if await reject_if_guild_not_allowed(interaction, settings=settings):
+            return
+        if await reject_if_user_not_registered(interaction, database=database):
             return
         await interaction.response.send_modal(CreateCommunityModal(database=database, settings=settings))

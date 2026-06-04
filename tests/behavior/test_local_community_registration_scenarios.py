@@ -66,10 +66,10 @@ def test_allowlisted_operator_creates_local_community_and_persists_actor_metadat
     assert created.actor_url == "https://bridge.example/communities/hackers"
 
 
-def test_non_allowlisted_operator_cannot_create_local_community(
+def test_registered_policy_no_longer_uses_operator_allowlist_for_create(
     tmp_path: Path,
 ) -> None:
-    """A non-allowlisted operator should not be able to create a local community."""
+    """Creation no longer depends on the historical operator allowlist."""
     database = build_database(tmp_path, "local-community-registration-denied.db")
     result = create_community_operation(
         CreateCommunityInput(
@@ -84,9 +84,11 @@ def test_non_allowlisted_operator_cannot_create_local_community(
         )
     )
 
-    assert result.applied is False
-    assert result.reason == "operator_not_allowlisted"
-    assert database.local_communities.get_local_community_by_slug("hackers") is None
+    assert result.applied is True
+    assert result.reason == "created"
+    created = database.local_communities.get_local_community_by_slug("hackers")
+    assert created is not None
+    assert created.created_by_discord_user_id == "123"
 
 
 def test_service_rejects_duplicate_forum_binding(

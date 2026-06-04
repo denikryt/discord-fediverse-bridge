@@ -6,7 +6,6 @@ from .list_banned_users import ListBannedUsersInput, ListBannedUsersResult, list
 from .create_community import (
     CreateCommunityInput,
     CreateCommunityResult,
-    create_community_authorization_precheck,
     create_community_operation,
 )
 from .edit_community import EditCommunityInput, EditCommunityResult, edit_community_operation
@@ -41,7 +40,6 @@ __all__ = [
     "ban_user_operation",
     "unban_user_operation",
     "list_banned_users_operation",
-    "create_community_authorization_precheck",
     "create_community_operation",
     "edit_community_operation",
     "list_subscriptions_operation",
