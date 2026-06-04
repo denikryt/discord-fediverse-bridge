@@ -15,9 +15,10 @@ This document is a task-oriented reading guide for maintainers changing or debug
 
 ## Discord slash commands
 1. `src/discord_bot.py` — Discord adapter and command registration.
-2. `src/commands/guild_guard.py` — shared guild allowlist and registered-user command guards.
-3. `src/commands/` — command adapters.
-4. `src/operations/` — business logic.
+2. `src/operations/common_preconditions.py` — shared command-access input, atomic DiscordOps preconditions, and named policy compositions.
+3. `src/commands/guild_guard.py` — Discord evaluation and rejection-presentation adapter for those policies.
+4. `src/commands/` — command adapters.
+5. `src/operations/` — business logic.
 
 ## Remote community subscription
 1. `src/commands/subscribe.py` for `/subscribe-community` command metadata, option descriptions, autocomplete source selection, Lemmyverse cache wiring, and defensive raw interaction reads for `instance_domain`; 2. `src/commands/subscribe_community_handler.py` for submit-flow orchestration, allowlist checks, community resolution, numeric-id backfill, optional forum-channel placement delegation, operation dispatch, cleanup, directory snapshots, no-ping initiator mentions, and success-message formatting; 3. `src/community_labels.py` for compact `slug@instance` labels used by subscription command output; 4. `src/discord_forum_placement.py` for selected-channel availability, auto-created forum channels, Manage Channels error mapping, and best-effort cleanup; 5. `src/lemmyverse_communities.py` for disk-backed global Lemmyverse autocomplete cache, lazy background refresh, retry handling, monthly-active-user ranking, and Fediverse choice labels; 6. `src/community_discovery.py` for direct-instance autocomplete labels and selected community resolution; 7. `src/operations/subscribe.py`; 8. `src/db/repositories/remote_subscriptions.py`; 9. `src/db/repositories/bridge_actor_follows.py`; 10. `src/lemmy_client.py`; 11. `src/fedify_gateway_client.py`; 12. `fedify-gateway/src/federation-outbound.ts`.
@@ -32,7 +33,7 @@ This document is a task-oriented reading guide for maintainers changing or debug
 1. `fedify-gateway/src/federation.ts`; 2. `fedify-gateway/src/normalize.ts`; 3. `fedify-gateway/src/python-bridge.ts`; 4. `src/activitypub_handlers.py`; 5. `src/community_sync/discord_fanout.py`; 6. `src/db/repositories/discord_fanout_groups.py`; 7. `src/db/repositories/legacy_lemmy_mappings.py`.
 
 ## Local community creation
-1. `src/commands/guild_guard.py` for guild allowlist and registered-user access checks; 2. `src/commands/create_community.py` for the `/create_community` modal launcher, modal submit validation, optional forum-channel selection, and snapshot timing; 3. `src/discord_forum_placement.py` for selected-channel availability, auto-created forum channels, Manage Channels error mapping, and cleanup after later failures; 4. `src/operations/create_community.py` for domain creation by registered users; 5. `src/local_communities/service.py`; 6. `src/management_actions.py` for transactional creation plus audit; 7. `src/db/repositories/local_communities.py`; 8. `src/management_audit_recorder.py`; 9. `src/management_audit.py`; 10. `src/db/repositories/management_audit_events.py`; 11. `src/db/database.py`; 12. `src/local_community_permissions.py` for owner/super-admin management checks after creation.
+1. `src/operations/common_preconditions.py` for shared access inputs, atomic preconditions, and named policy compositions; 2. `src/commands/guild_guard.py` for Discord evaluation and rejection presentation; 3. `src/commands/create_community.py` for the `/create_community` modal launcher, modal submit validation, optional forum-channel selection, and snapshot timing; 4. `src/discord_forum_placement.py` for selected-channel availability, auto-created forum channels, Manage Channels error mapping, and cleanup after later failures; 5. `src/operations/create_community.py` for domain creation by registered users; 6. `src/local_communities/service.py`; 7. `src/management_actions.py` for transactional creation plus audit; 8. `src/db/repositories/local_communities.py`; 9. `src/management_audit_recorder.py`; 10. `src/management_audit.py`; 11. `src/db/repositories/management_audit_events.py`; 12. `src/db/database.py`; 13. `src/local_community_permissions.py` for owner/super-admin management checks after creation.
 
 ## Local community actor rendering
 1. `fedify-gateway/src/server.ts`; 2. `fedify-gateway/src/actor-store.ts`; 3. `fedify-gateway/src/actors.ts`; 4. `fedify-gateway/src/webfinger.ts`.

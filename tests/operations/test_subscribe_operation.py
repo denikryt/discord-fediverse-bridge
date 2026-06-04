@@ -39,7 +39,7 @@ async def test_subscribe_operation_rejects_unregistered_user() -> None:
     assert result.applied is False
     assert result.reason == "discord_user_is_registered"
     assert result.message == (
-        "You must register with the bridge before subscribing a channel. Use `/register` first."
+        "You must register with the bridge before using this command. Use `/register` first."
     )
     fedify_gateway.follow_community.assert_not_awaited()
     database.remote_subscriptions.create_subscription.assert_not_called()

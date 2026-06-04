@@ -7,12 +7,15 @@ from unittest.mock import MagicMock
 
 from discordops import evaluate_policy
 
-from src.command_access import (
+from src.operations.common_preconditions import (
+    DISCORD_USER_REGISTERED,
+    GUILD_ALLOWLISTED,
     GUILD_COMMAND_ACCESS,
+    GUILD_CONTEXT_REQUIRED,
     REGISTERED_GUILD_COMMAND_ACCESS,
+    REGISTRATION_REQUIRED_MESSAGE,
     CommandAccessInput,
 )
-from src.operations.common_preconditions import DISCORD_USER_REGISTERED, REGISTRATION_REQUIRED_MESSAGE
 from src.operations.subscribe import subscribe_operation
 from src.operations.subscribe_local_community import subscribe_local_community_operation
 
@@ -73,6 +76,16 @@ def test_registered_policy_permits_known_user_and_memoizes_lookup() -> None:
     result = evaluate_policy(REGISTERED_GUILD_COMMAND_ACCESS, value)
     assert result.allowed is True
     database.users.get_user_by_discord_user_id.assert_called_once_with("123")
+
+
+def test_policy_compositions_preserve_shared_precondition_identity_and_order() -> None:
+    """Named policies compose the exact shared conditions in rejection order."""
+    assert GUILD_COMMAND_ACCESS.preconditions == (GUILD_CONTEXT_REQUIRED, GUILD_ALLOWLISTED)
+    assert REGISTERED_GUILD_COMMAND_ACCESS.preconditions == (
+        GUILD_CONTEXT_REQUIRED,
+        GUILD_ALLOWLISTED,
+        DISCORD_USER_REGISTERED,
+    )
 
 
 def test_subscribe_operations_share_exact_registration_precondition() -> None:
