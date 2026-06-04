@@ -6,7 +6,7 @@ from discordops import run_operation_definition_async
 from ..community_labels import community_relay_label
 from ..config import Settings
 from ..db import Database
-from .guild_guard import reject_if_guild_not_allowed
+from .guild_guard import REGISTERED_GUILD_COMMAND_ACCESS, reject_if_command_access_denied
 from ..operations import ListSubscriptionsInput, list_subscriptions_operation
 
 
@@ -15,7 +15,7 @@ def register(tree: app_commands.CommandTree, database: Database, settings: Setti
     # operation layer and keeps Discord embed rendering in the adapter.
     @tree.command(name="list-subscriptions", description="List all active channel-community subscriptions")
     async def list_subscriptions(interaction: discord.Interaction) -> None:
-        if await reject_if_guild_not_allowed(interaction, settings=settings):
+        if await reject_if_command_access_denied(interaction, definition=REGISTERED_GUILD_COMMAND_ACCESS, settings=settings, database=database):
             return
 
         # The operation determines whether the list is empty; the command keeps

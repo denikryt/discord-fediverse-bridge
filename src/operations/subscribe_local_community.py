@@ -10,6 +10,8 @@ from dataclasses import dataclass, field
 
 from discordops import OperationDefinition, OperationResult, Precondition
 
+from .common_preconditions import DISCORD_USER_REGISTERED
+
 from ..db import Database
 from ..local_community_lifecycle import is_local_community_disabled
 
@@ -74,11 +76,6 @@ def _reject(
     return OperationResult(applied=False, message=message, reason=reason)
 
 
-def _registration_message(_: SubscribeLocalCommunityInput) -> str:
-    """Explain why local subscribe still requires bridge registration."""
-    return "You must register with the bridge before subscribing a channel. Use `/register` first."
-
-
 def _host_forum_message(operation_input: SubscribeLocalCommunityInput) -> str:
     """Explain that the host forum cannot subscribe to itself."""
     return (
@@ -139,11 +136,7 @@ def _body(operation_input: SubscribeLocalCommunityInput) -> OperationResult:
 subscribe_local_community_operation = OperationDefinition(
     name="subscribe_local_community",
     preconditions=(
-        Precondition(
-            name="discord_user_is_registered",
-            message=_registration_message,
-            predicate=lambda op: op.get_bridge_user() is not None,
-        ),
+        DISCORD_USER_REGISTERED,
         Precondition(
             name="local_community_exists",
             message=lambda _: "The selected local community no longer exists.",

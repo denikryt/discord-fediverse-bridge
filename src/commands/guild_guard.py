@@ -1,107 +1,111 @@
-"""Shared Discord slash-command access guards.
-
-This module owns deployment-level command checks that must run before command-
-specific work. It intentionally lives in the command layer because it imports
-Discord SDK objects and sends interaction responses; operations and repositories
-stay independent of Discord interaction mechanics.
-"""
+"""Discord presentation adapter for shared command-access policies."""
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+import inspect
 from typing import Any
 
 import discord
+from discordops import PolicyDefinition, PolicyResult, evaluate_policy_async
 
+from ..command_access import (
+    GUILD_COMMAND_ACCESS,
+    GUILD_NOT_ALLOWED_MESSAGE,
+    GUILD_ONLY_MESSAGE,
+    REGISTERED_GUILD_COMMAND_ACCESS,
+    CommandAccessInput,
+)
 from ..config import Settings
 from ..db import Database
-
-GUILD_ONLY_MESSAGE = "This command can only be used inside an allowed Discord server."
-GUILD_NOT_ALLOWED_MESSAGE = "This Discord server is not allowed to use this bridge bot."
-REGISTRATION_REQUIRED_MESSAGE = "You must register with the bridge before using this command. Use `/register` first."
+from ..operations.common_preconditions import REGISTRATION_REQUIRED_MESSAGE
 
 
-@dataclass(slots=True)
-class GuildGuardResult:
-    """Describe whether a Discord interaction passed guild deployment checks.
-
-    `reason` is stable for command tests and logs. The guard does not write
-    audit events because deployment scoping is command-context validation, not a
-    management authorization decision.
-    """
-
-    allowed: bool
-    guild_id: int | None
-    message: str | None = None
-    reason: str | None = None
-
-
-def _configured_guild_allowlist(settings: Settings | object | None) -> list[str]:
-    """Return the configured guild allowlist, tolerating lightweight test settings."""
-    if settings is None:
-        return []
-    value = getattr(settings, "discord_guild_allowlist", [])
-    return [str(entry) for entry in value]
+async def evaluate_command_access(
+    interaction: discord.Interaction,
+    *,
+    definition: PolicyDefinition,
+    settings: Settings | object | None,
+    database: Database | Any | None = None,
+) -> PolicyResult:
+    """Evaluate one access policy from primitive interaction identity fields."""
+    policy_input = CommandAccessInput(
+        settings=settings,
+        database=database,
+        discord_guild_id=getattr(interaction, "guild_id", None),
+        discord_user_id=str(interaction.user.id),
+    )
+    return await evaluate_policy_async(definition, policy_input)
 
 
-def check_guild_allowed(*, settings: Settings | object | None, guild_id: int | None) -> GuildGuardResult:
-    """Return whether one command may run in this Discord guild context."""
-    if guild_id is None:
-        return GuildGuardResult(
-            allowed=False,
-            guild_id=None,
-            message=GUILD_ONLY_MESSAGE,
-            reason="no_guild",
-        )
+async def send_command_access_rejection(
+    interaction: discord.Interaction,
+    result: PolicyResult,
+) -> None:
+    """Send a private policy rejection using initial response or follow-up safely."""
+    message = result.message or GUILD_ONLY_MESSAGE
+    response = interaction.response
+    # Modal and command error paths may already have acknowledged the interaction;
+    # follow-up preserves the policy result without triggering double-response errors.
+    is_done = getattr(response, "is_done", None)
+    done = is_done() if callable(is_done) else False
+    # Lightweight AsyncMock interactions may model every attribute as async,
+    # while discord.py exposes ``is_done`` synchronously. Treat such test-only
+    # awaitables as not acknowledged and close raw coroutines to avoid warnings.
+    if inspect.isawaitable(done):
+        if inspect.iscoroutine(done):
+            done.close()
+        done = False
+    if done:
+        await interaction.followup.send(message, ephemeral=True)
+        return
+    await response.send_message(message, ephemeral=True)
 
-    allowlist = _configured_guild_allowlist(settings)
-    if allowlist and str(guild_id) not in allowlist:
-        return GuildGuardResult(
-            allowed=False,
-            guild_id=guild_id,
-            message=GUILD_NOT_ALLOWED_MESSAGE,
-            reason="not_allowlisted",
-        )
 
-    return GuildGuardResult(allowed=True, guild_id=guild_id)
-
-
-async def reject_if_guild_not_allowed(interaction: discord.Interaction, *, settings: Settings | object | None) -> bool:
-    """Send an ephemeral guild-scope rejection and return True when flow stops."""
-    result = check_guild_allowed(settings=settings, guild_id=getattr(interaction, "guild_id", None))
+async def reject_if_command_access_denied(
+    interaction: discord.Interaction,
+    *,
+    definition: PolicyDefinition,
+    settings: Settings | object | None,
+    database: Database | Any | None = None,
+) -> bool:
+    """Evaluate a policy, present a denial, and report whether handler flow stops."""
+    result = await evaluate_command_access(
+        interaction,
+        definition=definition,
+        settings=settings,
+        database=database,
+    )
     if result.allowed:
         return False
-
-    # Guard responses are initial interaction replies for slash commands and
-    # modal submits. Keep them private because they are deployment context.
-    await interaction.response.send_message(result.message or GUILD_ONLY_MESSAGE, ephemeral=True)
+    await send_command_access_rejection(interaction, result)
     return True
 
 
-def check_guild_autocomplete_disallowed(interaction: discord.Interaction, settings: Settings | object | None) -> bool:
-    """Return True when autocomplete should quietly show no choices.
-
-    Autocomplete interactions cannot display normal ephemeral rejection messages.
-    Returning no choices prevents network/database discovery for disallowed guilds
-    while keeping Discord's autocomplete surface stable.
-    """
-    return not check_guild_allowed(
+async def command_access_allows_autocomplete(
+    interaction: discord.Interaction,
+    *,
+    definition: PolicyDefinition,
+    settings: Settings | object | None,
+    database: Database | Any | None = None,
+) -> bool:
+    """Evaluate policy quietly for autocomplete, which cannot send normal replies."""
+    result = await evaluate_command_access(
+        interaction,
+        definition=definition,
         settings=settings,
-        guild_id=getattr(interaction, "guild_id", None),
-    ).allowed
+        database=database,
+    )
+    return result.allowed
 
 
-def is_registered_discord_user(*, database: Database | Any, discord_user_id: str) -> bool:
-    """Return whether a Discord user has completed bridge registration."""
-    return database.users.get_user_by_discord_user_id(discord_user_id) is not None
-
-
-async def reject_if_user_not_registered(interaction: discord.Interaction, *, database: Database | Any) -> bool:
-    """Send registration guidance and return True when command flow stops."""
-    if is_registered_discord_user(database=database, discord_user_id=str(interaction.user.id)):
-        return False
-
-    # Registration is an onboarding prerequisite, not a management forbidden
-    # decision. It should not create audit rows or run domain operations.
-    await interaction.response.send_message(REGISTRATION_REQUIRED_MESSAGE, ephemeral=True)
-    return True
+__all__ = [
+    "GUILD_COMMAND_ACCESS",
+    "REGISTERED_GUILD_COMMAND_ACCESS",
+    "GUILD_ONLY_MESSAGE",
+    "GUILD_NOT_ALLOWED_MESSAGE",
+    "REGISTRATION_REQUIRED_MESSAGE",
+    "evaluate_command_access",
+    "send_command_access_rejection",
+    "reject_if_command_access_denied",
+    "command_access_allows_autocomplete",
+]

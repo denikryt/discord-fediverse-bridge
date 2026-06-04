@@ -10,7 +10,7 @@ from discord import app_commands
 from ..config import Settings
 from ..db import Database
 from ..local_community_permissions import can_manage_local_community, is_super_admin
-from .guild_guard import check_guild_autocomplete_disallowed, reject_if_guild_not_allowed
+from .guild_guard import GUILD_COMMAND_ACCESS, command_access_allows_autocomplete, reject_if_command_access_denied
 from ..operations import UnbanUserInput, unban_user_operation
 
 logger = logging.getLogger(__name__)
@@ -47,7 +47,7 @@ def _unban_community_autocomplete(database: Database, settings: Settings):
     ) -> list[app_commands.Choice[str]]:
         """Return manageable active communities for the invoking user."""
         try:
-            if check_guild_autocomplete_disallowed(interaction, settings):
+            if not await command_access_allows_autocomplete(interaction, definition=GUILD_COMMAND_ACCESS, settings=settings):
                 return []
             discord_user_id = str(interaction.user.id)
             if is_super_admin(settings=settings, discord_user_id=discord_user_id):
@@ -88,7 +88,7 @@ def _unban_user_autocomplete(database: Database, settings: Settings):
     ) -> list[app_commands.Choice[str]]:
         """Return active banned handles for a manageable selected community."""
         try:
-            if check_guild_autocomplete_disallowed(interaction, settings):
+            if not await command_access_allows_autocomplete(interaction, definition=GUILD_COMMAND_ACCESS, settings=settings):
                 return []
             namespace = getattr(interaction, "namespace", None)
             community_slug = getattr(namespace, "community", None) if namespace is not None else None
@@ -160,7 +160,7 @@ def register(
         user: str,
     ) -> None:
         """Run the unban operation and return an ephemeral command reply."""
-        if await reject_if_guild_not_allowed(interaction, settings=settings):
+        if await reject_if_command_access_denied(interaction, definition=GUILD_COMMAND_ACCESS, settings=settings):
             return
         result = unban_user_operation(
             UnbanUserInput(

@@ -14,7 +14,7 @@ from ..local_community_permissions import (
     can_manage_local_community,
     is_super_admin,
 )
-from .guild_guard import check_guild_autocomplete_disallowed, reject_if_guild_not_allowed
+from .guild_guard import GUILD_COMMAND_ACCESS, command_access_allows_autocomplete, reject_if_command_access_denied
 from ..operations import EditCommunityInput, edit_community_operation
 
 logger = logging.getLogger(__name__)
@@ -53,7 +53,7 @@ def _edit_community_autocomplete(database: Database, settings: Settings):
     ) -> list[app_commands.Choice[str]]:
         """Return editable active communities for this Discord caller."""
         try:
-            if check_guild_autocomplete_disallowed(interaction, settings):
+            if not await command_access_allows_autocomplete(interaction, definition=GUILD_COMMAND_ACCESS, settings=settings):
                 return []
             discord_user_id = str(interaction.user.id)
             if is_super_admin(settings=settings, discord_user_id=discord_user_id):
@@ -145,7 +145,7 @@ class EditCommunityModal(discord.ui.Modal):
 
     async def on_submit(self, interaction: discord.Interaction) -> None:
         """Re-run runtime authorization and persist the submitted metadata."""
-        if await reject_if_guild_not_allowed(interaction, settings=self.settings):
+        if await reject_if_command_access_denied(interaction, definition=GUILD_COMMAND_ACCESS, settings=self.settings):
             return
         result = edit_community_operation(
             EditCommunityInput(
@@ -233,7 +233,7 @@ def register(
         community: str,
     ) -> None:
         """Open a prefilled edit modal or return a private rejection message."""
-        if await reject_if_guild_not_allowed(interaction, settings=settings):
+        if await reject_if_command_access_denied(interaction, definition=GUILD_COMMAND_ACCESS, settings=settings):
             return
         community_row, error = _can_open_edit_modal(
             database=database,

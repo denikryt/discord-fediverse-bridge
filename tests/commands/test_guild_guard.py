@@ -1,85 +1,88 @@
-"""Command-level tests for guild deployment and registration guards."""
+"""Discord adapter tests for command-access policy presentation."""
 
 from __future__ import annotations
 
 from types import SimpleNamespace
-from unittest.mock import AsyncMock, Mock
+from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
 from src.commands.guild_guard import (
-    GUILD_NOT_ALLOWED_MESSAGE,
-    GUILD_ONLY_MESSAGE,
-    REGISTRATION_REQUIRED_MESSAGE,
-    check_guild_allowed,
-    reject_if_guild_not_allowed,
-    reject_if_user_not_registered,
+    GUILD_COMMAND_ACCESS,
+    REGISTERED_GUILD_COMMAND_ACCESS,
+    command_access_allows_autocomplete,
+    reject_if_command_access_denied,
 )
 
 
-def test_check_guild_allowed_permits_any_guild_when_allowlist_empty() -> None:
-    """Empty allowlists preserve unrestricted guild usage."""
-    settings = SimpleNamespace(discord_guild_allowlist=[])
-
-    result = check_guild_allowed(settings=settings, guild_id=123)
-
-    assert result.allowed is True
-    assert result.reason is None
-
-
-def test_check_guild_allowed_rejects_dm_context() -> None:
-    """All slash commands are guild-scoped and reject missing guild ids."""
-    settings = SimpleNamespace(discord_guild_allowlist=[])
-
-    result = check_guild_allowed(settings=settings, guild_id=None)
-
-    assert result.allowed is False
-    assert result.reason == "no_guild"
-    assert result.message == GUILD_ONLY_MESSAGE
-
-
-def test_check_guild_allowed_rejects_non_allowlisted_guild() -> None:
-    """Configured allowlists restrict commands to explicit guild ids."""
-    settings = SimpleNamespace(discord_guild_allowlist=["123"])
-
-    result = check_guild_allowed(settings=settings, guild_id=456)
-
-    assert result.allowed is False
-    assert result.reason == "not_allowlisted"
-    assert result.message == GUILD_NOT_ALLOWED_MESSAGE
+def _interaction(*, guild_id: int | None = 123) -> SimpleNamespace:
+    """Build a lightweight Discord interaction double for policy presentation."""
+    response = SimpleNamespace(send_message=AsyncMock(), is_done=MagicMock(return_value=False))
+    return SimpleNamespace(
+        guild_id=guild_id,
+        user=SimpleNamespace(id=999),
+        response=response,
+        followup=SimpleNamespace(send=AsyncMock()),
+    )
 
 
 @pytest.mark.asyncio
-async def test_reject_if_guild_not_allowed_sends_ephemeral_message() -> None:
-    """The async helper owns the user-visible rejection response."""
-    interaction = AsyncMock()
-    interaction.guild_id = 456
-    interaction.response.send_message = AsyncMock()
-    settings = SimpleNamespace(discord_guild_allowlist=["123"])
-
-    rejected = await reject_if_guild_not_allowed(interaction, settings=settings)
-
-    assert rejected is True
+async def test_denied_command_sends_initial_ephemeral_response() -> None:
+    """Unacknowledged commands receive the policy message privately."""
+    interaction = _interaction(guild_id=None)
+    stopped = await reject_if_command_access_denied(
+        interaction,
+        definition=GUILD_COMMAND_ACCESS,
+        settings=SimpleNamespace(discord_guild_allowlist=[]),
+    )
+    assert stopped is True
     interaction.response.send_message.assert_awaited_once_with(
-        GUILD_NOT_ALLOWED_MESSAGE,
+        "This command can only be used inside an allowed Discord server.",
         ephemeral=True,
     )
 
 
 @pytest.mark.asyncio
-async def test_reject_if_user_not_registered_sends_registration_guidance() -> None:
-    """Create-community uses the guard before any command-specific work."""
-    interaction = AsyncMock()
-    interaction.user.id = "1234567890"
-    interaction.response.send_message = AsyncMock()
-    database = Mock()
-    database.users.get_user_by_discord_user_id.return_value = None
-
-    rejected = await reject_if_user_not_registered(interaction, database=database)
-
-    assert rejected is True
-    database.users.get_user_by_discord_user_id.assert_called_once_with("1234567890")
-    interaction.response.send_message.assert_awaited_once_with(
-        REGISTRATION_REQUIRED_MESSAGE,
+async def test_denied_acknowledged_command_uses_ephemeral_followup() -> None:
+    """Already acknowledged interactions avoid a second initial response."""
+    interaction = _interaction(guild_id=5)
+    interaction.response.is_done.return_value = True
+    stopped = await reject_if_command_access_denied(
+        interaction,
+        definition=GUILD_COMMAND_ACCESS,
+        settings=SimpleNamespace(discord_guild_allowlist=["4"]),
+    )
+    assert stopped is True
+    interaction.followup.send.assert_awaited_once_with(
+        "This Discord server is not allowed to use this bridge bot.",
         ephemeral=True,
     )
+
+
+@pytest.mark.asyncio
+async def test_allowed_command_returns_false_without_response() -> None:
+    """Allowed ingress leaves response ownership with the command handler."""
+    interaction = _interaction(guild_id=5)
+    stopped = await reject_if_command_access_denied(
+        interaction,
+        definition=GUILD_COMMAND_ACCESS,
+        settings=SimpleNamespace(discord_guild_allowlist=[]),
+    )
+    assert stopped is False
+    interaction.response.send_message.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_autocomplete_denial_is_quiet_and_skips_registration_lookup() -> None:
+    """Autocomplete returns a decision without sending interaction responses."""
+    interaction = _interaction(guild_id=None)
+    database = MagicMock()
+    allowed = await command_access_allows_autocomplete(
+        interaction,
+        definition=REGISTERED_GUILD_COMMAND_ACCESS,
+        settings=SimpleNamespace(discord_guild_allowlist=[]),
+        database=database,
+    )
+    assert allowed is False
+    database.users.get_user_by_discord_user_id.assert_not_called()
+    interaction.response.send_message.assert_not_awaited()

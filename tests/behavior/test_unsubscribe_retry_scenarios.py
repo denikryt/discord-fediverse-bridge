@@ -25,6 +25,21 @@ def _community_actor_url() -> str:
     return f"https://{LEMMY_EXAMPLE_DOMAIN}/c/hackers"
 
 
+def _register_user(database: Database, discord_user_id: str = "1234567890") -> None:
+    """Seed the registered command caller required by unsubscribe ingress."""
+    actor_url = f"https://{BRIDGE_EXAMPLE_DOMAIN}/users/alice"
+    database.users.create_user(
+        discord_user_id=discord_user_id,
+        activitypub_username="alice",
+        actor_url=actor_url,
+        inbox_url=f"{actor_url}/inbox",
+        outbox_url=f"{actor_url}/outbox",
+        followers_url=f"{actor_url}/followers",
+        public_key_pem="public-key",
+        private_key_pem="private-key",
+    )
+
+
 @pytest.mark.asyncio
 async def test_last_channel_remote_unfollow_failure_keeps_bridge_follow_for_retry(
     tmp_path: Path,
@@ -35,6 +50,7 @@ async def test_last_channel_remote_unfollow_failure_keeps_bridge_follow_for_retr
 ) -> None:
     """Remote Undo failure should preserve retry state after local channel cleanup."""
     database = _database(tmp_path)
+    _register_user(database)
     community_actor_url = _community_actor_url()
     follow_activity_id = f"https://{BRIDGE_EXAMPLE_DOMAIN}/activities/follow/1"
     database.bridge_actor_follows.create_bridge_actor_follow(
@@ -84,6 +100,7 @@ async def test_last_channel_missing_follow_activity_id_blocks_local_cleanup(
 ) -> None:
     """Missing follow state should stop the last-channel unsubscribe early."""
     database = _database(tmp_path)
+    _register_user(database)
     community_actor_url = _community_actor_url()
     database.bridge_actor_follows.create_bridge_actor_follow(
         community_actor_id=community_actor_url,

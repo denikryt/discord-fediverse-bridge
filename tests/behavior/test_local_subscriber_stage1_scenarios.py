@@ -175,6 +175,7 @@ async def test_unsubscribe_community_removes_only_local_subscriber_state(
 ) -> None:
     """Removing a local subscriber should not dispatch remote Undo(Follow)."""
     database = _database(tmp_path)
+    _register_user(database)
     community = _create_local_community(database, forum_channel_id=100)
     database.local_subscribers.create_local_subscriber(
         local_community_id=community.id,
@@ -205,6 +206,7 @@ async def test_list_subscriptions_renders_remote_and_local_sections(
 ) -> None:
     """The list command should separate remote subscriptions from local subscribers."""
     database = _database(tmp_path)
+    _register_user(database)
     community = _create_local_community(database, forum_channel_id=100)
     database.remote_subscriptions.create_subscription(
         discord_channel_id=222,

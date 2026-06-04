@@ -19,7 +19,7 @@ from ..discord_forum_placement import (
     resolve_optional_forum_channel,
 )
 from ..operations import CreateCommunityInput, create_community_operation
-from .guild_guard import reject_if_guild_not_allowed, reject_if_user_not_registered
+from .guild_guard import REGISTERED_GUILD_COMMAND_ACCESS, reject_if_command_access_denied
 
 logger = logging.getLogger(__name__)
 
@@ -94,9 +94,7 @@ class CreateCommunityModal(discord.ui.Modal):
 
     async def on_submit(self, interaction: discord.Interaction) -> None:
         """Validate modal input, resolve channel placement, and create the community."""
-        if await reject_if_guild_not_allowed(interaction, settings=self.settings):
-            return
-        if await reject_if_user_not_registered(interaction, database=self.database):
+        if await reject_if_command_access_denied(interaction, definition=REGISTERED_GUILD_COMMAND_ACCESS, settings=self.settings, database=self.database):
             return
 
         guild_id = interaction.guild_id
@@ -186,8 +184,6 @@ def register(
     )
     async def create_community(interaction: discord.Interaction) -> None:
         """Open the local-community creation modal for registered guild users."""
-        if await reject_if_guild_not_allowed(interaction, settings=settings):
-            return
-        if await reject_if_user_not_registered(interaction, database=database):
+        if await reject_if_command_access_denied(interaction, definition=REGISTERED_GUILD_COMMAND_ACCESS, settings=settings, database=database):
             return
         await interaction.response.send_modal(CreateCommunityModal(database=database, settings=settings))

@@ -336,6 +336,7 @@ async def test_unsubscribe_last_channel_sends_undo_follow(
 ) -> None:
     """Unsubscribing the last channel for a community sends Undo(Follow)."""
     database = _database(tmp_path)
+    _register_user(database)
     community_actor_url = _community_actor_url()
     follow_activity_id = f"https://{BRIDGE_EXAMPLE_DOMAIN}/activities/follow/1"
     database.bridge_actor_follows.create_bridge_actor_follow(
@@ -381,6 +382,7 @@ async def test_unsubscribe_one_of_two_channels_keeps_bridge_follow(
 ) -> None:
     """Unsubscribing one of two channels keeps the bridge follow row intact."""
     database = _database(tmp_path)
+    _register_user(database)
     community_actor_url = _community_actor_url()
     follow_activity_id = f"https://{BRIDGE_EXAMPLE_DOMAIN}/activities/follow/1"
     database.bridge_actor_follows.create_bridge_actor_follow(

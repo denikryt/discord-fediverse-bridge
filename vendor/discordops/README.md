@@ -1,6 +1,6 @@
 # discordops
 
-A declarative operation and precondition framework for Discord bots.
+A declarative operation, policy, and precondition framework for Discord bots.
 
 ## What is it?
 
@@ -77,6 +77,34 @@ Describes an operation declaratively:
 - `reject`: Handler called when a precondition fails
 - `body`: Handler called when all preconditions pass
 
+
+### PolicyDefinition and PolicyResult
+A policy evaluates an ordered tuple of the same reusable `Precondition` objects
+without defining an operation body or rejection callback. It returns a neutral
+`PolicyResult`, leaving presentation and control flow to the application.
+
+```python
+from discordops import PolicyDefinition, Precondition, evaluate_policy_async
+
+GUILD_ACCESS = PolicyDefinition(
+    name="guild_access",
+    preconditions=(
+        Precondition(
+            name="guild_required",
+            message="Use this command in a server.",
+            predicate=lambda value: value.guild_id is not None,
+        ),
+    ),
+)
+
+result = await evaluate_policy_async(GUILD_ACCESS, command_input)
+if not result.allowed:
+    await interaction.response.send_message(result.message, ephemeral=True)
+```
+
+Policy evaluation never sends Discord responses. Commands, autocomplete, HTTP
+adapters, and other consumers decide how a denial is presented.
+
 ### OperationResult
 Returned by operations. Contains:
 - `applied`: True if operation succeeded, False if rejected
@@ -102,11 +130,14 @@ Basic checks for common Discord scenarios:
 ### framework.py
 - `Precondition(name, message, predicate, reject_kwargs_factory=None)` — defines a condition
 - `OperationDefinition(name, preconditions, reject, body)` — defines operation contract
-- `run_operation_definition(definition, operation_input)` — executes operation with preconditions
+- `PolicyDefinition(name, preconditions)` — defines a body-less ordered policy
+- `evaluate_policy(...)` / `evaluate_policy_async(...)` — evaluate policy conditions
+- `run_operation_definition(...)` / `run_operation_definition_async(...)` — execute an operation
 - `Operation` — base class for declarative operations
 
 ### types.py
 - `OperationResult(applied, message, reason=None, extra_kwargs=None)` — operation result
+- `PolicyResult(allowed, reason=None, message=None, extra_kwargs=None)` — policy result
 
 ### gates.py
 - `has_actor_authority(interaction)` — check if user is admin
@@ -164,7 +195,7 @@ The framework short-circuits on the first failing precondition.
 Handlers are your application code, not part of the framework. A typical handler:
 
 1. Extracts context from interaction
-2. Verifies authority
+2. Evaluates any body-less ingress policy
 3. Builds operation input
 4. Executes operation
 5. Sends response

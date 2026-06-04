@@ -17,6 +17,8 @@ from dataclasses import dataclass, field
 
 from discordops import OperationDefinition, OperationResult, Precondition
 
+from .common_preconditions import DISCORD_USER_REGISTERED
+
 from ..db import Database
 from ..fedify_gateway_client import FedifyGatewayClient
 
@@ -90,11 +92,6 @@ def _existing_community_label(subscription: object) -> str:
         or getattr(subscription, "lemmy_community_name", None)
         or getattr(subscription, "lemmy_community_actor_id")
     )
-
-
-def _registration_message(_: SubscribeInput) -> str:
-    """Explain why subscribe requires prior bridge registration."""
-    return "You must register with the bridge before subscribing a channel. Use `/register` first."
 
 
 def _accepted_message(operation_input: SubscribeInput) -> str:
@@ -269,11 +266,7 @@ async def _body(operation_input: SubscribeInput) -> OperationResult:
 subscribe_operation = OperationDefinition(
     name="subscribe_channel",
     preconditions=(
-        Precondition(
-            name="discord_user_is_registered",
-            message=_registration_message,
-            predicate=lambda op: op.get_bridge_user() is not None,
-        ),
+        DISCORD_USER_REGISTERED,
         # Block if this specific channel already has an accepted subscription.
         # Does not block when a *different* channel's follow was accepted and
         # this channel is subscribing for the first time.

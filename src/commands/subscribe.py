@@ -25,7 +25,7 @@ from ..lemmyverse_communities import (
     LemmyverseCommunityCache,
     autocomplete_lemmyverse_communities,
 )
-from .guild_guard import check_guild_autocomplete_disallowed, reject_if_guild_not_allowed
+from .guild_guard import GUILD_COMMAND_ACCESS, REGISTERED_GUILD_COMMAND_ACCESS, command_access_allows_autocomplete, reject_if_command_access_denied
 from .subscribe_community_handler import SubscribeCommunityCommandHandler
 
 logger = logging.getLogger(__name__)
@@ -72,7 +72,7 @@ def register(
         instance_domain: str | None = None,
     ) -> None:
         """Delegate /subscribe-community submit handling to the command handler."""
-        if await reject_if_guild_not_allowed(interaction, settings=settings):
+        if await reject_if_command_access_denied(interaction, definition=REGISTERED_GUILD_COMMAND_ACCESS, settings=settings, database=database):
             return
         await handler.handle(
             interaction=interaction,
@@ -128,7 +128,7 @@ def _instance_autocomplete(settings: Settings | None):
         interaction: discord.Interaction,
         current: str,
     ) -> list[app_commands.Choice[str]]:
-        if check_guild_autocomplete_disallowed(interaction, settings):
+        if not await command_access_allows_autocomplete(interaction, definition=GUILD_COMMAND_ACCESS, settings=settings):
             return []
         if not allowlist:
             return []
@@ -166,7 +166,7 @@ def _community_autocomplete(
         interaction: discord.Interaction,
         current: str,
     ) -> list[app_commands.Choice[str]]:
-        if check_guild_autocomplete_disallowed(interaction, settings):
+        if not await command_access_allows_autocomplete(interaction, definition=GUILD_COMMAND_ACCESS, settings=settings):
             return []
         instance_url = _extract_instance_domain_for_autocomplete(interaction)
 

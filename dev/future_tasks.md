@@ -274,3 +274,29 @@ Later audit extensions may cover:
 - role and super-admin configuration changes;
 - legacy claim/backfill actions;
 - operator-facing audit search, retention, export, or dashboard UI.
+
+## 23. DiscordOps precondition and reason-code naming
+
+DiscordOps currently uses some positive condition names as failure reason codes. For example, a failed registration check can return:
+
+```text
+discord_user_is_registered
+```
+
+This is counterintuitive because the value describes the condition that was expected to be true rather than the reason the operation or policy was rejected. A future compatibility-focused cleanup should adopt failure-oriented reason codes, for example:
+
+```text
+discord_user_not_registered
+not_guild_context
+guild_not_allowed
+```
+
+The cleanup should cover all DiscordOps preconditions consistently rather than renaming only the registration check. Before changing names, identify every consumer of each reason code, including:
+
+- tests that assert exact strings;
+- command and modal adapters that map reasons to responses;
+- logs, diagnostics, and audit-related output;
+- documentation and examples;
+- any external or compatibility-sensitive consumers.
+
+Treat reason strings as stable contract values during the migration. Decide whether aliases or a deprecation period are required, update affected tests and adapters explicitly, and document the compatibility impact. This work is intentionally separate from the DiscordOps policy-evaluation refactor so that structural changes do not silently include reason-code changes.

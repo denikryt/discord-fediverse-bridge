@@ -10,7 +10,7 @@ from ..community_labels import community_relay_label
 from ..db import Database
 from ..config import Settings
 from ..fedify_gateway_client import FedifyGatewayClient
-from .guild_guard import reject_if_guild_not_allowed
+from .guild_guard import REGISTERED_GUILD_COMMAND_ACCESS, reject_if_command_access_denied
 from ..operations import UnsubscribeInput, unsubscribe_operation
 from ..operations.unsubscribe_local_community import (
     UnsubscribeLocalCommunityInput,
@@ -96,7 +96,7 @@ def register(
         channel: discord.ForumChannel,
     ) -> None:
         """Handle the /unsubscribe-channel slash command."""
-        if await reject_if_guild_not_allowed(interaction, settings=settings):
+        if await reject_if_command_access_denied(interaction, definition=REGISTERED_GUILD_COMMAND_ACCESS, settings=settings, database=database):
             return
         # The command adapter only supplies Discord-facing context; the
         # operation decides whether deletion is allowed and what result to show.
