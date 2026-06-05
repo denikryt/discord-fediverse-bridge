@@ -78,7 +78,7 @@ list_subscriptions_operation = OperationDefinition(
     name="list_subscriptions",
     preconditions=(
         Precondition(
-            name="subscriptions_exist",
+            name="no_subscriptions",
             message="No active subscriptions.",
             predicate=lambda operation_input: bool(_load_remote_subscriptions(operation_input))
             or bool(_load_local_subscribers(operation_input)),

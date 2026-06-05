@@ -63,7 +63,7 @@ def test_registered_policy_rejects_unknown_user_with_existing_message() -> None:
     database = MagicMock()
     database.users.get_user_by_discord_user_id.return_value = None
     result = evaluate_policy(REGISTERED_GUILD_COMMAND_ACCESS, _input(guild_id=2, allowlist=[], database=database))
-    assert result.reason == "discord_user_is_registered"
+    assert result.reason == "discord_user_not_registered"
     assert result.message == REGISTRATION_REQUIRED_MESSAGE
 
 

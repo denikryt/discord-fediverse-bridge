@@ -171,42 +171,34 @@ class BanUserOperation(Operation):
     """Declarative operation for one community-scoped local actor ban."""
 
     name = "ban_user"
-    _REJECTION_REASONS = {
-        "guild_context": "missing_guild_context",
-        "community_accessible": "unknown_or_inaccessible_community",
-        "can_manage_community": "cannot_manage_community",
-        "community_active": "community_disabled",
-        "valid_actor_handle": "invalid_handle",
-        "no_duplicate_active_ban": "duplicate_active_ban",
-    }
     preconditions = (
         Precondition(
-            name="guild_context",
+            name="missing_guild_context",
             message="This command can only be used inside a guild.",
             predicate=_has_guild_context,
         ),
         Precondition(
-            name="community_accessible",
+            name="unknown_or_inaccessible_community",
             message=_inaccessible_message,
             predicate=_community_accessible,
         ),
         Precondition(
-            name="can_manage_community",
+            name="cannot_manage_community",
             message="You are not allowed to manage this local community.",
             predicate=_can_manage_community,
         ),
         Precondition(
-            name="community_active",
+            name="community_disabled",
             message=_disabled_message,
             predicate=_community_active,
         ),
         Precondition(
-            name="valid_actor_handle",
+            name="invalid_handle",
             message="Invalid remote user handle. Use user@example.com.",
             predicate=_valid_actor_handle,
         ),
         Precondition(
-            name="no_duplicate_active_ban",
+            name="duplicate_active_ban",
             message=_duplicate_active_ban_message,
             predicate=_no_duplicate_active_ban,
         ),
@@ -223,7 +215,7 @@ class BanUserOperation(Operation):
         """Return one rejected command result for the first failed precondition."""
         # discordops exposes the failed precondition name; command callers keep
         # stable reason codes from the ban-user operation contract.
-        if reason in {"can_manage_community", "community_active"}:
+        if reason in {"cannot_manage_community", "community_disabled"}:
             community = operation_input.get_local_community()
             if community is not None:
                 operation_input.database.management_audit.ban_create_forbidden(
@@ -234,7 +226,7 @@ class BanUserOperation(Operation):
         return BanUserResult(
             applied=False,
             message=message,
-            reason=self._REJECTION_REASONS.get(reason, reason),
+            reason=reason,
         )
 
     def body(self, operation_input: BanUserInput) -> BanUserResult:

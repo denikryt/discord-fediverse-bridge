@@ -32,7 +32,7 @@ async def test_unsubscribe_operation_rejects_missing_subscription() -> None:
     )
 
     assert result.applied is False
-    assert result.reason == "channel_has_subscription"
+    assert result.reason == "channel_subscription_not_found"
     assert result.message == "Channel <#123> has no active subscription."
     database.remote_subscriptions.delete_subscription.assert_not_called()
 

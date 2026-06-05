@@ -37,7 +37,7 @@ async def test_subscribe_operation_rejects_unregistered_user() -> None:
     )
 
     assert result.applied is False
-    assert result.reason == "discord_user_is_registered"
+    assert result.reason == "discord_user_not_registered"
     assert result.message == (
         "You must register with the bridge before using this command. Use `/register` first."
     )
@@ -75,7 +75,7 @@ async def test_subscribe_operation_rejects_accepted_subscription() -> None:
     )
 
     assert result.applied is False
-    assert result.reason == "channel_subscription_not_accepted"
+    assert result.reason == "channel_subscription_already_accepted"
     assert result.message == f"Channel <#123> is already subscribed to **!hackers@{LEMMY_EXAMPLE_DOMAIN}**."
     fedify_gateway.follow_community.assert_not_awaited()
     database.remote_subscriptions.create_subscription.assert_not_called()
@@ -111,7 +111,7 @@ async def test_subscribe_operation_rejects_pending_subscription() -> None:
     )
 
     assert result.applied is False
-    assert result.reason == "channel_subscription_not_pending"
+    assert result.reason == "channel_subscription_already_pending"
     assert result.message == (
         f"Channel <#123> is still waiting for **!hackers@{LEMMY_EXAMPLE_DOMAIN}** to accept the bridge follow."
     )

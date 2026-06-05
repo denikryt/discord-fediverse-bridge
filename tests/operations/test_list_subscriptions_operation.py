@@ -21,7 +21,7 @@ def test_list_subscriptions_operation_rejects_empty_state() -> None:
     )
 
     assert result.applied is False
-    assert result.reason == "subscriptions_exist"
+    assert result.reason == "no_subscriptions"
     assert result.message == "No active subscriptions."
 
 

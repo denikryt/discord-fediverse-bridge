@@ -100,24 +100,19 @@ class ListBannedUsersOperation(Operation):
     """Declarative operation for listing active bans in one community."""
 
     name = "list_banned_users"
-    _REJECTION_REASONS = {
-        "guild_context": "missing_guild_context",
-        "community_accessible": "unknown_or_inaccessible_community",
-        "community_active": "community_disabled",
-    }
     preconditions = (
         Precondition(
-            name="guild_context",
+            name="missing_guild_context",
             message="This command can only be used inside a guild.",
             predicate=_has_guild_context,
         ),
         Precondition(
-            name="community_accessible",
+            name="unknown_or_inaccessible_community",
             message=_inaccessible_message,
             predicate=_community_accessible,
         ),
         Precondition(
-            name="community_active",
+            name="community_disabled",
             message=_disabled_message,
             predicate=_community_active,
         ),
@@ -135,7 +130,7 @@ class ListBannedUsersOperation(Operation):
         return ListBannedUsersResult(
             applied=False,
             message=message,
-            reason=self._REJECTION_REASONS.get(reason, reason),
+            reason=reason,
         )
 
     def body(self, operation_input: ListBannedUsersInput) -> ListBannedUsersResult:

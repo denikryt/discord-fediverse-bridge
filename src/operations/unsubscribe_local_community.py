@@ -78,7 +78,7 @@ unsubscribe_local_community_operation = OperationDefinition(
     name="unsubscribe_local_community",
     preconditions=(
         Precondition(
-            name="channel_has_local_subscriber",
+            name="local_subscriber_not_found",
             message=_missing_message,
             predicate=lambda op: op.get_local_subscriber() is not None,
         ),

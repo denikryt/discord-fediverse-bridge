@@ -16,6 +16,7 @@ This document is a task-oriented reading guide for maintainers changing or debug
 ## Discord slash commands
 1. `src/discord_bot.py` — Discord adapter and command registration.
 2. `src/operations/common_preconditions.py` — shared command-access input, atomic DiscordOps preconditions, and named policy compositions.
+   `Precondition.name` is the emitted failure reason, so project-owned names must describe the rejection state directly.
 3. `src/commands/guild_guard.py` — Discord evaluation and rejection-presentation adapter for those policies.
 4. `src/commands/` — command adapters.
 5. `src/operations/` — business logic.

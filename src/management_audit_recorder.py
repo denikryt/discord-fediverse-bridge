@@ -36,8 +36,8 @@ from .management_audit import (
 from .models import CommunityActorBan, LocalCommunity, ManagementAuditEvent
 
 _FAILED_PRECONDITION_REASON_CODES = {
-    "can_manage_community": REASON_NOT_OWNER_OR_SUPER_ADMIN,
-    "community_active": REASON_COMMUNITY_DISABLED,
+    "cannot_manage_community": REASON_NOT_OWNER_OR_SUPER_ADMIN,
+    "community_disabled": REASON_COMMUNITY_DISABLED,
 }
 
 

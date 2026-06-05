@@ -84,7 +84,7 @@ GUILD_ALLOWLISTED = Precondition(
 )
 
 DISCORD_USER_REGISTERED = Precondition(
-    name="discord_user_is_registered",
+    name="discord_user_not_registered",
     message=REGISTRATION_REQUIRED_MESSAGE,
     predicate=_discord_user_is_registered,
 )

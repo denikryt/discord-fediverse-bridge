@@ -138,32 +138,32 @@ subscribe_local_community_operation = OperationDefinition(
     preconditions=(
         DISCORD_USER_REGISTERED,
         Precondition(
-            name="local_community_exists",
+            name="local_community_not_found",
             message=lambda _: "The selected local community no longer exists.",
             predicate=lambda op: op.get_local_community() is not None,
         ),
         Precondition(
-            name="local_community_active",
+            name="local_community_disabled",
             message=_disabled_community_message,
             predicate=_target_community_active,
         ),
         Precondition(
-            name="target_is_not_host_forum",
+            name="target_is_host_forum",
             message=_host_forum_message,
             predicate=lambda op: getattr(op.get_local_community(), "discord_forum_channel_id", None) != op.channel_id,
         ),
         Precondition(
-            name="channel_has_no_remote_subscription",
+            name="channel_has_remote_subscription",
             message=_already_remote_message,
             predicate=lambda op: op.get_existing_remote_subscription() is None,
         ),
         Precondition(
-            name="channel_is_not_local_community_host",
+            name="channel_is_local_community_host",
             message=_already_local_host_message,
             predicate=lambda op: op.database.local_communities.get_local_community_by_forum_channel_id(op.channel_id) is None,
         ),
         Precondition(
-            name="channel_is_not_already_local_subscriber",
+            name="channel_already_local_subscriber",
             message=_already_local_message,
             predicate=lambda op: op.get_existing_local_subscriber() is None,
         ),

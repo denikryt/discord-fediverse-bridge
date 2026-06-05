@@ -271,7 +271,7 @@ subscribe_operation = OperationDefinition(
         # Does not block when a *different* channel's follow was accepted and
         # this channel is subscribing for the first time.
         Precondition(
-            name="channel_subscription_not_accepted",
+            name="channel_subscription_already_accepted",
             message=_accepted_message,
             predicate=lambda op: _channel_sub_status(op) != "accepted",
         ),
@@ -279,7 +279,7 @@ subscribe_operation = OperationDefinition(
         # Does not block when a *different* channel's follow is pending and
         # this channel is piggybacking — that is handled in the body.
         Precondition(
-            name="channel_subscription_not_pending",
+            name="channel_subscription_already_pending",
             message=_pending_message,
             predicate=lambda op: _channel_sub_status(op) != "pending",
         ),

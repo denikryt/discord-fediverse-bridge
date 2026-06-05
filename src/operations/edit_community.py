@@ -160,42 +160,34 @@ class EditCommunityOperation(Operation):
     """Declarative operation for editing local-community display metadata."""
 
     name = "edit_community"
-    _REJECTION_REASONS = {
-        "guild_context": "missing_guild_context",
-        "community_accessible": "unknown_or_inaccessible_community",
-        "can_manage_community": "cannot_manage_community",
-        "display_name_valid": "invalid_display_name",
-        "summary_valid": "invalid_summary",
-        "status_valid": "invalid_status",
-    }
     preconditions = (
         Precondition(
-            name="guild_context",
+            name="missing_guild_context",
             message="This command can only be used inside a guild.",
             predicate=_has_guild_context,
         ),
         Precondition(
-            name="community_accessible",
+            name="unknown_or_inaccessible_community",
             message=_inaccessible_message,
             predicate=_community_accessible,
         ),
         Precondition(
-            name="can_manage_community",
+            name="cannot_manage_community",
             message="You are not allowed to manage this local community.",
             predicate=_can_manage_community,
         ),
         Precondition(
-            name="display_name_valid",
+            name="invalid_display_name",
             message=_display_name_error_message,
             predicate=_display_name_valid,
         ),
         Precondition(
-            name="summary_valid",
+            name="invalid_summary",
             message=_summary_error_message,
             predicate=_summary_valid,
         ),
         Precondition(
-            name="status_valid",
+            name="invalid_status",
             message="Community status must be active or disabled.",
             predicate=_status_valid,
         ),
@@ -210,7 +202,7 @@ class EditCommunityOperation(Operation):
         **_: object,
     ) -> EditCommunityResult:
         """Return the first failed precondition as a command-visible result."""
-        if reason == "can_manage_community":
+        if reason == "cannot_manage_community":
             community = operation_input.get_local_community()
             if community is not None:
                 operation_input.database.management_audit.community_manage_forbidden(
@@ -220,7 +212,7 @@ class EditCommunityOperation(Operation):
         return EditCommunityResult(
             applied=False,
             message=message,
-            reason=self._REJECTION_REASONS.get(reason, reason),
+            reason=reason,
         )
 
     def body(self, operation_input: EditCommunityInput) -> EditCommunityResult:

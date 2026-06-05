@@ -177,7 +177,7 @@ unsubscribe_operation = OperationDefinition(
     name="unsubscribe_channel",
     preconditions=(
         Precondition(
-            name="channel_has_subscription",
+            name="channel_subscription_not_found",
             message=_missing_message,
             predicate=lambda operation_input: operation_input.get_subscription() is not None,
         ),
