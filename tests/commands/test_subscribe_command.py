@@ -25,7 +25,7 @@ async def test_subscribe_community_success(
         follow_activity_id=f"https://{BRIDGE_EXAMPLE_DOMAIN}/activities/follow/1",
     )
 
-    subscribe.register(command_tree, database, fedify_gateway)
+    subscribe.register(command_tree, database, fedify_gateway, SimpleNamespace(discord_guild_allowlist=[], federation_allowlist=[]))
 
     command = command_tree.commands["subscribe-community"]
     with patch("src.commands.subscribe.LemmyClient") as MockLemmyClient:
@@ -76,7 +76,7 @@ async def test_subscribe_community_rejects_duplicate_accepted(
         lemmy_community_actor_id=f"https://{LEMMY_EXAMPLE_DOMAIN}/c/hackers",
     )
 
-    subscribe.register(command_tree, database, fedify_gateway)
+    subscribe.register(command_tree, database, fedify_gateway, SimpleNamespace(discord_guild_allowlist=[], federation_allowlist=[]))
 
     command = command_tree.commands["subscribe-community"]
     await command.callback(
@@ -107,7 +107,7 @@ async def test_subscribe_community_rejects_duplicate_pending(
         lemmy_community_actor_id=f"https://{LEMMY_EXAMPLE_DOMAIN}/c/hackers",
     )
 
-    subscribe.register(command_tree, database, fedify_gateway)
+    subscribe.register(command_tree, database, fedify_gateway, SimpleNamespace(discord_guild_allowlist=[], federation_allowlist=[]))
 
     command = command_tree.commands["subscribe-community"]
     await command.callback(
@@ -138,7 +138,7 @@ async def test_subscribe_community_rejects_when_community_resolution_fails(
     # must stop the flow before any DB mutation is attempted.
     database.remote_subscriptions.get_subscription_by_channel.return_value = None
 
-    subscribe.register(command_tree, database, fedify_gateway)
+    subscribe.register(command_tree, database, fedify_gateway, SimpleNamespace(discord_guild_allowlist=[], federation_allowlist=[]))
 
     command = command_tree.commands["subscribe-community"]
     with patch("src.commands.subscribe.LemmyClient") as MockLemmyClient:
@@ -169,7 +169,7 @@ async def test_subscribe_community_marks_failed_when_follow_dispatch_fails(
     database.remote_subscriptions.get_subscription_by_channel.return_value = None
     fedify_gateway.follow_community.side_effect = RuntimeError("boom")
 
-    subscribe.register(command_tree, database, fedify_gateway)
+    subscribe.register(command_tree, database, fedify_gateway, SimpleNamespace(discord_guild_allowlist=[], federation_allowlist=[]))
 
     command = command_tree.commands["subscribe-community"]
     with patch("src.commands.subscribe.LemmyClient") as MockLemmyClient:
@@ -220,7 +220,7 @@ async def test_subscribe_community_retries_failed_subscription(
         follow_activity_id=f"https://{BRIDGE_EXAMPLE_DOMAIN}/activities/follow/2",
     )
 
-    subscribe.register(command_tree, database, fedify_gateway)
+    subscribe.register(command_tree, database, fedify_gateway, SimpleNamespace(discord_guild_allowlist=[], federation_allowlist=[]))
 
     command = command_tree.commands["subscribe-community"]
     await command.callback(
@@ -259,7 +259,7 @@ async def test_subscribe_community_retries_failed_subscription(
 
 def _settings(allowlist: list[str]) -> SimpleNamespace:
     """Build a minimal settings stub with the given federation_allowlist."""
-    return SimpleNamespace(federation_allowlist=allowlist)
+    return SimpleNamespace(discord_guild_allowlist=[], federation_allowlist=allowlist)
 
 
 def _make_interaction(instance_domain: str | None) -> AsyncMock:
@@ -276,7 +276,7 @@ def test_subscribe_command_callback_uses_instance_domain_parameter(
     command_tree, database, fedify_gateway
 ):
     """The slash-command callback should expose the generic instance parameter name."""
-    subscribe.register(command_tree, database, fedify_gateway)
+    subscribe.register(command_tree, database, fedify_gateway, SimpleNamespace(discord_guild_allowlist=[], federation_allowlist=[]))
 
     command = command_tree.commands["subscribe-community"]
 
@@ -617,7 +617,7 @@ async def test_subscribe_community_accepts_actor_url_without_instance(
 
 def test_subscribe_community_channel_description_fits_discord_limit(command_tree, database, fedify_gateway) -> None:
     """Slash option descriptions must satisfy Discord's 100 character limit."""
-    settings = SimpleNamespace(federation_allowlist=[])
+    settings = SimpleNamespace(discord_guild_allowlist=[], federation_allowlist=[])
 
     subscribe.register(command_tree, database, fedify_gateway, settings)
     command = command_tree.commands["subscribe-community"]

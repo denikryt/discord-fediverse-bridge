@@ -26,6 +26,7 @@ def _settings(*, allowlist: list[str], public_bridge_base_url: str, fedify_origi
     # These fields mirror the public bridge URLs the command compares against
     # when deciding whether a selected instance belongs to this deployment.
     return SimpleNamespace(
+        discord_guild_allowlist=[],
         federation_allowlist=allowlist,
         public_bridge_base_url=public_bridge_base_url,
         fedify_origin=fedify_origin,

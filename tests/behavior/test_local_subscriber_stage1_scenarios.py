@@ -30,6 +30,7 @@ def _database(tmp_path: Path) -> Database:
 def _settings() -> SimpleNamespace:
     """Build the minimum settings contract needed for local-bridge resolution."""
     return SimpleNamespace(
+        discord_guild_allowlist=[],
         federation_allowlist=[],
         normalized_public_bridge_base_url=f"https://{BRIDGE_EXAMPLE_DOMAIN}",
         normalized_fedify_origin=f"https://{BRIDGE_EXAMPLE_DOMAIN}",
@@ -228,7 +229,7 @@ async def test_list_subscriptions_renders_remote_and_local_sections(
         status="active",
     )
 
-    list_subs.register(command_tree, database)
+    list_subs.register(command_tree, database, SimpleNamespace(discord_guild_allowlist=[]))
 
     command = command_tree.commands["list-subscriptions"]
     await command.callback(interaction)

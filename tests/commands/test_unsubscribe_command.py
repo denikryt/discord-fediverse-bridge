@@ -23,7 +23,7 @@ async def test_unsubscribe_channel_success(command_tree, interaction, forum_chan
     # other channel still remains subscribed afterward.
     database.remote_subscriptions.count_subscriptions_for_community.return_value = 2
 
-    unsubscribe.register(command_tree, database, fedify_gateway)
+    unsubscribe.register(command_tree, database, fedify_gateway, SimpleNamespace(discord_guild_allowlist=[], federation_allowlist=[]))
 
     command = command_tree.commands["unsubscribe-channel"]
     await command.callback(interaction, forum_channel)
@@ -42,7 +42,7 @@ async def test_unsubscribe_channel_rejects_missing_subscription(command_tree, in
     database.remote_subscriptions.get_subscription_by_channel.return_value = None
     database.local_subscribers.get_local_subscriber_by_channel.return_value = None
 
-    unsubscribe.register(command_tree, database, fedify_gateway)
+    unsubscribe.register(command_tree, database, fedify_gateway, SimpleNamespace(discord_guild_allowlist=[], federation_allowlist=[]))
 
     command = command_tree.commands["unsubscribe-channel"]
     await command.callback(interaction, forum_channel)

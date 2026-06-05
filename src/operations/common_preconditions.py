@@ -38,18 +38,12 @@ class CommandAccessInput:
     repository reads when one policy or caller resolves the user repeatedly.
     """
 
-    settings: Settings | object | None
+    settings: Settings
     database: Database | Any | None
     discord_guild_id: int | None
     discord_user_id: str
     _bridge_user: object | None = field(default=None, init=False, repr=False)
     _bridge_user_loaded: bool = field(default=False, init=False, repr=False)
-
-    def configured_guild_allowlist(self) -> tuple[str, ...]:
-        """Return normalized configured guild IDs, tolerating lightweight settings."""
-        if self.settings is None:
-            return ()
-        return tuple(str(entry) for entry in getattr(self.settings, "discord_guild_allowlist", []))
 
     def get_bridge_user(self) -> object | None:
         """Resolve and memoize the registered bridge user for this command input."""
@@ -68,7 +62,7 @@ def _has_guild_context(value: CommandAccessInput) -> bool:
 
 def _guild_is_allowlisted(value: CommandAccessInput) -> bool:
     """Apply unrestricted-empty-list compatibility and configured membership."""
-    allowlist = value.configured_guild_allowlist()
+    allowlist = value.settings.discord_guild_allowlist
     return not allowlist or str(value.discord_guild_id) in allowlist
 
 

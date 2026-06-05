@@ -13,7 +13,7 @@ from src.commands import edit_community
 @pytest.mark.asyncio
 async def test_edit_command_opens_prefilled_modal_without_defer(command_tree, interaction, database) -> None:
     """Authorized callers receive a prefilled modal as the initial response."""
-    settings = SimpleNamespace(local_community_operator_allowlist=[])
+    settings = SimpleNamespace(discord_guild_allowlist=[], local_community_operator_allowlist=[])
     database.local_communities.get_local_community_by_slug.return_value = SimpleNamespace(
         id=1,
         slug="cats",
@@ -43,7 +43,7 @@ async def test_edit_command_opens_prefilled_modal_without_defer(command_tree, in
 @pytest.mark.asyncio
 async def test_edit_command_rejects_dm_before_modal(command_tree, interaction, database) -> None:
     """Guild context is required before the command opens any modal."""
-    settings = SimpleNamespace(local_community_operator_allowlist=[])
+    settings = SimpleNamespace(discord_guild_allowlist=[], local_community_operator_allowlist=[])
     interaction.guild_id = None
     interaction.response.send_modal = AsyncMock()
 
@@ -62,7 +62,7 @@ async def test_edit_command_rejects_dm_before_modal(command_tree, interaction, d
 @pytest.mark.asyncio
 async def test_edit_command_rejects_unauthorized_without_exposing_modal(command_tree, interaction, database) -> None:
     """Unauthorized users must not see prefilled community metadata."""
-    settings = SimpleNamespace(local_community_operator_allowlist=[])
+    settings = SimpleNamespace(discord_guild_allowlist=[], local_community_operator_allowlist=[])
     database.local_communities.get_local_community_by_slug.return_value = SimpleNamespace(
         id=1,
         slug="cats",
@@ -88,7 +88,7 @@ async def test_edit_command_rejects_unauthorized_without_exposing_modal(command_
 @pytest.mark.asyncio
 async def test_edit_modal_submit_delegates_to_operation_and_responds_ephemeral(interaction, database) -> None:
     """Modal submit reuses runtime operation behavior instead of inline writes."""
-    settings = SimpleNamespace(local_community_operator_allowlist=[])
+    settings = SimpleNamespace(discord_guild_allowlist=[], local_community_operator_allowlist=[])
     database.local_communities.get_local_community_by_slug.return_value = SimpleNamespace(
         id=1,
         slug="cats",
@@ -140,7 +140,7 @@ async def test_edit_modal_submit_delegates_to_operation_and_responds_ephemeral(i
 @pytest.mark.asyncio
 async def test_edit_community_autocomplete_matches_management_scope(interaction, database) -> None:
     """Autocomplete lists editable active communities for owners and admins."""
-    owner_settings = SimpleNamespace(local_community_operator_allowlist=[])
+    owner_settings = SimpleNamespace(discord_guild_allowlist=[], local_community_operator_allowlist=[])
     database.local_communities.list_manageable_local_communities_owned_by_user_in_guild.return_value = [
         SimpleNamespace(slug="cats", display_name="Cats", discord_guild_id=99999, status="active"),
         SimpleNamespace(slug="dogs", display_name="Dogs", discord_guild_id=99999, status="disabled"),
@@ -158,7 +158,7 @@ async def test_edit_community_autocomplete_matches_management_scope(interaction,
 @pytest.mark.asyncio
 async def test_edit_community_autocomplete_super_admin_sees_all_guilds(interaction, database) -> None:
     """Super-admin autocomplete includes guild context for cross-guild choices."""
-    settings = SimpleNamespace(local_community_operator_allowlist=["1234567890"])
+    settings = SimpleNamespace(discord_guild_allowlist=[], local_community_operator_allowlist=["1234567890"])
     database.local_communities.list_manageable_local_communities.return_value = [
         SimpleNamespace(slug="cats", display_name="Cats", discord_guild_id=10, status="active"),
         SimpleNamespace(slug="dogs", display_name="Dogs", discord_guild_id=20, status="disabled"),
@@ -175,7 +175,7 @@ async def test_edit_community_autocomplete_super_admin_sees_all_guilds(interacti
 @pytest.mark.asyncio
 async def test_edit_community_autocomplete_returns_empty_on_error(interaction, database) -> None:
     """Autocomplete catches repository failures and returns no choices."""
-    settings = SimpleNamespace(local_community_operator_allowlist=[])
+    settings = SimpleNamespace(discord_guild_allowlist=[], local_community_operator_allowlist=[])
     database.local_communities.list_manageable_local_communities_owned_by_user_in_guild.side_effect = RuntimeError("db down")
 
     choices = await edit_community._edit_community_autocomplete(database, settings)(interaction, "")

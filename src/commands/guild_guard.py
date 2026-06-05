@@ -24,7 +24,7 @@ async def evaluate_command_access(
     interaction: discord.Interaction,
     *,
     definition: PolicyDefinition,
-    settings: Settings | object | None,
+    settings: Settings,
     database: Database | Any | None = None,
 ) -> PolicyResult:
     """Evaluate one access policy from primitive interaction identity fields."""
@@ -65,7 +65,7 @@ async def reject_if_command_access_denied(
     interaction: discord.Interaction,
     *,
     definition: PolicyDefinition,
-    settings: Settings | object | None,
+    settings: Settings,
     database: Database | Any | None = None,
 ) -> bool:
     """Evaluate a policy, present a denial, and report whether handler flow stops."""
@@ -85,7 +85,7 @@ async def command_access_allows_autocomplete(
     interaction: discord.Interaction,
     *,
     definition: PolicyDefinition,
-    settings: Settings | object | None,
+    settings: Settings,
     database: Database | Any | None = None,
 ) -> bool:
     """Evaluate policy quietly for autocomplete, which cannot send normal replies."""

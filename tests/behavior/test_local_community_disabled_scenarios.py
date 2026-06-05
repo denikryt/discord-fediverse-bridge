@@ -110,7 +110,7 @@ async def test_disabled_community_skips_inbound_post_without_side_effects(tmp_pa
         database=database,
         local_community_runtime=local_runtime,
         community_runtime=SimpleNamespace(),
-        settings=SimpleNamespace(federation_allowlist=[]),
+        settings=SimpleNamespace(discord_guild_allowlist=[], federation_allowlist=[]),
     )
 
     result = await dispatch_activitypub_event(_post_event(), runtime)
@@ -130,7 +130,7 @@ async def test_disabled_community_skips_remote_follow_without_accept(tmp_path: P
         database=database,
         local_community_runtime=local_runtime,
         community_runtime=SimpleNamespace(),
-        settings=SimpleNamespace(federation_allowlist=[]),
+        settings=SimpleNamespace(discord_guild_allowlist=[], federation_allowlist=[]),
     )
 
     result = await dispatch_activitypub_event(_follow_event(), runtime)

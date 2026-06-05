@@ -12,7 +12,7 @@ from src.commands import list_banned_users
 @pytest.mark.asyncio
 async def test_list_banned_users_command_passes_user_and_guild_and_returns_ephemeral(command_tree, interaction, database) -> None:
     """The adapter keeps list output private and passes guild context."""
-    settings = SimpleNamespace(local_community_operator_allowlist=[])
+    settings = SimpleNamespace(discord_guild_allowlist=[], local_community_operator_allowlist=[])
     database.local_communities.get_local_community_by_slug.return_value = SimpleNamespace(
         id=1,
         slug="cats",
@@ -40,7 +40,9 @@ async def test_list_banned_users_community_autocomplete_shows_current_guild_acti
         SimpleNamespace(slug="dogs", display_name="Dogs"),
     ]
 
-    choices = await list_banned_users._list_community_autocomplete(database)(interaction, "")
+    choices = await list_banned_users._list_community_autocomplete(
+        database, SimpleNamespace(discord_guild_allowlist=[])
+    )(interaction, "")
 
     assert [(choice.name, choice.value) for choice in choices] == [
         ("cats — Cats", "cats"),
@@ -56,7 +58,9 @@ async def test_list_banned_users_community_autocomplete_returns_empty_without_gu
     """DM autocomplete cannot infer a current guild and returns no choices."""
     interaction.guild_id = None
 
-    choices = await list_banned_users._list_community_autocomplete(database)(interaction, "")
+    choices = await list_banned_users._list_community_autocomplete(
+        database, SimpleNamespace(discord_guild_allowlist=[])
+    )(interaction, "")
 
     assert choices == []
     database.local_communities.list_active_local_communities_by_guild.assert_not_called()
@@ -70,6 +74,8 @@ async def test_list_banned_users_community_autocomplete_caps_at_twenty_five(inte
         for index in range(30)
     ]
 
-    choices = await list_banned_users._list_community_autocomplete(database)(interaction, "")
+    choices = await list_banned_users._list_community_autocomplete(
+        database, SimpleNamespace(discord_guild_allowlist=[])
+    )(interaction, "")
 
     assert len(choices) == 25

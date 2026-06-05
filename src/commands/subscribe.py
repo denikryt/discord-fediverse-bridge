@@ -35,7 +35,7 @@ def register(
     tree: app_commands.CommandTree,
     database: Database,
     fedify_gateway: FedifyGatewayClient,
-    settings: Settings | None = None,
+    settings: Settings,
     lemmyverse_cache: LemmyverseCommunityCache | None = None,
 ) -> None:
     """Register the subscribe-community slash command on the Discord tree.
@@ -149,7 +149,7 @@ def _instance_autocomplete(settings: Settings | None):
 
 
 def _community_autocomplete(
-    settings: Settings | None = None,
+    settings: Settings,
     *,
     lemmyverse_cache: LemmyverseCommunityCache | None = None,
 ):

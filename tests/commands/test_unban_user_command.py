@@ -12,7 +12,7 @@ from src.commands import unban_user
 @pytest.mark.asyncio
 async def test_unban_user_command_passes_user_and_guild_and_returns_ephemeral(command_tree, interaction, database) -> None:
     """The adapter passes Discord caller/guild context into runtime policy."""
-    settings = SimpleNamespace(local_community_operator_allowlist=[])
+    settings = SimpleNamespace(discord_guild_allowlist=[], local_community_operator_allowlist=[])
     database.local_communities.get_local_community_by_slug.return_value = SimpleNamespace(
         id=1,
         slug="cats",
@@ -44,7 +44,7 @@ async def test_unban_user_command_passes_user_and_guild_and_returns_ephemeral(co
 @pytest.mark.asyncio
 async def test_unban_community_autocomplete_owner_sees_only_owned_current_guild(interaction, database) -> None:
     """Owner autocomplete is scoped to owned active communities in this guild."""
-    settings = SimpleNamespace(local_community_operator_allowlist=[])
+    settings = SimpleNamespace(discord_guild_allowlist=[], local_community_operator_allowlist=[])
     database.local_communities.list_active_local_communities_owned_by_user_in_guild.return_value = [
         SimpleNamespace(slug="cats", display_name="Cats", discord_guild_id=99999),
     ]
@@ -61,7 +61,7 @@ async def test_unban_community_autocomplete_owner_sees_only_owned_current_guild(
 @pytest.mark.asyncio
 async def test_unban_community_autocomplete_super_admin_sees_all_guilds(interaction, database) -> None:
     """Super-admin autocomplete lists all active communities across guilds."""
-    settings = SimpleNamespace(local_community_operator_allowlist=["1234567890"])
+    settings = SimpleNamespace(discord_guild_allowlist=[], local_community_operator_allowlist=["1234567890"])
     database.local_communities.list_active_local_communities.return_value = [
         SimpleNamespace(slug="cats", display_name="Cats", discord_guild_id=10),
         SimpleNamespace(slug="dogs", display_name="Dogs", discord_guild_id=20),
@@ -78,7 +78,7 @@ async def test_unban_community_autocomplete_super_admin_sees_all_guilds(interact
 @pytest.mark.asyncio
 async def test_unban_user_autocomplete_filters_selected_manageable_community(interaction, database) -> None:
     """User autocomplete shows active bans in the selected manageable community."""
-    settings = SimpleNamespace(local_community_operator_allowlist=[])
+    settings = SimpleNamespace(discord_guild_allowlist=[], local_community_operator_allowlist=[])
     interaction.namespace = SimpleNamespace(community="cats")
     database.local_communities.get_local_community_by_slug.return_value = SimpleNamespace(
         id=1,
@@ -103,7 +103,7 @@ async def test_unban_user_autocomplete_filters_selected_manageable_community(int
 @pytest.mark.asyncio
 async def test_unban_user_autocomplete_returns_empty_for_inaccessible_community(interaction, database) -> None:
     """User autocomplete must not expose bans for inaccessible communities."""
-    settings = SimpleNamespace(local_community_operator_allowlist=[])
+    settings = SimpleNamespace(discord_guild_allowlist=[], local_community_operator_allowlist=[])
     interaction.namespace = SimpleNamespace(community="dogs")
     database.local_communities.get_local_community_by_slug.return_value = SimpleNamespace(
         id=2,
@@ -121,7 +121,7 @@ async def test_unban_user_autocomplete_returns_empty_for_inaccessible_community(
 @pytest.mark.asyncio
 async def test_unban_user_autocomplete_caps_at_twenty_five(interaction, database) -> None:
     """Discord autocomplete choices are capped at 25 entries."""
-    settings = SimpleNamespace(local_community_operator_allowlist=[])
+    settings = SimpleNamespace(discord_guild_allowlist=[], local_community_operator_allowlist=[])
     interaction.namespace = SimpleNamespace(community="cats")
     database.local_communities.get_local_community_by_slug.return_value = SimpleNamespace(
         id=1,

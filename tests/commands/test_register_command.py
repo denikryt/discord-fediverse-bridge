@@ -13,7 +13,8 @@ async def test_register_command_returns_ephemeral_registration_link(
 ) -> None:
     """The slash command should only hand the user the web registration URL."""
     settings = SimpleNamespace(
-        normalized_public_bridge_base_url="https://discord-bridge.example.com"
+        normalized_public_bridge_base_url="https://discord-bridge.example.com",
+        discord_guild_allowlist=[],
     )
 
     register.register(command_tree, settings)

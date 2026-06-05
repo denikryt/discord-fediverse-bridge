@@ -63,7 +63,7 @@ async def test_no_subscription_subscribe_command_sends_follow_and_marks_pending(
         follow_activity_id=f"https://{BRIDGE_EXAMPLE_DOMAIN}/activities/follow/1",
     )
 
-    subscribe.register(command_tree, database, fedify_gateway)
+    subscribe.register(command_tree, database, fedify_gateway, SimpleNamespace(discord_guild_allowlist=[], federation_allowlist=[]))
 
     command = command_tree.commands["subscribe-community"]
     await command.callback(
@@ -122,7 +122,7 @@ async def test_second_channel_reuses_existing_accepted_bridge_follow(
         status="accepted",
     )
 
-    subscribe.register(command_tree, database, fedify_gateway)
+    subscribe.register(command_tree, database, fedify_gateway, SimpleNamespace(discord_guild_allowlist=[], federation_allowlist=[]))
 
     command = command_tree.commands["subscribe-community"]
     await command.callback(
@@ -165,7 +165,7 @@ async def test_pending_subscription_second_subscribe_does_not_send_follow(
         status="pending",
     )
 
-    subscribe.register(command_tree, database, fedify_gateway)
+    subscribe.register(command_tree, database, fedify_gateway, SimpleNamespace(discord_guild_allowlist=[], federation_allowlist=[]))
 
     command = command_tree.commands["subscribe-community"]
     await command.callback(
@@ -203,7 +203,7 @@ async def test_accepted_subscription_second_subscribe_does_not_send_follow(
         status="accepted",
     )
 
-    subscribe.register(command_tree, database, fedify_gateway)
+    subscribe.register(command_tree, database, fedify_gateway, SimpleNamespace(discord_guild_allowlist=[], federation_allowlist=[]))
 
     command = command_tree.commands["subscribe-community"]
     await command.callback(
@@ -235,7 +235,7 @@ async def test_follow_dispatch_failure_marks_subscription_failed(
     _register_user(database)
     fedify_gateway.follow_community.side_effect = RuntimeError("boom")
 
-    subscribe.register(command_tree, database, fedify_gateway)
+    subscribe.register(command_tree, database, fedify_gateway, SimpleNamespace(discord_guild_allowlist=[], federation_allowlist=[]))
 
     command = command_tree.commands["subscribe-community"]
     await command.callback(
@@ -357,7 +357,7 @@ async def test_unsubscribe_last_channel_sends_undo_follow(
         status="accepted",
     )
 
-    unsubscribe.register(command_tree, database, fedify_gateway)
+    unsubscribe.register(command_tree, database, fedify_gateway, SimpleNamespace(discord_guild_allowlist=[], federation_allowlist=[]))
 
     command = command_tree.commands["unsubscribe-channel"]
     await command.callback(interaction, forum_channel)
@@ -415,7 +415,7 @@ async def test_unsubscribe_one_of_two_channels_keeps_bridge_follow(
         status="accepted",
     )
 
-    unsubscribe.register(command_tree, database, fedify_gateway)
+    unsubscribe.register(command_tree, database, fedify_gateway, SimpleNamespace(discord_guild_allowlist=[], federation_allowlist=[]))
 
     command = command_tree.commands["unsubscribe-channel"]
     await command.callback(interaction, forum_channel)

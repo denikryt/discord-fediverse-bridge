@@ -79,13 +79,9 @@ def register(
     tree: app_commands.CommandTree,
     database: Database,
     fedify_gateway: FedifyGatewayClient,
-    settings: Settings | None = None,
+    settings: Settings,
 ) -> None:
     """Register the unsubscribe-channel slash command on the given command tree."""
-    # The command no longer needs Settings directly, but older tests and
-    # call-sites still register it with the pre-settings contract. Keeping the
-    # argument optional preserves that behavior while the command remains a
-    # thin adapter around the operation layer.
     # The registered slash command adapts Discord input into the operation
     # contract and leaves policy decisions to the framework-backed layer.
     @tree.command(name="unsubscribe-channel", description="Remove a forum channel's Lemmy subscription")

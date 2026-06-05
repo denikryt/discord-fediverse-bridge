@@ -25,7 +25,7 @@ def _matches_current(value: str, current: str) -> bool:
     return current.casefold() in value.casefold()
 
 
-def _list_community_autocomplete(database: Database, settings: Settings | None = None):
+def _list_community_autocomplete(database: Database, settings: Settings):
     """Build autocomplete for `/list-banned-users community` in one guild."""
 
     async def autocomplete(

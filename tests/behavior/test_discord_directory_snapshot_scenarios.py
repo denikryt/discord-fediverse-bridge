@@ -26,6 +26,7 @@ def _database(tmp_path: Path) -> Database:
 def _settings() -> SimpleNamespace:
     """Build settings required by command adapters in these scenarios."""
     return SimpleNamespace(
+        discord_guild_allowlist=[],
         federation_allowlist=[],
         normalized_public_bridge_base_url=f"https://{BRIDGE_EXAMPLE_DOMAIN}",
         normalized_fedify_origin=f"https://{BRIDGE_EXAMPLE_DOMAIN}",

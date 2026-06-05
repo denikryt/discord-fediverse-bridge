@@ -242,7 +242,7 @@ async def test_inbound_local_community_post_update_edits_discord_starter(tmp_pat
     bot = build_bot(threads={200: thread})
     local_runtime.bot = bot
     runtime = build_runtime_namespace(
-        settings=SimpleNamespace(federation_allowlist=[]),
+        settings=SimpleNamespace(discord_guild_allowlist=[], federation_allowlist=[]),
         database=database,
         local_community_runtime=local_runtime,
         community_runtime=SimpleNamespace(),
@@ -278,7 +278,7 @@ async def test_inbound_local_community_post_delete_marks_discord_starter_deleted
     bot = build_bot(threads={200: thread})
     local_runtime.bot = bot
     runtime = build_runtime_namespace(
-        settings=SimpleNamespace(federation_allowlist=[]),
+        settings=SimpleNamespace(discord_guild_allowlist=[], federation_allowlist=[]),
         database=database,
         local_community_runtime=local_runtime,
         community_runtime=SimpleNamespace(),
@@ -321,7 +321,7 @@ async def test_inbound_local_community_comment_update_edits_discord_message(
     bot = build_bot(threads={200: thread})
     local_runtime.bot = bot
     runtime = build_runtime_namespace(
-        settings=SimpleNamespace(federation_allowlist=[]),
+        settings=SimpleNamespace(discord_guild_allowlist=[], federation_allowlist=[]),
         database=database,
         local_community_runtime=local_runtime,
         community_runtime=SimpleNamespace(),
@@ -369,7 +369,7 @@ async def test_inbound_local_community_comment_delete_marks_discord_message_dele
     bot = build_bot(threads={200: thread})
     local_runtime.bot = bot
     runtime = build_runtime_namespace(
-        settings=SimpleNamespace(federation_allowlist=[]),
+        settings=SimpleNamespace(discord_guild_allowlist=[], federation_allowlist=[]),
         database=database,
         local_community_runtime=local_runtime,
         community_runtime=SimpleNamespace(),

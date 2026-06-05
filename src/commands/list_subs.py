@@ -10,7 +10,7 @@ from .guild_guard import REGISTERED_GUILD_COMMAND_ACCESS, reject_if_command_acce
 from ..operations import ListSubscriptionsInput, list_subscriptions_operation
 
 
-def register(tree: app_commands.CommandTree, database: Database, settings: Settings | None = None) -> None:
+def register(tree: app_commands.CommandTree, database: Database, settings: Settings) -> None:
     # The registered slash command delegates empty-state policy to the
     # operation layer and keeps Discord embed rendering in the adapter.
     @tree.command(name="list-subscriptions", description="List all active channel-community subscriptions")

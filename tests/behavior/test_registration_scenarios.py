@@ -89,7 +89,8 @@ async def test_unregistered_user_register_command_returns_ephemeral_link(
 ) -> None:
     """An unregistered user should get only the web registration entrypoint."""
     settings = SimpleNamespace(
-        normalized_public_bridge_base_url=f"https://{BRIDGE_HOST_DOMAIN}"
+        normalized_public_bridge_base_url=f"https://{BRIDGE_HOST_DOMAIN}",
+        discord_guild_allowlist=[],
     )
 
     register_command.register(command_tree, settings)

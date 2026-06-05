@@ -16,7 +16,7 @@ async def test_list_subscriptions_rejects_empty_state(command_tree, interaction,
     database.remote_subscriptions.get_subscriptions_by_guild.return_value = []
     database.local_subscribers.list_local_subscribers_by_guild.return_value = []
 
-    list_subs.register(command_tree, database)
+    list_subs.register(command_tree, database, SimpleNamespace(discord_guild_allowlist=[]))
 
     command = command_tree.commands["list-subscriptions"]
     await command.callback(interaction)
@@ -48,7 +48,7 @@ async def test_list_subscriptions_returns_embed_with_expected_items(command_tree
     ]
     database.local_subscribers.list_local_subscribers_by_guild.return_value = []
 
-    list_subs.register(command_tree, database)
+    list_subs.register(command_tree, database, SimpleNamespace(discord_guild_allowlist=[]))
 
     command = command_tree.commands["list-subscriptions"]
     await command.callback(interaction)

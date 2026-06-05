@@ -89,7 +89,7 @@ class SubscribeCommunityCommandHandler:
         *,
         database: Database,
         fedify_gateway: FedifyGatewayClient,
-        settings: Settings | None,
+        settings: Settings,
         lemmy_client_cls_getter: Callable[[], type[Any]],
         resolve_selected_community_getter: Callable[[], Callable[..., Any]],
         fetch_bridge_communities_getter: Callable[[], Callable[..., Any]],
@@ -98,7 +98,7 @@ class SubscribeCommunityCommandHandler:
         self.database = database
         self.fedify_gateway = fedify_gateway
         self.settings = settings
-        self.allowlist = settings.federation_allowlist if settings is not None else []
+        self.allowlist = settings.federation_allowlist
         self._lemmy_client_cls_getter = lemmy_client_cls_getter
         self._resolve_selected_community_getter = resolve_selected_community_getter
         self._fetch_bridge_communities_getter = fetch_bridge_communities_getter
