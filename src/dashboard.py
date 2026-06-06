@@ -32,6 +32,7 @@ def build_dashboard_payload(runtime: Any) -> dict[str, object]:
     bridge_follows = database.bridge_actor_follows.list_bridge_actor_follows()
     accepted_remote_subscriptions = database.remote_subscriptions.list_subscriptions(status="accepted")
     active_local_subscribers = database.local_subscribers.list_all_local_subscribers(status="active")
+    invite_publications = database.guild_invite_publications.list_publications()
 
     guild_snapshots, channel_snapshots = _load_discord_snapshots(
         database,
@@ -158,6 +159,11 @@ def build_dashboard_payload(runtime: Any) -> dict[str, object]:
         for follow in bridge_follows
     ]
 
+    publications_by_guild = {int(row.discord_guild_id): row for row in invite_publications}
+    for guild_id, bucket in guild_buckets.items():
+        publication = publications_by_guild.get(guild_id) if guild_id is not None else None
+        bucket["inviteUrl"] = str(publication.invite_url) if publication is not None else None
+
     return {
         "instance": {
             "title": "Discord/Fediverse Bridge Instance",
@@ -252,6 +258,7 @@ def _guild_bucket(
             "hostedCommunities": [],
             "remoteSubscriptions": [],
             "localSubscriptions": [],
+            "inviteUrl": None,
         }
     return buckets[key]
 

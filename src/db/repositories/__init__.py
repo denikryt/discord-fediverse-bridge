@@ -24,6 +24,7 @@ from .remote_actors import RemoteActorRepository
 from .legacy_lemmy_mappings import LegacyLemmyMappingRepository
 from .discord_fanout_groups import DiscordFanoutGroupRepository
 from .discord_directory import DiscordDirectoryRepository
+from .guild_invite_publications import GuildInvitePublicationRepository
 __all__ = [
     "CommunityActorBanRepository",
     "ManagementAuditEventRepository",
@@ -44,4 +45,5 @@ __all__ = [
     "LegacyLemmyMappingRepository",
     "DiscordFanoutGroupRepository",
     "DiscordDirectoryRepository",
+    "GuildInvitePublicationRepository",
 ]

@@ -11,7 +11,7 @@ from __future__ import annotations
 from sqlalchemy import text
 from sqlalchemy.engine import Connection, Engine
 
-from ..models import Base, CommunityActorBan, LocalCommunityMessageSurface, LocalCommunityThreadSurface, ManagementAuditEvent
+from ..models import Base, CommunityActorBan, GuildInvitePublication, LocalCommunityMessageSurface, LocalCommunityThreadSurface, ManagementAuditEvent
 
 
 def migrate(engine: Engine) -> None:
@@ -49,6 +49,7 @@ def migrate(engine: Engine) -> None:
             LocalCommunityThreadSurface.__table__,
             LocalCommunityMessageSurface.__table__,
             ManagementAuditEvent.__table__,
+            GuildInvitePublication.__table__,
         ],
     )
     with engine.connect() as conn:

@@ -15,6 +15,7 @@ from ..operations.common_preconditions import (
     GUILD_NOT_ALLOWED_MESSAGE,
     GUILD_ONLY_MESSAGE,
     REGISTERED_GUILD_COMMAND_ACCESS,
+    MANAGE_GUILD_COMMAND_ACCESS,
     REGISTRATION_REQUIRED_MESSAGE,
     CommandAccessInput,
 )
@@ -33,6 +34,7 @@ async def evaluate_command_access(
         database=database,
         discord_guild_id=getattr(interaction, "guild_id", None),
         discord_user_id=str(interaction.user.id),
+        member_can_manage_guild=bool(getattr(getattr(interaction.user, "guild_permissions", None), "manage_guild", False)),
     )
     return await evaluate_policy_async(definition, policy_input)
 
@@ -101,6 +103,7 @@ async def command_access_allows_autocomplete(
 __all__ = [
     "GUILD_COMMAND_ACCESS",
     "REGISTERED_GUILD_COMMAND_ACCESS",
+    "MANAGE_GUILD_COMMAND_ACCESS",
     "GUILD_ONLY_MESSAGE",
     "GUILD_NOT_ALLOWED_MESSAGE",
     "REGISTRATION_REQUIRED_MESSAGE",

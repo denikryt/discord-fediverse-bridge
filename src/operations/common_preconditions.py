@@ -42,6 +42,7 @@ class CommandAccessInput:
     database: Database | Any | None
     discord_guild_id: int | None
     discord_user_id: str
+    member_can_manage_guild: bool = False
     _bridge_user: object | None = field(default=None, init=False, repr=False)
     _bridge_user_loaded: bool = field(default=False, init=False, repr=False)
 
@@ -66,6 +67,11 @@ def _guild_is_allowlisted(value: CommandAccessInput) -> bool:
     return not allowlist or str(value.discord_guild_id) in allowlist
 
 
+def _member_can_manage_guild(value: CommandAccessInput) -> bool:
+    """Return whether the invoking guild member has Discord Manage Guild."""
+    return value.member_can_manage_guild
+
+
 def _discord_user_is_registered(value: RegisteredDiscordUserInput) -> bool:
     """Return whether the input resolves an existing registered bridge user."""
     return value.get_bridge_user() is not None
@@ -81,6 +87,12 @@ GUILD_ALLOWLISTED = Precondition(
     name="not_allowlisted",
     message=GUILD_NOT_ALLOWED_MESSAGE,
     predicate=_guild_is_allowlisted,
+)
+
+MANAGE_GUILD_REQUIRED = Precondition(
+    name="missing_manage_guild",
+    message="You need the Manage Server permission to manage this server invite.",
+    predicate=_member_can_manage_guild,
 )
 
 DISCORD_USER_REGISTERED = Precondition(
@@ -99,4 +111,9 @@ GUILD_COMMAND_ACCESS = PolicyDefinition(
 REGISTERED_GUILD_COMMAND_ACCESS = PolicyDefinition(
     name="registered_guild_command_access",
     preconditions=(GUILD_CONTEXT_REQUIRED, GUILD_ALLOWLISTED, DISCORD_USER_REGISTERED),
+)
+
+MANAGE_GUILD_COMMAND_ACCESS = PolicyDefinition(
+    name="manage_guild_command_access",
+    preconditions=(GUILD_CONTEXT_REQUIRED, GUILD_ALLOWLISTED, MANAGE_GUILD_REQUIRED),
 )

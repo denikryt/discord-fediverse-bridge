@@ -284,14 +284,9 @@ Open details:
 - one project version shared by both services;
 - Git tags, immutable image tags, and explicit version selection during deployment.
 
-## 26. Guild invite publication and dashboard link
 
-The dashboard does not currently expose a Discord invite for a guild.
+## 27. Dashboard active-user statistics
 
-Open details:
+The dashboard does not currently show activity metrics such as daily or monthly active users.
 
-- add a guild-only command that creates and publishes a non-expiring invite;
-- authorize it through Discord guild permissions instead of a bridge role;
-- define the required permission and target channel;
-- handle invite replacement, removal, persistence, and dashboard display;
-- record audit events and report missing bot permissions.
+A later design should define what counts as an active user, which bridge or Discord/Fediverse events are authoritative, how metrics are aggregated over time, and whether statistics are shown per guild, per community, or for the whole instance.

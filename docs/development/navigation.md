@@ -102,3 +102,7 @@ Use `docs/architecture/database-map.md` for table ownership and invariants. Use 
 3. `src/local_communities/discord_fanout.py` — per-surface local Discord edit/delete fanout.
 4. `src/local_communities/delivery_mapping.py` — surface/canonical lookup helpers.
 5. `src/content_sync/edit_delete.py` — shared Discord message edit/delete edge helpers.
+
+### Guild invite publication
+
+`src/commands/publish_guild_invite.py` and `src/commands/remove_guild_invite.py` are the Discord adapters. `src/guild_invite_publication.py` owns Discord invite side effects and transactional publication state, while `src/db/repositories/guild_invite_publications.py` owns the single current invite row per guild. `src/dashboard.py` exposes only the public invite URL on existing guild cards.

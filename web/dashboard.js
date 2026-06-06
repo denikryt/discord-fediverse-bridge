@@ -4,8 +4,9 @@ const endpoint =
 /**
  * Render one anchor tag for one URL-like value.
  */
-function link(url, label) {
-  return url ? `<a href="${url}">${label || url}</a>` : "";
+function link(url, label, external = false) {
+  const attributes = external ? ` target="_blank" rel="noopener noreferrer"` : "";
+  return url ? `<a href="${url}"${attributes}>${label || url}</a>` : "";
 }
 
 /**
@@ -166,6 +167,7 @@ fetch(endpoint)
             (guild) => `
     <article class="guild-card">
       <h3>${guild.guildName}</h3>
+      ${guild.inviteUrl ? `<p class="guild-invite">${link(guild.inviteUrl, "Join Discord server", true)}</p>` : ""}
       <details>
         <summary>Hosted communities (${guild.hostedCommunities.length})</summary>
         ${renderPlacementList(guild.hostedCommunities, (entry) => `<li>${entry.relayHandle} in ${discordChannelName(entry.forumChannelName)}</li>`)}

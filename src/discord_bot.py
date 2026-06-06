@@ -61,7 +61,7 @@ class BridgeBot(discord.Client):
     async def setup_hook(self) -> None:
         # setup_hook runs before the bot connects, making it the right place to
         # register slash commands and sync the tree with Discord.
-        from .commands import ban_user, create_community, edit_community, list_banned_users, list_subs, register, subscribe, unban_user, unsubscribe
+        from .commands import ban_user, create_community, edit_community, list_banned_users, list_subs, publish_guild_invite, register, remove_guild_invite, subscribe, unban_user, unsubscribe
         register.register(self.tree, self.settings)
         subscribe.register(self.tree, self.database, self.fedify_gateway, self.settings)
         unsubscribe.register(self.tree, self.database, self.fedify_gateway, self.settings)
@@ -71,6 +71,8 @@ class BridgeBot(discord.Client):
         ban_user.register(self.tree, self.database, self.settings)
         unban_user.register(self.tree, self.database, self.settings)
         list_banned_users.register(self.tree, self.database, self.settings)
+        publish_guild_invite.register(self.tree, self.database, self.settings)
+        remove_guild_invite.register(self.tree, self.database, self.settings)
         await self.tree.sync()
 
     async def on_ready(self) -> None:

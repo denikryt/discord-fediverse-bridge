@@ -246,3 +246,7 @@ ul {
 .placement strong {
   color: var(--text);
 }
+
+.guild-invite {
+  margin: 0.5rem 0 1rem;
+}

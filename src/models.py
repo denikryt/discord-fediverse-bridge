@@ -458,6 +458,22 @@ class ManagementAuditEvent(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, nullable=False, index=True)
 
 
+class GuildInvitePublication(Base):
+    """Store the single public Discord invite currently published for a guild."""
+
+    __tablename__ = "guild_invite_publications"
+    __table_args__ = (UniqueConstraint("discord_guild_id"),)
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    discord_guild_id: Mapped[int] = mapped_column(Integer, nullable=False)
+    discord_channel_id: Mapped[int] = mapped_column(Integer, nullable=False)
+    invite_code: Mapped[str] = mapped_column(String(128), nullable=False)
+    invite_url: Mapped[str] = mapped_column(String(512), nullable=False)
+    published_by_discord_user_id: Mapped[str] = mapped_column(String(64), nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, nullable=False)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, onupdate=utcnow, nullable=False)
+
+
 class RemoteSubscriber(Base):
     """Persist one remote ActivityPub subscriber for a local community.
 

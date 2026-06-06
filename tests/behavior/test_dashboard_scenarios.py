@@ -189,8 +189,8 @@ def test_dashboard_html_loads_and_includes_credits(tmp_path: Path) -> None:
     assert response.status_code == 200
     assert "Discord/Fediverse Bridge Instance" in response.text
     assert "/dashboard/data" in response.text
-    assert "/dashboard/static/dashboard.css?v=2026-05-29-mobile-guild-rendering" in response.text
-    assert "/dashboard/static/dashboard.js?v=2026-05-29-mobile-guild-rendering" in response.text
+    assert "/dashboard/static/dashboard.css?v=2026-06-06-guild-invite-publication" in response.text
+    assert "/dashboard/static/dashboard.js?v=2026-06-06-guild-invite-publication" in response.text
     assert 'data-dashboard-endpoint="/dashboard/data"' in response.text
     assert "Remote follower relays" not in response.text
     assert '<span class="stat-label">Origin</span>' not in response.text

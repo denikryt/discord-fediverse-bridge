@@ -24,16 +24,23 @@ from .management_audit import (
     ACTION_COMMUNITY_MANAGE_FORBIDDEN,
     ACTION_COMMUNITY_METADATA_UPDATED,
     ACTION_COMMUNITY_STATUS_CHANGED,
+    ACTION_GUILD_INVITE_PUBLISHED,
+    ACTION_GUILD_INVITE_REPLACED,
+    ACTION_GUILD_INVITE_PUBLISH_FORBIDDEN,
+    ACTION_GUILD_INVITE_REMOVED,
+    ACTION_GUILD_INVITE_REMOVE_FORBIDDEN,
     REASON_COMMUNITY_DISABLED,
     REASON_NOT_OWNER_OR_SUPER_ADMIN,
     REASON_NOT_SUPER_ADMIN,
+    REASON_MISSING_MANAGE_GUILD,
     RESULT_FORBIDDEN,
     RESULT_SUCCESS,
     TARGET_LOCAL_COMMUNITY,
     TARGET_REMOTE_ACTOR,
+    TARGET_DISCORD_GUILD,
     community_created_after,
 )
-from .models import CommunityActorBan, LocalCommunity, ManagementAuditEvent
+from .models import CommunityActorBan, GuildInvitePublication, LocalCommunity, ManagementAuditEvent
 
 _FAILED_PRECONDITION_REASON_CODES = {
     "cannot_manage_community": REASON_NOT_OWNER_OR_SUPER_ADMIN,
@@ -226,4 +233,43 @@ class ManagementAuditRecorder:
             target_id=ban.actor_handle,
             before={"status": "active"},
             after={"status": "inactive"},
+        )
+
+
+    def guild_invite_forbidden(self, *, actor_discord_user_id: str, discord_guild_id: int, removing: bool) -> ManagementAuditEvent:
+        """Record a Manage Guild denial for invite publication or removal."""
+        return self._events.create_event(
+            action=ACTION_GUILD_INVITE_REMOVE_FORBIDDEN if removing else ACTION_GUILD_INVITE_PUBLISH_FORBIDDEN,
+            result=RESULT_FORBIDDEN,
+            actor_discord_user_id=actor_discord_user_id,
+            target_type=TARGET_DISCORD_GUILD,
+            target_id=str(discord_guild_id),
+            reason_code=REASON_MISSING_MANAGE_GUILD,
+        )
+
+    def add_guild_invite_published(self, session: Session, *, actor_discord_user_id: str, before: GuildInvitePublication | None, after: GuildInvitePublication) -> ManagementAuditEvent:
+        """Add first-publication or replacement audit in the caller transaction."""
+        def snapshot(row: GuildInvitePublication | None) -> dict[str, object] | None:
+            return None if row is None else {"discord_channel_id": int(row.discord_channel_id), "invite_code": str(row.invite_code)}
+        return self._events.add_event(
+            session,
+            action=ACTION_GUILD_INVITE_REPLACED if before is not None else ACTION_GUILD_INVITE_PUBLISHED,
+            result=RESULT_SUCCESS,
+            actor_discord_user_id=actor_discord_user_id,
+            target_type=TARGET_DISCORD_GUILD,
+            target_id=str(after.discord_guild_id),
+            before=snapshot(before),
+            after=snapshot(after),
+        )
+
+    def add_guild_invite_removed(self, session: Session, *, actor_discord_user_id: str, publication: GuildInvitePublication) -> ManagementAuditEvent:
+        """Add successful removal audit in the caller transaction."""
+        return self._events.add_event(
+            session,
+            action=ACTION_GUILD_INVITE_REMOVED,
+            result=RESULT_SUCCESS,
+            actor_discord_user_id=actor_discord_user_id,
+            target_type=TARGET_DISCORD_GUILD,
+            target_id=str(publication.discord_guild_id),
+            before={"discord_channel_id": int(publication.discord_channel_id), "invite_code": str(publication.invite_code)},
         )

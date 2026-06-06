@@ -18,6 +18,7 @@ from .repositories import (
     BridgeActorFollowRepository,
     DiscordFanoutGroupRepository,
     DiscordDirectoryRepository,
+    GuildInvitePublicationRepository,
     EventReceiptRepository,
     LegacyLemmyMappingRepository,
     LocalCommunityContentRepository,
@@ -61,11 +62,13 @@ class Database:
         self.legacy_lemmy_mappings = LegacyLemmyMappingRepository(self.session)
         self.discord_fanout_groups = DiscordFanoutGroupRepository(self.session)
         self.discord_directory = DiscordDirectoryRepository(self.session)
+        self.guild_invite_publications = GuildInvitePublicationRepository(self.session)
         self.management_actions = ManagementActions(
             session_factory=self.session,
             local_communities=self.local_communities,
             community_actor_bans=self.community_actor_bans,
             management_audit=self.management_audit,
+            guild_invite_publications=self.guild_invite_publications,
         )
 
     def create_all(self) -> None:

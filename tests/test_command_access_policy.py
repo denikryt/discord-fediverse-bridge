@@ -12,6 +12,8 @@ from src.operations.common_preconditions import (
     GUILD_ALLOWLISTED,
     GUILD_COMMAND_ACCESS,
     GUILD_CONTEXT_REQUIRED,
+    MANAGE_GUILD_COMMAND_ACCESS,
+    MANAGE_GUILD_REQUIRED,
     REGISTERED_GUILD_COMMAND_ACCESS,
     REGISTRATION_REQUIRED_MESSAGE,
     CommandAccessInput,
@@ -20,13 +22,14 @@ from src.operations.subscribe import subscribe_operation
 from src.operations.subscribe_local_community import subscribe_local_community_operation
 
 
-def _input(*, guild_id: int | None, allowlist: list[str], database: object | None = None) -> CommandAccessInput:
+def _input(*, guild_id: int | None, allowlist: list[str], database: object | None = None, manage_guild: bool = False) -> CommandAccessInput:
     """Build one policy input with lightweight settings and user identity."""
     return CommandAccessInput(
         settings=SimpleNamespace(discord_guild_allowlist=allowlist),
         database=database,
         discord_guild_id=guild_id,
         discord_user_id="123",
+        member_can_manage_guild=manage_guild,
     )
 
 
@@ -93,3 +96,16 @@ def test_subscribe_operations_share_exact_registration_precondition() -> None:
     assert subscribe_operation.preconditions[0] is DISCORD_USER_REGISTERED
     assert subscribe_local_community_operation.preconditions[0] is DISCORD_USER_REGISTERED
     assert REGISTERED_GUILD_COMMAND_ACCESS.preconditions[-1] is DISCORD_USER_REGISTERED
+
+
+def test_manage_guild_policy_rejects_missing_native_permission() -> None:
+    """Invite management returns the stable forbidden reason without registration."""
+    result = evaluate_policy(MANAGE_GUILD_COMMAND_ACCESS, _input(guild_id=2, allowlist=[], manage_guild=False))
+    assert result.reason == "missing_manage_guild"
+
+
+def test_manage_guild_policy_allows_native_permission() -> None:
+    """Manage Guild is sufficient after guild and allowlist checks pass."""
+    result = evaluate_policy(MANAGE_GUILD_COMMAND_ACCESS, _input(guild_id=2, allowlist=[], manage_guild=True))
+    assert result.allowed is True
+    assert MANAGE_GUILD_COMMAND_ACCESS.preconditions == (GUILD_CONTEXT_REQUIRED, GUILD_ALLOWLISTED, MANAGE_GUILD_REQUIRED)
