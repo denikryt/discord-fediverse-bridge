@@ -7,7 +7,7 @@ from discord import app_commands
 
 from ..config import Settings
 from ..db import Database
-from ..guild_invite_publication import remove_guild_invite
+from ..operations.remove_guild_invite import RemoveGuildInviteInput, run_remove_guild_invite
 from .guild_guard import MANAGE_GUILD_COMMAND_ACCESS, evaluate_command_access, send_command_access_rejection
 
 
@@ -29,11 +29,12 @@ def register(tree: app_commands.CommandTree, database: Database, settings: Setti
                 )
             await send_command_access_rejection(interaction, access)
             return
-        result = await remove_guild_invite(database=database, client=interaction.client, guild=interaction.guild, actor_discord_user_id=str(interaction.user.id))
-        messages = {
-            "removed": "Removed the published server invite.",
-            "not_published": "No server invite is currently published.",
-            "delete_invite_failed": "Discord could not delete the published invite; the dashboard link was kept.",
-            "persistence_failed": "The Discord invite was deleted, but the bridge could not clear the dashboard state.",
-        }
-        await interaction.response.send_message(messages[result.kind], ephemeral=True)
+        result = await run_remove_guild_invite(
+            RemoveGuildInviteInput(
+                database=database,
+                client=interaction.client,
+                guild=interaction.guild,
+                actor_discord_user_id=str(interaction.user.id),
+            )
+        )
+        await interaction.response.send_message(result.message, ephemeral=True)

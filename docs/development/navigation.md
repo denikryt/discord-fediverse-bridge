@@ -105,4 +105,4 @@ Use `docs/architecture/database-map.md` for table ownership and invariants. Use 
 
 ### Guild invite publication
 
-`src/commands/publish_guild_invite.py` and `src/commands/remove_guild_invite.py` are the Discord adapters. `src/guild_invite_publication.py` owns Discord invite side effects and transactional publication state, while `src/db/repositories/guild_invite_publications.py` owns the single current invite row per guild. `src/dashboard.py` exposes only the public invite URL on existing guild cards.
+`src/commands/publish_guild_invite.py` and `src/commands/remove_guild_invite.py` are thin Discord adapters. `src/operations/publish_guild_invite.py` and `src/operations/remove_guild_invite.py` declare eligibility through DiscordOps and own Discord invite side effects plus transactional publication state. `src/operations/guild_invite_lock.py` serializes publish/remove mutations per guild. `src/db/repositories/guild_invite_publications.py` owns the single current invite row per guild, and `src/dashboard.py` exposes only the public invite URL on existing guild cards.

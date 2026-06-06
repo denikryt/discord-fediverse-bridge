@@ -20,6 +20,16 @@ from .unsubscribe_local_community import (
     unsubscribe_local_community_operation,
 )
 from .unsubscribe import UnsubscribeInput, unsubscribe_operation
+from .publish_guild_invite import (
+    PublishGuildInviteInput,
+    publish_guild_invite_operation,
+    run_publish_guild_invite,
+)
+from .remove_guild_invite import (
+    RemoveGuildInviteInput,
+    remove_guild_invite_operation,
+    run_remove_guild_invite,
+)
 
 __all__ = [
     "BanUserInput",
@@ -47,4 +57,10 @@ __all__ = [
     "subscribe_operation",
     "unsubscribe_local_community_operation",
     "unsubscribe_operation",
+    "PublishGuildInviteInput",
+    "RemoveGuildInviteInput",
+    "publish_guild_invite_operation",
+    "remove_guild_invite_operation",
+    "run_publish_guild_invite",
+    "run_remove_guild_invite",
 ]

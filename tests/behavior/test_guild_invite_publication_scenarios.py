@@ -9,7 +9,8 @@ import pytest
 
 from src.db import Database
 from src.dashboard import build_dashboard_payload
-from src.guild_invite_publication import publish_guild_invite, remove_guild_invite
+from src.operations.publish_guild_invite import PublishGuildInviteInput, run_publish_guild_invite
+from src.operations.remove_guild_invite import RemoveGuildInviteInput, run_remove_guild_invite
 
 
 def _create_active_community(database: Database, *, guild_id: int = 10, channel_id: int = 20) -> None:
@@ -58,13 +59,13 @@ async def test_publish_and_remove_guild_invite(tmp_path) -> None:
     fetched = SimpleNamespace(delete=AsyncMock())
     client = SimpleNamespace(fetch_invite=AsyncMock(return_value=fetched))
 
-    published = await publish_guild_invite(database=database, client=client, guild=guild, channel=channel, actor_discord_user_id="42")
-    assert published.kind == "published"
+    published = await run_publish_guild_invite(PublishGuildInviteInput(database=database, client=client, guild=guild, channel=channel, actor_discord_user_id="42"))
+    assert published.reason == "published"
     assert database.guild_invite_publications.get_by_guild_id(10).invite_url == "https://discord.gg/new"
     channel.create_invite.assert_awaited_once_with(max_age=0, max_uses=0, unique=True, reason="Published on bridge dashboard")
 
-    removed = await remove_guild_invite(database=database, client=client, guild=guild, actor_discord_user_id="42")
-    assert removed.kind == "removed"
+    removed = await run_remove_guild_invite(RemoveGuildInviteInput(database=database, client=client, guild=guild, actor_discord_user_id="42"))
+    assert removed.reason == "removed"
     assert database.guild_invite_publications.get_by_guild_id(10) is None
     fetched.delete.assert_awaited_once()
 
@@ -76,8 +77,8 @@ async def test_publication_requires_active_local_community_host(tmp_path) -> Non
     database.create_all()
     guild = SimpleNamespace(id=10, default_role=object(), me=object())
     channel = _channel(guild=guild)
-    result = await publish_guild_invite(database=database, client=SimpleNamespace(), guild=guild, channel=channel, actor_discord_user_id="42")
-    assert result.kind == "no_active_local_community"
+    result = await run_publish_guild_invite(PublishGuildInviteInput(database=database, client=SimpleNamespace(), guild=guild, channel=channel, actor_discord_user_id="42"))
+    assert result.reason == "no_active_local_community"
     channel.create_invite.assert_not_awaited()
 
 
@@ -106,15 +107,15 @@ async def test_non_host_channel_is_rejected_without_discord_side_effect(tmp_path
     guild = SimpleNamespace(id=10, default_role=object(), me=object())
     channel = _channel(guild=guild, channel_id=21)
 
-    result = await publish_guild_invite(
+    result = await run_publish_guild_invite(PublishGuildInviteInput(
         database=database,
         client=SimpleNamespace(),
         guild=guild,
         channel=channel,
         actor_discord_user_id="42",
-    )
+    ))
 
-    assert result.kind == "channel_not_active_local_community_host"
+    assert result.reason == "channel_not_active_local_community_host"
     channel.create_invite.assert_not_awaited()
 
 
@@ -130,27 +131,27 @@ async def test_replacement_stays_published_when_old_invite_cleanup_fails(tmp_pat
         invite=SimpleNamespace(code="first", url="https://discord.gg/first", delete=AsyncMock()),
     )
     client = SimpleNamespace(fetch_invite=AsyncMock(side_effect=RuntimeError("cleanup failed")))
-    await publish_guild_invite(
+    await run_publish_guild_invite(PublishGuildInviteInput(
         database=database,
         client=client,
         guild=guild,
         channel=first_channel,
         actor_discord_user_id="42",
-    )
+    ))
     second_channel = _channel(
         guild=guild,
         invite=SimpleNamespace(code="second", url="https://discord.gg/second", delete=AsyncMock()),
     )
 
-    result = await publish_guild_invite(
+    result = await run_publish_guild_invite(PublishGuildInviteInput(
         database=database,
         client=client,
         guild=guild,
         channel=second_channel,
         actor_discord_user_id="42",
-    )
+    ))
 
-    assert result.kind == "replaced"
+    assert result.reason == "replaced"
     assert database.guild_invite_publications.get_by_guild_id(10).invite_code == "second"
     actions = [row.action for row in database.management_audit_events.list_oldest_first()]
     assert actions == ["guild_invite.published", "guild_invite.replaced"]
