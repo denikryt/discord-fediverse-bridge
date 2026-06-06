@@ -17,3 +17,7 @@ logs/
 tmp/
 discord-fediverse-bridge
 .cache/
+
+# Docker deployment state and local TLS material.
+deploy/nginx/tls/*
+!deploy/nginx/tls/.gitkeep

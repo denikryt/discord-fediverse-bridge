@@ -1,0 +1,20 @@
+server {
+    listen 80;
+    server_name ${PUBLIC_DOMAIN};
+
+    proxy_set_header Host $host;
+    proxy_set_header X-Real-IP $remote_addr;
+    proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+    proxy_set_header X-Forwarded-Proto $scheme;
+
+    location = /.well-known/webfinger { proxy_pass http://fedify-gateway:3000; }
+    location ^~ /.well-known/discord-fediverse-bridge/ { proxy_pass http://fedify-gateway:3000; }
+    location ^~ /actors/ { proxy_pass http://fedify-gateway:3000; }
+    location ^~ /c/ { proxy_pass http://fedify-gateway:3000; }
+    location ^~ /users/ { proxy_pass http://fedify-gateway:3000; }
+    location ^~ /communities/ { proxy_pass http://fedify-gateway:3000; }
+    location ^~ /inbox { proxy_pass http://fedify-gateway:3000; }
+    location ^~ /activitypub/ { proxy_pass http://fedify-gateway:3000; }
+
+    location / { proxy_pass http://bridge:8080; }
+}

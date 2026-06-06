@@ -1,0 +1,19 @@
+services:
+  nginx:
+    image: nginx:1.27-alpine
+    restart: unless-stopped
+    depends_on:
+      bridge:
+        condition: service_healthy
+      fedify-gateway:
+        condition: service_healthy
+    ports:
+      - "${NGINX_HTTP_PORT:-8088}:80"
+      - "${NGINX_HTTPS_PORT:-8443}:443"
+    environment:
+      PUBLIC_DOMAIN: ${PUBLIC_DOMAIN:-localhost}
+    volumes:
+      - ${NGINX_CONFIG:-./deploy/nginx/default.conf.template}:/etc/nginx/templates/default.conf.template:ro
+      - ${NGINX_TLS_DIR:-./deploy/nginx/tls}:/etc/nginx/tls:ro
+    networks:
+      - bridge-internal

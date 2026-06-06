@@ -272,19 +272,6 @@ Open details:
 - how edits, deletes, pagination, and partial retries are handled;
 - whether restored history should be published to Discord.
 
-## 25. Production-ready Docker deployment setup
-
-The project does not yet have a supported production Docker deployment.
-
-Open details:
-
-- production images for the Python bridge and Fedify gateway;
-- Compose configuration, persistent volumes, secrets, and health checks;
-- database migrations, reverse proxy, TLS, backups, upgrades, and rollback;
-- one project version shared by both services;
-- Git tags, immutable image tags, and explicit version selection during deployment.
-
-
 ## 27. Dashboard active-user statistics
 
 The dashboard does not currently show activity metrics such as daily or monthly active users.

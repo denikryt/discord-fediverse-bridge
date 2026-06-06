@@ -297,3 +297,82 @@ The repository includes:
 ## Known issues
 
 See `notes/known_issues.md` for the current short issue journal and verified behavior notes.
+
+## Docker deployment
+
+The supported Docker deployment runs the Python bridge and Fedify gateway as two containers with one shared SQLite volume. The default stack does not include a reverse proxy; expose it through an existing nginx, Caddy, or Traefik installation.
+
+### Prepare configuration
+
+Copy the application environment templates and fill in real secrets:
+
+```bash
+cp .env.example .env
+cp fedify-gateway/.env.example fedify-gateway/.env
+cp .env.docker.example .env.docker
+```
+
+Use `.env` and `fedify-gateway/.env` for application settings and secrets. Use `.env.docker` only for Compose image, port, volume, and optional nginx settings.
+
+Set the release explicitly:
+
+```bash
+export BRIDGE_VERSION="$(cat VERSION)"
+```
+
+The default deployment expects versioned images named `discord-fediverse-bridge` and `discord-fediverse-bridge-fedify-gateway`. For a local source build, add `compose.build.yaml`.
+
+### Start with an external reverse proxy
+
+```bash
+docker compose --env-file .env.docker \
+  -f compose.yaml \
+  -f compose.build.yaml \
+  up -d --build
+```
+
+The bridge is bound to `127.0.0.1:8080` and the gateway to `127.0.0.1:3000` by default. Route dashboard, OAuth, registration, health, and other bridge HTTP paths to port 8080. Route WebFinger, actor/object, inbox, and ActivityPub paths to port 3000. Keep one public origin for both services.
+
+Check health and logs:
+
+```bash
+curl http://127.0.0.1:8080/healthz
+curl http://127.0.0.1:3000/healthz
+docker compose logs -f bridge fedify-gateway
+```
+
+### Optional bundled nginx
+
+For a self-contained HTTP proxy suitable for local verification or an operator-managed TLS mount:
+
+```bash
+docker compose --env-file .env.docker \
+  -f compose.yaml \
+  -f compose.build.yaml \
+  -f compose.nginx.yaml \
+  up -d --build
+```
+
+The optional nginx service listens on host port 8088 by default and uses `deploy/nginx/default.conf.template`. Certificate issuance is intentionally outside this setup; mount existing files through `NGINX_TLS_DIR` when extending the template for TLS.
+
+### Backup, update, and rollback
+
+Stop writers before copying the SQLite database:
+
+```bash
+docker compose stop bridge fedify-gateway
+docker run --rm -v discord-fediverse-bridge-data:/data -v "$PWD":/backup alpine \
+  cp /data/bridge.db /backup/bridge.db.backup
+docker compose start bridge fedify-gateway
+```
+
+To update, set `BRIDGE_VERSION` to the exact release, pull or build both images, and recreate the stack. Verify both `/healthz` endpoints report the selected version. Before rollback, restore the database backup unless the intervening migrations are known to be backward-compatible.
+
+```bash
+BRIDGE_VERSION=0.1.0 docker compose pull
+BRIDGE_VERSION=0.1.0 docker compose up -d
+```
+
+`docker compose down` preserves the named volume. `docker compose down -v` permanently deletes it.
+
+The existing direct Python/npm and systemd deployment remains supported.

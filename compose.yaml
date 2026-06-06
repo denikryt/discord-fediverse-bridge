@@ -1,0 +1,58 @@
+name: discord-fediverse-bridge
+
+services:
+  bridge:
+    image: ${BRIDGE_IMAGE:-discord-fediverse-bridge}:${BRIDGE_VERSION:?BRIDGE_VERSION is required}
+    restart: unless-stopped
+    env_file:
+      - ${BRIDGE_ENV_FILE:-.env}
+    environment:
+      DATABASE_URL: sqlite:////data/bridge.db
+      INTERNAL_HTTP_HOST: 0.0.0.0
+      INTERNAL_HTTP_PORT: 8080
+      FEDIFY_GATEWAY_URL: http://fedify-gateway:3000
+    ports:
+      - "127.0.0.1:${BRIDGE_HOST_PORT:-8080}:8080"
+    volumes:
+      - bridge-data:/data
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8080/healthz', timeout=5)"]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+      start_period: 20s
+    networks:
+      - bridge-internal
+
+  fedify-gateway:
+    image: ${GATEWAY_IMAGE:-discord-fediverse-bridge-fedify-gateway}:${BRIDGE_VERSION:?BRIDGE_VERSION is required}
+    restart: unless-stopped
+    env_file:
+      - ${BRIDGE_ENV_FILE:-.env}
+      - ${GATEWAY_ENV_FILE:-fedify-gateway/.env}
+    environment:
+      DATABASE_URL: sqlite:////data/bridge.db
+      FEDIFY_PORT: 3000
+      PYTHON_BRIDGE_EVENTS_URL: http://bridge:8080/internal/activitypub/events
+    ports:
+      - "127.0.0.1:${GATEWAY_HOST_PORT:-3000}:3000"
+    volumes:
+      - bridge-data:/data
+    depends_on:
+      bridge:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "node", "-e", "fetch('http://127.0.0.1:3000/healthz').then(r=>{if(!r.ok)process.exit(1)}).catch(()=>process.exit(1))"]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+      start_period: 10s
+    networks:
+      - bridge-internal
+
+volumes:
+  bridge-data:
+    name: ${BRIDGE_DATA_VOLUME:-discord-fediverse-bridge-data}
+
+networks:
+  bridge-internal: {}
