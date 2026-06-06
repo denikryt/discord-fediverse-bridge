@@ -259,3 +259,39 @@ Later audit extensions may cover:
 - role and super-admin configuration changes;
 - legacy claim/backfill actions;
 - operator-facing audit search, retention, export, or dashboard UI.
+
+## 24. Remote community history backfill and content archive
+
+The bridge stores identifier mappings but does not persist enough post and comment content to reconstruct remote community history.
+
+Open details:
+
+- whether to use ActivityPub outboxes and replies, Lemmy APIs, or a dedicated archive endpoint;
+- which post and comment fields must be stored locally;
+- how backfilled content is deduplicated against live federation;
+- how edits, deletes, pagination, and partial retries are handled;
+- whether restored history should be published to Discord.
+
+## 25. Production-ready Docker deployment setup
+
+The project does not yet have a supported production Docker deployment.
+
+Open details:
+
+- production images for the Python bridge and Fedify gateway;
+- Compose configuration, persistent volumes, secrets, and health checks;
+- database migrations, reverse proxy, TLS, backups, upgrades, and rollback;
+- one project version shared by both services;
+- Git tags, immutable image tags, and explicit version selection during deployment.
+
+## 26. Guild invite publication and dashboard link
+
+The dashboard does not currently expose a Discord invite for a guild.
+
+Open details:
+
+- add a guild-only command that creates and publishes a non-expiring invite;
+- authorize it through Discord guild permissions instead of a bridge role;
+- define the required permission and target channel;
+- handle invite replacement, removal, persistence, and dashboard display;
+- record audit events and report missing bot permissions.

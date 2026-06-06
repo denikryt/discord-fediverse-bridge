@@ -69,6 +69,7 @@
 - Do not dump unrelated details into nearby documentation files.
 - Preserve the established formatting style of the document family being edited.
 - If no documentation update is needed, understand and be able to explain why the change is outside the existing documentation boundaries.
+- Remove completed items from `dev/future_tasks.md`; do not replace them with completion notes.
 
 ## Planning Clarification Workflow
 
