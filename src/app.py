@@ -20,6 +20,7 @@ from .http_api import create_http_app
 from .local_communities.runtime import LocalCommunityRuntime
 from .logging_setup import configure_logging
 from .registration_service import RegistrationService
+from .project_version import APP_VERSION
 from .runtime import Runtime
 
 logger = logging.getLogger(__name__)
@@ -30,6 +31,7 @@ async def main() -> None:
     # against the same shared state.
     settings = Settings()
     configure_logging(settings.log_level)
+    logger.info("Starting Discord/Fediverse bridge version=%s", APP_VERSION)
     runtime = build_runtime(settings)
     bot = runtime.bot
     http_app = create_http_app(runtime)

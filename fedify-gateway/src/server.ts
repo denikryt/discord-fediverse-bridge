@@ -53,6 +53,7 @@ import type {
 } from "./types.js";
 import { buildWebFingerDocument } from "./webfinger.js";
 import { appendDebugFileLog, initializeDebugFileLog, installDebugFetchLogging } from "./debug-file-log.js";
+import { APP_VERSION } from "./project-version.js";
 
 // server.ts owns the operator-facing HTTP surface of the gateway: health,
 // manual follow, inbox logging, and Fedify middleware wiring.
@@ -95,7 +96,7 @@ export function createGatewayApp(config: GatewayConfig): Hono {
   }
 
   app.get("/healthz", (context) => {
-    return context.json({ status: "ok" });
+    return context.json({ status: "ok", version: APP_VERSION });
   });
 
   app.get("/.well-known/discord-fediverse-bridge/communities", async (context) => {
@@ -693,7 +694,7 @@ export function startGatewayServer(config: GatewayConfig = loadConfig()): void {
   });
 
   console.log(
-    `Fedify gateway listening on ${config.fedifyOrigin} (port ${config.port}) and forwarding to ${config.pythonBridgeEventsUrl}`,
+    `Fedify gateway version=${APP_VERSION} listening on ${config.fedifyOrigin} (port ${config.port}) and forwarding to ${config.pythonBridgeEventsUrl}`,
   );
 }
 

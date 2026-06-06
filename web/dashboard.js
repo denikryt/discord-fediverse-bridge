@@ -185,6 +185,15 @@ fetch(endpoint)
           .join("")
       : "<p class='muted'>No Discord guild placements.</p>";
 
+    const versionElement = document.getElementById("project-version");
+    const version = data.instance?.version;
+    if (versionElement && version) {
+      versionElement.textContent = `Version ${version}`;
+      versionElement.hidden = false;
+    } else if (versionElement) {
+      versionElement.hidden = true;
+    }
+
     document.getElementById("federation").innerHTML = `
     <p>Federation mode: <strong>${data.federation.mode === "open" ? "open" : "restricted allowlist"}</strong></p>
     <details open><summary>Allowlist</summary>${list(data.federation.allowlist, (host) => `<li>${host}</li>`)}</details>`;

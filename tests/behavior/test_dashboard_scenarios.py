@@ -71,6 +71,7 @@ def test_empty_dashboard_state_renders_open_federation(tmp_path: Path) -> None:
     assert response.status_code == 200
     payload = response.json()
     assert payload["instance"]["origin"] == "https://discrod-bridge.example.com"
+    assert payload["instance"]["version"] == "0.1.0"
     assert payload["instance"]["bridgeActorUrl"] == "https://discrod-bridge.example.com/actors/bridge"
     assert payload["instance"]["registeredUserCount"] == 0
     assert payload["localCommunities"] == []
@@ -181,6 +182,15 @@ def test_allowlist_mode_is_explicit_and_normalized(tmp_path: Path) -> None:
     assert payload["federation"]["allowlist"] == ["beehaw.org", "lemmy.world"]
 
 
+def test_healthcheck_exposes_project_version(tmp_path: Path) -> None:
+    """Process health metadata reports the canonical running version."""
+    database = _database(tmp_path)
+    response = _client(database).get("/healthz")
+
+    assert response.status_code == 200
+    assert response.json() == {"status": "ok", "version": "0.1.0"}
+
+
 def test_dashboard_html_loads_and_includes_credits(tmp_path: Path) -> None:
     """The browser dashboard shell exposes its JSON endpoint and credits."""
     database = _database(tmp_path)
@@ -189,14 +199,15 @@ def test_dashboard_html_loads_and_includes_credits(tmp_path: Path) -> None:
     assert response.status_code == 200
     assert "Discord/Fediverse Bridge Instance" in response.text
     assert "/dashboard/data" in response.text
-    assert "/dashboard/static/dashboard.css?v=2026-06-06-guild-invite-publication" in response.text
-    assert "/dashboard/static/dashboard.js?v=2026-06-06-guild-invite-publication" in response.text
+    assert "/dashboard/static/dashboard.css?v=2026-06-06-project-version" in response.text
+    assert "/dashboard/static/dashboard.js?v=2026-06-06-project-version" in response.text
     assert 'data-dashboard-endpoint="/dashboard/data"' in response.text
     assert "Remote follower relays" not in response.text
     assert '<span class="stat-label">Origin</span>' not in response.text
     assert '<span class="stat-label">Bridge actor</span>' not in response.text
     assert "https://nachitima.com" in response.text
     assert "Nachitima" in response.text
+    assert 'id="project-version"' in response.text
 
 
 def test_dashboard_path_redirects_to_root(tmp_path: Path) -> None:

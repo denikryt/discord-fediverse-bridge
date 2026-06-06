@@ -17,6 +17,7 @@ from .activitypub_models import BridgeGatewayEvent
 from .registration_service import RegistrationError, generate_oauth_state, generate_session_token
 from .runtime import Runtime
 from .models import RegistrationSession, utcnow
+from .project_version import APP_VERSION
 
 logger = logging.getLogger(__name__)
 
@@ -39,7 +40,7 @@ def create_http_app(runtime: Runtime) -> FastAPI:
     @app.get("/healthz")
     async def healthcheck() -> dict[str, str]:
         """Return a minimal healthcheck for process supervision."""
-        return {"status": "ok"}
+        return {"status": "ok", "version": APP_VERSION}
 
     @app.get("/register")
     async def register_page(request: Request) -> Response:

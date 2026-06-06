@@ -13,6 +13,8 @@ from pathlib import Path
 from typing import Any
 from urllib.parse import urlparse
 
+from .project_version import APP_VERSION
+
 WEB_DIR = Path(__file__).resolve().parent.parent / "web"
 DASHBOARD_HTML_PATH = WEB_DIR / "dashboard.html"
 UNKNOWN_GUILD = "Unknown guild"
@@ -167,6 +169,7 @@ def build_dashboard_payload(runtime: Any) -> dict[str, object]:
     return {
         "instance": {
             "title": "Discord/Fediverse Bridge Instance",
+            "version": APP_VERSION,
             "origin": origin,
             "bridgeActorUrl": f"{origin}/actors/{actor_identifier}",
             "registeredUserCount": len(registered_users),
