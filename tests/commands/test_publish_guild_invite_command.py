@@ -18,3 +18,4 @@ def test_publish_command_declares_manage_guild_default_permissions() -> None:
     assert command is not None
     assert command.default_permissions.manage_guild is True
     assert command.guild_only is True
+    assert command.parameters == []

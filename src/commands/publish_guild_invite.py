@@ -18,8 +18,7 @@ def register(tree: app_commands.CommandTree, database: Database, settings: Setti
     @tree.command(name="publish-guild-invite", description="Publish a server invite on the bridge dashboard")
     @app_commands.default_permissions(manage_guild=True)
     @app_commands.guild_only()
-    @app_commands.describe(channel="Public channel hosting an active local community")
-    async def publish_command(interaction: discord.Interaction, channel: discord.abc.GuildChannel) -> None:
+    async def publish_command(interaction: discord.Interaction) -> None:
         """Authorize, validate, create, persist, and publish one guild invite."""
         access = await evaluate_command_access(interaction, definition=MANAGE_GUILD_COMMAND_ACCESS, settings=settings)
         if not access.allowed:
@@ -36,11 +35,11 @@ def register(tree: app_commands.CommandTree, database: Database, settings: Setti
                 database=database,
                 client=interaction.client,
                 guild=interaction.guild,
-                channel=channel,
                 actor_discord_user_id=str(interaction.user.id),
             )
         )
         if result.applied:
+            channel = (result.extra_kwargs or {}).get("channel")
             record_discord_placement_snapshot(database, guild=interaction.guild, channel=channel)
             await interaction.response.send_message(result.message, ephemeral=True)
             return

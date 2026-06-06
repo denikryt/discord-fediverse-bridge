@@ -9,12 +9,8 @@ from src.operations.remove_guild_invite import remove_guild_invite_operation
 def test_publish_operation_declares_eligibility_in_execution_order() -> None:
     """Publish eligibility remains visible as ordered DiscordOps preconditions."""
     assert tuple(condition.name for condition in publish_guild_invite_operation.preconditions) == (
-        "channel_not_in_guild",
         "no_active_local_community",
-        "channel_not_active_local_community_host",
-        "private_channel",
-        "bot_permission_missing",
-        "channel_invites_unsupported",
+        "no_invitable_local_community_channel",
     )
 
 
