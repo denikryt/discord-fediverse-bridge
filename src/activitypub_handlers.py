@@ -10,6 +10,7 @@ import logging
 from dataclasses import dataclass
 
 from .community_moderation import find_local_community_actor_ban_for_event
+from .inbound_activity_outcomes import InboundActivityOutcome
 from .activitypub_models import (
     ActivityPubEvent,
     BridgeGatewayEvent,
@@ -26,14 +27,14 @@ logger = logging.getLogger(__name__)
 
 @dataclass(slots=True)
 class HandlerResult:
-    """Carry the processing outcome of one inbound ActivityPub event.
+    """Carry one terminal inbound result and its semantic classification.
 
-    Handlers return explicit status so the HTTP receipt layer can record
-    whether the event was processed, skipped, or needs a retry.
+    ``status`` remains the receipt lifecycle decision while ``outcome`` is the
+    stable bridge-observability contract persisted alongside human detail.
     """
 
-    # status values: processed | skipped
     status: str
+    outcome: InboundActivityOutcome
     detail: str
 
 
@@ -59,7 +60,7 @@ async def dispatch_activitypub_event(
                 event.event_type,
                 _allowlist_subject(event, runtime),
             )
-            return HandlerResult(status="skipped", detail="instance not in allowlist")
+            return HandlerResult(status="skipped", outcome=InboundActivityOutcome.IGNORED_INSTANCE_NOT_ALLOWLISTED, detail="instance not in allowlist")
 
     disabled = _skip_disabled_local_community(event, runtime)
     if disabled is not None:
@@ -78,7 +79,7 @@ async def dispatch_activitypub_event(
             getattr(event, "event_type", None),
             getattr(event, "delivery_id", None),
         )
-        return HandlerResult(status="skipped", detail="actor is banned for this community")
+        return HandlerResult(status="skipped", outcome=InboundActivityOutcome.IGNORED_BY_BAN, detail="actor is banned for this community")
 
     # Keep dispatch explicit so supported inbound event types stay obvious.
     if event.event_type == "post.created":
@@ -146,7 +147,7 @@ def _skip_disabled_local_community(event: BridgeGatewayEvent, runtime: Runtime) 
         getattr(event, "event_type", None),
         getattr(event, "delivery_id", None),
     )
-    return HandlerResult(status="skipped", detail="community is disabled")
+    return HandlerResult(status="skipped", outcome=InboundActivityOutcome.IGNORED_BY_DISABLED_COMMUNITY, detail="community is disabled")
 
 async def handle_post_created(event: ActivityPubEvent, runtime: Runtime) -> HandlerResult:
     """Route one inbound ActivityPub post through CommunityRuntime.
@@ -156,7 +157,7 @@ async def handle_post_created(event: ActivityPubEvent, runtime: Runtime) -> Hand
     accepted when the instance starts delivering without sending Accept first.
     """
     if _is_discord_originated_echo(event, runtime):
-        return HandlerResult(status="skipped", detail="discord-originated echo")
+        return HandlerResult(status="skipped", outcome=InboundActivityOutcome.IGNORED_DISCORD_ORIGINATED_ECHO, detail="discord-originated echo")
     if _is_local_community_target(event, runtime):
         return await runtime.local_community_runtime.handle_inbound_post(event, runtime)
     await _maybe_implicit_accept(event.community_actor_id, runtime)
@@ -166,7 +167,7 @@ async def handle_post_created(event: ActivityPubEvent, runtime: Runtime) -> Hand
             event.event_type, event.community_actor_id, event.delivery_id,
             event.object.ap_id, event.object.post_ap_id, event.object.parent_ap_id,
         )
-        return HandlerResult(status="skipped", detail="no subscriptions for this community")
+        return HandlerResult(status="skipped", outcome=InboundActivityOutcome.IGNORED_NO_SUBSCRIPTION, detail="no subscriptions for this community")
     return await runtime.community_runtime.handle_inbound_post(event, runtime)
 
 
@@ -178,7 +179,7 @@ async def handle_comment_created(event: ActivityPubEvent, runtime: Runtime) -> H
     accepted when the instance starts delivering without sending Accept first.
     """
     if _is_discord_originated_echo(event, runtime):
-        return HandlerResult(status="skipped", detail="discord-originated echo")
+        return HandlerResult(status="skipped", outcome=InboundActivityOutcome.IGNORED_DISCORD_ORIGINATED_ECHO, detail="discord-originated echo")
     if _is_local_community_target(event, runtime):
         return await runtime.local_community_runtime.handle_inbound_comment(event, runtime)
     await _maybe_implicit_accept(event.community_actor_id, runtime)
@@ -188,7 +189,7 @@ async def handle_comment_created(event: ActivityPubEvent, runtime: Runtime) -> H
             event.event_type, event.community_actor_id, event.delivery_id,
             event.object.ap_id, event.object.post_ap_id, event.object.parent_ap_id,
         )
-        return HandlerResult(status="skipped", detail="no subscriptions for this community")
+        return HandlerResult(status="skipped", outcome=InboundActivityOutcome.IGNORED_NO_SUBSCRIPTION, detail="no subscriptions for this community")
     return await runtime.community_runtime.handle_inbound_comment(event, runtime)
 
 
@@ -217,10 +218,10 @@ async def handle_follow_accepted(
             "Skipping follow acceptance for unknown bridge follow activity %s",
             follow_activity_id,
         )
-        return HandlerResult(status="skipped", detail="bridge follow activity is not mapped")
+        return HandlerResult(status="skipped", outcome=InboundActivityOutcome.IGNORED_UNKNOWN_FOLLOW, detail="bridge follow activity is not mapped")
 
     if bridge_follow.status == "accepted":
-        return HandlerResult(status="skipped", detail="bridge follow already accepted")
+        return HandlerResult(status="skipped", outcome=InboundActivityOutcome.IGNORED_ALREADY_APPLIED, detail="bridge follow already accepted")
 
     # Mark the bridge-actor follow and all pending channel rows accepted atomically.
     # get_pending_channel_subscriptions_for_community must be called BEFORE
@@ -237,6 +238,7 @@ async def handle_follow_accepted(
 
     return HandlerResult(
         status="processed",
+        outcome=InboundActivityOutcome.APPLIED,
         detail=f"bridge follow accepted; {len(pending_subs)} channel(s) notified",
     )
 

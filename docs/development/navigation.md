@@ -31,6 +31,8 @@ This document is a task-oriented reading guide for maintainers changing or debug
 1. `src/discord_bot.py`; 2. `src/discord_event_router.py`; 3. `src/community_sync/runtime.py`; 4. `src/db/repositories/legacy_lemmy_mappings.py`; 5. `src/db/repositories/discord_fanout_groups.py`; 6. `src/content_sync/outbound_publish.py`; 7. `src/fedify_gateway_client.py`.
 
 ## Remote ActivityPub -> Discord fanout
+
+For inbound observability, start with `src/inbound_activity_outcomes.py` for the stable semantic vocabulary, `src/activitypub_handlers.py` and the two runtime modules for classification decisions, `src/http_api.py` for receipt lifecycle orchestration, and `src/db/repositories/event_receipts.py` for atomic persistence.
 1. `fedify-gateway/src/federation.ts`; 2. `fedify-gateway/src/normalize.ts`; 3. `fedify-gateway/src/python-bridge.ts`; 4. `src/activitypub_handlers.py`; 5. `src/community_sync/discord_fanout.py`; 6. `src/db/repositories/discord_fanout_groups.py`; 7. `src/db/repositories/legacy_lemmy_mappings.py`.
 
 ## Local community creation

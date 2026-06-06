@@ -33,6 +33,11 @@ def migrate(engine: Engine) -> None:
             "created_by_discord_user_id",
             "ALTER TABLE local_communities ADD COLUMN created_by_discord_user_id VARCHAR(64)",
         ),
+        (
+            "activitypub_event_receipts",
+            "outcome",
+            "ALTER TABLE activitypub_event_receipts ADD COLUMN outcome VARCHAR(64)",
+        ),
     ]
     # Stage 2 adds explicit local-community surface tables. Creating them here
     # keeps interrupted deployments and migrate-only test fixtures aligned with
@@ -50,6 +55,11 @@ def migrate(engine: Engine) -> None:
         for table, column, stmt in migrations:
             # PRAGMA table_info returns one row per column; skip if already present.
             existing = _table_columns(conn, table)
+            # Partial legacy fixtures may omit unrelated tables entirely. A
+            # missing table has nothing to migrate and may be created later by
+            # the normal metadata path.
+            if not existing:
+                continue
             if column not in existing:
                 conn.execute(text(stmt))
         _migrate_local_communities_summary_nullable(conn)

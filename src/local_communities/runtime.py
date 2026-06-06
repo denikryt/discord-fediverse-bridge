@@ -13,6 +13,7 @@ import logging
 from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
+from ..inbound_activity_outcomes import InboundActivityOutcome
 from ..content_sync.inbound_references import build_message_reference
 from ..db import Database
 from ..content_publish_service import ContentPublishService
@@ -404,7 +405,7 @@ class LocalCommunityRuntime:
 
         local_community = self.database.local_communities.get_local_community_by_actor_url(getattr(event, "community_actor_id"))
         if local_community is None:
-            return _HandlerResult(status="skipped", detail="unknown local community")
+            return _HandlerResult(status="skipped", outcome=InboundActivityOutcome.IGNORED_UNKNOWN_LOCAL_COMMUNITY, detail="unknown local community")
         existing = get_local_community_thread_for_ap_object(self.database, getattr(getattr(event, "object"), "ap_id"))
         if existing is not None:
             await self._fanout_thread_to_local_subscribers(
@@ -420,13 +421,13 @@ class LocalCommunityRuntime:
                 local_community=local_community,
                 object_kind="post",
             )
-            return _HandlerResult(status="skipped", detail="post already mapped")
+            return _HandlerResult(status="skipped", outcome=InboundActivityOutcome.IGNORED_ALREADY_APPLIED, detail="post already mapped")
         remote_subscriber = self.database.remote_subscribers.get_remote_subscriber(
             local_community_id=getattr(local_community, "id"),
             remote_actor_id=getattr(event, "actor_id"),
         )
         if remote_subscriber is None or getattr(remote_subscriber, "status") != "accepted":
-            return _HandlerResult(status="skipped", detail="remote actor is not an accepted remote subscriber")
+            return _HandlerResult(status="skipped", outcome=InboundActivityOutcome.IGNORED_ACTOR_NOT_SUBSCRIBER, detail="remote actor is not an accepted remote subscriber")
         if self.bot is None:
             raise RuntimeError("LocalCommunityRuntime requires bot for inbound Discord delivery")
 
@@ -460,7 +461,7 @@ class LocalCommunityRuntime:
             local_community=local_community,
             object_kind="post",
         )
-        return _HandlerResult(status="processed", detail="remote post created thread")
+        return _HandlerResult(status="processed", outcome=InboundActivityOutcome.APPLIED, detail="remote post created thread")
 
     async def handle_inbound_comment(self, event: object, runtime: object) -> HandlerResult:
         """Mirror one remote comment into the mapped Discord thread."""
@@ -468,7 +469,7 @@ class LocalCommunityRuntime:
 
         local_community = self.database.local_communities.get_local_community_by_actor_url(getattr(event, "community_actor_id"))
         if local_community is None:
-            return _HandlerResult(status="skipped", detail="unknown local community")
+            return _HandlerResult(status="skipped", outcome=InboundActivityOutcome.IGNORED_UNKNOWN_LOCAL_COMMUNITY, detail="unknown local community")
         existing_message = self.database.local_community_content.get_local_community_message_by_ap_object_id(getattr(getattr(event, "object"), "ap_id"))
         if existing_message is not None:
             existing_thread = self.database.local_community_content.get_local_community_thread_by_id(
@@ -488,17 +489,17 @@ class LocalCommunityRuntime:
                 local_community=local_community,
                 object_kind="comment",
             )
-            return _HandlerResult(status="skipped", detail="comment already mapped")
+            return _HandlerResult(status="skipped", outcome=InboundActivityOutcome.IGNORED_ALREADY_APPLIED, detail="comment already mapped")
         remote_subscriber = self.database.remote_subscribers.get_remote_subscriber(
             local_community_id=getattr(local_community, "id"),
             remote_actor_id=getattr(event, "actor_id"),
         )
         if remote_subscriber is None or getattr(remote_subscriber, "status") != "accepted":
-            return _HandlerResult(status="skipped", detail="remote actor is not an accepted remote subscriber")
+            return _HandlerResult(status="skipped", outcome=InboundActivityOutcome.IGNORED_ACTOR_NOT_SUBSCRIBER, detail="remote actor is not an accepted remote subscriber")
 
         thread_row = self.database.local_community_content.get_local_community_thread_by_ap_object_id(getattr(getattr(event, "object"), "post_ap_id"))
         if thread_row is None:
-            return _HandlerResult(status="skipped", detail="comment parent post is not mapped")
+            return _HandlerResult(status="skipped", outcome=InboundActivityOutcome.IGNORED_UNMAPPED_CONTEXT, detail="comment parent post is not mapped")
         if self.bot is None:
             raise RuntimeError("LocalCommunityRuntime requires bot for inbound Discord delivery")
 
@@ -506,7 +507,7 @@ class LocalCommunityRuntime:
             getattr(thread_row, "id")
         )
         if host_thread_surface is None:
-            return _HandlerResult(status="skipped", detail="comment thread host surface not mapped")
+            return _HandlerResult(status="skipped", outcome=InboundActivityOutcome.IGNORED_UNMAPPED_CONTEXT, detail="comment thread host surface not mapped")
         discord_thread = await self.bot.get_thread_by_id(
             getattr(host_thread_surface, "discord_thread_id")
         )
@@ -551,7 +552,7 @@ class LocalCommunityRuntime:
             local_community=local_community,
             object_kind="comment",
         )
-        return _HandlerResult(status="processed", detail="remote comment created message")
+        return _HandlerResult(status="processed", outcome=InboundActivityOutcome.APPLIED, detail="remote comment created message")
 
 
     async def _fanout_thread_to_local_subscribers(
@@ -890,7 +891,7 @@ class LocalCommunityRuntime:
 
         thread_row = self.database.local_community_content.get_local_community_thread_by_ap_object_id(getattr(getattr(event, "object"), "ap_id"))
         if thread_row is None:
-            return _HandlerResult(status="skipped", detail="post not yet mapped")
+            return _HandlerResult(status="skipped", outcome=InboundActivityOutcome.IGNORED_UNMAPPED_CONTEXT, detail="post not yet mapped")
         local_community = self.database.local_communities.get_local_community_by_actor_url(getattr(event, "community_actor_id"))
         await self._fanout_thread_edit(
             runtime=runtime,
@@ -905,7 +906,7 @@ class LocalCommunityRuntime:
                 object_kind="post",
                 operation="update",
             )
-        return _HandlerResult(status="processed", detail="post updated")
+        return _HandlerResult(status="processed", outcome=InboundActivityOutcome.APPLIED, detail="post updated")
 
     async def handle_inbound_post_delete(self, event: object, runtime: object) -> HandlerResult:
         """Mark the starter message deleted for one inbound remote post delete."""
@@ -913,7 +914,7 @@ class LocalCommunityRuntime:
 
         thread_row = self.database.local_community_content.get_local_community_thread_by_ap_object_id(getattr(getattr(event, "object"), "ap_id"))
         if thread_row is None:
-            return _HandlerResult(status="skipped", detail="post not yet mapped")
+            return _HandlerResult(status="skipped", outcome=InboundActivityOutcome.IGNORED_UNMAPPED_CONTEXT, detail="post not yet mapped")
         local_community = self.database.local_communities.get_local_community_by_actor_url(getattr(event, "community_actor_id"))
         await self._fanout_thread_delete(
             runtime=runtime,
@@ -927,7 +928,7 @@ class LocalCommunityRuntime:
                 object_kind="post",
                 operation="delete",
             )
-        return _HandlerResult(status="processed", detail="post deleted")
+        return _HandlerResult(status="processed", outcome=InboundActivityOutcome.APPLIED, detail="post deleted")
 
     async def handle_inbound_comment_update(self, event: object, runtime: object) -> HandlerResult:
         """Edit the mirrored Discord copy for one inbound remote comment update."""
@@ -935,10 +936,10 @@ class LocalCommunityRuntime:
 
         message_row = self.database.local_community_content.get_local_community_message_by_ap_object_id(getattr(getattr(event, "object"), "ap_id"))
         if message_row is None:
-            return _HandlerResult(status="skipped", detail="comment not yet mapped")
+            return _HandlerResult(status="skipped", outcome=InboundActivityOutcome.IGNORED_UNMAPPED_CONTEXT, detail="comment not yet mapped")
         thread_row = self.database.local_community_content.get_local_community_thread_by_id(getattr(message_row, "local_community_thread_id"))
         if thread_row is None:
-            return _HandlerResult(status="skipped", detail="comment thread not mapped")
+            return _HandlerResult(status="skipped", outcome=InboundActivityOutcome.IGNORED_UNMAPPED_CONTEXT, detail="comment thread not mapped")
         local_community = self.database.local_communities.get_local_community_by_actor_url(getattr(event, "community_actor_id"))
         await self._fanout_message_edit(
             runtime=runtime,
@@ -953,7 +954,7 @@ class LocalCommunityRuntime:
                 object_kind="comment",
                 operation="update",
             )
-        return _HandlerResult(status="processed", detail="comment updated")
+        return _HandlerResult(status="processed", outcome=InboundActivityOutcome.APPLIED, detail="comment updated")
 
     async def handle_inbound_comment_delete(self, event: object, runtime: object) -> HandlerResult:
         """Mark the mirrored Discord copy deleted for one inbound remote comment delete."""
@@ -961,10 +962,10 @@ class LocalCommunityRuntime:
 
         message_row = self.database.local_community_content.get_local_community_message_by_ap_object_id(getattr(getattr(event, "object"), "ap_id"))
         if message_row is None:
-            return _HandlerResult(status="skipped", detail="comment not yet mapped")
+            return _HandlerResult(status="skipped", outcome=InboundActivityOutcome.IGNORED_UNMAPPED_CONTEXT, detail="comment not yet mapped")
         thread_row = self.database.local_community_content.get_local_community_thread_by_id(getattr(message_row, "local_community_thread_id"))
         if thread_row is None:
-            return _HandlerResult(status="skipped", detail="comment thread not mapped")
+            return _HandlerResult(status="skipped", outcome=InboundActivityOutcome.IGNORED_UNMAPPED_CONTEXT, detail="comment thread not mapped")
         local_community = self.database.local_communities.get_local_community_by_actor_url(getattr(event, "community_actor_id"))
         await self._fanout_message_delete(
             runtime=runtime,
@@ -978,7 +979,7 @@ class LocalCommunityRuntime:
                 object_kind="comment",
                 operation="delete",
             )
-        return _HandlerResult(status="processed", detail="comment deleted")
+        return _HandlerResult(status="processed", outcome=InboundActivityOutcome.APPLIED, detail="comment deleted")
 
     async def handle_follow_request(
         self,
@@ -993,7 +994,7 @@ class LocalCommunityRuntime:
 
         local_community = self.database.local_communities.get_local_community_by_actor_url(local_community_actor_id)
         if local_community is None:
-            return _HandlerResult(status="skipped", detail="unknown local community")
+            return _HandlerResult(status="skipped", outcome=InboundActivityOutcome.IGNORED_UNKNOWN_LOCAL_COMMUNITY, detail="unknown local community")
         existing = self.database.remote_subscribers.get_remote_subscriber(
             local_community_id=getattr(local_community, "id"),
             remote_actor_id=remote_actor_id,
@@ -1036,7 +1037,7 @@ class LocalCommunityRuntime:
             remote_inbox_url=remote_inbox_url,
             follow_activity_id=follow_activity_id,
         )
-        return _HandlerResult(status="processed", detail=detail)
+        return _HandlerResult(status="processed", outcome=InboundActivityOutcome.APPLIED, detail=detail)
 
     async def handle_unfollow_request(
         self,
@@ -1050,13 +1051,13 @@ class LocalCommunityRuntime:
 
         local_community = self.database.local_communities.get_local_community_by_actor_url(local_community_actor_id)
         if local_community is None:
-            return _HandlerResult(status="skipped", detail="unknown local community")
+            return _HandlerResult(status="skipped", outcome=InboundActivityOutcome.IGNORED_UNKNOWN_LOCAL_COMMUNITY, detail="unknown local community")
         remote_subscriber = self.database.remote_subscribers.get_remote_subscriber(
             local_community_id=getattr(local_community, "id"),
             remote_actor_id=remote_actor_id,
         )
         if remote_subscriber is None:
-            return _HandlerResult(status="skipped", detail="local community remote subscriber not found")
+            return _HandlerResult(status="skipped", outcome=InboundActivityOutcome.IGNORED_UNKNOWN_FOLLOW, detail="local community remote subscriber not found")
         if follow_activity_id is not None and getattr(remote_subscriber, "follow_activity_id") != follow_activity_id:
             logger.info(
                 "Local-community unfollow Follow ID mismatch community=%s remote_actor=%s stored=%s incoming=%s",
@@ -1066,7 +1067,7 @@ class LocalCommunityRuntime:
             local_community_id=getattr(local_community, "id"),
             remote_actor_id=remote_actor_id,
         )
-        return _HandlerResult(status="processed", detail="local community remote subscriber removed")
+        return _HandlerResult(status="processed", outcome=InboundActivityOutcome.APPLIED, detail="local community remote subscriber removed")
 
     @staticmethod
     def _unpack_created_thread(created: object) -> tuple[object, object]:

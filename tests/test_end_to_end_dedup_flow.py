@@ -145,6 +145,7 @@ async def test_inbound_post_with_discord_originated_mapping_is_skipped_as_echo(
 
     assert result.status == "skipped"
     assert result.detail == "discord-originated echo"
+    assert result.outcome.value == "ignored_discord_originated_echo"
     runtime.bot.fetch_forum_channel.assert_not_awaited()
 
 
@@ -184,6 +185,7 @@ async def test_inbound_comment_with_discord_originated_mapping_is_skipped_as_ech
 
     assert result.status == "skipped"
     assert result.detail == "discord-originated echo"
+    assert result.outcome.value == "ignored_discord_originated_echo"
     runtime.bot.get_thread_by_id.assert_not_awaited()
 
 
@@ -227,8 +229,10 @@ def test_out_of_order_comment_receipt_becomes_deferred_and_retries_successfully(
 
     assert first_response.status_code == 200
     assert first_response.json()["status"] == "deferred"
+    assert first_response.json()["outcome"] == "deferred_missing_dependency"
     assert receipt_after_first is not None
     assert receipt_after_first.status == "deferred"
+    assert receipt_after_first.outcome == "deferred_missing_dependency"
 
     post_ap_id = f"https://{LEMMY_EXAMPLE_DOMAIN}/post/111"
     thread_group = database.discord_fanout_groups.create_thread_group(
@@ -257,8 +261,10 @@ def test_out_of_order_comment_receipt_becomes_deferred_and_retries_successfully(
 
     assert second_response.status_code == 200
     assert second_response.json()["status"] == "processed"
+    assert second_response.json()["outcome"] == "applied"
     assert receipt_after_second is not None
     assert receipt_after_second.status == "processed"
+    assert receipt_after_second.outcome == "applied"
     assert created_message_group is not None
 
 
@@ -298,6 +304,7 @@ def test_failed_inbound_discord_fanout_marks_receipt_failed(tmp_path: Path) -> N
     assert response.status_code == 500
     assert receipt is not None
     assert receipt.status == "failed"
+    assert receipt.outcome == "processing_failed"
 
 
 def test_duplicate_inbound_delivery_returns_duplicate_without_side_effects(
@@ -349,4 +356,5 @@ def test_duplicate_inbound_delivery_returns_duplicate_without_side_effects(
     assert first_response.json()["status"] == "processed"
     assert second_response.status_code == 200
     assert second_response.json()["status"] == "duplicate"
+    assert second_response.json()["outcome"] == "applied"
     forum_channel.create_thread.assert_awaited_once()

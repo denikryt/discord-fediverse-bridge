@@ -16,6 +16,7 @@ from typing import TYPE_CHECKING
 
 import discord
 
+from ..inbound_activity_outcomes import InboundActivityOutcome
 from .backfill import backfill_post_as_thread_group
 from .delivery_mapping import (
     get_message_group_for_ap_object,
@@ -287,11 +288,11 @@ class CommunityRuntime:
         # or replayed event arrived — skip without creating more threads.
         if get_thread_group_for_ap_object(self.database, event.object.ap_id) is not None:
             logger.info("Post %s already mapped to a thread group — skipping", event.object.ap_id)
-            return _HandlerResult(status="skipped", detail="post already mapped")
+            return _HandlerResult(status="skipped", outcome=InboundActivityOutcome.IGNORED_ALREADY_APPLIED, detail="post already mapped")
 
         accepted = get_accepted_subscriptions(self.database, event.community_actor_id)
         if not accepted:
-            return _HandlerResult(status="skipped", detail="no subscriptions for this community")
+            return _HandlerResult(status="skipped", outcome=InboundActivityOutcome.IGNORED_NO_SUBSCRIPTION, detail="no subscriptions for this community")
 
         # Use self.bot when available; fall back to runtime.bot for backward compat
         # with callers that pass the full Runtime (e.g. existing integration tests).
@@ -331,7 +332,7 @@ class CommunityRuntime:
             "Delivered inbound post %s into %d subscribed channel(s)",
             event.object.ap_id, len(accepted),
         )
-        return _HandlerResult(status="processed", detail="post created")
+        return _HandlerResult(status="processed", outcome=InboundActivityOutcome.APPLIED, detail="post created")
 
     async def handle_inbound_comment(
         self,
@@ -371,7 +372,7 @@ class CommunityRuntime:
         # Dedup: if a message group already exists for this AP object, skip.
         if get_message_group_for_ap_object(self.database, event.object.ap_id) is not None:
             logger.info("Comment %s already mapped — skipping", event.object.ap_id)
-            return _HandlerResult(status="skipped", detail="comment already mapped")
+            return _HandlerResult(status="skipped", outcome=InboundActivityOutcome.IGNORED_ALREADY_APPLIED, detail="comment already mapped")
 
         # Resolve the thread group and ensure all subscribed channels have a delivery
         # row. When the group is missing entirely, or when some channels have no
@@ -399,14 +400,14 @@ class CommunityRuntime:
                     "Deferring comment %s — parent post %s not mapped and fetch failed",
                     event.object.ap_id, event.object.post_ap_id,
                 )
-                return _HandlerResult(status="deferred", detail="parent post not mapped and fetch failed")
+                return _HandlerResult(status="deferred", outcome=InboundActivityOutcome.DEFERRED_MISSING_DEPENDENCY, detail="parent post not mapped and fetch failed")
 
         if thread_group is None:
             logger.info(
                 "Skipping comment %s — parent post %s is not mapped and no backfill is needed",
                 event.object.ap_id, event.object.post_ap_id,
             )
-            return _HandlerResult(status="skipped", detail="parent post not mapped")
+            return _HandlerResult(status="skipped", outcome=InboundActivityOutcome.IGNORED_UNMAPPED_CONTEXT, detail="parent post not mapped")
 
         logger.debug(
             "[handle_inbound_comment] thread_group=%s deliveries=%s",
@@ -460,7 +461,7 @@ class CommunityRuntime:
             "Delivered inbound comment %s into %d thread(s)",
             event.object.ap_id, len(thread_deliveries),
         )
-        return _HandlerResult(status="processed", detail="comment created")
+        return _HandlerResult(status="processed", outcome=InboundActivityOutcome.APPLIED, detail="comment created")
 
 
     async def handle_discord_message_edit(
@@ -591,11 +592,11 @@ class CommunityRuntime:
         thread_group = get_thread_group_for_ap_object(self.database, event.object.ap_id)
         if thread_group is None:
             logger.info("Post update for %s — no thread group found, skipping", event.object.ap_id)
-            return _HandlerResult(status="skipped", detail="post not yet mapped")
+            return _HandlerResult(status="skipped", outcome=InboundActivityOutcome.IGNORED_UNMAPPED_CONTEXT, detail="post not yet mapped")
 
         thread_deliveries = self.database.discord_fanout_groups.get_thread_deliveries(thread_group.id)
         if not thread_deliveries:
-            return _HandlerResult(status="skipped", detail="no thread deliveries")
+            return _HandlerResult(status="skipped", outcome=InboundActivityOutcome.IGNORED_UNMAPPED_CONTEXT, detail="no thread deliveries")
 
         bot = self.bot or runtime.bot
         new_content = event.object.body_markdown or ""
@@ -604,7 +605,7 @@ class CommunityRuntime:
             bot=bot, thread_deliveries=thread_deliveries, new_content=new_content
         )
 
-        return _HandlerResult(status="processed", detail="post updated")
+        return _HandlerResult(status="processed", outcome=InboundActivityOutcome.APPLIED, detail="post updated")
 
     async def handle_inbound_post_delete(
         self,
@@ -622,7 +623,7 @@ class CommunityRuntime:
         thread_group = get_thread_group_for_ap_object(self.database, event.object.ap_id)
         if thread_group is None:
             logger.info("Post delete for %s — no thread group found, skipping", event.object.ap_id)
-            return _HandlerResult(status="skipped", detail="post not yet mapped")
+            return _HandlerResult(status="skipped", outcome=InboundActivityOutcome.IGNORED_UNMAPPED_CONTEXT, detail="post not yet mapped")
 
         thread_deliveries = self.database.discord_fanout_groups.get_thread_deliveries(thread_group.id)
 
@@ -630,7 +631,7 @@ class CommunityRuntime:
 
         await propagate_inbound_post_delete(bot=bot, thread_deliveries=thread_deliveries)
 
-        return _HandlerResult(status="processed", detail="post deleted")
+        return _HandlerResult(status="processed", outcome=InboundActivityOutcome.APPLIED, detail="post deleted")
 
     async def handle_inbound_comment_update(
         self,
@@ -650,7 +651,7 @@ class CommunityRuntime:
                 "Comment update for %s — no message group found, skipping",
                 event.object.ap_id,
             )
-            return _HandlerResult(status="skipped", detail="comment not yet mapped")
+            return _HandlerResult(status="skipped", outcome=InboundActivityOutcome.IGNORED_UNMAPPED_CONTEXT, detail="comment not yet mapped")
 
         all_deliveries = self.database.discord_fanout_groups.get_message_deliveries(message_group.id)
         # Only edit messages the bot itself wrote: inbound (created by bot from AP)
@@ -658,7 +659,7 @@ class CommunityRuntime:
         # Source messages are user-authored — editing them returns 403 Forbidden.
         deliveries = get_inbound_comment_edit_deliveries(all_deliveries)
         if not deliveries:
-            return _HandlerResult(status="skipped", detail="no message deliveries")
+            return _HandlerResult(status="skipped", outcome=InboundActivityOutcome.IGNORED_UNMAPPED_CONTEXT, detail="no message deliveries")
 
         bot = self.bot or runtime.bot
         new_content = event.object.body_markdown or ""
@@ -667,7 +668,7 @@ class CommunityRuntime:
             bot=bot, deliveries=deliveries, new_content=new_content
         )
 
-        return _HandlerResult(status="processed", detail="comment updated")
+        return _HandlerResult(status="processed", outcome=InboundActivityOutcome.APPLIED, detail="comment updated")
 
     async def handle_inbound_comment_delete(
         self,
@@ -688,7 +689,7 @@ class CommunityRuntime:
                 "Comment delete for %s — no message group found, skipping",
                 event.object.ap_id,
             )
-            return _HandlerResult(status="skipped", detail="comment not yet mapped")
+            return _HandlerResult(status="skipped", outcome=InboundActivityOutcome.IGNORED_UNMAPPED_CONTEXT, detail="comment not yet mapped")
 
         all_deliveries = self.database.discord_fanout_groups.get_message_deliveries(message_group.id)
         # Only edit messages the bot itself wrote — source messages are user-authored.
@@ -698,7 +699,7 @@ class CommunityRuntime:
 
         await propagate_inbound_comment_delete(bot=bot, deliveries=deliveries)
 
-        return _HandlerResult(status="processed", detail="comment deleted")
+        return _HandlerResult(status="processed", outcome=InboundActivityOutcome.APPLIED, detail="comment deleted")
 
 def _ignored_result(reason: str) -> PublishResult:
     """Build a PublishResult for events that are intentionally skipped.

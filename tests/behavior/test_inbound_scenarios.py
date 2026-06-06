@@ -172,6 +172,7 @@ def test_accepted_subscription_inbound_post_creates_discord_thread_and_receipt(
 
     assert response.status_code == 200
     assert response.json()["status"] == "processed"
+    assert response.json()["outcome"] == "applied"
     # Mapping is now in CommunityThreadGroup, not PostLink.
     assert thread_group is not None
     assert thread_group.ap_object_id == event.object.ap_id
@@ -180,6 +181,7 @@ def test_accepted_subscription_inbound_post_creates_discord_thread_and_receipt(
     assert deliveries[0].discord_thread_id == 200
     assert receipt is not None
     assert receipt.status == "processed"
+    assert receipt.outcome == "applied"
 
 
 def test_inbound_post_and_comment_fan_out_to_all_accepted_subscriptions(
@@ -527,8 +529,10 @@ def test_comment_before_parent_mapping_becomes_deferred_then_retries_processed(
 
     assert first_response.status_code == 200
     assert first_response.json()["status"] == "deferred"
+    assert first_response.json()["outcome"] == "deferred_missing_dependency"
     assert first_receipt is not None
     assert first_receipt.status == "deferred"
+    assert first_receipt.outcome == "deferred_missing_dependency"
     assert second_response.status_code == 200
     assert second_response.json()["status"] == "processed"
     assert second_receipt is not None
@@ -574,3 +578,4 @@ def test_discord_target_failure_marks_inbound_receipt_failed(
     assert response.status_code == 500
     assert receipt is not None
     assert receipt.status == "failed"
+    assert receipt.outcome == "processing_failed"

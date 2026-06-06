@@ -16,7 +16,7 @@ Runtime behavior is not changed by this inventory. The repository names below de
 | --- | --- | ---: | --- | --- | --- |
 | Database infrastructure | `Database infrastructure (no repository)` | 3 | `src/app.py`, `src/community_sync/edit_delete.py` | `tests/test_follow_subscription_flow.py`, `tests/test_phase8_edit_delete_sync.py`, `tests/test_user_identity_dump.py`, `tests/test_phase4_reply_preservation.py`, `tests/test_end_to_end_dedup_flow.py`, plus 23 more | Stage 2 must keep Database as the sole engine/session/create_all/migrate owner; do not move session ownership into repositories. |
 | Legacy Lemmy mapping repository | `LegacyLemmyMappingRepository` | 12 | `src/discord_bot.py` | `tests/test_phase4_reply_preservation.py`, `tests/test_phase3_message_fanout_scenarios.py`, `tests/support/db.py` | Older remote Lemmy mapping paths are mixed with newer fanout code; extraction must preserve dedup keys and direct thread/message lookup behavior. |
-| Event receipt repository | `EventReceiptRepository` | 3 | `src/http_api.py` | `tests/test_end_to_end_dedup_flow.py`, `tests/behavior/test_inbound_scenarios.py` | Inbound idempotency must keep the same delivery-id decisions and status transitions. |
+| Event receipt repository | `EventReceiptRepository` | 3 | `src/http_api.py` | `tests/test_end_to_end_dedup_flow.py`, `tests/behavior/test_inbound_scenarios.py` | Inbound idempotency must keep the same delivery-id decisions and status transitions; repository updates persist status, outcome, and detail together. |
 | Remote subscription repository | `RemoteSubscriptionRepository` | 9 | `src/discord_event_router.py`, `src/content_publish_service.py`, `src/operations/unsubscribe.py`, `src/local_communities/participant_routing.py`, `src/operations/subscribe_local_community.py`, plus 6 more | `tests/test_follow_subscription_flow.py`, `tests/test_federation_allowlist_handlers.py`, `tests/test_db_federation_identity.py`, `tests/behavior/test_unsubscribe_retry_scenarios.py`, `tests/behavior/test_subscription_scenarios.py`, plus 15 more | Subscribe/unsubscribe lifecycle and stale inbound filtering depend on exact subscription and follow-state rows. |
 | User repository | `UserRepository` | 5 | `src/registration_service.py`, `src/http_api.py`, `src/content_sync/outbound_publish.py`, `src/operations/subscribe_local_community.py`, `src/operations/subscribe.py`, plus 2 more | `tests/test_phase4_reply_preservation.py`, `tests/test_phase3_message_fanout_scenarios.py`, `tests/test_phase6_dedup_hardening.py`, `tests/test_registration_flow.py`, `tests/test_user_identity_dump.py`, plus 11 more | Registration and actor-serving paths rely on uniqueness and actor URL lookups. |
 | Registration session repository | `RegistrationSessionRepository` | 5 | `src/http_api.py` | `tests/test_registration_flow.py`, `tests/behavior/test_registration_scenarios.py`, `tests/behavior/test_cross_stage_scenarios.py` | OAuth/browser flow is stateful; extraction must keep token, OAuth state, and completion semantics unchanged. |
@@ -70,7 +70,7 @@ Target owner: `LegacyLemmyMappingRepository`.
 
 ### Event receipt repository
 
-Target owner: `EventReceiptRepository`.
+Target owner: `EventReceiptRepository`. Receipt writes keep retry/idempotency `status`, semantic `outcome`, and human `detail` in one transaction; retry starts clear stale outcomes.
 
 | Current `Database` method | Primary source call sites | Relevant tests |
 | --- | --- | --- |

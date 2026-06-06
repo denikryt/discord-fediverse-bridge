@@ -138,6 +138,7 @@ async def test_follow_accept_without_bridge_follow_does_not_accept_channel_subsc
 
     assert result.status == "skipped"
     assert result.detail == "bridge follow activity is not mapped"
+    assert result.outcome.value == "ignored_unknown_follow"
     assert subscription is not None
     assert subscription.status == "pending"
     runtime.bot.fetch_user.assert_not_awaited()

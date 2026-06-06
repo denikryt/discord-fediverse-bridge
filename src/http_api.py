@@ -11,6 +11,7 @@ from fastapi.responses import HTMLResponse, RedirectResponse
 from fastapi.staticfiles import StaticFiles
 
 from .activitypub_handlers import dispatch_activitypub_event
+from .inbound_activity_outcomes import InboundActivityOutcome
 from .dashboard import WEB_DIR, build_dashboard_payload, render_dashboard_html
 from .activitypub_models import BridgeGatewayEvent
 from .registration_service import RegistrationError, generate_oauth_state, generate_session_token
@@ -227,7 +228,7 @@ def create_http_app(runtime: Runtime) -> FastAPI:
         event: BridgeGatewayEvent,
         authorization: str | None = Header(default=None),
         x_bridge_delivery_id: str | None = Header(default=None),
-    ) -> dict[str, str]:
+    ) -> dict[str, str | None]:
         # Authenticate and deduplicate before touching Discord so gateway
         # retries remain safe.
         _validate_internal_auth(runtime, authorization)
@@ -244,8 +245,14 @@ def create_http_app(runtime: Runtime) -> FastAPI:
             logger.exception("ActivityPub event handling failed for delivery %s", event.delivery_id)
             raise
 
-        _finish_event_processing(runtime, event.delivery_id, result.status, result.detail)
-        return {"status": result.status, "detail": result.detail}
+        _finish_event_processing(
+            runtime, event.delivery_id, result.status, result.outcome, result.detail
+        )
+        return {
+            "status": result.status,
+            "outcome": result.outcome.value,
+            "detail": result.detail,
+        }
 
     return app
 
@@ -360,7 +367,8 @@ def _validate_delivery_header(x_bridge_delivery_id: str | None, delivery_id: str
 
 def _begin_event_processing(
     runtime: Runtime, event: BridgeGatewayEvent
-) -> dict[str, str] | None:
+) -> dict[str, str | None] | None:
+    """Begin one delivery attempt or return the stored duplicate result."""
     # Receipt state is the source of truth for idempotency across duplicate and
     # retry deliveries from the gateway.
     existing = runtime.database.event_receipts.get_event_receipt(event.delivery_id)
@@ -376,11 +384,16 @@ def _begin_event_processing(
     if existing.status == "in_progress":
         raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="Delivery is already in progress")
     if existing.status in {"processed", "skipped"}:
-        return {"status": "duplicate", "detail": existing.detail or existing.status}
+        return {
+            "status": "duplicate",
+            "outcome": existing.outcome,
+            "detail": existing.detail or existing.status,
+        }
     if existing.status == "deferred":
         runtime.database.event_receipts.update_event_receipt(
             delivery_id=event.delivery_id,
             status="in_progress",
+            outcome=None,
             detail="retrying deferred delivery",
         )
         return None
@@ -388,6 +401,7 @@ def _begin_event_processing(
     runtime.database.event_receipts.update_event_receipt(
         delivery_id=event.delivery_id,
         status="in_progress",
+        outcome=None,
         detail="retrying failed delivery",
     )
     return None
@@ -403,17 +417,27 @@ def _event_object_id(event: BridgeGatewayEvent) -> str:
     return event.object.ap_id
 
 
-def _finish_event_processing(runtime: Runtime, delivery_id: str, status_value: str, detail: str) -> None:
+def _finish_event_processing(
+    runtime: Runtime,
+    delivery_id: str,
+    status_value: str,
+    outcome: InboundActivityOutcome,
+    detail: str,
+) -> None:
+    """Persist one terminal result as an atomic receipt transition."""
     runtime.database.event_receipts.update_event_receipt(
         delivery_id=delivery_id,
         status=status_value,
+        outcome=outcome,
         detail=detail,
     )
 
 
 def _mark_event_failed(runtime: Runtime, delivery_id: str, detail: str) -> None:
+    """Persist an exception as a failed attempt with a stable outcome."""
     runtime.database.event_receipts.update_event_receipt(
         delivery_id=delivery_id,
         status="failed",
+        outcome=InboundActivityOutcome.PROCESSING_FAILED,
         detail=detail,
     )

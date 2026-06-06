@@ -8,6 +8,7 @@ from types import SimpleNamespace
 import pytest
 
 from src.activitypub_handlers import HandlerResult, dispatch_activitypub_event
+from src.inbound_activity_outcomes import InboundActivityOutcome
 from support.activitypub import build_comment_created_event, build_post_created_event
 from support.db import build_database
 
@@ -20,11 +21,11 @@ class _NoopCommunityRuntime:
     async def handle_inbound_post(self, event, runtime):
         """Record one post event."""
         self.post_events.append(event)
-        return HandlerResult(status="processed", detail="post created")
+        return HandlerResult(status="processed", outcome=InboundActivityOutcome.APPLIED, detail="post created")
     async def handle_inbound_comment(self, event, runtime):
         """Record one comment event."""
         self.comment_events.append(event)
-        return HandlerResult(status="processed", detail="comment created")
+        return HandlerResult(status="processed", outcome=InboundActivityOutcome.APPLIED, detail="comment created")
 
 
 class _NoopLocalCommunityRuntime:
@@ -51,6 +52,7 @@ async def test_unsubscribed_remote_post_create_is_skipped_before_thread_creation
     result = await dispatch_activitypub_event(event, _runtime(database, community_runtime))
     assert result.status == "skipped"
     assert result.detail == "no subscriptions for this community"
+    assert result.outcome.value == "ignored_no_subscription"
     assert database.discord_fanout_groups.get_thread_group_by_ap_object(event.object.ap_id) is None
     assert community_runtime.post_events == []
 
@@ -64,6 +66,7 @@ async def test_unsubscribed_remote_comment_without_mapped_context_is_skipped(tmp
     result = await dispatch_activitypub_event(event, _runtime(database, community_runtime))
     assert result.status == "skipped"
     assert result.detail == "no subscriptions for this community"
+    assert result.outcome.value == "ignored_no_subscription"
     assert database.discord_fanout_groups.get_message_group_by_ap_object(event.object.ap_id) is None
     assert database.discord_fanout_groups.get_thread_group_by_ap_object(event.object.post_ap_id) is None
     assert community_runtime.comment_events == []

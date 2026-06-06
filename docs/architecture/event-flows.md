@@ -31,6 +31,10 @@ This document explains the major runtime traces through the bridge: user/platfor
 4. `src/content_sync/outbound_publish.py` builds the publish request.
 5. Gateway `/publish` signs and sends Create; Python persists object/mapping state.
 
+## Inbound receipt observability
+
+`src/http_api.py` creates an `in_progress` receipt before dispatch. Terminal handlers return a lifecycle `status`, a stable `InboundActivityOutcome`, and human-readable `detail`; `EventReceiptRepository` persists all three together. Deferred or failed retries reset the row to `in_progress` and clear the previous outcome. Duplicate terminal deliveries return the stored outcome without rewriting the receipt.
+
 ## Remote ActivityPub post -> Discord fanout flow
 
 1. Gateway `/inbox` receives and normalizes ActivityPub to `post.created`.

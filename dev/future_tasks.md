@@ -236,21 +236,6 @@ Open details:
 - how failures should be retried or surfaced to operators;
 - how this interacts with re-enable.
 
-## 19. Inbound activity outcome taxonomy
-
-Inbound decisions currently use existing result and receipt paths with detail/log reasons instead of feature-specific receipt statuses.
-
-A later observability design should decide whether to add explicit outcomes such as:
-
-```text
-ignored_by_ban
-ignored_by_disabled_community
-ignored_unknown_subscription
-ignored_unmapped_context
-```
-
-This should be separate because it changes receipt semantics, tests, dashboard/debug tooling, and operator observability.
-
 ## 20. Subscriber cleanup on disabled communities
 
 Disabling a community leaves existing local and remote subscriber rows untouched. Fanout is blocked while disabled and resumes after re-enable.

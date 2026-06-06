@@ -181,10 +181,11 @@ def test_banned_actor_post_is_acked_and_skipped_before_discord_side_effects(tmp_
     receipt = runtime.database.event_receipts.get_event_receipt(str(payload["delivery_id"]))
 
     assert response.status_code == 200
-    assert response.json() == {"status": "skipped", "detail": "actor is banned for this community"}
+    assert response.json() == {"status": "skipped", "outcome": "ignored_by_ban", "detail": "actor is banned for this community"}
     assert receipt is not None
     assert receipt.status == "skipped"
     assert receipt.detail == "actor is banned for this community"
+    assert receipt.outcome == "ignored_by_ban"
     assert runtime.database.local_community_content.get_local_community_thread_by_ap_object_id("https://example.com/post/1") is None
     runtime.local_community_runtime.bot.fetch_forum_channel.assert_not_awaited()
 
@@ -236,7 +237,7 @@ def test_banned_actor_follow_is_acked_and_does_not_create_subscriber_or_accept(t
     response = _post_event(client, payload)
 
     assert response.status_code == 200
-    assert response.json() == {"status": "skipped", "detail": "actor is banned for this community"}
+    assert response.json() == {"status": "skipped", "outcome": "ignored_by_ban", "detail": "actor is banned for this community"}
     assert runtime.database.remote_subscribers.get_remote_subscriber(local_community_id=community.id, remote_actor_id="https://example.com/u/alice") is None
     runtime.local_community_runtime.fedify_gateway.accept_local_community_follow.assert_not_awaited()
 
@@ -268,7 +269,7 @@ def test_banned_actor_unfollow_is_acked_and_does_not_remove_existing_subscriber(
     response = _post_event(client, payload)
 
     assert response.status_code == 200
-    assert response.json() == {"status": "skipped", "detail": "actor is banned for this community"}
+    assert response.json() == {"status": "skipped", "outcome": "ignored_by_ban", "detail": "actor is banned for this community"}
     assert runtime.database.remote_subscribers.get_remote_subscriber(local_community_id=community.id, remote_actor_id="https://example.com/u/alice") is not None
 
 
@@ -293,8 +294,8 @@ def test_duplicate_delivery_for_banned_activity_stays_idempotent(tmp_path: Path)
     first = _post_event(client, payload)
     second = _post_event(client, payload)
 
-    assert first.json() == {"status": "skipped", "detail": "actor is banned for this community"}
-    assert second.json() == {"status": "duplicate", "detail": "actor is banned for this community"}
+    assert first.json() == {"status": "skipped", "outcome": "ignored_by_ban", "detail": "actor is banned for this community"}
+    assert second.json() == {"status": "duplicate", "outcome": "ignored_by_ban", "detail": "actor is banned for this community"}
     assert runtime.database.local_community_content.get_local_community_thread_by_ap_object_id("https://example.com/post/1") is None
 
 

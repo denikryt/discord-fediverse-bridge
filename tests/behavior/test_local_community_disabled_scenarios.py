@@ -117,6 +117,7 @@ async def test_disabled_community_skips_inbound_post_without_side_effects(tmp_pa
 
     assert result.status == "skipped"
     assert result.detail == "community is disabled"
+    assert result.outcome.value == "ignored_by_disabled_community"
     assert database.local_community_content.get_local_community_thread_by_ap_object_id("https://remote.example/post/1") is None
     local_runtime.fedify_gateway.send_local_community_relay.assert_not_awaited()
 
@@ -137,6 +138,7 @@ async def test_disabled_community_skips_remote_follow_without_accept(tmp_path: P
 
     assert result.status == "skipped"
     assert result.detail == "community is disabled"
+    assert result.outcome.value == "ignored_by_disabled_community"
     local_runtime.fedify_gateway.accept_local_community_follow.assert_not_awaited()
     with database.session() as session:
         assert session.scalar(select(func.count()).select_from(RemoteSubscriber)) == 0

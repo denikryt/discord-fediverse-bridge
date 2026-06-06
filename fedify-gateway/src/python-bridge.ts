@@ -38,10 +38,11 @@ export async function deliverEventToPythonBridge(
     );
   }
 
-  let parsedResponse: { status?: string; detail?: string } | null = null;
+  let parsedResponse: { status?: string; outcome?: string | null; detail?: string } | null = null;
   try {
     parsedResponse = (await response.clone().json()) as {
       status?: string;
+      outcome?: string | null;
       detail?: string;
     };
   } catch {
@@ -60,7 +61,8 @@ export async function deliverEventToPythonBridge(
 
   const resultStatus = parsedResponse?.status ?? "ok";
   const objectId = describeEventObject(event);
-  console.log(`[Bridge] ${event.event_type} delivered — ${objectId} (${resultStatus})`);
+  const outcomeSuffix = parsedResponse?.outcome ? `, ${parsedResponse.outcome}` : "";
+  console.log(`[Bridge] ${event.event_type} delivered — ${objectId} (${resultStatus}${outcomeSuffix})`);
 }
 
 function describeEventObject(event: InternalBridgeEvent): string {

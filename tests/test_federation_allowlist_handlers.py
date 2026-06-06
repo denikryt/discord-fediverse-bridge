@@ -100,6 +100,7 @@ async def test_dispatch_skips_event_from_unlisted_instance(tmp_path: Path) -> No
 
     assert result.status == "skipped"
     assert result.detail == "instance not in allowlist"
+    assert result.outcome.value == "ignored_instance_not_allowlisted"
 
 
 @pytest.mark.asyncio
