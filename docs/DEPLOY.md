@@ -1,44 +1,54 @@
 # Deployment
 
-The Docker stack stores the live SQLite database in the `bridge-data` named volume and automatically writes validated snapshots to a host directory outside that volume.
+Docker runs the Python bridge, Fedify gateway, and backup worker as separate containers over one shared SQLite volume.
 
 ## Configuration
 
-Create the shared environment file from the repository root:
+Copy the template and fill in the required values:
 
 ```bash
 cp .env.example .env
 ```
 
-Set the public deployment identity once:
+Set these at minimum:
 
 ```env
 PUBLIC_BASE_URL=https://discord-bridge.example.com
+DISCORD_TOKEN=...
+FEDIFY_SHARED_SECRET=...
+DATABASE_URL=sqlite:///./bridge.db
 ```
 
-Federation URLs, registration links, the OAuth callback, and nginx hostname are derived from this value. Keep local defaults for direct runs in `.env`; Docker Compose overrides the container-internal service URLs when the stack starts there.
-
-The bridge actor signing key is initialized automatically in SQLite. Existing deployments may keep `FEDIFY_BRIDGE_PRIVATE_KEY_JWK_JSON` and `FEDIFY_BRIDGE_PUBLIC_KEY_JWK_JSON` in `.env` for the first upgraded start; both values are imported once, and the database row wins on all later starts. New deployments do not generate keys manually.
-
-Configure local backups in the same `.env`:
+Common local overrides:
 
 ```env
+BRIDGE_PUBLISHED_PORT=8081
+GATEWAY_PUBLISHED_PORT=3000
 BACKUP_HOST_DIR=./backups
 BACKUP_INTERVAL_SECONDS=86400
 BACKUP_RETENTION_COUNT=14
 ```
 
-The backup directory must be writable by container UID `10001`. Backup files contain all local actor private keys and must remain private.
+`PUBLIC_BASE_URL` defines the public federation identity. Changing it changes actor and object URLs.
 
 ## Start
 
 ```bash
-docker compose up -d
+docker compose -f compose.yaml -f compose.build.yaml up -d --build
 ```
 
-The `backup` service starts automatically after the bridge becomes healthy, creates an immediate online SQLite snapshot, and repeats at the configured interval.
+Check health:
 
-## Immediate backup
+```bash
+curl http://127.0.0.1:${BRIDGE_PUBLISHED_PORT:-8080}/healthz
+curl http://127.0.0.1:${GATEWAY_PUBLISHED_PORT:-3000}/healthz
+```
+
+## Backups
+
+The backup worker writes timestamped SQLite snapshots to `BACKUP_HOST_DIR` and keeps the newest `BACKUP_RETENTION_COUNT` files.
+
+Create one snapshot now:
 
 ```bash
 docker compose run --rm backup \
@@ -47,15 +57,17 @@ docker compose run --rm backup \
   --output-dir /backups
 ```
 
+The periodic backup worker starts with the stack and repeats every `BACKUP_INTERVAL_SECONDS` seconds.
+
 ## Restore
 
-Stop every process that can access the database:
+Stop writers:
 
 ```bash
 docker compose stop bridge fedify-gateway backup
 ```
 
-Restore one validated snapshot:
+Restore one snapshot:
 
 ```bash
 docker compose run --rm --no-deps backup \
@@ -64,12 +76,14 @@ docker compose run --rm --no-deps backup \
   --source /backups/discord-fediverse-bridge-YYYYMMDDTHHMMSSZ.sqlite3
 ```
 
-Then restart the stack and verify health. Compare the bridge actor public key before and after recovery to confirm that the same federation identity was restored.
+Start again:
 
 ```bash
 docker compose up -d
-curl http://127.0.0.1:${BRIDGE_PUBLISHED_PORT:-8080}/healthz
-curl http://127.0.0.1:${GATEWAY_PUBLISHED_PORT:-3000}/healthz
 ```
 
-Local backups protect against accidental volume deletion and database-file corruption. They do not protect against loss of the whole Docker host; remote backup storage remains future work.
+## Notes
+
+- `docker compose down` keeps the named volume.
+- `docker compose down -v` deletes the database volume.
+- If you are upgrading an old deployment, keep the legacy bridge-key env vars only for the first start; the database row wins after import.
