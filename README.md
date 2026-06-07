@@ -141,24 +141,17 @@ registration/OAuth routes    -> Python bridge
 
 ## Public host deployment
 
-For a normal deployment, one public hostname can serve both federation and registration UI. Configure the root `.env` like this:
+Configure one public URL in the root `.env`:
 
 ```env
-FEDIFY_ORIGIN=https://discord-bridge.example.com
-PUBLIC_BRIDGE_BASE_URL=https://discord-bridge.example.com
-DISCORD_OAUTH_REDIRECT_URI=https://discord-bridge.example.com/auth/discord/callback
-FEDIFY_GATEWAY_URL=http://127.0.0.1:3000
-PUBLIC_DOMAIN=discord-bridge.example.com
-GATEWAY_UPSTREAM=http://127.0.0.1:3000
-PYTHON_BRIDGE_UPSTREAM=http://127.0.0.1:8081
-PYTHON_BRIDGE_EVENTS_URL=http://127.0.0.1:8081/internal/activitypub/events
+PUBLIC_BASE_URL=https://discord-bridge.example.com
 ```
 
-`GATEWAY_UPSTREAM` and `PYTHON_BRIDGE_UPSTREAM` are optional overrides for nginx rendering. Keep the defaults unless the gateway or Python bridge listens on a different local address.
+The bridge derives federation actor/object URLs, registration links, the OAuth callback, and the nginx hostname from this value. Docker-only service URLs remain internal Compose details and are not repeated in `.env`. External nginx defaults to the published `BRIDGE_HOST_PORT` and `GATEWAY_HOST_PORT`.
 
 The gateway keeps canonical ActivityPub routes such as `/.well-known/webfinger`, `/.well-known/discord-fediverse-bridge/communities`, `/inbox`, `/actors/`, `/communities/`, `/c/`, and `/users/`. Python owns `/`, `/dashboard/...`, `/register`, and `/auth/discord/`. Do not expose `/internal/` publicly through nginx.
 
-Changing `FEDIFY_ORIGIN` on an existing deployment changes ActivityPub actor and object IDs. Treat that as a federation identity migration, not a harmless nginx change.
+Changing `PUBLIC_BASE_URL` on an existing deployment changes ActivityPub actor and object IDs. Treat that as a federation identity migration, not a harmless nginx change.
 
 
 ## Public dashboard
@@ -169,54 +162,18 @@ The dashboard is intentionally public and omits Discord guild/channel IDs, priva
 
 ## Environment
 
-The root `.env` is shared by the Python bridge, Fedify gateway, systemd, and Docker Compose. Template: `.env.example`
+The root `.env` is shared by the Python bridge, Fedify gateway, systemd, and Docker Compose. Template: `.env.example`.
 
-Required:
+Required application values:
 
 - `DISCORD_TOKEN`
 - `FEDIFY_SHARED_SECRET`
-- `FEDIFY_ORIGIN`
+- `PUBLIC_BASE_URL`
 - `DATABASE_URL`
 
-Common:
+Optional application values include federation/operator allowlists, Discord OAuth credentials, actor display metadata, and logging. The OAuth callback defaults to `${PUBLIC_BASE_URL}/auth/discord/callback`; an explicit `DISCORD_OAUTH_REDIRECT_URI` remains available only for unusual deployments.
 
-- `FEDIFY_GATEWAY_URL`
-- `INTERNAL_HTTP_HOST`
-- `INTERNAL_HTTP_PORT`
-- `PUBLIC_BRIDGE_BASE_URL`
-- `PUBLIC_DOMAIN`
-- `GATEWAY_UPSTREAM`
-- `PYTHON_BRIDGE_UPSTREAM`
-- `PYTHON_BRIDGE_EVENTS_URL`
-- `LOG_LEVEL`
-
-Optional:
-
-- `FEDERATION_ALLOWLIST` — comma-separated Lemmy hostnames to accept; empty means all instances allowed
-- `LOCAL_COMMUNITY_OPERATOR_ALLOWLIST` — comma-separated Discord user ids allowed to manage local communities
-- `REMOTE_SUBSCRIPTION_OPERATOR_ALLOWLIST` — comma-separated Discord user ids allowed to subscribe channels to remote communities
-- `BRIDGE_DISPLAY_PREFIX`
-
-Needed only for web registration:
-
-- `DISCORD_OAUTH_CLIENT_ID`
-- `DISCORD_OAUTH_CLIENT_SECRET`
-- `DISCORD_OAUTH_REDIRECT_URI`
-
-Gateway values are kept in the same root `.env`:
-
-- `FEDIFY_PORT`
-- `FEDIFY_ACTOR_IDENTIFIER`
-- `FEDIFY_ACTOR_NAME`
-- `FEDIFY_ACTOR_SUMMARY`
-
-Docker Compose values are also kept in this file under the Docker section:
-
-- `BRIDGE_VERSION`
-- `BRIDGE_IMAGE` / `GATEWAY_IMAGE`
-- `BRIDGE_HOST_PORT` / `GATEWAY_HOST_PORT`
-- `BRIDGE_DATA_VOLUME`
-- optional `NGINX_*` values
+Docker settings are grouped in the same file: image/version selection, published host ports, data volume, backup retention, and optional bundled-nginx settings. Internal bind addresses and container-to-container URLs are supplied by Compose and do not need operator configuration.
 
 ## Install
 

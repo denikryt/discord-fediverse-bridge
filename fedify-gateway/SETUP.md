@@ -12,12 +12,12 @@ The root `.env` is the only environment file for both the Python bridge and the 
 
 Important gateway values include:
 
-- `FEDIFY_ORIGIN` — public base URL of this gateway
+- `PUBLIC_BASE_URL` — the one public origin shared with the Python bridge
 - `FEDIFY_SHARED_SECRET` — shared secret used for gateway -> Python delivery
-- `PYTHON_BRIDGE_EVENTS_URL` — internal Python intake endpoint
 - `DATABASE_URL` — database used by both processes
-- `FEDIFY_PORT` — local gateway port
 - optional actor metadata overrides
+
+The local gateway port and Python intake URL use built-in defaults for direct runs and Compose-owned internal values in Docker. They are not duplicated in the operator `.env`.
 
 ## Signing Keys
 
@@ -65,15 +65,9 @@ The deployment model uses one public host. It installs one public site where Act
 /dashboard/data        -> Python bridge
 ```
 
-```env
-PUBLIC_DOMAIN=discord-bridge.example.com
-GATEWAY_UPSTREAM=http://127.0.0.1:3000
-PYTHON_BRIDGE_UPSTREAM=http://127.0.0.1:8081
-```
+Set `PUBLIC_BASE_URL` once in the root `.env`. `nginx-setup.sh` derives the hostname from that URL and proxies to `BRIDGE_HOST_PORT` and `GATEWAY_HOST_PORT`. Advanced one-off upstream overrides may still be exported in the shell, but they are not part of the normal env contract.
 
-`GATEWAY_UPSTREAM` and `PYTHON_BRIDGE_UPSTREAM` are optional overrides. Leave them at the defaults unless nginx must proxy to a different local bind or port.
-
-Run `nginx-setup.sh` after setting those values in the root `.env`. Public `/healthz` belongs to the gateway. Keep `/internal/` private; it is for gateway-to-Python delivery only.
+Run `nginx-setup.sh` after configuring the root `.env`. Public `/healthz` belongs to the gateway. Keep `/internal/` private; it is for gateway-to-Python delivery only.
 
 ## Verification
 

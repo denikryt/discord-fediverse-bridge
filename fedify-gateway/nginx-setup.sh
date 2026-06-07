@@ -36,17 +36,15 @@ load_configuration() {
         exit 1
     fi
 
-    PUBLIC_DOMAIN="${PUBLIC_DOMAIN:-$(read_env_value PUBLIC_DOMAIN)}"
-    GATEWAY_UPSTREAM="${GATEWAY_UPSTREAM:-$(read_env_value GATEWAY_UPSTREAM)}"
-    PYTHON_BRIDGE_UPSTREAM="${PYTHON_BRIDGE_UPSTREAM:-$(read_env_value PYTHON_BRIDGE_UPSTREAM)}"
+    PUBLIC_BASE_URL="${PUBLIC_BASE_URL:-$(read_env_value PUBLIC_BASE_URL)}"
+    BRIDGE_HOST_PORT="${BRIDGE_HOST_PORT:-$(read_env_value BRIDGE_HOST_PORT)}"
+    GATEWAY_HOST_PORT="${GATEWAY_HOST_PORT:-$(read_env_value GATEWAY_HOST_PORT)}"
+
     DEPLOYMENT_MODE="${DEPLOYMENT_MODE:-$(read_env_value DEPLOYMENT_MODE)}"
     GATEWAY_DOMAIN="${GATEWAY_DOMAIN:-$(read_env_value GATEWAY_DOMAIN)}"
     BRIDGE_DOMAIN="${BRIDGE_DOMAIN:-$(read_env_value BRIDGE_DOMAIN)}"
-
-    # Reject the old split-host settings explicitly so operators migrate to the
-    # single public host contract instead of getting a silently wrong config.
     if [[ -n "${DEPLOYMENT_MODE}" || -n "${GATEWAY_DOMAIN}" || -n "${BRIDGE_DOMAIN}" ]]; then
-        echo "Error: legacy split-host settings are no longer supported; use PUBLIC_DOMAIN only" >&2
+        echo "Error: legacy split-host settings are no longer supported" >&2
         exit 1
     fi
 
@@ -55,15 +53,31 @@ load_configuration() {
         exit 1
     fi
 
-    if [[ -z "${PUBLIC_DOMAIN}" ]]; then
-        echo "Error: PUBLIC_DOMAIN must be set" >&2
+    if [[ -z "${PUBLIC_BASE_URL}" ]]; then
+        echo "Error: PUBLIC_BASE_URL must be set" >&2
         exit 1
     fi
 
-    # Nginx upstreams default to the local bridge binds but can still be
-    # overridden from the root env file or from shell exports for one-off runs.
-    GATEWAY_UPSTREAM="${GATEWAY_UPSTREAM:-http://127.0.0.1:3000}"
-    PYTHON_BRIDGE_UPSTREAM="${PYTHON_BRIDGE_UPSTREAM:-http://127.0.0.1:8081}"
+    # Derive the nginx hostname from the same public URL used by the bridge and
+    # gateway. Operators no longer repeat the public identity as PUBLIC_DOMAIN.
+    PUBLIC_DOMAIN="$(python3 - "$PUBLIC_BASE_URL" <<'PYURL'
+from sys import argv
+from urllib.parse import urlparse
+
+parsed = urlparse(argv[1])
+if parsed.scheme not in {"http", "https"} or not parsed.hostname:
+    raise SystemExit("PUBLIC_BASE_URL must be an absolute http(s) URL")
+print(parsed.hostname)
+PYURL
+)"
+
+    # The external nginx setup proxies to the host-published Compose ports.
+    # Explicit shell overrides remain available for unusual installations but
+    # are not duplicated in the shared .env contract.
+    BRIDGE_HOST_PORT="${BRIDGE_HOST_PORT:-8080}"
+    GATEWAY_HOST_PORT="${GATEWAY_HOST_PORT:-3000}"
+    GATEWAY_UPSTREAM="${GATEWAY_UPSTREAM:-http://127.0.0.1:${GATEWAY_HOST_PORT}}"
+    PYTHON_BRIDGE_UPSTREAM="${PYTHON_BRIDGE_UPSTREAM:-http://127.0.0.1:${BRIDGE_HOST_PORT}}"
 }
 
 escape_sed_replacement() {
@@ -119,10 +133,7 @@ main() {
     load_configuration
     install_site "$PUBLIC_DOMAIN" "$(render_site)"
     echo ""
-    echo "Public site is up. Update the root .env:"
-    echo "  FEDIFY_ORIGIN=https://${PUBLIC_DOMAIN}"
-    echo "  PUBLIC_BRIDGE_BASE_URL=https://${PUBLIC_DOMAIN}"
-    echo "  DISCORD_OAUTH_REDIRECT_URI=https://${PUBLIC_DOMAIN}/auth/discord/callback"
+    echo "Public site is up at ${PUBLIC_BASE_URL}."
 }
 
 if [[ "${1:-}" == "--render" ]]; then

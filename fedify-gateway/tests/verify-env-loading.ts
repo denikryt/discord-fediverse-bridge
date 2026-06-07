@@ -18,7 +18,7 @@ async function main(): Promise<void> {
   await writeFile(
     rootEnvPath,
     [
-      "FEDIFY_ORIGIN=https://root.example.com",
+      "PUBLIC_BASE_URL=https://root.example.com",
       "FEDIFY_SHARED_SECRET=root-secret",
       "LOG_LEVEL=debug",
       "DATABASE_URL=sqlite:///./root-bridge.db",

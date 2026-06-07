@@ -1,6 +1,6 @@
 server {
     listen 80;
-    server_name ${PUBLIC_DOMAIN};
+    server_name _;
 
     proxy_set_header Host $host;
     proxy_set_header X-Real-IP $remote_addr;

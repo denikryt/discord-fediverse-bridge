@@ -21,9 +21,9 @@ assert_contains() {
 
 single_env="$TMP_DIR/single.env"
 cat > "$single_env" <<'ENV'
-PUBLIC_DOMAIN=discord-bridge.example.com
-GATEWAY_UPSTREAM=http://127.0.0.1:3100
-PYTHON_BRIDGE_UPSTREAM=http://127.0.0.1:8181
+PUBLIC_BASE_URL=https://discord-bridge.example.com
+GATEWAY_HOST_PORT=3100
+BRIDGE_HOST_PORT=8181
 ENV
 single_out="$TMP_DIR/single.conf"
 ENV_FILE="$single_env" "$GATEWAY_DIR/nginx-setup.sh" --render > "$single_out"
@@ -52,9 +52,9 @@ assert_contains "$TMP_DIR/legacy.out" "legacy split-host settings are no longer 
 missing_single_env="$TMP_DIR/missing-single.env"
 touch "$missing_single_env"
 if ENV_FILE="$missing_single_env" "$GATEWAY_DIR/nginx-setup.sh" --render > "$TMP_DIR/missing-single.out" 2>&1; then
-    echo "Expected render to fail without PUBLIC_DOMAIN" >&2
+    echo "Expected render to fail without PUBLIC_BASE_URL" >&2
     exit 1
 fi
-assert_contains "$TMP_DIR/missing-single.out" "PUBLIC_DOMAIN must be set"
+assert_contains "$TMP_DIR/missing-single.out" "PUBLIC_BASE_URL must be set"
 
 echo "verify:nginx-setup passed"

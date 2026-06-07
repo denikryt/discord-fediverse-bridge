@@ -10,6 +10,14 @@ Create the shared environment file from the repository root:
 cp .env.example .env
 ```
 
+Set the public deployment identity once:
+
+```env
+PUBLIC_BASE_URL=https://discord-bridge.example.com
+```
+
+Federation URLs, registration links, the OAuth callback, and nginx hostname are derived from this value. Compose supplies internal service URLs itself; do not add duplicate gateway/bridge endpoint variables to `.env`.
+
 The bridge actor signing key is initialized automatically in SQLite. Existing deployments may keep `FEDIFY_BRIDGE_PRIVATE_KEY_JWK_JSON` and `FEDIFY_BRIDGE_PUBLIC_KEY_JWK_JSON` in `.env` for the first upgraded start; both values are imported once, and the database row wins on all later starts. New deployments do not generate keys manually.
 
 Configure local backups in the same `.env`:

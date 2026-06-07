@@ -54,7 +54,8 @@ export function loadConfig(): GatewayConfig {
       process.env.FEDIFY_ACTOR_SUMMARY ??
       "Receives ActivityPub activities from Lemmy and forwards normalized events to the Python bridge.",
     databaseUrl: process.env.DATABASE_URL ?? "sqlite:///../bridge.db",
-    fedifyOrigin: requireEnv("FEDIFY_ORIGIN"),
+    fedifyOrigin:
+      process.env.PUBLIC_BASE_URL ?? requireEnv("FEDIFY_ORIGIN"),
     port: parsePort(process.env.FEDIFY_PORT, 3000),
     pythonBridgeEventsUrl:
       process.env.PYTHON_BRIDGE_EVENTS_URL ??

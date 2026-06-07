@@ -118,3 +118,24 @@ def test_deployment_uses_one_root_env_file() -> None:
     assert "BACKUP_HOST_DIR=./backups" in env_example
     assert not (ROOT / ".env.docker.example").exists()
     assert not (ROOT / "fedify-gateway/.env.example").exists()
+
+
+def test_environment_example_uses_one_public_url_and_no_derived_endpoints() -> None:
+    """Operators must configure one public URL instead of repeated equivalent endpoints."""
+    env_example = _read(".env.example")
+
+    assert "PUBLIC_BASE_URL=https://discord-bridge.example.com" in env_example
+    for obsolete in (
+        "FEDIFY_ORIGIN=",
+        "PUBLIC_BRIDGE_BASE_URL=",
+        "DISCORD_OAUTH_REDIRECT_URI=",
+        "PUBLIC_DOMAIN=",
+        "GATEWAY_UPSTREAM=",
+        "PYTHON_BRIDGE_UPSTREAM=",
+        "FEDIFY_GATEWAY_URL=",
+        "PYTHON_BRIDGE_EVENTS_URL=",
+        "INTERNAL_HTTP_HOST=",
+        "INTERNAL_HTTP_PORT=",
+        "FEDIFY_PORT=",
+    ):
+        assert obsolete not in env_example
