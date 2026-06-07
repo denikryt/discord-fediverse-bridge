@@ -2,10 +2,7 @@ import process from "node:process";
 
 // This CLI is a thin operator tool for issuing a one-off follow request to the
 // running local gateway.
-const GATEWAY_URL =
-  process.env.FEDIFY_GATEWAY_URL ??
-  process.env.GATEWAY_URL ??
-  "http://localhost:3000";
+const BRIDGE_GATEWAY_URL = process.env.BRIDGE_GATEWAY_URL;
 const SHARED_SECRET = process.env.FEDIFY_SHARED_SECRET;
 const communityActorUrl = process.argv[2];
 
@@ -15,7 +12,12 @@ if (!communityActorUrl) {
   process.exit(1);
 }
 
-const response = await fetch(`${GATEWAY_URL}/follow-community`, {
+if (!BRIDGE_GATEWAY_URL) {
+  console.error("Missing required environment variable: BRIDGE_GATEWAY_URL");
+  process.exit(1);
+}
+
+const response = await fetch(`${BRIDGE_GATEWAY_URL}/follow-community`, {
   method: "POST",
   headers: {
     ...(SHARED_SECRET

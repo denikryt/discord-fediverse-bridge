@@ -147,7 +147,7 @@ Configure one public URL in the root `.env`:
 PUBLIC_BASE_URL=https://discord-bridge.example.com
 ```
 
-The bridge derives federation actor/object URLs, registration links, the OAuth callback, and the nginx hostname from this value. Docker-only service URLs remain internal Compose details and are not repeated in `.env`. External nginx defaults to the published `BRIDGE_HOST_PORT` and `GATEWAY_HOST_PORT`.
+The bridge derives federation actor/object URLs, registration links, the OAuth callback, and the nginx hostname from this value. Root `.env` keeps local defaults for direct runs, while Docker Compose overrides the container-internal service URLs. External nginx defaults to the published `BRIDGE_PUBLISHED_PORT` and `GATEWAY_PUBLISHED_PORT`.
 
 The gateway keeps canonical ActivityPub routes such as `/.well-known/webfinger`, `/.well-known/discord-fediverse-bridge/communities`, `/inbox`, `/actors/`, `/communities/`, `/c/`, and `/users/`. Python owns `/`, `/dashboard/...`, `/register`, and `/auth/discord/`. Do not expose `/internal/` publicly through nginx.
 

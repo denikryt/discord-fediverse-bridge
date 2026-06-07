@@ -17,7 +17,7 @@ Important gateway values include:
 - `DATABASE_URL` — database used by both processes
 - optional actor metadata overrides
 
-The local gateway port and Python intake URL use built-in defaults for direct runs and Compose-owned internal values in Docker. They are not duplicated in the operator `.env`.
+The local bridge-to-gateway URL, gateway port, and Python intake URL use built-in defaults for direct runs and Compose-owned internal values in Docker. They are not duplicated as Docker-only values in the operator `.env`.
 
 ## Signing Keys
 
@@ -65,7 +65,7 @@ The deployment model uses one public host. It installs one public site where Act
 /dashboard/data        -> Python bridge
 ```
 
-Set `PUBLIC_BASE_URL` once in the root `.env`. `nginx-setup.sh` derives the hostname from that URL and proxies to `BRIDGE_HOST_PORT` and `GATEWAY_HOST_PORT`. Advanced one-off upstream overrides may still be exported in the shell, but they are not part of the normal env contract.
+Set `PUBLIC_BASE_URL` once in the root `.env`. `nginx-setup.sh` derives the hostname from that URL and proxies to `BRIDGE_PUBLISHED_PORT` and `GATEWAY_PUBLISHED_PORT`. Advanced one-off upstream overrides may still be exported in the shell, but they are not part of the normal env contract.
 
 Run `nginx-setup.sh` after configuring the root `.env`. Public `/healthz` belongs to the gateway. Keep `/internal/` private; it is for gateway-to-Python delivery only.
 

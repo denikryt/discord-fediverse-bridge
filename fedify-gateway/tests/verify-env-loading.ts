@@ -22,7 +22,9 @@ async function main(): Promise<void> {
       "FEDIFY_SHARED_SECRET=root-secret",
       "LOG_LEVEL=debug",
       "DATABASE_URL=sqlite:///./root-bridge.db",
-      "FEDIFY_PORT=4100",
+      "GATEWAY_BIND_PORT=4100",
+      "BRIDGE_BIND_HOST=bridge.internal",
+      "BRIDGE_BIND_PORT=9100",
       "FEDIFY_ACTOR_IDENTIFIER=test-bridge",
       "FEDIFY_ACTOR_NAME=Test Bridge",
       "FEDIFY_ACTOR_SUMMARY=Test summary",
@@ -69,6 +71,7 @@ async function main(): Promise<void> {
   assert.equal(config.logLevel, "debug");
   assert.equal(config.databaseUrl, "sqlite:///./root-bridge.db");
   assert.equal(config.port, 4100);
+  assert.equal(config.pythonBridgeEventsUrl, "http://bridge.internal:9100/internal/activitypub/events");
   assert.equal(config.actorIdentifier, "test-bridge");
   assert.equal(config.actorName, "Test Bridge");
   assert.equal(config.actorSummary, "Test summary");

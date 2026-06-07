@@ -10,6 +10,6 @@ const compose = await readFile(resolve(root, "compose.yaml"), "utf8");
 assert.match(dockerfile, /COPY VERSION \.\/VERSION/);
 assert.match(dockerfile, /USER bridge/);
 assert.match(dockerfile, /EXPOSE 3000/);
-assert.match(compose, /PYTHON_BRIDGE_EVENTS_URL: http:\/\/bridge:8080\/internal\/activitypub\/events/);
+assert.match(compose, /BRIDGE_EVENTS_URL: http:\/\/bridge:8080\/internal\/activitypub\/events/);
 assert.match(compose, /DATABASE_URL: sqlite:\/\/\/\/data\/bridge\.db/);
 console.log("Docker gateway contract verified.");

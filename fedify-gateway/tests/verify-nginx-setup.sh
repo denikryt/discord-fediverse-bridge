@@ -22,8 +22,8 @@ assert_contains() {
 single_env="$TMP_DIR/single.env"
 cat > "$single_env" <<'ENV'
 PUBLIC_BASE_URL=https://discord-bridge.example.com
-GATEWAY_HOST_PORT=3100
-BRIDGE_HOST_PORT=8181
+GATEWAY_PUBLISHED_PORT=3100
+BRIDGE_PUBLISHED_PORT=8181
 ENV
 single_out="$TMP_DIR/single.conf"
 ENV_FILE="$single_env" "$GATEWAY_DIR/nginx-setup.sh" --render > "$single_out"

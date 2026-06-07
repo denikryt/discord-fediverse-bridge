@@ -37,8 +37,8 @@ load_configuration() {
     fi
 
     PUBLIC_BASE_URL="${PUBLIC_BASE_URL:-$(read_env_value PUBLIC_BASE_URL)}"
-    BRIDGE_HOST_PORT="${BRIDGE_HOST_PORT:-$(read_env_value BRIDGE_HOST_PORT)}"
-    GATEWAY_HOST_PORT="${GATEWAY_HOST_PORT:-$(read_env_value GATEWAY_HOST_PORT)}"
+    BRIDGE_PUBLISHED_PORT="${BRIDGE_PUBLISHED_PORT:-$(read_env_value BRIDGE_PUBLISHED_PORT)}"
+    GATEWAY_PUBLISHED_PORT="${GATEWAY_PUBLISHED_PORT:-$(read_env_value GATEWAY_PUBLISHED_PORT)}"
 
     DEPLOYMENT_MODE="${DEPLOYMENT_MODE:-$(read_env_value DEPLOYMENT_MODE)}"
     GATEWAY_DOMAIN="${GATEWAY_DOMAIN:-$(read_env_value GATEWAY_DOMAIN)}"
@@ -74,10 +74,10 @@ PYURL
     # The external nginx setup proxies to the host-published Compose ports.
     # Explicit shell overrides remain available for unusual installations but
     # are not duplicated in the shared .env contract.
-    BRIDGE_HOST_PORT="${BRIDGE_HOST_PORT:-8080}"
-    GATEWAY_HOST_PORT="${GATEWAY_HOST_PORT:-3000}"
-    GATEWAY_UPSTREAM="${GATEWAY_UPSTREAM:-http://127.0.0.1:${GATEWAY_HOST_PORT}}"
-    PYTHON_BRIDGE_UPSTREAM="${PYTHON_BRIDGE_UPSTREAM:-http://127.0.0.1:${BRIDGE_HOST_PORT}}"
+    BRIDGE_PUBLISHED_PORT="${BRIDGE_PUBLISHED_PORT:-8080}"
+    GATEWAY_PUBLISHED_PORT="${GATEWAY_PUBLISHED_PORT:-3000}"
+    GATEWAY_UPSTREAM_URL="${GATEWAY_UPSTREAM_URL:-http://127.0.0.1:${GATEWAY_PUBLISHED_PORT}}"
+    BRIDGE_UPSTREAM_URL="${BRIDGE_UPSTREAM_URL:-http://127.0.0.1:${BRIDGE_PUBLISHED_PORT}}"
 }
 
 escape_sed_replacement() {
@@ -85,15 +85,15 @@ escape_sed_replacement() {
 }
 
 render_site() {
-    local public_domain gateway_upstream python_bridge_upstream
+    local public_domain gateway_upstream bridge_upstream
     public_domain="$(escape_sed_replacement "$PUBLIC_DOMAIN")"
-    gateway_upstream="$(escape_sed_replacement "$GATEWAY_UPSTREAM")"
-    python_bridge_upstream="$(escape_sed_replacement "$PYTHON_BRIDGE_UPSTREAM")"
+    gateway_upstream="$(escape_sed_replacement "$GATEWAY_UPSTREAM_URL")"
+    bridge_upstream="$(escape_sed_replacement "$BRIDGE_UPSTREAM_URL")"
 
     sed \
         -e "s/__PUBLIC_DOMAIN__/${public_domain}/g" \
         -e "s/__GATEWAY_UPSTREAM__/${gateway_upstream}/g" \
-        -e "s/__PYTHON_BRIDGE_UPSTREAM__/${python_bridge_upstream}/g" \
+        -e "s/__PYTHON_BRIDGE_UPSTREAM__/${bridge_upstream}/g" \
         "$TEMPLATE_FILE"
 }
 

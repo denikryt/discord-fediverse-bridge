@@ -9,16 +9,16 @@ import process from "node:process";
 //   tsx src/unfollow-community-cli.ts <community_actor_url> <follow_activity_id>
 //   tsx src/unfollow-community-cli.ts --all                 # unfollow all
 
-const GATEWAY_URL =
-  process.env.FEDIFY_GATEWAY_URL ??
-  process.env.GATEWAY_URL ??
-  "http://localhost:3000";
+const BRIDGE_GATEWAY_URL = process.env.BRIDGE_GATEWAY_URL;
 const SHARED_SECRET = process.env.FEDIFY_SHARED_SECRET;
 const DATABASE_URL = process.env.DATABASE_URL ?? "sqlite:///../bridge.db";
 
 async function sendUnfollow(communityActorUrl: string, followActivityId: string): Promise<void> {
+  if (!BRIDGE_GATEWAY_URL) {
+    throw new Error("Missing required environment variable: BRIDGE_GATEWAY_URL");
+  }
   console.log(`  → Sending Undo(Follow) for ${communityActorUrl}`);
-  const response = await fetch(`${GATEWAY_URL}/unfollow-community`, {
+  const response = await fetch(`${BRIDGE_GATEWAY_URL}/unfollow-community`, {
     method: "POST",
     headers: {
       ...(SHARED_SECRET ? { Authorization: `Bearer ${SHARED_SECRET}` } : {}),

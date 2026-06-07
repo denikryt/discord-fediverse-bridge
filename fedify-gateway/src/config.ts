@@ -43,6 +43,12 @@ function parsePort(value: string | undefined, fallback: number): number {
   return parsed;
 }
 
+function buildPythonBridgeEventsUrl(): string {
+  const host = process.env.BRIDGE_BIND_HOST ?? "127.0.0.1";
+  const port = parsePort(process.env.BRIDGE_BIND_PORT, 8080);
+  return `http://${host}:${port}/internal/activitypub/events`;
+}
+
 export function loadConfig(): GatewayConfig {
   // Defaults keep local development ergonomic while still failing fast for the
   // secrets and origins that define federation identity.
@@ -56,10 +62,8 @@ export function loadConfig(): GatewayConfig {
     databaseUrl: process.env.DATABASE_URL ?? "sqlite:///../bridge.db",
     fedifyOrigin:
       process.env.PUBLIC_BASE_URL ?? requireEnv("FEDIFY_ORIGIN"),
-    port: parsePort(process.env.FEDIFY_PORT, 3000),
-    pythonBridgeEventsUrl:
-      process.env.PYTHON_BRIDGE_EVENTS_URL ??
-      "http://127.0.0.1:8080/internal/activitypub/events",
+    port: parsePort(process.env.GATEWAY_BIND_PORT, 3000),
+    pythonBridgeEventsUrl: process.env.BRIDGE_EVENTS_URL ?? buildPythonBridgeEventsUrl(),
     pythonBridgeSharedSecret: requireEnv("FEDIFY_SHARED_SECRET"),
     logLevel,
   };

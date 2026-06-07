@@ -9,6 +9,7 @@ def _settings(**overrides: str) -> Settings:
         "DISCORD_TOKEN": "token",
         "FEDIFY_SHARED_SECRET": "secret",
         "PUBLIC_BASE_URL": "https://bridge.example.com/base/",
+        "DISCORD_OAUTH_REDIRECT_URI": None,
     }
     values.update(overrides)
     return Settings(**values)

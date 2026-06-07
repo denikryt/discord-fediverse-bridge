@@ -22,11 +22,11 @@ def test_primary_compose_has_two_versioned_services_and_shared_state() -> None:
     assert compose.count("${BRIDGE_VERSION:?") == 3
     assert compose.count("DATABASE_URL: sqlite:////data/bridge.db") == 2
     assert compose.count("- bridge-data:/data") == 3
-    assert '127.0.0.1:${BRIDGE_HOST_PORT:-8080}:8080' in compose
-    assert '127.0.0.1:${GATEWAY_HOST_PORT:-3000}:3000' in compose
+    assert '127.0.0.1:${BRIDGE_PUBLISHED_PORT:-8080}:8080' in compose
+    assert '127.0.0.1:${GATEWAY_PUBLISHED_PORT:-3000}:3000' in compose
     assert "condition: service_healthy" in compose
-    assert "FEDIFY_GATEWAY_URL: http://fedify-gateway:3000" in compose
-    assert "PYTHON_BRIDGE_EVENTS_URL: http://bridge:8080/internal/activitypub/events" in compose
+    assert "BRIDGE_GATEWAY_URL: http://fedify-gateway:3000" in compose
+    assert "BRIDGE_EVENTS_URL: http://bridge:8080/internal/activitypub/events" in compose
     assert "  backup:" in compose
     assert "python\n      - -m\n      - src.db.backup\n      - serve" in compose
     assert "${BACKUP_HOST_DIR:-./backups}:/backups" in compose
@@ -125,6 +125,15 @@ def test_environment_example_uses_one_public_url_and_no_derived_endpoints() -> N
     env_example = _read(".env.example")
 
     assert "PUBLIC_BASE_URL=https://discord-bridge.example.com" in env_example
+    for expected in (
+        "BRIDGE_BIND_HOST=127.0.0.1",
+        "BRIDGE_BIND_PORT=8081",
+        "GATEWAY_BIND_PORT=3000",
+        "BRIDGE_GATEWAY_URL=http://127.0.0.1:3000",
+        "BRIDGE_PUBLISHED_PORT=8080",
+        "GATEWAY_PUBLISHED_PORT=3000",
+    ):
+        assert expected in env_example
     for obsolete in (
         "FEDIFY_ORIGIN=",
         "PUBLIC_BRIDGE_BASE_URL=",
@@ -134,8 +143,10 @@ def test_environment_example_uses_one_public_url_and_no_derived_endpoints() -> N
         "PYTHON_BRIDGE_UPSTREAM=",
         "FEDIFY_GATEWAY_URL=",
         "PYTHON_BRIDGE_EVENTS_URL=",
+        "BRIDGE_HOST_PORT=",
+        "GATEWAY_HOST_PORT=",
+        "FEDIFY_PORT=",
         "INTERNAL_HTTP_HOST=",
         "INTERNAL_HTTP_PORT=",
-        "FEDIFY_PORT=",
     ):
         assert obsolete not in env_example
