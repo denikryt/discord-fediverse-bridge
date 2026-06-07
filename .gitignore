@@ -21,3 +21,6 @@ discord-fediverse-bridge
 # Docker deployment state and local TLS material.
 deploy/nginx/tls/*
 !deploy/nginx/tls/.gitkeep
+
+# Local database snapshots contain private actor signing keys.
+backups/

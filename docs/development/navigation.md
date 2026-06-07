@@ -106,3 +106,9 @@ Use `docs/architecture/database-map.md` for table ownership and invariants. Use 
 ### Guild invite publication
 
 `src/commands/publish_guild_invite.py` and `src/commands/remove_guild_invite.py` are thin Discord adapters. `src/operations/publish_guild_invite.py` and `src/operations/remove_guild_invite.py` declare eligibility through DiscordOps and own Discord invite side effects plus transactional publication state. `src/operations/guild_invite_lock.py` serializes publish/remove mutations per guild. `src/db/repositories/guild_invite_publications.py` owns the single current invite row per guild, and `src/dashboard.py` exposes only the public invite URL on existing guild cards.
+
+## Actor keys and backups
+
+- `src/actor_key_service.py` bootstraps and resolves local actor signing keys.
+- `src/db/repositories/bridge_actor_keys.py` persists the bridge service actor keypair.
+- `src/db/backup.py` creates, retains, and restores validated SQLite snapshots.

@@ -7,6 +7,60 @@ import initSqlJs, { type Database, type SqlJsStatic } from "sql.js";
 import type { GatewayConfig } from "./config.js";
 import type { LocalCommunityDiscoveryRecord } from "./types.js";
 
+
+export interface BridgeActorKeyRow {
+  // Bridge key metadata and material are Python-owned persistent state.
+  actorUrl: string;
+  keyId: string;
+  keyFormat: "jwk" | "pem";
+  algorithm: string;
+  publicKeyData: string;
+  privateKeyData: string;
+}
+
+export async function loadBridgeActorKey(
+  config: GatewayConfig,
+): Promise<BridgeActorKeyRow | null> {
+  const database = await openConfiguredDatabase(config);
+  try {
+    let statement;
+    try {
+      statement = database.prepare(`
+        SELECT actor_url, key_id, key_format, algorithm, public_key_data, private_key_data
+        FROM bridge_actor_keys
+        LIMIT 1
+      `);
+    } catch (error) {
+      if (error instanceof Error && error.message.includes("no such table: bridge_actor_keys")) {
+        return null;
+      }
+      throw error;
+    }
+    try {
+      if (!statement.step()) {
+        return null;
+      }
+      const row = statement.getAsObject() as Record<string, unknown>;
+      const keyFormat = asString(row.key_format);
+      if (keyFormat !== "jwk" && keyFormat !== "pem") {
+        throw new Error(`Unsupported bridge actor key format: ${keyFormat}`);
+      }
+      return {
+        actorUrl: asString(row.actor_url),
+        keyId: asString(row.key_id),
+        keyFormat,
+        algorithm: asString(row.algorithm),
+        publicKeyData: asString(row.public_key_data),
+        privateKeyData: asString(row.private_key_data),
+      };
+    } finally {
+      statement.free();
+    }
+  } finally {
+    database.close();
+  }
+}
+
 export interface RegisteredUserRow {
   // The gateway only needs the identity and key fields required to publish a
   // correct local actor document and later sign user-authored activities.

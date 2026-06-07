@@ -6,8 +6,9 @@ export interface GatewayConfig {
   actorIdentifier: string;
   actorName: string;
   actorSummary: string;
-  bridgePrivateKeyJwkJson: string | null;
-  bridgePublicKeyJwkJson: string | null;
+  // Optional direct injection is retained only for isolated compatibility tests; loadConfig never populates it.
+  bridgePrivateKeyJwkJson?: string | null;
+  bridgePublicKeyJwkJson?: string | null;
   databaseUrl: string;
   fedifyOrigin: string;
   port: number;
@@ -52,10 +53,6 @@ export function loadConfig(): GatewayConfig {
     actorSummary:
       process.env.FEDIFY_ACTOR_SUMMARY ??
       "Receives ActivityPub activities from Lemmy and forwards normalized events to the Python bridge.",
-    bridgePrivateKeyJwkJson:
-      process.env.FEDIFY_BRIDGE_PRIVATE_KEY_JWK_JSON ?? null,
-    bridgePublicKeyJwkJson:
-      process.env.FEDIFY_BRIDGE_PUBLIC_KEY_JWK_JSON ?? null,
     databaseUrl: process.env.DATABASE_URL ?? "sqlite:///../bridge.db",
     fedifyOrigin: requireEnv("FEDIFY_ORIGIN"),
     port: parsePort(process.env.FEDIFY_PORT, 3000),

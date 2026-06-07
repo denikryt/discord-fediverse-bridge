@@ -13,20 +13,25 @@ def _read(path: str) -> str:
 
 
 def test_primary_compose_has_two_versioned_services_and_shared_state() -> None:
-    """Default Compose must expose only the two application processes."""
+    """Default Compose must expose the application processes and automatic backup."""
     compose = _read("compose.yaml")
 
     assert "  bridge:" in compose
     assert "  fedify-gateway:" in compose
     assert "  nginx:" not in compose
-    assert compose.count("${BRIDGE_VERSION:?") == 2
+    assert compose.count("${BRIDGE_VERSION:?") == 3
     assert compose.count("DATABASE_URL: sqlite:////data/bridge.db") == 2
-    assert compose.count("- bridge-data:/data") == 2
+    assert compose.count("- bridge-data:/data") == 3
     assert '127.0.0.1:${BRIDGE_HOST_PORT:-8080}:8080' in compose
     assert '127.0.0.1:${GATEWAY_HOST_PORT:-3000}:3000' in compose
     assert "condition: service_healthy" in compose
     assert "FEDIFY_GATEWAY_URL: http://fedify-gateway:3000" in compose
     assert "PYTHON_BRIDGE_EVENTS_URL: http://bridge:8080/internal/activitypub/events" in compose
+    assert "  backup:" in compose
+    assert "python\n      - -m\n      - src.db.backup\n      - serve" in compose
+    assert "${BACKUP_HOST_DIR:-./backups}:/backups" in compose
+    assert "${BACKUP_INTERVAL_SECONDS:-86400}" in compose
+    assert "${BACKUP_RETENTION_COUNT:-14}" in compose
     # The dedicated network isolates service discovery without blocking required outbound traffic.
     assert "bridge-internal: {}" in compose
     assert "internal: true" not in compose
@@ -100,7 +105,7 @@ def test_deployment_uses_one_root_env_file() -> None:
     systemd = _read("systemd-services.sh")
     env_example = _read(".env.example")
 
-    assert compose.count("      - .env") == 2
+    assert compose.count("      - .env") == 3
     assert "BRIDGE_ENV_FILE" not in compose
     assert "GATEWAY_ENV_FILE" not in compose
     assert "fedify-gateway/.env" not in compose
@@ -109,6 +114,7 @@ def test_deployment_uses_one_root_env_file() -> None:
     assert 'BRIDGE_ENV_FILE="${BRIDGE_ENV_FILE:-$PROJECT_DIR/.env}"' in systemd
     assert systemd.count('EnvironmentFile=$BRIDGE_ENV_FILE') == 2
     assert "# Docker Compose settings." in env_example
-    assert "FEDIFY_BRIDGE_PRIVATE_KEY_JWK_JSON=" in env_example
+    assert "FEDIFY_BRIDGE_PRIVATE_KEY_JWK_JSON=" not in env_example
+    assert "BACKUP_HOST_DIR=./backups" in env_example
     assert not (ROOT / ".env.docker.example").exists()
     assert not (ROOT / "fedify-gateway/.env.example").exists()

@@ -13,6 +13,7 @@ from ..management_audit_recorder import ManagementAuditRecorder
 from . import migrations, schema
 from .repositories import (
     ActivityPubObjectRepository,
+    BridgeActorKeyRepository,
     CommunityActorBanRepository,
     ManagementAuditEventRepository,
     BridgeActorFollowRepository,
@@ -42,6 +43,7 @@ class Database:
         connect_args = {"check_same_thread": False} if url.startswith("sqlite") else {}
         self.engine = create_engine(url, future=True, connect_args=connect_args)
         self.session_factory = sessionmaker(self.engine, expire_on_commit=False, class_=Session)
+        self.bridge_actor_keys = BridgeActorKeyRepository(self.session)
         self.local_communities = LocalCommunityRepository(self.session)
         self.community_actor_bans = CommunityActorBanRepository(self.session)
         self.management_audit_events = ManagementAuditEventRepository(self.session)

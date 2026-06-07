@@ -23,8 +23,6 @@ async function main(): Promise<void> {
       "LOG_LEVEL=debug",
       "DATABASE_URL=sqlite:///./root-bridge.db",
       "FEDIFY_PORT=4100",
-      'FEDIFY_BRIDGE_PRIVATE_KEY_JWK_JSON={"kty":"RSA","d":"private"}',
-      'FEDIFY_BRIDGE_PUBLIC_KEY_JWK_JSON={"kty":"RSA","n":"public"}',
       "FEDIFY_ACTOR_IDENTIFIER=test-bridge",
       "FEDIFY_ACTOR_NAME=Test Bridge",
       "FEDIFY_ACTOR_SUMMARY=Test summary",
@@ -74,8 +72,6 @@ async function main(): Promise<void> {
   assert.equal(config.actorIdentifier, "test-bridge");
   assert.equal(config.actorName, "Test Bridge");
   assert.equal(config.actorSummary, "Test summary");
-  assert.equal(config.bridgePrivateKeyJwkJson, '{"kty":"RSA","d":"private"}');
-  assert.equal(config.bridgePublicKeyJwkJson, '{"kty":"RSA","n":"public"}');
 
   console.log("verify:env-loading passed");
 }

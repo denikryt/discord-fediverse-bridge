@@ -46,6 +46,11 @@ class UserRepository(BaseRepository):
                 session.flush()
                 return user
 
+    def get_user_by_id(self, user_id: int) -> User | None:
+            """Load one registered user by its database primary key."""
+            with self.session() as session:
+                return session.get(User, user_id)
+
     def get_user_by_discord_user_id(self, discord_user_id: str) -> User | None:
             """Load the registered user that owns one Discord account ID."""
             with self.session() as session:

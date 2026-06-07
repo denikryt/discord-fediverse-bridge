@@ -49,6 +49,33 @@ services:
     networks:
       - bridge-internal
 
+  backup:
+    image: ${BRIDGE_IMAGE:-discord-fediverse-bridge}:${BRIDGE_VERSION:?BRIDGE_VERSION is required}
+    restart: unless-stopped
+    env_file:
+      - .env
+    command:
+      - python
+      - -m
+      - src.db.backup
+      - serve
+      - --database
+      - /data/bridge.db
+      - --output-dir
+      - /backups
+      - --interval-seconds
+      - ${BACKUP_INTERVAL_SECONDS:-86400}
+      - --retention-count
+      - ${BACKUP_RETENTION_COUNT:-14}
+    volumes:
+      - bridge-data:/data
+      - ${BACKUP_HOST_DIR:-./backups}:/backups
+    depends_on:
+      bridge:
+        condition: service_healthy
+    networks:
+      - bridge-internal
+
 volumes:
   bridge-data:
     name: ${BRIDGE_DATA_VOLUME:-discord-fediverse-bridge-data}

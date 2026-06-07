@@ -24,3 +24,7 @@ Supported normalized event categories: `post.created`, `post.updated`, `post.del
 | `/accept-local-community-follow` | `accept_local_community_follow` | Send Accept(Follow) | community, remote actor, inbox, Follow id | Sends signed Accept |
 | `/update` | `update_content` | Send Update | actor, community, object, kind, body | Sends Update |
 | `/delete` | `delete_content` | Send Delete | actor, community, object | Sends Delete |
+
+## Bridge signing key ownership
+
+Python initializes the bridge actor key in `bridge_actor_keys` before readiness. The gateway reads that row from the shared SQLite database; it does not generate an in-memory bridge identity or require bridge JWK environment variables during normal runtime.

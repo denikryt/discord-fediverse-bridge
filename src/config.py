@@ -24,6 +24,13 @@ class Settings(BaseSettings):
     fedify_shared_secret: str = Field(alias="FEDIFY_SHARED_SECRET")
     fedify_origin: HttpUrl = Field(default="http://127.0.0.1:3000", alias="FEDIFY_ORIGIN")
     fedify_actor_identifier: str = Field(default="bridge", alias="FEDIFY_ACTOR_IDENTIFIER")
+    # Legacy bridge JWK values are accepted only for one-time database import.
+    fedify_bridge_private_key_jwk_json: str | None = Field(
+        default=None, alias="FEDIFY_BRIDGE_PRIVATE_KEY_JWK_JSON", repr=False
+    )
+    fedify_bridge_public_key_jwk_json: str | None = Field(
+        default=None, alias="FEDIFY_BRIDGE_PUBLIC_KEY_JWK_JSON"
+    )
     bridge_display_prefix: str = Field(default="[bridge]", alias="BRIDGE_DISPLAY_PREFIX")
     log_level: str = Field(default="INFO", alias="LOG_LEVEL")
     # Comma-separated list of allowed Lemmy instance hostnames (e.g. "lemmy.world,beehaw.org").

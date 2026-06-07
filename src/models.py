@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from datetime import datetime, timezone
 
-from sqlalchemy import DateTime, Integer, JSON, String, Text, UniqueConstraint
+from sqlalchemy import CheckConstraint, DateTime, Integer, JSON, String, Text, UniqueConstraint
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column
 
 
@@ -16,6 +16,34 @@ def utcnow() -> datetime:
 class Base(DeclarativeBase):
     """Base class for all ORM models used by the bridge."""
     pass
+
+
+class BridgeActorKey(Base):
+    """Persist the single bridge service actor signing keypair."""
+
+    __tablename__ = "bridge_actor_keys"
+    __table_args__ = (
+        UniqueConstraint("actor_url"),
+        UniqueConstraint("key_id"),
+        CheckConstraint("id = 1", name="ck_bridge_actor_keys_singleton"),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    actor_url: Mapped[str] = mapped_column(String(512), nullable=False)
+    key_id: Mapped[str] = mapped_column(String(768), nullable=False)
+    key_format: Mapped[str] = mapped_column(String(16), nullable=False)
+    algorithm: Mapped[str] = mapped_column(String(64), nullable=False)
+    public_key_data: Mapped[str] = mapped_column(Text, nullable=False)
+    private_key_data: Mapped[str] = mapped_column(Text, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, nullable=False)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, onupdate=utcnow, nullable=False)
+
+    def __repr__(self) -> str:
+        """Represent metadata only so private key material cannot leak to logs."""
+        return (
+            f"BridgeActorKey(id={self.id!r}, actor_url={self.actor_url!r}, "
+            f"key_format={self.key_format!r}, algorithm={self.algorithm!r})"
+        )
 
 
 class PostLink(Base):

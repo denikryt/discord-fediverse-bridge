@@ -4,6 +4,7 @@ Repositories share Database session ownership; they do not create engines or
 session factories.
 """
 
+from .bridge_actor_keys import BridgeActorKeyRepository
 from .community_actor_bans import CommunityActorBanRepository
 from .management_audit_events import ManagementAuditEventRepository
 from .local_communities import LocalCommunityRepository
@@ -26,6 +27,7 @@ from .discord_fanout_groups import DiscordFanoutGroupRepository
 from .discord_directory import DiscordDirectoryRepository
 from .guild_invite_publications import GuildInvitePublicationRepository
 __all__ = [
+    "BridgeActorKeyRepository",
     "CommunityActorBanRepository",
     "ManagementAuditEventRepository",
     "LocalCommunityRepository",

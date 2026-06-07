@@ -205,7 +205,6 @@ Needed only for web registration:
 
 Gateway values are kept in the same root `.env`:
 
-- `FEDIFY_BRIDGE_PRIVATE_KEY_JWK_JSON` / `FEDIFY_BRIDGE_PUBLIC_KEY_JWK_JSON` — generate from `fedify-gateway` with `npm run generate-keys`
 - `FEDIFY_PORT`
 - `FEDIFY_ACTOR_IDENTIFIER`
 - `FEDIFY_ACTOR_NAME`
@@ -360,3 +359,7 @@ docker compose up -d
 `docker compose down` preserves the named volume. `docker compose down -v` permanently deletes it.
 
 The existing direct Python/npm and systemd deployment remains supported.
+
+## Deployment
+
+See `docs/DEPLOY.md` for Docker startup, automatic backups, and restore instructions.

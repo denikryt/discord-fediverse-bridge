@@ -1,12 +1,12 @@
 import { webcrypto } from "node:crypto";
 
 import {
-  generateCryptoKeyPair,
   importJwk,
 } from "@fedify/fedify";
 
 import type { GatewayConfig } from "./config.js";
 import {
+  loadBridgeActorKey,
   loadLocalCommunityByActorUrl,
   loadLocalCommunityBySlug,
   loadRegisteredUserByUsername,
@@ -54,7 +54,6 @@ export interface LocalCommunityIdentity {
 
 export type LocalActorKind = "bridge" | "user" | "community";
 
-let generatedBridgeKeyPair: Promise<CryptoKeyPair> | null = null;
 
 export function getBridgeActorIdentity(
   config: GatewayConfig,
@@ -149,25 +148,31 @@ export async function loadActorKeyPair(
 async function loadBridgeActorKeyPair(
   config: GatewayConfig,
 ): Promise<CryptoKeyPair> {
-  // The bridge actor key is config-backed. When operators do not provide an
-  // explicit JWK pair, the gateway falls back to one generated in memory so
-  // local development still boots without the removed JSON file key store.
-  const privateJwkJson = config.bridgePrivateKeyJwkJson;
-  const publicJwkJson = config.bridgePublicKeyJwkJson;
-  if (privateJwkJson != null && publicJwkJson != null) {
+  // The bridge actor key is durable Python-owned state. Missing storage is a
+  // startup/migration error rather than a reason to create a temporary identity.
+  const row = await loadBridgeActorKey(config);
+  if (row == null) {
+    // Older isolated verifier fixtures inject a JWK pair directly. Production
+    // loadConfig never supplies these fields, so runtime still fails when DB
+    // bootstrap has not completed instead of generating an ephemeral identity.
+    if (config.bridgePrivateKeyJwkJson != null && config.bridgePublicKeyJwkJson != null) {
+      return {
+        privateKey: await importJwk(JSON.parse(config.bridgePrivateKeyJwkJson), "private"),
+        publicKey: await importJwk(JSON.parse(config.bridgePublicKeyJwkJson), "public"),
+      };
+    }
+    throw new Error("Bridge actor keypair is not initialized in the shared database");
+  }
+  if (row.algorithm !== "RSASSA-PKCS1-v1_5") {
+    throw new Error(`Unsupported bridge actor key algorithm: ${row.algorithm}`);
+  }
+  if (row.keyFormat === "jwk") {
     return {
-      privateKey: await importJwk(JSON.parse(privateJwkJson), "private"),
-      publicKey: await importJwk(JSON.parse(publicJwkJson), "public"),
+      privateKey: await importJwk(JSON.parse(row.privateKeyData), "private"),
+      publicKey: await importJwk(JSON.parse(row.publicKeyData), "public"),
     };
   }
-
-  if (generatedBridgeKeyPair == null) {
-    console.warn(
-      "[Fedify] FEDIFY_BRIDGE_*_KEY_JWK_JSON is not set; using an in-memory bridge key pair for this process.",
-    );
-    generatedBridgeKeyPair = generateCryptoKeyPair("RSASSA-PKCS1-v1_5");
-  }
-  return await generatedBridgeKeyPair;
+  return await importPemKeyPair(row.publicKeyData, row.privateKeyData);
 }
 
 function mapRegisteredUserRow(row: RegisteredUserRow): UserActorIdentity {

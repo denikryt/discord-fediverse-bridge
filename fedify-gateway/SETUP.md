@@ -16,20 +16,13 @@ Important gateway values include:
 - `FEDIFY_SHARED_SECRET` — shared secret used for gateway -> Python delivery
 - `PYTHON_BRIDGE_EVENTS_URL` — internal Python intake endpoint
 - `DATABASE_URL` — database used by both processes
-- `FEDIFY_BRIDGE_PRIVATE_KEY_JWK_JSON` / `FEDIFY_BRIDGE_PUBLIC_KEY_JWK_JSON` — persistent signing keys
 - `FEDIFY_PORT` — local gateway port
 - optional actor metadata overrides
 
 ## Signing Keys
 
-Generate a persistent RSA key pair and write it to the root `.env`:
+The bridge service actor key is initialized automatically in the shared database. Existing deployments may keep both legacy JWK variables in the root `.env` for one upgraded start so the Python bridge imports the existing identity before the gateway becomes healthy.
 
-```bash
-cd fedify-gateway
-npm run generate-keys
-```
-
-Run once. Use `npm run generate-keys:force` to regenerate. Restart the gateway after.
 
 ## Start
 

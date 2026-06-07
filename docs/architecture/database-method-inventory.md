@@ -303,3 +303,7 @@ This inventory remains a migration/history map from the former facade methods to
 ## Cross-table Discord forum placement
 
 `src/discord_forum_placement.py` is the command-layer reader for channel exclusivity across `local_communities`, `channel_community_subscriptions`, and `local_subscribers`. It does not own schema or persistence; it calls repository methods to reject occupied selected channels and to decide whether a bot-created channel is safe to delete after a later command failure.
+
+## Bridge actor keys
+
+`BridgeActorKeyRepository.get`, `get_by_actor_url`, and `create` own persistence for the bridge service actor keypair. `ActorKeyService` provides explicit bridge, user, and local-community access methods without merging their physical storage.

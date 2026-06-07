@@ -16,7 +16,10 @@ COPY vendor/discordops ./vendor/discordops
 COPY src ./src
 COPY web ./web
 
-RUN python -m pip install --no-cache-dir . ./vendor/discordops \
+RUN apt-get update \
+    && apt-get install --no-install-recommends -y openssl \
+    && rm -rf /var/lib/apt/lists/* \
+    && python -m pip install --no-cache-dir . ./vendor/discordops \
     && groupadd --gid 10001 bridge \
     && useradd --uid 10001 --gid bridge --home-dir /app --create-home bridge \
     && mkdir -p /data \

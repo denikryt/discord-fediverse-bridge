@@ -7,6 +7,7 @@ import logging
 
 import uvicorn
 
+from .actor_key_service import BridgeActorKeyBootstrap
 from .community_sync.discord_fanout import DiscordFanout
 from .community_sync.runtime import CommunityRuntime
 from .config import Settings
@@ -69,6 +70,7 @@ def build_runtime(settings: Settings) -> Runtime:
     database = Database(settings.database_url)
     database.create_all()
     database.migrate()
+    BridgeActorKeyBootstrap(database=database, settings=settings).ensure()
 
     fedify_gateway = FedifyGatewayClient(settings)
     discord_oauth_client = DiscordOAuthClient(settings)
