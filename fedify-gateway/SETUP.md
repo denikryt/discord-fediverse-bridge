@@ -2,28 +2,30 @@
 
 ## Required Env
 
-Copy the root `.env.example` to `.env` and `fedify-gateway/.env.example` to
-`fedify-gateway/.env`.
+Copy the root template once:
 
-Root `.env` owns shared deployment values:
+```bash
+cp .env.example .env
+```
+
+The root `.env` is the only environment file for both the Python bridge and the Fedify gateway. It contains shared values, gateway signing keys and actor metadata, and Docker Compose settings.
+
+Important gateway values include:
 
 - `FEDIFY_ORIGIN` — public base URL of this gateway
 - `FEDIFY_SHARED_SECRET` — shared secret used for gateway -> Python delivery
 - `PYTHON_BRIDGE_EVENTS_URL` — internal Python intake endpoint
-- `PUBLIC_DOMAIN` — public hostname used by `nginx-setup.sh`
-
-`fedify-gateway/.env` keeps gateway-local values:
-
-- `DATABASE_URL`
-- `FEDIFY_BRIDGE_PRIVATE_KEY_JWK_JSON` / `FEDIFY_BRIDGE_PUBLIC_KEY_JWK_JSON` — generate once with `npm run generate-keys`
-- `FEDIFY_PORT`
+- `DATABASE_URL` — database used by both processes
+- `FEDIFY_BRIDGE_PRIVATE_KEY_JWK_JSON` / `FEDIFY_BRIDGE_PUBLIC_KEY_JWK_JSON` — persistent signing keys
+- `FEDIFY_PORT` — local gateway port
 - optional actor metadata overrides
 
 ## Signing Keys
 
-Generate a persistent RSA key pair and write it to `.env`:
+Generate a persistent RSA key pair and write it to the root `.env`:
 
 ```bash
+cd fedify-gateway
 npm run generate-keys
 ```
 
@@ -47,7 +49,7 @@ npm run dev
 
 ```bash
 curl http://127.0.0.1:3000/healthz
-# -> {"status":"ok"}
+# -> {"status":"ok","version":"..."}
 ```
 
 ## Nginx

@@ -167,9 +167,9 @@ The Python bridge exposes a public dashboard on the root URL `/`. Legacy `/dashb
 
 The dashboard is intentionally public and omits Discord guild/channel IDs, private keys, shared secrets, database paths, and internal service URLs. It does show last-known Discord guild and forum-channel names for hosted local communities, accepted remote subscriptions, and active same-instance local subscribers so operators can see where public routing state lives without exposing raw Discord identifiers.
 
-## Python Bridge Env
+## Environment
 
-Env template: `.env.example`
+The root `.env` is shared by the Python bridge, Fedify gateway, systemd, and Docker Compose. Template: `.env.example`
 
 Required:
 
@@ -203,29 +203,21 @@ Needed only for web registration:
 - `DISCORD_OAUTH_CLIENT_SECRET`
 - `DISCORD_OAUTH_REDIRECT_URI`
 
-## Gateway Env
+Gateway values are kept in the same root `.env`:
 
-Env template: `fedify-gateway/.env.example`
-
-Required:
-
-- `DATABASE_URL`
-- `FEDIFY_BRIDGE_PRIVATE_KEY_JWK_JSON` — generate with `npm run generate-keys`
-- `FEDIFY_BRIDGE_PUBLIC_KEY_JWK_JSON` — generate with `npm run generate-keys`
-
-Common:
-
+- `FEDIFY_BRIDGE_PRIVATE_KEY_JWK_JSON` / `FEDIFY_BRIDGE_PUBLIC_KEY_JWK_JSON` — generate from `fedify-gateway` with `npm run generate-keys`
 - `FEDIFY_PORT`
-
-Optional:
-
 - `FEDIFY_ACTOR_IDENTIFIER`
 - `FEDIFY_ACTOR_NAME`
 - `FEDIFY_ACTOR_SUMMARY`
 
-The gateway also reads shared deployment values from the root `.env`, including
-`FEDIFY_ORIGIN`, `FEDIFY_SHARED_SECRET`, `PYTHON_BRIDGE_EVENTS_URL`, and
-`LOG_LEVEL`.
+Docker Compose values are also kept in this file under the Docker section:
+
+- `BRIDGE_VERSION`
+- `BRIDGE_IMAGE` / `GATEWAY_IMAGE`
+- `BRIDGE_HOST_PORT` / `GATEWAY_HOST_PORT`
+- `BRIDGE_DATA_VOLUME`
+- optional `NGINX_*` values
 
 ## Install
 
@@ -304,28 +296,20 @@ The supported Docker deployment runs the Python bridge and Fedify gateway as two
 
 ### Prepare configuration
 
-Copy the application environment templates and fill in real secrets:
+Copy the single environment template and fill in application, gateway, and Docker values:
 
 ```bash
 cp .env.example .env
-cp fedify-gateway/.env.example fedify-gateway/.env
-cp .env.docker.example .env.docker
 ```
 
-Use `.env` and `fedify-gateway/.env` for application settings and secrets. Use `.env.docker` only for Compose image, port, volume, and optional nginx settings.
-
-Set the release explicitly:
-
-```bash
-export BRIDGE_VERSION="$(cat VERSION)"
-```
+The Python bridge, Fedify gateway, systemd units, and Docker Compose all read this same root `.env` file. Docker-only image, port, volume, and optional nginx settings are grouped in the Docker section of `.env.example`.
 
 The default deployment expects versioned images named `discord-fediverse-bridge` and `discord-fediverse-bridge-fedify-gateway`. For a local source build, add `compose.build.yaml`.
 
 ### Start with an external reverse proxy
 
 ```bash
-docker compose --env-file .env.docker \
+docker compose \
   -f compose.yaml \
   -f compose.build.yaml \
   up -d --build
@@ -346,7 +330,7 @@ docker compose logs -f bridge fedify-gateway
 For a self-contained HTTP proxy suitable for local verification or an operator-managed TLS mount:
 
 ```bash
-docker compose --env-file .env.docker \
+docker compose \
   -f compose.yaml \
   -f compose.build.yaml \
   -f compose.nginx.yaml \
@@ -366,11 +350,11 @@ docker run --rm -v discord-fediverse-bridge-data:/data -v "$PWD":/backup alpine 
 docker compose start bridge fedify-gateway
 ```
 
-To update, set `BRIDGE_VERSION` to the exact release, pull or build both images, and recreate the stack. Verify both `/healthz` endpoints report the selected version. Before rollback, restore the database backup unless the intervening migrations are known to be backward-compatible.
+To update, set `BRIDGE_VERSION` in the root `.env` to the exact release, pull or build both images, and recreate the stack. Verify both `/healthz` endpoints report the selected version. Before rollback, restore the database backup unless the intervening migrations are known to be backward-compatible.
 
 ```bash
-BRIDGE_VERSION=0.1.0 docker compose pull
-BRIDGE_VERSION=0.1.0 docker compose up -d
+docker compose pull
+docker compose up -d
 ```
 
 `docker compose down` preserves the named volume. `docker compose down -v` permanently deletes it.

@@ -5,7 +5,7 @@ services:
     image: ${BRIDGE_IMAGE:-discord-fediverse-bridge}:${BRIDGE_VERSION:?BRIDGE_VERSION is required}
     restart: unless-stopped
     env_file:
-      - ${BRIDGE_ENV_FILE:-.env}
+      - .env
     environment:
       DATABASE_URL: sqlite:////data/bridge.db
       INTERNAL_HTTP_HOST: 0.0.0.0
@@ -28,8 +28,7 @@ services:
     image: ${GATEWAY_IMAGE:-discord-fediverse-bridge-fedify-gateway}:${BRIDGE_VERSION:?BRIDGE_VERSION is required}
     restart: unless-stopped
     env_file:
-      - ${BRIDGE_ENV_FILE:-.env}
-      - ${GATEWAY_ENV_FILE:-fedify-gateway/.env}
+      - .env
     environment:
       DATABASE_URL: sqlite:////data/bridge.db
       FEDIFY_PORT: 3000

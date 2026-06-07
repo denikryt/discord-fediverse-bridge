@@ -91,3 +91,24 @@ def test_dockerignore_excludes_local_secrets_and_generated_state() -> None:
     assert "VERSION" not in ignored
     assert "web" not in ignored
     assert "vendor" not in ignored
+
+
+def test_deployment_uses_one_root_env_file() -> None:
+    """All supported launch paths must read the same root .env file."""
+    compose = _read("compose.yaml")
+    package = _read("fedify-gateway/package.json")
+    systemd = _read("systemd-services.sh")
+    env_example = _read(".env.example")
+
+    assert compose.count("      - .env") == 2
+    assert "BRIDGE_ENV_FILE" not in compose
+    assert "GATEWAY_ENV_FILE" not in compose
+    assert "fedify-gateway/.env" not in compose
+    assert "--env-file=../.env --env-file=.env" not in package
+    assert "--env-file=../.env" in package
+    assert 'BRIDGE_ENV_FILE="${BRIDGE_ENV_FILE:-$PROJECT_DIR/.env}"' in systemd
+    assert systemd.count('EnvironmentFile=$BRIDGE_ENV_FILE') == 2
+    assert "# Docker Compose settings." in env_example
+    assert "FEDIFY_BRIDGE_PRIVATE_KEY_JWK_JSON=" in env_example
+    assert not (ROOT / ".env.docker.example").exists()
+    assert not (ROOT / "fedify-gateway/.env.example").exists()

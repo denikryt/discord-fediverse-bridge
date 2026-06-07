@@ -13,8 +13,7 @@ PYTHON_BRIDGE_UNIT_FILE="${PYTHON_BRIDGE_UNIT_FILE:-}"
 FEDIFY_GATEWAY_UNIT_FILE="${FEDIFY_GATEWAY_UNIT_FILE:-}"
 SERVICE_USER="${SERVICE_USER:-${SUDO_USER:-$USER}}"
 SERVICE_GROUP="${SERVICE_GROUP:-$SERVICE_USER}"
-PYTHON_BRIDGE_ENV_FILE="${PYTHON_BRIDGE_ENV_FILE:-$PROJECT_DIR/.env}"
-FEDIFY_GATEWAY_ENV_FILE="${FEDIFY_GATEWAY_ENV_FILE:-$PROJECT_DIR/fedify-gateway/.env}"
+BRIDGE_ENV_FILE="${BRIDGE_ENV_FILE:-$PROJECT_DIR/.env}"
 PYTHON_BRIDGE_WORKDIR="${PYTHON_BRIDGE_WORKDIR:-$PROJECT_DIR}"
 FEDIFY_GATEWAY_WORKDIR="${FEDIFY_GATEWAY_WORKDIR:-$PROJECT_DIR/fedify-gateway}"
 PYTHON_BRIDGE_EXEC="${PYTHON_BRIDGE_EXEC:-$PROJECT_DIR/.venv/bin/python -m src.app}"
@@ -49,8 +48,7 @@ Optional environment overrides:
   FEDIFY_GATEWAY_UNIT_FILE Default: /etc/systemd/system/<FEDIFY_GATEWAY_SERVICE>
   SERVICE_USER            Default: current shell user (or SUDO_USER)
   SERVICE_GROUP           Default: same as SERVICE_USER
-  PYTHON_BRIDGE_ENV_FILE  Default: <repo>/.env
-  FEDIFY_GATEWAY_ENV_FILE Default: <repo>/fedify-gateway/.env
+  BRIDGE_ENV_FILE         Default: <repo>/.env
   PYTHON_BRIDGE_WORKDIR   Default: <repo>
   FEDIFY_GATEWAY_WORKDIR  Default: <repo>/fedify-gateway
   PYTHON_BRIDGE_EXEC      Default: <repo>/.venv/bin/python -m src.app
@@ -119,7 +117,7 @@ Type=simple
 User=$SERVICE_USER
 Group=$SERVICE_GROUP
 WorkingDirectory=$PYTHON_BRIDGE_WORKDIR
-EnvironmentFile=$PYTHON_BRIDGE_ENV_FILE
+EnvironmentFile=$BRIDGE_ENV_FILE
 ExecStart=$PYTHON_BRIDGE_EXEC
 Restart=always
 RestartSec=5
@@ -136,7 +134,7 @@ Type=simple
 User=$SERVICE_USER
 Group=$SERVICE_GROUP
 WorkingDirectory=$FEDIFY_GATEWAY_WORKDIR
-EnvironmentFile=$FEDIFY_GATEWAY_ENV_FILE
+EnvironmentFile=$BRIDGE_ENV_FILE
 ExecStart=$FEDIFY_GATEWAY_EXEC
 Restart=always
 RestartSec=5

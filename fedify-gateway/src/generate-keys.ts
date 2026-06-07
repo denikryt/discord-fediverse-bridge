@@ -4,7 +4,7 @@ import { resolve } from "node:path";
 
 const { subtle } = webcrypto;
 
-const ENV_FILE = resolve(process.cwd(), ".env");
+const ENV_FILE = resolve(process.cwd(), "..", ".env");
 const PRIVATE_KEY_VAR = "FEDIFY_BRIDGE_PRIVATE_KEY_JWK_JSON";
 const PUBLIC_KEY_VAR = "FEDIFY_BRIDGE_PUBLIC_KEY_JWK_JSON";
 
@@ -23,7 +23,7 @@ async function main() {
   const existing = readEnv(ENV_FILE);
 
   if (existing.includes(PRIVATE_KEY_VAR) && existing.includes(PUBLIC_KEY_VAR)) {
-    console.log("Keys already present in .env — skipping generation.");
+    console.log("Keys already present in the root .env — skipping generation.");
     console.log("Pass --force to regenerate.");
     if (!process.argv.includes("--force") && !process.env.FORCE) {
       process.exit(0);
