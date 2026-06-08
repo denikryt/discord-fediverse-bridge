@@ -14,10 +14,19 @@ LABEL org.opencontainers.image.title="discord-fediverse-bridge-fedify-gateway" \
 
 ENV NODE_ENV=production
 WORKDIR /app
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends python3 python3-pip python3-venv \
+    && rm -rf /var/lib/apt/lists/*
+RUN python3 -m venv /app/.venv \
+    && /app/.venv/bin/pip install --no-cache-dir "pydantic>=2,<3"
 COPY VERSION ./VERSION
+COPY pyproject.toml ./pyproject.toml
+COPY src ./src
 COPY --from=dependencies /app/fedify-gateway/node_modules ./fedify-gateway/node_modules
 COPY fedify-gateway/package.json fedify-gateway/package-lock.json ./fedify-gateway/
+COPY fedify-gateway/tsconfig.json ./fedify-gateway/tsconfig.json
 COPY fedify-gateway/src ./fedify-gateway/src
+COPY fedify-gateway/tests ./fedify-gateway/tests
 RUN groupadd --gid 10001 bridge \
     && useradd --uid 10001 --gid bridge --home-dir /app --create-home bridge \
     && mkdir -p /data \

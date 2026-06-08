@@ -141,4 +141,21 @@ The dashboard is intentionally public and omits Discord guild/channel IDs, priva
 
 See `notes/known_issues.md` for the current short issue journal and verified behavior notes.
 
+## Tests
+
+Python test suite:
+
+```bash
+source .venv/bin/activate
+.venv/bin/pytest -q
+```
+
+Gateway checks:
+
+```bash
+cd fedify-gateway
+npm run check
+npm test
+```
+
 Deployment and runtime setup live in [`docs/DEPLOY.md`](docs/DEPLOY.md).

@@ -30,6 +30,8 @@ def test_primary_compose_has_two_versioned_services_and_shared_state() -> None:
     gateway_block = compose.split("  fedify-gateway:", 1)[1].split("\n  backup:", 1)[0]
     assert "DATABASE_URL" not in gateway_block
     assert "bridge-data:/data" not in gateway_block
+    assert "BRIDGE_EVENTS_URL: http://bridge:8080/internal/activitypub/events" in compose
+    assert "fedify-gateway/.env" not in compose
     assert "  backup:" in compose
     assert "python\n      - -m\n      - src.db.backup\n      - serve" in compose
     assert "${BACKUP_HOST_DIR:-./backups}:/backups" in compose
@@ -109,9 +111,9 @@ def test_deployment_uses_one_root_env_file() -> None:
     env_example = _read(".env.example")
 
     assert compose.count("      - .env") == 3
+    assert "fedify-gateway/.env" not in compose
     assert "BRIDGE_ENV_FILE" not in compose
     assert "GATEWAY_ENV_FILE" not in compose
-    assert "fedify-gateway/.env" not in compose
     assert "--env-file=../.env --env-file=.env" not in package
     assert "--env-file=../.env" in package
     assert 'BRIDGE_ENV_FILE="${BRIDGE_ENV_FILE:-$PROJECT_DIR/.env}"' in systemd
