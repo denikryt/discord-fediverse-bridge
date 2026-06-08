@@ -65,7 +65,7 @@ class LocalCommunityRuntime:
         fedify_gateway: FedifyGatewayClient,
         content_publish_service: ContentPublishService,
         bridge_prefix: str,
-        bridge_policy_service: BridgePolicyService,
+        bridge_policy_service: BridgePolicyService | None = None,
         bot: object | None = None,
     ) -> None:
         """Initialise the local-community runtime with shared long-lived services."""
@@ -73,6 +73,14 @@ class LocalCommunityRuntime:
         self.fedify_gateway = fedify_gateway
         self.content_publish_service = content_publish_service
         self.bridge_prefix = bridge_prefix
+        # Production supplies the shared service. Older scenario harnesses omit
+        # it, so use an unrestricted empty-bootstrap evaluator over the same DB.
+        if bridge_policy_service is None:
+            settings = type("LocalCommunityPolicySettings", (), {})()
+            bridge_policy_service = BridgePolicyService(
+                settings=settings,
+                repository=database.bridge_policy_entries,
+            )
         self.bridge_policy_service = bridge_policy_service
         self.bot = bot
         self.federation_fanout = LocalCommunityFederationFanout(

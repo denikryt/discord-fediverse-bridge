@@ -13,7 +13,7 @@ from pathlib import Path
 from typing import Any
 from urllib.parse import urlparse
 
-from .bridge_policy import PolicyType
+from .bridge_policy import PolicyType, runtime_bridge_policy_service
 from .project_version import APP_VERSION
 
 WEB_DIR = Path(__file__).resolve().parent.parent / "web"
@@ -29,7 +29,7 @@ def build_dashboard_payload(runtime: Any) -> dict[str, object]:
     origin_host = _hostname_from_url(origin) or ""
     actor_identifier = getattr(settings, "fedify_actor_identifier", "bridge")
     database = runtime.database
-    snapshot = runtime.bridge_policy_service.snapshot()
+    snapshot = runtime_bridge_policy_service(runtime).snapshot()
     local_communities = [
         row for row in database.local_communities.list_local_communities()
         if snapshot.is_discord_guild_allowed(getattr(row, "discord_guild_id", None))

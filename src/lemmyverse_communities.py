@@ -20,7 +20,7 @@ from urllib.parse import urlparse
 
 import httpx
 
-from .bridge_policy import BridgePolicySnapshot
+from .bridge_policy import BridgePolicySnapshot, EffectivePolicyEntry, PolicyType, normalize_instance_subject
 
 logger = logging.getLogger(__name__)
 
@@ -255,9 +255,24 @@ async def autocomplete_lemmyverse_communities(
     cache: LemmyverseCommunityCache,
     *,
     current: str,
-    policy_snapshot: BridgePolicySnapshot,
+    policy_snapshot: BridgePolicySnapshot | None = None,
+    allowlist: list[str] | None = None,
 ) -> list[tuple[str, str]]:
-    """Return ``(choice_name, actor_url)`` pairs for global autocomplete."""
+    """Return ``(choice_name, actor_url)`` pairs for global autocomplete.
+
+    ``allowlist`` remains a compatibility input for older callers. New runtime
+    paths pass one effective snapshot so dynamic blocklist precedence applies.
+    """
+    if policy_snapshot is None:
+        entries = tuple(
+            EffectivePolicyEntry(
+                PolicyType.FEDERATION_ALLOW,
+                normalize_instance_subject(subject),
+                "bootstrap",
+            )
+            for subject in (allowlist or [])
+        )
+        policy_snapshot = BridgePolicySnapshot(entries)
     if hasattr(cache, "get_entries_for_autocomplete"):
         entries = await cache.get_entries_for_autocomplete()
     else:

@@ -39,8 +39,9 @@ def _matches_current(value: str, current: str) -> bool:
     return current.casefold() in value.casefold()
 
 
-def _unban_community_autocomplete(database: Database, settings: Settings, policy_service: BridgePolicyService):
+def _unban_community_autocomplete(database: Database, settings: Settings, policy_service: BridgePolicyService | None = None):
     """Build autocomplete for `/unban-user community` with owner/admin scope."""
+    policy_service = policy_service or BridgePolicyService(settings=settings, repository=database.bridge_policy_entries)
 
     async def autocomplete(
         interaction: discord.Interaction,
@@ -48,7 +49,7 @@ def _unban_community_autocomplete(database: Database, settings: Settings, policy
     ) -> list[app_commands.Choice[str]]:
         """Return manageable active communities for the invoking user."""
         try:
-            if not await command_access_allows_autocomplete(interaction, definition=GUILD_COMMAND_ACCESS, settings=settings, database=database):
+            if not await command_access_allows_autocomplete(interaction, definition=GUILD_COMMAND_ACCESS, settings=settings, database=database, policy_service=policy_service):
                 return []
             discord_user_id = str(interaction.user.id)
             if is_super_admin(policy_snapshot=policy_service.snapshot(), discord_user_id=discord_user_id):
@@ -80,8 +81,9 @@ def _unban_community_autocomplete(database: Database, settings: Settings, policy
     return autocomplete
 
 
-def _unban_user_autocomplete(database: Database, settings: Settings, policy_service: BridgePolicyService):
+def _unban_user_autocomplete(database: Database, settings: Settings, policy_service: BridgePolicyService | None = None):
     """Build autocomplete for `/unban-user user` from selected community bans."""
+    policy_service = policy_service or BridgePolicyService(settings=settings, repository=database.bridge_policy_entries)
 
     async def autocomplete(
         interaction: discord.Interaction,
@@ -89,7 +91,7 @@ def _unban_user_autocomplete(database: Database, settings: Settings, policy_serv
     ) -> list[app_commands.Choice[str]]:
         """Return active banned handles for a manageable selected community."""
         try:
-            if not await command_access_allows_autocomplete(interaction, definition=GUILD_COMMAND_ACCESS, settings=settings, database=database):
+            if not await command_access_allows_autocomplete(interaction, definition=GUILD_COMMAND_ACCESS, settings=settings, database=database, policy_service=policy_service):
                 return []
             namespace = getattr(interaction, "namespace", None)
             community_slug = getattr(namespace, "community", None) if namespace is not None else None
@@ -140,9 +142,10 @@ def register(
     tree: app_commands.CommandTree,
     database: Database,
     settings: Settings,
-    policy_service: BridgePolicyService,
+    policy_service: BridgePolicyService | None = None,
 ) -> None:
     """Register the `/unban-user` command on the Discord command tree."""
+    policy_service = policy_service or BridgePolicyService(settings=settings, repository=database.bridge_policy_entries)
 
     @tree.command(
         name="unban-user",
@@ -165,12 +168,13 @@ def register(
         # Preserve the previous direct-callback positional order used by tests.
         if community and "@" in community and "@" not in user:
             user, community = community, user
-        if await reject_if_command_access_denied(interaction, definition=GUILD_COMMAND_ACCESS, settings=settings, database=database):
+        if await reject_if_command_access_denied(interaction, definition=GUILD_COMMAND_ACCESS, settings=settings, database=database, policy_service=policy_service):
             return
         result = unban_user_operation(
             UnbanUserInput(
                 database=database,
-                policy_snapshot=policy_service.snapshot(),
+                settings=settings,
+                policy_service=policy_service,
                 discord_user_id=str(interaction.user.id),
                 discord_guild_id=interaction.guild_id,
                 community_slug=community,

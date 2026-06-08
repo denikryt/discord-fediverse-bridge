@@ -16,6 +16,7 @@ def _settings(**overrides: object) -> Settings:
     values = {
         "DISCORD_TOKEN": "token",
         "FEDIFY_SHARED_SECRET": "secret",
+        "BRIDGE_SUPER_ADMIN_USER_IDS": "1",
         "PUBLIC_BASE_URL": "https://bridge.example",
         "FEDIFY_ACTOR_IDENTIFIER": "bridge",
     }

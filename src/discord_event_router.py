@@ -23,12 +23,20 @@ class DiscordEventRouter:
         database: Database,
         community_runtime: CommunityRuntime,
         local_community_runtime: LocalCommunityRuntime,
-        bridge_policy_service: BridgePolicyService,
+        bridge_policy_service: BridgePolicyService | None = None,
     ) -> None:
         """Initialise the router with the runtimes for both bridge modes."""
         self.database = database
         self.community_runtime = community_runtime
         self.local_community_runtime = local_community_runtime
+        # Legacy scenario harnesses may omit the long-lived service. Empty
+        # bootstrap policy preserves unrestricted behavior over the same DB.
+        if bridge_policy_service is None:
+            settings = type("DiscordRouterPolicySettings", (), {})()
+            bridge_policy_service = BridgePolicyService(
+                settings=settings,
+                repository=database.bridge_policy_entries,
+            )
         self.bridge_policy_service = bridge_policy_service
 
     def _is_guild_allowed(self, guild_id: int | str | None) -> bool:

@@ -26,8 +26,9 @@ def _matches_current(value: str, current: str) -> bool:
     return current.casefold() in value.casefold()
 
 
-def _list_community_autocomplete(database: Database, settings: Settings):
+def _list_community_autocomplete(database: Database, settings: Settings, policy_service: BridgePolicyService | None = None):
     """Build autocomplete for `/list-banned-users community` in one guild."""
+    policy_service = policy_service or BridgePolicyService(settings=settings, repository=database.bridge_policy_entries)
 
     async def autocomplete(
         interaction: discord.Interaction,
@@ -35,7 +36,7 @@ def _list_community_autocomplete(database: Database, settings: Settings):
     ) -> list[app_commands.Choice[str]]:
         """Return active local communities in the current Discord guild."""
         try:
-            if not await command_access_allows_autocomplete(interaction, definition=GUILD_COMMAND_ACCESS, settings=settings, database=database):
+            if not await command_access_allows_autocomplete(interaction, definition=GUILD_COMMAND_ACCESS, settings=settings, database=database, policy_service=policy_service):
                 return []
             if interaction.guild_id is None:
                 return []
@@ -62,22 +63,23 @@ def register(
     tree: app_commands.CommandTree,
     database: Database,
     settings: Settings,
-    policy_service: BridgePolicyService,
+    policy_service: BridgePolicyService | None = None,
 ) -> None:
     """Register the `/list-banned-users` command on the command tree."""
+    policy_service = policy_service or BridgePolicyService(settings=settings, repository=database.bridge_policy_entries)
 
     @tree.command(
         name="list-banned-users",
         description="List active community or global user bans",
     )
     @app_commands.describe(community="Optional local community slug; omit for global bans")
-    @app_commands.autocomplete(community=_list_community_autocomplete(database, settings))
+    @app_commands.autocomplete(community=_list_community_autocomplete(database, settings, policy_service))
     async def list_banned_users(
         interaction: discord.Interaction,
         community: str | None = None,
     ) -> None:
         """Run the list operation and return an ephemeral command reply."""
-        if await reject_if_command_access_denied(interaction, definition=GUILD_COMMAND_ACCESS, settings=settings, database=database):
+        if await reject_if_command_access_denied(interaction, definition=GUILD_COMMAND_ACCESS, settings=settings, database=database, policy_service=policy_service):
             return
         result = list_banned_users_operation(
             ListBannedUsersInput(

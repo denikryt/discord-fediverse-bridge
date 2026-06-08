@@ -30,8 +30,8 @@ class BanUserInput:
     discord_guild_id: int | None
     community_slug: str | None
     actor_handle: str
-    policy_service: BridgePolicyService | None = None
     reason: str | None = None
+    policy_service: BridgePolicyService | None = None
     _policy_snapshot: BridgePolicySnapshot | None = field(default=None, init=False, repr=False)
     _community: LocalCommunity | None = field(default=None, init=False, repr=False)
     _community_loaded: bool = field(default=False, init=False, repr=False)

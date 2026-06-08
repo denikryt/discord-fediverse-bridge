@@ -86,6 +86,7 @@ def _client(tmp_path: Path) -> tuple[TestClient, Database]:
 async def test_unregistered_user_register_command_returns_ephemeral_link(
     command_tree,
     interaction,
+    database,
 ) -> None:
     """An unregistered user should get only the web registration entrypoint."""
     settings = SimpleNamespace(
@@ -93,7 +94,7 @@ async def test_unregistered_user_register_command_returns_ephemeral_link(
         discord_guild_allowlist=[],
     )
 
-    register_command.register(command_tree, settings)
+    register_command.register(command_tree, database, settings)
 
     command = command_tree.commands["register"]
     await command.callback(interaction)

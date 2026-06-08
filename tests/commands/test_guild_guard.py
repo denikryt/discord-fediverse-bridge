@@ -15,6 +15,14 @@ from src.commands.guild_guard import (
 )
 
 
+def _database() -> MagicMock:
+    """Build policy repositories with unrestricted and unbanned defaults."""
+    database = MagicMock()
+    database.bridge_policy_entries.list_all_active.return_value = []
+    database.community_actor_bans.get_active_global_ban_by_discord_user_id.return_value = None
+    return database
+
+
 def _interaction(*, guild_id: int | None = 123) -> SimpleNamespace:
     """Build a lightweight Discord interaction double for policy presentation."""
     response = SimpleNamespace(send_message=AsyncMock(), is_done=MagicMock(return_value=False))
@@ -34,6 +42,7 @@ async def test_denied_command_sends_initial_ephemeral_response() -> None:
         interaction,
         definition=GUILD_COMMAND_ACCESS,
         settings=SimpleNamespace(discord_guild_allowlist=[]),
+        database=_database(),
     )
     assert stopped is True
     interaction.response.send_message.assert_awaited_once_with(
@@ -51,6 +60,7 @@ async def test_denied_acknowledged_command_uses_ephemeral_followup() -> None:
         interaction,
         definition=GUILD_COMMAND_ACCESS,
         settings=SimpleNamespace(discord_guild_allowlist=["4"]),
+        database=_database(),
     )
     assert stopped is True
     interaction.followup.send.assert_awaited_once_with(
@@ -67,6 +77,7 @@ async def test_allowed_command_returns_false_without_response() -> None:
         interaction,
         definition=GUILD_COMMAND_ACCESS,
         settings=SimpleNamespace(discord_guild_allowlist=[]),
+        database=_database(),
     )
     assert stopped is False
     interaction.response.send_message.assert_not_awaited()

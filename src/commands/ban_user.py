@@ -39,8 +39,9 @@ def _matches_current(value: str, current: str) -> bool:
     return current.casefold() in value.casefold()
 
 
-def _ban_community_autocomplete(database: Database, settings: Settings, policy_service: BridgePolicyService):
+def _ban_community_autocomplete(database: Database, settings: Settings, policy_service: BridgePolicyService | None = None):
     """Build autocomplete for `/ban-user community` with owner/admin scope."""
+    policy_service = policy_service or BridgePolicyService(settings=settings, repository=database.bridge_policy_entries)
 
     async def autocomplete(
         interaction: discord.Interaction,
@@ -48,7 +49,7 @@ def _ban_community_autocomplete(database: Database, settings: Settings, policy_s
     ) -> list[app_commands.Choice[str]]:
         """Return manageable active local communities for the invoking user."""
         try:
-            if not await command_access_allows_autocomplete(interaction, definition=GUILD_COMMAND_ACCESS, settings=settings, database=database):
+            if not await command_access_allows_autocomplete(interaction, definition=GUILD_COMMAND_ACCESS, settings=settings, database=database, policy_service=policy_service):
                 return []
             discord_user_id = str(interaction.user.id)
             if is_super_admin(policy_snapshot=policy_service.snapshot(), discord_user_id=discord_user_id):
@@ -91,9 +92,10 @@ def register(
     tree: app_commands.CommandTree,
     database: Database,
     settings: Settings,
-    policy_service: BridgePolicyService,
+    policy_service: BridgePolicyService | None = None,
 ) -> None:
     """Register the `/ban-user` command on the Discord application tree."""
+    policy_service = policy_service or BridgePolicyService(settings=settings, repository=database.bridge_policy_entries)
 
     @tree.command(
         name="ban-user",
@@ -118,7 +120,7 @@ def register(
         # order used by project tests while Discord itself supplies named options.
         if community and "@" in community and "@" not in user:
             user, community = community, user
-        if await reject_if_command_access_denied(interaction, definition=GUILD_COMMAND_ACCESS, settings=settings, database=database):
+        if await reject_if_command_access_denied(interaction, definition=GUILD_COMMAND_ACCESS, settings=settings, database=database, policy_service=policy_service):
             return
         result = ban_user_operation(
             BanUserInput(

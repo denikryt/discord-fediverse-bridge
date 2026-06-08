@@ -19,7 +19,7 @@ from .activitypub_models import (
 from .community_sync.inbound_mapping import get_accepted_subscriptions
 from .local_community_lifecycle import evaluate_local_community_lifecycle
 from .local_communities.inbound_mapping import resolve_local_community_by_actor_url
-from .bridge_policy import FederationPolicyReason
+from .bridge_policy import FederationPolicyReason, runtime_bridge_policy_service
 from .runtime import Runtime
 
 logger = logging.getLogger(__name__)
@@ -43,7 +43,7 @@ async def dispatch_activitypub_event(
 ) -> HandlerResult:
     """Route one inbound ActivityPub event after federation policy admission."""
     subject = _allowlist_subject(event, runtime)
-    decision = runtime.bridge_policy_service.snapshot().federation_decision(subject)
+    decision = runtime_bridge_policy_service(runtime).snapshot().federation_decision(subject)
     if not decision.allowed:
         if decision.reason is FederationPolicyReason.BLOCKLISTED:
             outcome = InboundActivityOutcome.IGNORED_INSTANCE_BLOCKLISTED

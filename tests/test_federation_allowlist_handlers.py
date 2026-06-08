@@ -154,10 +154,8 @@ async def test_dispatch_allows_all_when_allowlist_empty(tmp_path: Path) -> None:
 
 
 @pytest.mark.asyncio
-async def test_dispatch_follow_accepted_bypasses_allowlist(tmp_path: Path) -> None:
-    # follow.accepted is a lifecycle response to our own outbound Follow.
-    # It must always be processed regardless of the allowlist, because we
-    # initiated the Follow and need to record the acceptance.
+async def test_dispatch_follow_accepted_respects_allowlist(tmp_path: Path) -> None:
+    # Lifecycle responses obey the same federation policy as content events.
     db = _database(tmp_path)
     follow_activity_id = f"https://{BRIDGE_EXAMPLE_DOMAIN}/activities/follow/1"
     community_actor_id = f"https://{LEMMY_EXAMPLE_DOMAIN}/c/hackers"
@@ -181,7 +179,7 @@ async def test_dispatch_follow_accepted_bypasses_allowlist(tmp_path: Path) -> No
     dm_user = SimpleNamespace(send=AsyncMock())
     runtime = SimpleNamespace(
         database=db,
-        # Allowlist explicitly excludes LEMMY_EXAMPLE_DOMAIN — must not block follow.accepted.
+        # Allowlist explicitly excludes LEMMY_EXAMPLE_DOMAIN.
         settings=_settings(["allowed.example"]),
         bot=SimpleNamespace(fetch_user=AsyncMock(return_value=dm_user)),
         community_runtime=AsyncMock(),
@@ -190,7 +188,8 @@ async def test_dispatch_follow_accepted_bypasses_allowlist(tmp_path: Path) -> No
 
     result = await dispatch_activitypub_event(event, runtime)
 
-    # follow.accepted must still be processed even though the instance is not listed.
-    assert result.status == "processed"
+    assert result.status == "skipped"
+    assert result.outcome.value == "ignored_instance_not_allowlisted"
     subscription = db.remote_subscriptions.get_subscription_by_channel(123)
-    assert subscription.status == "accepted"
+    assert subscription.status == "pending"
+    dm_user.send.assert_not_awaited()

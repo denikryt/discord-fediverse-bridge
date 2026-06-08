@@ -10,6 +10,7 @@ import discord
 import pytest
 
 from src.commands import subscribe
+from src.bridge_policy import BridgePolicyService
 from src.db import Database
 from src.local_communities.service import LocalCommunityService
 
@@ -91,6 +92,8 @@ async def test_same_instance_autocomplete_uses_bridge_discovery(
         fedify_origin="https://bot.example.com",
     )
     interaction = AsyncMock()
+    interaction.user.id = "1234567890"
+    interaction.guild_id = 99999
     interaction.namespace = SimpleNamespace(instance_domain="https://bot.example.com")
     subscribe.register(command_tree, database, fedify_gateway, settings)
 
@@ -109,7 +112,8 @@ async def test_same_instance_autocomplete_uses_bridge_discovery(
                 )
             ]
 
-            choices = await subscribe._community_autocomplete(settings)(interaction, "news")
+            policy_service = BridgePolicyService(settings=settings, repository=database.bridge_policy_entries)
+            choices = await subscribe._community_autocomplete(settings, database, policy_service)(interaction, "news")
 
     lemmy_client_mock.assert_not_called()
     fetch_mock.assert_awaited_once_with("https://bot.example.com")

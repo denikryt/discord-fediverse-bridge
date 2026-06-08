@@ -81,9 +81,10 @@ def register(
     database: Database,
     fedify_gateway: FedifyGatewayClient,
     settings: Settings,
-    policy_service: BridgePolicyService,
+    policy_service: BridgePolicyService | None = None,
 ) -> None:
     """Register the unsubscribe-channel slash command on the given command tree."""
+    policy_service = policy_service or BridgePolicyService(settings=settings, repository=database.bridge_policy_entries)
     # The registered slash command adapts Discord input into the operation
     # contract and leaves policy decisions to the framework-backed layer.
     @tree.command(name="unsubscribe-channel", description="Remove a forum channel's Lemmy subscription")
@@ -94,7 +95,7 @@ def register(
         channel: discord.ForumChannel,
     ) -> None:
         """Handle the /unsubscribe-channel slash command."""
-        if await reject_if_command_access_denied(interaction, definition=REGISTERED_GUILD_COMMAND_ACCESS, settings=settings, database=database):
+        if await reject_if_command_access_denied(interaction, definition=REGISTERED_GUILD_COMMAND_ACCESS, settings=settings, database=database, policy_service=policy_service):
             return
         # The command adapter only supplies Discord-facing context; the
         # operation decides whether deletion is allowed and what result to show.

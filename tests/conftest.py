@@ -71,6 +71,8 @@ def database() -> Mock:
     database.local_communities.get_local_community_by_forum_channel_id.return_value = None
     database.remote_subscriptions.get_subscription_by_channel.return_value = None
     database.local_subscribers.get_local_subscriber_by_channel.return_value = None
+    database.community_actor_bans.get_active_global_ban_by_discord_user_id.return_value = None
+    database.bridge_policy_entries.list_all_active.return_value = []
     return database
 
 

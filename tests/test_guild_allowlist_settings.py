@@ -14,6 +14,7 @@ def _settings_data(**overrides: object) -> dict[str, object]:
         "DISCORD_TOKEN": "discord-token",
         "FEDIFY_SHARED_SECRET": "secret",
         "PUBLIC_BASE_URL": "https://bridge.example",
+        "BRIDGE_SUPER_ADMIN_USER_IDS": "1",
     }
     data.update(overrides)
     return data

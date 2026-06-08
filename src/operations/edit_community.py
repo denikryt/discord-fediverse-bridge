@@ -34,8 +34,8 @@ class EditCommunityInput:
     community_slug: str
     display_name: str
     summary: str | None
-    policy_service: BridgePolicyService | None = None
     status: str = "active"
+    policy_service: BridgePolicyService | None = None
     _policy_snapshot: BridgePolicySnapshot | None = field(default=None, init=False, repr=False)
     _community: LocalCommunity | None = field(default=None, init=False, repr=False)
     _community_loaded: bool = field(default=False, init=False, repr=False)

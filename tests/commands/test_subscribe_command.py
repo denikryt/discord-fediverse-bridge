@@ -6,7 +6,13 @@ from unittest.mock import AsyncMock, patch
 import pytest
 
 from src.commands import subscribe
+from src.bridge_policy import BridgePolicyService
 from tests_constants import BRIDGE_EXAMPLE_DOMAIN, LEMMY_EXAMPLE_DOMAIN
+
+
+def _policy_service(settings, database):
+    """Build the effective policy dependency used by autocomplete callbacks."""
+    return BridgePolicyService(settings=settings, repository=database.bridge_policy_entries)
 
 
 @pytest.mark.asyncio
@@ -259,7 +265,11 @@ async def test_subscribe_community_retries_failed_subscription(
 
 def _settings(allowlist: list[str]) -> SimpleNamespace:
     """Build a minimal settings stub with the given federation_allowlist."""
-    return SimpleNamespace(discord_guild_allowlist=[], federation_allowlist=allowlist)
+    return SimpleNamespace(
+        discord_guild_allowlist=[],
+        federation_allowlist=allowlist,
+        normalized_public_bridge_base_url="https://bridge.example.com",
+    )
 
 
 def _make_interaction(instance_domain: str | None) -> AsyncMock:
@@ -297,16 +307,16 @@ async def test_subscribe_instance_autocomplete_returns_allowlist_entries(
     # one Choice per entry with value = "https://" + hostname.
     settings = _settings(["lemmy.world", "beehaw.org"])
     subscribe.register(command_tree, database, fedify_gateway, settings)
-    autocomplete_fn = subscribe._instance_autocomplete(settings)
+    autocomplete_fn = subscribe._instance_autocomplete(settings, database, _policy_service(settings, database))
 
     interaction = _make_interaction(None)
     choices = await autocomplete_fn(interaction, "")
 
-    assert len(choices) == 2
-    assert choices[0].name == "lemmy.world"
-    assert choices[0].value == "https://lemmy.world"
-    assert choices[1].name == "beehaw.org"
-    assert choices[1].value == "https://beehaw.org"
+    assert [(choice.name, choice.value) for choice in choices] == [
+        ("beehaw.org", "https://beehaw.org"),
+        ("lemmy.world", "https://lemmy.world"),
+        ("bridge.example.com", "https://bridge.example.com"),
+    ]
 
 
 @pytest.mark.asyncio
@@ -317,12 +327,14 @@ async def test_subscribe_instance_autocomplete_returns_empty_for_open_federation
     # so the user types the URL manually.
     settings = _settings([])
     subscribe.register(command_tree, database, fedify_gateway, settings)
-    autocomplete_fn = subscribe._instance_autocomplete(settings)
+    autocomplete_fn = subscribe._instance_autocomplete(settings, database, _policy_service(settings, database))
 
     interaction = _make_interaction(None)
     choices = await autocomplete_fn(interaction, "")
 
-    assert choices == []
+    assert [(choice.name, choice.value) for choice in choices] == [
+        ("bridge.example.com", "https://bridge.example.com"),
+    ]
 
 
 # ---------------------------------------------------------------------------
@@ -352,7 +364,7 @@ async def test_subscribe_autocomplete_uses_lemmy_instance_url(
 
     settings = _settings([])
     subscribe.register(command_tree, database, fedify_gateway, settings)
-    autocomplete_fn = subscribe._community_autocomplete(settings)
+    autocomplete_fn = subscribe._community_autocomplete(settings, database, _policy_service(settings, database))
 
     with patch("src.commands.subscribe.LemmyClient") as MockLemmyClient:
         fake_remote = AsyncMock()
@@ -396,7 +408,7 @@ async def test_subscribe_autocomplete_reads_instance_domain_from_raw_payload_whe
     ]
 
     settings = _settings([])
-    autocomplete_fn = subscribe._community_autocomplete(settings)
+    autocomplete_fn = subscribe._community_autocomplete(settings, database, _policy_service(settings, database))
 
     with patch("src.commands.subscribe.LemmyClient") as MockLemmyClient:
         fake_remote = AsyncMock()
@@ -428,7 +440,7 @@ async def test_subscribe_autocomplete_returns_empty_when_global_cache_is_empty(
 
     settings = _settings([])
     subscribe.register(command_tree, database, fedify_gateway, settings)
-    autocomplete_fn = subscribe._community_autocomplete(settings, lemmyverse_cache=EmptyCache())
+    autocomplete_fn = subscribe._community_autocomplete(settings, database, _policy_service(settings, database), lemmyverse_cache=EmptyCache())
 
     with patch("src.commands.subscribe.LemmyClient") as MockLemmyClient:
         choices = await autocomplete_fn(interaction, "")
@@ -447,7 +459,7 @@ async def test_subscribe_autocomplete_rejects_unlisted_instance(
 
     settings = _settings(["allowed.example"])
     subscribe.register(command_tree, database, fedify_gateway, settings)
-    autocomplete_fn = subscribe._community_autocomplete(settings)
+    autocomplete_fn = subscribe._community_autocomplete(settings, database, _policy_service(settings, database))
 
     with patch("src.commands.subscribe.LemmyClient") as MockLemmyClient:
         choices = await autocomplete_fn(interaction, "")
@@ -507,7 +519,7 @@ async def test_subscribe_global_autocomplete_uses_lemmyverse_without_instance(
 
     interaction = _make_interaction(None)
     settings = _settings([])
-    autocomplete_fn = subscribe._community_autocomplete(settings, lemmyverse_cache=FakeCache())
+    autocomplete_fn = subscribe._community_autocomplete(settings, database, _policy_service(settings, database), lemmyverse_cache=FakeCache())
 
     with patch("src.commands.subscribe.LemmyClient") as MockLemmyClient:
         with patch("src.commands.subscribe.fetch_bridge_community_summaries", new=AsyncMock()) as fetch_mock:
@@ -539,7 +551,7 @@ async def test_subscribe_global_autocomplete_filters_allowlist(
 
     interaction = _make_interaction(None)
     settings = _settings(["allowed.example"])
-    autocomplete_fn = subscribe._community_autocomplete(settings, lemmyverse_cache=FakeCache())
+    autocomplete_fn = subscribe._community_autocomplete(settings, database, _policy_service(settings, database), lemmyverse_cache=FakeCache())
 
     choices = await autocomplete_fn(interaction, "news")
 

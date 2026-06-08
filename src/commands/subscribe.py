@@ -36,7 +36,7 @@ def register(
     database: Database,
     fedify_gateway: FedifyGatewayClient,
     settings: Settings,
-    policy_service: BridgePolicyService,
+    policy_service: BridgePolicyService | None = None,
     lemmyverse_cache: LemmyverseCommunityCache | None = None,
 ) -> None:
     """Register the subscribe-community slash command on the Discord tree.
@@ -47,6 +47,7 @@ def register(
     handler, keeping this module focused on Discord registration and autocomplete.
     """
     cache = lemmyverse_cache or LemmyverseCommunityCache()
+    policy_service = policy_service or BridgePolicyService(settings=settings, repository=database.bridge_policy_entries)
     handler = SubscribeCommunityCommandHandler(
         database=database,
         fedify_gateway=fedify_gateway,
