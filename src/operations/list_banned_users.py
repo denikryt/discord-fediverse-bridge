@@ -62,15 +62,71 @@ def _format_reason(reason: str | None) -> str:
     return reason if len(reason) <= 160 else f"{reason[:157]}..."
 
 
+def _global_list_authorized(value: ListBannedUsersInput) -> bool:
+    """Allow omitted-community lists only for configured super-admins."""
+    return not value.is_global or is_super_admin(
+        settings=value.settings,
+        discord_user_id=value.discord_user_id,
+    )
+
+
+def _list_has_required_guild_context(value: ListBannedUsersInput) -> bool:
+    """Require guild context only for community-scoped list requests."""
+    return value.is_global or value.discord_guild_id is not None
+
+
+def _list_community_accessible(value: ListBannedUsersInput) -> bool:
+    """Require the selected community to be visible from the invoking guild."""
+    if value.is_global:
+        return True
+    community = value.get_local_community()
+    return community is not None and can_access_local_community_from_guild(
+        settings=value.settings,
+        discord_user_id=value.discord_user_id,
+        discord_guild_id=value.discord_guild_id,
+        local_community=community,
+        include_disabled=True,
+    )
+
+
+def _list_community_active(value: ListBannedUsersInput) -> bool:
+    """Reject list requests for disabled communities while allowing global lists."""
+    if value.is_global:
+        return True
+    community = value.get_local_community()
+    return community is not None and not is_local_community_disabled(community)
+
+
 class ListBannedUsersOperation(Operation):
     """Authorize and render active bans for one explicit scope."""
 
     name = "list_banned_users"
     preconditions = (
-        Precondition(name="not_super_admin", message="Only a super-admin can list global bans.", predicate=lambda value: not value.is_global or is_super_admin(settings=value.settings, discord_user_id=value.discord_user_id)),
-        Precondition(name="missing_guild_context", message="This command can only be used inside a guild.", predicate=lambda value: value.is_global or value.discord_guild_id is not None),
-        Precondition(name="unknown_or_inaccessible_community", message=lambda value: f"Unknown or inaccessible local community: {value.normalized_community_slug}", predicate=lambda value: value.is_global or (value.get_local_community() is not None and can_access_local_community_from_guild(settings=value.settings, discord_user_id=value.discord_user_id, discord_guild_id=value.discord_guild_id, local_community=value.get_local_community(), include_disabled=True))),
-        Precondition(name="community_disabled", message=lambda value: disabled_moderation_message(value.normalized_community_slug or ""), predicate=lambda value: value.is_global or (value.get_local_community() is not None and not is_local_community_disabled(value.get_local_community()))),
+        Precondition(
+            name="not_super_admin",
+            message="Only a super-admin can list global bans.",
+            predicate=_global_list_authorized,
+        ),
+        Precondition(
+            name="missing_guild_context",
+            message="This command can only be used inside a guild.",
+            predicate=_list_has_required_guild_context,
+        ),
+        Precondition(
+            name="unknown_or_inaccessible_community",
+            message=lambda value: (
+                f"Unknown or inaccessible local community: "
+                f"{value.normalized_community_slug}"
+            ),
+            predicate=_list_community_accessible,
+        ),
+        Precondition(
+            name="community_disabled",
+            message=lambda value: disabled_moderation_message(
+                value.normalized_community_slug or ""
+            ),
+            predicate=_list_community_active,
+        ),
     )
 
     def reject(self, operation_input: ListBannedUsersInput, *, reason: str, message: str, **_: object) -> ListBannedUsersResult:

@@ -104,14 +104,40 @@ def _community_accessible(value: UnbanUserInput) -> bool:
 
 def _can_manage(value: UnbanUserInput) -> bool:
     """Require owner or super-admin for community scope."""
-    return value.is_global or (value.get_local_community() is not None and can_manage_local_community(
-        settings=value.settings, discord_user_id=value.discord_user_id, local_community=value.get_local_community()
-    ))
+    if value.is_global:
+        return True
+    community = value.get_local_community()
+    return community is not None and can_manage_local_community(
+        settings=value.settings,
+        discord_user_id=value.discord_user_id,
+        local_community=community,
+    )
 
 
 def _active_community(value: UnbanUserInput) -> bool:
     """Require active lifecycle only for community-scoped moderation."""
-    return value.is_global or (value.get_local_community() is not None and not is_local_community_disabled(value.get_local_community()))
+    if value.is_global:
+        return True
+    community = value.get_local_community()
+    return community is not None and not is_local_community_disabled(community)
+
+
+def _valid_actor_handle(value: UnbanUserInput) -> bool:
+    """Require a syntactically valid normalized local or remote handle."""
+    return value.get_normalized_actor_handle() is not None
+
+
+def _active_ban_exists(value: UnbanUserInput) -> bool:
+    """Require one active ban in exactly the requested scope."""
+    return value.get_active_ban() is not None
+
+
+def _no_active_message(value: UnbanUserInput) -> str:
+    """Render non-disclosing absence text for the requested scope."""
+    handle = value.get_normalized_actor_handle() or value.actor_handle
+    if value.is_global:
+        return f"User {handle} is not actively banned from this bridge instance."
+    return f"User {handle} is not actively banned in community {value.normalized_community_slug}."
 
 
 class UnbanUserOperation(Operation):
@@ -119,13 +145,46 @@ class UnbanUserOperation(Operation):
 
     name = "unban_user"
     preconditions = (
-        Precondition(name="not_super_admin", message="Only a super-admin can remove a global ban.", predicate=_global_authorized),
-        Precondition(name="missing_guild_context", message="This command can only be used inside a guild.", predicate=_guild_context),
-        Precondition(name="unknown_or_inaccessible_community", message=lambda value: f"Unknown or inaccessible local community: {value.normalized_community_slug}", predicate=_community_accessible),
-        Precondition(name="cannot_manage_community", message="You are not allowed to manage this local community.", predicate=_can_manage),
-        Precondition(name="community_disabled", message=lambda value: disabled_moderation_message(value.normalized_community_slug or ""), predicate=_active_community),
-        Precondition(name="invalid_handle", message="Invalid remote user handle. Use user@example.com.", predicate=lambda value: value.get_normalized_actor_handle() is not None),
-        Precondition(name="no_active_ban", message=lambda value: _no_active_message(value), predicate=lambda value: value.get_active_ban() is not None),
+        Precondition(
+            name="not_super_admin",
+            message="Only a super-admin can remove a global ban.",
+            predicate=_global_authorized,
+        ),
+        Precondition(
+            name="missing_guild_context",
+            message="This command can only be used inside a guild.",
+            predicate=_guild_context,
+        ),
+        Precondition(
+            name="unknown_or_inaccessible_community",
+            message=lambda value: (
+                f"Unknown or inaccessible local community: "
+                f"{value.normalized_community_slug}"
+            ),
+            predicate=_community_accessible,
+        ),
+        Precondition(
+            name="cannot_manage_community",
+            message="You are not allowed to manage this local community.",
+            predicate=_can_manage,
+        ),
+        Precondition(
+            name="community_disabled",
+            message=lambda value: disabled_moderation_message(
+                value.normalized_community_slug or ""
+            ),
+            predicate=_active_community,
+        ),
+        Precondition(
+            name="invalid_handle",
+            message="Invalid remote user handle. Use user@example.com.",
+            predicate=_valid_actor_handle,
+        ),
+        Precondition(
+            name="no_active_ban",
+            message=_no_active_message,
+            predicate=_active_ban_exists,
+        ),
     )
 
     def reject(self, operation_input: UnbanUserInput, *, reason: str, message: str, **_: object) -> UnbanUserResult:
@@ -153,13 +212,6 @@ class UnbanUserOperation(Operation):
         scope = "this bridge instance" if operation_input.is_global else f"community {operation_input.normalized_community_slug}"
         return UnbanUserResult(True, f"Unbanned {handle} from {scope}.", "unbanned")
 
-
-def _no_active_message(value: UnbanUserInput) -> str:
-    """Render non-disclosing absence text for the requested scope."""
-    handle = value.get_normalized_actor_handle() or value.actor_handle
-    if value.is_global:
-        return f"User {handle} is not actively banned from this bridge instance."
-    return f"User {handle} is not actively banned in community {value.normalized_community_slug}."
 
 
 def unban_user_operation(operation_input: UnbanUserInput) -> UnbanUserResult:

@@ -157,13 +157,46 @@ class BanUserOperation(Operation):
 
     name = "ban_user"
     preconditions = (
-        Precondition(name="not_super_admin", message="Only a super-admin can create a global ban.", predicate=_global_authorized),
-        Precondition(name="missing_guild_context", message="This command can only be used inside a guild.", predicate=_has_guild_for_scoped),
-        Precondition(name="unknown_or_inaccessible_community", message=lambda value: f"Unknown or inaccessible local community: {value.normalized_community_slug}", predicate=_community_accessible),
-        Precondition(name="cannot_manage_community", message="You are not allowed to manage this local community.", predicate=_can_manage),
-        Precondition(name="community_disabled", message=lambda value: disabled_moderation_message(value.normalized_community_slug or ""), predicate=_active),
-        Precondition(name="invalid_handle", message=_target_error, predicate=_valid_target),
-        Precondition(name="duplicate_active_ban", message=_duplicate_message, predicate=_no_duplicate),
+        Precondition(
+            name="not_super_admin",
+            message="Only a super-admin can create a global ban.",
+            predicate=_global_authorized,
+        ),
+        Precondition(
+            name="missing_guild_context",
+            message="This command can only be used inside a guild.",
+            predicate=_has_guild_for_scoped,
+        ),
+        Precondition(
+            name="unknown_or_inaccessible_community",
+            message=lambda value: (
+                f"Unknown or inaccessible local community: "
+                f"{value.normalized_community_slug}"
+            ),
+            predicate=_community_accessible,
+        ),
+        Precondition(
+            name="cannot_manage_community",
+            message="You are not allowed to manage this local community.",
+            predicate=_can_manage,
+        ),
+        Precondition(
+            name="community_disabled",
+            message=lambda value: disabled_moderation_message(
+                value.normalized_community_slug or ""
+            ),
+            predicate=_active,
+        ),
+        Precondition(
+            name="invalid_handle",
+            message=_target_error,
+            predicate=_valid_target,
+        ),
+        Precondition(
+            name="duplicate_active_ban",
+            message=_duplicate_message,
+            predicate=_no_duplicate,
+        ),
     )
 
     def reject(self, operation_input: BanUserInput, *, reason: str, message: str, **_: object) -> BanUserResult:
