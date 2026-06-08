@@ -16,5 +16,8 @@ server {
     location ^~ /inbox { proxy_pass http://fedify-gateway:3000; }
     location ^~ /activitypub/ { proxy_pass http://fedify-gateway:3000; }
 
+    # Internal bridge routes carry private signing keys and are never public.
+    location ^~ /internal/ { return 404; }
+
     location / { proxy_pass http://bridge:8080; }
 }

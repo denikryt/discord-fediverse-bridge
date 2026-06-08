@@ -25,6 +25,10 @@ import {
 
 const LEMMY_ORIGIN = "https://lemmy.example";
 const COMMUNITY_URL = `${LEMMY_ORIGIN}/c/testcommunity`;
+const EMPTY_LOOKUP_CLIENT = {
+  async loadMessageMappingByObjectId(): Promise<null> { return null; },
+  async loadPublishedActivityObjectByObjectId(): Promise<null> { return null; },
+};
 
 async function main(): Promise<void> {
   await testNormalizeUpdateComment();
@@ -59,7 +63,7 @@ async function testNormalizeUpdateComment(): Promise<void> {
     },
   };
 
-  const event = await normalizeUpdateActivityFromJson(activity);
+  const event = await normalizeUpdateActivityFromJson(activity, { pythonBridgeClient: EMPTY_LOOKUP_CLIENT });
 
   assert.ok(event, "normalizeUpdateActivityFromJson must return an event for Update(Note)");
   assert.equal(event.event_type, "comment.updated");
@@ -90,7 +94,7 @@ async function testNormalizeUpdatePost(): Promise<void> {
     },
   };
 
-  const event = await normalizeUpdateActivityFromJson(activity);
+  const event = await normalizeUpdateActivityFromJson(activity, { pythonBridgeClient: EMPTY_LOOKUP_CLIENT });
 
   assert.ok(event, "normalizeUpdateActivityFromJson must return an event for Update(Page)");
   assert.equal(event.event_type, "post.updated");
@@ -183,7 +187,7 @@ async function testNormalizeUpdateUnknownObjectType(): Promise<void> {
     },
   };
 
-  const event = await normalizeUpdateActivityFromJson(activity);
+  const event = await normalizeUpdateActivityFromJson(activity, { pythonBridgeClient: EMPTY_LOOKUP_CLIENT });
 
   assert.equal(event, null, "normalizeUpdateActivityFromJson must return null for unknown nested type");
 }
@@ -199,7 +203,7 @@ async function testNormalizeUpdateMissingObject(): Promise<void> {
     actor: `${LEMMY_ORIGIN}/u/admin`,
   };
 
-  const event = await normalizeUpdateActivityFromJson(activity);
+  const event = await normalizeUpdateActivityFromJson(activity, { pythonBridgeClient: EMPTY_LOOKUP_CLIENT });
 
   assert.equal(event, null, "normalizeUpdateActivityFromJson must return null when object field is missing");
 }

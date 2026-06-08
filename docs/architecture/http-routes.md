@@ -16,6 +16,7 @@ This document explains HTTP route ownership between the Python bridge and the Fe
 | `/dashboard/static/dashboard.js` | GET | Python FastAPI | public | Dashboard browser logic | `src/http_api.py` | Python |
 | `/dashboard/data` | GET | Python FastAPI | public | Public bridge dashboard JSON | `src/http_api.py` | Python |
 | `/internal/activitypub/events` | POST | Python FastAPI | private | Gateway-to-Python AP event intake | `src/http_api.py` | Not publicly routed |
+| `/internal/fedify/*` | GET/POST | Python FastAPI | private | Authenticated Gateway read models and signing keys | `src/internal_fedify_api.py` | Not publicly routed |
 | `/healthz` | GET | Fedify gateway | public | Gateway health | `fedify-gateway/src/server.ts` | Gateway |
 | `/.well-known/webfinger` | GET | Fedify gateway | public | Actor discovery | `fedify-gateway/src/server.ts` | Gateway |
 | `/.well-known/discord-fediverse-bridge/communities` | GET | Fedify gateway | public | Bridge-owned public local-community discovery | `fedify-gateway/src/server.ts` | Gateway |
@@ -38,6 +39,6 @@ This document explains HTTP route ownership between the Python bridge and the Fe
 
 `/healthz` exists in both processes. In the public-host deployment, public `/healthz` should stay gateway-owned unless an operator intentionally adds a Python health alias.
 
-`/internal/activitypub/events` is authenticated with the shared gateway secret, but it is still a private gateway-to-Python route and should not be routed publicly by nginx.
+All `/internal/*` routes are authenticated with the shared gateway secret and must not be routed publicly by nginx.
 
 `/users/`, `/communities/`, `/c/`, `/.well-known/webfinger`, `/.well-known/discord-fediverse-bridge/communities`, and `/inbox` are gateway-owned public identity, discovery, or delivery paths and should stay out of the Python bridge namespace.

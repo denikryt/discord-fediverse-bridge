@@ -64,6 +64,17 @@ class ActivityPubObjectRepository(BaseRepository):
                     )
                 )
 
+    def get_published_activity_object_by_activity_id(
+            self, activity_id: str
+        ) -> PublishedActivityObject | None:
+            """Load one stored gateway-published object by Create activity URL."""
+            with self.session() as session:
+                return session.scalar(
+                    select(PublishedActivityObject).where(
+                        PublishedActivityObject.activity_id == activity_id
+                    )
+                )
+
     def get_published_activity_object_by_discord_message_id(
             self, discord_message_id: int
         ) -> PublishedActivityObject | None:

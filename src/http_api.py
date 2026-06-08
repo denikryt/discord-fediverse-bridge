@@ -18,6 +18,8 @@ from .registration_service import RegistrationError, generate_oauth_state, gener
 from .runtime import Runtime
 from .models import RegistrationSession, utcnow
 from .project_version import APP_VERSION
+from .internal_auth import validate_internal_bearer
+from .internal_fedify_api import create_internal_fedify_router
 
 logger = logging.getLogger(__name__)
 
@@ -29,6 +31,7 @@ def create_http_app(runtime: Runtime) -> FastAPI:
     # public registration pages. The internal auth rules apply only to the
     # private event-ingest surface.
     app = FastAPI(title="discord-lemmy-bridge-internal-api")
+    app.include_router(create_internal_fedify_router(runtime))
     # Dashboard assets stay under one namespace so nginx can proxy the whole
     # prefix to Python instead of learning every file name individually.
     app.mount(
@@ -232,7 +235,7 @@ def create_http_app(runtime: Runtime) -> FastAPI:
     ) -> dict[str, str | None]:
         # Authenticate and deduplicate before touching Discord so gateway
         # retries remain safe.
-        _validate_internal_auth(runtime, authorization)
+        validate_internal_bearer(authorization=authorization, shared_secret=runtime.settings.fedify_shared_secret)
         _validate_delivery_header(x_bridge_delivery_id, event.delivery_id)
 
         duplicate_response = _begin_event_processing(runtime, event)
@@ -351,12 +354,6 @@ def _html_response(*, title: str, body: str, status_code: int = 200) -> HTMLResp
         ),
         status_code=status_code,
     )
-
-
-def _validate_internal_auth(runtime: Runtime, authorization: str | None) -> None:
-    expected = f"Bearer {runtime.settings.fedify_shared_secret}"
-    if authorization != expected:
-        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid internal authorization")
 
 
 def _validate_delivery_header(x_bridge_delivery_id: str | None, delivery_id: str) -> None:

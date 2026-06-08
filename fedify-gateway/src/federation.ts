@@ -28,7 +28,7 @@ import {
   normalizeUpdateActivityFromJson,
   normalizeDeleteActivityFromJson,
 } from "./normalize.js";
-import { deliverEventToPythonBridge } from "./python-bridge.js";
+import { getPythonBridgeClient } from "./python-bridge-client.js";
 import type {
   BridgeContentEvent,
   FollowAcceptedEvent,
@@ -133,7 +133,7 @@ export function createGatewayFederation(
         // not wrap local objects inside Announce. Errors must be logged here
         // because the inbox already returns 202 before async processing finishes.
         const event = await normalizeCreateActivity(activity, {
-          databaseUrl: config.databaseUrl,
+          pythonBridgeClient: getPythonBridgeClient(config),
         });
         if (event == null) {
           logDebug(isDebug, "normalizeCreateActivity returned null");
@@ -181,7 +181,7 @@ export function createGatewayFederation(
         const createRecord = extractCreateRecord(announceEnvelope.rawRecord);
         if (createRecord != null) {
           const event = await normalizeCreateActivityFromJson(createRecord, {
-            databaseUrl: config.databaseUrl,
+            pythonBridgeClient: getPythonBridgeClient(config),
           });
           if (event == null) {
             logDebug(isDebug, "normalizeCreateActivityFromJson returned null");
@@ -204,7 +204,7 @@ export function createGatewayFederation(
         const updateRecord = extractUpdateRecord(announceEnvelope.rawRecord);
         if (updateRecord != null) {
           const event = await normalizeUpdateActivityFromJson(updateRecord, {
-            databaseUrl: config.databaseUrl,
+            pythonBridgeClient: getPythonBridgeClient(config),
           });
           if (event == null) {
             logDebug(isDebug, "normalizeUpdateActivityFromJson returned null");
@@ -321,11 +321,7 @@ async function deliverNormalizedEvent(
   if (config.logLevel === "debug") {
     console.log("[Fedify][debug] Delivering event", logContext);
   }
-  await deliverEventToPythonBridge(
-    config.pythonBridgeEventsUrl,
-    config.pythonBridgeSharedSecret,
-    event,
-  );
+  await getPythonBridgeClient(config).deliverEvent(event);
 }
 
 export async function deliverDirectUpdateActivity(
@@ -336,7 +332,7 @@ export async function deliverDirectUpdateActivity(
   /** Normalize one direct Update and deliver it to the Python bridge. */
   const sourceActivityJson = await activity.toJsonLd() as Record<string, unknown>;
   const event = await normalizeUpdateActivityFromJson(sourceActivityJson, {
-    databaseUrl: config.databaseUrl,
+    pythonBridgeClient: getPythonBridgeClient(config),
   });
   if (event == null) {
     logDebug(isDebug, "normalizeUpdateActivityFromJson returned null for direct Update");

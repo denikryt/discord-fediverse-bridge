@@ -31,6 +31,9 @@ BACKUP_RETENTION_COUNT=14
 
 `PUBLIC_BASE_URL` defines the public federation identity. Changing it changes actor and object URLs.
 
+
+The gateway does not mount or read the SQLite database. It reaches the bridge over the private Compose network using `PYTHON_BRIDGE_INTERNAL_URL=http://bridge:8080`; both event delivery and read requests use `FEDIFY_SHARED_SECRET`. Do not route `/internal/` through a public reverse proxy.
+
 ## Start
 
 ```bash

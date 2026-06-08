@@ -222,7 +222,6 @@ main() {
       remove_unit_file "$(unit_file_path "$PYTHON_BRIDGE_SERVICE" "$PYTHON_BRIDGE_UNIT_FILE")"
       remove_unit_file "$(unit_file_path "$FEDIFY_GATEWAY_SERVICE" "$FEDIFY_GATEWAY_UNIT_FILE")"
       sudo_if_needed systemctl daemon-reload
-      sudo_if_needed systemctl reset-failed "$PYTHON_BRIDGE_SERVICE" "$FEDIFY_GATEWAY_SERVICE" || true
       ;;
     *)
       usage

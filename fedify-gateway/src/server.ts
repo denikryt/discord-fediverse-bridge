@@ -27,7 +27,7 @@ import {
   listLocalCommunities,
   loadPublishedActivityObjectByActivityId,
   loadPublishedActivityObjectByObjectId,
-} from "./db.js";
+} from "./python-bridge-client.js";
 import { createGatewayFederation } from "./federation.js";
 import {
   acceptLocalCommunityFollow,
@@ -694,7 +694,7 @@ export function startGatewayServer(config: GatewayConfig = loadConfig()): void {
   });
 
   console.log(
-    `Fedify gateway version=${APP_VERSION} listening on ${config.fedifyOrigin} (port ${config.port}) and forwarding to ${config.pythonBridgeEventsUrl}`,
+    `Fedify gateway version=${APP_VERSION} listening on ${config.fedifyOrigin} (port ${config.port}) and forwarding to ${`${config.pythonBridgeInternalUrl}/internal/activitypub/events`}`,
   );
 }
 

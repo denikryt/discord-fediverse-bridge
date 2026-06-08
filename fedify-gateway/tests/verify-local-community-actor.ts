@@ -5,7 +5,8 @@ import path from "node:path";
 import { webcrypto } from "node:crypto";
 
 import { exportJwk, generateCryptoKeyPair } from "@fedify/fedify";
-import initSqlJs from "sql.js";
+import initSqlJs, { seedBridgeActorJwk } from "./support/sqlite-fixture.js";
+import { startPythonBridgeFixture } from "./support/python-bridge-fixture.js";
 
 import { buildLocalCommunityGroupActor } from "../src/actors.js";
 import {
@@ -21,6 +22,7 @@ async function main(): Promise<void> {
   const sqlJs = await initSqlJs();
   const tempDir = await mkdtemp(path.join(tmpdir(), "fedify-local-community-"));
   const databasePath = path.join(tempDir, "bridge.db");
+  let pythonBridgeInternalUrl = "";
   const bridgeKeys = await generateCryptoKeyPair("RSASSA-PKCS1-v1_5");
   const communityKeys = await generateCryptoKeyPair("RSASSA-PKCS1-v1_5");
   const db = new sqlJs.Database();
@@ -75,7 +77,14 @@ async function main(): Promise<void> {
         "active",
       ],
     );
+    seedBridgeActorJwk(
+      db,
+      `${TEST_ORIGIN}actors/bridge`,
+      JSON.stringify(await exportJwk(bridgeKeys.privateKey)),
+      JSON.stringify(await exportJwk(bridgeKeys.publicKey)),
+    );
     await writeFile(databasePath, Buffer.from(db.export()));
+    pythonBridgeInternalUrl = await startPythonBridgeFixture(databasePath);
   } finally {
     db.close();
   }
@@ -84,13 +93,10 @@ async function main(): Promise<void> {
     actorIdentifier: "bridge",
     actorName: "Bridge",
     actorSummary: "Bridge summary",
-    bridgePrivateKeyJwkJson: JSON.stringify(await exportJwk(bridgeKeys.privateKey)),
-    bridgePublicKeyJwkJson: JSON.stringify(await exportJwk(bridgeKeys.publicKey)),
-    databaseUrl: `sqlite:///${databasePath}`,
+    pythonBridgeInternalUrl,
     fedifyOrigin: TEST_ORIGIN,
     port: 3000,
-    pythonBridgeEventsUrl: "http://127.0.0.1:8080/internal/activitypub/events",
-    pythonBridgeSharedSecret: "secret",
+        pythonBridgeSharedSecret: "secret",
     logLevel: "info",
   };
 

@@ -126,7 +126,7 @@ async function importPublicPemKey(publicKeyPem: string): Promise<CryptoKey> {
 }
 
 function pemToDer(pem: string): ArrayBuffer {
-  // PEM values in the Python-owned SQLite database are text envelopes. Fedify
+  // PEM values returned by the Python bridge are text envelopes. Fedify
   // and WebCrypto need DER bytes, so the conversion stays local to key loading.
   const base64 = pem
     .replace(/-----BEGIN [^-]+-----/g, "")

@@ -14,8 +14,8 @@ Discord bot behavior, registration pages, moderator policy, or Python-owned pers
 
 ## Primary entry points
 
-`server.ts` registers routes, `federation.ts` handles inbound AP, `federation-outbound.ts` sends signed activities, `normalize.ts` builds Python events, `python-bridge.ts` delivers events to Python, `actor-store.ts` loads actors, `actors.ts` renders actors, `webfinger.ts` handles discovery, and `db.ts` reads bridge DB state.
+`server.ts` registers routes, `federation.ts` handles inbound AP, `federation-outbound.ts` sends signed activities, `normalize.ts` builds Python events, `python-bridge-client.ts` provides the authenticated Python bridge client, `actor-store.ts` resolves actors through that client, `actors.ts` renders actors, and `webfinger.ts` handles discovery.
 
 ## Important tables or payloads
 
-`users`, `local_communities`, `published_activity_objects`, `remote_subscribers`, gateway internal route payloads, and normalized Python event types.
+Authenticated `/internal/fedify/*` read-model payloads and normalized Python event types. The gateway does not own or read the database schema.

@@ -1,4 +1,4 @@
-import type { PublishedActivityObjectRow } from "./db.js";
+import type { PublishedActivityObjectRow } from "./python-bridge-client.js";
 
 const ACTIVITYSTREAMS_PUBLIC = "https://www.w3.org/ns/activitystreams#Public";
 
@@ -56,7 +56,7 @@ export function buildPublishedActivityObjectJson(
  *
  * Mastodon dereferences Announce.object.id after accepting local-community
  * Announce(Create(Page|Note)) deliveries, so the stored Create must be
- * fetchable from SQLite instead of existing only inside the original POST body.
+ * fetchable from bridge-owned persistence instead of existing only inside the original POST body.
  */
 export function buildPublishedCreateActivityJson(
   record: PublishedActivityObjectRow,
@@ -82,7 +82,7 @@ function canonicalActorUrlForRecord(record: PublishedActivityObjectRow): string 
 }
 
 function normalizePublishedTimestamp(value: string): string {
-  // SQLite rows can contain either RFC3339 strings or Python datetime strings.
+  // Persisted rows can contain either RFC3339 strings or Python datetime strings.
   // Mastodon expects ActivityStreams-compatible timestamps, so convert common
   // UTC-like storage forms to an explicit Z-suffixed ISO string.
   const normalized = value.includes("T") ? value : value.replace(" ", "T");

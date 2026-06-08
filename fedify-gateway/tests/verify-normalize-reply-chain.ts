@@ -28,7 +28,9 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 
 import { Create, Note, Person, Source } from "@fedify/vocab";
-import initSqlJs from "sql.js";
+import initSqlJs from "./support/sqlite-fixture.js";
+import { startPythonBridgeFixture } from "./support/python-bridge-fixture.js";
+import { PythonBridgeClient } from "../src/python-bridge-client.js";
 
 import {
   normalizeCreateActivity,
@@ -37,6 +39,11 @@ import {
 
 const LEMMY_ORIGIN = "https://lemmy.example";
 const COMMUNITY_URL = `${LEMMY_ORIGIN}/c/testcommunity`;
+
+const EMPTY_LOOKUP_CLIENT = {
+  async loadMessageMappingByObjectId(): Promise<null> { return null; },
+  async loadPublishedActivityObjectByObjectId(): Promise<null> { return null; },
+};
 
 async function main(): Promise<void> {
   await testLemmyReplyToGatewayPost();
@@ -132,7 +139,7 @@ async function testLemmyReplyToGatewayPost(): Promise<void> {
       },
     };
 
-    const event = await normalizeCreateActivityFromJson(createActivity);
+    const event = await normalizeCreateActivityFromJson(createActivity, { pythonBridgeClient: EMPTY_LOOKUP_CLIENT });
 
     assert.ok(event, "event must be normalized when inReplyTo is a gateway post URL");
     assert.equal(event.event_type, "comment.created");
@@ -179,7 +186,7 @@ async function testLemmyReplyToGatewayComment(): Promise<void> {
       },
     };
 
-    const event = await normalizeCreateActivityFromJson(createActivity);
+    const event = await normalizeCreateActivityFromJson(createActivity, { pythonBridgeClient: EMPTY_LOOKUP_CLIENT });
 
     assert.ok(event, "event must be normalized when inReplyTo is a gateway comment URL");
     assert.equal(event.event_type, "comment.created");
@@ -205,13 +212,11 @@ async function testLemmyReplyToGatewayComment(): Promise<void> {
  * message_mappings, and accepts the non-Lemmy status URL with lemmy_id = 0.
  */
 async function testDirectNoteReplyToMappedLocalComment(): Promise<void> {
-  const previousDatabaseUrl = process.env.DATABASE_URL;
   const tempDir = await mkdtemp(path.join(tmpdir(), "fedify-direct-note-parent-"));
   const databasePath = path.join(tempDir, "bridge.db");
-  const databaseUrl = `sqlite:///${databasePath}`;
 
   try {
-    await writeBridgeParentDatabase(databasePath);
+    const pythonBridgeInternalUrl = await writeBridgeParentDatabase(databasePath);
     // The normalization call receives databaseUrl explicitly, matching runtime
     // gateway config. This protects against cwd-relative DATABASE_URL fallbacks.
 
@@ -233,7 +238,7 @@ async function testDirectNoteReplyToMappedLocalComment(): Promise<void> {
       }),
     });
 
-    const event = await normalizeCreateActivity(activity, { databaseUrl });
+    const event = await normalizeCreateActivity(activity, { pythonBridgeClient: new PythonBridgeClient(pythonBridgeInternalUrl, "secret") });
 
     assert.ok(event, "direct Note reply to mapped local parent must normalize");
     assert.equal(event.event_type, "comment.created");
@@ -244,11 +249,6 @@ async function testDirectNoteReplyToMappedLocalComment(): Promise<void> {
     assert.equal(event.object.post_ap_id, "https://bridge.example/users/bob/post/100");
     assert.equal(event.object.post_lemmy_id, 0);
   } finally {
-    if (previousDatabaseUrl == null) {
-      delete process.env.DATABASE_URL;
-    } else {
-      process.env.DATABASE_URL = previousDatabaseUrl;
-    }
     rmSync(tempDir, { force: true, recursive: true });
   }
 }
@@ -262,13 +262,10 @@ async function testDirectNoteReplyToMappedLocalComment(): Promise<void> {
  * define Discord placement.
  */
 async function testDirectNoteReplyToUnmappedLocalCommentRejects(): Promise<void> {
-  const previousDatabaseUrl = process.env.DATABASE_URL;
   const tempDir = await mkdtemp(path.join(tmpdir(), "fedify-direct-note-unmapped-"));
   const databasePath = path.join(tempDir, "bridge.db");
-
   try {
-    await writeBridgeParentDatabase(databasePath, { includeMapping: false });
-    const databaseUrl = `sqlite:///${databasePath}`;
+    const pythonBridgeInternalUrl = await writeBridgeParentDatabase(databasePath, { includeMapping: false });
 
     const activity = new Create({
       id: new URL("https://mastodon.example/users/alice/statuses/901/activity"),
@@ -287,15 +284,10 @@ async function testDirectNoteReplyToUnmappedLocalCommentRejects(): Promise<void>
     });
 
     await assert.rejects(
-      () => normalizeCreateActivity(activity, { databaseUrl }),
+      () => normalizeCreateActivity(activity, { pythonBridgeClient: new PythonBridgeClient(pythonBridgeInternalUrl, "secret") }),
       /Could not resolve community actor id for comment reply parent/,
     );
   } finally {
-    if (previousDatabaseUrl == null) {
-      delete process.env.DATABASE_URL;
-    } else {
-      process.env.DATABASE_URL = previousDatabaseUrl;
-    }
     rmSync(tempDir, { force: true, recursive: true });
   }
 }
@@ -308,7 +300,7 @@ async function testDirectNoteReplyToUnmappedLocalCommentRejects(): Promise<void>
 async function writeBridgeParentDatabase(
   databasePath: string,
   options: { includeMapping?: boolean } = {},
-): Promise<void> {
+): Promise<string> {
   const sqlJs = await initSqlJs();
   const db = new sqlJs.Database();
   try {
@@ -405,6 +397,7 @@ async function writeBridgeParentDatabase(
       );
     }
     await writeFile(databasePath, Buffer.from(db.export()));
+    return await startPythonBridgeFixture(databasePath);
   } finally {
     db.close();
   }

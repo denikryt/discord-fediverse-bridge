@@ -4,10 +4,8 @@ import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 
-import {
-  loadPublishedActivityObjectByActivityIdForDatabaseUrl,
-  loadPublishedActivityObjectByObjectIdForDatabaseUrl,
-} from "../src/db.js";
+import { PythonBridgeClient } from "../src/python-bridge-client.js";
+import { startPythonBridgeFixture } from "./support/python-bridge-fixture.js";
 import { normalizeCreateActivityFromJson } from "../src/normalize.js";
 import { createGatewayApp } from "../src/server.js";
 import {
@@ -47,10 +45,9 @@ async function testStoredPostBuildsPageJsonAndResolvesWithoutHttp(): Promise<voi
         in_reply_to_object_id: null,
       },
     ],
-    async (databaseUrl) => {
-      process.env.DATABASE_URL = databaseUrl;
-      const storedPost = await loadPublishedActivityObjectByObjectIdForDatabaseUrl(
-        databaseUrl,
+    async (pythonBridgeInternalUrl) => {
+      const pythonBridgeClient = new PythonBridgeClient(pythonBridgeInternalUrl, "secret");
+      const storedPost = await pythonBridgeClient.loadPublishedActivityObjectByObjectId(
         `${BRIDGE_ORIGIN}/users/alice/post/100`,
       );
       assert.ok(storedPost, "stored post must be readable from the shared DB");
@@ -83,9 +80,9 @@ async function testStoredPostBuildsPageJsonAndResolvesWithoutHttp(): Promise<voi
           inReplyTo: `${BRIDGE_ORIGIN}/users/alice/post/100`,
           published: "2026-05-08T12:00:00Z",
         },
-      });
+      }, { pythonBridgeClient });
 
-      assert.ok(event, "DB-backed local post must resolve without any HTTP route");
+      assert.ok(event, "Bridge-backed local post must resolve without public HTTP dereference");
       assert.equal(event.event_type, "comment.created");
       assert.equal(event.object.post_ap_id, `${BRIDGE_ORIGIN}/users/alice/post/100`);
       assert.equal(event.object.parent_ap_id, null);
@@ -120,10 +117,9 @@ async function testStoredCommentWalksLocalReplyChainWithoutHttp(): Promise<void>
         in_reply_to_object_id: `${BRIDGE_ORIGIN}/users/alice/post/100`,
       },
     ],
-    async (databaseUrl) => {
-      process.env.DATABASE_URL = databaseUrl;
-      const storedComment = await loadPublishedActivityObjectByObjectIdForDatabaseUrl(
-        databaseUrl,
+    async (pythonBridgeInternalUrl) => {
+      const pythonBridgeClient = new PythonBridgeClient(pythonBridgeInternalUrl, "secret");
+      const storedComment = await pythonBridgeClient.loadPublishedActivityObjectByObjectId(
         `${BRIDGE_ORIGIN}/users/alice/comment/200`,
       );
       assert.ok(storedComment, "stored comment must be readable from the shared DB");
@@ -155,9 +151,9 @@ async function testStoredCommentWalksLocalReplyChainWithoutHttp(): Promise<void>
           inReplyTo: `${BRIDGE_ORIGIN}/users/alice/comment/200`,
           published: "2026-05-08T12:01:00Z",
         },
-      });
+      }, { pythonBridgeClient });
 
-      assert.ok(event, "DB-backed local comment chain must resolve without HTTP");
+      assert.ok(event, "Bridge-backed local comment chain must resolve without public HTTP dereference");
       assert.equal(event.event_type, "comment.created");
       assert.equal(event.object.parent_ap_id, `${BRIDGE_ORIGIN}/users/alice/comment/200`);
       assert.equal(event.object.post_ap_id, `${BRIDGE_ORIGIN}/users/alice/post/100`);
@@ -194,8 +190,7 @@ async function testStoredActivitiesLoadByActivityIdAndRenderCreate(): Promise<vo
       },
     ],
     async (databaseUrl) => {
-      const storedPost = await loadPublishedActivityObjectByActivityIdForDatabaseUrl(
-        databaseUrl,
+      const storedPost = await new PythonBridgeClient(databaseUrl, "secret").loadPublishedActivityObjectByActivityId(
         `${BRIDGE_ORIGIN}/users/alice/activities/create/post/100`,
       );
       assert.ok(storedPost, "stored post Create must be readable by activity id");
@@ -212,8 +207,7 @@ async function testStoredActivitiesLoadByActivityIdAndRenderCreate(): Promise<vo
       assert.equal(postObject.content, "<p>hello from discord</p>");
       assert.equal(postObject.published, "2026-05-08T12:00:00Z");
 
-      const storedComment = await loadPublishedActivityObjectByActivityIdForDatabaseUrl(
-        databaseUrl,
+      const storedComment = await new PythonBridgeClient(databaseUrl, "secret").loadPublishedActivityObjectByActivityId(
         `${BRIDGE_ORIGIN}/users/alice/activities/create/comment/200`,
       );
       assert.ok(storedComment, "stored comment Create must be readable by activity id");
@@ -305,8 +299,7 @@ async function testActivityLookupHandlesUnknownAndMissingTable(): Promise<void> 
       },
     ],
     async (databaseUrl) => {
-      const missing = await loadPublishedActivityObjectByActivityIdForDatabaseUrl(
-        databaseUrl,
+      const missing = await new PythonBridgeClient(databaseUrl, "secret").loadPublishedActivityObjectByActivityId(
         `${BRIDGE_ORIGIN}/users/alice/activities/create/post/missing`,
       );
       assert.equal(missing, null);
@@ -314,8 +307,7 @@ async function testActivityLookupHandlesUnknownAndMissingTable(): Promise<void> 
   );
 
   await withEmptyDatabase(async (databaseUrl) => {
-    const missingTable = await loadPublishedActivityObjectByActivityIdForDatabaseUrl(
-      databaseUrl,
+    const missingTable = await new PythonBridgeClient(databaseUrl, "secret").loadPublishedActivityObjectByActivityId(
       `${BRIDGE_ORIGIN}/users/alice/activities/create/post/100`,
     );
     assert.equal(missingTable, null);
@@ -338,12 +330,10 @@ async function testStoredObjectsRemainReadableAcrossFreshDbOpens(): Promise<void
       },
     ],
     async (databaseUrl) => {
-      const firstRead = await loadPublishedActivityObjectByObjectIdForDatabaseUrl(
-        databaseUrl,
+      const firstRead = await new PythonBridgeClient(databaseUrl, "secret").loadPublishedActivityObjectByObjectId(
         `${BRIDGE_ORIGIN}/users/alice/post/999`,
       );
-      const secondRead = await loadPublishedActivityObjectByObjectIdForDatabaseUrl(
-        databaseUrl,
+      const secondRead = await new PythonBridgeClient(databaseUrl, "secret").loadPublishedActivityObjectByObjectId(
         `${BRIDGE_ORIGIN}/users/alice/post/999`,
       );
 
@@ -360,7 +350,6 @@ async function withPublishedObjectDatabase(
 ): Promise<void> {
   const tempDir = mkdtempSync(path.join(tmpdir(), "published-object-store-"));
   const databasePath = path.join(tempDir, "published-objects.sqlite3");
-  const databaseUrl = `sqlite:///${databasePath}`;
 
   try {
     execFileSync(
@@ -375,7 +364,7 @@ async function withPublishedObjectDatabase(
         },
       },
     );
-    await fn(databaseUrl);
+    await fn(await startPythonBridgeFixture(databasePath));
   } finally {
     rmSync(tempDir, { force: true, recursive: true });
   }
@@ -385,7 +374,6 @@ async function withPublishedObjectDatabase(
 async function withEmptyDatabase(fn: (databaseUrl: string) => Promise<void>): Promise<void> {
   const tempDir = mkdtempSync(path.join(tmpdir(), "published-object-store-empty-"));
   const databasePath = path.join(tempDir, "empty.sqlite3");
-  const databaseUrl = `sqlite:///${databasePath}`;
 
   try {
     execFileSync(
@@ -399,26 +387,23 @@ async function withEmptyDatabase(fn: (databaseUrl: string) => Promise<void>): Pr
         },
       },
     );
-    await fn(databaseUrl);
+    await fn(await startPythonBridgeFixture(databasePath));
   } finally {
     rmSync(tempDir, { force: true, recursive: true });
   }
 }
 
-function buildRouteTestConfig(databaseUrl: string): GatewayConfig {
+function buildRouteTestConfig(pythonBridgeInternalUrl: string): GatewayConfig {
   // Route-level tests only exercise DB-backed dereference routes, but the full
   // gateway app still needs a complete config object for middleware setup.
   return {
     actorIdentifier: "bridge",
     actorName: "Bridge",
     actorSummary: "Bridge summary",
-    bridgePrivateKeyJwkJson: null,
-    bridgePublicKeyJwkJson: null,
-    databaseUrl,
+    pythonBridgeInternalUrl,
     fedifyOrigin: BRIDGE_ORIGIN,
     port: 3000,
-    pythonBridgeEventsUrl: "http://127.0.0.1:8080/internal/activitypub/events",
-    pythonBridgeSharedSecret: "secret",
+        pythonBridgeSharedSecret: "secret",
     logLevel: "info",
   };
 }

@@ -14,7 +14,8 @@ import path from "node:path";
 import { webcrypto } from "node:crypto";
 
 import { exportJwk, generateCryptoKeyPair } from "@fedify/fedify";
-import initSqlJs from "sql.js";
+import initSqlJs, { seedBridgeActorJwk } from "./support/sqlite-fixture.js";
+import { startPythonBridgeFixture } from "./support/python-bridge-fixture.js";
 
 import { buildLocalCommunityGroupActor } from "../src/actors.js";
 import { loadLocalCommunityIdentity } from "../src/actor-store.js";
@@ -153,6 +154,8 @@ function installFetchRecorder(
   /** Capture signed JSON relay delivery so key identity is verified at the HTTP signature boundary. */
   const originalFetch = globalThis.fetch;
   globalThis.fetch = async (input: RequestInfo | URL, init?: RequestInit): Promise<Response> => {
+    const target = input instanceof URL ? input.href : String(input);
+    if (target.startsWith("http://127.0.0.1:")) return await originalFetch(input, init);
     const headers = new Headers(init?.headers);
     deliveries.push({
       inboxId: input instanceof URL ? input.href : String(input),
@@ -201,6 +204,7 @@ async function buildConfig(): Promise<GatewayConfig> {
   const sqlJs = await initSqlJs();
   const tempDir = await mkdtemp(path.join(tmpdir(), "fedify-canonical-community-key-"));
   const databasePath = path.join(tempDir, "bridge.db");
+  let pythonBridgeInternalUrl = "";
   const bridgeKeys = await generateCryptoKeyPair("RSASSA-PKCS1-v1_5");
   const communityKeys = await generateCryptoKeyPair("RSASSA-PKCS1-v1_5");
   const db = new sqlJs.Database();
@@ -255,7 +259,14 @@ async function buildConfig(): Promise<GatewayConfig> {
         "active",
       ],
     );
+    seedBridgeActorJwk(
+      db,
+      `${TEST_ORIGIN}actors/bridge`,
+      JSON.stringify(await exportJwk(bridgeKeys.privateKey)),
+      JSON.stringify(await exportJwk(bridgeKeys.publicKey)),
+    );
     await writeFile(databasePath, Buffer.from(db.export()));
+    pythonBridgeInternalUrl = await startPythonBridgeFixture(databasePath);
   } finally {
     db.close();
   }
@@ -264,13 +275,10 @@ async function buildConfig(): Promise<GatewayConfig> {
     actorIdentifier: "bridge",
     actorName: "Bridge",
     actorSummary: "Bridge summary",
-    bridgePrivateKeyJwkJson: JSON.stringify(await exportJwk(bridgeKeys.privateKey)),
-    bridgePublicKeyJwkJson: JSON.stringify(await exportJwk(bridgeKeys.publicKey)),
-    databaseUrl: `sqlite:///${databasePath}`,
+    pythonBridgeInternalUrl,
     fedifyOrigin: TEST_ORIGIN,
     port: 3000,
-    pythonBridgeEventsUrl: "http://127.0.0.1:8080/internal/activitypub/events",
-    pythonBridgeSharedSecret: "secret",
+        pythonBridgeSharedSecret: "secret",
     logLevel: "info",
   };
 }

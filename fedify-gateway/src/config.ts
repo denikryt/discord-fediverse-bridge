@@ -6,13 +6,9 @@ export interface GatewayConfig {
   actorIdentifier: string;
   actorName: string;
   actorSummary: string;
-  // Optional direct injection is retained only for isolated compatibility tests; loadConfig never populates it.
-  bridgePrivateKeyJwkJson?: string | null;
-  bridgePublicKeyJwkJson?: string | null;
-  databaseUrl: string;
   fedifyOrigin: string;
   port: number;
-  pythonBridgeEventsUrl: string;
+  pythonBridgeInternalUrl: string;
   pythonBridgeSharedSecret: string;
   logLevel: "info" | "debug";
 }
@@ -49,6 +45,17 @@ function buildPythonBridgeEventsUrl(): string {
   return `http://${host}:${port}/internal/activitypub/events`;
 }
 
+function derivePythonBridgeInternalUrl(): string {
+  const eventsUrl = process.env.BRIDGE_EVENTS_URL;
+  if (eventsUrl) {
+    const suffix = "/internal/activitypub/events";
+    return eventsUrl.endsWith(suffix)
+      ? eventsUrl.slice(0, -suffix.length)
+      : eventsUrl.replace(/\/+$/, "");
+  }
+  return buildPythonBridgeEventsUrl().replace(/\/internal\/activitypub\/events$/, "");
+}
+
 export function loadConfig(): GatewayConfig {
   // Defaults keep local development ergonomic while still failing fast for the
   // secrets and origins that define federation identity.
@@ -59,11 +66,9 @@ export function loadConfig(): GatewayConfig {
     actorSummary:
       process.env.FEDIFY_ACTOR_SUMMARY ??
       "Receives ActivityPub activities from Lemmy and forwards normalized events to the Python bridge.",
-    databaseUrl: process.env.DATABASE_URL ?? "sqlite:///../bridge.db",
-    fedifyOrigin:
-      process.env.PUBLIC_BASE_URL ?? requireEnv("FEDIFY_ORIGIN"),
+    fedifyOrigin: requireEnv("PUBLIC_BASE_URL"),
     port: parsePort(process.env.GATEWAY_BIND_PORT, 3000),
-    pythonBridgeEventsUrl: process.env.BRIDGE_EVENTS_URL ?? buildPythonBridgeEventsUrl(),
+    pythonBridgeInternalUrl: derivePythonBridgeInternalUrl(),
     pythonBridgeSharedSecret: requireEnv("FEDIFY_SHARED_SECRET"),
     logLevel,
   };

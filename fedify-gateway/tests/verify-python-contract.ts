@@ -10,7 +10,7 @@ import {
   normalizeCreateActivity,
   normalizeCreateActivityFromJson,
 } from "../src/normalize.js";
-import { deliverEventToPythonBridge } from "../src/python-bridge.js";
+import { PythonBridgeClient } from "../src/python-bridge-client.js";
 
 const TEST_ORIGIN = "https://forum.example/";
 const TEST_ACTOR_URL = `${TEST_ORIGIN}u/alice`;
@@ -20,6 +20,10 @@ const TEST_COMMENT_ACTIVITY_URL = `${TEST_ORIGIN}activities/create/comment-1`;
 const TEST_POST_URL = `${TEST_ORIGIN}post/123`;
 const TEST_COMMENT_URL = `${TEST_ORIGIN}comment/456`;
 const TEST_SHARED_SECRET = "secret";
+const EMPTY_LOOKUP_CLIENT = {
+  async loadMessageMappingByObjectId(): Promise<null> { return null; },
+  async loadPublishedActivityObjectByObjectId(): Promise<null> { return null; },
+};
 
 // This script locks the contract between the Node gateway and the Python
 // bridge by verifying both normalization paths and HTTP delivery shape.
@@ -50,6 +54,7 @@ async function main(): Promise<void> {
         url: new URL(TEST_POST_URL),
       }),
     }),
+    { pythonBridgeClient: EMPTY_LOOKUP_CLIENT },
   );
 
   const commentEvent = await normalizeCreateActivity(
@@ -67,6 +72,7 @@ async function main(): Promise<void> {
         url: new URL(TEST_COMMENT_URL),
       }),
     }),
+    { pythonBridgeClient: EMPTY_LOOKUP_CLIENT },
   );
 
   assert.ok(postEvent);
@@ -87,7 +93,7 @@ async function main(): Promise<void> {
       inReplyTo: TEST_POST_URL,
       url: TEST_COMMENT_URL,
     },
-  });
+  }, { pythonBridgeClient: EMPTY_LOOKUP_CLIENT });
 
   assert.ok(announceWrappedComment);
   assert.equal(announceWrappedComment.event_type, "comment.created");
@@ -131,11 +137,7 @@ async function verifyHttpDelivery(
   }
 
   try {
-    await deliverEventToPythonBridge(
-      `http://127.0.0.1:${address.port}/internal/activitypub/events`,
-      TEST_SHARED_SECRET,
-      event,
-    );
+    await new PythonBridgeClient(`http://127.0.0.1:${address.port}`, TEST_SHARED_SECRET).deliverEvent(event);
   } finally {
     await new Promise<void>((resolve, reject) =>
       server.close((error) => (error ? reject(error) : resolve())),

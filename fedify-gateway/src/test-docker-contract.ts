@@ -11,5 +11,7 @@ assert.match(dockerfile, /COPY VERSION \.\/VERSION/);
 assert.match(dockerfile, /USER bridge/);
 assert.match(dockerfile, /EXPOSE 3000/);
 assert.match(compose, /BRIDGE_EVENTS_URL: http:\/\/bridge:8080\/internal\/activitypub\/events/);
-assert.match(compose, /DATABASE_URL: sqlite:\/\/\/\/data\/bridge\.db/);
+const gatewayBlock = compose.split("  fedify-gateway:")[1]?.split("\n  backup:")[0] ?? "";
+assert.doesNotMatch(gatewayBlock, /DATABASE_URL/);
+assert.doesNotMatch(gatewayBlock, /bridge-data:\/data/);
 console.log("Docker gateway contract verified.");

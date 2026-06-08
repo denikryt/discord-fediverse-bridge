@@ -5,15 +5,12 @@ import { Note } from "@fedify/vocab";
 import { Page } from "@fedify/vocab";
 import { type Object as ActivityObject } from "@fedify/vocab";
 
-import {
-  loadMessageMappingByObjectIdForDatabaseUrl,
-  loadPublishedActivityObjectByObjectIdForDatabaseUrl,
-} from "./db.js";
+import type { PythonBridgeReadClient } from "./python-bridge-client.js";
 import type { BridgeEvent } from "./types.js";
 
 export interface NormalizeOptions {
-  /** Shared bridge database URL resolved by the gateway configuration. */
-  databaseUrl?: string;
+  /** Internal bridge lookup boundary used for local parent/object resolution. */
+  pythonBridgeClient?: PythonBridgeReadClient;
 }
 
 export async function normalizeCreateActivity(
@@ -706,10 +703,7 @@ async function loadLocalParentMessageMapping(
 } | null> {
   // Use message_mappings, not published_activity_objects, because only the
   // mapping table proves that the parent has Discord placement state.
-  const row = await loadMessageMappingByObjectIdForDatabaseUrl(
-    resolveDatabaseUrl(options),
-    objectId,
-  );
+  const row = await requirePythonBridgeClient(options).loadMessageMappingByObjectId(objectId);
   if (row == null) {
     return null;
   }
@@ -719,18 +713,14 @@ async function loadLocalParentMessageMapping(
   };
 }
 
-function resolveDatabaseUrl(options: NormalizeOptions): string {
-  // Runtime callers pass the gateway-resolved database URL so normalization
-  // reads the same shared bridge DB as actor routes and published-object routes.
-  if (options.databaseUrl) {
-    return options.databaseUrl;
+function requirePythonBridgeClient(options: NormalizeOptions): PythonBridgeReadClient {
+  // Normalization must use the same bridge-owned persistence boundary as the
+  // runtime gateway; silently falling back to a local database would recreate
+  // the ownership split this module is designed to remove.
+  if (options.pythonBridgeClient == null) {
+    throw new Error("Python bridge lookup client is required for local object resolution");
   }
-  // Tests and standalone verify scripts may still provide DATABASE_URL directly,
-  // but production code must not depend on cwd-relative fallbacks here.
-  if (process.env.DATABASE_URL) {
-    return process.env.DATABASE_URL;
-  }
-  return "sqlite:///../bridge.db";
+  return options.pythonBridgeClient;
 }
 
 function logCommunityResolution(
@@ -761,10 +751,7 @@ async function loadStoredActivityObject(
 } | null> {
   // Local objects are resolved from the shared DB first so reply chains remain
   // valid even when no HTTP route or in-memory state is available yet.
-  const row = await loadPublishedActivityObjectByObjectIdForDatabaseUrl(
-    resolveDatabaseUrl(options),
-    objectId,
-  );
+  const row = await requirePythonBridgeClient(options).loadPublishedActivityObjectByObjectId(objectId);
   if (row == null) {
     return null;
   }

@@ -8,7 +8,7 @@ import type { Federation } from "@fedify/fedify";
 import type { GatewayConfig } from "./config.js";
 import { appendDebugFileLog } from "./debug-file-log.js";
 import { loadActorKeyPair } from "./actor-store.js";
-import { loadAcceptedRemoteSubscribersByActorUrl } from "./db.js";
+import { loadAcceptedRemoteSubscribersByActorUrl } from "./python-bridge-client.js";
 import {
   loadLocalCommunitySigningKey,
   loadLocalCommunitySigningKeyByActorUrl,

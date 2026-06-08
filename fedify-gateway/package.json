@@ -7,7 +7,7 @@
     "dev": "node --env-file=../.env ./node_modules/.bin/tsx watch src/server.ts",
     "start": "node --env-file=../.env ./node_modules/.bin/tsx src/server.ts",
     "check": "tsc --noEmit",
-    "test": "node --env-file=../.env ./node_modules/.bin/tsx tests/verify-env-loading.ts && node --env-file=../.env ./node_modules/.bin/tsx tests/verify-actor-layer.ts && node --env-file=../.env ./node_modules/.bin/tsx tests/verify-user-canonical-actor.ts && node --env-file=../.env ./node_modules/.bin/tsx tests/verify-local-community-actor.ts && node --env-file=../.env ./node_modules/.bin/tsx tests/verify-local-community-discovery.ts && node --env-file=../.env ./node_modules/.bin/tsx tests/verify-local-community-follow.ts && node --env-file=../.env ./node_modules/.bin/tsx tests/verify-local-community-unfollow.ts && node --env-file=../.env ./node_modules/.bin/tsx tests/verify-follow-activity-id.ts && node --env-file=../.env ./node_modules/.bin/tsx tests/verify-local-community-publish.ts && node --env-file=../.env ./node_modules/.bin/tsx tests/verify-local-community-update-delete.ts && node --env-file=../.env ./node_modules/.bin/tsx tests/verify-local-community-relay.ts && node --env-file=../.env ./node_modules/.bin/tsx tests/verify-local-community-canonical-key.ts && node --env-file=../.env ./node_modules/.bin/tsx tests/verify-remote-subscriber-naming.ts && node --env-file=../.env ./node_modules/.bin/tsx tests/verify-webfinger-discovery.ts && node --env-file=../.env ./node_modules/.bin/tsx tests/verify-publish-contract.ts && node --env-file=../.env ./node_modules/.bin/tsx tests/verify-python-contract.ts && node --env-file=../.env ./node_modules/.bin/tsx tests/verify-accept-follow.ts && node --env-file=../.env ./node_modules/.bin/tsx tests/verify-gateway-url.ts && node --env-file=../.env ./node_modules/.bin/tsx tests/verify-unfollow-activity.ts && node --env-file=../.env ./node_modules/.bin/tsx tests/verify-discord-to-lemmy-publish.ts && node --env-file=../.env ./node_modules/.bin/tsx tests/verify-normalize-local-community-create.ts && node --env-file=../.env ./node_modules/.bin/tsx tests/verify-normalize-reply-chain.ts && node --env-file=../.env ./node_modules/.bin/tsx tests/verify-published-object-store.ts && node --env-file=../.env ./node_modules/.bin/tsx tests/verify-normalize-update-delete.ts && node --env-file=../.env ./node_modules/.bin/tsx tests/verify-direct-update-delete-delivery.ts && npm run test:project-version && npm run test:docker-contract && npm run test:bridge-key-store",
+    "test": "npm run check && for test in tests/verify-*.ts; do echo \"Running $test\"; ./node_modules/.bin/tsx \"$test\" || exit 1; done",
     "follow-community": "node --env-file=../.env ./node_modules/.bin/tsx src/follow-community-cli.ts",
     "unfollow-community": "node --env-file=../.env ./node_modules/.bin/tsx src/unfollow-community-cli.ts",
     "verify:local-community-canonical-key": "node --env-file=../.env ./node_modules/.bin/tsx tests/verify-local-community-canonical-key.ts",
@@ -20,12 +20,10 @@
     "@fedify/hono": "^2.2.0",
     "@fedify/vocab": "^2.2.0",
     "@hono/node-server": "^1.19.6",
-    "hono": "^4.12.16",
-    "sql.js": "^1.14.1"
+    "hono": "^4.12.16"
   },
   "devDependencies": {
     "@types/node": "^24.9.0",
-    "@types/sql.js": "^1.4.11",
     "tsx": "^4.20.6",
     "typescript": "^5.9.3"
   }

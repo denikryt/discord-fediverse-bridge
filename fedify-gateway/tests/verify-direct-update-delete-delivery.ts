@@ -96,6 +96,12 @@ async function startCaptureServer(): Promise<{
   /** Start one fake Python bridge boundary that records the last request body. */
   let body: string | null = null;
   const server = createServer((req, res) => {
+    if ((req.url ?? "").startsWith("/internal/fedify/")) {
+      res.statusCode = 404;
+      res.setHeader("Content-Type", "application/json");
+      res.end(JSON.stringify({ detail: "not found" }));
+      return;
+    }
     req.setEncoding("utf8");
     req.on("data", (chunk) => {
       body = (body ?? "") + chunk;
@@ -128,12 +134,9 @@ function buildConfig(eventsUrl: string): GatewayContextData {
     actorIdentifier: "bridge",
     actorName: "Bridge",
     actorSummary: "Bridge summary",
-    bridgePrivateKeyJwkJson: "{}",
-    bridgePublicKeyJwkJson: "{}",
-    databaseUrl: "sqlite:///tmp/bridge.db",
     fedifyOrigin: TEST_ORIGIN,
     port: 3000,
-    pythonBridgeEventsUrl: eventsUrl,
+    pythonBridgeInternalUrl: eventsUrl.replace("/internal/activitypub/events", ""),
     pythonBridgeSharedSecret: "secret",
     logLevel: "info",
     activitypubRawBodySha256: undefined,

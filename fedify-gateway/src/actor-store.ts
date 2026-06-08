@@ -12,7 +12,7 @@ import {
   loadRegisteredUserByUsername,
   type LocalCommunityRow,
   type RegisteredUserRow,
-} from "./db.js";
+} from "./python-bridge-client.js";
 
 export interface BridgeActorIdentity {
   // The bridge actor is config-backed because the deployment has exactly one
@@ -151,18 +151,6 @@ async function loadBridgeActorKeyPair(
   // The bridge actor key is durable Python-owned state. Missing storage is a
   // startup/migration error rather than a reason to create a temporary identity.
   const row = await loadBridgeActorKey(config);
-  if (row == null) {
-    // Older isolated verifier fixtures inject a JWK pair directly. Production
-    // loadConfig never supplies these fields, so runtime still fails when DB
-    // bootstrap has not completed instead of generating an ephemeral identity.
-    if (config.bridgePrivateKeyJwkJson != null && config.bridgePublicKeyJwkJson != null) {
-      return {
-        privateKey: await importJwk(JSON.parse(config.bridgePrivateKeyJwkJson), "private"),
-        publicKey: await importJwk(JSON.parse(config.bridgePublicKeyJwkJson), "public"),
-      };
-    }
-    throw new Error("Bridge actor keypair is not initialized in the shared database");
-  }
   if (row.algorithm !== "RSASSA-PKCS1-v1_5") {
     throw new Error(`Unsupported bridge actor key algorithm: ${row.algorithm}`);
   }

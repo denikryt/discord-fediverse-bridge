@@ -11,7 +11,7 @@ import process from "node:process";
 
 const BRIDGE_GATEWAY_URL = process.env.BRIDGE_GATEWAY_URL;
 const SHARED_SECRET = process.env.FEDIFY_SHARED_SECRET;
-const DATABASE_URL = process.env.DATABASE_URL ?? "sqlite:///../bridge.db";
+const PYTHON_BRIDGE_INTERNAL_URL = process.env.PYTHON_BRIDGE_INTERNAL_URL ?? "http://127.0.0.1:8080";
 
 async function sendUnfollow(communityActorUrl: string, followActivityId: string): Promise<void> {
   if (!BRIDGE_GATEWAY_URL) {
@@ -36,21 +36,28 @@ async function sendUnfollow(communityActorUrl: string, followActivityId: string)
 }
 
 async function listSubscriptions(): Promise<{ communityActorUrl: string; followActivityId: string; status: string }[]> {
-  // Read directly from SQLite via python so we don't need a JS DB driver.
-  const { execSync } = await import("node:child_process");
-  const dbPath = DATABASE_URL.replace("sqlite:///", "");
-  const output = execSync(
-    `python3 -c "
-import sqlite3, json
-conn = sqlite3.connect('${dbPath}')
-rows = conn.execute('SELECT lemmy_community_actor_id, follow_activity_id, status FROM channel_community_subscriptions WHERE follow_activity_id IS NOT NULL').fetchall()
-print(json.dumps([{'communityActorUrl': r[0], 'followActivityId': r[1], 'status': r[2]} for r in rows]))
-conn.close()
-"`,
-    { encoding: "utf8" },
-  );
-  return JSON.parse(output.trim());
+  // Operator listing uses the same authenticated Python-owned persistence boundary
+  // as the runtime gateway, so this CLI never needs database file access.
+  if (!SHARED_SECRET) {
+    throw new Error("FEDIFY_SHARED_SECRET is required to list subscriptions");
+  }
+  const response = await fetch(`${PYTHON_BRIDGE_INTERNAL_URL}/internal/fedify/channel-community-subscriptions`, {
+    headers: { Authorization: `Bearer ${SHARED_SECRET}` },
+  });
+  if (!response.ok) {
+    throw new Error(`Python bridge subscription listing failed: ${response.status} ${response.statusText}`);
+  }
+  const payload = await response.json() as { items?: Array<{ community_actor_url: string; follow_activity_id: string; status: string }> };
+  if (!Array.isArray(payload.items)) {
+    throw new Error("Python bridge returned a malformed subscription listing");
+  }
+  return payload.items.map((row) => ({
+    communityActorUrl: row.community_actor_url,
+    followActivityId: row.follow_activity_id,
+    status: row.status,
+  }));
 }
+
 
 const args = process.argv.slice(2);
 

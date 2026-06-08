@@ -12,7 +12,8 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 
 import { exportJwk, generateCryptoKeyPair } from "@fedify/fedify";
-import initSqlJs from "sql.js";
+import initSqlJs, { seedBridgeActorJwk } from "./support/sqlite-fixture.js";
+import { startPythonBridgeFixture } from "./support/python-bridge-fixture.js";
 
 import { deleteContent, updateContent } from "../src/federation-outbound.js";
 import type { GatewayConfig } from "../src/config.js";
@@ -103,6 +104,8 @@ function installFetchRecorder(deliveries: DeliveryRecord[]): () => void {
   /** Capture exact signed JSON deliveries without external network dependency. */
   const originalFetch = globalThis.fetch;
   globalThis.fetch = async (input: RequestInfo | URL, init?: RequestInit): Promise<Response> => {
+    const targetUrl = input instanceof URL ? input.href : String(input);
+    if (targetUrl.startsWith("http://127.0.0.1:")) return await originalFetch(input, init);
     deliveries.push({
       inboxId: input instanceof URL ? input.href : String(input),
       payload: JSON.parse(String(init?.body ?? "{}")) as Record<string, unknown>,
@@ -119,6 +122,7 @@ async function buildConfig(): Promise<GatewayConfig> {
   const sqlJs = await initSqlJs();
   const tempDir = await mkdtemp(path.join(tmpdir(), "fedify-local-community-update-delete-"));
   const databasePath = path.join(tempDir, "bridge.db");
+  let pythonBridgeInternalUrl = "";
   const bridgeKeys = await generateCryptoKeyPair("RSASSA-PKCS1-v1_5");
   const communityKeys = await generateCryptoKeyPair("RSASSA-PKCS1-v1_5");
   const db = new sqlJs.Database();
@@ -200,7 +204,14 @@ async function buildConfig(): Promise<GatewayConfig> {
           (1, 'https://mastodon.example/ap/users/bob', 'https://mastodon.example/ap/users/bob/inbox', 'follow-2', 'accepted', 'mastodon_compat')
       `,
     );
+    seedBridgeActorJwk(
+      db,
+      `${TEST_ORIGIN}actors/bridge`,
+      JSON.stringify(await exportJwk(bridgeKeys.privateKey)),
+      JSON.stringify(await exportJwk(bridgeKeys.publicKey)),
+    );
     await writeFile(databasePath, Buffer.from(db.export()));
+    pythonBridgeInternalUrl = await startPythonBridgeFixture(databasePath);
   } finally {
     db.close();
   }
@@ -209,13 +220,10 @@ async function buildConfig(): Promise<GatewayConfig> {
     actorIdentifier: "bridge",
     actorName: "Bridge",
     actorSummary: "Bridge summary",
-    bridgePrivateKeyJwkJson: JSON.stringify(await exportJwk(bridgeKeys.privateKey)),
-    bridgePublicKeyJwkJson: JSON.stringify(await exportJwk(bridgeKeys.publicKey)),
-    databaseUrl: `sqlite:///${databasePath}`,
+    pythonBridgeInternalUrl,
     fedifyOrigin: TEST_ORIGIN,
     port: 3000,
-    pythonBridgeEventsUrl: "http://127.0.0.1:8080/internal/activitypub/events",
-    pythonBridgeSharedSecret: "secret",
+        pythonBridgeSharedSecret: "secret",
     logLevel: "info",
   };
 }

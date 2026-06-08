@@ -7,17 +7,19 @@ import type { PublishContentRequest } from "../src/types.js";
 
 const TEST_ORIGIN = "https://discord-bridge.example.com/";
 const TEST_COMMUNITY_URL = "https://lemmy.example/c/hackers";
+const EMPTY_LOOKUP_CLIENT = {
+  async loadMessageMappingByObjectId(): Promise<null> { return null; },
+  async loadPublishedActivityObjectByObjectId(): Promise<null> { return null; },
+};
+
 const TEST_CONFIG: GatewayConfig = {
   actorIdentifier: "bridge",
   actorName: "Bridge",
   actorSummary: "Bridge summary",
-  bridgePrivateKeyJwkJson: null,
-  bridgePublicKeyJwkJson: null,
-  databaseUrl: "sqlite:///./bridge.db",
+  pythonBridgeInternalUrl: "http://127.0.0.1:1",
   fedifyOrigin: TEST_ORIGIN,
   port: 3000,
-  pythonBridgeEventsUrl: "http://127.0.0.1:8080/internal/activitypub/events",
-  pythonBridgeSharedSecret: "secret",
+    pythonBridgeSharedSecret: "secret",
   logLevel: "info",
 };
 
@@ -42,10 +44,12 @@ async function main(): Promise<void> {
   const postEvent = await normalizeCreateActivity(
     buildPublishCreateActivity(TEST_CONFIG, postRequest, TEST_COMMUNITY_URL)
       .activity,
+    { pythonBridgeClient: EMPTY_LOOKUP_CLIENT },
   );
   const commentEvent = await normalizeCreateActivity(
     buildPublishCreateActivity(TEST_CONFIG, commentRequest, TEST_COMMUNITY_URL)
       .activity,
+    { pythonBridgeClient: EMPTY_LOOKUP_CLIENT },
   );
 
   assert.ok(postEvent);

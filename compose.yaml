@@ -30,13 +30,10 @@ services:
     env_file:
       - .env
     environment:
-      DATABASE_URL: sqlite:////data/bridge.db
       GATEWAY_BIND_PORT: 3000
       BRIDGE_EVENTS_URL: http://bridge:8080/internal/activitypub/events
     ports:
       - "127.0.0.1:${GATEWAY_PUBLISHED_PORT:-3000}:3000"
-    volumes:
-      - bridge-data:/data
     depends_on:
       bridge:
         condition: service_healthy

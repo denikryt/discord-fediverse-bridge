@@ -25,12 +25,9 @@ const config: GatewayConfig = {
   actorIdentifier: "bridge",
   actorName: "Bridge",
   actorSummary: "Bridge test actor",
-  bridgePrivateKeyJwkJson: null,
-  bridgePublicKeyJwkJson: null,
-  databaseUrl: `sqlite:///${join(temporaryDirectory, "bridge.db")}`,
   fedifyOrigin: "https://bridge.example.com/",
   port: 3000,
-  pythonBridgeEventsUrl: "http://127.0.0.1:8080/internal/activitypub/events",
+  pythonBridgeInternalUrl: "http://127.0.0.1:8080",
   pythonBridgeSharedSecret: "secret",
   logLevel: "info",
 };

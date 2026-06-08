@@ -7,11 +7,7 @@
  * actor identity fields, not internal Discord routing state.
  */
 import assert from "node:assert/strict";
-import { mkdtemp, writeFile } from "node:fs/promises";
-import { tmpdir } from "node:os";
-import path from "node:path";
-
-import initSqlJs from "sql.js";
+import { createServer } from "node:http";
 
 import { createGatewayApp } from "../src/server.js";
 import type { GatewayConfig } from "../src/config.js";
@@ -28,8 +24,8 @@ async function main(): Promise<void> {
  * Expected: the response lists sorted public identity fields only.
  */
 async function testDiscoveryEndpointReturnsStablePublicCommunitySummaries(): Promise<void> {
-  const config = await buildConfig();
-  const app = createGatewayApp(config);
+  const fixture = await buildConfig();
+  const app = createGatewayApp(fixture.config);
 
   const response = await app.request("/.well-known/discord-fediverse-bridge/communities");
   assert.equal(response.status, 200);
@@ -56,105 +52,40 @@ async function testDiscoveryEndpointReturnsStablePublicCommunitySummaries(): Pro
   );
   assert.equal(payload.communities[0]?.discord_forum_channel_id, undefined);
   assert.equal(payload.communities[0]?.discord_guild_id, undefined);
+  await fixture.close();
 }
 
-async function buildConfig(): Promise<GatewayConfig> {
-  /** Build a temporary Python-owned database with public local communities. */
-  const sqlJs = await initSqlJs();
-  const tempDir = await mkdtemp(path.join(tmpdir(), "fedify-local-community-discovery-"));
-  const databasePath = path.join(tempDir, "bridge.db");
-  const db = new sqlJs.Database();
+async function buildConfig(): Promise<{ config: GatewayConfig; close: () => Promise<void> }> {
+  /** Expose the Python bridge discovery read model over the authenticated boundary. */
+  const server = createServer((request, response) => {
+    if (request.url !== "/internal/fedify/communities") {
+      response.statusCode = 404;
+      response.end(JSON.stringify({ detail: "not found" }));
+      return;
+    }
+    response.setHeader("Content-Type", "application/json");
+    response.end(JSON.stringify({ items: [
+      { id: 2, slug: "announcements", display_name: "Announcements", summary: "One-way service updates.", actor_url: `${TEST_ORIGIN}communities/announcements` },
+      { id: 1, slug: "hackers", display_name: "Hackers", summary: "A local hackerspace forum.", actor_url: `${TEST_ORIGIN}communities/hackers` },
+    ] }));
+  });
+  await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
+  server.unref();
+  const address = server.address();
+  if (address == null || typeof address === "string") throw new Error("missing bridge fixture address");
 
-  try {
-    db.run(`
-      CREATE TABLE local_communities (
-        id INTEGER PRIMARY KEY AUTOINCREMENT,
-        discord_guild_id INTEGER NOT NULL,
-        discord_forum_channel_id INTEGER NOT NULL,
-        slug VARCHAR(255) NOT NULL,
-        display_name VARCHAR(255) NOT NULL,
-        summary TEXT NOT NULL,
-        actor_url VARCHAR(512) NOT NULL,
-        inbox_url VARCHAR(512) NOT NULL,
-        outbox_url VARCHAR(512) NOT NULL,
-        followers_url VARCHAR(512) NOT NULL,
-        public_key_pem TEXT NOT NULL,
-        private_key_pem TEXT NOT NULL,
-        status VARCHAR(32) NOT NULL,
-        created_at DATETIME DEFAULT CURRENT_TIMESTAMP
-      )
-    `);
-    insertCommunity(db, {
-      guildId: 10,
-      forumId: 100,
-      slug: "hackers",
-      title: "Hackers",
-      summary: "A local hackerspace forum.",
-    });
-    insertCommunity(db, {
-      guildId: 20,
-      forumId: 200,
-      slug: "announcements",
-      title: "Announcements",
-      summary: "One-way service updates.",
-    });
-    await writeFile(databasePath, Buffer.from(db.export()));
-  } finally {
-    db.close();
-  }
-
-  return {
+  return { config: {
     actorIdentifier: "bridge",
     actorName: "Discord Bridge",
     actorSummary: "Test gateway",
-    bridgePrivateKeyJwkJson: null,
-    bridgePublicKeyJwkJson: null,
-    databaseUrl: `sqlite:///${databasePath}`,
+    pythonBridgeInternalUrl: `http://127.0.0.1:${address.port}`,
     fedifyOrigin: TEST_ORIGIN,
     port: 3000,
-    pythonBridgeEventsUrl: "http://127.0.0.1:8081/internal/activitypub/events",
     pythonBridgeSharedSecret: "secret",
     logLevel: "info",
-  };
-}
-
-function insertCommunity(
-  db: initSqlJs.Database,
-  args: { guildId: number; forumId: number; slug: string; title: string; summary: string },
-): void {
-  /** Seed one local community row with the public fields discovery must expose. */
-  db.run(
-    `
-      INSERT INTO local_communities (
-        discord_guild_id,
-        discord_forum_channel_id,
-        slug,
-        display_name,
-        summary,
-        actor_url,
-        inbox_url,
-        outbox_url,
-        followers_url,
-        public_key_pem,
-        private_key_pem,
-        status
-      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-    `,
-    [
-      args.guildId,
-      args.forumId,
-      args.slug,
-      args.title,
-      args.summary,
-      `${TEST_ORIGIN}communities/${args.slug}`,
-      `${TEST_ORIGIN}communities/${args.slug}/inbox`,
-      `${TEST_ORIGIN}communities/${args.slug}/outbox`,
-      `${TEST_ORIGIN}communities/${args.slug}/followers`,
-      "public",
-      "private",
-      "active",
-    ],
-  );
+  }, close: async () => {
+    await new Promise<void>((resolve, reject) => server.close((error) => error ? reject(error) : resolve()));
+  } };
 }
 
 main().catch((error) => {

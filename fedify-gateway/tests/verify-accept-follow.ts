@@ -30,7 +30,7 @@ import { Accept } from "@fedify/vocab";
 
 import { storeRawActivity } from "../src/activitypub-raw-cache.js";
 import { buildFollowAcceptedEvent } from "../src/federation.js";
-import { deliverEventToPythonBridge } from "../src/python-bridge.js";
+import { PythonBridgeClient } from "../src/python-bridge-client.js";
 import type { FollowAcceptedEvent } from "../src/types.js";
 
 const TEST_ORIGIN = "https://discord-bridge.example.com/";
@@ -212,11 +212,7 @@ async function testDeliveryShapeMatchesPythonContract(): Promise<void> {
   }
 
   try {
-    await deliverEventToPythonBridge(
-      `http://127.0.0.1:${address.port}/internal/activitypub/events`,
-      TEST_SHARED_SECRET,
-      event,
-    );
+    await new PythonBridgeClient(`http://127.0.0.1:${address.port}`, TEST_SHARED_SECRET).deliverEvent(event);
   } finally {
     await new Promise<void>((resolve, reject) =>
       server.close((err) => (err ? reject(err) : resolve())),

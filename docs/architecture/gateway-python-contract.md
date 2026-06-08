@@ -4,7 +4,7 @@ This document explains the internal API contract between the Fedify gateway and 
 
 ## Gateway -> Python
 
-Endpoint: `POST /internal/activitypub/events`. Authentication: `FEDIFY_SHARED_SECRET` bearer token. Producer: `fedify-gateway/src/python-bridge.ts` after normalization. Consumer: `src/http_api.py` and `src/activitypub_handlers.py`.
+The gateway uses one authenticated internal bridge API. `POST /internal/activitypub/events` delivers normalized activities; `/internal/fedify/*` supplies actor identities, signing keys, subscribers, published objects, mappings, and operator subscription rows. Authentication uses the `FEDIFY_SHARED_SECRET` bearer token. The Python bridge is the only database owner.
 
 Common fields: `event_type`, `delivery_id`, `occurred_at`, `actor_id`, `community_actor_id`, and `object` or event-specific object payload.
 

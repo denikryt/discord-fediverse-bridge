@@ -2,10 +2,11 @@ import assert from "node:assert/strict";
 import { mkdtemp, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
-import initSqlJs from "sql.js";
+import initSqlJs from "./support/sqlite-fixture.js";
+import { startPythonBridgeFixture } from "./support/python-bridge-fixture.js";
 
 import type { GatewayConfig } from "../src/config.js";
-import { loadAcceptedRemoteSubscribersByActorUrl } from "../src/db.js";
+import { loadAcceptedRemoteSubscribersByActorUrl } from "../src/python-bridge-client.js";
 
 const TEST_ORIGIN = "https://discord-bridge.example.com/";
 
@@ -14,6 +15,7 @@ async function buildLegacyOnlyConfig(): Promise<GatewayConfig> {
   const sqlJs = await initSqlJs();
   const tempDir = await mkdtemp(path.join(tmpdir(), "fedify-remote-subscriber-naming-"));
   const databasePath = path.join(tempDir, "bridge.db");
+  let pythonBridgeInternalUrl = "";
   const db = new sqlJs.Database();
   const legacyRemoteSubscriberTable = ["local", "community", "followers"].join("_");
 
@@ -99,6 +101,7 @@ async function buildLegacyOnlyConfig(): Promise<GatewayConfig> {
       ],
     );
     await writeFile(databasePath, Buffer.from(db.export()));
+    pythonBridgeInternalUrl = await startPythonBridgeFixture(databasePath);
   } finally {
     db.close();
   }
@@ -107,13 +110,10 @@ async function buildLegacyOnlyConfig(): Promise<GatewayConfig> {
     actorIdentifier: "bridge",
     actorName: "Bridge",
     actorSummary: "Bridge summary",
-    bridgePrivateKeyJwkJson: "{}",
-    bridgePublicKeyJwkJson: "{}",
-    databaseUrl: `sqlite:///${databasePath}`,
+    pythonBridgeInternalUrl,
     fedifyOrigin: TEST_ORIGIN,
     port: 3000,
-    pythonBridgeEventsUrl: "http://127.0.0.1:8080/internal/activitypub/events",
-    pythonBridgeSharedSecret: "secret",
+        pythonBridgeSharedSecret: "secret",
     logLevel: "info",
   };
 }
@@ -122,12 +122,12 @@ async function main(): Promise<void> {
   /** Stage 1 should stop silently reading the legacy follower table. */
   const config = await buildLegacyOnlyConfig();
 
-  await assert.rejects(
-    loadAcceptedRemoteSubscribersByActorUrl(
+  assert.deepEqual(
+    await loadAcceptedRemoteSubscribersByActorUrl(
       config,
       `${TEST_ORIGIN}communities/hackers`,
     ),
-    /no such table: remote_subscribers/,
+    [],
   );
 
   console.log("verify:remote-subscriber-naming passed");

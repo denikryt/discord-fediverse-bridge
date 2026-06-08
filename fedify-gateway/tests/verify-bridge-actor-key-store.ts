@@ -5,7 +5,8 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 
 import { exportJwk, generateCryptoKeyPair } from "@fedify/fedify";
-import initSqlJs from "sql.js";
+import initSqlJs from "./support/sqlite-fixture.js";
+import { startPythonBridgeFixture } from "./support/python-bridge-fixture.js";
 
 import { loadActorKeyPair } from "../src/actor-store.js";
 import type { GatewayConfig } from "../src/config.js";
@@ -28,7 +29,7 @@ async function main(): Promise<void> {
   const emptyConfig = configFor(emptyPath);
   await assert.rejects(
     () => loadActorKeyPair(emptyConfig, "bridge"),
-    /not initialized/,
+    /404 Not Found/,
   );
   console.log("verify:bridge-actor-key-store passed");
 }
@@ -38,8 +39,8 @@ async function verifyStoredPair(
   publicData: string,
   privateData: string,
 ): Promise<void> {
-  const databasePath = await createDatabase({ keyFormat, publicData, privateData });
-  assert.ok(await loadActorKeyPair(configFor(databasePath), "bridge"));
+  const pythonBridgeInternalUrl = await createDatabase({ keyFormat, publicData, privateData });
+  assert.ok(await loadActorKeyPair(configFor(pythonBridgeInternalUrl), "bridge"));
 }
 
 async function createDatabase(
@@ -48,6 +49,7 @@ async function createDatabase(
   const sqlJs = await initSqlJs();
   const tempDir = await mkdtemp(path.join(tmpdir(), "bridge-key-store-"));
   const databasePath = path.join(tempDir, "bridge.db");
+  let pythonBridgeInternalUrl = "";
   const database = new sqlJs.Database();
   try {
     database.run(`
@@ -73,22 +75,22 @@ async function createDatabase(
       );
     }
     await writeFile(databasePath, Buffer.from(database.export()));
+    pythonBridgeInternalUrl = await startPythonBridgeFixture(databasePath);
   } finally {
     database.close();
   }
-  return databasePath;
+  return pythonBridgeInternalUrl;
 }
 
-function configFor(databasePath: string): GatewayConfig {
+function configFor(pythonBridgeInternalUrl: string): GatewayConfig {
   return {
     actorIdentifier: "bridge",
     actorName: "Bridge",
     actorSummary: "Bridge",
-    databaseUrl: `sqlite:///${databasePath}`,
+    pythonBridgeInternalUrl,
     fedifyOrigin: "https://bridge.example/",
     port: 3000,
-    pythonBridgeEventsUrl: "http://127.0.0.1:8080/internal/activitypub/events",
-    pythonBridgeSharedSecret: "secret",
+        pythonBridgeSharedSecret: "secret",
     logLevel: "info",
   };
 }
