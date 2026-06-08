@@ -91,7 +91,7 @@ class ListBridgePolicyOperation(Operation):
         """Return one private rejection without exposing policy contents."""
         return ListBridgePolicyResult(False, message, reason)
 
-    def perform(self, operation_input: ListBridgePolicyInput) -> ListBridgePolicyResult:
+    def body(self, operation_input: ListBridgePolicyInput) -> ListBridgePolicyResult:
         policy_type = operation_input.policy_type
         assert policy_type is not None
         entries = operation_input.get_policy_snapshot().list_effective_entries(policy_type)

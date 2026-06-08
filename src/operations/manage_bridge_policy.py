@@ -213,7 +213,7 @@ class ManageBridgePolicyOperation(Operation):
             )
         return ManageBridgePolicyResult(False, message, reason)
 
-    def perform(self, operation_input: ManageBridgePolicyInput) -> ManageBridgePolicyResult:
+    def body(self, operation_input: ManageBridgePolicyInput) -> ManageBridgePolicyResult:
         """Commit one valid transition with its audit row."""
         policy_type = operation_input.policy_type
         subject = operation_input.get_normalized_subject()

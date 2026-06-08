@@ -201,7 +201,7 @@ async def test_blocking_current_guild_denies_later_policy_commands_there(
     )
     assert entry is not None and entry.status == "active"
     list_interaction.response.send_message.assert_awaited_once_with(
-        "The bridge is not allowed to operate in this Discord server.",
+        "This Discord server is not allowed to use this bridge bot.",
         ephemeral=True,
     )
     assert [event.action for event in database.management_audit_events.list_oldest_first()] == [
