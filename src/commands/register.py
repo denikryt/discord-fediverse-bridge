@@ -6,17 +6,18 @@ import discord
 from discord import app_commands
 
 from ..config import Settings
+from ..db import Database
 from .guild_guard import GUILD_COMMAND_ACCESS, reject_if_command_access_denied
 
 
-def register(tree: app_commands.CommandTree, settings: Settings) -> None:
+def register(tree: app_commands.CommandTree, database: Database, settings: Settings) -> None:
     """Register the `/register` slash command for user self-service onboarding."""
 
     # The bot does not create accounts directly. It only hands users the
     # bridge-owned web URL where Discord OAuth and username validation happen.
     @tree.command(name="register", description="Get a link to register your ActivityPub identity")
     async def register_identity(interaction: discord.Interaction) -> None:
-        if await reject_if_command_access_denied(interaction, definition=GUILD_COMMAND_ACCESS, settings=settings):
+        if await reject_if_command_access_denied(interaction, definition=GUILD_COMMAND_ACCESS, settings=settings, database=database):
             return
         await interaction.response.defer(ephemeral=True, thinking=False)
 

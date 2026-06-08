@@ -36,7 +36,7 @@ from ..discord_forum_placement import (
     resolve_optional_forum_channel,
 )
 from ..fedify_gateway_client import FedifyGatewayClient
-from ..federation_policy import is_instance_allowed
+from ..bridge_policy import BridgePolicyService, FederationPolicyReason
 from ..operations import SubscribeInput, subscribe_operation
 from ..operations.subscribe_local_community import (
     SubscribeLocalCommunityInput,
@@ -90,6 +90,7 @@ class SubscribeCommunityCommandHandler:
         database: Database,
         fedify_gateway: FedifyGatewayClient,
         settings: Settings,
+        policy_service: BridgePolicyService,
         lemmy_client_cls_getter: Callable[[], type[Any]],
         resolve_selected_community_getter: Callable[[], Callable[..., Any]],
         fetch_bridge_communities_getter: Callable[[], Callable[..., Any]],
@@ -98,7 +99,7 @@ class SubscribeCommunityCommandHandler:
         self.database = database
         self.fedify_gateway = fedify_gateway
         self.settings = settings
-        self.allowlist = settings.federation_allowlist
+        self.policy_service = policy_service
         self._lemmy_client_cls_getter = lemmy_client_cls_getter
         self._resolve_selected_community_getter = resolve_selected_community_getter
         self._fetch_bridge_communities_getter = fetch_bridge_communities_getter
@@ -194,13 +195,18 @@ class SubscribeCommunityCommandHandler:
         origin: str | None,
     ) -> bool:
         """Reject disallowed non-bridge origins with the current message text."""
-        if origin is None or is_bridge_origin(origin, self.settings) or is_instance_allowed(origin, self.allowlist):
+        if origin is None or is_bridge_origin(origin, self.settings):
             return True
-        hostname = urlparse(origin).hostname or origin
-        await request.interaction.response.send_message(
-            f"Instance **{hostname}** is not in the federation allowlist.",
-            ephemeral=True,
+        decision = self.policy_service.snapshot().federation_decision(origin)
+        if decision.allowed:
+            return True
+        hostname = decision.host or urlparse(origin).hostname or origin
+        message = (
+            f"Instance **{hostname}** is blocked by federation policy."
+            if decision.reason is FederationPolicyReason.BLOCKLISTED
+            else f"Instance **{hostname}** is not in the federation allowlist."
         )
+        await request.interaction.response.send_message(message, ephemeral=True)
         return False
 
     async def _resolve_selected(self, request: SubscribeCommunityRequest) -> ResolvedCommunity:
@@ -383,6 +389,7 @@ class SubscribeCommunityCommandHandler:
                 community_name=resolved.name,
                 numeric_id=resolved.numeric_id,
                 community_handle=resolved.handle,
+                policy_service=self.policy_service,
             ),
         )
 

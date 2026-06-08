@@ -7,6 +7,7 @@ from dataclasses import dataclass, field
 from discordops import Operation, Precondition
 
 from ..config import Settings
+from ..bridge_policy import BridgePolicyService, BridgePolicySnapshot
 from ..db import Database
 from ..models import LocalCommunity
 from .common_preconditions import (
@@ -26,7 +27,9 @@ class ListBannedUsersInput:
     discord_user_id: str
     discord_guild_id: int | None
     community_slug: str | None
+    policy_service: BridgePolicyService | None = None
     limit: int = 20
+    _policy_snapshot: BridgePolicySnapshot | None = field(default=None, init=False, repr=False)
     _community: LocalCommunity | None = field(default=None, init=False, repr=False)
     _loaded: bool = field(default=False, init=False, repr=False)
 
@@ -40,6 +43,16 @@ class ListBannedUsersInput:
     def is_global(self) -> bool:
         """Return whether global scope was requested."""
         return self.normalized_community_slug is None
+
+    def get_policy_snapshot(self) -> BridgePolicySnapshot:
+        """Return one memoized effective policy snapshot for this operation."""
+        if self._policy_snapshot is None:
+            service = self.policy_service or BridgePolicyService(
+                settings=self.settings,
+                repository=self.database.bridge_policy_entries,
+            )
+            self._policy_snapshot = service.snapshot()
+        return self._policy_snapshot
 
     def get_local_community(self) -> LocalCommunity | None:
         """Load selected community only when present."""

@@ -14,6 +14,7 @@ from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
 from ..inbound_activity_outcomes import InboundActivityOutcome
+from ..bridge_policy import BridgePolicyService
 from ..content_sync.inbound_references import build_message_reference
 from ..db import Database
 from ..content_publish_service import ContentPublishService
@@ -64,6 +65,7 @@ class LocalCommunityRuntime:
         fedify_gateway: FedifyGatewayClient,
         content_publish_service: ContentPublishService,
         bridge_prefix: str,
+        bridge_policy_service: BridgePolicyService,
         bot: object | None = None,
     ) -> None:
         """Initialise the local-community runtime with shared long-lived services."""
@@ -71,10 +73,12 @@ class LocalCommunityRuntime:
         self.fedify_gateway = fedify_gateway
         self.content_publish_service = content_publish_service
         self.bridge_prefix = bridge_prefix
+        self.bridge_policy_service = bridge_policy_service
         self.bot = bot
         self.federation_fanout = LocalCommunityFederationFanout(
             database=database,
             fedify_gateway=fedify_gateway,
+            policy_service=bridge_policy_service,
         )
 
     def _disabled_result_if_needed(self, local_community: object) -> LocalCommunityRuntimeResult | None:
@@ -590,7 +594,7 @@ class LocalCommunityRuntime:
         """Best-effort fanout of one canonical post to selected local surfaces."""
         if self.bot is None:
             return
-        fanout = LocalCommunityDiscordFanout(database=self.database, bot=self.bot)
+        fanout = LocalCommunityDiscordFanout(database=self.database, bot=self.bot, policy_service=self.bridge_policy_service)
         await fanout.fanout_thread(
             local_community=local_community,
             thread_row=thread_row,
@@ -636,7 +640,7 @@ class LocalCommunityRuntime:
         """Best-effort fanout of one canonical comment to selected local surfaces."""
         if self.bot is None:
             return
-        fanout = LocalCommunityDiscordFanout(database=self.database, bot=self.bot)
+        fanout = LocalCommunityDiscordFanout(database=self.database, bot=self.bot, policy_service=self.bridge_policy_service)
         await fanout.fanout_message(
             local_community=local_community,
             thread_row=thread_row,
@@ -680,6 +684,9 @@ class LocalCommunityRuntime:
                     title=published.title,
                     body_markdown=new_content,
                     in_reply_to_object_id=published.in_reply_to_object_id,
+                    target_inbox_urls=self._allowed_remote_inboxes(
+                        published.community_actor_url
+                    ),
                 )
             )
         except Exception:
@@ -694,10 +701,30 @@ class LocalCommunityRuntime:
                     actor_username=published.actor_username,
                     community_actor_url=published.community_actor_url,
                     ap_object_id=published.object_id,
+                    target_inbox_urls=self._allowed_remote_inboxes(
+                        published.community_actor_url
+                    ),
                 )
             )
         except Exception:
             logger.exception("Failed to send local-community delete for AP object %s", published.object_id)
+
+
+    def _allowed_remote_inboxes(self, community_actor_url: str) -> list[str]:
+        """Return accepted remote-subscriber inboxes allowed by current policy."""
+        local_community = self.database.local_communities.get_local_community_by_actor_url(
+            community_actor_url
+        )
+        if local_community is None:
+            return []
+        snapshot = self.bridge_policy_service.snapshot()
+        return [
+            str(row.remote_inbox_url)
+            for row in self.database.remote_subscribers.list_remote_subscribers(
+                getattr(local_community, "id"), status="accepted"
+            )
+            if snapshot.federation_decision(str(row.remote_inbox_url)).allowed
+        ]
 
     async def _fanout_thread_edit(
         self, *, runtime: object, thread_row: object, source_surface_id: int | None, new_content: str
@@ -706,7 +733,7 @@ class LocalCommunityRuntime:
         bot = self.bot or getattr(runtime, "bot", None)
         if bot is None:
             return
-        fanout = LocalCommunityDiscordFanout(database=self.database, bot=bot)
+        fanout = LocalCommunityDiscordFanout(database=self.database, bot=bot, policy_service=self.bridge_policy_service)
         await fanout.fanout_thread_starter_edit(
             thread_row=thread_row,
             source_surface_id=source_surface_id,
@@ -720,7 +747,7 @@ class LocalCommunityRuntime:
         bot = self.bot or getattr(runtime, "bot", None)
         if bot is None:
             return
-        fanout = LocalCommunityDiscordFanout(database=self.database, bot=bot)
+        fanout = LocalCommunityDiscordFanout(database=self.database, bot=bot, policy_service=self.bridge_policy_service)
         await fanout.fanout_message_edit(
             message_row=message_row,
             source_surface_id=source_surface_id,
@@ -732,7 +759,7 @@ class LocalCommunityRuntime:
         bot = self.bot or getattr(runtime, "bot", None)
         if bot is None:
             return
-        fanout = LocalCommunityDiscordFanout(database=self.database, bot=bot)
+        fanout = LocalCommunityDiscordFanout(database=self.database, bot=bot, policy_service=self.bridge_policy_service)
         await fanout.fanout_thread_starter_delete(thread_row=thread_row, source_surface_id=source_surface_id)
 
     async def _fanout_message_delete(self, *, runtime: object, message_row: object, source_surface_id: int | None) -> None:
@@ -740,7 +767,7 @@ class LocalCommunityRuntime:
         bot = self.bot or getattr(runtime, "bot", None)
         if bot is None:
             return
-        fanout = LocalCommunityDiscordFanout(database=self.database, bot=bot)
+        fanout = LocalCommunityDiscordFanout(database=self.database, bot=bot, policy_service=self.bridge_policy_service)
         await fanout.fanout_message_delete(message_row=message_row, source_surface_id=source_surface_id)
 
     def _persist_inbound_activitypub_message_mapping(
@@ -995,6 +1022,20 @@ class LocalCommunityRuntime:
         local_community = self.database.local_communities.get_local_community_by_actor_url(local_community_actor_id)
         if local_community is None:
             return _HandlerResult(status="skipped", outcome=InboundActivityOutcome.IGNORED_UNKNOWN_LOCAL_COMMUNITY, detail="unknown local community")
+        decision = self.bridge_policy_service.snapshot().federation_decision(
+            remote_inbox_url or remote_actor_id
+        )
+        if not decision.allowed:
+            return _HandlerResult(
+                status="skipped",
+                outcome=(
+                    InboundActivityOutcome.IGNORED_INSTANCE_BLOCKLISTED
+                    if decision.reason.value == "blocklisted"
+                    else InboundActivityOutcome.IGNORED_INSTANCE_NOT_ALLOWLISTED
+                ),
+                detail="remote follow denied by federation policy",
+            )
+
         existing = self.database.remote_subscribers.get_remote_subscriber(
             local_community_id=getattr(local_community, "id"),
             remote_actor_id=remote_actor_id,

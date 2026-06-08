@@ -11,7 +11,7 @@ from __future__ import annotations
 from sqlalchemy import text
 from sqlalchemy.engine import Connection, Engine
 
-from ..models import Base, BridgeActorKey, CommunityActorBan, GuildInvitePublication, LocalCommunityMessageSurface, LocalCommunityThreadSurface, ManagementAuditEvent
+from ..models import Base, BridgeActorKey, BridgePolicyEntry, CommunityActorBan, GuildInvitePublication, LocalCommunityMessageSurface, LocalCommunityThreadSurface, ManagementAuditEvent
 
 
 def migrate(engine: Engine) -> None:
@@ -46,6 +46,7 @@ def migrate(engine: Engine) -> None:
         engine,
         tables=[
             BridgeActorKey.__table__,
+            BridgePolicyEntry.__table__,
             CommunityActorBan.__table__,
             LocalCommunityThreadSurface.__table__,
             LocalCommunityMessageSurface.__table__,

@@ -41,6 +41,7 @@ class PublishContentRequest:
     title: str | None
     body_markdown: str
     in_reply_to_object_id: str | None
+    target_inbox_urls: list[str] | None = None
 
 
 @dataclass(slots=True)
@@ -83,6 +84,7 @@ class UpdateContentRequest:
     # in_reply_to_object_id is required for comments to identify the parent post.
     # Lemmy will not process comment updates without this field.
     in_reply_to_object_id: str | None = None
+    target_inbox_urls: list[str] | None = None
 
 
 @dataclass(slots=True)
@@ -91,7 +93,7 @@ class DeleteContentRequest:
     actor_username: str
     community_actor_url: str
     ap_object_id: str
-
+    target_inbox_urls: list[str] | None = None
 
 
 
@@ -209,6 +211,7 @@ class FedifyGatewayClient:
                 "title": request.title,
                 "bodyMarkdown": request.body_markdown,
                 "inReplyToObjectId": request.in_reply_to_object_id,
+                "targetInboxUrls": request.target_inbox_urls,
             },
         )
         response.raise_for_status()
@@ -270,6 +273,7 @@ class FedifyGatewayClient:
                 "bodyMarkdown": request.body_markdown,
                 "title": request.title,
                 "inReplyToObjectId": request.in_reply_to_object_id,
+                "targetInboxUrls": request.target_inbox_urls,
             },
         )
         response.raise_for_status()
@@ -283,6 +287,7 @@ class FedifyGatewayClient:
                 "actorUsername": request.actor_username,
                 "communityActorUrl": request.community_actor_url,
                 "apObjectId": request.ap_object_id,
+                "targetInboxUrls": request.target_inbox_urls,
             },
         )
         response.raise_for_status()

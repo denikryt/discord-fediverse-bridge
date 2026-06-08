@@ -8,6 +8,7 @@ local-community mode, or neither, then forwards the event to the right runtime.
 from __future__ import annotations
 
 from .db import Database
+from .bridge_policy import BridgePolicyService
 from .community_sync.runtime import CommunityRuntime
 from .local_communities.runtime import LocalCommunityRuntime
 from .local_communities.participant_routing import resolve_local_community_source_for_forum
@@ -22,11 +23,17 @@ class DiscordEventRouter:
         database: Database,
         community_runtime: CommunityRuntime,
         local_community_runtime: LocalCommunityRuntime,
+        bridge_policy_service: BridgePolicyService,
     ) -> None:
         """Initialise the router with the runtimes for both bridge modes."""
         self.database = database
         self.community_runtime = community_runtime
         self.local_community_runtime = local_community_runtime
+        self.bridge_policy_service = bridge_policy_service
+
+    def _is_guild_allowed(self, guild_id: int | str | None) -> bool:
+        """Evaluate one Discord event against the current guild policy."""
+        return self.bridge_policy_service.snapshot().is_discord_guild_allowed(guild_id)
 
     def is_local_community_forum(self, forum_channel_id: int | None) -> bool:
         """Return whether one forum is a local-community create source.
@@ -61,6 +68,10 @@ class DiscordEventRouter:
 
     async def handle_thread_create(self, *, thread: object, starter_message: object) -> object:
         """Route one thread-create event into the owning bridge mode."""
+        guild = getattr(thread, "guild", None)
+        guild_id = getattr(guild, "id", None) or getattr(thread, "guild_id", None)
+        if not self._is_guild_allowed(guild_id):
+            return None
         forum_channel_id = getattr(thread, "parent_id", None)
         if self.is_local_community_forum(forum_channel_id):
             return await self.local_community_runtime.handle_discord_thread_create(
@@ -74,6 +85,10 @@ class DiscordEventRouter:
 
     async def handle_message(self, *, message: object) -> object:
         """Route one message event into the owning bridge mode."""
+        guild = getattr(message, "guild", None)
+        guild_id = getattr(guild, "id", None) or getattr(message, "guild_id", None)
+        if not self._is_guild_allowed(guild_id):
+            return None
         thread = getattr(message, "channel")
         forum_channel_id = getattr(thread, "parent_id", None)
         if self.is_local_community_forum(forum_channel_id):
@@ -91,8 +106,11 @@ class DiscordEventRouter:
         new_content: str,
         author_display_name: str,
         runtime: object,
+        guild_id: int | None = None,
     ) -> None:
         """Route one raw Discord edit event into the owning bridge mode."""
+        if guild_id is not None and not self._is_guild_allowed(guild_id):
+            return
         if self.is_local_community_message(message_id):
             await self.local_community_runtime.handle_discord_message_edit(
                 message_id=message_id,
@@ -113,8 +131,11 @@ class DiscordEventRouter:
         *,
         message_id: int,
         runtime: object,
+        guild_id: int | None = None,
     ) -> None:
         """Route one raw Discord delete event into the owning bridge mode."""
+        if guild_id is not None and not self._is_guild_allowed(guild_id):
+            return
         if self.is_local_community_message(message_id):
             await self.local_community_runtime.handle_discord_message_delete(
                 message_id=message_id,

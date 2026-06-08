@@ -19,7 +19,7 @@ from .activitypub_models import (
 from .community_sync.inbound_mapping import get_accepted_subscriptions
 from .local_community_lifecycle import evaluate_local_community_lifecycle
 from .local_communities.inbound_mapping import resolve_local_community_by_actor_url
-from .federation_policy import is_instance_allowed
+from .bridge_policy import FederationPolicyReason
 from .runtime import Runtime
 
 logger = logging.getLogger(__name__)
@@ -41,26 +41,23 @@ class HandlerResult:
 async def dispatch_activitypub_event(
     event: BridgeGatewayEvent, runtime: Runtime
 ) -> HandlerResult:
-    """Route one inbound ActivityPub event to the correct handler.
-
-    follow.accepted is exempt from the allowlist check because it is a
-    lifecycle response to our own outbound Follow and must always be processed.
-    All other event types are filtered against the federation allowlist before
-    any handler logic runs.
-    """
-    # follow.accepted and local.follow_requested are lifecycle/control events,
-    # not remote community content fanout, so they bypass the normal allowlist.
-    if event.event_type not in {"follow.accepted", "local.follow_requested", "local.unfollow_requested"}:
-        # settings may be absent in test runtimes that pre-date allowlist support;
-        # treat a missing settings as an empty allowlist (allow all).
-        allowlist = getattr(getattr(runtime, "settings", None), "federation_allowlist", [])
-        if not is_instance_allowed(_allowlist_subject(event, runtime), allowlist):
-            logger.debug(
-                "Skipping %s from non-allowlisted instance: %s",
-                event.event_type,
-                _allowlist_subject(event, runtime),
-            )
-            return HandlerResult(status="skipped", outcome=InboundActivityOutcome.IGNORED_INSTANCE_NOT_ALLOWLISTED, detail="instance not in allowlist")
+    """Route one inbound ActivityPub event after federation policy admission."""
+    subject = _allowlist_subject(event, runtime)
+    decision = runtime.bridge_policy_service.snapshot().federation_decision(subject)
+    if not decision.allowed:
+        if decision.reason is FederationPolicyReason.BLOCKLISTED:
+            outcome = InboundActivityOutcome.IGNORED_INSTANCE_BLOCKLISTED
+            detail = "instance is blocklisted"
+        else:
+            outcome = InboundActivityOutcome.IGNORED_INSTANCE_NOT_ALLOWLISTED
+            detail = "instance not in allowlist"
+        logger.debug(
+            "Skipping %s from denied federation instance: subject=%s reason=%s",
+            event.event_type,
+            subject,
+            decision.reason.value,
+        )
+        return HandlerResult(status="skipped", outcome=outcome, detail=detail)
 
     disabled = _skip_disabled_local_community(event, runtime)
     if disabled is not None:

@@ -13,6 +13,7 @@ from pathlib import Path
 from typing import Any
 from urllib.parse import urlparse
 
+from .bridge_policy import PolicyType
 from .project_version import APP_VERSION
 
 WEB_DIR = Path(__file__).resolve().parent.parent / "web"
@@ -28,13 +29,35 @@ def build_dashboard_payload(runtime: Any) -> dict[str, object]:
     origin_host = _hostname_from_url(origin) or ""
     actor_identifier = getattr(settings, "fedify_actor_identifier", "bridge")
     database = runtime.database
-    local_communities = database.local_communities.list_local_communities()
+    snapshot = runtime.bridge_policy_service.snapshot()
+    local_communities = [
+        row for row in database.local_communities.list_local_communities()
+        if snapshot.is_discord_guild_allowed(getattr(row, "discord_guild_id", None))
+    ]
     registered_users = database.users.list_users()
-    remote_subscribers = database.remote_subscribers.list_remote_subscribers_for_all(status="accepted")
-    bridge_follows = database.bridge_actor_follows.list_bridge_actor_follows()
-    accepted_remote_subscriptions = database.remote_subscriptions.list_subscriptions(status="accepted")
-    active_local_subscribers = database.local_subscribers.list_all_local_subscribers(status="active")
-    invite_publications = database.guild_invite_publications.list_publications()
+    remote_subscribers = [
+        row for row in database.remote_subscribers.list_remote_subscribers_for_all(status="accepted")
+        if snapshot.federation_decision(
+            getattr(row, "remote_actor_id", None) or getattr(row, "remote_inbox_url", "")
+        ).allowed
+    ]
+    bridge_follows = [
+        row for row in database.bridge_actor_follows.list_bridge_actor_follows()
+        if snapshot.federation_decision(getattr(row, "community_actor_id", "")).allowed
+    ]
+    accepted_remote_subscriptions = [
+        row for row in database.remote_subscriptions.list_subscriptions(status="accepted")
+        if snapshot.is_discord_guild_allowed(getattr(row, "discord_guild_id", None))
+        and snapshot.federation_decision(getattr(row, "lemmy_community_actor_id", "")).allowed
+    ]
+    active_local_subscribers = [
+        row for row in database.local_subscribers.list_all_local_subscribers(status="active")
+        if snapshot.is_discord_guild_allowed(getattr(row, "discord_guild_id", None))
+    ]
+    invite_publications = [
+        row for row in database.guild_invite_publications.list_publications()
+        if snapshot.is_discord_guild_allowed(getattr(row, "discord_guild_id", None))
+    ]
 
     guild_snapshots, channel_snapshots = _load_discord_snapshots(
         database,
@@ -148,7 +171,11 @@ def build_dashboard_payload(runtime: Any) -> dict[str, object]:
             }
         )
 
-    allowlist = _normalize_host_list(getattr(settings, "federation_allowlist", []))
+    allowlist = [
+        entry.subject
+        for entry in snapshot.list_effective_entries(PolicyType.FEDERATION_ALLOW)
+        if snapshot.federation_decision(entry.subject).allowed
+    ]
     bridge_follow_payloads = [
         {
             "communityActorUrl": getattr(follow, "community_actor_id"),

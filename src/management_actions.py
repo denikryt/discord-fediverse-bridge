@@ -14,6 +14,7 @@ from sqlalchemy.orm import Session
 from .db.repositories.community_actor_bans import BanActivationResult, CommunityActorBanRepository
 from .db.repositories.local_communities import LocalCommunityRepository
 from .db.repositories.guild_invite_publications import GuildInvitePublicationRepository
+from .db.repositories.bridge_policy_entries import BridgePolicyEntryRepository, PolicyActivationResult
 from .management_audit_recorder import ManagementAuditRecorder
 from .models import CommunityActorBan, GuildInvitePublication, LocalCommunity
 
@@ -29,6 +30,7 @@ class ManagementActions:
         community_actor_bans: CommunityActorBanRepository,
         management_audit: ManagementAuditRecorder,
         guild_invite_publications: GuildInvitePublicationRepository,
+        bridge_policy_entries: BridgePolicyEntryRepository,
     ) -> None:
         """Initialise the service with repositories and an audit recorder."""
         self._session_factory = session_factory
@@ -36,6 +38,7 @@ class ManagementActions:
         self._community_actor_bans = community_actor_bans
         self._audit = management_audit
         self._guild_invite_publications = guild_invite_publications
+        self._bridge_policy_entries = bridge_policy_entries
 
     def create_local_community(
         self,
@@ -157,6 +160,56 @@ class ManagementActions:
             )
             return ban
 
+    def add_or_reactivate_bridge_policy_entry(
+        self,
+        *,
+        actor_discord_user_id: str,
+        policy_type: str,
+        normalized_subject: str,
+        reason: str | None,
+        existing_entry_id: int | None,
+    ) -> PolicyActivationResult:
+        """Create/reactivate one policy row and audit it atomically."""
+        with self._session_factory() as session:
+            if existing_entry_id is None:
+                result = self._bridge_policy_entries.create_active_in_session(
+                    session,
+                    policy_type=policy_type,
+                    normalized_subject=normalized_subject,
+                    actor_discord_user_id=actor_discord_user_id,
+                    reason=reason,
+                )
+            else:
+                result = self._bridge_policy_entries.reactivate_in_session(
+                    session,
+                    entry_id=existing_entry_id,
+                    actor_discord_user_id=actor_discord_user_id,
+                    reason=reason,
+                )
+            self._audit.add_bridge_policy_activation(
+                session, actor_discord_user_id=actor_discord_user_id, result=result
+            )
+            return result
+
+    def remove_bridge_policy_entry(
+        self,
+        *,
+        actor_discord_user_id: str,
+        entry_id: int,
+        removal_reason: str | None,
+    ) -> object:
+        """Deactivate one dynamic policy row and audit it atomically."""
+        with self._session_factory() as session:
+            entry = self._bridge_policy_entries.deactivate_in_session(
+                session, entry_id=entry_id, actor_discord_user_id=actor_discord_user_id
+            )
+            self._audit.add_bridge_policy_removed(
+                session,
+                actor_discord_user_id=actor_discord_user_id,
+                entry=entry,
+                removal_reason=removal_reason,
+            )
+            return entry
 
     def replace_guild_invite_publication(self, *, discord_guild_id: int, discord_channel_id: int, invite_code: str, invite_url: str, actor_discord_user_id: str) -> tuple[GuildInvitePublication | None, GuildInvitePublication]:
         """Replace guild invite state and write its audit row atomically."""

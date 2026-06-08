@@ -9,7 +9,7 @@ from src.local_community_permissions import can_manage_local_community
 
 def _settings(*, super_admins: list[str] | None = None) -> SimpleNamespace:
     """Build the settings subset used by the permission helper."""
-    return SimpleNamespace(local_community_operator_allowlist=super_admins or [])
+    return SimpleNamespace(bridge_super_admin_user_ids=super_admins or [])
 
 
 def _community(owner_id: str | None) -> SimpleNamespace:

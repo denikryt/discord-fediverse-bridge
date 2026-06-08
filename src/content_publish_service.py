@@ -13,6 +13,7 @@ from dataclasses import dataclass
 from typing import Awaitable, Callable
 
 from .config import Settings
+from .bridge_policy import BridgePolicyService
 from .user_bans import UserBanService, canonical_local_user_handle, render_ban_message
 
 from .content_sync.outbound_publish import (
@@ -59,12 +60,14 @@ class ContentPublishService:
         fedify_gateway: object,
         bridge_prefix: str,
         settings: Settings | None = None,
+        bridge_policy_service: BridgePolicyService | None = None,
     ) -> None:
         """Initialise with the shared database, AP gateway, and bridge prefix."""
         self.database = database
         self.fedify_gateway = fedify_gateway
         self.bridge_prefix = bridge_prefix
         self.settings = settings
+        self.bridge_policy_service = bridge_policy_service
         self.user_ban_service = UserBanService(database=database, settings=settings) if settings is not None else None
 
     async def publish_thread_starter(
@@ -79,6 +82,12 @@ class ContentPublishService:
             return PublishResult(status="ignored", reason="no_subscription")
         if subscription.status != "accepted":
             return PublishResult(status="ignored", reason="subscription_not_active")
+        if self.bridge_policy_service is not None:
+            decision = self.bridge_policy_service.snapshot().federation_decision(
+                subscription.lemmy_community_actor_id
+            )
+            if not decision.allowed:
+                return PublishResult(status="ignored", reason=f"federation_policy_{decision.reason.value}")
 
         return await self.publish_post_to_community(
             thread=thread,
@@ -95,6 +104,12 @@ class ContentPublishService:
             return PublishResult(status="ignored", reason="no_subscription")
         if subscription.status != "accepted":
             return PublishResult(status="ignored", reason="subscription_not_active")
+        if self.bridge_policy_service is not None:
+            decision = self.bridge_policy_service.snapshot().federation_decision(
+                subscription.lemmy_community_actor_id
+            )
+            if not decision.allowed:
+                return PublishResult(status="ignored", reason=f"federation_policy_{decision.reason.value}")
 
         thread_group = self.database.discord_fanout_groups.get_thread_group_by_any_thread(getattr(thread, "id"))
         if thread_group is None or thread_group.ap_object_id is None:
@@ -124,6 +139,7 @@ class ContentPublishService:
             starter_message=starter_message,
             community_actor_url=community_actor_url,
             publish_call=self.fedify_gateway.publish_local_community_content,
+            target_inbox_urls=self._allowed_local_follower_inboxes(community_actor_url),
         )
 
     async def publish_local_thread_message(
@@ -139,6 +155,7 @@ class ContentPublishService:
             community_actor_url=community_actor_url,
             parent_object_id=parent_object_id,
             publish_call=self.fedify_gateway.publish_local_community_content,
+            target_inbox_urls=self._allowed_local_follower_inboxes(community_actor_url),
         )
 
     async def publish_post_to_community(
@@ -148,6 +165,7 @@ class ContentPublishService:
         starter_message: object,
         community_actor_url: str,
         publish_call: Callable[[object], Awaitable[object]],
+        target_inbox_urls: list[str] | None = None,
     ) -> PublishResult:
         """Publish one Discord thread starter through the supplied gateway path."""
         user, rejection = await self._resolve_publish_user(
@@ -173,6 +191,7 @@ class ContentPublishService:
                 title=title,
                 body_markdown=body,
                 in_reply_to_object_id=None,
+                target_inbox_urls=target_inbox_urls,
             )
         )
 
@@ -211,6 +230,7 @@ class ContentPublishService:
         community_actor_url: str,
         parent_object_id: str,
         publish_call: Callable[[object], Awaitable[object]],
+        target_inbox_urls: list[str] | None = None,
     ) -> PublishResult:
         """Publish one Discord comment through the supplied gateway path."""
         thread = getattr(message, "channel")
@@ -236,6 +256,7 @@ class ContentPublishService:
                 title=None,
                 body_markdown=body,
                 in_reply_to_object_id=parent_object_id,
+                target_inbox_urls=target_inbox_urls,
             )
         )
 
@@ -312,6 +333,26 @@ class ContentPublishService:
                 return None, PublishResult(status="rejected", reason="user_banned")
         return user, None
 
+
+    def _allowed_local_follower_inboxes(self, community_actor_url: str) -> list[str]:
+        """Return accepted follower inboxes permitted by one current snapshot."""
+        local_community = self.database.local_communities.get_local_community_by_actor_url(
+            community_actor_url
+        )
+        if local_community is None:
+            return []
+        followers = self.database.remote_subscribers.list_remote_subscribers(
+            getattr(local_community, "id"), status="accepted"
+        )
+        if self.bridge_policy_service is None:
+            return [str(row.remote_inbox_url) for row in followers]
+        snapshot = self.bridge_policy_service.snapshot()
+        return [
+            str(row.remote_inbox_url)
+            for row in followers
+            if snapshot.federation_decision(str(row.remote_inbox_url)).allowed
+        ]
+
     def _resolve_reply_target(self, *, message: object, thread_group: object) -> str:
         """Resolve the AP object ID that one remote-subscription reply should target."""
         post_ap_id = thread_group.ap_object_id
@@ -350,6 +391,7 @@ class ContentPublishService:
         title: str | None,
         body_markdown: str,
         in_reply_to_object_id: str | None,
+        target_inbox_urls: list[str] | None = None,
     ) -> object:
         """Build one gateway publish request without importing mode-specific code."""
         from .fedify_gateway_client import PublishContentRequest
@@ -361,4 +403,5 @@ class ContentPublishService:
             title=title,
             body_markdown=body_markdown,
             in_reply_to_object_id=in_reply_to_object_id,
+            target_inbox_urls=target_inbox_urls,
         )

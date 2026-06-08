@@ -9,6 +9,7 @@ import discord
 from discord import app_commands
 
 from .config import Settings
+from .bridge_policy import BridgePolicyService
 from .db import Database
 from .discord_event_router import DiscordEventRouter
 from .fedify_gateway_client import FedifyGatewayClient
@@ -32,6 +33,7 @@ class BridgeBot(discord.Client):
         database: Database,
         fedify_gateway: FedifyGatewayClient,
         event_router: DiscordEventRouter,
+        bridge_policy_service: BridgePolicyService,
     ) -> None:
         """Initialise the bot with shared services and Discord intent configuration."""
         intents = discord.Intents.default()
@@ -43,11 +45,12 @@ class BridgeBot(discord.Client):
         self.database = database
         self.fedify_gateway = fedify_gateway
         self.event_router = event_router
+        self.bridge_policy_service = bridge_policy_service
         # Keep the current runtime reachable for edit/delete paths that still
         # belong only to the remote-subscription mode today.
         self.community_runtime = event_router.community_runtime
         self.user_ban_service = UserBanService(database=database, settings=settings)
-        self.tree = BridgeCommandTree(self, ban_service=self.user_ban_service)
+        self.tree = BridgeCommandTree(self)
         self.bridge_ready = asyncio.Event()
         # Per-thread locks prevent duplicate Lemmy posts when Discord fires
         # on_thread_create twice for the same thread (e.g. on reconnect).
@@ -64,18 +67,19 @@ class BridgeBot(discord.Client):
     async def setup_hook(self) -> None:
         # setup_hook runs before the bot connects, making it the right place to
         # register slash commands and sync the tree with Discord.
-        from .commands import ban_user, create_community, edit_community, list_banned_users, list_subs, publish_guild_invite, register, remove_guild_invite, subscribe, unban_user, unsubscribe
-        register.register(self.tree, self.settings)
-        subscribe.register(self.tree, self.database, self.fedify_gateway, self.settings)
-        unsubscribe.register(self.tree, self.database, self.fedify_gateway, self.settings)
+        from .commands import ban_user, bridge_policy, create_community, edit_community, list_banned_users, list_subs, publish_guild_invite, register, remove_guild_invite, subscribe, unban_user, unsubscribe
+        register.register(self.tree, self.database, self.settings)
+        subscribe.register(self.tree, self.database, self.fedify_gateway, self.settings, self.bridge_policy_service)
+        unsubscribe.register(self.tree, self.database, self.fedify_gateway, self.settings, self.bridge_policy_service)
         list_subs.register(self.tree, self.database, self.settings)
         create_community.register(self.tree, self.database, self.settings)
-        edit_community.register(self.tree, self.database, self.settings)
-        ban_user.register(self.tree, self.database, self.settings)
-        unban_user.register(self.tree, self.database, self.settings)
-        list_banned_users.register(self.tree, self.database, self.settings)
+        edit_community.register(self.tree, self.database, self.settings, self.bridge_policy_service)
+        ban_user.register(self.tree, self.database, self.settings, self.bridge_policy_service)
+        unban_user.register(self.tree, self.database, self.settings, self.bridge_policy_service)
+        list_banned_users.register(self.tree, self.database, self.settings, self.bridge_policy_service)
         publish_guild_invite.register(self.tree, self.database, self.settings)
         remove_guild_invite.register(self.tree, self.database, self.settings)
+        bridge_policy.register(self.tree, self.database, self.bridge_policy_service, self.user_ban_service)
         await self.tree.sync()
 
     async def on_ready(self) -> None:
@@ -232,6 +236,7 @@ class BridgeBot(discord.Client):
                 new_content=new_content,
                 author_display_name=author_display_name,
                 runtime=runtime,
+                guild_id=getattr(payload, "guild_id", None),
             )
         except Exception:
             logger.exception("[on_raw_message_edit] exception in handle_discord_message_edit for msg=%s", payload.message_id)
@@ -281,6 +286,7 @@ class BridgeBot(discord.Client):
             await self.event_router.handle_message_delete(
                 message_id=payload.message_id,
                 runtime=runtime,
+                guild_id=getattr(payload, "guild_id", None),
             )
         except Exception:
             logger.exception("[on_raw_message_delete] exception in handle_discord_message_delete for msg=%s", payload.message_id)

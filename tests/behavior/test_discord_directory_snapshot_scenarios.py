@@ -31,7 +31,7 @@ def _settings() -> SimpleNamespace:
         normalized_public_bridge_base_url=f"https://{BRIDGE_EXAMPLE_DOMAIN}",
         normalized_fedify_origin=f"https://{BRIDGE_EXAMPLE_DOMAIN}",
         fedify_origin=f"https://{BRIDGE_EXAMPLE_DOMAIN}",
-        local_community_operator_allowlist=["1234567890"],
+        bridge_super_admin_user_ids=["1234567890"],
     )
 
 

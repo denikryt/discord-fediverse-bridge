@@ -271,13 +271,15 @@ export async function publishLocalCommunityContent(
   // Local-community fanout is performed by the bridge-owned community actor.
   // The embedded Create remains user-authored, while the outer Announce makes
   // delivery look like Lemmy Group fanout to Mastodon and other remote subscribers.
-  const remoteSubscribers = await loadAcceptedRemoteSubscribersByActorUrl(
+  const allRemoteSubscribers = await loadAcceptedRemoteSubscribersByActorUrl(
     config,
     request.communityActorUrl,
   );
-  if (remoteSubscribers.length === 0) {
-    throw new Error("Local community has no accepted remote subscribers");
-  }
+  const explicitTargets = request.targetInboxUrls ?? null;
+  const targetSet = explicitTargets == null ? null : new Set(explicitTargets);
+  const remoteSubscribers = targetSet == null
+    ? allRemoteSubscribers
+    : allRemoteSubscribers.filter((subscriber) => targetSet.has(subscriber.remoteInboxUrl));
 
   const signingKey = await loadLocalCommunitySigningKeyByActorUrl(
     config,
@@ -766,6 +768,7 @@ async function maybeDeliverLocalCommunityMutation(
   config: GatewayConfig,
   communityActorUrl: string,
   activity: Update | Delete,
+  targetInboxUrls: string[] | null | undefined,
 ): Promise<boolean> {
   /** Fan out one local-community mutation to accepted remote subscribers. */
   const signingKey = await loadLocalCommunitySigningKeyByActorUrl(config, communityActorUrl);
@@ -773,7 +776,11 @@ async function maybeDeliverLocalCommunityMutation(
     return false;
   }
 
-  const remoteSubscribers = await loadAcceptedRemoteSubscribersByActorUrl(config, communityActorUrl);
+  const allRemoteSubscribers = await loadAcceptedRemoteSubscribersByActorUrl(config, communityActorUrl);
+  const targetSet = targetInboxUrls == null ? null : new Set(targetInboxUrls);
+  const remoteSubscribers = targetSet == null
+    ? allRemoteSubscribers
+    : allRemoteSubscribers.filter((subscriber) => targetSet.has(subscriber.remoteInboxUrl));
   const activityJson = await renderPublicActivityJson(
     buildLocalCommunityAnnounceActivity(config, communityActorUrl, activity),
   );
@@ -849,7 +856,7 @@ export async function updateContent(
   // Update delivery mirrors publish delivery: same actor URI, same community
   // fetch, but wraps the object in an Update activity instead of Create.
   const builtUpdate = buildUpdateActivity(config, request);
-  if (await maybeDeliverLocalCommunityMutation(config, request.communityActorUrl, builtUpdate.activity)) {
+  if (await maybeDeliverLocalCommunityMutation(config, request.communityActorUrl, builtUpdate.activity, request.targetInboxUrls)) {
     return;
   }
 
@@ -890,7 +897,7 @@ export async function deleteContent(
   // Delete delivery uses the AP object URL as the object field (string form, not
   // a full object), matching the Lemmy federation protocol for Delete activities.
   const builtDelete = buildDeleteActivity(config, request);
-  if (await maybeDeliverLocalCommunityMutation(config, request.communityActorUrl, builtDelete.activity)) {
+  if (await maybeDeliverLocalCommunityMutation(config, request.communityActorUrl, builtDelete.activity, request.targetInboxUrls)) {
     return;
   }
 

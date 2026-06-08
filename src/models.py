@@ -469,6 +469,23 @@ class CommunityActorBan(Base):
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, onupdate=utcnow, nullable=False)
 
 
+class BridgePolicyEntry(Base):
+    """Persist one dynamic bridge policy subject with reversible status."""
+
+    __tablename__ = "bridge_policy_entries"
+    __table_args__ = (UniqueConstraint("policy_type", "normalized_subject"),)
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    policy_type: Mapped[str] = mapped_column(String(64), nullable=False, index=True)
+    normalized_subject: Mapped[str] = mapped_column(String(512), nullable=False, index=True)
+    status: Mapped[str] = mapped_column(String(32), nullable=False, default="active", index=True)
+    reason: Mapped[str | None] = mapped_column(String(500), nullable=True)
+    created_by_discord_user_id: Mapped[str] = mapped_column(String(64), nullable=False)
+    updated_by_discord_user_id: Mapped[str] = mapped_column(String(64), nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, nullable=False)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, onupdate=utcnow, nullable=False)
+
+
 class ManagementAuditEvent(Base):
     """Backend audit trail for management operations.
 

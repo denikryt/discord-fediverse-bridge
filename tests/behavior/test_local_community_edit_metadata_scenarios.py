@@ -12,7 +12,7 @@ from support.db import build_database
 
 def _settings(*, super_admins: list[str] | None = None) -> SimpleNamespace:
     """Build settings with only the fields metadata edit behavior uses."""
-    return SimpleNamespace(discord_guild_allowlist=[], local_community_operator_allowlist=super_admins or [])
+    return SimpleNamespace(discord_guild_allowlist=[], bridge_super_admin_user_ids=super_admins or [])
 
 
 def test_user_action_edits_local_community_metadata_end_to_end(tmp_path: Path) -> None:

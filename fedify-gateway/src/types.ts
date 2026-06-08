@@ -102,6 +102,7 @@ export interface PublishLocalCommunityContentRequest {
   title: string | null;
   bodyMarkdown: string;
   inReplyToObjectId: string | null;
+  targetInboxUrls?: string[] | null;
 }
 
 export interface PublishLocalCommunityContentResult {
@@ -125,6 +126,7 @@ export interface UpdateContentRequest {
   // inReplyToObjectId is required for comments to identify the parent post.
   // Lemmy will not process comment updates without this field.
   inReplyToObjectId?: string | null;
+  targetInboxUrls?: string[] | null;
 }
 
 export interface DeleteContentRequest {
@@ -132,6 +134,7 @@ export interface DeleteContentRequest {
   actorUsername: string;
   communityActorUrl: string;
   apObjectId: string;
+  targetInboxUrls?: string[] | null;
 }
 
 export interface AcceptLocalCommunityFollowRequest {

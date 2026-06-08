@@ -14,6 +14,7 @@ from dataclasses import dataclass, field
 
 from discordops import OperationDefinition, OperationResult, Precondition
 
+from ..bridge_policy import BridgePolicyService
 from ..db import Database
 from ..fedify_gateway_client import FedifyGatewayClient, UnfollowCommunityResult
 
@@ -28,6 +29,7 @@ class UnsubscribeInput:
     fedify_gateway: FedifyGatewayClient
     channel_id: int
     channel_mention: str
+    policy_service: BridgePolicyService | None = None
     _subscription: object | None = field(default=None, init=False, repr=False)
     _subscription_loaded: bool = field(default=False, init=False, repr=False)
 
@@ -96,6 +98,7 @@ async def _body(operation_input: UnsubscribeInput) -> OperationResult:
 
     bridge_follow = None
     follow_activity_id: str | None = None
+    federation_policy_denied = False
     if is_last_channel:
         # Last-channel cleanup is only safe when the shared follow row still
         # knows the exact outbound Follow activity that must be undone.
@@ -112,6 +115,10 @@ async def _body(operation_input: UnsubscribeInput) -> OperationResult:
                 ),
                 reason="follow_activity_id_missing",
             )
+        if operation_input.policy_service is not None:
+            federation_policy_denied = not operation_input.policy_service.snapshot().federation_decision(
+                community_actor_id
+            ).allowed
 
     deleted = operation_input.database.remote_subscriptions.delete_subscription(operation_input.channel_id)
     if not deleted:
@@ -125,6 +132,17 @@ async def _body(operation_input: UnsubscribeInput) -> OperationResult:
         return OperationResult(
             applied=True,
             message=f"Unsubscribed {operation_input.channel_mention} from **{label}**.",
+        )
+
+    if federation_policy_denied:
+        return OperationResult(
+            applied=True,
+            message=(
+                f"Unsubscribed {operation_input.channel_mention} from **{label}** locally. "
+                "Remote Undo(Follow) was skipped because federation policy denies "
+                "the destination instance."
+            ),
+            reason="remote_unfollow_skipped_by_policy",
         )
 
     # At this point the local channel cleanup already happened. Remote cleanup

@@ -53,7 +53,7 @@ def _settings(*, super_admins: list[str] | None = None) -> SimpleNamespace:
     """Build settings used by command access, identity, and ban rendering."""
     return SimpleNamespace(
         discord_guild_allowlist=[],
-        local_community_operator_allowlist=super_admins or [],
+        bridge_super_admin_user_ids=super_admins or [],
         normalized_public_base_url="https://bridge.example:8443",
     )
 

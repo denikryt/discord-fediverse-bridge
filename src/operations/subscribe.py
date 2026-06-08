@@ -19,6 +19,7 @@ from discordops import OperationDefinition, OperationResult, Precondition
 
 from .common_preconditions import DISCORD_USER_REGISTERED
 
+from ..bridge_policy import BridgePolicyService
 from ..db import Database
 from ..fedify_gateway_client import FedifyGatewayClient
 
@@ -40,6 +41,7 @@ class SubscribeInput:
     community_name: str | None
     numeric_id: int | None
     community_handle: str
+    policy_service: BridgePolicyService | None = None
     guild_id: int | None = None
     _bridge_user: object | None = field(default=None, init=False, repr=False)
     _bridge_user_loaded: bool = field(default=False, init=False, repr=False)
@@ -211,6 +213,20 @@ async def _body(operation_input: SubscribeInput) -> OperationResult:
     if existing_follow is not None and existing_follow.status == "failed":
         # Remove the stale failed bridge follow row before creating a fresh one.
         operation_input.database.bridge_actor_follows.delete_bridge_actor_follow(operation_input.actor_id)
+
+    if operation_input.policy_service is not None:
+        decision = operation_input.policy_service.snapshot().federation_decision(
+            operation_input.actor_id
+        )
+        if not decision.allowed:
+            return OperationResult(
+                applied=False,
+                message=(
+                    f"Could not subscribe {operation_input.channel_mention} to "
+                    f"**{_requested_community_label(operation_input)}** because federation policy denies the instance."
+                ),
+                reason="federation_policy_denied",
+            )
 
     try:
         follow_result = await operation_input.fedify_gateway.follow_community(operation_input.actor_id)

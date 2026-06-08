@@ -29,15 +29,21 @@ from .management_audit import (
     ACTION_GUILD_INVITE_PUBLISH_FORBIDDEN,
     ACTION_GUILD_INVITE_REMOVED,
     ACTION_GUILD_INVITE_REMOVE_FORBIDDEN,
+    ACTION_BRIDGE_POLICY_ADDED,
+    ACTION_BRIDGE_POLICY_REACTIVATED,
+    ACTION_BRIDGE_POLICY_REMOVED,
+    ACTION_BRIDGE_POLICY_MANAGE_FORBIDDEN,
     REASON_COMMUNITY_DISABLED,
     REASON_NOT_OWNER_OR_SUPER_ADMIN,
     REASON_NOT_SUPER_ADMIN,
     REASON_MISSING_MANAGE_GUILD,
+    REASON_NOT_EFFECTIVE_SUPER_ADMIN,
     RESULT_FORBIDDEN,
     RESULT_SUCCESS,
     TARGET_LOCAL_COMMUNITY,
     TARGET_REMOTE_ACTOR,
     TARGET_DISCORD_GUILD,
+    TARGET_BRIDGE_POLICY_ENTRY,
     community_created_after,
 )
 from .models import CommunityActorBan, GuildInvitePublication, LocalCommunity, ManagementAuditEvent
@@ -249,6 +255,47 @@ class ManagementAuditRecorder:
             after={"status": "inactive"},
         )
 
+    def bridge_policy_manage_forbidden(self, *, actor_discord_user_id: str) -> ManagementAuditEvent:
+        """Record a policy-management attempt by a non-super-admin."""
+        return self._events.create_event(
+            action=ACTION_BRIDGE_POLICY_MANAGE_FORBIDDEN,
+            result=RESULT_FORBIDDEN,
+            actor_discord_user_id=actor_discord_user_id,
+            target_type=TARGET_BRIDGE_POLICY_ENTRY,
+            target_id=None,
+            reason_code=REASON_NOT_EFFECTIVE_SUPER_ADMIN,
+        )
+
+    def add_bridge_policy_activation(self, session: Session, *, actor_discord_user_id: str, result: object) -> ManagementAuditEvent:
+        """Audit creation or reactivation of one dynamic policy row."""
+        action = ACTION_BRIDGE_POLICY_ADDED if getattr(result, "kind") == "created" else ACTION_BRIDGE_POLICY_REACTIVATED
+        entry = getattr(result, "entry")
+        return self._events.add_event(
+            session,
+            action=action,
+            result=RESULT_SUCCESS,
+            actor_discord_user_id=actor_discord_user_id,
+            target_type=TARGET_BRIDGE_POLICY_ENTRY,
+            target_id=f"{entry.policy_type}:{entry.normalized_subject}",
+            before=getattr(result, "before"),
+            after=getattr(result, "after"),
+        )
+
+    def add_bridge_policy_removed(self, session: Session, *, actor_discord_user_id: str, entry: object, removal_reason: str | None) -> ManagementAuditEvent:
+        """Audit deactivation without mutating the stored activation reason."""
+        after: dict[str, object] = {"status": "inactive"}
+        if removal_reason is not None:
+            after["removal_reason"] = removal_reason
+        return self._events.add_event(
+            session,
+            action=ACTION_BRIDGE_POLICY_REMOVED,
+            result=RESULT_SUCCESS,
+            actor_discord_user_id=actor_discord_user_id,
+            target_type=TARGET_BRIDGE_POLICY_ENTRY,
+            target_id=f"{entry.policy_type}:{entry.normalized_subject}",
+            before={"status": "active"},
+            after=after,
+        )
 
     def guild_invite_forbidden(self, *, actor_discord_user_id: str, discord_guild_id: int, removing: bool) -> ManagementAuditEvent:
         """Record a Manage Guild denial for invite publication or removal."""

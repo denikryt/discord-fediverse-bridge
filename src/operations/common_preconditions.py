@@ -13,6 +13,8 @@ from typing import Any, Protocol
 from discordops import PolicyDefinition, Precondition
 
 from ..config import Settings
+from ..bridge_policy import BridgePolicyService, BridgePolicySnapshot
+from ..user_bans import BanDecision, UserBanService, render_ban_message
 from ..db import Database
 from ..local_community_lifecycle import disabled_moderation_message, is_local_community_disabled
 from ..local_community_permissions import (
@@ -28,10 +30,18 @@ REGISTRATION_REQUIRED_MESSAGE = "You must register with the bridge before using 
 
 
 class RegisteredDiscordUserInput(Protocol):
-    """Structural contract for inputs that can resolve a registered bridge user."""
+    """Structural contract for inputs that can resolve shared command access."""
+
+    def get_policy_snapshot(self) -> BridgePolicySnapshot:
+        """Return one memoized effective policy snapshot."""
+        ...
+
+    def get_global_ban_decision(self) -> BanDecision:
+        """Return one memoized global-ban decision for the caller."""
+        ...
 
     def get_bridge_user(self) -> object | None:
-        """Return the registered bridge user or ``None`` when registration is absent."""
+        """Return the registered bridge user or ``None`` when absent."""
         ...
 
 
@@ -44,6 +54,9 @@ class OptionalCommunityScopeInput(Protocol):
 
     settings: Settings
     discord_user_id: str
+    def get_policy_snapshot(self) -> BridgePolicySnapshot:
+        """Return one memoized effective policy snapshot."""
+        ...
     discord_guild_id: int | None
 
     @property
@@ -66,6 +79,9 @@ class RequiredLocalCommunityInput(Protocol):
 
     settings: Settings
     discord_user_id: str
+    def get_policy_snapshot(self) -> BridgePolicySnapshot:
+        """Return one memoized effective policy snapshot."""
+        ...
     discord_guild_id: int | None
 
     @property
@@ -81,7 +97,7 @@ class RequiredLocalCommunityInput(Protocol):
 def is_global_scope_authorized(value: OptionalCommunityScopeInput) -> bool:
     """Allow global scope only to a configured bridge super-admin."""
     return not value.is_global or is_super_admin(
-        settings=value.settings,
+        policy_snapshot=value.get_policy_snapshot(),
         discord_user_id=value.discord_user_id,
     )
 
@@ -98,7 +114,7 @@ def is_scoped_local_community_accessible(value: OptionalCommunityScopeInput) -> 
         return True
     community = value.get_local_community()
     return community is not None and can_access_local_community_from_guild(
-        settings=value.settings,
+        policy_snapshot=value.get_policy_snapshot(),
         discord_user_id=value.discord_user_id,
         discord_guild_id=value.discord_guild_id,
         local_community=community,
@@ -112,7 +128,7 @@ def can_manage_scoped_local_community(value: OptionalCommunityScopeInput) -> boo
         return True
     community = value.get_local_community()
     return community is not None and can_manage_local_community(
-        settings=value.settings,
+        policy_snapshot=value.get_policy_snapshot(),
         discord_user_id=value.discord_user_id,
         local_community=community,
     )
@@ -141,7 +157,7 @@ def is_required_local_community_accessible(
     """Require the selected local community to exist and be accessible."""
     community = value.get_local_community()
     return community is not None and can_access_local_community_from_guild(
-        settings=value.settings,
+        policy_snapshot=value.get_policy_snapshot(),
         discord_user_id=value.discord_user_id,
         discord_guild_id=value.discord_guild_id,
         local_community=community,
@@ -155,7 +171,7 @@ def can_manage_required_local_community(
     """Require management permission for the selected local community."""
     community = value.get_local_community()
     return community is not None and can_manage_local_community(
-        settings=value.settings,
+        policy_snapshot=value.get_policy_snapshot(),
         discord_user_id=value.discord_user_id,
         local_community=community,
     )
@@ -243,8 +259,43 @@ class CommandAccessInput:
     discord_guild_id: int | None
     discord_user_id: str
     member_can_manage_guild: bool = False
+    policy_service: BridgePolicyService | None = None
+    ban_service: UserBanService | None = None
+    _policy_snapshot: BridgePolicySnapshot | None = field(default=None, init=False, repr=False)
+    _policy_snapshot_loaded: bool = field(default=False, init=False, repr=False)
+    _global_ban_decision: BanDecision | None = field(default=None, init=False, repr=False)
     _bridge_user: object | None = field(default=None, init=False, repr=False)
     _bridge_user_loaded: bool = field(default=False, init=False, repr=False)
+
+    def get_policy_snapshot(self) -> BridgePolicySnapshot:
+        """Resolve one memoized effective policy snapshot for all access checks."""
+        if not self._policy_snapshot_loaded:
+            if self.policy_service is None:
+                if self.database is None:
+                    raise RuntimeError("Guild policy access requires a database.")
+                self.policy_service = BridgePolicyService(
+                    settings=self.settings,
+                    repository=self.database.bridge_policy_entries,
+                )
+            self._policy_snapshot = self.policy_service.snapshot()
+            self._policy_snapshot_loaded = True
+        assert self._policy_snapshot is not None
+        return self._policy_snapshot
+
+    def get_global_ban_decision(self) -> BanDecision:
+        """Resolve one memoized global-ban decision for this command input."""
+        if self._global_ban_decision is None:
+            if self.ban_service is None:
+                if self.database is None:
+                    raise RuntimeError("Global-ban access requires a database.")
+                self.ban_service = UserBanService(
+                    database=self.database,
+                    settings=self.settings,
+                )
+            self._global_ban_decision = self.ban_service.check_global_discord_user(
+                self.discord_user_id
+            )
+        return self._global_ban_decision
 
     def get_bridge_user(self) -> object | None:
         """Resolve and memoize the registered bridge user for this command input."""
@@ -261,10 +312,19 @@ def _has_guild_context(value: CommandAccessInput) -> bool:
     return value.discord_guild_id is not None
 
 
-def _is_guild_allowlisted(value: CommandAccessInput) -> bool:
-    """Apply unrestricted-empty-list compatibility and configured membership."""
-    allowlist = value.settings.discord_guild_allowlist
-    return not allowlist or str(value.discord_guild_id) in allowlist
+def _is_global_user_not_banned(value: RegisteredDiscordUserInput) -> bool:
+    """Admit only callers without an active global bridge ban."""
+    return not value.get_global_ban_decision().banned
+
+
+def _global_ban_message(value: RegisteredDiscordUserInput) -> str:
+    """Render the existing scope-specific global-ban rejection text."""
+    return render_ban_message(value.get_global_ban_decision())
+
+
+def _is_command_guild_allowed(value: CommandAccessInput) -> bool:
+    """Apply effective dynamic/bootstrap guild policy for this interaction."""
+    return value.get_policy_snapshot().is_discord_guild_allowed(value.discord_guild_id)
 
 
 def _can_member_manage_guild(value: CommandAccessInput) -> bool:
@@ -283,10 +343,16 @@ GUILD_CONTEXT_REQUIRED = Precondition(
     predicate=_has_guild_context,
 )
 
-GUILD_ALLOWLISTED = Precondition(
-    name="not_allowlisted",
+GLOBAL_USER_NOT_BANNED = Precondition(
+    name="globally_banned_user",
+    message=_global_ban_message,
+    predicate=_is_global_user_not_banned,
+)
+
+GUILD_POLICY_ALLOWS_COMMAND = Precondition(
+    name="guild_not_allowed",
     message=GUILD_NOT_ALLOWED_MESSAGE,
-    predicate=_is_guild_allowlisted,
+    predicate=_is_command_guild_allowed,
 )
 
 MANAGE_GUILD_REQUIRED = Precondition(
@@ -305,15 +371,15 @@ DISCORD_USER_REGISTERED = Precondition(
 # source of truth for atomic preconditions and their short-circuit order.
 GUILD_COMMAND_ACCESS = PolicyDefinition(
     name="guild_command_access",
-    preconditions=(GUILD_CONTEXT_REQUIRED, GUILD_ALLOWLISTED),
+    preconditions=(GLOBAL_USER_NOT_BANNED, GUILD_CONTEXT_REQUIRED, GUILD_POLICY_ALLOWS_COMMAND),
 )
 
 REGISTERED_GUILD_COMMAND_ACCESS = PolicyDefinition(
     name="registered_guild_command_access",
-    preconditions=(GUILD_CONTEXT_REQUIRED, GUILD_ALLOWLISTED, DISCORD_USER_REGISTERED),
+    preconditions=(GLOBAL_USER_NOT_BANNED, GUILD_CONTEXT_REQUIRED, GUILD_POLICY_ALLOWS_COMMAND, DISCORD_USER_REGISTERED),
 )
 
 MANAGE_GUILD_COMMAND_ACCESS = PolicyDefinition(
     name="manage_guild_command_access",
-    preconditions=(GUILD_CONTEXT_REQUIRED, GUILD_ALLOWLISTED, MANAGE_GUILD_REQUIRED),
+    preconditions=(GLOBAL_USER_NOT_BANNED, GUILD_CONTEXT_REQUIRED, GUILD_POLICY_ALLOWS_COMMAND, MANAGE_GUILD_REQUIRED),
 )

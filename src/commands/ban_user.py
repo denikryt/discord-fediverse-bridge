@@ -8,6 +8,7 @@ import discord
 from discord import app_commands
 
 from ..config import Settings
+from ..bridge_policy import BridgePolicyService
 from ..db import Database
 from ..local_community_permissions import is_super_admin
 from .guild_guard import GUILD_COMMAND_ACCESS, command_access_allows_autocomplete, reject_if_command_access_denied
@@ -38,7 +39,7 @@ def _matches_current(value: str, current: str) -> bool:
     return current.casefold() in value.casefold()
 
 
-def _ban_community_autocomplete(database: Database, settings: Settings):
+def _ban_community_autocomplete(database: Database, settings: Settings, policy_service: BridgePolicyService):
     """Build autocomplete for `/ban-user community` with owner/admin scope."""
 
     async def autocomplete(
@@ -47,10 +48,10 @@ def _ban_community_autocomplete(database: Database, settings: Settings):
     ) -> list[app_commands.Choice[str]]:
         """Return manageable active local communities for the invoking user."""
         try:
-            if not await command_access_allows_autocomplete(interaction, definition=GUILD_COMMAND_ACCESS, settings=settings):
+            if not await command_access_allows_autocomplete(interaction, definition=GUILD_COMMAND_ACCESS, settings=settings, database=database):
                 return []
             discord_user_id = str(interaction.user.id)
-            if is_super_admin(settings=settings, discord_user_id=discord_user_id):
+            if is_super_admin(policy_snapshot=policy_service.snapshot(), discord_user_id=discord_user_id):
                 communities = database.local_communities.list_active_local_communities()
                 include_guild = True
             elif interaction.guild_id is not None:
@@ -90,6 +91,7 @@ def register(
     tree: app_commands.CommandTree,
     database: Database,
     settings: Settings,
+    policy_service: BridgePolicyService,
 ) -> None:
     """Register the `/ban-user` command on the Discord application tree."""
 
@@ -103,7 +105,7 @@ def register(
         reason="Optional moderation note",
     )
     @app_commands.autocomplete(
-        community=_ban_community_autocomplete(database, settings),
+        community=_ban_community_autocomplete(database, settings, policy_service),
     )
     async def ban_user(
         interaction: discord.Interaction,
@@ -116,12 +118,13 @@ def register(
         # order used by project tests while Discord itself supplies named options.
         if community and "@" in community and "@" not in user:
             user, community = community, user
-        if await reject_if_command_access_denied(interaction, definition=GUILD_COMMAND_ACCESS, settings=settings):
+        if await reject_if_command_access_denied(interaction, definition=GUILD_COMMAND_ACCESS, settings=settings, database=database):
             return
         result = ban_user_operation(
             BanUserInput(
                 database=database,
                 settings=settings,
+                policy_service=policy_service,
                 discord_user_id=str(interaction.user.id),
                 discord_guild_id=interaction.guild_id,
                 community_slug=community,

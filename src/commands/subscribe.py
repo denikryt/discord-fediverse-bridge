@@ -19,7 +19,7 @@ from ..community_discovery import (
 from ..config import Settings
 from ..db import Database
 from ..fedify_gateway_client import FedifyGatewayClient
-from ..federation_policy import is_instance_allowed
+from ..bridge_policy import BridgePolicyService, PolicyType
 from ..lemmy_client import LemmyClient
 from ..lemmyverse_communities import (
     LemmyverseCommunityCache,
@@ -36,6 +36,7 @@ def register(
     database: Database,
     fedify_gateway: FedifyGatewayClient,
     settings: Settings,
+    policy_service: BridgePolicyService,
     lemmyverse_cache: LemmyverseCommunityCache | None = None,
 ) -> None:
     """Register the subscribe-community slash command on the Discord tree.
@@ -50,6 +51,7 @@ def register(
         database=database,
         fedify_gateway=fedify_gateway,
         settings=settings,
+        policy_service=policy_service,
         lemmy_client_cls_getter=lambda: LemmyClient,
         resolve_selected_community_getter=lambda: resolve_selected_community,
         fetch_bridge_communities_getter=lambda: fetch_bridge_community_summaries,
@@ -62,8 +64,8 @@ def register(
         channel="Choose a free forum channel, or leave empty to create one named after the selected community.",
     )
     @app_commands.autocomplete(
-        instance_domain=_instance_autocomplete(settings),
-        community=_community_autocomplete(settings, lemmyverse_cache=cache),
+        instance_domain=_instance_autocomplete(settings, database, policy_service),
+        community=_community_autocomplete(settings, database, policy_service, lemmyverse_cache=cache),
     )
     async def subscribe_community(
         interaction: discord.Interaction,
@@ -120,36 +122,45 @@ def _iter_option_values_by_name(payload: object, name: str):
             yield option.get("value")
         yield from _iter_option_values_by_name(option, name)
 
-def _instance_autocomplete(settings: Settings | None):
-    """Return allowlist entries as Discord choices; empty list when allowlist is open."""
-    allowlist = settings.federation_allowlist if settings is not None else []
+def _instance_autocomplete(
+    settings: Settings,
+    database: Database,
+    policy_service: BridgePolicyService,
+):
+    """Return effective allowed bootstrap/dynamic hosts as Discord choices."""
 
     async def autocomplete(
         interaction: discord.Interaction,
         current: str,
     ) -> list[app_commands.Choice[str]]:
-        if not await command_access_allows_autocomplete(interaction, definition=GUILD_COMMAND_ACCESS, settings=settings):
+        if not await command_access_allows_autocomplete(
+            interaction,
+            definition=GUILD_COMMAND_ACCESS,
+            settings=settings,
+            database=database,
+        ):
             return []
-        if not allowlist:
-            return []
+        snapshot = policy_service.snapshot()
         choices = [
-            app_commands.Choice(name=hostname, value=f"https://{hostname}")
-            for hostname in allowlist
+            app_commands.Choice(name=entry.subject, value=f"https://{entry.subject}")
+            for entry in snapshot.list_effective_entries(PolicyType.FEDERATION_ALLOW)
+            if snapshot.federation_decision(entry.subject).allowed
+            and current.casefold() in entry.subject.casefold()
         ]
-        # Same-instance local discovery should be discoverable from the same
-        # command surface even when remote federation uses a restrictive list.
-        if settings is not None:
-            local_origin = getattr(settings, "normalized_public_bridge_base_url", "")
-            local_hostname = urlparse(local_origin).hostname
-            if local_origin and local_hostname and all(choice.name != local_hostname for choice in choices):
+        local_origin = settings.normalized_public_bridge_base_url
+        local_hostname = urlparse(local_origin).hostname
+        if local_hostname and current.casefold() in local_hostname.casefold():
+            if all(choice.name != local_hostname for choice in choices):
                 choices.append(app_commands.Choice(name=local_hostname, value=local_origin))
-        return choices
+        return choices[:25]
 
     return autocomplete
 
 
 def _community_autocomplete(
     settings: Settings,
+    database: Database,
+    policy_service: BridgePolicyService,
     *,
     lemmyverse_cache: LemmyverseCommunityCache | None = None,
 ):
@@ -159,14 +170,13 @@ def _community_autocomplete(
     normal Lemmy host. The callback keeps network failures non-fatal so Discord
     autocomplete degrades to an empty list instead of surfacing tracebacks.
     """
-    allowlist = settings.federation_allowlist if settings is not None else []
     cache = lemmyverse_cache or LemmyverseCommunityCache()
 
     async def autocomplete(
         interaction: discord.Interaction,
         current: str,
     ) -> list[app_commands.Choice[str]]:
-        if not await command_access_allows_autocomplete(interaction, definition=GUILD_COMMAND_ACCESS, settings=settings):
+        if not await command_access_allows_autocomplete(interaction, definition=GUILD_COMMAND_ACCESS, settings=settings, database=database):
             return []
         instance_url = _extract_instance_domain_for_autocomplete(interaction)
 
@@ -175,7 +185,7 @@ def _community_autocomplete(
                 raw_choices = await autocomplete_lemmyverse_communities(
                     cache,
                     current=current,
-                    allowlist=allowlist,
+                    policy_snapshot=policy_service.snapshot(),
                 )
             except Exception:
                 logger.exception("Failed to autocomplete communities from Lemmyverse")
@@ -186,7 +196,10 @@ def _community_autocomplete(
             normalized_origin = normalize_instance_domain(instance_url)
         except CommunityResolutionError:
             return []
-        if not is_bridge_origin(normalized_origin, settings) and not is_instance_allowed(normalized_origin, allowlist):
+        if (
+            not is_bridge_origin(normalized_origin, settings)
+            and not policy_service.snapshot().federation_decision(normalized_origin).allowed
+        ):
             return []
         try:
             raw_choices = await autocomplete_communities(

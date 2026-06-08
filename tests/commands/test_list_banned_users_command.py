@@ -12,7 +12,7 @@ from src.commands import list_banned_users
 @pytest.mark.asyncio
 async def test_list_banned_users_command_passes_user_and_guild_and_returns_ephemeral(command_tree, interaction, database) -> None:
     """The adapter keeps list output private and passes guild context."""
-    settings = SimpleNamespace(discord_guild_allowlist=[], local_community_operator_allowlist=[])
+    settings = SimpleNamespace(discord_guild_allowlist=[], bridge_super_admin_user_ids=[])
     database.local_communities.get_local_community_by_slug.return_value = SimpleNamespace(
         id=1,
         slug="cats",

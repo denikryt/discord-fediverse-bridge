@@ -12,6 +12,7 @@ import logging
 from dataclasses import dataclass
 
 from ..db import Database
+from ..bridge_policy import BridgePolicyService
 from ..fedify_gateway_client import SendLocalCommunityRelayDelivery
 from .activitypub_renderers import render_local_community_relay_activity
 
@@ -30,10 +31,11 @@ class RelayFanoutSummary:
 class LocalCommunityFederationFanout:
     """Coordinate durable federation relay for local-community inbound events."""
 
-    def __init__(self, *, database: Database, fedify_gateway: object) -> None:
+    def __init__(self, *, database: Database, fedify_gateway: object, policy_service: BridgePolicyService) -> None:
         """Initialize the fanout helper with persistence and gateway boundaries."""
         self.database = database
         self.fedify_gateway = fedify_gateway
+        self.policy_service = policy_service
 
     async def relay_create(self, *, event: object, local_community: object, object_kind: str) -> RelayFanoutSummary:
         """Relay one inbound remote create to other accepted remote subscribers."""
@@ -105,6 +107,13 @@ class LocalCommunityFederationFanout:
 
     async def _relay_to_targets(self, *, event: object, local_community: object, object_kind: str, operation: str, targets: list[dict[str, str]]) -> RelayFanoutSummary:
         """Persist source/target rows, render payloads, and call the gateway."""
+        snapshot = self.policy_service.snapshot()
+        targets = [
+            target for target in targets
+            if snapshot.federation_decision(
+                target.get("remote_inbox_url") or target.get("remote_actor_id") or ""
+            ).allowed
+        ]
         source_json = getattr(event, "source_activity_json", None)
         if not source_json:
             # Older tests and non-upgraded gateway events lack source JSON. The

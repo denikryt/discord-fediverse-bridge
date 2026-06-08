@@ -8,6 +8,7 @@ import discord
 from discord import app_commands
 
 from ..config import Settings
+from ..bridge_policy import BridgePolicyService
 from ..db import Database
 from ..local_community_permissions import (
     can_access_local_community_from_guild,
@@ -44,7 +45,7 @@ def _matches_current(value: str, current: str) -> bool:
     return current.casefold() in value.casefold()
 
 
-def _edit_community_autocomplete(database: Database, settings: Settings):
+def _edit_community_autocomplete(database: Database, settings: Settings, policy_service: BridgePolicyService):
     """Build `/edit-community community` autocomplete with management scope."""
 
     async def autocomplete(
@@ -53,10 +54,10 @@ def _edit_community_autocomplete(database: Database, settings: Settings):
     ) -> list[app_commands.Choice[str]]:
         """Return editable active communities for this Discord caller."""
         try:
-            if not await command_access_allows_autocomplete(interaction, definition=GUILD_COMMAND_ACCESS, settings=settings):
+            if not await command_access_allows_autocomplete(interaction, definition=GUILD_COMMAND_ACCESS, settings=settings, database=database):
                 return []
             discord_user_id = str(interaction.user.id)
-            if is_super_admin(settings=settings, discord_user_id=discord_user_id):
+            if is_super_admin(policy_snapshot=policy_service.snapshot(), discord_user_id=discord_user_id):
                 communities = database.local_communities.list_manageable_local_communities()
                 include_guild = True
             elif interaction.guild_id is not None:
@@ -108,6 +109,7 @@ class EditCommunityModal(discord.ui.Modal):
         super().__init__(title=f"Edit {community_slug}")
         self.database = database
         self.settings = settings
+        self.policy_service = policy_service
         self.community_slug = community_slug
         # Discord modal defaults must be supplied when constructing the inputs,
         # so fields are added dynamically instead of as static class attrs.
@@ -145,12 +147,13 @@ class EditCommunityModal(discord.ui.Modal):
 
     async def on_submit(self, interaction: discord.Interaction) -> None:
         """Re-run runtime authorization and persist the submitted metadata."""
-        if await reject_if_command_access_denied(interaction, definition=GUILD_COMMAND_ACCESS, settings=self.settings):
+        if await reject_if_command_access_denied(interaction, definition=GUILD_COMMAND_ACCESS, settings=self.settings, database=self.database):
             return
         result = edit_community_operation(
             EditCommunityInput(
                 database=self.database,
                 settings=self.settings,
+                policy_service=self.policy_service,
                 discord_user_id=str(interaction.user.id),
                 discord_guild_id=interaction.guild_id,
                 community_slug=self.community_slug,
@@ -180,6 +183,7 @@ def _can_open_edit_modal(
     *,
     database: Database,
     settings: Settings,
+    policy_service: BridgePolicyService,
     discord_user_id: str,
     discord_guild_id: int | None,
     community_slug: str,
@@ -195,7 +199,7 @@ def _can_open_edit_modal(
     normalized_slug = community_slug.strip()
     community = database.local_communities.get_local_community_by_slug(normalized_slug)
     if community is None or not can_access_local_community_from_guild(
-        settings=settings,
+        policy_snapshot=policy_service.snapshot(),
         discord_user_id=discord_user_id,
         discord_guild_id=discord_guild_id,
         local_community=community,
@@ -203,7 +207,7 @@ def _can_open_edit_modal(
     ):
         return None, f"Unknown or inaccessible local community: {normalized_slug}"
     if not can_manage_local_community(
-        settings=settings,
+        policy_snapshot=policy_service.snapshot(),
         discord_user_id=discord_user_id,
         local_community=community,
     ):
@@ -215,6 +219,7 @@ def register(
     tree: app_commands.CommandTree,
     database: Database,
     settings: Settings,
+    policy_service: BridgePolicyService,
 ) -> None:
     """Register the `/edit-community` command on the Discord application tree."""
 
@@ -226,18 +231,19 @@ def register(
         community="Local community slug, for example cats",
     )
     @app_commands.autocomplete(
-        community=_edit_community_autocomplete(database, settings),
+        community=_edit_community_autocomplete(database, settings, policy_service),
     )
     async def edit_community(
         interaction: discord.Interaction,
         community: str,
     ) -> None:
         """Open a prefilled edit modal or return a private rejection message."""
-        if await reject_if_command_access_denied(interaction, definition=GUILD_COMMAND_ACCESS, settings=settings):
+        if await reject_if_command_access_denied(interaction, definition=GUILD_COMMAND_ACCESS, settings=settings, database=database):
             return
         community_row, error = _can_open_edit_modal(
             database=database,
             settings=settings,
+            policy_service=policy_service,
             discord_user_id=str(interaction.user.id),
             discord_guild_id=interaction.guild_id,
             community_slug=community,
@@ -249,6 +255,7 @@ def register(
         modal = EditCommunityModal(
             database=database,
             settings=settings,
+            policy_service=policy_service,
             community_slug=getattr(community_row, "slug"),
             display_name=getattr(community_row, "display_name"),
             summary=getattr(community_row, "summary", None),

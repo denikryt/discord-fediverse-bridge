@@ -8,6 +8,7 @@ import logging
 import uvicorn
 
 from .actor_key_service import BridgeActorKeyBootstrap
+from .bridge_policy import BridgePolicyService
 from .community_sync.discord_fanout import DiscordFanout
 from .community_sync.runtime import CommunityRuntime
 from .config import Settings
@@ -72,6 +73,7 @@ def build_runtime(settings: Settings) -> Runtime:
     database.migrate()
     BridgeActorKeyBootstrap(database=database, settings=settings).ensure()
 
+    bridge_policy_service = BridgePolicyService(settings=settings, repository=database.bridge_policy_entries)
     fedify_gateway = FedifyGatewayClient(settings)
     discord_oauth_client = DiscordOAuthClient(settings)
     content_publish_service = ContentPublishService(
@@ -79,6 +81,7 @@ def build_runtime(settings: Settings) -> Runtime:
         fedify_gateway=fedify_gateway,
         bridge_prefix=settings.bridge_display_prefix,
         settings=settings,
+        bridge_policy_service=bridge_policy_service,
     )
     registration_service = RegistrationService(
         database=database,
@@ -89,6 +92,7 @@ def build_runtime(settings: Settings) -> Runtime:
         fedify_gateway=fedify_gateway,
         content_publish_service=content_publish_service,
         bridge_prefix=settings.bridge_display_prefix,
+        bridge_policy_service=bridge_policy_service,
     )
 
     # CommunityRuntime is constructed without discord_fanout first so it can be
@@ -104,14 +108,16 @@ def build_runtime(settings: Settings) -> Runtime:
         database=database,
         community_runtime=community_runtime,
         local_community_runtime=local_community_runtime,
+        bridge_policy_service=bridge_policy_service,
     )
     bot = BridgeBot(
         settings=settings,
         database=database,
         fedify_gateway=fedify_gateway,
         event_router=event_router,
+        bridge_policy_service=bridge_policy_service,
     )
-    discord_fanout = DiscordFanout(bot=bot)
+    discord_fanout = DiscordFanout(bot=bot, database=database, policy_service=bridge_policy_service)
     community_runtime.discord_fanout = discord_fanout
     # Wire bot into CommunityRuntime after construction for the same reason
     # discord_fanout is injected late — bot depends on community_runtime existing first.
@@ -124,6 +130,7 @@ def build_runtime(settings: Settings) -> Runtime:
         discord_oauth_client=discord_oauth_client,
         content_publish_service=content_publish_service,
         registration_service=registration_service,
+        bridge_policy_service=bridge_policy_service,
         bot=bot,
         community_runtime=community_runtime,
         local_community_runtime=local_community_runtime,

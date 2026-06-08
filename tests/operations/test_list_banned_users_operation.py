@@ -13,7 +13,7 @@ from support.db import build_database
 
 def _settings(*, super_admins: list[str] | None = None) -> SimpleNamespace:
     """Build the settings fields read by list operation policy."""
-    return SimpleNamespace(local_community_operator_allowlist=super_admins or [])
+    return SimpleNamespace(bridge_super_admin_user_ids=super_admins or [])
 
 
 def _community(database: object, *, slug: str = "cats", guild_id: int = 10, owner_id: str = "111", forum_channel_id: int = 100) -> object:

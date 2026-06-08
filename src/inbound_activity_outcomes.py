@@ -15,6 +15,7 @@ class InboundActivityOutcome(StrEnum):
 
     APPLIED = "applied"
     IGNORED_INSTANCE_NOT_ALLOWLISTED = "ignored_instance_not_allowlisted"
+    IGNORED_INSTANCE_BLOCKLISTED = "ignored_instance_blocklisted"
     IGNORED_BY_BAN = "ignored_by_ban"
     IGNORED_BY_DISABLED_COMMUNITY = "ignored_by_disabled_community"
     IGNORED_DISCORD_ORIGINATED_ECHO = "ignored_discord_originated_echo"

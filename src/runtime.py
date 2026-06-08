@@ -5,6 +5,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 
 from .community_sync.runtime import CommunityRuntime
+from .bridge_policy import BridgePolicyService
 from .config import Settings
 from .db import Database
 from .discord_bot import BridgeBot
@@ -31,6 +32,7 @@ class Runtime:
     discord_oauth_client: DiscordOAuthClient
     content_publish_service: ContentPublishService
     registration_service: RegistrationService
+    bridge_policy_service: BridgePolicyService
     bot: BridgeBot
     community_runtime: CommunityRuntime
     local_community_runtime: LocalCommunityRuntime

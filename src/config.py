@@ -1,6 +1,6 @@
 """Environment-backed settings for the Python bridge process."""
 
-from pydantic import Field, HttpUrl, field_validator
+from pydantic import Field, HttpUrl, field_validator, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -37,29 +37,20 @@ class Settings(BaseSettings):
     )
     bridge_display_prefix: str = Field(default="[bridge]", alias="BRIDGE_DISPLAY_PREFIX")
     log_level: str = Field(default="INFO", alias="LOG_LEVEL")
-    # Comma-separated list of allowed Lemmy instance hostnames (e.g. "lemmy.world,beehaw.org").
-    # Empty means all instances are allowed (open federation).
+    # Bootstrap policy remains immutable for the process lifetime. Dynamic
+    # entries are persisted separately and merged by BridgePolicyService.
     federation_allowlist: list[str] = Field(default_factory=list, alias="FEDERATION_ALLOWLIST")
-    # Comma-separated Discord user IDs allowed to create local communities.
-    # The bridge keeps this operator list explicit because creating a federated
-    # local community is more privileged than subscribing a channel.
-    local_community_operator_allowlist: list[str] = Field(
-        default_factory=list,
-        alias="LOCAL_COMMUNITY_OPERATOR_ALLOWLIST",
-    )
-    # Comma-separated Discord guild IDs allowed to use slash commands. Empty
-    # means the bot remains usable in any guild where it is installed.
+    federation_blocklist: list[str] = Field(default_factory=list, alias="FEDERATION_BLOCKLIST")
     discord_guild_allowlist: list[str] = Field(default_factory=list, alias="DISCORD_GUILD_ALLOWLIST")
+    discord_guild_blocklist: list[str] = Field(default_factory=list, alias="DISCORD_GUILD_BLOCKLIST")
+    bridge_super_admin_user_ids: list[str] = Field(alias="BRIDGE_SUPER_ADMIN_USER_IDS")
 
-    @field_validator("federation_allowlist", "local_community_operator_allowlist", mode="before")
+    @field_validator("federation_allowlist", "federation_blocklist", mode="before")
     @classmethod
     def _split_allowlist(cls, v: object) -> list[str]:
         # Accept comma-separated env values:
-        #   FEDERATION_ALLOWLIST=lemmy.world,beehaw.org
-        #   LOCAL_COMMUNITY_OPERATOR_ALLOWLIST=123456789012345678,987654321098765432
-        #
-        # Also tolerate pydantic-settings decoding a bare numeric env value as int:
-        #   LOCAL_COMMUNITY_OPERATOR_ALLOWLIST=123456789012345678
+        # Host policy lists are comma-separated and normalized later by the
+        # runtime policy service so startup parsing remains transport-neutral.
         if v is None or v == "":
             return []
 
@@ -72,7 +63,7 @@ class Settings(BaseSettings):
         return [str(entry).strip() for entry in v if str(entry).strip()]
 
 
-    @field_validator("discord_guild_allowlist", mode="before")
+    @field_validator("discord_guild_allowlist", "discord_guild_blocklist", "bridge_super_admin_user_ids", mode="before")
     @classmethod
     def _split_discord_guild_allowlist(cls, v: object) -> list[str]:
         """Parse and validate comma-separated Discord guild IDs.
@@ -94,9 +85,16 @@ class Settings(BaseSettings):
         invalid = [entry for entry in entries if not entry.isdecimal()]
         if invalid:
             raise ValueError(
-                "DISCORD_GUILD_ALLOWLIST must contain comma-separated decimal Discord guild IDs"
+                "Discord guild and super-admin policy lists must contain comma-separated decimal Discord IDs"
             )
         return entries
+
+    @model_validator(mode="after")
+    def _require_bootstrap_super_admin(self) -> "Settings":
+        """Fail startup when no immutable bridge administrator is configured."""
+        if not self.bridge_super_admin_user_ids:
+            raise ValueError("BRIDGE_SUPER_ADMIN_USER_IDS must contain at least one Discord user ID")
+        return self
 
     @property
     def normalized_public_base_url(self) -> str:

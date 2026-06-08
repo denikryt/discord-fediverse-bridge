@@ -8,6 +8,7 @@ import discord
 from discord import app_commands
 
 from ..config import Settings
+from ..bridge_policy import BridgePolicyService
 from ..db import Database
 from .guild_guard import GUILD_COMMAND_ACCESS, command_access_allows_autocomplete, reject_if_command_access_denied
 from ..operations import ListBannedUsersInput, list_banned_users_operation
@@ -34,7 +35,7 @@ def _list_community_autocomplete(database: Database, settings: Settings):
     ) -> list[app_commands.Choice[str]]:
         """Return active local communities in the current Discord guild."""
         try:
-            if not await command_access_allows_autocomplete(interaction, definition=GUILD_COMMAND_ACCESS, settings=settings):
+            if not await command_access_allows_autocomplete(interaction, definition=GUILD_COMMAND_ACCESS, settings=settings, database=database):
                 return []
             if interaction.guild_id is None:
                 return []
@@ -61,6 +62,7 @@ def register(
     tree: app_commands.CommandTree,
     database: Database,
     settings: Settings,
+    policy_service: BridgePolicyService,
 ) -> None:
     """Register the `/list-banned-users` command on the command tree."""
 
@@ -75,12 +77,13 @@ def register(
         community: str | None = None,
     ) -> None:
         """Run the list operation and return an ephemeral command reply."""
-        if await reject_if_command_access_denied(interaction, definition=GUILD_COMMAND_ACCESS, settings=settings):
+        if await reject_if_command_access_denied(interaction, definition=GUILD_COMMAND_ACCESS, settings=settings, database=database):
             return
         result = list_banned_users_operation(
             ListBannedUsersInput(
                 database=database,
                 settings=settings,
+                policy_service=policy_service,
                 discord_user_id=str(interaction.user.id),
                 discord_guild_id=interaction.guild_id,
                 community_slug=community,

@@ -15,6 +15,9 @@ from typing import TYPE_CHECKING
 
 import discord
 
+from ..bridge_policy import BridgePolicyService
+from ..db import Database
+
 if TYPE_CHECKING:
     from ..models import CommunityMessageGroupDelivery, CommunityThreadGroupDelivery
     from ..discord_bot import BridgeBot
@@ -103,9 +106,19 @@ class DiscordFanout:
     already-resolved sibling targets.
     """
 
-    def __init__(self, *, bot: BridgeBot) -> None:
+    def __init__(self, *, bot: BridgeBot, database: Database, policy_service: BridgePolicyService) -> None:
         """Initialise fanout with the shared bot instance for Discord API calls."""
         self.bot = bot
+        self.database = database
+        self.policy_service = policy_service
+
+    def _channel_is_allowed(self, channel_id: int) -> bool:
+        """Return whether the persisted subscription channel's guild is allowed."""
+        subscription = self.database.remote_subscriptions.get_subscription_by_channel(channel_id)
+        guild_id = getattr(subscription, "discord_guild_id", None) if subscription is not None else None
+        # Missing guild metadata is preserved for compatibility; the SDK object
+        # path can still proceed, while known denied guilds are skipped early.
+        return guild_id is None or self.policy_service.snapshot().is_discord_guild_allowed(guild_id)
 
     def _author_label(self, message: object) -> str | None:
         """Resolve a registered local handle through the bot's shared services."""
@@ -138,7 +151,12 @@ class DiscordFanout:
         title = getattr(source_thread, "name", "Untitled")
         body = _format_mirror_body(source_starter_message, author_label=self._author_label(source_starter_message))
 
+        snapshot = self.policy_service.snapshot()
         for channel_id in sibling_channel_ids:
+            subscription = self.database.remote_subscriptions.get_subscription_by_channel(channel_id)
+            guild_id = getattr(subscription, "discord_guild_id", None) if subscription is not None else None
+            if guild_id is not None and not snapshot.is_discord_guild_allowed(guild_id):
+                continue
             try:
                 forum_channel = await self.bot.fetch_forum_channel(channel_id)
                 result = await forum_channel.create_thread(name=title, content=body)
@@ -184,7 +202,12 @@ class DiscordFanout:
         """
         results: list[MirrorMessageResult] = []
         content = _format_mirror_body(source_message, author_label=self._author_label(source_message))
+        snapshot = self.policy_service.snapshot()
         for delivery in sibling_thread_deliveries:
+            subscription = self.database.remote_subscriptions.get_subscription_by_channel(delivery.discord_channel_id)
+            guild_id = getattr(subscription, "discord_guild_id", None) if subscription is not None else None
+            if guild_id is not None and not snapshot.is_discord_guild_allowed(guild_id):
+                continue
             try:
                 thread = await self.bot.get_thread_by_id(delivery.discord_thread_id)
                 # Resolve the Discord reference for this specific mirror thread.
@@ -232,7 +255,13 @@ class DiscordFanout:
         has no existing backtick-quoted attribution line (e.g. messages created
         before the header format was introduced).
         """
+        snapshot = self.policy_service.snapshot()
+
         async def _edit_one(delivery: CommunityMessageGroupDelivery) -> None:
+            subscription = self.database.remote_subscriptions.get_subscription_by_channel(delivery.discord_channel_id)
+            guild_id = getattr(subscription, "discord_guild_id", None) if subscription is not None else None
+            if guild_id is not None and not snapshot.is_discord_guild_allowed(guild_id):
+                return
             try:
                 from ..formatting import apply_edit_to_discord_message
                 thread = await self.bot.get_thread_by_id(delivery.discord_thread_id)
@@ -277,7 +306,13 @@ class DiscordFanout:
         The caller is responsible for sending the AP Delete regardless of
         whether any individual mirror delete failed.
         """
+        snapshot = self.policy_service.snapshot()
+
         async def _delete_one(delivery: CommunityMessageGroupDelivery) -> None:
+            subscription = self.database.remote_subscriptions.get_subscription_by_channel(delivery.discord_channel_id)
+            guild_id = getattr(subscription, "discord_guild_id", None) if subscription is not None else None
+            if guild_id is not None and not snapshot.is_discord_guild_allowed(guild_id):
+                return
             try:
                 thread = await self.bot.get_thread_by_id(delivery.discord_thread_id)
                 message = await thread.fetch_message(delivery.discord_message_id)

@@ -17,6 +17,7 @@ from .repositories import (
     CommunityActorBanRepository,
     ManagementAuditEventRepository,
     BridgeActorFollowRepository,
+    BridgePolicyEntryRepository,
     DiscordFanoutGroupRepository,
     DiscordDirectoryRepository,
     GuildInvitePublicationRepository,
@@ -55,6 +56,7 @@ class Database:
         self.local_community_relay = LocalCommunityRelayRepository(self.session)
         self.remote_subscriptions = RemoteSubscriptionRepository(self.session)
         self.bridge_actor_follows = BridgeActorFollowRepository(self.session)
+        self.bridge_policy_entries = BridgePolicyEntryRepository(self.session)
         self.event_receipts = EventReceiptRepository(self.session)
         self.users = UserRepository(self.session)
         self.registration_sessions = RegistrationSessionRepository(self.session)
@@ -71,6 +73,7 @@ class Database:
             community_actor_bans=self.community_actor_bans,
             management_audit=self.management_audit,
             guild_invite_publications=self.guild_invite_publications,
+            bridge_policy_entries=self.bridge_policy_entries,
         )
 
     def create_all(self) -> None:

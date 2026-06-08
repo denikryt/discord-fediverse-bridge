@@ -34,7 +34,7 @@ def _settings(*, allowlist: str = "123") -> Settings:
         bridge_display_prefix="[bridge]",
         log_level="INFO",
         federation_allowlist=[],
-        local_community_operator_allowlist=allowlist.split(",") if allowlist else [],
+        bridge_super_admin_user_ids=allowlist.split(",") if allowlist else [],
     )
 
 

@@ -8,6 +8,7 @@ from discordops import run_operation_definition_async
 
 from ..community_labels import community_relay_label
 from ..db import Database
+from ..bridge_policy import BridgePolicyService
 from ..config import Settings
 from ..fedify_gateway_client import FedifyGatewayClient
 from .guild_guard import REGISTERED_GUILD_COMMAND_ACCESS, reject_if_command_access_denied
@@ -80,6 +81,7 @@ def register(
     database: Database,
     fedify_gateway: FedifyGatewayClient,
     settings: Settings,
+    policy_service: BridgePolicyService,
 ) -> None:
     """Register the unsubscribe-channel slash command on the given command tree."""
     # The registered slash command adapts Discord input into the operation
@@ -108,6 +110,7 @@ def register(
                     fedify_gateway=fedify_gateway,
                     channel_id=channel.id,
                     channel_mention=channel.mention,
+                    policy_service=policy_service,
                 ),
             )
         elif local_subscriber is not None:

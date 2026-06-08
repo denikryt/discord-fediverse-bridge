@@ -20,7 +20,7 @@ from urllib.parse import urlparse
 
 import httpx
 
-from .federation_policy import is_instance_allowed
+from .bridge_policy import BridgePolicySnapshot
 
 logger = logging.getLogger(__name__)
 
@@ -255,14 +255,17 @@ async def autocomplete_lemmyverse_communities(
     cache: LemmyverseCommunityCache,
     *,
     current: str,
-    allowlist: Iterable[str],
+    policy_snapshot: BridgePolicySnapshot,
 ) -> list[tuple[str, str]]:
     """Return ``(choice_name, actor_url)`` pairs for global autocomplete."""
     if hasattr(cache, "get_entries_for_autocomplete"):
         entries = await cache.get_entries_for_autocomplete()
     else:
         entries = await cache.get_entries()
-    allowed_entries = [entry for entry in entries if is_instance_allowed(entry.actor_id, allowlist)]
+    allowed_entries = [
+        entry for entry in entries
+        if policy_snapshot.federation_decision(entry.actor_id).allowed
+    ]
     ranked_entries = _rank_entries(allowed_entries, query=current)
     return [(_choice_name(entry), entry.actor_id) for entry in ranked_entries[:DISCORD_AUTOCOMPLETE_LIMIT]]
 

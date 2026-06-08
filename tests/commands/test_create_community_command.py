@@ -16,7 +16,7 @@ def _settings() -> SimpleNamespace:
     """Return command settings with no guild restriction for create tests."""
     return SimpleNamespace(
         discord_guild_allowlist=[],
-        local_community_operator_allowlist=[],
+        bridge_super_admin_user_ids=[],
         normalized_fedify_origin="https://bridge.example",
     )
 
@@ -65,7 +65,7 @@ async def test_create_community_rejects_disallowed_guild_before_registration_loo
     """Guild allowlist failures stop before onboarding checks or modal open."""
     settings = SimpleNamespace(
         discord_guild_allowlist=["111"],
-        local_community_operator_allowlist=[],
+        bridge_super_admin_user_ids=[],
         normalized_fedify_origin="https://bridge.example",
     )
     interaction.guild_id = 99999

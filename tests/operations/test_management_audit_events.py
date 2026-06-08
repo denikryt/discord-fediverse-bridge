@@ -48,7 +48,7 @@ from support.db import build_database
 def _settings(*, super_admins: list[str] | None = None) -> SimpleNamespace:
     """Build the settings fields read by management operations."""
     return SimpleNamespace(
-        local_community_operator_allowlist=super_admins or [],
+        bridge_super_admin_user_ids=super_admins or [],
         normalized_fedify_origin="https://bridge.example",
     )
 

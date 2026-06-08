@@ -450,6 +450,9 @@ app.post("/publish-local-community", async (context) => {
         typeof payload.inReplyToObjectId === "string"
           ? payload.inReplyToObjectId
           : null,
+      targetInboxUrls: Array.isArray(payload.targetInboxUrls)
+        ? payload.targetInboxUrls.filter((value): value is string => typeof value === "string")
+        : null,
     });
     return context.json(result);
   } catch (error) {
@@ -589,6 +592,9 @@ app.post("/update", async (context) => {
         typeof payload.inReplyToObjectId === "string" && payload.inReplyToObjectId.length > 0
           ? payload.inReplyToObjectId
           : null,
+      targetInboxUrls: Array.isArray(payload.targetInboxUrls)
+        ? payload.targetInboxUrls.filter((value): value is string => typeof value === "string")
+        : null,
     });
     return context.json({ status: "ok" });
   } catch (error) {
@@ -625,6 +631,9 @@ app.post("/delete", async (context) => {
       actorUsername: payload.actorUsername,
       communityActorUrl: payload.communityActorUrl,
       apObjectId: payload.apObjectId,
+      targetInboxUrls: Array.isArray(payload.targetInboxUrls)
+        ? payload.targetInboxUrls.filter((value): value is string => typeof value === "string")
+        : null,
     });
     return context.json({ status: "ok" });
   } catch (error) {

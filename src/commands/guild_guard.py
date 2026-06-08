@@ -27,6 +27,8 @@ async def evaluate_command_access(
     definition: PolicyDefinition,
     settings: Settings,
     database: Database | Any | None = None,
+    policy_service: Any | None = None,
+    ban_service: Any | None = None,
 ) -> PolicyResult:
     """Evaluate one access policy from primitive interaction identity fields."""
     policy_input = CommandAccessInput(
@@ -35,6 +37,8 @@ async def evaluate_command_access(
         discord_guild_id=getattr(interaction, "guild_id", None),
         discord_user_id=str(interaction.user.id),
         member_can_manage_guild=bool(getattr(getattr(interaction.user, "guild_permissions", None), "manage_guild", False)),
+        policy_service=policy_service,
+        ban_service=ban_service,
     )
     return await evaluate_policy_async(definition, policy_input)
 
@@ -69,6 +73,8 @@ async def reject_if_command_access_denied(
     definition: PolicyDefinition,
     settings: Settings,
     database: Database | Any | None = None,
+    policy_service: Any | None = None,
+    ban_service: Any | None = None,
 ) -> bool:
     """Evaluate a policy, present a denial, and report whether handler flow stops."""
     result = await evaluate_command_access(
@@ -76,6 +82,8 @@ async def reject_if_command_access_denied(
         definition=definition,
         settings=settings,
         database=database,
+        policy_service=policy_service,
+        ban_service=ban_service,
     )
     if result.allowed:
         return False
@@ -89,6 +97,8 @@ async def command_access_allows_autocomplete(
     definition: PolicyDefinition,
     settings: Settings,
     database: Database | Any | None = None,
+    policy_service: Any | None = None,
+    ban_service: Any | None = None,
 ) -> bool:
     """Evaluate policy quietly for autocomplete, which cannot send normal replies."""
     result = await evaluate_command_access(
@@ -96,6 +106,8 @@ async def command_access_allows_autocomplete(
         definition=definition,
         settings=settings,
         database=database,
+        policy_service=policy_service,
+        ban_service=ban_service,
     )
     return result.allowed
 

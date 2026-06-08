@@ -12,7 +12,7 @@ from src.commands import ban_user
 @pytest.mark.asyncio
 async def test_ban_user_command_passes_user_and_guild_and_returns_ephemeral(command_tree, interaction, database) -> None:
     """The adapter passes Discord caller/guild context into runtime policy."""
-    settings = SimpleNamespace(discord_guild_allowlist=[], local_community_operator_allowlist=[])
+    settings = SimpleNamespace(discord_guild_allowlist=[], bridge_super_admin_user_ids=[])
     database.local_communities.get_local_community_by_slug.return_value = SimpleNamespace(
         id=1,
         slug="cats",
@@ -42,7 +42,7 @@ async def test_ban_user_command_passes_user_and_guild_and_returns_ephemeral(comm
 @pytest.mark.asyncio
 async def test_ban_user_command_rejection_stays_ephemeral(command_tree, interaction, database) -> None:
     """Runtime rejection details stay private in the invoking user's response."""
-    settings = SimpleNamespace(discord_guild_allowlist=[], local_community_operator_allowlist=[])
+    settings = SimpleNamespace(discord_guild_allowlist=[], bridge_super_admin_user_ids=[])
     database.local_communities.get_local_community_by_slug.return_value = SimpleNamespace(
         id=1,
         slug="cats",
@@ -65,7 +65,7 @@ async def test_ban_user_command_rejection_stays_ephemeral(command_tree, interact
 @pytest.mark.asyncio
 async def test_ban_community_autocomplete_owner_sees_owned_current_guild(interaction, database) -> None:
     """Owner autocomplete is scoped to owned active communities in this guild."""
-    settings = SimpleNamespace(discord_guild_allowlist=[], local_community_operator_allowlist=[])
+    settings = SimpleNamespace(discord_guild_allowlist=[], bridge_super_admin_user_ids=[])
     database.local_communities.list_active_local_communities_owned_by_user_in_guild.return_value = [
         SimpleNamespace(slug="cats", display_name="Cats", discord_guild_id=99999),
     ]
@@ -83,7 +83,7 @@ async def test_ban_community_autocomplete_owner_sees_owned_current_guild(interac
 @pytest.mark.asyncio
 async def test_ban_community_autocomplete_super_admin_sees_all_guilds(interaction, database) -> None:
     """Super-admin autocomplete lists active communities across guilds."""
-    settings = SimpleNamespace(discord_guild_allowlist=[], local_community_operator_allowlist=["1234567890"])
+    settings = SimpleNamespace(discord_guild_allowlist=[], bridge_super_admin_user_ids=["1234567890"])
     database.local_communities.list_active_local_communities.return_value = [
         SimpleNamespace(slug="cats", display_name="Cats", discord_guild_id=10),
         SimpleNamespace(slug="dogs", display_name="Dogs", discord_guild_id=20),
@@ -101,7 +101,7 @@ async def test_ban_community_autocomplete_super_admin_sees_all_guilds(interactio
 @pytest.mark.asyncio
 async def test_ban_community_autocomplete_filters_by_slug_or_display_name(interaction, database) -> None:
     """Typed text matches either stable slug or human-readable display name."""
-    settings = SimpleNamespace(discord_guild_allowlist=[], local_community_operator_allowlist=[])
+    settings = SimpleNamespace(discord_guild_allowlist=[], bridge_super_admin_user_ids=[])
     database.local_communities.list_active_local_communities_owned_by_user_in_guild.return_value = [
         SimpleNamespace(slug="cats", display_name="Cats", discord_guild_id=99999),
         SimpleNamespace(slug="bird-watch", display_name="Bird Watch", discord_guild_id=99999),
@@ -116,7 +116,7 @@ async def test_ban_community_autocomplete_filters_by_slug_or_display_name(intera
 @pytest.mark.asyncio
 async def test_ban_community_autocomplete_caps_at_twenty_five(interaction, database) -> None:
     """Discord autocomplete choices are capped at 25 entries."""
-    settings = SimpleNamespace(discord_guild_allowlist=[], local_community_operator_allowlist=["1234567890"])
+    settings = SimpleNamespace(discord_guild_allowlist=[], bridge_super_admin_user_ids=["1234567890"])
     database.local_communities.list_active_local_communities.return_value = [
         SimpleNamespace(slug=f"community-{index:02d}", display_name=f"Community {index:02d}", discord_guild_id=99999)
         for index in range(30)
@@ -132,7 +132,7 @@ async def test_ban_community_autocomplete_caps_at_twenty_five(interaction, datab
 @pytest.mark.asyncio
 async def test_ban_community_autocomplete_returns_empty_for_guildless_owner(interaction, database) -> None:
     """Non-admin owners need guild context before autocomplete can list rows."""
-    settings = SimpleNamespace(discord_guild_allowlist=[], local_community_operator_allowlist=[])
+    settings = SimpleNamespace(discord_guild_allowlist=[], bridge_super_admin_user_ids=[])
     interaction.guild_id = None
 
     choices = await ban_user._ban_community_autocomplete(database, settings)(interaction, "")
@@ -145,7 +145,7 @@ async def test_ban_community_autocomplete_returns_empty_for_guildless_owner(inte
 @pytest.mark.asyncio
 async def test_ban_community_autocomplete_supports_guildless_super_admin(interaction, database) -> None:
     """Super-admin autocomplete is not tied to a single guild context."""
-    settings = SimpleNamespace(discord_guild_allowlist=[], local_community_operator_allowlist=["1234567890"])
+    settings = SimpleNamespace(discord_guild_allowlist=[], bridge_super_admin_user_ids=["1234567890"])
     interaction.guild_id = None
     database.local_communities.list_active_local_communities.return_value = [
         SimpleNamespace(slug="cats", display_name="Cats", discord_guild_id=10),
@@ -160,7 +160,7 @@ async def test_ban_community_autocomplete_supports_guildless_super_admin(interac
 @pytest.mark.asyncio
 async def test_ban_community_autocomplete_returns_empty_on_repository_error(interaction, database) -> None:
     """Autocomplete failures are caught so Discord receives an empty list."""
-    settings = SimpleNamespace(discord_guild_allowlist=[], local_community_operator_allowlist=[])
+    settings = SimpleNamespace(discord_guild_allowlist=[], bridge_super_admin_user_ids=[])
     database.local_communities.list_active_local_communities_owned_by_user_in_guild.side_effect = RuntimeError(
         "database unavailable"
     )

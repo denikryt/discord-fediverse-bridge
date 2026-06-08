@@ -11,6 +11,7 @@ from dataclasses import dataclass, field
 from discordops import Operation, Precondition
 
 from ..config import Settings
+from ..bridge_policy import BridgePolicyService, BridgePolicySnapshot
 from ..db import Database
 from ..local_communities.service import LocalCommunityError, normalize_display_name, normalize_summary
 from ..local_community_lifecycle import normalize_local_community_status
@@ -33,7 +34,9 @@ class EditCommunityInput:
     community_slug: str
     display_name: str
     summary: str | None
+    policy_service: BridgePolicyService | None = None
     status: str = "active"
+    _policy_snapshot: BridgePolicySnapshot | None = field(default=None, init=False, repr=False)
     _community: LocalCommunity | None = field(default=None, init=False, repr=False)
     _community_loaded: bool = field(default=False, init=False, repr=False)
     _normalized_display_name: str | None = field(default=None, init=False, repr=False)
@@ -49,6 +52,16 @@ class EditCommunityInput:
     def normalized_community_slug(self) -> str:
         """Return the trimmed community slug from the Discord command value."""
         return self.community_slug.strip()
+
+    def get_policy_snapshot(self) -> BridgePolicySnapshot:
+        """Return one memoized effective policy snapshot for this operation."""
+        if self._policy_snapshot is None:
+            service = self.policy_service or BridgePolicyService(
+                settings=self.settings,
+                repository=self.database.bridge_policy_entries,
+            )
+            self._policy_snapshot = service.snapshot()
+        return self._policy_snapshot
 
     def get_local_community(self) -> LocalCommunity | None:
         """Load and memoize the target local community by globally unique slug."""

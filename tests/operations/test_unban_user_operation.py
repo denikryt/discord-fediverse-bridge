@@ -15,7 +15,7 @@ from support.db import build_database
 
 def _settings(*, super_admins: list[str] | None = None) -> SimpleNamespace:
     """Build the settings fields read by moderation operations."""
-    return SimpleNamespace(local_community_operator_allowlist=super_admins or [])
+    return SimpleNamespace(bridge_super_admin_user_ids=super_admins or [])
 
 
 def _community(
