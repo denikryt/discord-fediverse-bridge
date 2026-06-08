@@ -182,3 +182,39 @@ def test_disabled_community_rejects_list_banned_users(tmp_path: Path) -> None:
     assert result.reason == "community_disabled"
     assert result.message == "Community cats is disabled. Use /edit-community to re-enable it first."
     assert "alice@example.com" not in result.message
+
+
+def test_global_list_skips_local_community_repository(tmp_path: Path, monkeypatch) -> None:
+    """A global list reads global bans without resolving any local community."""
+    database = build_database(tmp_path, "list-global-no-community-read.db")
+    database.community_actor_bans.create_active_ban(
+        local_community_id=None,
+        actor_handle="alice@example.com",
+        actor_url=None,
+        created_by_discord_user_id="999",
+        reason="spam",
+    )
+
+    def fail_lookup(_: str) -> object:
+        """Fail if global scope accidentally touches local-community storage."""
+        raise AssertionError("global scope must not query local communities")
+
+    monkeypatch.setattr(
+        database.local_communities,
+        "get_local_community_by_slug",
+        fail_lookup,
+    )
+
+    result = list_banned_users_operation(
+        ListBannedUsersInput(
+            database,
+            _settings(super_admins=["999"]),
+            "999",
+            None,
+            None,
+        )
+    )
+
+    assert result.applied is True
+    assert "Globally banned users:" in result.message
+    assert "alice@example.com — spam" in result.message

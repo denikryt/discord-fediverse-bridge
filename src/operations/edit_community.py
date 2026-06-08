@@ -14,8 +14,12 @@ from ..config import Settings
 from ..db import Database
 from ..local_communities.service import LocalCommunityError, normalize_display_name, normalize_summary
 from ..local_community_lifecycle import normalize_local_community_status
-from ..local_community_permissions import can_access_local_community_from_guild, can_manage_local_community
 from ..models import LocalCommunity
+from .common_preconditions import (
+    LOCAL_COMMUNITY_ACCESSIBLE,
+    LOCAL_COMMUNITY_GUILD_CONTEXT_REQUIRED,
+    LOCAL_COMMUNITY_MANAGEMENT_ALLOWED,
+)
 
 
 @dataclass(slots=True)
@@ -94,36 +98,6 @@ class EditCommunityResult:
     reason: str
 
 
-def _has_guild_context(operation_input: EditCommunityInput) -> bool:
-    """Return whether Discord supplied a guild id for this command."""
-    return operation_input.discord_guild_id is not None
-
-
-def _is_community_accessible(operation_input: EditCommunityInput) -> bool:
-    """Return whether the requested community exists in the caller's scope."""
-    community = operation_input.get_local_community()
-    if community is None:
-        return False
-    return can_access_local_community_from_guild(
-        settings=operation_input.settings,
-        discord_user_id=operation_input.discord_user_id,
-        discord_guild_id=operation_input.discord_guild_id,
-        local_community=community,
-        include_disabled=True,
-    )
-
-
-def _can_manage_community(operation_input: EditCommunityInput) -> bool:
-    """Return whether the caller is the owner or configured super-admin."""
-    community = operation_input.get_local_community()
-    if community is None:
-        return False
-    return can_manage_local_community(
-        settings=operation_input.settings,
-        discord_user_id=operation_input.discord_user_id,
-        local_community=community,
-    )
-
 
 def _is_display_name_valid(operation_input: EditCommunityInput) -> bool:
     """Return whether display-name input satisfies shared metadata rules."""
@@ -141,10 +115,6 @@ def _is_status_valid(operation_input: EditCommunityInput) -> bool:
     return operation_input.get_normalized_status() is not None
 
 
-def _inaccessible_message(operation_input: EditCommunityInput) -> str:
-    """Build the shared inaccessible-community rejection text."""
-    return f"Unknown or inaccessible local community: {operation_input.normalized_community_slug}"
-
 
 def _display_name_error_message(operation_input: EditCommunityInput) -> str:
     """Return the stable display-name validation message."""
@@ -161,21 +131,9 @@ class EditCommunityOperation(Operation):
 
     name = "edit_community"
     preconditions = (
-        Precondition(
-            name="missing_guild_context",
-            message="This command can only be used inside a guild.",
-            predicate=_has_guild_context,
-        ),
-        Precondition(
-            name="unknown_or_inaccessible_community",
-            message=_inaccessible_message,
-            predicate=_is_community_accessible,
-        ),
-        Precondition(
-            name="cannot_manage_community",
-            message="You are not allowed to manage this local community.",
-            predicate=_can_manage_community,
-        ),
+        LOCAL_COMMUNITY_GUILD_CONTEXT_REQUIRED,
+        LOCAL_COMMUNITY_ACCESSIBLE,
+        LOCAL_COMMUNITY_MANAGEMENT_ALLOWED,
         Precondition(
             name="invalid_display_name",
             message=_display_name_error_message,

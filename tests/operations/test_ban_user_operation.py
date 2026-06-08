@@ -642,3 +642,69 @@ def test_disabled_community_rejects_ban_with_reenable_hint(tmp_path: Path) -> No
     assert result.reason == "community_disabled"
     assert result.message == "Community cats is disabled. Use /edit-community to re-enable it first."
     assert _ban_count(database) == 0
+
+
+def test_global_ban_skips_local_community_repository(tmp_path: Path, monkeypatch) -> None:
+    """A global ban reaches target mutation without any community lookup."""
+    database = build_database(tmp_path, "ban-user-global-no-community-read.db")
+
+    def fail_lookup(_: str) -> object:
+        """Fail if global scope accidentally touches local-community storage."""
+        raise AssertionError("global scope must not query local communities")
+
+    monkeypatch.setattr(
+        database.local_communities,
+        "get_local_community_by_slug",
+        fail_lookup,
+    )
+
+    result = ban_user_operation(
+        BanUserInput(
+            database=database,
+            settings=_settings(super_admins=["999"]),
+            discord_user_id="999",
+            discord_guild_id=None,
+            community_slug=None,
+            actor_handle="alice@example.com",
+            reason="spam",
+        )
+    )
+
+    assert result.applied is True
+    assert result.reason == "created"
+    assert _ban_count(database) == 1
+
+
+def test_scoped_ban_reuses_one_memoized_community_lookup(tmp_path: Path, monkeypatch) -> None:
+    """One scoped action reuses its community across all shared checks and body."""
+    database = build_database(tmp_path, "ban-user-one-community-read.db")
+    _local_community(database, owner_id="111")
+    original_lookup = database.local_communities.get_local_community_by_slug
+    calls = 0
+
+    def count_lookup(slug: str) -> object:
+        """Count the observable repository reads made by one operation input."""
+        nonlocal calls
+        calls += 1
+        return original_lookup(slug)
+
+    monkeypatch.setattr(
+        database.local_communities,
+        "get_local_community_by_slug",
+        count_lookup,
+    )
+
+    result = ban_user_operation(
+        BanUserInput(
+            database=database,
+            settings=_settings(),
+            discord_user_id="111",
+            discord_guild_id=10,
+            community_slug="cats",
+            actor_handle="alice@example.com",
+            reason="spam",
+        )
+    )
+
+    assert result.applied is True
+    assert calls == 1

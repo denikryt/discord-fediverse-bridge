@@ -267,3 +267,40 @@ def test_disabled_community_rejects_unban_without_changing_ban(tmp_path: Path) -
     assert result.reason == "community_disabled"
     assert result.message == "Community cats is disabled. Use /edit-community to re-enable it first."
     assert _all_bans(database)[0].status == "active"
+
+
+def test_global_unban_skips_local_community_repository(tmp_path: Path, monkeypatch) -> None:
+    """A global unban deactivates its row without resolving any community."""
+    database = build_database(tmp_path, "unban-global-no-community-read.db")
+    database.community_actor_bans.create_active_ban(
+        local_community_id=None,
+        actor_handle="alice@example.com",
+        actor_url=None,
+        created_by_discord_user_id="999",
+        reason="spam",
+    )
+
+    def fail_lookup(_: str) -> object:
+        """Fail if global scope accidentally touches local-community storage."""
+        raise AssertionError("global scope must not query local communities")
+
+    monkeypatch.setattr(
+        database.local_communities,
+        "get_local_community_by_slug",
+        fail_lookup,
+    )
+
+    result = unban_user_operation(
+        UnbanUserInput(
+            database,
+            _settings(super_admins=["999"]),
+            "999",
+            None,
+            None,
+            "alice@example.com",
+        )
+    )
+
+    assert result.applied is True
+    assert result.reason == "unbanned"
+    assert _all_bans(database)[0].status == "inactive"

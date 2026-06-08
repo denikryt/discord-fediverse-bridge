@@ -8,9 +8,14 @@ from discordops import Operation, Precondition
 
 from ..config import Settings
 from ..db import Database
-from ..local_community_lifecycle import disabled_moderation_message, is_local_community_disabled
-from ..local_community_permissions import can_access_local_community_from_guild, can_manage_local_community, is_super_admin
 from ..models import LocalCommunity
+from .common_preconditions import (
+    SCOPED_GUILD_CONTEXT_REQUIRED,
+    SCOPED_LOCAL_COMMUNITY_ACCESSIBLE,
+    SCOPED_LOCAL_COMMUNITY_MANAGEMENT_ALLOWED,
+    SCOPED_LOCAL_COMMUNITY_MODERATION_ENABLED,
+    global_scope_authorized_precondition,
+)
 from ..user_bans import ResolvedBanTarget, UnknownLocalBanTarget, resolve_ban_target
 
 
@@ -90,41 +95,6 @@ class BanUserResult:
     stored_reason: str | None = None
 
 
-def _is_global_scope_authorized(value: BanUserInput) -> bool:
-    """Reject omitted-community calls before target validation unless super-admin."""
-    return not value.is_global or is_super_admin(settings=value.settings, discord_user_id=value.discord_user_id)
-
-
-def _has_required_guild_context(value: BanUserInput) -> bool:
-    """Require guild context only for community-owner scoped operations."""
-    return value.is_global or value.discord_guild_id is not None
-
-
-def _is_community_accessible(value: BanUserInput) -> bool:
-    """Resolve and authorize the selected community, while global scope skips it."""
-    if value.is_global:
-        return True
-    community = value.get_local_community()
-    return community is not None and can_access_local_community_from_guild(
-        settings=value.settings, discord_user_id=value.discord_user_id,
-        discord_guild_id=value.discord_guild_id, local_community=community, include_disabled=True,
-    )
-
-
-def _can_manage_community(value: BanUserInput) -> bool:
-    """Require owner or super-admin for selected community."""
-    if value.is_global:
-        return True
-    community = value.get_local_community()
-    return community is not None and can_manage_local_community(
-        settings=value.settings, discord_user_id=value.discord_user_id, local_community=community
-    )
-
-
-def _is_community_moderation_enabled(value: BanUserInput) -> bool:
-    """Require active lifecycle only for community scope."""
-    return value.is_global or (value.get_local_community() is not None and not is_local_community_disabled(value.get_local_community()))
-
 
 def _is_ban_target_valid(value: BanUserInput) -> bool:
     """Return whether syntax and local-domain DB resolution succeeded."""
@@ -157,36 +127,13 @@ class BanUserOperation(Operation):
 
     name = "ban_user"
     preconditions = (
-        Precondition(
-            name="global_scope_requires_super_admin",
+        global_scope_authorized_precondition(
             message="Only a super-admin can create a global ban.",
-            predicate=_is_global_scope_authorized,
         ),
-        Precondition(
-            name="missing_guild_context",
-            message="This command can only be used inside a guild.",
-            predicate=_has_required_guild_context,
-        ),
-        Precondition(
-            name="unknown_or_inaccessible_community",
-            message=lambda value: (
-                f"Unknown or inaccessible local community: "
-                f"{value.normalized_community_slug}"
-            ),
-            predicate=_is_community_accessible,
-        ),
-        Precondition(
-            name="cannot_manage_community",
-            message="You are not allowed to manage this local community.",
-            predicate=_can_manage_community,
-        ),
-        Precondition(
-            name="community_disabled",
-            message=lambda value: disabled_moderation_message(
-                value.normalized_community_slug or ""
-            ),
-            predicate=_is_community_moderation_enabled,
-        ),
+        SCOPED_GUILD_CONTEXT_REQUIRED,
+        SCOPED_LOCAL_COMMUNITY_ACCESSIBLE,
+        SCOPED_LOCAL_COMMUNITY_MANAGEMENT_ALLOWED,
+        SCOPED_LOCAL_COMMUNITY_MODERATION_ENABLED,
         Precondition(
             name="invalid_handle",
             message=_target_error,

@@ -9,9 +9,14 @@ from discordops import Operation, Precondition
 from ..config import Settings
 from ..db import Database
 from ..fediverse_identity import InvalidRemoteActorHandle, normalize_remote_actor_handle
-from ..local_community_lifecycle import disabled_moderation_message, is_local_community_disabled
-from ..local_community_permissions import can_access_local_community_from_guild, can_manage_local_community, is_super_admin
 from ..models import CommunityActorBan, LocalCommunity
+from .common_preconditions import (
+    SCOPED_GUILD_CONTEXT_REQUIRED,
+    SCOPED_LOCAL_COMMUNITY_ACCESSIBLE,
+    SCOPED_LOCAL_COMMUNITY_MANAGEMENT_ALLOWED,
+    SCOPED_LOCAL_COMMUNITY_MODERATION_ENABLED,
+    global_scope_authorized_precondition,
+)
 
 
 @dataclass(slots=True)
@@ -81,46 +86,6 @@ class UnbanUserResult:
     reason: str
 
 
-def _is_global_scope_authorized(value: UnbanUserInput) -> bool:
-    """Allow global unban only for configured super-admins."""
-    return not value.is_global or is_super_admin(settings=value.settings, discord_user_id=value.discord_user_id)
-
-
-def _has_required_guild_context(value: UnbanUserInput) -> bool:
-    """Require guild context only for community scope."""
-    return value.is_global or value.discord_guild_id is not None
-
-
-def _is_community_accessible(value: UnbanUserInput) -> bool:
-    """Require an addressable community for scoped requests."""
-    if value.is_global:
-        return True
-    community = value.get_local_community()
-    return community is not None and can_access_local_community_from_guild(
-        settings=value.settings, discord_user_id=value.discord_user_id,
-        discord_guild_id=value.discord_guild_id, local_community=community, include_disabled=True,
-    )
-
-
-def _can_manage_community(value: UnbanUserInput) -> bool:
-    """Require owner or super-admin for community scope."""
-    if value.is_global:
-        return True
-    community = value.get_local_community()
-    return community is not None and can_manage_local_community(
-        settings=value.settings,
-        discord_user_id=value.discord_user_id,
-        local_community=community,
-    )
-
-
-def _is_community_moderation_enabled(value: UnbanUserInput) -> bool:
-    """Require active lifecycle only for community-scoped moderation."""
-    if value.is_global:
-        return True
-    community = value.get_local_community()
-    return community is not None and not is_local_community_disabled(community)
-
 
 def _is_actor_handle_valid(value: UnbanUserInput) -> bool:
     """Require a syntactically valid normalized local or remote handle."""
@@ -145,36 +110,13 @@ class UnbanUserOperation(Operation):
 
     name = "unban_user"
     preconditions = (
-        Precondition(
-            name="global_scope_requires_super_admin",
+        global_scope_authorized_precondition(
             message="Only a super-admin can remove a global ban.",
-            predicate=_is_global_scope_authorized,
         ),
-        Precondition(
-            name="missing_guild_context",
-            message="This command can only be used inside a guild.",
-            predicate=_has_required_guild_context,
-        ),
-        Precondition(
-            name="unknown_or_inaccessible_community",
-            message=lambda value: (
-                f"Unknown or inaccessible local community: "
-                f"{value.normalized_community_slug}"
-            ),
-            predicate=_is_community_accessible,
-        ),
-        Precondition(
-            name="cannot_manage_community",
-            message="You are not allowed to manage this local community.",
-            predicate=_can_manage_community,
-        ),
-        Precondition(
-            name="community_disabled",
-            message=lambda value: disabled_moderation_message(
-                value.normalized_community_slug or ""
-            ),
-            predicate=_is_community_moderation_enabled,
-        ),
+        SCOPED_GUILD_CONTEXT_REQUIRED,
+        SCOPED_LOCAL_COMMUNITY_ACCESSIBLE,
+        SCOPED_LOCAL_COMMUNITY_MANAGEMENT_ALLOWED,
+        SCOPED_LOCAL_COMMUNITY_MODERATION_ENABLED,
         Precondition(
             name="invalid_handle",
             message="Invalid remote user handle. Use user@example.com.",
