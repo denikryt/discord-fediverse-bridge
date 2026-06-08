@@ -16,7 +16,7 @@ def _settings(**overrides: object) -> Settings:
     values = {
         "DISCORD_TOKEN": "token",
         "FEDIFY_SHARED_SECRET": "secret",
-        "FEDIFY_ORIGIN": "https://bridge.example",
+        "PUBLIC_BASE_URL": "https://bridge.example",
         "FEDIFY_ACTOR_IDENTIFIER": "bridge",
     }
     values.update(overrides)

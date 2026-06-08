@@ -1,0 +1,84 @@
+name: Release container images
+
+on:
+  push:
+    tags: ["v*.*.*"]
+
+permissions:
+  contents: write
+  packages: write
+
+jobs:
+  validate-version:
+    runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.version.outputs.value }}
+    steps:
+      - uses: actions/checkout@v4
+      - id: version
+        name: Validate tag and package versions
+        shell: bash
+        run: |
+          set -euo pipefail
+          tag_version="${GITHUB_REF_NAME#v}"
+          file_version="$(tr -d '[:space:]' < VERSION)"
+          python_version="$(python -c "import tomllib; print(tomllib.load(open('pyproject.toml', 'rb'))['project']['version'])")"
+          gateway_version="$(node -p "require('./fedify-gateway/package.json').version")"
+          if [[ "$tag_version" != "$file_version" || "$tag_version" != "$python_version" || "$tag_version" != "$gateway_version" ]]; then
+            echo "Release tag, VERSION, pyproject.toml, and gateway package version must match." >&2
+            exit 1
+          fi
+          echo "value=$tag_version" >> "$GITHUB_OUTPUT"
+
+  publish-images:
+    needs: validate-version
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        include:
+          - name: bridge
+            image_suffix: discord-fediverse-bridge
+            dockerfile: Dockerfile
+          - name: gateway
+            image_suffix: discord-fediverse-bridge-gateway
+            dockerfile: fedify-gateway/Dockerfile
+    steps:
+      - uses: actions/checkout@v4
+      - uses: docker/setup-buildx-action@v3
+      - uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - id: image
+        name: Resolve lowercase GHCR image name
+        shell: bash
+        run: |
+          owner="${GITHUB_REPOSITORY_OWNER,,}"
+          echo "name=ghcr.io/${owner}/${{ matrix.image_suffix }}" >> "$GITHUB_OUTPUT"
+      - uses: docker/metadata-action@v5
+        id: meta
+        with:
+          images: ${{ steps.image.outputs.name }}
+          tags: |
+            type=raw,value=${{ needs.validate-version.outputs.version }}
+            type=raw,value=sha-${{ github.sha }}
+      - uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: ${{ matrix.dockerfile }}
+          push: true
+          build-args: |
+            APP_VERSION=${{ needs.validate-version.outputs.version }}
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+
+  create-release:
+    needs: [validate-version, publish-images]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Create GitHub Release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: gh release create "$GITHUB_REF_NAME" --verify-tag --generate-notes

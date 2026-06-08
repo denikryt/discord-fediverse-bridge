@@ -1,11 +1,9 @@
-name: discord-fediverse-bridge
-
 services:
   bridge:
     image: ${BRIDGE_IMAGE:-discord-fediverse-bridge}:${BRIDGE_VERSION:?BRIDGE_VERSION is required}
     restart: unless-stopped
     env_file:
-      - .env
+      - ${COMPOSE_ENV_FILE:-.env}
     environment:
       DATABASE_URL: sqlite:////data/bridge.db
       BRIDGE_BIND_HOST: 0.0.0.0
@@ -28,7 +26,7 @@ services:
     image: ${GATEWAY_IMAGE:-discord-fediverse-bridge-fedify-gateway}:${BRIDGE_VERSION:?BRIDGE_VERSION is required}
     restart: unless-stopped
     env_file:
-      - .env
+      - ${COMPOSE_ENV_FILE:-.env}
     environment:
       GATEWAY_BIND_PORT: 3000
       BRIDGE_EVENTS_URL: http://bridge:8080/internal/activitypub/events
@@ -50,7 +48,7 @@ services:
     image: ${BRIDGE_IMAGE:-discord-fediverse-bridge}:${BRIDGE_VERSION:?BRIDGE_VERSION is required}
     restart: unless-stopped
     env_file:
-      - .env
+      - ${COMPOSE_ENV_FILE:-.env}
     command:
       - python
       - -m

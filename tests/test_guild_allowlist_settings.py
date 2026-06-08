@@ -13,6 +13,7 @@ def _settings_data(**overrides: object) -> dict[str, object]:
     data: dict[str, object] = {
         "DISCORD_TOKEN": "discord-token",
         "FEDIFY_SHARED_SECRET": "secret",
+        "PUBLIC_BASE_URL": "https://bridge.example",
     }
     data.update(overrides)
     return data

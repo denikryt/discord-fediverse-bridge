@@ -1,92 +1,183 @@
 # Deployment
 
-Docker runs the Python bridge, Fedify gateway, and backup worker as separate containers over one shared SQLite volume.
+## Production: first start
 
-## Configuration
+Run these commands from the project root.
 
-Copy the template and fill in the required values:
+### 1. Create the production environment file
 
 ```bash
 cp .env.example .env
 ```
 
-Set these at minimum:
+Open `.env` and set at least:
 
 ```env
-PUBLIC_BASE_URL=https://discord-bridge.example.com
-DISCORD_TOKEN=...
-FEDIFY_SHARED_SECRET=...
-DATABASE_URL=sqlite:///./bridge.db
-```
+COMPOSE_PROJECT_NAME=discord-bridge-prod
+COMPOSE_ENV_FILE=.env
 
-Common local overrides:
+BRIDGE_VERSION=0.1.0
+BRIDGE_IMAGE=ghcr.io/YOUR_GITHUB_OWNER/discord-fediverse-bridge
+GATEWAY_IMAGE=ghcr.io/YOUR_GITHUB_OWNER/discord-fediverse-bridge-gateway
 
-```env
+PUBLIC_BASE_URL=https://bridge.example.com
+DISCORD_TOKEN=replace-me
+FEDIFY_SHARED_SECRET=replace-with-a-long-random-value
+
 BRIDGE_PUBLISHED_PORT=8081
 GATEWAY_PUBLISHED_PORT=3000
 BACKUP_HOST_DIR=./backups
-BACKUP_INTERVAL_SECONDS=86400
-BACKUP_RETENTION_COUNT=14
 ```
 
-`PUBLIC_BASE_URL` defines the public federation identity. Changing it changes actor and object URLs.
-
-
-The gateway does not mount or read the SQLite database. It reaches the bridge over the private Compose network using `PYTHON_BRIDGE_INTERNAL_URL=http://bridge:8080`; both event delivery and read requests use `FEDIFY_SHARED_SECRET`. Do not route `/internal/` through a public reverse proxy.
-
-## Start
+If the GHCR packages are private, log in first:
 
 ```bash
-docker compose -f compose.yaml -f compose.build.yaml up -d --build
+echo "$GHCR_TOKEN" | docker login ghcr.io -u YOUR_GITHUB_USER --password-stdin
 ```
 
-Check health:
+### 2. Pull and start the containers
 
 ```bash
-curl http://127.0.0.1:${BRIDGE_PUBLISHED_PORT:-8080}/healthz
-curl http://127.0.0.1:${GATEWAY_PUBLISHED_PORT:-3000}/healthz
+docker compose --env-file .env pull
+docker compose --env-file .env up -d
 ```
 
-## Backups
+### 3. Install nginx for this instance
 
-The backup worker writes timestamped SQLite snapshots to `BACKUP_HOST_DIR` and keeps the newest `BACKUP_RETENTION_COUNT` files.
-
-Create one snapshot now:
+The domain in `PUBLIC_BASE_URL` must already point to this server.
 
 ```bash
-docker compose run --rm backup \
+sudo fedify-gateway/nginx-setup.sh --name prod --env-file .env
+```
+
+### 4. Check the deployment
+
+```bash
+docker compose --env-file .env ps
+docker compose --env-file .env logs --tail=100 bridge fedify-gateway
+curl -fsS http://127.0.0.1:8081/healthz
+curl -fsS http://127.0.0.1:3000/healthz
+```
+
+The public service should now be available at the URL configured in `PUBLIC_BASE_URL`.
+
+## Development instance on the same machine
+
+The development instance uses a separate domain, Discord bot, ports, Compose project, database volume, and backup directory.
+
+### 1. Create the development environment file
+
+```bash
+cp .env.dev.example .env.dev
+```
+
+Set at least:
+
+```env
+COMPOSE_PROJECT_NAME=discord-bridge-dev
+COMPOSE_ENV_FILE=.env.dev
+
+PUBLIC_BASE_URL=https://bridge-dev.example.com
+DISCORD_TOKEN=replace-with-a-different-bot-token
+FEDIFY_SHARED_SECRET=replace-with-a-different-long-random-value
+
+BRIDGE_PUBLISHED_PORT=8181
+GATEWAY_PUBLISHED_PORT=3100
+BRIDGE_DATA_VOLUME=discord-fediverse-bridge-dev-data
+BACKUP_HOST_DIR=./backups-dev
+```
+
+### 2. Build the current working tree and start it
+
+```bash
+docker compose \
+  --env-file .env.dev \
+  -f compose.yaml \
+  -f compose.build.yaml \
+  up -d --build
+```
+
+### 3. Install the development nginx site
+
+```bash
+sudo fedify-gateway/nginx-setup.sh --name dev --env-file .env.dev
+```
+
+### 4. Check the development instance
+
+```bash
+docker compose \
+  --env-file .env.dev \
+  -f compose.yaml \
+  -f compose.build.yaml \
+  ps
+
+curl -fsS http://127.0.0.1:8181/healthz
+curl -fsS http://127.0.0.1:3100/healthz
+```
+
+## Update production to another version
+
+Change only `BRIDGE_VERSION` in `.env`, for example:
+
+```env
+BRIDGE_VERSION=0.2.0
+```
+
+Then run:
+
+```bash
+docker compose --env-file .env pull
+docker compose --env-file .env up -d
+docker compose --env-file .env ps
+```
+
+Check the logs after the update:
+
+```bash
+docker compose --env-file .env logs --tail=100 bridge fedify-gateway
+```
+
+A database backup should exist before changing versions.
+
+## Return production to an earlier version
+
+Set the previous `BRIDGE_VERSION` in `.env`, then run:
+
+```bash
+docker compose --env-file .env pull
+docker compose --env-file .env up -d
+```
+
+If the newer version changed the database schema incompatibly, restore the database backup created before the update as well.
+
+## Create a backup now
+
+Automatic backups are written to `BACKUP_HOST_DIR`. To create one immediately:
+
+```bash
+docker compose --env-file .env run --rm backup \
   python -m src.db.backup backup \
   --database /data/bridge.db \
   --output-dir /backups
 ```
 
-The periodic backup worker starts with the stack and repeats every `BACKUP_INTERVAL_SECONDS` seconds.
+## Stop an instance
 
-## Restore
-
-Stop writers:
+Production:
 
 ```bash
-docker compose stop bridge fedify-gateway backup
+docker compose --env-file .env down
 ```
 
-Restore one snapshot:
+Development:
 
 ```bash
-docker compose run --rm --no-deps backup \
-  python -m src.db.backup restore \
-  --database /data/bridge.db \
-  --source /backups/discord-fediverse-bridge-YYYYMMDDTHHMMSSZ.sqlite3
+docker compose \
+  --env-file .env.dev \
+  -f compose.yaml \
+  -f compose.build.yaml \
+  down
 ```
 
-Start again:
-
-```bash
-docker compose up -d
-```
-
-## Notes
-
-- `docker compose down` keeps the named volume.
-- `docker compose down -v` deletes the database volume.
-- If you are upgrading an old deployment, keep the legacy bridge-key env vars only for the first start; the database row wins after import.
+Do not add `-v` for production. It deletes the database volume.

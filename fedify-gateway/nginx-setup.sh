@@ -1,15 +1,61 @@
 #!/bin/bash
-# Install nginx for the public bridge host.
-# The script renders the checked-in nginx template from env values so route
-# ownership stays defined in one place instead of being duplicated in shell.
+# Render or install one nginx site for a bridge deployment instance.
+# The selected env file is the single source for public URL and published ports.
 
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
 ENV_FILE="${ENV_FILE:-$REPO_ROOT/.env}"
+INSTANCE_NAME="${INSTANCE_NAME:-prod}"
 TEMPLATE_FILE="${TEMPLATE_FILE:-$SCRIPT_DIR/nginx.conf}"
 EMAIL="${EMAIL:-$(git config user.email 2>/dev/null || echo "admin@example.com")}"
+RENDER_ONLY=false
+
+usage() {
+    cat <<'USAGE'
+Usage: nginx-setup.sh [--env-file PATH] [--name INSTANCE] [--render]
+
+  --env-file PATH  Read PUBLIC_BASE_URL and published ports from PATH.
+  --name INSTANCE  Use an independent nginx site name, for example prod or dev.
+  --render         Print the rendered nginx config without installing it.
+USAGE
+}
+
+parse_arguments() {
+    while [[ $# -gt 0 ]]; do
+        case "$1" in
+            --env-file)
+                [[ $# -ge 2 ]] || { echo "Error: --env-file requires a path" >&2; exit 2; }
+                ENV_FILE="$2"
+                shift 2
+                ;;
+            --name)
+                [[ $# -ge 2 ]] || { echo "Error: --name requires a value" >&2; exit 2; }
+                INSTANCE_NAME="$2"
+                shift 2
+                ;;
+            --render)
+                RENDER_ONLY=true
+                shift
+                ;;
+            -h|--help)
+                usage
+                exit 0
+                ;;
+            *)
+                echo "Error: unknown argument: $1" >&2
+                usage >&2
+                exit 2
+                ;;
+        esac
+    done
+
+    if [[ ! "$INSTANCE_NAME" =~ ^[a-zA-Z0-9._-]+$ ]]; then
+        echo "Error: --name may contain only letters, numbers, dots, underscores, and dashes" >&2
+        exit 2
+    fi
+}
 
 read_env_value() {
     local key="$1"
@@ -58,8 +104,7 @@ load_configuration() {
         exit 1
     fi
 
-    # Derive the nginx hostname from the same public URL used by the bridge and
-    # gateway. Operators no longer repeat the public identity as PUBLIC_DOMAIN.
+    # Derive the hostname from the same public URL used by ActivityPub actors.
     PUBLIC_DOMAIN="$(python3 - "$PUBLIC_BASE_URL" <<'PYURL'
 from sys import argv
 from urllib.parse import urlparse
@@ -71,9 +116,7 @@ print(parsed.hostname)
 PYURL
 )"
 
-    # The external nginx setup proxies to the host-published Compose ports.
-    # Explicit shell overrides remain available for unusual installations but
-    # are not duplicated in the shared .env contract.
+    # External nginx proxies to the loopback-only ports published by Compose.
     BRIDGE_PUBLISHED_PORT="${BRIDGE_PUBLISHED_PORT:-8080}"
     GATEWAY_PUBLISHED_PORT="${GATEWAY_PUBLISHED_PORT:-3000}"
     GATEWAY_UPSTREAM_URL="${GATEWAY_UPSTREAM_URL:-http://127.0.0.1:${GATEWAY_PUBLISHED_PORT}}"
@@ -97,47 +140,42 @@ render_site() {
         "$TEMPLATE_FILE"
 }
 
-render_selected_sites() {
-    load_configuration
-    render_site
-}
-
 install_site() {
-    local domain="$1"
-    local rendered_config="$2"
-    local conf_dst="/etc/nginx/sites-available/${domain}"
+    local rendered_config="$1"
+    local site_name="discord-fediverse-bridge-${INSTANCE_NAME}"
+    local conf_dst="/etc/nginx/sites-available/${site_name}.conf"
+    local enabled_dst="/etc/nginx/sites-enabled/${site_name}.conf"
 
-    echo "--- Installing $domain ---"
+    echo "--- Installing ${site_name} for ${PUBLIC_DOMAIN} ---"
     sudo tee "$conf_dst" > /dev/null <<NGINX
 server {
     listen 80;
-    server_name ${domain};
+    server_name ${PUBLIC_DOMAIN};
     location / {
         proxy_pass http://127.0.0.1:1;
     }
 }
 NGINX
-    sudo ln -sf "$conf_dst" "/etc/nginx/sites-enabled/${domain}"
+    sudo ln -sf "$conf_dst" "$enabled_dst"
     sudo nginx -t
     sudo systemctl reload nginx
 
-    sudo certbot certonly --nginx -d "$domain" --non-interactive --agree-tos -m "$EMAIL"
+    sudo certbot certonly --nginx -d "$PUBLIC_DOMAIN" --non-interactive --agree-tos -m "$EMAIL"
 
     printf '%s\n' "$rendered_config" | sudo tee "$conf_dst" > /dev/null
     sudo nginx -t
     sudo systemctl reload nginx
-    echo "✓ $domain ready"
+    echo "✓ ${site_name} ready at ${PUBLIC_BASE_URL}"
 }
 
 main() {
+    parse_arguments "$@"
     load_configuration
-    install_site "$PUBLIC_DOMAIN" "$(render_site)"
-    echo ""
-    echo "Public site is up at ${PUBLIC_BASE_URL}."
+    if [[ "$RENDER_ONLY" == true ]]; then
+        render_site
+        return
+    fi
+    install_site "$(render_site)"
 }
 
-if [[ "${1:-}" == "--render" ]]; then
-    render_selected_sites
-else
-    main
-fi
+main "$@"

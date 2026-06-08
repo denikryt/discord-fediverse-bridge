@@ -3,6 +3,9 @@ notes/
 plans/
 bridge.db
 .env
+.env.*
+!.env.example
+!.env.dev.example
 discord_lemmy_bridge.egg-info
 __pycache__
 fedify-gateway/node_modules/

@@ -65,7 +65,7 @@ One public host serves both services:
 /dashboard/data        -> Python bridge
 ```
 
-Set `PUBLIC_BASE_URL` once in the root `.env`. `nginx-setup.sh` derives the hostname from that URL and proxies to `BRIDGE_PUBLISHED_PORT` and `GATEWAY_PUBLISHED_PORT`. Keep `/internal/` private; it is the authenticated gateway-to-Python API and must never be exposed by nginx.
+Use `nginx-setup.sh --name INSTANCE --env-file PATH` so production and development can install independent sites from `.env` and `.env.dev`. The script derives the hostname from `PUBLIC_BASE_URL` and proxies to the selected file's published ports. Keep `/internal/` private; it is the authenticated gateway-to-Python API and must never be exposed by nginx. See `docs/DEPLOY.md` for the complete prod/dev and release workflow.
 
 ## Verification
 

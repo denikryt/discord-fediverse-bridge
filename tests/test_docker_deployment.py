@@ -110,8 +110,7 @@ def test_deployment_uses_one_root_env_file() -> None:
     systemd = _read("systemd-services.sh")
     env_example = _read(".env.example")
 
-    assert compose.count("      - .env") == 3
-    assert "fedify-gateway/.env" not in compose
+    assert compose.count("      - ${COMPOSE_ENV_FILE:-.env}") == 3
     assert "BRIDGE_ENV_FILE" not in compose
     assert "GATEWAY_ENV_FILE" not in compose
     assert "--env-file=../.env --env-file=.env" not in package
@@ -155,3 +154,45 @@ def test_environment_example_uses_one_public_url_and_no_derived_endpoints() -> N
         "INTERNAL_HTTP_PORT=",
     ):
         assert obsolete not in env_example
+
+
+def test_prod_and_dev_environment_examples_are_isolated() -> None:
+    """Prod and dev examples must select distinct Compose projects, env files, ports, and origins."""
+    prod = _read(".env.example")
+    dev = _read(".env.dev.example")
+
+    assert "COMPOSE_PROJECT_NAME=discord-bridge-prod" in prod
+    assert "COMPOSE_ENV_FILE=.env" in prod
+    assert "PUBLIC_BASE_URL=https://discord-bridge.example.com" in prod
+    assert "BRIDGE_PUBLISHED_PORT=8081" in prod
+    assert "GATEWAY_PUBLISHED_PORT=3000" in prod
+
+    assert "COMPOSE_PROJECT_NAME=discord-bridge-dev" in dev
+    assert "COMPOSE_ENV_FILE=.env.dev" in dev
+    assert "PUBLIC_BASE_URL=https://discord-bridge-dev.example.com" in dev
+    assert "BRIDGE_PUBLISHED_PORT=8181" in dev
+    assert "GATEWAY_PUBLISHED_PORT=3100" in dev
+    assert "BRIDGE_VERSION=dev" in dev
+
+
+def test_release_workflow_publishes_both_images_from_version_tags() -> None:
+    """Release tags must publish matched bridge/gateway images and create a GitHub Release."""
+    workflow = _read(".github/workflows/release.yml")
+
+    assert 'tags: ["v*.*.*"]' in workflow
+    assert "packages: write" in workflow
+    assert "contents: write" in workflow
+    assert "docker/login-action@v3" in workflow
+    assert "docker/build-push-action@v6" in workflow
+    assert "discord-fediverse-bridge-gateway" in workflow
+    assert "gh release create" in workflow
+    assert "VERSION" in workflow
+
+
+def test_nginx_setup_accepts_env_file_and_instance_name_flags() -> None:
+    """One nginx setup script must install independent prod and dev configurations."""
+    script = _read("fedify-gateway/nginx-setup.sh")
+
+    assert "--env-file" in script
+    assert "--name" in script
+    assert 'discord-fediverse-bridge-${INSTANCE_NAME}' in script
