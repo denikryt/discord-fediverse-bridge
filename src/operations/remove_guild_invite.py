@@ -47,7 +47,7 @@ def _reject(
     return OperationResult(applied=False, reason=reason, message=message)
 
 
-def _publication_exists(operation_input: RemoveGuildInviteInput) -> bool:
+def _has_published_guild_invite(operation_input: RemoveGuildInviteInput) -> bool:
     """Return whether this guild currently has a published invite."""
     return operation_input.get_current_publication() is not None
 
@@ -97,7 +97,7 @@ remove_guild_invite_operation = OperationDefinition(
         Precondition(
             name="guild_invite_not_published",
             message="No server invite is currently published.",
-            predicate=_publication_exists,
+            predicate=_has_published_guild_invite,
         ),
     ),
     reject=_reject,

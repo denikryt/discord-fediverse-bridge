@@ -55,6 +55,11 @@ def _community_label(subscription: object) -> str:
     return subscription.lemmy_community_name or subscription.lemmy_community_actor_id
 
 
+def _has_channel_subscription(operation_input: UnsubscribeInput) -> bool:
+    """Return whether the target channel has a subscription to remove."""
+    return operation_input.get_subscription() is not None
+
+
 def _reject(
     operation_input: UnsubscribeInput,
     *,
@@ -179,7 +184,7 @@ unsubscribe_operation = OperationDefinition(
         Precondition(
             name="channel_subscription_not_found",
             message=_missing_message,
-            predicate=lambda operation_input: operation_input.get_subscription() is not None,
+            predicate=_has_channel_subscription,
         ),
     ),
     reject=_reject,

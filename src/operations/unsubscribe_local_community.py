@@ -36,6 +36,13 @@ def _missing_message(operation_input: UnsubscribeLocalCommunityInput) -> str:
     return f"Channel {operation_input.channel_mention} has no local community subscriber state."
 
 
+def _has_local_community_subscription(
+    operation_input: UnsubscribeLocalCommunityInput,
+) -> bool:
+    """Return whether the target channel has local subscriber state to remove."""
+    return operation_input.get_local_subscriber() is not None
+
+
 def _reject(
     operation_input: UnsubscribeLocalCommunityInput,
     *,
@@ -80,7 +87,7 @@ unsubscribe_local_community_operation = OperationDefinition(
         Precondition(
             name="local_subscriber_not_found",
             message=_missing_message,
-            predicate=lambda op: op.get_local_subscriber() is not None,
+            predicate=_has_local_community_subscription,
         ),
     ),
     reject=_reject,

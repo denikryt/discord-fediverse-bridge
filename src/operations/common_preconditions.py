@@ -61,18 +61,18 @@ def _has_guild_context(value: CommandAccessInput) -> bool:
     return value.discord_guild_id is not None
 
 
-def _guild_is_allowlisted(value: CommandAccessInput) -> bool:
+def _is_guild_allowlisted(value: CommandAccessInput) -> bool:
     """Apply unrestricted-empty-list compatibility and configured membership."""
     allowlist = value.settings.discord_guild_allowlist
     return not allowlist or str(value.discord_guild_id) in allowlist
 
 
-def _member_can_manage_guild(value: CommandAccessInput) -> bool:
+def _can_member_manage_guild(value: CommandAccessInput) -> bool:
     """Return whether the invoking guild member has Discord Manage Guild."""
     return value.member_can_manage_guild
 
 
-def _discord_user_is_registered(value: RegisteredDiscordUserInput) -> bool:
+def _is_discord_user_registered(value: RegisteredDiscordUserInput) -> bool:
     """Return whether the input resolves an existing registered bridge user."""
     return value.get_bridge_user() is not None
 
@@ -86,19 +86,19 @@ GUILD_CONTEXT_REQUIRED = Precondition(
 GUILD_ALLOWLISTED = Precondition(
     name="not_allowlisted",
     message=GUILD_NOT_ALLOWED_MESSAGE,
-    predicate=_guild_is_allowlisted,
+    predicate=_is_guild_allowlisted,
 )
 
 MANAGE_GUILD_REQUIRED = Precondition(
     name="missing_manage_guild",
     message="You need the Manage Server permission to manage this server invite.",
-    predicate=_member_can_manage_guild,
+    predicate=_can_member_manage_guild,
 )
 
 DISCORD_USER_REGISTERED = Precondition(
     name="discord_user_not_registered",
     message=REGISTRATION_REQUIRED_MESSAGE,
-    predicate=_discord_user_is_registered,
+    predicate=_is_discord_user_registered,
 )
 
 # Named compositions keep command handlers declarative while preserving one

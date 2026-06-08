@@ -49,6 +49,13 @@ def _load_local_subscribers(operation_input: ListSubscriptionsInput) -> list[obj
     return operation_input.get_local_subscribers()
 
 
+def _has_any_active_subscriptions(operation_input: ListSubscriptionsInput) -> bool:
+    """Return whether the guild has any remote or local subscriptions to list."""
+    return bool(_load_remote_subscriptions(operation_input)) or bool(
+        _load_local_subscribers(operation_input)
+    )
+
+
 def _reject(
     operation_input: ListSubscriptionsInput,
     *,
@@ -80,8 +87,7 @@ list_subscriptions_operation = OperationDefinition(
         Precondition(
             name="no_subscriptions",
             message="No active subscriptions.",
-            predicate=lambda operation_input: bool(_load_remote_subscriptions(operation_input))
-            or bool(_load_local_subscribers(operation_input)),
+            predicate=_has_any_active_subscriptions,
         ),
     ),
     reject=_reject,

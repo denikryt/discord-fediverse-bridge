@@ -78,12 +78,12 @@ def _reject(
     return OperationResult(applied=False, reason=reason, message=message)
 
 
-def _active_local_community_exists(operation_input: PublishGuildInviteInput) -> bool:
+def _has_active_local_community(operation_input: PublishGuildInviteInput) -> bool:
     """Return whether the guild has at least one active local community."""
     return bool(operation_input.get_active_communities())
 
 
-def _invitable_host_channel_exists(operation_input: PublishGuildInviteInput) -> bool:
+def _has_invitable_local_community_channel(operation_input: PublishGuildInviteInput) -> bool:
     """Return whether one active host channel can create a Discord invite."""
     return operation_input.get_selected_channel() is not None
 
@@ -177,12 +177,12 @@ publish_guild_invite_operation = OperationDefinition(
         Precondition(
             name="no_active_local_community",
             message="This server has no active local community.",
-            predicate=_active_local_community_exists,
+            predicate=_has_active_local_community,
         ),
         Precondition(
             name="no_invitable_local_community_channel",
             message="The bot cannot create an invite in any active local-community channel.",
-            predicate=_invitable_host_channel_exists,
+            predicate=_has_invitable_local_community_channel,
         ),
     ),
     reject=_reject,

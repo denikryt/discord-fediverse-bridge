@@ -131,6 +131,16 @@ def _channel_sub_status(operation_input: SubscribeInput) -> str | None:
     return sub.status if sub is not None else None
 
 
+def _has_no_accepted_channel_subscription(operation_input: SubscribeInput) -> bool:
+    """Return whether the channel lacks an already accepted subscription."""
+    return _channel_sub_status(operation_input) != "accepted"
+
+
+def _has_no_pending_channel_subscription(operation_input: SubscribeInput) -> bool:
+    """Return whether the channel lacks an already pending subscription."""
+    return _channel_sub_status(operation_input) != "pending"
+
+
 async def _body(operation_input: SubscribeInput) -> OperationResult:
     """Dispatch one bridge follow and persist the resulting lifecycle state.
 
@@ -273,7 +283,7 @@ subscribe_operation = OperationDefinition(
         Precondition(
             name="channel_subscription_already_accepted",
             message=_accepted_message,
-            predicate=lambda op: _channel_sub_status(op) != "accepted",
+            predicate=_has_no_accepted_channel_subscription,
         ),
         # Block if this specific channel is already waiting for acceptance.
         # Does not block when a *different* channel's follow is pending and
@@ -281,7 +291,7 @@ subscribe_operation = OperationDefinition(
         Precondition(
             name="channel_subscription_already_pending",
             message=_pending_message,
-            predicate=lambda op: _channel_sub_status(op) != "pending",
+            predicate=_has_no_pending_channel_subscription,
         ),
     ),
     reject=_reject,

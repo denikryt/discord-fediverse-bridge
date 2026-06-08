@@ -99,7 +99,7 @@ def _has_guild_context(operation_input: EditCommunityInput) -> bool:
     return operation_input.discord_guild_id is not None
 
 
-def _community_accessible(operation_input: EditCommunityInput) -> bool:
+def _is_community_accessible(operation_input: EditCommunityInput) -> bool:
     """Return whether the requested community exists in the caller's scope."""
     community = operation_input.get_local_community()
     if community is None:
@@ -125,18 +125,18 @@ def _can_manage_community(operation_input: EditCommunityInput) -> bool:
     )
 
 
-def _display_name_valid(operation_input: EditCommunityInput) -> bool:
+def _is_display_name_valid(operation_input: EditCommunityInput) -> bool:
     """Return whether display-name input satisfies shared metadata rules."""
     return operation_input.get_normalized_display_name() is not None
 
 
-def _summary_valid(operation_input: EditCommunityInput) -> bool:
+def _is_summary_valid(operation_input: EditCommunityInput) -> bool:
     """Return whether summary input satisfies shared metadata rules."""
     operation_input.get_normalized_summary()
     return operation_input._summary_error is None
 
 
-def _status_valid(operation_input: EditCommunityInput) -> bool:
+def _is_status_valid(operation_input: EditCommunityInput) -> bool:
     """Return whether the modal submitted a supported lifecycle status."""
     return operation_input.get_normalized_status() is not None
 
@@ -169,7 +169,7 @@ class EditCommunityOperation(Operation):
         Precondition(
             name="unknown_or_inaccessible_community",
             message=_inaccessible_message,
-            predicate=_community_accessible,
+            predicate=_is_community_accessible,
         ),
         Precondition(
             name="cannot_manage_community",
@@ -179,17 +179,17 @@ class EditCommunityOperation(Operation):
         Precondition(
             name="invalid_display_name",
             message=_display_name_error_message,
-            predicate=_display_name_valid,
+            predicate=_is_display_name_valid,
         ),
         Precondition(
             name="invalid_summary",
             message=_summary_error_message,
-            predicate=_summary_valid,
+            predicate=_is_summary_valid,
         ),
         Precondition(
             name="invalid_status",
             message="Community status must be active or disabled.",
-            predicate=_status_valid,
+            predicate=_is_status_valid,
         ),
     )
 
