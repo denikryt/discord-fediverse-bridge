@@ -58,7 +58,7 @@ def _make_discord_reference(
     )
 
 
-def _format_mirror_body(message: discord.Message | object) -> str:
+def _format_mirror_body(message: discord.Message | object, *, author_label: str | None = None) -> str:
     """Build the mirror thread body from the source starter message.
 
     Format:
@@ -70,7 +70,7 @@ def _format_mirror_body(message: discord.Message | object) -> str:
     apply_edit_to_discord_message can preserve the attribution line on edits.
     """
     author = getattr(message, "author", None)
-    display_name = getattr(author, "display_name", None) or getattr(author, "name", "unknown")
+    display_name = author_label or getattr(author, "display_name", None) or getattr(author, "name", "unknown")
     content = getattr(message, "content", "") or ""
     return f"`{display_name}`\n\n{content}"
 
@@ -107,6 +107,19 @@ class DiscordFanout:
         """Initialise fanout with the shared bot instance for Discord API calls."""
         self.bot = bot
 
+    def _author_label(self, message: object) -> str | None:
+        """Resolve a registered local handle through the bot's shared services."""
+        author = getattr(message, "author", None)
+        database = getattr(self.bot, "database", None)
+        settings = getattr(self.bot, "settings", None)
+        if author is None or database is None or settings is None:
+            return None
+        user = database.users.get_user_by_discord_user_id(str(getattr(author, "id")))
+        if user is None:
+            return None
+        from ..user_bans import canonical_local_user_handle
+        return canonical_local_user_handle(username=str(user.activitypub_username), settings=settings)
+
     async def mirror_thread_to_siblings(
         self,
         *,
@@ -123,7 +136,7 @@ class DiscordFanout:
         """
         results: list[MirrorResult] = []
         title = getattr(source_thread, "name", "Untitled")
-        body = _format_mirror_body(source_starter_message)
+        body = _format_mirror_body(source_starter_message, author_label=self._author_label(source_starter_message))
 
         for channel_id in sibling_channel_ids:
             try:
@@ -170,7 +183,7 @@ class DiscordFanout:
         source AP publish is never rolled back.
         """
         results: list[MirrorMessageResult] = []
-        content = _format_mirror_body(source_message)
+        content = _format_mirror_body(source_message, author_label=self._author_label(source_message))
         for delivery in sibling_thread_deliveries:
             try:
                 thread = await self.bot.get_thread_by_id(delivery.discord_thread_id)

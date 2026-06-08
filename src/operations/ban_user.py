@@ -1,10 +1,4 @@
-"""Operation layer for the `/ban-user` local-community moderation command.
-
-The command is implemented as an ordered `discordops` operation because the
-precondition order is part of the security contract: callers must first be able
-to address an active community from the command guild, then be allowed to manage
-it, before handle validation or duplicate-ban checks can reveal extra state.
-"""
+"""Operation layer for community-scoped and global bridge user bans."""
 
 from __future__ import annotations
 
@@ -14,253 +8,209 @@ from discordops import Operation, Precondition
 
 from ..config import Settings
 from ..db import Database
-from ..fediverse_identity import InvalidRemoteActorHandle, normalize_remote_actor_handle
 from ..local_community_lifecycle import disabled_moderation_message, is_local_community_disabled
-from ..local_community_permissions import (
-    can_access_local_community_from_guild,
-    can_manage_local_community,
-)
+from ..local_community_permissions import can_access_local_community_from_guild, can_manage_local_community, is_super_admin
 from ..models import LocalCommunity
+from ..user_bans import ResolvedBanTarget, UnknownLocalBanTarget, resolve_ban_target
 
 
 @dataclass(slots=True)
 class BanUserInput:
-    """Carry one parsed `/ban-user` request plus cached derived state."""
+    """Carry one `/ban-user` request and memoized authorization/identity state."""
 
     database: Database
     settings: Settings
     discord_user_id: str
     discord_guild_id: int | None
-    community_slug: str
+    community_slug: str | None
     actor_handle: str
     reason: str | None = None
     _community: LocalCommunity | None = field(default=None, init=False, repr=False)
     _community_loaded: bool = field(default=False, init=False, repr=False)
-    _normalized_actor_handle: str | None = field(default=None, init=False, repr=False)
-    _actor_handle_normalized: bool = field(default=False, init=False, repr=False)
-    _actor_handle_error: InvalidRemoteActorHandle | None = field(default=None, init=False, repr=False)
-    _existing_ban: object | None = field(default=None, init=False, repr=False)
-    _existing_ban_loaded: bool = field(default=False, init=False, repr=False)
+    _target: ResolvedBanTarget | None = field(default=None, init=False, repr=False)
+    _target_error: Exception | None = field(default=None, init=False, repr=False)
+    _target_loaded: bool = field(default=False, init=False, repr=False)
+    _existing: object | None = field(default=None, init=False, repr=False)
+    _existing_loaded: bool = field(default=False, init=False, repr=False)
 
     @property
-    def normalized_community_slug(self) -> str:
-        """Return the command slug after trimming Discord input whitespace."""
-        return self.community_slug.strip()
+    def normalized_community_slug(self) -> str | None:
+        """Return trimmed community slug or None for global scope."""
+        value = (self.community_slug or "").strip()
+        return value or None
+
+    @property
+    def is_global(self) -> bool:
+        """Return whether the command omitted community scope."""
+        return self.normalized_community_slug is None
 
     def get_local_community(self) -> LocalCommunity | None:
-        """Load and memoize the target active local community by slug."""
-        # Several preconditions need the same row. Memoizing preserves the
-        # observable lookup order without repeating database reads.
+        """Load the selected local community only for scoped requests."""
         if not self._community_loaded:
-            self._community = self.database.local_communities.get_local_community_by_slug(
-                self.normalized_community_slug
-            )
+            slug = self.normalized_community_slug
+            self._community = None if slug is None else self.database.local_communities.get_local_community_by_slug(slug)
             self._community_loaded = True
         return self._community
 
-    def get_normalized_actor_handle(self) -> str | None:
-        """Normalize and memoize the remote actor handle, or return None."""
-        # Normalization is delayed until after community access and management
-        # checks. This prevents unauthorized callers from learning whether their
-        # handle input is valid.
-        if not self._actor_handle_normalized:
+    def get_target(self) -> ResolvedBanTarget | None:
+        """Resolve local/remote target after authorization has allowed validation."""
+        if not self._target_loaded:
             try:
-                self._normalized_actor_handle = normalize_remote_actor_handle(self.actor_handle)
-            except InvalidRemoteActorHandle as exc:
-                self._actor_handle_error = exc
-                self._normalized_actor_handle = None
-            self._actor_handle_normalized = True
-        return self._normalized_actor_handle
+                self._target = resolve_ban_target(database=self.database, settings=self.settings, value=self.actor_handle)
+            except Exception as exc:
+                self._target_error = exc
+                self._target = None
+            self._target_loaded = True
+        return self._target
 
     def get_existing_active_ban(self) -> object | None:
-        """Load and memoize the duplicate active ban row for valid requests."""
-        # Duplicate lookup is intentionally after authorization and handle
-        # validation so moderation state is not exposed to unrelated callers.
-        if not self._existing_ban_loaded:
+        """Load duplicate state in exactly the requested scope."""
+        if not self._existing_loaded:
+            target = self.get_target()
             community = self.get_local_community()
-            actor_handle = self.get_normalized_actor_handle()
-            if community is None or actor_handle is None:
-                self._existing_ban = None
-            else:
-                self._existing_ban = self.database.community_actor_bans.get_active_ban_by_handle(
-                    local_community_id=community.id,
-                    actor_handle=actor_handle,
-                )
-            self._existing_ban_loaded = True
-        return self._existing_ban
+            self._existing = None if target is None else self.database.community_actor_bans.get_active_ban_by_handle(
+                local_community_id=None if self.is_global else getattr(community, "id", None),
+                actor_handle=target.actor_handle,
+            )
+            self._existing_loaded = True
+        return self._existing
 
 
 @dataclass(slots=True)
 class BanUserResult:
-    """Report the visible command outcome and machine-readable reason."""
+    """Report command outcome plus notification metadata for the adapter."""
 
     applied: bool
     message: str
     reason: str
+    activation_kind: str | None = None
+    target_discord_user_id: str | None = None
+    scope: str | None = None
+    community_slug: str | None = None
+    stored_reason: str | None = None
 
 
-def _has_guild_context(operation_input: BanUserInput) -> bool:
-    """Return whether Discord supplied a guild id for this command."""
-    return operation_input.discord_guild_id is not None
+def _global_authorized(value: BanUserInput) -> bool:
+    """Reject omitted-community calls before target validation unless super-admin."""
+    return not value.is_global or is_super_admin(settings=value.settings, discord_user_id=value.discord_user_id)
 
 
-def _community_accessible(operation_input: BanUserInput) -> bool:
-    """Return whether the caller may address this community from the guild."""
-    community = operation_input.get_local_community()
-    if community is None:
-        return False
-    return can_access_local_community_from_guild(
-        settings=operation_input.settings,
-        discord_user_id=operation_input.discord_user_id,
-        discord_guild_id=operation_input.discord_guild_id,
-        local_community=community,
-        include_disabled=True,
+def _has_guild_for_scoped(value: BanUserInput) -> bool:
+    """Require guild context only for community-owner scoped operations."""
+    return value.is_global or value.discord_guild_id is not None
+
+
+def _community_accessible(value: BanUserInput) -> bool:
+    """Resolve and authorize the selected community, while global scope skips it."""
+    if value.is_global:
+        return True
+    community = value.get_local_community()
+    return community is not None and can_access_local_community_from_guild(
+        settings=value.settings, discord_user_id=value.discord_user_id,
+        discord_guild_id=value.discord_guild_id, local_community=community, include_disabled=True,
     )
 
 
-def _can_manage_community(operation_input: BanUserInput) -> bool:
-    """Return whether the caller is owner or super-admin for the community."""
-    community = operation_input.get_local_community()
-    if community is None:
-        return False
-    return can_manage_local_community(
-        settings=operation_input.settings,
-        discord_user_id=operation_input.discord_user_id,
-        local_community=community,
+def _can_manage(value: BanUserInput) -> bool:
+    """Require owner or super-admin for selected community."""
+    if value.is_global:
+        return True
+    community = value.get_local_community()
+    return community is not None and can_manage_local_community(
+        settings=value.settings, discord_user_id=value.discord_user_id, local_community=community
     )
 
 
-def _valid_actor_handle(operation_input: BanUserInput) -> bool:
-    """Return whether the remote actor handle matches the v1 command format."""
-    return operation_input.get_normalized_actor_handle() is not None
+def _active(value: BanUserInput) -> bool:
+    """Require active lifecycle only for community scope."""
+    return value.is_global or (value.get_local_community() is not None and not is_local_community_disabled(value.get_local_community()))
 
 
-def _no_duplicate_active_ban(operation_input: BanUserInput) -> bool:
-    """Return whether no active ban exists for the same community and actor."""
-    return operation_input.get_existing_active_ban() is None
+def _valid_target(value: BanUserInput) -> bool:
+    """Return whether syntax and local-domain DB resolution succeeded."""
+    return value.get_target() is not None
 
 
-def _community_active(operation_input: BanUserInput) -> bool:
-    """Return whether moderation/list operations may act on this community."""
-    community = operation_input.get_local_community()
-    return community is not None and not is_local_community_disabled(community)
+def _target_error(value: BanUserInput) -> str:
+    """Return precise local lookup validation or generic handle syntax text."""
+    if isinstance(value._target_error, UnknownLocalBanTarget):
+        return str(value._target_error)
+    return "Invalid remote user handle. Use user@example.com."
 
 
-def _disabled_message(operation_input: BanUserInput) -> str:
-    """Build the shared disabled-community moderation rejection text."""
-    return disabled_moderation_message(operation_input.normalized_community_slug)
+def _no_duplicate(value: BanUserInput) -> bool:
+    """Return whether no active row exists in the requested scope."""
+    return value.get_existing_active_ban() is None
 
 
-def _inaccessible_message(operation_input: BanUserInput) -> str:
-    """Build the shared inaccessible-community rejection text."""
-    return f"Unknown or inaccessible local community: {operation_input.normalized_community_slug}"
-
-
-def _duplicate_active_ban_message(operation_input: BanUserInput) -> str:
-    """Build the duplicate-ban rejection message using the stored reason."""
-    existing = operation_input.get_existing_active_ban()
-    actor_handle = operation_input.get_normalized_actor_handle() or operation_input.actor_handle
-    reason_text = getattr(existing, "reason", None) or "not specified"
-    return (
-        f"User {actor_handle} is already banned in community {operation_input.normalized_community_slug}.\n"
-        f"Reason: {reason_text}"
-    )
+def _duplicate_message(value: BanUserInput) -> str:
+    """Render private duplicate details for the authorized moderator."""
+    target = value.get_target()
+    existing = value.get_existing_active_ban()
+    if value.is_global:
+        return f"User {target.actor_handle if target else value.actor_handle} is already banned from this bridge instance.\nReason: {getattr(existing, 'reason', None) or 'not specified'}"
+    return f"User {target.actor_handle if target else value.actor_handle} is already banned in community {value.normalized_community_slug}.\nReason: {getattr(existing, 'reason', None) or 'not specified'}"
 
 
 class BanUserOperation(Operation):
-    """Declarative operation for one community-scoped local actor ban."""
+    """Execute ordered authorization, identity resolution, and atomic mutation."""
 
     name = "ban_user"
     preconditions = (
-        Precondition(
-            name="missing_guild_context",
-            message="This command can only be used inside a guild.",
-            predicate=_has_guild_context,
-        ),
-        Precondition(
-            name="unknown_or_inaccessible_community",
-            message=_inaccessible_message,
-            predicate=_community_accessible,
-        ),
-        Precondition(
-            name="cannot_manage_community",
-            message="You are not allowed to manage this local community.",
-            predicate=_can_manage_community,
-        ),
-        Precondition(
-            name="community_disabled",
-            message=_disabled_message,
-            predicate=_community_active,
-        ),
-        Precondition(
-            name="invalid_handle",
-            message="Invalid remote user handle. Use user@example.com.",
-            predicate=_valid_actor_handle,
-        ),
-        Precondition(
-            name="duplicate_active_ban",
-            message=_duplicate_active_ban_message,
-            predicate=_no_duplicate_active_ban,
-        ),
+        Precondition(name="not_super_admin", message="Only a super-admin can create a global ban.", predicate=_global_authorized),
+        Precondition(name="missing_guild_context", message="This command can only be used inside a guild.", predicate=_has_guild_for_scoped),
+        Precondition(name="unknown_or_inaccessible_community", message=lambda value: f"Unknown or inaccessible local community: {value.normalized_community_slug}", predicate=_community_accessible),
+        Precondition(name="cannot_manage_community", message="You are not allowed to manage this local community.", predicate=_can_manage),
+        Precondition(name="community_disabled", message=lambda value: disabled_moderation_message(value.normalized_community_slug or ""), predicate=_active),
+        Precondition(name="invalid_handle", message=_target_error, predicate=_valid_target),
+        Precondition(name="duplicate_active_ban", message=_duplicate_message, predicate=_no_duplicate),
     )
 
-    def reject(
-        self,
-        operation_input: BanUserInput,
-        *,
-        reason: str,
-        message: str,
-        **_: object,
-    ) -> BanUserResult:
-        """Return one rejected command result for the first failed precondition."""
-        # discordops exposes the failed precondition name; command callers keep
-        # stable reason codes from the ban-user operation contract.
-        if reason in {"cannot_manage_community", "community_disabled"}:
+    def reject(self, operation_input: BanUserInput, *, reason: str, message: str, **_: object) -> BanUserResult:
+        """Return first failure and audit only defined authorization denials."""
+        if reason == "not_super_admin":
+            operation_input.database.management_audit.ban_create_global_forbidden(
+                actor_discord_user_id=operation_input.discord_user_id
+            )
+        elif reason in {"cannot_manage_community", "community_disabled"}:
             community = operation_input.get_local_community()
             if community is not None:
                 operation_input.database.management_audit.ban_create_forbidden(
                     actor_discord_user_id=operation_input.discord_user_id,
-                    community=community,
-                    failed_precondition=reason,
+                    community=community, failed_precondition=reason,
                 )
-        return BanUserResult(
-            applied=False,
-            message=message,
-            reason=reason,
-        )
+        return BanUserResult(False, message, reason)
 
     def body(self, operation_input: BanUserInput) -> BanUserResult:
-        """Persist the active ban after all ordered preconditions have passed."""
+        """Persist ban and audit atomically after all checks pass."""
+        target = operation_input.get_target()
         community = operation_input.get_local_community()
-        actor_handle = operation_input.get_normalized_actor_handle()
-        if community is None or actor_handle is None:
-            # This defensive branch should be unreachable because preconditions
-            # already established both facts. Keeping it explicit prevents a
-            # malformed future caller from creating an orphan moderation row.
-            return BanUserResult(
-                applied=False,
-                message="Unable to create ban because the command state is invalid.",
-                reason="invalid_operation_state",
-            )
-
-        reason = operation_input.reason.strip() if operation_input.reason else None
-        operation_input.database.management_actions.create_or_reactivate_ban(
-            actor_discord_user_id=operation_input.discord_user_id,
-            local_community_id=community.id,
-            actor_handle=actor_handle,
-            actor_url=None,
-            reason=reason,
-        )
+        if target is None or (not operation_input.is_global and community is None):
+            return BanUserResult(False, "Unable to create ban because the command state is invalid.", "invalid_operation_state")
+        stored_reason = operation_input.reason.strip() if operation_input.reason and operation_input.reason.strip() else None
+        mutation_kwargs = {
+            "actor_discord_user_id": operation_input.discord_user_id,
+            "local_community_id": None if operation_input.is_global else community.id,
+            "actor_handle": target.actor_handle,
+            "actor_url": target.actor_url,
+            "reason": stored_reason,
+        }
+        # Preserve the legacy remote-target call shape while attaching immutable
+        # Discord identity only for locally registered users.
+        if target.discord_user_id is not None:
+            mutation_kwargs["target_discord_user_id"] = target.discord_user_id
+        activation = operation_input.database.management_actions.create_or_reactivate_ban(**mutation_kwargs)
+        scope_text = "this bridge instance" if operation_input.is_global else f"community {operation_input.normalized_community_slug}"
         return BanUserResult(
-            applied=True,
-            message=(
-                f"Banned {actor_handle} from community {operation_input.normalized_community_slug}.\n"
-                f"Reason: {reason or 'not specified'}"
-            ),
-            reason="created",
+            True, f"Banned {target.actor_handle} from {scope_text}.\nReason: {stored_reason or 'not specified'}",
+            activation.kind, activation_kind=activation.kind,
+            target_discord_user_id=target.discord_user_id,
+            scope="global" if operation_input.is_global else "community",
+            community_slug=operation_input.normalized_community_slug,
+            stored_reason=stored_reason,
         )
 
 
 def ban_user_operation(operation_input: BanUserInput) -> BanUserResult:
-    """Execute the `/ban-user` operation through ordered `discordops` checks."""
+    """Execute `/ban-user` through ordered discordops preconditions."""
     return BanUserOperation().execute(operation_input)

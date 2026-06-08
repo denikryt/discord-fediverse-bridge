@@ -70,19 +70,6 @@ Future management commands should follow the established autocomplete pattern:
 
 This applies to future command surfaces such as subscription approvals, ownership transfer, and role-management commands.
 
-## 7. Discord/Fediverse identity moderation model
-
-Remote actor bans currently operate on Fediverse actor identity. The project still needs a separate design for Discord-originated moderation and future identity mapping.
-
-A later design should define whether a remote actor ban should have any effect on:
-
-- Discord users posting into a bridge-hosted community;
-- Discord users editing or deleting their own local-community surfaces;
-- Discord users mapped to Fediverse identities later;
-- local subscriber channels sending content into the community.
-
-This should remain separate because Discord identity and Fediverse actor identity are different domains.
-
 ## 8. Existing subscriber cleanup after actor bans
 
 Banning a remote actor does not remove or deactivate existing remote subscriber rows.
@@ -114,7 +101,7 @@ The project should avoid inventing protocol behavior that may conflict with Lemm
 
 ## 10. WebFinger and remote identity resolution
 
-Remote actor moderation currently accepts the same `user@example.com` handle shape shown in Discord and uses local best-effort extraction from actor URLs.
+Local bridge-domain handles now resolve directly from the registered `users` table. Remote actor moderation still accepts the same `user@example.com` handle shape shown in Discord and uses local best-effort extraction from actor URLs; it does not perform WebFinger or actor fetches.
 
 Future work may add network resolution:
 

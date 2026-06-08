@@ -441,21 +441,27 @@ class LocalCommunity(Base):
 
 
 class CommunityActorBan(Base):
-    """Record one local-only remote actor ban scoped to one local community.
+    """Persist one bridge-local user ban with community or global scope.
 
-    This is bridge moderation state, not a federated ActivityPub Block. V1 uses
-    it only to acknowledge and skip future inbound events before side effects.
+    The row may identify a local registered Discord user as well as an
+    ActivityPub actor. Global rows use ``local_community_id = NULL``; community
+    rows require a concrete local community id. Status toggling preserves the
+    existing create/reactivate/remove history model without emitting protocol
+    moderation activities.
     """
 
     __tablename__ = "community_actor_bans"
     __table_args__ = (
-        UniqueConstraint("local_community_id", "actor_handle", "status"),
+        UniqueConstraint("scope", "scope_key", "actor_handle", "status"),
     )
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
-    local_community_id: Mapped[int] = mapped_column(Integer, nullable=False)
+    scope: Mapped[str] = mapped_column(String(32), nullable=False, default="community")
+    scope_key: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    local_community_id: Mapped[int | None] = mapped_column(Integer, nullable=True)
     actor_handle: Mapped[str] = mapped_column(String(255), nullable=False)
     actor_url: Mapped[str | None] = mapped_column(String(512), nullable=True)
+    target_discord_user_id: Mapped[str | None] = mapped_column(String(64), nullable=True, index=True)
     status: Mapped[str] = mapped_column(String(32), nullable=False, default="active")
     created_by_discord_user_id: Mapped[str | None] = mapped_column(String(64), nullable=True)
     reason: Mapped[str | None] = mapped_column(String(1024), nullable=True)

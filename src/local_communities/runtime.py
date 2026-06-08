@@ -136,7 +136,7 @@ class LocalCommunityRuntime:
                 thread_row=existing_thread,
                 title=getattr(thread, "name", "Untitled thread"),
                 content=getattr(starter_message, "content", ""),
-                author_display_name=_discord_author_display_name(starter_message),
+                author_display_name=self.content_publish_service.canonical_author_name_for_discord(getattr(starter_message, "author")),
                 source_forum_channel_id=getattr(thread, "parent_id"),
             )
             return LocalCommunityRuntimeResult(status="ignored", reason="duplicate_thread")
@@ -163,7 +163,7 @@ class LocalCommunityRuntime:
             thread_row=thread_row,
             title=getattr(thread, "name", "Untitled thread"),
             content=getattr(starter_message, "content", ""),
-            author_display_name=_discord_author_display_name(starter_message),
+            author_display_name=self.content_publish_service.canonical_author_name_for_discord(getattr(starter_message, "author")),
             source_forum_channel_id=getattr(thread, "parent_id"),
         )
         return LocalCommunityRuntimeResult(
@@ -195,7 +195,7 @@ class LocalCommunityRuntime:
                     thread_row=thread_row,
                     title=getattr(thread, "name", "Untitled thread"),
                     content=getattr(starter_message, "content", ""),
-                    author_display_name=_discord_author_display_name(starter_message),
+                    author_display_name=self.content_publish_service.canonical_author_name_for_discord(getattr(starter_message, "author")),
                     source_forum_channel_id=getattr(thread, "parent_id"),
                     include_host=True,
                 )
@@ -229,7 +229,7 @@ class LocalCommunityRuntime:
             thread_row=thread_row,
             title=getattr(thread, "name", "Untitled thread"),
             content=getattr(starter_message, "content", ""),
-            author_display_name=_discord_author_display_name(starter_message),
+            author_display_name=self.content_publish_service.canonical_author_name_for_discord(getattr(starter_message, "author")),
             source_forum_channel_id=getattr(thread, "parent_id"),
             include_host=True,
         )
@@ -271,7 +271,7 @@ class LocalCommunityRuntime:
                     thread_row=thread_row,
                     message_row=existing_message,
                     content=getattr(message, "content", ""),
-                    author_display_name=_discord_author_display_name(message),
+                    author_display_name=self.content_publish_service.canonical_author_name_for_discord(getattr(message, "author")),
                     source_forum_channel_id=getattr(thread, "parent_id"),
                 )
             return LocalCommunityRuntimeResult(status="ignored", reason="duplicate_message")
@@ -308,7 +308,7 @@ class LocalCommunityRuntime:
             thread_row=thread_row,
             message_row=message_row,
             content=getattr(message, "content", ""),
-            author_display_name=_discord_author_display_name(message),
+            author_display_name=self.content_publish_service.canonical_author_name_for_discord(getattr(message, "author")),
             source_forum_channel_id=getattr(thread, "parent_id"),
         )
         return LocalCommunityRuntimeResult(
@@ -338,7 +338,7 @@ class LocalCommunityRuntime:
                     thread_row=thread_row,
                     message_row=existing_message,
                     content=getattr(message, "content", ""),
-                    author_display_name=_discord_author_display_name(message),
+                    author_display_name=self.content_publish_service.canonical_author_name_for_discord(getattr(message, "author")),
                     source_forum_channel_id=getattr(thread, "parent_id"),
                     include_host=True,
                 )
@@ -388,7 +388,7 @@ class LocalCommunityRuntime:
             thread_row=thread_row,
             message_row=message_row,
             content=getattr(message, "content", ""),
-            author_display_name=_discord_author_display_name(message),
+            author_display_name=self.content_publish_service.canonical_author_name_for_discord(getattr(message, "author")),
             source_forum_channel_id=getattr(thread, "parent_id"),
             include_host=True,
         )

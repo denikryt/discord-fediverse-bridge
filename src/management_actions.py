@@ -110,10 +110,11 @@ class ManagementActions:
         self,
         *,
         actor_discord_user_id: str,
-        local_community_id: int,
+        local_community_id: int | None,
         actor_handle: str,
         actor_url: str | None,
-        reason: str | None,
+        target_discord_user_id: str | None = None,
+        reason: str | None = None,
     ) -> BanActivationResult:
         """Create/reactivate a ban and audit the activation atomically."""
         with self._session_factory() as session:
@@ -122,6 +123,7 @@ class ManagementActions:
                 local_community_id=local_community_id,
                 actor_handle=actor_handle,
                 actor_url=actor_url,
+                target_discord_user_id=target_discord_user_id,
                 created_by_discord_user_id=actor_discord_user_id,
                 reason=reason,
             )
@@ -136,7 +138,7 @@ class ManagementActions:
         self,
         *,
         actor_discord_user_id: str,
-        local_community_id: int,
+        local_community_id: int | None,
         actor_handle: str,
     ) -> CommunityActorBan | None:
         """Deactivate an active ban and audit the removal atomically."""

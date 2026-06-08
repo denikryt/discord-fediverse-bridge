@@ -95,11 +95,11 @@ def register(
 
     @tree.command(
         name="ban-user",
-        description="Ban a remote user from a local community",
+        description="Ban a local or remote user from a community or bridge-wide",
     )
     @app_commands.describe(
-        community="Local community slug, for example cats",
-        user="Remote author handle exactly as shown in Discord, for example alice@example.com",
+        community="Optional local community slug; omit for a global super-admin ban",
+        user="Local or remote user handle, for example alice@example.com",
         reason="Optional moderation note",
     )
     @app_commands.autocomplete(
@@ -107,11 +107,15 @@ def register(
     )
     async def ban_user(
         interaction: discord.Interaction,
-        community: str,
         user: str,
+        community: str | None = None,
         reason: str | None = None,
     ) -> None:
         """Run the moderation operation and return an ephemeral command reply."""
+        # Preserve direct-callback compatibility with the previous positional
+        # order used by project tests while Discord itself supplies named options.
+        if community and "@" in community and "@" not in user:
+            user, community = community, user
         if await reject_if_command_access_denied(interaction, definition=GUILD_COMMAND_ACCESS, settings=settings):
             return
         result = ban_user_operation(
@@ -125,6 +129,18 @@ def register(
                 reason=reason,
             )
         )
-        # Moderation actions and duplicate/error details stay private in v1 so
-        # channels are not spammed with operational state or ban reasons.
+        # Moderation output stays private. A newly activated local-user ban is
+        # also notified by DM after the authoritative ban+audit transaction has
+        # committed; Discord DM failures never roll back moderation state.
         await interaction.response.send_message(result.message, ephemeral=True)
+        if result.applied and result.activation_kind in {"created", "reactivated"} and result.target_discord_user_id:
+            from ..user_bans import BanDecision, canonical_local_community_handle, render_ban_message
+            community_handle = None
+            if result.scope == "community" and result.community_slug:
+                community_handle = canonical_local_community_handle(slug=result.community_slug, settings=settings)
+            decision = BanDecision(True, scope=result.scope, reason=result.stored_reason, community_handle=community_handle)
+            try:
+                target = await interaction.client.fetch_user(int(result.target_discord_user_id))
+                await target.send(render_ban_message(decision))
+            except Exception:
+                logger.exception("Failed to DM newly banned Discord user %s", result.target_discord_user_id)

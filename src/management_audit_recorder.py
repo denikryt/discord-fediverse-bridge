@@ -92,6 +92,20 @@ class ManagementAuditRecorder:
             reason_code=REASON_NOT_OWNER_OR_SUPER_ADMIN,
         )
 
+    def ban_create_global_forbidden(
+        self, *, actor_discord_user_id: str
+    ) -> ManagementAuditEvent:
+        """Record an omitted-community attempt by a non-super-admin."""
+        return self._events.create_event(
+            action=ACTION_BAN_CREATE_FORBIDDEN,
+            result=RESULT_FORBIDDEN,
+            actor_discord_user_id=actor_discord_user_id,
+            local_community_id=None,
+            target_type=TARGET_REMOTE_ACTOR,
+            target_id=None,
+            reason_code=REASON_NOT_SUPER_ADMIN,
+        )
+
     def ban_create_forbidden(
         self,
         *,

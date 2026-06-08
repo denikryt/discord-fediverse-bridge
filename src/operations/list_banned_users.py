@@ -1,4 +1,4 @@
-"""Operation layer for listing active local-community actor bans."""
+"""Operation layer for listing active community or global bans."""
 
 from __future__ import annotations
 
@@ -9,166 +9,94 @@ from discordops import Operation, Precondition
 from ..config import Settings
 from ..db import Database
 from ..local_community_lifecycle import disabled_moderation_message, is_local_community_disabled
-from ..local_community_permissions import can_access_local_community_from_guild
+from ..local_community_permissions import can_access_local_community_from_guild, is_super_admin
 from ..models import LocalCommunity
 
 
 @dataclass(slots=True)
 class ListBannedUsersInput:
-    """Carry one `/list-banned-users` request and cached community state."""
+    """Carry one list request and memoized scope state."""
 
     database: Database
     settings: Settings
     discord_user_id: str
     discord_guild_id: int | None
-    community_slug: str
+    community_slug: str | None
     limit: int = 20
     _community: LocalCommunity | None = field(default=None, init=False, repr=False)
-    _community_loaded: bool = field(default=False, init=False, repr=False)
+    _loaded: bool = field(default=False, init=False, repr=False)
 
     @property
-    def normalized_community_slug(self) -> str:
-        """Return the community slug after trimming Discord input whitespace."""
-        return self.community_slug.strip()
+    def normalized_community_slug(self) -> str | None:
+        """Return trimmed slug or None for global list."""
+        value = (self.community_slug or "").strip()
+        return value or None
+
+    @property
+    def is_global(self) -> bool:
+        """Return whether global scope was requested."""
+        return self.normalized_community_slug is None
 
     def get_local_community(self) -> LocalCommunity | None:
-        """Load and memoize the target local community by slug."""
-        if not self._community_loaded:
-            self._community = self.database.local_communities.get_local_community_by_slug(
-                self.normalized_community_slug
-            )
-            self._community_loaded = True
+        """Load selected community only when present."""
+        if not self._loaded:
+            slug = self.normalized_community_slug
+            self._community = None if slug is None else self.database.local_communities.get_local_community_by_slug(slug)
+            self._loaded = True
         return self._community
 
 
 @dataclass(slots=True)
 class ListBannedUsersResult:
-    """Report the visible `/list-banned-users` command outcome."""
+    """Report visible list outcome."""
 
     applied: bool
     message: str
     reason: str
 
 
-def _has_guild_context(operation_input: ListBannedUsersInput) -> bool:
-    """Return whether Discord supplied a guild id for this command."""
-    return operation_input.discord_guild_id is not None
-
-
-def _community_accessible(operation_input: ListBannedUsersInput) -> bool:
-    """Return whether the selected community can be listed from this guild."""
-    community = operation_input.get_local_community()
-    if community is None:
-        return False
-    return can_access_local_community_from_guild(
-        settings=operation_input.settings,
-        discord_user_id=operation_input.discord_user_id,
-        discord_guild_id=operation_input.discord_guild_id,
-        local_community=community,
-        include_disabled=True,
-    )
-
-
-def _community_active(operation_input: ListBannedUsersInput) -> bool:
-    """Return whether moderation/list operations may act on this community."""
-    community = operation_input.get_local_community()
-    return community is not None and not is_local_community_disabled(community)
-
-
-def _disabled_message(operation_input: ListBannedUsersInput) -> str:
-    """Build the shared disabled-community moderation rejection text."""
-    return disabled_moderation_message(operation_input.normalized_community_slug)
-
-
-def _inaccessible_message(operation_input: ListBannedUsersInput) -> str:
-    """Build the shared inaccessible-community rejection text."""
-    return f"Unknown or inaccessible local community: {operation_input.normalized_community_slug}"
-
-
 def _format_reason(reason: str | None) -> str:
-    """Return compact reason text for Discord-visible list output."""
+    """Return compact reason text without modifying stored data."""
     if not reason:
         return "reason not specified"
-    # Keep each line compact so the 20-row v1 output is unlikely to exceed
-    # Discord's message limit while preserving the stored DB reason unchanged.
-    if len(reason) > 160:
-        return f"{reason[:157]}..."
-    return reason
+    return reason if len(reason) <= 160 else f"{reason[:157]}..."
 
 
 class ListBannedUsersOperation(Operation):
-    """Declarative operation for listing active bans in one community."""
+    """Authorize and render active bans for one explicit scope."""
 
     name = "list_banned_users"
     preconditions = (
-        Precondition(
-            name="missing_guild_context",
-            message="This command can only be used inside a guild.",
-            predicate=_has_guild_context,
-        ),
-        Precondition(
-            name="unknown_or_inaccessible_community",
-            message=_inaccessible_message,
-            predicate=_community_accessible,
-        ),
-        Precondition(
-            name="community_disabled",
-            message=_disabled_message,
-            predicate=_community_active,
-        ),
+        Precondition(name="not_super_admin", message="Only a super-admin can list global bans.", predicate=lambda value: not value.is_global or is_super_admin(settings=value.settings, discord_user_id=value.discord_user_id)),
+        Precondition(name="missing_guild_context", message="This command can only be used inside a guild.", predicate=lambda value: value.is_global or value.discord_guild_id is not None),
+        Precondition(name="unknown_or_inaccessible_community", message=lambda value: f"Unknown or inaccessible local community: {value.normalized_community_slug}", predicate=lambda value: value.is_global or (value.get_local_community() is not None and can_access_local_community_from_guild(settings=value.settings, discord_user_id=value.discord_user_id, discord_guild_id=value.discord_guild_id, local_community=value.get_local_community(), include_disabled=True))),
+        Precondition(name="community_disabled", message=lambda value: disabled_moderation_message(value.normalized_community_slug or ""), predicate=lambda value: value.is_global or (value.get_local_community() is not None and not is_local_community_disabled(value.get_local_community()))),
     )
 
-    def reject(
-        self,
-        operation_input: ListBannedUsersInput,
-        *,
-        reason: str,
-        message: str,
-        **_: object,
-    ) -> ListBannedUsersResult:
-        """Return a rejected command result for the first failed precondition."""
-        return ListBannedUsersResult(
-            applied=False,
-            message=message,
-            reason=reason,
-        )
+    def reject(self, operation_input: ListBannedUsersInput, *, reason: str, message: str, **_: object) -> ListBannedUsersResult:
+        """Return the first authorization or lifecycle rejection."""
+        return ListBannedUsersResult(False, message, reason)
 
     def body(self, operation_input: ListBannedUsersInput) -> ListBannedUsersResult:
-        """Build the ephemeral active-ban list for one accessible community."""
-        community = operation_input.get_local_community()
-        if community is None:
-            # Preconditions guarantee accessibility. This branch prevents future
-            # direct callers from accidentally formatting a global list.
-            return ListBannedUsersResult(
-                applied=False,
-                message=_inaccessible_message(operation_input),
-                reason="unknown_or_inaccessible_community",
-            )
-
-        total = operation_input.database.community_actor_bans.count_active_bans_for_community(
-            local_community_id=community.id,
-        )
+        """Render active rows for global or selected community scope."""
+        limit = max(1, operation_input.limit)
+        if operation_input.is_global:
+            total = operation_input.database.community_actor_bans.count_active_global_bans()
+            rows = operation_input.database.community_actor_bans.list_active_global_bans(limit=limit)
+            heading = "Globally banned users:"
+            empty = "This bridge instance has no active global bans."
+        else:
+            community = operation_input.get_local_community()
+            total = operation_input.database.community_actor_bans.count_active_bans_for_community(local_community_id=community.id)
+            rows = operation_input.database.community_actor_bans.list_active_bans_for_community(local_community_id=community.id, limit=limit)
+            heading = f"Banned users in community {operation_input.normalized_community_slug}:"
+            empty = f"Community {operation_input.normalized_community_slug} has no active bans."
         if total == 0:
-            return ListBannedUsersResult(
-                applied=True,
-                message=f"Community {operation_input.normalized_community_slug} has no active bans.",
-                reason="empty",
-            )
-
-        visible_limit = max(1, operation_input.limit)
-        bans = operation_input.database.community_actor_bans.list_active_bans_for_community(
-            local_community_id=community.id,
-            limit=visible_limit,
-        )
-        lines = [f"Banned users in community {operation_input.normalized_community_slug}:"]
-        lines.extend(f"- {ban.actor_handle} — {_format_reason(ban.reason)}" for ban in bans)
-        if total > visible_limit:
-            lines.append(f"Showing {visible_limit} of {total} active bans.")
-        return ListBannedUsersResult(
-            applied=True,
-            message="\n".join(lines),
-            reason="listed",
-        )
+            return ListBannedUsersResult(True, empty, "empty")
+        lines = [heading, *(f"- {row.actor_handle} — {_format_reason(row.reason)}" for row in rows)]
+        if total > limit:
+            lines.append(f"Showing {limit} of {total} active bans.")
+        return ListBannedUsersResult(True, "\n".join(lines), "listed")
 
 
 def list_banned_users_operation(operation_input: ListBannedUsersInput) -> ListBannedUsersResult:

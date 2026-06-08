@@ -66,13 +66,13 @@ def register(
 
     @tree.command(
         name="list-banned-users",
-        description="List active remote user bans for a local community",
+        description="List active community or global user bans",
     )
-    @app_commands.describe(community="Local community slug")
+    @app_commands.describe(community="Optional local community slug; omit for global bans")
     @app_commands.autocomplete(community=_list_community_autocomplete(database, settings))
     async def list_banned_users(
         interaction: discord.Interaction,
-        community: str,
+        community: str | None = None,
     ) -> None:
         """Run the list operation and return an ephemeral command reply."""
         if await reject_if_command_access_denied(interaction, definition=GUILD_COMMAND_ACCESS, settings=settings):

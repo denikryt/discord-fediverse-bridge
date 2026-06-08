@@ -23,3 +23,7 @@ Remote Lemmy subscription binding, gateway WebFinger routing, or generic content
 ## Local subscriber participant boundary
 
 Stage 5 makes active local subscriber forums create/edit/delete-capable community participants. A local-subscriber-originated post/comment creates one canonical activity, one source local-subscriber surface, host/sibling Discord surfaces, and the existing local-community ActivityPub publish. Later edits/deletes from host or active local-subscriber surfaces resolve through the persisted surface rows, update/delete the canonical AP object through the gateway, and mutate every non-source local Discord surface.
+
+## User moderation boundary
+
+Local-community host and active local-subscriber sources apply global bans first and then the canonical community-scoped ban before ActivityPub publishing, canonical-row creation, or Discord fanout. Rejection reasons remain on the source Discord surface. Registered local authors are attributed by their stable `user@bridge-authority` handle across all participant surfaces.

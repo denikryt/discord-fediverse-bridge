@@ -65,6 +65,7 @@ def migrate(engine: Engine) -> None:
             if column not in existing:
                 conn.execute(text(stmt))
         _migrate_local_communities_summary_nullable(conn)
+        _migrate_generalized_user_bans(conn)
         # Stage 3 stores the selected LocalSubscriber on subscriber surface rows.
         # Existing host-only surface rows keep NULL, so this additive migration is
         # safe to run before or after Stage 2 backfill.
@@ -78,6 +79,56 @@ def migrate(engine: Engine) -> None:
         _verify_stage2_surface_invariants(conn)
         conn.commit()
 
+
+
+def _migrate_generalized_user_bans(conn: Connection) -> None:
+    """Rebuild legacy community-only ban rows into explicit scoped rows.
+
+    SQLite cannot make ``local_community_id`` nullable or replace the legacy
+    uniqueness constraint in place. Existing rows remain community-scoped and
+    retain status, reason, actor identity, creator, and timestamps.
+    """
+    columns = _table_columns(conn, "community_actor_bans")
+    if not columns or "scope" in columns:
+        return
+    conn.execute(text("ALTER TABLE community_actor_bans RENAME TO community_actor_bans_legacy_scope"))
+    conn.execute(text(
+        """
+        CREATE TABLE community_actor_bans (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            scope VARCHAR(32) NOT NULL,
+            scope_key VARCHAR(64) NOT NULL,
+            local_community_id INTEGER,
+            actor_handle VARCHAR(255) NOT NULL,
+            actor_url VARCHAR(512),
+            target_discord_user_id VARCHAR(64),
+            status VARCHAR(32) NOT NULL,
+            created_by_discord_user_id VARCHAR(64),
+            reason VARCHAR(1024),
+            created_at DATETIME NOT NULL,
+            updated_at DATETIME NOT NULL,
+            UNIQUE (scope, scope_key, actor_handle, status)
+        )
+        """
+    ))
+    conn.execute(text(
+        """
+        INSERT INTO community_actor_bans (
+            id, scope, scope_key, local_community_id, actor_handle, actor_url,
+            target_discord_user_id, status, created_by_discord_user_id, reason,
+            created_at, updated_at
+        )
+        SELECT id, 'community', CAST(local_community_id AS TEXT),
+               local_community_id, actor_handle, actor_url, NULL, status,
+               created_by_discord_user_id, reason, created_at, updated_at
+        FROM community_actor_bans_legacy_scope
+        """
+    ))
+    conn.execute(text("DROP TABLE community_actor_bans_legacy_scope"))
+    conn.execute(text(
+        "CREATE INDEX IF NOT EXISTS ix_community_actor_bans_target_discord_user_id "
+        "ON community_actor_bans (target_discord_user_id)"
+    ))
 
 def _table_columns(conn: Connection, table: str) -> set[str]:
     """Return the current SQLite column names for one table."""

@@ -144,11 +144,11 @@ def register(
 
     @tree.command(
         name="unban-user",
-        description="Remove an active remote user ban from a local community",
+        description="Remove an active community or global user ban",
     )
     @app_commands.describe(
-        community="Local community slug",
-        user="Banned remote author handle",
+        community="Optional local community slug; omit for a global super-admin unban",
+        user="Banned local or remote user handle",
     )
     @app_commands.autocomplete(
         community=_unban_community_autocomplete(database, settings),
@@ -156,10 +156,13 @@ def register(
     )
     async def unban_user(
         interaction: discord.Interaction,
-        community: str,
         user: str,
+        community: str | None = None,
     ) -> None:
         """Run the unban operation and return an ephemeral command reply."""
+        # Preserve the previous direct-callback positional order used by tests.
+        if community and "@" in community and "@" not in user:
+            user, community = community, user
         if await reject_if_command_access_denied(interaction, definition=GUILD_COMMAND_ACCESS, settings=settings):
             return
         result = unban_user_operation(

@@ -12,10 +12,12 @@ import logging
 from dataclasses import dataclass
 from typing import Awaitable, Callable
 
+from .config import Settings
+from .user_bans import UserBanService, canonical_local_user_handle, render_ban_message
+
 from .content_sync.outbound_publish import (
     build_discord_comment_body,
     build_discord_post_title,
-    resolve_registered_user,
 )
 from .content_sync.persistence import persist_publish_artifacts
 
@@ -56,11 +58,14 @@ class ContentPublishService:
         database: object,
         fedify_gateway: object,
         bridge_prefix: str,
+        settings: Settings | None = None,
     ) -> None:
         """Initialise with the shared database, AP gateway, and bridge prefix."""
         self.database = database
         self.fedify_gateway = fedify_gateway
         self.bridge_prefix = bridge_prefix
+        self.settings = settings
+        self.user_ban_service = UserBanService(database=database, settings=settings) if settings is not None else None
 
     async def publish_thread_starter(
         self,
@@ -145,14 +150,13 @@ class ContentPublishService:
         publish_call: Callable[[object], Awaitable[object]],
     ) -> PublishResult:
         """Publish one Discord thread starter through the supplied gateway path."""
-        user = await resolve_registered_user(
-            database=self.database,
+        user, rejection = await self._resolve_publish_user(
             author=getattr(starter_message, "author"),
             reply_target=starter_message,
-            unregistered_reply=UNREGISTERED_REPLY,
+            community_actor_url=community_actor_url,
         )
-        if user is None:
-            return PublishResult(status="ignored", reason="unregistered_user")
+        if rejection is not None:
+            return rejection
 
         author_name = self._author_name(getattr(starter_message, "author"))
         body = build_discord_comment_body(
@@ -210,14 +214,13 @@ class ContentPublishService:
     ) -> PublishResult:
         """Publish one Discord comment through the supplied gateway path."""
         thread = getattr(message, "channel")
-        user = await resolve_registered_user(
-            database=self.database,
+        user, rejection = await self._resolve_publish_user(
             author=getattr(message, "author"),
             reply_target=message,
-            unregistered_reply=UNREGISTERED_REPLY,
+            community_actor_url=community_actor_url,
         )
-        if user is None:
-            return PublishResult(status="ignored", reason="unregistered_user")
+        if rejection is not None:
+            return rejection
 
         author_name = self._author_name(getattr(message, "author"))
         body = build_discord_comment_body(
@@ -263,6 +266,51 @@ class ContentPublishService:
             activity_id=publish_result.activity_id,
             object_id=publish_result.object_id,
         )
+
+    def canonical_author_name_for_discord(self, author: object) -> str:
+        """Return a stable local handle when the Discord account is registered."""
+        user = self.database.users.get_user_by_discord_user_id(str(getattr(author, "id")))
+        if user is not None and self.settings is not None:
+            return canonical_local_user_handle(
+                username=str(user.activitypub_username), settings=self.settings
+            )
+        return self._author_name(author)
+
+    async def _resolve_publish_user(
+        self, *, author: object, reply_target: object, community_actor_url: str
+    ) -> tuple[object | None, PublishResult | None]:
+        """Resolve registration, then enforce global/community bans before side effects."""
+        discord_user_id = str(getattr(author, "id"))
+        user = self.database.users.get_user_by_discord_user_id(discord_user_id)
+        if user is None:
+            await getattr(reply_target, "reply")(UNREGISTERED_REPLY)
+            return None, PublishResult(status="ignored", reason="unregistered_user")
+        if self.user_ban_service is not None:
+            try:
+                local_community = self.database.local_communities.get_local_community_by_actor_url(community_actor_url)
+                decision = self.user_ban_service.check_discord_user(
+                    discord_user_id=discord_user_id,
+                    local_community=local_community,
+                )
+            except Exception:
+                # Database uncertainty must never reopen the publish path. The
+                # generic message avoids falsely claiming that the user is banned.
+                logger.exception("Discord publish ban lookup failed for user %s", discord_user_id)
+                try:
+                    await getattr(reply_target, "reply")(
+                        "The bridge could not verify publishing access. Please try again later."
+                    )
+                except Exception:
+                    logger.exception("Failed to send publishing access verification error")
+                return None, PublishResult(status="rejected", reason="ban_check_failed")
+            if decision.banned:
+                try:
+                    await getattr(reply_target, "reply")(render_ban_message(decision))
+                except Exception:
+                    # Rejection delivery is best-effort; moderation remains fail-closed.
+                    logger.exception("Failed to send Discord ban rejection for user %s", discord_user_id)
+                return None, PublishResult(status="rejected", reason="user_banned")
+        return user, None
 
     def _resolve_reply_target(self, *, message: object, thread_group: object) -> str:
         """Resolve the AP object ID that one remote-subscription reply should target."""

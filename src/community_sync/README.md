@@ -19,3 +19,7 @@ Local community actor hosting, local follower state, or gateway route ownership.
 ## Important tables or payloads
 
 `channel_community_subscriptions`, `bridge_actor_follows`, community group tables, and normalized post/comment events.
+
+## User moderation boundary
+
+Discord-originated remote-subscription publishing resolves the registered local identity before side effects. Active global bans reject the source action and reply only in the source thread. Discord-to-Discord mirror attribution uses the registered `user@bridge-authority` handle rather than guild display names.

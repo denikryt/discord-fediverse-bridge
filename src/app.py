@@ -78,6 +78,7 @@ def build_runtime(settings: Settings) -> Runtime:
         database=database,
         fedify_gateway=fedify_gateway,
         bridge_prefix=settings.bridge_display_prefix,
+        settings=settings,
     )
     registration_service = RegistrationService(
         database=database,

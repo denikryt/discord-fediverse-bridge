@@ -13,6 +13,8 @@ from .db import Database
 from .discord_event_router import DiscordEventRouter
 from .fedify_gateway_client import FedifyGatewayClient
 from .discord_directory import refresh_discord_directory_from_bot
+from .command_tree import BridgeCommandTree
+from .user_bans import UserBanService
 
 logger = logging.getLogger(__name__)
 
@@ -44,7 +46,8 @@ class BridgeBot(discord.Client):
         # Keep the current runtime reachable for edit/delete paths that still
         # belong only to the remote-subscription mode today.
         self.community_runtime = event_router.community_runtime
-        self.tree = app_commands.CommandTree(self)
+        self.user_ban_service = UserBanService(database=database, settings=settings)
+        self.tree = BridgeCommandTree(self, ban_service=self.user_ban_service)
         self.bridge_ready = asyncio.Event()
         # Per-thread locks prevent duplicate Lemmy posts when Discord fires
         # on_thread_create twice for the same thread (e.g. on reconnect).

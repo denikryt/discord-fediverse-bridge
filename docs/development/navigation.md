@@ -60,7 +60,7 @@ For inbound observability, start with `src/inbound_activity_outcomes.py` for the
 3. `src/fediverse_identity.py` — command handle normalization and hot-path actor URL extraction.
 4. `src/local_community_permissions.py` — command-side owner/super-admin and guild-access policy.
 5. `src/management_actions.py` — transaction boundary for ban/unban mutation plus success audit.
-6. `src/db/repositories/community_actor_bans.py` — scoped active-ban persistence, inactive-row reactivation deltas, list/count/deactivate helpers.
+6. `src/user_bans.py` and `src/db/repositories/community_actor_bans.py` — local/remote moderation target resolution, global-first policy decisions, scoped persistence, inactive-row reactivation, and list/count/deactivate helpers.
 7. `src/management_audit_recorder.py` — semantic audit-row construction for ban/unban success and forbidden outcomes.
 8. `src/management_audit.py`; `src/db/repositories/management_audit_events.py` — v1 audit vocabulary, canonical JSON payloads, and low-level audit-row insertion helpers.
 9. `src/community_moderation.py` — inbound ban resolution before local-community side effects.
