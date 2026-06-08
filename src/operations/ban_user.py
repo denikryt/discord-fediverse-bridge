@@ -90,17 +90,17 @@ class BanUserResult:
     stored_reason: str | None = None
 
 
-def _global_authorized(value: BanUserInput) -> bool:
+def _is_global_scope_authorized(value: BanUserInput) -> bool:
     """Reject omitted-community calls before target validation unless super-admin."""
     return not value.is_global or is_super_admin(settings=value.settings, discord_user_id=value.discord_user_id)
 
 
-def _has_guild_for_scoped(value: BanUserInput) -> bool:
+def _has_required_guild_context(value: BanUserInput) -> bool:
     """Require guild context only for community-owner scoped operations."""
     return value.is_global or value.discord_guild_id is not None
 
 
-def _community_accessible(value: BanUserInput) -> bool:
+def _is_community_accessible(value: BanUserInput) -> bool:
     """Resolve and authorize the selected community, while global scope skips it."""
     if value.is_global:
         return True
@@ -111,7 +111,7 @@ def _community_accessible(value: BanUserInput) -> bool:
     )
 
 
-def _can_manage(value: BanUserInput) -> bool:
+def _can_manage_community(value: BanUserInput) -> bool:
     """Require owner or super-admin for selected community."""
     if value.is_global:
         return True
@@ -121,12 +121,12 @@ def _can_manage(value: BanUserInput) -> bool:
     )
 
 
-def _active(value: BanUserInput) -> bool:
+def _is_community_moderation_enabled(value: BanUserInput) -> bool:
     """Require active lifecycle only for community scope."""
     return value.is_global or (value.get_local_community() is not None and not is_local_community_disabled(value.get_local_community()))
 
 
-def _valid_target(value: BanUserInput) -> bool:
+def _is_ban_target_valid(value: BanUserInput) -> bool:
     """Return whether syntax and local-domain DB resolution succeeded."""
     return value.get_target() is not None
 
@@ -138,7 +138,7 @@ def _target_error(value: BanUserInput) -> str:
     return "Invalid remote user handle. Use user@example.com."
 
 
-def _no_duplicate(value: BanUserInput) -> bool:
+def _has_no_active_duplicate_ban(value: BanUserInput) -> bool:
     """Return whether no active row exists in the requested scope."""
     return value.get_existing_active_ban() is None
 
@@ -158,14 +158,14 @@ class BanUserOperation(Operation):
     name = "ban_user"
     preconditions = (
         Precondition(
-            name="not_super_admin",
+            name="global_scope_requires_super_admin",
             message="Only a super-admin can create a global ban.",
-            predicate=_global_authorized,
+            predicate=_is_global_scope_authorized,
         ),
         Precondition(
             name="missing_guild_context",
             message="This command can only be used inside a guild.",
-            predicate=_has_guild_for_scoped,
+            predicate=_has_required_guild_context,
         ),
         Precondition(
             name="unknown_or_inaccessible_community",
@@ -173,35 +173,35 @@ class BanUserOperation(Operation):
                 f"Unknown or inaccessible local community: "
                 f"{value.normalized_community_slug}"
             ),
-            predicate=_community_accessible,
+            predicate=_is_community_accessible,
         ),
         Precondition(
             name="cannot_manage_community",
             message="You are not allowed to manage this local community.",
-            predicate=_can_manage,
+            predicate=_can_manage_community,
         ),
         Precondition(
             name="community_disabled",
             message=lambda value: disabled_moderation_message(
                 value.normalized_community_slug or ""
             ),
-            predicate=_active,
+            predicate=_is_community_moderation_enabled,
         ),
         Precondition(
             name="invalid_handle",
             message=_target_error,
-            predicate=_valid_target,
+            predicate=_is_ban_target_valid,
         ),
         Precondition(
             name="duplicate_active_ban",
             message=_duplicate_message,
-            predicate=_no_duplicate,
+            predicate=_has_no_active_duplicate_ban,
         ),
     )
 
     def reject(self, operation_input: BanUserInput, *, reason: str, message: str, **_: object) -> BanUserResult:
         """Return first failure and audit only defined authorization denials."""
-        if reason == "not_super_admin":
+        if reason == "global_scope_requires_super_admin":
             operation_input.database.management_audit.ban_create_global_forbidden(
                 actor_discord_user_id=operation_input.discord_user_id
             )
