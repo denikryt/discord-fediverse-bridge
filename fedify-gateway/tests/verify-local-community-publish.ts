@@ -13,9 +13,9 @@ import { mkdtemp, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 
-import { exportJwk, generateCryptoKeyPair } from "@fedify/fedify";
+import { exportJwk } from "@fedify/fedify";
 import initSqlJs, { seedBridgeActorJwk } from "./support/sqlite-fixture.js";
-import { startPythonBridgeFixture } from "./support/python-bridge-fixture.js";
+import { closeAllPythonBridgeFixtures, importFixedRsaKeyPair, startPythonBridgeFixture } from "./support/python-bridge-fixture.js";
 
 import { publishLocalCommunityContent } from "../src/federation-outbound.js";
 import type { GatewayConfig } from "../src/config.js";
@@ -51,19 +51,23 @@ async function testLocalCommunityPostPublishesAnnounceCreatePage(): Promise<void
   const deliveries: DeliveryRecord[] = [];
   const restoreFetch = installFetchRecorder(deliveries);
 
-  const result = await publishLocalCommunityContent(
-    {} as never,
-    config,
-    {
-      actorUsername: "alice",
-      communityActorUrl: COMMUNITY_ACTOR,
-      kind: "post",
-      title: "Hello from Discord",
-      bodyMarkdown: "Body from Discord",
-      inReplyToObjectId: null,
-    },
-  );
-  restoreFetch();
+  let result;
+  try {
+    result = await publishLocalCommunityContent(
+      {} as never,
+      config,
+      {
+        actorUsername: "alice",
+        communityActorUrl: COMMUNITY_ACTOR,
+        kind: "post",
+        title: "Hello from Discord",
+        bodyMarkdown: "Body from Discord",
+        inReplyToObjectId: null,
+      },
+    );
+  } finally {
+    restoreFetch();
+  }
 
   assert.equal(result.deliveredFollowerCount, 2);
   assert.equal(result.failedFollowerCount, 0);
@@ -117,18 +121,23 @@ async function testLocalCommunityCommentPublishesAnnounceCreateNote(): Promise<v
   const restoreFetch = installFetchRecorder(deliveries);
   const parentObjectId = `${TEST_ORIGIN}users/alice/post/parent`;
 
-  const result = await publishLocalCommunityContent(
-    {} as never,
-    config,
-    {
-      actorUsername: "alice",
-      communityActorUrl: COMMUNITY_ACTOR,
-      kind: "comment",
-      title: null,
-      bodyMarkdown: "Reply from Discord",
-      inReplyToObjectId: parentObjectId,
-    },
-  );
+  let result;
+  try {
+    result = await publishLocalCommunityContent(
+      {} as never,
+      config,
+      {
+        actorUsername: "alice",
+        communityActorUrl: COMMUNITY_ACTOR,
+        kind: "comment",
+        title: null,
+        bodyMarkdown: "Reply from Discord",
+        inReplyToObjectId: parentObjectId,
+      },
+    );
+  } finally {
+    restoreFetch();
+  }
 
   assert.equal(deliveries.length, 2);
   for (const delivery of deliveries) {
@@ -161,19 +170,23 @@ async function testLocalCommunityPublishReportsPartialFailure(): Promise<void> {
     new Set(["https://mastodon.example/ap/users/bob/inbox"]),
   );
 
-  const result = await publishLocalCommunityContent(
-    {} as never,
-    config,
-    {
-      actorUsername: "alice",
-      communityActorUrl: COMMUNITY_ACTOR,
-      kind: "post",
-      title: "Partial failure",
-      bodyMarkdown: "Healthy followers should still receive this.",
-      inReplyToObjectId: null,
-    },
-  );
-  restoreFetch();
+  let result;
+  try {
+    result = await publishLocalCommunityContent(
+      {} as never,
+      config,
+      {
+        actorUsername: "alice",
+        communityActorUrl: COMMUNITY_ACTOR,
+        kind: "post",
+        title: "Partial failure",
+        bodyMarkdown: "Healthy followers should still receive this.",
+        inReplyToObjectId: null,
+      },
+    );
+  } finally {
+    restoreFetch();
+  }
 
   assert.equal(result.deliveredFollowerCount, 1);
   assert.equal(result.failedFollowerCount, 1);
@@ -198,15 +211,18 @@ async function testLogLevelDebugControlsSignedJsonDeliveryLogs(): Promise<void> 
 
     const infoDeliveries: DeliveryRecord[] = [];
     const restoreInfoFetch = installFetchRecorder(infoDeliveries);
-    await publishLocalCommunityContent({} as never, await buildConfig("info"), {
-      actorUsername: "alice",
-      communityActorUrl: COMMUNITY_ACTOR,
-      kind: "post",
-      title: "Info logging",
-      bodyMarkdown: "Normal logging should not emit raw request bodies.",
-      inReplyToObjectId: null,
-    });
-    restoreInfoFetch();
+    try {
+      await publishLocalCommunityContent({} as never, await buildConfig("info"), {
+        actorUsername: "alice",
+        communityActorUrl: COMMUNITY_ACTOR,
+        kind: "post",
+        title: "Info logging",
+        bodyMarkdown: "Normal logging should not emit raw request bodies.",
+        inReplyToObjectId: null,
+      });
+    } finally {
+      restoreInfoFetch();
+    }
 
     assert.equal(infoDeliveries.length, 2);
     assert.equal(hasRawDeliveryLog(logs), false);
@@ -214,15 +230,18 @@ async function testLogLevelDebugControlsSignedJsonDeliveryLogs(): Promise<void> 
     logs.length = 0;
     const debugDeliveries: DeliveryRecord[] = [];
     const restoreDebugFetch = installFetchRecorder(debugDeliveries);
-    await publishLocalCommunityContent({} as never, await buildConfig("debug"), {
-      actorUsername: "alice",
-      communityActorUrl: COMMUNITY_ACTOR,
-      kind: "post",
-      title: "Debug logging",
-      bodyMarkdown: "LOG_LEVEL=debug should enable raw logs.",
-      inReplyToObjectId: null,
-    });
-    restoreDebugFetch();
+    try {
+      await publishLocalCommunityContent({} as never, await buildConfig("debug"), {
+        actorUsername: "alice",
+        communityActorUrl: COMMUNITY_ACTOR,
+        kind: "post",
+        title: "Debug logging",
+        bodyMarkdown: "LOG_LEVEL=debug should enable raw logs.",
+        inReplyToObjectId: null,
+      });
+    } finally {
+      restoreDebugFetch();
+    }
 
     assert.equal(debugDeliveries.length, 2);
     assert.equal(hasRawDeliveryLog(logs), true);
@@ -263,8 +282,8 @@ async function buildConfig(logLevel: "info" | "debug" = "info"): Promise<Gateway
   const tempDir = await mkdtemp(path.join(tmpdir(), "fedify-local-community-publish-"));
   const databasePath = path.join(tempDir, "bridge.db");
   let pythonBridgeInternalUrl = "";
-  const bridgeKeys = await generateCryptoKeyPair("RSASSA-PKCS1-v1_5");
-  const communityKeys = await generateCryptoKeyPair("RSASSA-PKCS1-v1_5");
+  const bridgeKeys = await importFixedRsaKeyPair();
+  const communityKeys = await importFixedRsaKeyPair();
   const db = new sqlJs.Database();
 
   try {
@@ -407,7 +426,11 @@ function toPem(label: string, bytes: Buffer): string {
   return `-----BEGIN ${label}-----\n${wrapped}\n-----END ${label}-----\n`;
 }
 
-main().catch((error) => {
+try {
+  await main();
+} catch (error) {
   console.error(error);
   process.exitCode = 1;
-});
+} finally {
+  await closeAllPythonBridgeFixtures();
+}

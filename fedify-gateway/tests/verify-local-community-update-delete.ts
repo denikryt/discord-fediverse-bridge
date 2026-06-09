@@ -11,9 +11,9 @@ import { mkdtemp, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 
-import { exportJwk, generateCryptoKeyPair } from "@fedify/fedify";
+import { exportJwk } from "@fedify/fedify";
 import initSqlJs, { seedBridgeActorJwk } from "./support/sqlite-fixture.js";
-import { startPythonBridgeFixture } from "./support/python-bridge-fixture.js";
+import { closeAllPythonBridgeFixtures, importFixedRsaKeyPair, startPythonBridgeFixture } from "./support/python-bridge-fixture.js";
 
 import { deleteContent, updateContent } from "../src/federation-outbound.js";
 import type { GatewayConfig } from "../src/config.js";
@@ -42,16 +42,19 @@ async function testLocalCommunityUpdateFansOutToAcceptedRemoteSubscribers(): Pro
   const deliveries: DeliveryRecord[] = [];
   const restoreFetch = installFetchRecorder(deliveries);
 
-  await updateContent({} as never, config, {
-    actorUsername: "alice",
-    communityActorUrl: COMMUNITY_ACTOR,
-    apObjectId: `${TEST_ORIGIN}users/alice/comment/1`,
-    kind: "comment",
-    bodyMarkdown: "Edited from Discord",
-    title: null,
-    inReplyToObjectId: `${TEST_ORIGIN}users/alice/post/1`,
-  });
-  restoreFetch();
+  try {
+    await updateContent({} as never, config, {
+      actorUsername: "alice",
+      communityActorUrl: COMMUNITY_ACTOR,
+      apObjectId: `${TEST_ORIGIN}users/alice/comment/1`,
+      kind: "comment",
+      bodyMarkdown: "Edited from Discord",
+      title: null,
+      inReplyToObjectId: `${TEST_ORIGIN}users/alice/post/1`,
+    });
+  } finally {
+    restoreFetch();
+  }
 
   assert.deepEqual(
     deliveries.map((delivery) => delivery.inboxId).sort(),
@@ -82,12 +85,15 @@ async function testLocalCommunityDeleteFansOutToAcceptedRemoteSubscribers(): Pro
   const deliveries: DeliveryRecord[] = [];
   const restoreFetch = installFetchRecorder(deliveries);
 
-  await deleteContent({} as never, config, {
-    actorUsername: "alice",
-    communityActorUrl: COMMUNITY_ACTOR,
-    apObjectId: `${TEST_ORIGIN}users/alice/comment/1`,
-  });
-  restoreFetch();
+  try {
+    await deleteContent({} as never, config, {
+      actorUsername: "alice",
+      communityActorUrl: COMMUNITY_ACTOR,
+      apObjectId: `${TEST_ORIGIN}users/alice/comment/1`,
+    });
+  } finally {
+    restoreFetch();
+  }
 
   assert.equal(deliveries.length, 2);
   for (const delivery of deliveries) {
@@ -123,8 +129,8 @@ async function buildConfig(): Promise<GatewayConfig> {
   const tempDir = await mkdtemp(path.join(tmpdir(), "fedify-local-community-update-delete-"));
   const databasePath = path.join(tempDir, "bridge.db");
   let pythonBridgeInternalUrl = "";
-  const bridgeKeys = await generateCryptoKeyPair("RSASSA-PKCS1-v1_5");
-  const communityKeys = await generateCryptoKeyPair("RSASSA-PKCS1-v1_5");
+  const bridgeKeys = await importFixedRsaKeyPair();
+  const communityKeys = await importFixedRsaKeyPair();
   const db = new sqlJs.Database();
 
   try {
@@ -242,7 +248,11 @@ function toPem(label: string, bytes: Buffer): string {
   return `-----BEGIN ${label}-----\n${wrapped}\n-----END ${label}-----\n`;
 }
 
-main().catch((error) => {
+try {
+  await main();
+} catch (error) {
   console.error(error);
   process.exitCode = 1;
-});
+} finally {
+  await closeAllPythonBridgeFixtures();
+}

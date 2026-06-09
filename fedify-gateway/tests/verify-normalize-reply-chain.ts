@@ -29,7 +29,7 @@ import path from "node:path";
 
 import { Create, Note, Person, Source } from "@fedify/vocab";
 import initSqlJs from "./support/sqlite-fixture.js";
-import { startPythonBridgeFixture } from "./support/python-bridge-fixture.js";
+import { closeAllPythonBridgeFixtures, startPythonBridgeFixture } from "./support/python-bridge-fixture.js";
 import { PythonBridgeClient } from "../src/python-bridge-client.js";
 
 import {
@@ -403,7 +403,11 @@ async function writeBridgeParentDatabase(
   }
 }
 
-main().catch((error) => {
+try {
+  await main();
+} catch (error) {
   console.error(error);
   process.exitCode = 1;
-});
+} finally {
+  await closeAllPythonBridgeFixtures();
+}

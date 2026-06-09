@@ -3,7 +3,7 @@ import { mkdtemp, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import initSqlJs from "./support/sqlite-fixture.js";
-import { startPythonBridgeFixture } from "./support/python-bridge-fixture.js";
+import { closeAllPythonBridgeFixtures, startPythonBridgeFixture } from "./support/python-bridge-fixture.js";
 
 import type { GatewayConfig } from "../src/config.js";
 import { loadAcceptedRemoteSubscribersByActorUrl } from "../src/python-bridge-client.js";
@@ -133,4 +133,8 @@ async function main(): Promise<void> {
   console.log("verify:remote-subscriber-naming passed");
 }
 
-await main();
+try {
+  await main();
+} finally {
+  await closeAllPythonBridgeFixtures();
+}

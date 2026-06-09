@@ -12,9 +12,9 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 import { webcrypto } from "node:crypto";
 
-import { exportJwk, generateCryptoKeyPair } from "@fedify/fedify";
+import { exportJwk } from "@fedify/fedify";
 import initSqlJs, { seedBridgeActorJwk } from "./support/sqlite-fixture.js";
-import { startPythonBridgeFixture } from "./support/python-bridge-fixture.js";
+import { closeAllPythonBridgeFixtures, importFixedRsaKeyPair, startPythonBridgeFixture } from "./support/python-bridge-fixture.js";
 
 import { sendLocalCommunityRelay } from "../src/federation-outbound.js";
 import type { GatewayConfig } from "../src/config.js";
@@ -128,8 +128,8 @@ async function buildConfig(): Promise<GatewayConfig> {
   const tempDir = await mkdtemp(path.join(tmpdir(), "fedify-local-community-relay-"));
   const databasePath = path.join(tempDir, "bridge.db");
   let pythonBridgeInternalUrl = "";
-  const bridgeKeys = await generateCryptoKeyPair("RSASSA-PKCS1-v1_5");
-  const communityKeys = await generateCryptoKeyPair("RSASSA-PKCS1-v1_5");
+  const bridgeKeys = await importFixedRsaKeyPair();
+  const communityKeys = await importFixedRsaKeyPair();
   const db = new sqlJs.Database();
 
   try {
@@ -247,7 +247,11 @@ function buildAnnounceJson(): Record<string, unknown> {
   };
 }
 
-main().catch((error) => {
+try {
+  await main();
+} catch (error) {
   console.error(error);
   process.exitCode = 1;
-});
+} finally {
+  await closeAllPythonBridgeFixtures();
+}

@@ -5,7 +5,7 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 
 import { PythonBridgeClient } from "../src/python-bridge-client.js";
-import { startPythonBridgeFixture } from "./support/python-bridge-fixture.js";
+import { closeAllPythonBridgeFixtures, startPythonBridgeFixture } from "./support/python-bridge-fixture.js";
 import { normalizeCreateActivityFromJson } from "../src/normalize.js";
 import { createGatewayApp } from "../src/server.js";
 import {
@@ -474,4 +474,8 @@ connection.close()
 `;
 }
 
-await main();
+try {
+  await main();
+} finally {
+  await closeAllPythonBridgeFixtures();
+}

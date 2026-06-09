@@ -4,16 +4,16 @@ import { webcrypto } from "node:crypto";
 import { tmpdir } from "node:os";
 import path from "node:path";
 
-import { exportJwk, generateCryptoKeyPair } from "@fedify/fedify";
+import { exportJwk } from "@fedify/fedify";
 import initSqlJs from "./support/sqlite-fixture.js";
-import { startPythonBridgeFixture } from "./support/python-bridge-fixture.js";
+import { closeAllPythonBridgeFixtures, importFixedRsaKeyPair, startPythonBridgeFixture } from "./support/python-bridge-fixture.js";
 
 import { loadActorKeyPair } from "../src/actor-store.js";
 import type { GatewayConfig } from "../src/config.js";
 
 async function main(): Promise<void> {
   // The verifier proves both supported persisted formats and missing-state failure.
-  const keys = await generateCryptoKeyPair("RSASSA-PKCS1-v1_5");
+  const keys = await importFixedRsaKeyPair();
   const jwkPair = {
     publicData: JSON.stringify(await exportJwk(keys.publicKey)),
     privateData: JSON.stringify(await exportJwk(keys.privateKey)),
@@ -101,4 +101,8 @@ function toPem(label: string, bytes: Buffer): string {
   return `-----BEGIN ${label}-----\n${wrapped}\n-----END ${label}-----\n`;
 }
 
-await main();
+try {
+  await main();
+} finally {
+  await closeAllPythonBridgeFixtures();
+}

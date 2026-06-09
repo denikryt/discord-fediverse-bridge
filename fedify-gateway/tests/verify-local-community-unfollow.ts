@@ -3,9 +3,9 @@ import { mkdtemp, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { Undo } from "@fedify/vocab";
-import { exportJwk, generateCryptoKeyPair } from "@fedify/fedify";
+import { exportJwk } from "@fedify/fedify";
 import initSqlJs, { seedBridgeActorJwk } from "./support/sqlite-fixture.js";
-import { startPythonBridgeFixture } from "./support/python-bridge-fixture.js";
+import { closeAllPythonBridgeFixtures, importFixedRsaKeyPair, startPythonBridgeFixture } from "./support/python-bridge-fixture.js";
 
 import { buildLocalUnfollowRequestedEvent } from "../src/federation.js";
 import type { GatewayConfig } from "../src/config.js";
@@ -18,7 +18,7 @@ async function buildConfig(): Promise<GatewayConfig> {
   const tempDir = await mkdtemp(path.join(tmpdir(), "fedify-local-unfollow-"));
   const databasePath = path.join(tempDir, "bridge.db");
   let pythonBridgeInternalUrl = "";
-  const bridgeKeys = await generateCryptoKeyPair("RSASSA-PKCS1-v1_5");
+  const bridgeKeys = await importFixedRsaKeyPair();
   const db = new sqlJs.Database();
 
   try {
@@ -142,4 +142,8 @@ async function main(): Promise<void> {
   console.log("verify:local-community-unfollow passed");
 }
 
-await main();
+try {
+  await main();
+} finally {
+  await closeAllPythonBridgeFixtures();
+}

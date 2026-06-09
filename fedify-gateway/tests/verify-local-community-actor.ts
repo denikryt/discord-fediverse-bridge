@@ -4,9 +4,9 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 import { webcrypto } from "node:crypto";
 
-import { exportJwk, generateCryptoKeyPair } from "@fedify/fedify";
+import { exportJwk } from "@fedify/fedify";
 import initSqlJs, { seedBridgeActorJwk } from "./support/sqlite-fixture.js";
-import { startPythonBridgeFixture } from "./support/python-bridge-fixture.js";
+import { closeAllPythonBridgeFixtures, importFixedRsaKeyPair, startPythonBridgeFixture } from "./support/python-bridge-fixture.js";
 
 import { buildLocalCommunityGroupActor } from "../src/actors.js";
 import {
@@ -23,8 +23,8 @@ async function main(): Promise<void> {
   const tempDir = await mkdtemp(path.join(tmpdir(), "fedify-local-community-"));
   const databasePath = path.join(tempDir, "bridge.db");
   let pythonBridgeInternalUrl = "";
-  const bridgeKeys = await generateCryptoKeyPair("RSASSA-PKCS1-v1_5");
-  const communityKeys = await generateCryptoKeyPair("RSASSA-PKCS1-v1_5");
+  const bridgeKeys = await importFixedRsaKeyPair();
+  const communityKeys = await importFixedRsaKeyPair();
   const db = new sqlJs.Database();
 
   try {
@@ -140,4 +140,8 @@ function toPem(label: string, bytes: Buffer): string {
   return `-----BEGIN ${label}-----\n${wrapped}\n-----END ${label}-----\n`;
 }
 
-await main();
+try {
+  await main();
+} finally {
+  await closeAllPythonBridgeFixtures();
+}

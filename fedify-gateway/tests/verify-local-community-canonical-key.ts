@@ -13,9 +13,9 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 import { webcrypto } from "node:crypto";
 
-import { exportJwk, generateCryptoKeyPair } from "@fedify/fedify";
+import { exportJwk } from "@fedify/fedify";
 import initSqlJs, { seedBridgeActorJwk } from "./support/sqlite-fixture.js";
-import { startPythonBridgeFixture } from "./support/python-bridge-fixture.js";
+import { closeAllPythonBridgeFixtures, importFixedRsaKeyPair, startPythonBridgeFixture } from "./support/python-bridge-fixture.js";
 
 import { buildLocalCommunityGroupActor } from "../src/actors.js";
 import { loadLocalCommunityIdentity } from "../src/actor-store.js";
@@ -29,11 +29,21 @@ const TEST_ORIGIN = "https://discord-bridge.example.com/";
 const REMOTE_ORIGIN = "https://mastodon.example/";
 
 async function main(): Promise<void> {
+  console.error("canonical:build:start");
   const config = await buildConfig();
+  console.error("canonical:build:done");
+  console.error("canonical:actor:start");
   await testActorBuilderPublishesCanonicalKey(config);
+  console.error("canonical:actor:done");
+  console.error("canonical:http:start");
   await testHttpActorRoutesPublishCanonicalKey(config);
+  console.error("canonical:http:done");
+  console.error("canonical:accept:start");
   await testAcceptFollowSignsWithCanonicalCommunityKey(config);
+  console.error("canonical:accept:done");
+  console.error("canonical:relay:start");
   await testRelaySignsWithCanonicalCommunityKey(config);
+  console.error("canonical:relay:done");
   console.log("verify:local-community-canonical-key passed");
 }
 
@@ -205,8 +215,8 @@ async function buildConfig(): Promise<GatewayConfig> {
   const tempDir = await mkdtemp(path.join(tmpdir(), "fedify-canonical-community-key-"));
   const databasePath = path.join(tempDir, "bridge.db");
   let pythonBridgeInternalUrl = "";
-  const bridgeKeys = await generateCryptoKeyPair("RSASSA-PKCS1-v1_5");
-  const communityKeys = await generateCryptoKeyPair("RSASSA-PKCS1-v1_5");
+  const bridgeKeys = await importFixedRsaKeyPair();
+  const communityKeys = await importFixedRsaKeyPair();
   const db = new sqlJs.Database();
 
   try {
@@ -303,7 +313,11 @@ function toPem(label: string, bytes: Buffer): string {
   return `-----BEGIN ${label}-----\n${wrapped}\n-----END ${label}-----\n`;
 }
 
-main().catch((error) => {
+try {
+  await main();
+} catch (error) {
   console.error(error);
   process.exitCode = 1;
-});
+} finally {
+  await closeAllPythonBridgeFixtures();
+}
