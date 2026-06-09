@@ -295,3 +295,10 @@ The relay model pilot records the current durability boundaries for renderer,
 gateway, and per-outcome persistence failures. Source and pending delivery rows
 may already be durable before rendering or transport, and outcome persistence is
 per target rather than one atomic batch.
+
+### Relay model pilot evaluation
+
+The completed relay pilot is evaluated in
+`docs/development/local-community-relay-model-evaluation.md`. It is retained as
+a bounded targeted-CI layer. No generic model framework is introduced; the next
+possible pilot is the inbound receipt/dedup lifecycle under a separate plan.

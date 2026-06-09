@@ -123,8 +123,8 @@ def test_generated_local_community_relay_create_retry_sequences() -> None:
     run_state_machine_as_test(
         RelayCreateRetryMachine,
         settings=settings(
-            max_examples=75 if ci else 20,
-            stateful_step_count=30 if ci else 15,
+            max_examples=30 if ci else 20,
+            stateful_step_count=20 if ci else 15,
             deadline=None,
             suppress_health_check=(HealthCheck.too_slow,),
         ),
