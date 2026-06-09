@@ -264,3 +264,7 @@ Dashboard, backup, OAuth, public URL, deployment, schema, and Fedify gateway che
 ## Shared assurance reporting
 
 `tools/assurance_reporting.py` contains only the two report mechanics proven across multiple domains: typed-case rule representation and named/generated node-prefix ownership. Domain inputs, expected effects, serializers, and output paths remain domain-specific. `tools/aggregate_assurance_report.py` combines already-generated JSON artifacts without rerunning tests or inferring new product rules.
+
+## Migration completeness
+
+Run `python tools/migration_completeness_report.py` to collect every project Python test, vendored DiscordOps test, and native gateway verification script. The generated JSON classifies each executable test as typed contract, named scenario, generated assurance, technical/native contract, or proven duplicate/obsolete. `unknown_unreviewed: 0` means every current test has an architectural ownership decision; it does not claim that every possible product rule is known.
