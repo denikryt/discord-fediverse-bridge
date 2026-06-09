@@ -3,6 +3,7 @@
 This document is a task-oriented reading guide for maintainers changing or debugging one feature area. It owns practical file-reading order and short notes, not full architecture explanations.
 
 For a feature-oriented index of existing tests, use `docs/development/test-coverage-map.md`.
+For reproducible test groups, branch coverage, durations, and generated assurance artifacts, use `docs/development/test-assurance.md`.
 
 ## Startup wiring
 1. `src/app.py` — process composition.

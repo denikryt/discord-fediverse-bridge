@@ -27,3 +27,7 @@ deploy/nginx/tls/*
 
 # Local database snapshots contain private actor signing keys.
 backups/
+
+# Generated local test-assurance reports.
+.artifacts/test-assurance/
+.coverage
