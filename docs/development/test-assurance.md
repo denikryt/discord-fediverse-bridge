@@ -111,3 +111,28 @@ The pilot collects operation output, persisted active/inactive ban rows, resolve
 ```
 
 The CLI runs only the typed ban pilot and passively records each case ID, declared dimensions, pytest status, represented values, selected combinations, and separately declared required rules. The JSON report is generated and ignored by Git. Missing rules are visible facts but do not change pytest's exit code in this stage.
+
+## Bridge-policy contract pilot
+
+Stage 5 validates the contract pattern in a second bounded domain without creating a universal case or effects hierarchy. The domain-specific files are:
+
+```text
+tests/support/bridge_policy_contracts.py
+tests/support/bridge_policy_effects.py
+tests/operations/test_bridge_policy_contract_cases.py
+```
+
+The cases exercise real `BridgePolicyService` and DiscordOps management operation paths against SQLite persistence. Explicit expected effects cover precedence decisions, operation outcomes, dynamic entry state, and management audit events.
+
+Generate the passive second-domain report:
+
+```bash
+.venv/bin/python tools/bridge_policy_contract_report.py \
+  --output .artifacts/test-assurance/bridge-policy-contract/report.json
+```
+
+The report shows only declared contract representation and pytest outcomes. It does not infer missing product rules from production code and it does not make a missing declaration fail the suite.
+
+### Stage 5 framework decision
+
+Ban and bridge-policy case/effect models remain domain-specific because their inputs and observable effects differ materially. Only passive pytest collection and terminal-status accounting are shared in `tools/contract_report_support.py`. Common case metadata, entry-point adapters, and effect fragments remain deferred until another domain proves stable repetition.

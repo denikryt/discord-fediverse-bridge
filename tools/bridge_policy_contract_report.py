@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Run the typed ban pilot and emit a passive deterministic contract report."""
+"""Run typed bridge-policy contracts and emit a passive deterministic report."""
 
 from __future__ import annotations
 
@@ -7,12 +7,10 @@ import argparse
 import json
 import sys
 from collections.abc import Mapping, Sequence
-from dataclasses import asdict
 from pathlib import Path
 from typing import Any
 
 import pytest
-
 
 try:
     from tools.contract_report_support import (
@@ -28,25 +26,24 @@ except ModuleNotFoundError:  # Direct script execution adds tools/ to sys.path.
     )
 
 
-class BanContractCollector(PassiveCaseCollector):
-    """Collect typed ban cases through the shared passive mechanism."""
+class BridgePolicyContractCollector(PassiveCaseCollector):
+    """Collect only bridge-policy typed cases."""
 
     def __init__(self) -> None:
-        """Accept only the ban pilot case shape."""
+        """Identify cases by their bridge-policy dimensions."""
 
-        super().__init__(accepts=lambda case: hasattr(case, "caller_role"))
+        super().__init__(accepts=lambda case: hasattr(case, "policy_type"))
 
 
 def _case_dimensions(case: Any) -> dict[str, str]:
-    """Extract the declared machine-readable dimensions from one case."""
+    """Extract machine-readable dimensions declared by one case."""
 
     return {
         "action": case.action,
         "caller_role": case.caller_role,
-        "scope": case.scope,
-        "community_state": case.community_state,
-        "target_kind": case.target_kind,
-        "existing_ban_state": case.existing_ban_state,
+        "policy_type": case.policy_type,
+        "existing_dynamic_state": case.existing_dynamic_state,
+        "guild_context": case.guild_context,
     }
 
 
@@ -54,42 +51,43 @@ def build_contract_report(
     results: Sequence[CollectedCaseResult],
     required_rules: Sequence[Any],
 ) -> dict[str, Any]:
-    """Build deterministic factual coverage data from cases and pytest results."""
+    """Build deterministic factual coverage for bridge-policy contracts."""
 
     collected_ids = {result.case.id for result in results}
     rule_rows = []
     missing_rules = []
     for rule in sorted(required_rules, key=lambda value: value.id):
         represented = bool(collected_ids.intersection(rule.represented_by))
-        row = {
-            "id": rule.id,
-            "description": rule.description,
-            "represented": represented,
-            "represented_by": list(rule.represented_by),
-        }
-        rule_rows.append(row)
+        rule_rows.append(
+            {
+                "id": rule.id,
+                "description": rule.description,
+                "represented": represented,
+                "represented_by": list(rule.represented_by),
+            }
+        )
         if not represented:
             missing_rules.append(rule.id)
 
-    case_rows = []
     values: dict[str, set[str]] = {}
     combinations = {
-        "caller_role_scope": set(),
-        "action_existing_ban_state": set(),
-        "community_state_target_kind": set(),
+        "action_policy_type": set(),
+        "caller_role_action": set(),
+        "existing_state_action": set(),
     }
+    case_rows = []
     for result in sorted(results, key=lambda value: value.case.id):
         dimensions = _case_dimensions(result.case)
         for name, value in dimensions.items():
             values.setdefault(name, set()).add(value)
-        combinations["caller_role_scope"].add(
-            (dimensions["caller_role"], dimensions["scope"])
+        combinations["action_policy_type"].add(
+            (dimensions["action"], dimensions["policy_type"])
         )
-        combinations["action_existing_ban_state"].add(
-            (dimensions["action"], dimensions["existing_ban_state"])
+        combinations["caller_role_action"].add(
+            (dimensions["caller_role"], dimensions["action"])
         )
-        combinations["community_state_target_kind"].add(
-            (dimensions["community_state"], dimensions["target_kind"])
+        combinations["existing_state_action"].add(
+            (dimensions["existing_dynamic_state"], dimensions["action"])
         )
         case_rows.append(
             {
@@ -101,7 +99,7 @@ def build_contract_report(
         )
 
     return {
-        "domain": "ban_management",
+        "domain": "bridge_policy",
         "summary": {
             "required_rules": len(rule_rows),
             "represented_rules": len(rule_rows) - len(missing_rules),
@@ -125,44 +123,39 @@ def write_report(path: Path, report: Mapping[str, Any]) -> None:
     """Write canonical sorted JSON to the generated artifact path."""
 
     path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(json.dumps(report, indent=2, sort_keys=True) + "\n", encoding="utf-8")
-
-
-def build_parser() -> argparse.ArgumentParser:
-    """Create the CLI parser for passive contract reporting."""
-
-    parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument(
-        "--output",
-        type=Path,
-        default=Path(".artifacts/test-assurance/ban-contract/report.json"),
-    )
-    return parser
+    path.write_text(json.dumps(report, indent=2, sort_keys=True) + "\n")
 
 
 def main(argv: Sequence[str] | None = None) -> int:
-    """Run the typed pilot, emit its report, and return pytest's exit code."""
+    """Run the typed second-domain pilot and preserve pytest's exit status."""
 
-    args = build_parser().parse_args(argv)
+    parser = argparse.ArgumentParser()
+    parser.add_argument(
+        "--output",
+        type=Path,
+        default=Path(".artifacts/test-assurance/bridge-policy-contract/report.json"),
+    )
+    args = parser.parse_args(argv)
     project_root = Path(__file__).resolve().parents[1]
     tests_root = project_root / "tests"
-    # The existing suite imports test support as ``support``. Match pytest's
-    # collection environment when the report CLI is launched directly.
     for path in (project_root, tests_root):
         if str(path) not in sys.path:
             sys.path.insert(0, str(path))
-    from support.ban_contracts import REQUIRED_BAN_RULES
 
-    collector = BanContractCollector()
+    from support.bridge_policy_contracts import REQUIRED_BRIDGE_POLICY_RULES
+
+    collector = BridgePolicyContractCollector()
     exit_code = pytest.main(
-        ["-q", "tests/operations/test_ban_contract_cases.py"],
+        ["-q", "tests/operations/test_bridge_policy_contract_cases.py"],
         plugins=[collector],
     )
-    report = build_contract_report(collector.results(), REQUIRED_BAN_RULES)
     output = args.output if args.output.is_absolute() else project_root / args.output
-    write_report(output, report)
+    write_report(
+        output,
+        build_contract_report(collector.results(), REQUIRED_BRIDGE_POLICY_RULES),
+    )
     return int(exit_code)
 
 
 if __name__ == "__main__":
-    raise SystemExit(main())
+    sys.exit(main())
