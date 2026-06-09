@@ -157,7 +157,9 @@ COMMUNITY_MANAGEMENT_CASES: tuple[CommunityManagementCase, ...] = (
             display_name="Cats",
             summary="Old summary",
             status="active",
-            audit_events=(("community.manage_forbidden", "forbidden", "not_owner_or_super_admin"),),
+            audit_events=(
+                ("community.manage_forbidden", "forbidden", "not_owner_or_super_admin"),
+            ),
         ),
     ),
     CommunityManagementCase(
@@ -203,7 +205,9 @@ COMMUNITY_MANAGEMENT_CASES: tuple[CommunityManagementCase, ...] = (
         display_name="New Cats",
         summary=None,
         requested_status="active",
-        expected=CommunityManagementExpected(False, "unknown_or_inaccessible_community"),
+        expected=CommunityManagementExpected(
+            False, "unknown_or_inaccessible_community"
+        ),
     ),
     CommunityManagementCase(
         id="edit.invalid_status.validation",
@@ -252,15 +256,59 @@ class CommunityManagementRequiredRule:
 
 
 REQUIRED_COMMUNITY_MANAGEMENT_RULES: tuple[CommunityManagementRequiredRule, ...] = (
-    CommunityManagementRequiredRule("create_success", "Valid registered creation persists and audits.", ("create.registered.valid.success",)),
-    CommunityManagementRequiredRule("create_validation", "Invalid creation input does not persist.", ("create.invalid_slug.validation",)),
-    CommunityManagementRequiredRule("owner_metadata_edit", "Owner can update active community metadata.", ("edit.owner.active.metadata_success",)),
-    CommunityManagementRequiredRule("owner_status_change", "Owner can disable and re-enable community lifecycle.", ("edit.owner.active.disable_success", "edit.owner.disabled.enable_success")),
-    CommunityManagementRequiredRule("super_admin_cross_guild", "Super-admin can manage across guild context.", ("edit.super_admin.cross_guild.success",)),
-    CommunityManagementRequiredRule("unauthorized_forbidden", "Unrelated caller is denied and audited.", ("edit.unauthorized.same_guild.forbidden",)),
-    CommunityManagementRequiredRule("owner_cross_guild_hidden", "Owner cannot manage through another guild.", ("edit.owner.cross_guild.inaccessible",)),
-    CommunityManagementRequiredRule("guild_context_required", "Management requires a guild context.", ("edit.owner.dm.context_rejected",)),
-    CommunityManagementRequiredRule("missing_rejected", "Missing community is rejected without mutation.", ("edit.missing.validation",)),
-    CommunityManagementRequiredRule("invalid_status_rejected", "Unsupported lifecycle status is rejected.", ("edit.invalid_status.validation",)),
-    CommunityManagementRequiredRule("noop_success_no_audit", "No-op save succeeds without change audit.", ("edit.noop.success_without_audit",)),
+    CommunityManagementRequiredRule(
+        "create_success",
+        "Valid registered creation persists and audits.",
+        ("create.registered.valid.success",),
+    ),
+    CommunityManagementRequiredRule(
+        "create_validation",
+        "Invalid creation input does not persist.",
+        ("create.invalid_slug.validation",),
+    ),
+    CommunityManagementRequiredRule(
+        "owner_metadata_edit",
+        "Owner can update active community metadata.",
+        ("edit.owner.active.metadata_success",),
+    ),
+    CommunityManagementRequiredRule(
+        "owner_status_change",
+        "Owner can disable and re-enable community lifecycle.",
+        ("edit.owner.active.disable_success", "edit.owner.disabled.enable_success"),
+    ),
+    CommunityManagementRequiredRule(
+        "super_admin_cross_guild",
+        "Super-admin can manage across guild context.",
+        ("edit.super_admin.cross_guild.success",),
+    ),
+    CommunityManagementRequiredRule(
+        "unauthorized_forbidden",
+        "Unrelated caller is denied and audited.",
+        ("edit.unauthorized.same_guild.forbidden",),
+    ),
+    CommunityManagementRequiredRule(
+        "owner_cross_guild_hidden",
+        "Owner cannot manage through another guild.",
+        ("edit.owner.cross_guild.inaccessible",),
+    ),
+    CommunityManagementRequiredRule(
+        "guild_context_required",
+        "Management requires a guild context.",
+        ("edit.owner.dm.context_rejected",),
+    ),
+    CommunityManagementRequiredRule(
+        "missing_rejected",
+        "Missing community is rejected without mutation.",
+        ("edit.missing.validation",),
+    ),
+    CommunityManagementRequiredRule(
+        "invalid_status_rejected",
+        "Unsupported lifecycle status is rejected.",
+        ("edit.invalid_status.validation",),
+    ),
+    CommunityManagementRequiredRule(
+        "noop_success_no_audit",
+        "No-op save succeeds without change audit.",
+        ("edit.noop.success_without_audit",),
+    ),
 )

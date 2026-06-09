@@ -15,9 +15,15 @@ def build_aggregate(reports: list[dict[str, Any]]) -> dict[str, Any]:
     return {
         "summary": {
             "domains": len(domains),
-            "required_rules": sum(report["summary"].get("required_rules", 0) for report in domains),
-            "represented_rules": sum(report["summary"].get("represented_rules", 0) for report in domains),
-            "missing_rules": sum(report["summary"].get("missing_rules", 0) for report in domains),
+            "required_rules": sum(
+                report["summary"].get("required_rules", 0) for report in domains
+            ),
+            "represented_rules": sum(
+                report["summary"].get("represented_rules", 0) for report in domains
+            ),
+            "missing_rules": sum(
+                report["summary"].get("missing_rules", 0) for report in domains
+            ),
         },
         "domains": [
             {
@@ -35,10 +41,17 @@ def main() -> int:
 
     parser = argparse.ArgumentParser()
     parser.add_argument("reports", nargs="+", type=Path)
-    parser.add_argument("--output", type=Path, default=Path(".artifacts/test-assurance/aggregate/report.json"))
+    parser.add_argument(
+        "--output",
+        type=Path,
+        default=Path(".artifacts/test-assurance/aggregate/report.json"),
+    )
     args = parser.parse_args()
     root = Path(__file__).resolve().parents[1]
-    reports = [json.loads((path if path.is_absolute() else root / path).read_text()) for path in args.reports]
+    reports = [
+        json.loads((path if path.is_absolute() else root / path).read_text())
+        for path in args.reports
+    ]
     aggregate = build_aggregate(reports)
     output = args.output if args.output.is_absolute() else root / args.output
     output.parent.mkdir(parents=True, exist_ok=True)

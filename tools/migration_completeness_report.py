@@ -23,7 +23,9 @@ class NodeCollector:
         self.nodeids.extend(item.nodeid for item in items)
 
 
-def build_report(python_nodeids: list[str], gateway_scripts: list[str]) -> dict[str, Any]:
+def build_report(
+    python_nodeids: list[str], gateway_scripts: list[str]
+) -> dict[str, Any]:
     """Build and validate the complete migration inventory."""
 
     root = Path(__file__).resolve().parents[1]
@@ -37,8 +39,14 @@ def build_report(python_nodeids: list[str], gateway_scripts: list[str]) -> dict[
     if duplicates:
         raise ValueError(f"duplicate executable test IDs: {duplicates}")
     records = [classify_test(nodeid, "python") for nodeid in sorted(python_nodeids)]
-    records.extend(classify_test(script, "gateway") for script in sorted(gateway_scripts))
-    unknown = [record.test_id for record in records if not record.domain or not record.classification]
+    records.extend(
+        classify_test(script, "gateway") for script in sorted(gateway_scripts)
+    )
+    unknown = [
+        record.test_id
+        for record in records
+        if not record.domain or not record.classification
+    ]
     class_counts = Counter(record.classification for record in records)
     domain_counts = Counter(record.domain for record in records)
     status_counts = Counter(record.migration_status for record in records)
@@ -57,8 +65,13 @@ def build_report(python_nodeids: list[str], gateway_scripts: list[str]) -> dict[
         "records": [record.to_json() for record in records],
         "interpretation": {
             "zero_unknown_means": "Every executable test has an architectural classification.",
-            "zero_unknown_does_not_mean": "All possible product rules are known or semantically complete.",
-            "duplicate_review": "No test was removed because no exact redundant contract was proven in this stage.",
+            "zero_unknown_does_not_mean": (
+                "All possible product rules are known or semantically complete."
+            ),
+            "duplicate_review": (
+                "No test was removed because no exact redundant contract was "
+                "proven in this stage."
+            ),
         },
     }
 

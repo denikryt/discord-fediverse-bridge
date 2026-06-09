@@ -11,13 +11,20 @@ from unittest.mock import AsyncMock
 import pytest
 
 from src.activitypub_models import ActivityPubEvent
-from src.fedify_gateway_client import SendLocalCommunityRelayResult, SendLocalCommunityRelayOutcome
+from src.fedify_gateway_client import (
+    SendLocalCommunityRelayResult,
+    SendLocalCommunityRelayOutcome,
+)
 from src.bridge_policy import PolicyType
 from src.content_publish_service import ContentPublishService
 from src.local_communities.runtime import LocalCommunityRuntime
 from src.local_communities.service import LocalCommunityService
 from support.db import build_database
-from support.discord import build_bot, build_forum_channel_tuple_result, build_send_thread
+from support.discord import (
+    build_bot,
+    build_forum_channel_tuple_result,
+    build_send_thread,
+)
 
 
 def _runtime(tmp_path: Path) -> tuple[object, LocalCommunityRuntime]:
@@ -31,15 +38,15 @@ def _runtime(tmp_path: Path) -> tuple[object, LocalCommunityRuntime]:
         database=database,
         fedify_gateway=gateway,
         bridge_prefix="[bridge]",
-            bridge_policy_service=build_test_policy_service(database),
-)
+        bridge_policy_service=build_test_policy_service(database),
+    )
     runtime = LocalCommunityRuntime(
         database=database,
         fedify_gateway=gateway,
         content_publish_service=publish_service,
         bridge_prefix="[bridge]",
-            bridge_policy_service=build_test_policy_service(database),
-)
+        bridge_policy_service=build_test_policy_service(database),
+    )
     return database, runtime
 
 
@@ -137,7 +144,7 @@ def _mastodon_comment_event() -> ActivityPubEvent:
                 "https://mastodon.example/ap/users/alice/followers",
                 "https://bridge.example/actors/choikak2",
             ],
-            "content": "<p><span class=\"h-card\">@alice</span><br />test-2 from mastodon</p>",
+            "content": '<p><span class="h-card">@alice</span><br />test-2 from mastodon</p>',
             "contentMap": {"en": "<p>test-2 from mastodon</p>"},
             "context": "https://mastodon.example/contexts/1",
             "conversation": "https://mastodon.example/contexts/1",
@@ -202,7 +209,7 @@ def _mastodon_top_level_comment_event() -> ActivityPubEvent:
                 "https://mastodon.example/ap/users/alice/followers",
                 "https://bridge.example/actors/choikak2",
             ],
-            "content": "<p><span class=\"h-card\">@choikak2</span><br />test-1 from mastodon</p>",
+            "content": '<p><span class="h-card">@choikak2</span><br />test-1 from mastodon</p>',
             "contentMap": {"en": "<p>test-1 from mastodon</p>"},
             "context": "https://mastodon.example/contexts/1",
             "conversation": "https://mastodon.example/contexts/1",
@@ -246,19 +253,28 @@ def _mastodon_top_level_comment_event() -> ActivityPubEvent:
 def _lemmy_comment_event() -> ActivityPubEvent:
     """Build a Lemmy-shaped inbound reply that must keep preserve relay behavior."""
     source = {
-        "@context": ["https://join-lemmy.org/context.json", "https://www.w3.org/ns/activitystreams"],
+        "@context": [
+            "https://join-lemmy.org/context.json",
+            "https://www.w3.org/ns/activitystreams",
+        ],
         "id": "https://lemmy.example/activities/create/comment/225",
         "type": "Create",
         "actor": "https://lemmy.example/u/bob",
         "audience": "https://bridge.example/communities/hackers",
         "to": ["https://www.w3.org/ns/activitystreams#Public"],
-        "cc": ["https://bridge.example/communities/hackers", "https://lemmy.example/u/bob"],
+        "cc": [
+            "https://bridge.example/communities/hackers",
+            "https://lemmy.example/u/bob",
+        ],
         "object": {
             "id": "https://lemmy.example/comment/225",
             "type": "Note",
             "attributedTo": "https://lemmy.example/u/bob",
             "audience": "https://bridge.example/communities/hackers",
-            "cc": ["https://bridge.example/communities/hackers", "https://lemmy.example/u/bob"],
+            "cc": [
+                "https://bridge.example/communities/hackers",
+                "https://lemmy.example/u/bob",
+            ],
             "content": "<p>YOUO whatsuP!</p>\n",
             "inReplyTo": "https://lemmy.example/comment/223",
             "mediaType": "text/html",
@@ -295,15 +311,21 @@ def _lemmy_comment_event() -> ActivityPubEvent:
 
 
 @pytest.mark.asyncio
-async def test_accepted_remote_post_relays_to_other_followers_only(tmp_path: Path) -> None:
+async def test_accepted_remote_post_relays_to_other_followers_only(
+    tmp_path: Path,
+) -> None:
     """A remote subscriber post should mirror to Discord and fan out to other remote subscribers."""
     database, runtime = _runtime(tmp_path)
     local_community = _local_community(database)
     _add_followers(database, local_community)
-    forum_channel = build_forum_channel_tuple_result(channel_id=100, thread_id=200, starter_message_id=300)
+    forum_channel = build_forum_channel_tuple_result(
+        channel_id=100, thread_id=200, starter_message_id=300
+    )
     runtime.bot = build_bot(forum_channels={100: forum_channel})
 
-    async def gateway_result(*, signing_actor_url: str, deliveries: list[object]) -> SendLocalCommunityRelayResult:
+    async def gateway_result(
+        *, signing_actor_url: str, deliveries: list[object]
+    ) -> SendLocalCommunityRelayResult:
         """Mark every requested target as delivered for DB-state assertions."""
         return SendLocalCommunityRelayResult(
             outcomes=[
@@ -325,12 +347,20 @@ async def test_accepted_remote_post_relays_to_other_followers_only(tmp_path: Pat
     runtime.fedify_gateway.send_local_community_relay.assert_awaited_once()
     request = runtime.fedify_gateway.send_local_community_relay.await_args.kwargs
     assert request["signing_actor_url"] == local_community.actor_url
-    assert sorted(delivery.target_remote_actor_id for delivery in request["deliveries"]) == [
+    assert sorted(
+        delivery.target_remote_actor_id for delivery in request["deliveries"]
+    ) == [
         "https://lemmy.example/u/alice",
         "https://lemmy.example/u/carol",
     ]
-    assert all(delivery.activity_json["type"] == "Announce" for delivery in request["deliveries"])
-    assert all(delivery.activity_json["object"]["actor"] == "https://lemmy.example/u/bob" for delivery in request["deliveries"])
+    assert all(
+        delivery.activity_json["type"] == "Announce"
+        for delivery in request["deliveries"]
+    )
+    assert all(
+        delivery.activity_json["object"]["actor"] == "https://lemmy.example/u/bob"
+        for delivery in request["deliveries"]
+    )
     delivered = database.local_community_relay.list_delivered_local_community_create_relay_targets(
         local_community_id=local_community.id,
         source_object_ap_id="https://lemmy.example/post/1",
@@ -339,7 +369,9 @@ async def test_accepted_remote_post_relays_to_other_followers_only(tmp_path: Pat
 
 
 @pytest.mark.asyncio
-async def test_mastodon_shaped_comment_relay_to_lemmy_gets_threadiverse_payload(tmp_path: Path) -> None:
+async def test_mastodon_shaped_comment_relay_to_lemmy_gets_threadiverse_payload(
+    tmp_path: Path,
+) -> None:
     """A Mastodon-shaped comment should relay to Lemmy as a minimal Create(Note)."""
     database, runtime = _runtime(tmp_path)
     local_community = _local_community(database)
@@ -367,7 +399,9 @@ async def test_mastodon_shaped_comment_relay_to_lemmy_gets_threadiverse_payload(
     discord_thread = build_send_thread(thread_id=200, sent_message_id=301)
     runtime.bot = build_bot(threads={200: discord_thread})
 
-    async def gateway_result(*, signing_actor_url: str, deliveries: list[object]) -> SendLocalCommunityRelayResult:
+    async def gateway_result(
+        *, signing_actor_url: str, deliveries: list[object]
+    ) -> SendLocalCommunityRelayResult:
         """Return success so the rendered payload becomes visible in the test."""
         return SendLocalCommunityRelayResult(
             outcomes=[
@@ -383,7 +417,9 @@ async def test_mastodon_shaped_comment_relay_to_lemmy_gets_threadiverse_payload(
 
     runtime.fedify_gateway.send_local_community_relay.side_effect = gateway_result
 
-    result = await runtime.handle_inbound_comment(_mastodon_comment_event(), SimpleNamespace())
+    result = await runtime.handle_inbound_comment(
+        _mastodon_comment_event(), SimpleNamespace()
+    )
 
     assert result.status == "processed"
     request = runtime.fedify_gateway.send_local_community_relay.await_args.kwargs
@@ -411,7 +447,10 @@ async def test_mastodon_shaped_comment_relay_to_lemmy_gets_threadiverse_payload(
     assert note["inReplyTo"] == "https://lemmy.example/comment/227"
     assert note["audience"] == local_community.actor_url
     assert note["content"] == "<p>test-2 from mastodon</p>"
-    assert note["source"] == {"content": "test-2 from mastodon", "mediaType": "text/markdown"}
+    assert note["source"] == {
+        "content": "test-2 from mastodon",
+        "mediaType": "text/markdown",
+    }
     assert note["mediaType"] == "text/html"
     for key in [
         "interactionPolicy",
@@ -428,7 +467,9 @@ async def test_mastodon_shaped_comment_relay_to_lemmy_gets_threadiverse_payload(
 
 
 @pytest.mark.asyncio
-async def test_mastodon_shaped_top_level_comment_relay_uses_post_as_in_reply_to(tmp_path: Path) -> None:
+async def test_mastodon_shaped_top_level_comment_relay_uses_post_as_in_reply_to(
+    tmp_path: Path,
+) -> None:
     """A Mastodon reply directly to a post must keep inReplyTo pointing at that post."""
     database, runtime = _runtime(tmp_path)
     local_community = _local_community(database)
@@ -456,7 +497,9 @@ async def test_mastodon_shaped_top_level_comment_relay_uses_post_as_in_reply_to(
     discord_thread = build_send_thread(thread_id=200, sent_message_id=303)
     runtime.bot = build_bot(threads={200: discord_thread})
 
-    async def gateway_result(*, signing_actor_url: str, deliveries: list[object]) -> SendLocalCommunityRelayResult:
+    async def gateway_result(
+        *, signing_actor_url: str, deliveries: list[object]
+    ) -> SendLocalCommunityRelayResult:
         """Return success so the rendered payload becomes visible in the test."""
         return SendLocalCommunityRelayResult(
             outcomes=[
@@ -472,17 +515,25 @@ async def test_mastodon_shaped_top_level_comment_relay_uses_post_as_in_reply_to(
 
     runtime.fedify_gateway.send_local_community_relay.side_effect = gateway_result
 
-    result = await runtime.handle_inbound_comment(_mastodon_top_level_comment_event(), SimpleNamespace())
+    result = await runtime.handle_inbound_comment(
+        _mastodon_top_level_comment_event(), SimpleNamespace()
+    )
 
     assert result.status == "processed"
-    delivery = runtime.fedify_gateway.send_local_community_relay.await_args.kwargs["deliveries"][0]
+    delivery = runtime.fedify_gateway.send_local_community_relay.await_args.kwargs[
+        "deliveries"
+    ][0]
     note = delivery.activity_json["object"]["object"]
-    assert note["inReplyTo"] == "https://bridge.example/users/choikak2/post/1779382297938"
+    assert (
+        note["inReplyTo"] == "https://bridge.example/users/choikak2/post/1779382297938"
+    )
     assert note["content"] == "<p>test-1 from mastodon</p>"
 
 
 @pytest.mark.asyncio
-async def test_lemmy_shaped_comment_relay_preserves_source_activity(tmp_path: Path) -> None:
+async def test_lemmy_shaped_comment_relay_preserves_source_activity(
+    tmp_path: Path,
+) -> None:
     """A Lemmy-shaped comment should keep the existing preserve-and-announce relay."""
     database, runtime = _runtime(tmp_path)
     local_community = _local_community(database)
@@ -510,7 +561,9 @@ async def test_lemmy_shaped_comment_relay_preserves_source_activity(tmp_path: Pa
     discord_thread = build_send_thread(thread_id=200, sent_message_id=302)
     runtime.bot = build_bot(threads={200: discord_thread})
 
-    async def gateway_result(*, signing_actor_url: str, deliveries: list[object]) -> SendLocalCommunityRelayResult:
+    async def gateway_result(
+        *, signing_actor_url: str, deliveries: list[object]
+    ) -> SendLocalCommunityRelayResult:
         """Return success so preservation can be asserted from the outbound call."""
         return SendLocalCommunityRelayResult(
             outcomes=[
@@ -526,10 +579,14 @@ async def test_lemmy_shaped_comment_relay_preserves_source_activity(tmp_path: Pa
 
     runtime.fedify_gateway.send_local_community_relay.side_effect = gateway_result
 
-    result = await runtime.handle_inbound_comment(_lemmy_comment_event(), SimpleNamespace())
+    result = await runtime.handle_inbound_comment(
+        _lemmy_comment_event(), SimpleNamespace()
+    )
 
     assert result.status == "processed"
-    delivery = runtime.fedify_gateway.send_local_community_relay.await_args.kwargs["deliveries"][0]
+    delivery = runtime.fedify_gateway.send_local_community_relay.await_args.kwargs[
+        "deliveries"
+    ][0]
     create = delivery.activity_json["object"]
     assert create == _lemmy_comment_event().source_activity_json
     assert create["actor"] == "https://lemmy.example/u/bob"
@@ -537,7 +594,9 @@ async def test_lemmy_shaped_comment_relay_preserves_source_activity(tmp_path: Pa
 
 
 @pytest.mark.asyncio
-async def test_duplicate_post_recovers_missing_relay_rows_without_discord_duplicate(tmp_path: Path) -> None:
+async def test_duplicate_post_recovers_missing_relay_rows_without_discord_duplicate(
+    tmp_path: Path,
+) -> None:
     """A mapping-only crash should be repaired on duplicate delivery."""
     database, runtime = _runtime(tmp_path)
     local_community = _local_community(database)
@@ -552,7 +611,9 @@ async def test_duplicate_post_recovers_missing_relay_rows_without_discord_duplic
         origin_kind="remote_follower",
     )
 
-    async def gateway_result(*, signing_actor_url: str, deliveries: list[object]) -> SendLocalCommunityRelayResult:
+    async def gateway_result(
+        *, signing_actor_url: str, deliveries: list[object]
+    ) -> SendLocalCommunityRelayResult:
         """Return success so recovered rows become durable delivered state."""
         return SendLocalCommunityRelayResult(
             outcomes=[
@@ -621,19 +682,27 @@ def _post_update_event() -> ActivityPubEvent:
 
 
 @pytest.mark.asyncio
-async def test_inbound_post_update_relays_only_to_delivered_create_targets(tmp_path: Path) -> None:
+async def test_inbound_post_update_relays_only_to_delivered_create_targets(
+    tmp_path: Path,
+) -> None:
     """A remote update should target only followers with delivered create relay rows."""
     database, runtime = _runtime(tmp_path)
     local_community = _local_community(database)
     _add_followers(database, local_community)
-    forum_channel = build_forum_channel_tuple_result(channel_id=100, thread_id=200, starter_message_id=300)
+    forum_channel = build_forum_channel_tuple_result(
+        channel_id=100, thread_id=200, starter_message_id=300
+    )
     starter_message = SimpleNamespace(edit=AsyncMock())
     runtime.bot = build_bot(
         forum_channels={100: forum_channel},
-        threads={200: SimpleNamespace(fetch_message=AsyncMock(return_value=starter_message))},
+        threads={
+            200: SimpleNamespace(fetch_message=AsyncMock(return_value=starter_message))
+        },
     )
 
-    async def gateway_result(*, signing_actor_url: str, deliveries: list[object]) -> SendLocalCommunityRelayResult:
+    async def gateway_result(
+        *, signing_actor_url: str, deliveries: list[object]
+    ) -> SendLocalCommunityRelayResult:
         """Deliver every relay request so update continuity has concrete rows."""
         return SendLocalCommunityRelayResult(
             outcomes=[
@@ -652,30 +721,46 @@ async def test_inbound_post_update_relays_only_to_delivered_create_targets(tmp_p
     runtime.fedify_gateway.send_local_community_relay.reset_mock(side_effect=True)
     runtime.fedify_gateway.send_local_community_relay.side_effect = gateway_result
 
-    result = await runtime.handle_inbound_post_update(_post_update_event(), SimpleNamespace(bot=runtime.bot))
+    result = await runtime.handle_inbound_post_update(
+        _post_update_event(), SimpleNamespace(bot=runtime.bot)
+    )
 
     assert result.status == "processed"
     request = runtime.fedify_gateway.send_local_community_relay.await_args.kwargs
-    assert sorted(delivery.target_remote_actor_id for delivery in request["deliveries"]) == [
+    assert sorted(
+        delivery.target_remote_actor_id for delivery in request["deliveries"]
+    ) == [
         "https://lemmy.example/u/alice",
         "https://lemmy.example/u/carol",
     ]
-    assert all(delivery.activity_json["object"]["type"] == "Update" for delivery in request["deliveries"])
+    assert all(
+        delivery.activity_json["object"]["type"] == "Update"
+        for delivery in request["deliveries"]
+    )
+
 
 @pytest.mark.asyncio
-async def test_inbound_post_update_skips_unfollowed_delivered_targets(tmp_path: Path) -> None:
+async def test_inbound_post_update_skips_unfollowed_delivered_targets(
+    tmp_path: Path,
+) -> None:
     """A delivered create target should not receive updates after unfollowing."""
     database, runtime = _runtime(tmp_path)
     local_community = _local_community(database)
     _add_followers(database, local_community)
-    forum_channel = build_forum_channel_tuple_result(channel_id=100, thread_id=200, starter_message_id=300)
+    forum_channel = build_forum_channel_tuple_result(
+        channel_id=100, thread_id=200, starter_message_id=300
+    )
     starter_message = SimpleNamespace(edit=AsyncMock())
     runtime.bot = build_bot(
         forum_channels={100: forum_channel},
-        threads={200: SimpleNamespace(fetch_message=AsyncMock(return_value=starter_message))},
+        threads={
+            200: SimpleNamespace(fetch_message=AsyncMock(return_value=starter_message))
+        },
     )
 
-    async def gateway_result(*, signing_actor_url: str, deliveries: list[object]) -> SendLocalCommunityRelayResult:
+    async def gateway_result(
+        *, signing_actor_url: str, deliveries: list[object]
+    ) -> SendLocalCommunityRelayResult:
         """Mark every requested relay as delivered for continuity rows."""
         return SendLocalCommunityRelayResult(
             outcomes=[
@@ -698,11 +783,15 @@ async def test_inbound_post_update_skips_unfollowed_delivered_targets(tmp_path: 
     runtime.fedify_gateway.send_local_community_relay.reset_mock(side_effect=True)
     runtime.fedify_gateway.send_local_community_relay.side_effect = gateway_result
 
-    result = await runtime.handle_inbound_post_update(_post_update_event(), SimpleNamespace(bot=runtime.bot))
+    result = await runtime.handle_inbound_post_update(
+        _post_update_event(), SimpleNamespace(bot=runtime.bot)
+    )
 
     assert result.status == "processed"
     request = runtime.fedify_gateway.send_local_community_relay.await_args.kwargs
-    assert sorted(delivery.target_remote_actor_id for delivery in request["deliveries"]) == [
+    assert sorted(
+        delivery.target_remote_actor_id for delivery in request["deliveries"]
+    ) == [
         "https://lemmy.example/u/carol",
     ]
 
@@ -721,7 +810,9 @@ async def test_relay_policy_read_failure_happens_before_persistence_or_transport
         """Simulate repository failure at the action's first policy boundary."""
         raise RuntimeError("policy read failed")
 
-    monkeypatch.setattr(runtime.federation_fanout.policy_service, "snapshot", fail_snapshot)
+    monkeypatch.setattr(
+        runtime.federation_fanout.policy_service, "snapshot", fail_snapshot
+    )
 
     with pytest.raises(RuntimeError, match="policy read failed"):
         await runtime.federation_fanout.relay_create(
@@ -747,7 +838,9 @@ async def test_partial_relay_failure_retries_only_failed_target(tmp_path: Path) 
     event = _post_event(suffix="partial-retry")
     calls: list[list[str]] = []
 
-    async def gateway_result(*, signing_actor_url: str, deliveries: list[object]) -> SendLocalCommunityRelayResult:
+    async def gateway_result(
+        *, signing_actor_url: str, deliveries: list[object]
+    ) -> SendLocalCommunityRelayResult:
         """Fail carol once and deliver every later retry."""
         del signing_actor_url
         actors = [delivery.target_remote_actor_id for delivery in deliveries]
@@ -757,10 +850,18 @@ async def test_partial_relay_failure_retries_only_failed_target(tmp_path: Path) 
             outcomes=[
                 SendLocalCommunityRelayOutcome(
                     delivery_id=delivery.delivery_id,
-                    ok=not (first_attempt and delivery.target_remote_actor_id.endswith("/carol")),
+                    ok=not (
+                        first_attempt
+                        and delivery.target_remote_actor_id.endswith("/carol")
+                    ),
                     target_remote_actor_id=delivery.target_remote_actor_id,
                     activity_id=delivery.activity_json["id"],
-                    error=("temporary failure" if first_attempt and delivery.target_remote_actor_id.endswith("/carol") else None),
+                    error=(
+                        "temporary failure"
+                        if first_attempt
+                        and delivery.target_remote_actor_id.endswith("/carol")
+                        else None
+                    ),
                 )
                 for delivery in deliveries
             ]
@@ -777,7 +878,10 @@ async def test_partial_relay_failure_retries_only_failed_target(tmp_path: Path) 
 
     assert first == type(first)(attempted=2, delivered=1, failed=1)
     assert second == type(second)(attempted=1, delivered=1, failed=0)
-    assert sorted(calls[0]) == ["https://lemmy.example/u/alice", "https://lemmy.example/u/carol"]
+    assert sorted(calls[0]) == [
+        "https://lemmy.example/u/alice",
+        "https://lemmy.example/u/carol",
+    ]
     assert calls[1] == ["https://lemmy.example/u/carol"]
     source = database.local_community_relay.get_local_community_relay_source_activity(
         local_community_id=local_community.id,
@@ -786,15 +890,24 @@ async def test_partial_relay_failure_retries_only_failed_target(tmp_path: Path) 
         source_activity_id=event.source_activity_id,
     )
     assert source is not None
-    deliveries = database.local_community_relay.list_local_community_relay_deliveries_for_source(source.id)
-    assert {row.target_remote_actor_id: (row.status, row.attempt_count) for row in deliveries} == {
+    deliveries = (
+        database.local_community_relay.list_local_community_relay_deliveries_for_source(
+            source.id
+        )
+    )
+    assert {
+        row.target_remote_actor_id: (row.status, row.attempt_count)
+        for row in deliveries
+    } == {
         "https://lemmy.example/u/alice": ("delivered", 1),
         "https://lemmy.example/u/carol": ("delivered", 2),
     }
 
 
 @pytest.mark.asyncio
-async def test_policy_change_during_relay_applies_to_next_action_only(tmp_path: Path) -> None:
+async def test_policy_change_during_relay_applies_to_next_action_only(
+    tmp_path: Path,
+) -> None:
     """An in-flight relay keeps its snapshot while the next action sees new policy."""
     database, runtime = _runtime(tmp_path)
     local_community = _local_community(database)
@@ -803,10 +916,14 @@ async def test_policy_change_during_relay_applies_to_next_action_only(tmp_path: 
     release_gateway = asyncio.Event()
     observed_targets: list[list[str]] = []
 
-    async def blocking_gateway(*, signing_actor_url: str, deliveries: list[object]) -> SendLocalCommunityRelayResult:
+    async def blocking_gateway(
+        *, signing_actor_url: str, deliveries: list[object]
+    ) -> SendLocalCommunityRelayResult:
         """Pause after target selection so policy can change deterministically."""
         del signing_actor_url
-        observed_targets.append([delivery.target_remote_actor_id for delivery in deliveries])
+        observed_targets.append(
+            [delivery.target_remote_actor_id for delivery in deliveries]
+        )
         entered_gateway.set()
         await release_gateway.wait()
         return SendLocalCommunityRelayResult(
@@ -847,6 +964,9 @@ async def test_policy_change_during_relay_applies_to_next_action_only(tmp_path: 
     )
 
     assert first == type(first)(attempted=2, delivered=2, failed=0)
-    assert sorted(observed_targets[0]) == ["https://lemmy.example/u/alice", "https://lemmy.example/u/carol"]
+    assert sorted(observed_targets[0]) == [
+        "https://lemmy.example/u/alice",
+        "https://lemmy.example/u/carol",
+    ]
     assert second == type(second)(attempted=0, delivered=0, failed=0)
     runtime.fedify_gateway.send_local_community_relay.assert_not_awaited()

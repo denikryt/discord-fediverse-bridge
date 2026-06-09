@@ -32,7 +32,9 @@ class PrefixCollector:
         if report.failed:
             self.status[report.nodeid] = "failed"
         elif report.skipped:
-            self.status[report.nodeid] = "xfailed" if hasattr(report, "wasxfail") else "skipped"
+            self.status[report.nodeid] = (
+                "xfailed" if hasattr(report, "wasxfail") else "skipped"
+            )
         elif report.when == "call" and report.passed:
             self.status[report.nodeid] = "passed"
 
@@ -110,7 +112,9 @@ def main() -> int:
     files = sorted({prefix.split("::", 1)[0] for prefix in prefixes})
     collector = PrefixCollector(prefixes)
     code = pytest.main(["-q", *files], plugins=[collector])
-    gateway_path = root / ".artifacts/test-assurance/technical-contracts/gateway-status.json"
+    gateway_path = (
+        root / ".artifacts/test-assurance/technical-contracts/gateway-status.json"
+    )
     gateway = json.loads(gateway_path.read_text()) if gateway_path.exists() else {}
     report = build_report(TECHNICAL_CONTRACT_ENTRIES, collector.status, gateway)
     output = root / ".artifacts/test-assurance/technical-contracts/report.json"

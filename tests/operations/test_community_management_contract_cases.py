@@ -12,8 +12,14 @@ from src.local_communities.service import LocalCommunityService
 from src.operations import CreateCommunityInput, EditCommunityInput
 from src.operations.create_community import create_community_operation
 from src.operations.edit_community import edit_community_operation
-from support.community_management_contracts import COMMUNITY_MANAGEMENT_CASES, CommunityManagementCase
-from support.community_management_effects import CommunityManagementObserved, collect_community_management_effects
+from support.community_management_contracts import (
+    COMMUNITY_MANAGEMENT_CASES,
+    CommunityManagementCase,
+)
+from support.community_management_effects import (
+    CommunityManagementObserved,
+    collect_community_management_effects,
+)
 from support.db import build_database
 
 
@@ -48,10 +54,14 @@ def _seed_community(database: object, *, status: str) -> None:
             persisted.status = "disabled"
 
 
-def _execute(case: CommunityManagementCase, tmp_path: Path) -> CommunityManagementObserved:
+def _execute(
+    case: CommunityManagementCase, tmp_path: Path
+) -> CommunityManagementObserved:
     """Execute one case through real operations and persistence."""
 
-    database = build_database(tmp_path, f"community-contract-{case.id.replace('.', '-')}.db")
+    database = build_database(
+        tmp_path, f"community-contract-{case.id.replace('.', '-')}.db"
+    )
     if case.action == "edit" and case.community_state != "missing":
         _seed_community(database, status=case.community_state)
     audit_offset = len(database.management_audit_events.list_oldest_first())
@@ -70,7 +80,9 @@ def _execute(case: CommunityManagementCase, tmp_path: Path) -> CommunityManageme
             )
         )
     else:
-        user_id = {"owner": "111", "super_admin": "999", "unauthorized": "222"}[case.caller_role]
+        user_id = {"owner": "111", "super_admin": "999", "unauthorized": "222"}[
+            case.caller_role
+        ]
         guild_id = {"same": 10, "other": 20, "dm": None}[case.guild_context]
         settings = _settings(super_admin=case.caller_role == "super_admin")
         result = edit_community_operation(
@@ -99,7 +111,9 @@ def _execute(case: CommunityManagementCase, tmp_path: Path) -> CommunityManageme
 
 
 @pytest.mark.parametrize("case", COMMUNITY_MANAGEMENT_CASES, ids=lambda case: case.id)
-def test_community_management_contract(case: CommunityManagementCase, tmp_path: Path) -> None:
+def test_community_management_contract(
+    case: CommunityManagementCase, tmp_path: Path
+) -> None:
     """Real operation effects must match the independently declared contract."""
 
     observed = _execute(case, tmp_path)

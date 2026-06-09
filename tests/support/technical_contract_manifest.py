@@ -1,4 +1,5 @@
 """Stable rule ownership for dashboard, configuration, deployment, and gateway tests."""
+
 from __future__ import annotations
 
 from dataclasses import dataclass

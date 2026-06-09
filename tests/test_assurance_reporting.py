@@ -1,4 +1,5 @@
 """Tests for the minimal shared assurance reporting framework."""
+
 from __future__ import annotations
 
 from types import SimpleNamespace
@@ -16,8 +17,12 @@ def test_shared_case_report_preserves_domain_dimensions_and_gaps() -> None:
     case = SimpleNamespace(id="case-a", action="create")
     result = CollectedCaseResult("file.py::test_a", case, "passed")
     rules = (
-        SimpleNamespace(id="present", description="present", represented_by=("case-a",)),
-        SimpleNamespace(id="missing", description="missing", represented_by=("case-b",)),
+        SimpleNamespace(
+            id="present", description="present", represented_by=("case-a",)
+        ),
+        SimpleNamespace(
+            id="missing", description="missing", represented_by=("case-b",)
+        ),
     )
     report = build_case_report(
         domain="example",
@@ -33,9 +38,16 @@ def test_shared_owner_report_preserves_classification_and_status() -> None:
     """Named scenario reports retain classification and exact owner status."""
 
     entries = (
-        SimpleNamespace(rule_id="rule", family="routing", classification="named_scenario", node_prefixes=("f.py::test_",)),
+        SimpleNamespace(
+            rule_id="rule",
+            family="routing",
+            classification="named_scenario",
+            node_prefixes=("f.py::test_",),
+        ),
     )
-    report = build_owner_report(domain="fanout", entries=entries, status={"f.py::test_one": "passed"})
+    report = build_owner_report(
+        domain="fanout", entries=entries, status={"f.py::test_one": "passed"}
+    )
     assert report["summary"]["represented_rules"] == 1
     assert report["rules"][0]["classification"] == "named_scenario"
 
@@ -44,8 +56,18 @@ def test_shared_reporting_rejects_duplicate_rule_ids() -> None:
     """Ambiguous registry data fails before a misleading artifact is emitted."""
 
     entries = (
-        SimpleNamespace(rule_id="duplicate", family="a", classification="named_scenario", node_prefixes=("a",)),
-        SimpleNamespace(rule_id="duplicate", family="b", classification="named_scenario", node_prefixes=("b",)),
+        SimpleNamespace(
+            rule_id="duplicate",
+            family="a",
+            classification="named_scenario",
+            node_prefixes=("a",),
+        ),
+        SimpleNamespace(
+            rule_id="duplicate",
+            family="b",
+            classification="named_scenario",
+            node_prefixes=("b",),
+        ),
     )
     with pytest.raises(ValueError, match="duplicate rule IDs"):
         build_owner_report(domain="x", entries=entries, status={})
@@ -54,9 +76,32 @@ def test_shared_reporting_rejects_duplicate_rule_ids() -> None:
 def test_aggregate_report_sums_only_declared_domain_facts() -> None:
     """Aggregate totals are deterministic sums of provider reports."""
 
-    aggregate = build_aggregate([
-        {"domain": "b", "summary": {"required_rules": 2, "represented_rules": 1, "missing_rules": 1}, "missing_rule_ids": ["b2"]},
-        {"domain": "a", "summary": {"required_rules": 3, "represented_rules": 3, "missing_rules": 0}, "missing_rule_ids": []},
-    ])
-    assert aggregate["summary"] == {"domains": 2, "required_rules": 5, "represented_rules": 4, "missing_rules": 1}
+    aggregate = build_aggregate(
+        [
+            {
+                "domain": "b",
+                "summary": {
+                    "required_rules": 2,
+                    "represented_rules": 1,
+                    "missing_rules": 1,
+                },
+                "missing_rule_ids": ["b2"],
+            },
+            {
+                "domain": "a",
+                "summary": {
+                    "required_rules": 3,
+                    "represented_rules": 3,
+                    "missing_rules": 0,
+                },
+                "missing_rule_ids": [],
+            },
+        ]
+    )
+    assert aggregate["summary"] == {
+        "domains": 2,
+        "required_rules": 5,
+        "represented_rules": 4,
+        "missing_rules": 1,
+    }
     assert [row["domain"] for row in aggregate["domains"]] == ["a", "b"]

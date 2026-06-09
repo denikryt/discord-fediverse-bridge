@@ -1,4 +1,5 @@
 """Tests for complete executable-test migration classification."""
+
 from __future__ import annotations
 
 import pytest
@@ -10,15 +11,42 @@ from tools.migration_completeness_report import build_report
 @pytest.mark.parametrize(
     ("test_id", "runtime", "classification", "domain"),
     (
-        ("tests/operations/test_ban_contract_cases.py::test_case[x]", "python", "A", "ban"),
-        ("tests/behavior/test_dashboard_scenarios.py::test_page", "python", "B", "technical_contracts"),
-        ("tests/property/test_bridge_policy_properties.py::test_rule", "python", "C", "bridge_policy"),
+        (
+            "tests/operations/test_ban_contract_cases.py::test_case[x]",
+            "python",
+            "A",
+            "ban",
+        ),
+        (
+            "tests/behavior/test_dashboard_scenarios.py::test_page",
+            "python",
+            "B",
+            "technical_contracts",
+        ),
+        (
+            "tests/property/test_bridge_policy_properties.py::test_rule",
+            "python",
+            "C",
+            "bridge_policy",
+        ),
         ("tests/test_database.py::test_schema", "python", "D", "core_or_support"),
-        ("vendor/discordops/tests/test_operation.py::test_run", "python", "D", "discordops_framework"),
-        ("tests/verify-local-community-relay.ts", "gateway", "D", "technical_contracts"),
+        (
+            "vendor/discordops/tests/test_operation.py::test_run",
+            "python",
+            "D",
+            "discordops_framework",
+        ),
+        (
+            "tests/verify-local-community-relay.ts",
+            "gateway",
+            "D",
+            "technical_contracts",
+        ),
     ),
 )
-def test_classifier_covers_each_architectural_test_form(test_id: str, runtime: str, classification: str, domain: str) -> None:
+def test_classifier_covers_each_architectural_test_form(
+    test_id: str, runtime: str, classification: str, domain: str
+) -> None:
     """All supported test forms receive stable intentional classifications."""
 
     record = classify_test(test_id, runtime)  # type: ignore[arg-type]

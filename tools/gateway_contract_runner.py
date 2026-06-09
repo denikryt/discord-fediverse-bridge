@@ -36,7 +36,11 @@ def merge_status(
     scripts = {name: old_scripts[name] for name in discovered if name in old_scripts}
     scripts.update(updates)
     result = {
-        "check": check_status if check_status is not None else previous.get("check", "not_run"),
+        "check": (
+            check_status
+            if check_status is not None
+            else previous.get("check", "not_run")
+        ),
         "scripts": dict(sorted(scripts.items())),
     }
     return result
@@ -53,12 +57,16 @@ def main() -> int:
 
     root = Path(__file__).resolve().parents[1]
     gateway = root / "fedify-gateway"
-    artifact = root / ".artifacts/test-assurance/technical-contracts/gateway-status.json"
+    artifact = (
+        root / ".artifacts/test-assurance/technical-contracts/gateway-status.json"
+    )
     scripts = tuple(
         path.relative_to(gateway).as_posix()
         for path in sorted((gateway / "tests").glob("verify-*.ts"))
     )
-    selected = scripts[args.start : None if args.limit is None else args.start + args.limit]
+    selected = scripts[
+        args.start : None if args.limit is None else args.start + args.limit
+    ]
 
     previous = json.loads(artifact.read_text()) if artifact.exists() else {}
     check_status = None

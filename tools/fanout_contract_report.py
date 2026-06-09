@@ -1,29 +1,53 @@
 #!/usr/bin/env python3
-"""Run outbound fanout scenario owners and emit a deterministic report."""
+"""Run outbound fanout contract owners and emit their JSON report."""
+
 from __future__ import annotations
-import json,sys
-from collections import Counter
+
 from pathlib import Path
 from typing import Any
-import pytest
 
 try:
- from tools.assurance_reporting import OwnerPrefixCollector, build_owner_report
+    from tools.assurance_reporting import (
+        add_project_import_paths,
+        build_owner_report,
+        run_owner_report,
+    )
 except ModuleNotFoundError:
- from assurance_reporting import OwnerPrefixCollector, build_owner_report
+    from assurance_reporting import (
+        add_project_import_paths,
+        build_owner_report,
+        run_owner_report,
+    )
 
-Collector = OwnerPrefixCollector
 
-def build_report(entries:tuple[Any,...],status:dict[str,str])->dict[str,Any]:
- return build_owner_report(domain='outbound_fanout',entries=entries,status=status)
+def build_report(
+    entries: tuple[Any, ...],
+    status: dict[str, str],
+) -> dict[str, Any]:
+    """Build the outbound fanout report from declared owners and pytest status."""
+
+    return build_owner_report(
+        domain="outbound_fanout",
+        entries=entries,
+        status=status,
+    )
 
 
-def main()->int:
- root=Path(__file__).resolve().parents[1]
- for p in (root,root/'tests'):
-  if str(p) not in sys.path:sys.path.insert(0,str(p))
- from support.fanout_contract_manifest import FANOUT_CONTRACT_ENTRIES
- prefixes={p for e in FANOUT_CONTRACT_ENTRIES for p in e.node_prefixes}; c=Collector(prefixes)
- files=sorted({p.split('::',1)[0] for p in prefixes}); code=pytest.main(['-q',*files],plugins=[c]); report=build_report(FANOUT_CONTRACT_ENTRIES,c.status)
- out=root/'.artifacts/test-assurance/outbound-fanout/report.json'; out.parent.mkdir(parents=True,exist_ok=True); out.write_text(json.dumps(report,indent=2,sort_keys=True)+'\n'); return int(code)
-if __name__=='__main__':raise SystemExit(main())
+def main() -> int:
+    """Run all declared fanout owner tests and write the generated report."""
+
+    root = Path(__file__).resolve().parents[1]
+    add_project_import_paths(root)
+
+    from support.fanout_contract_manifest import FANOUT_CONTRACT_ENTRIES
+
+    return run_owner_report(
+        root=root,
+        domain="outbound_fanout",
+        entries=FANOUT_CONTRACT_ENTRIES,
+        output=root / ".artifacts/test-assurance/outbound-fanout/report.json",
+    )
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())
