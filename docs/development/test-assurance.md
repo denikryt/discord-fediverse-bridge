@@ -136,3 +136,23 @@ The report shows only declared contract representation and pytest outcomes. It d
 ### Stage 5 framework decision
 
 Ban and bridge-policy case/effect models remain domain-specific because their inputs and observable effects differ materially. Only passive pytest collection and terminal-status accounting are shared in `tools/contract_report_support.py`. Common case metadata, entry-point adapters, and effect fragments remain deferred until another domain proves stable repetition.
+
+## Property-based policy invariants
+
+Hypothesis is confined to focused value-space tests under `tests/property/`. These tests complement named scenarios and typed contract cases; they do not replace them or derive expected results from production evaluators.
+
+Run the normal development profile:
+
+```bash
+HYPOTHESIS_PROFILE=dev .venv/bin/python -m pytest -q tests/property
+```
+
+Run the larger deterministic CI profile:
+
+```bash
+HYPOTHESIS_PROFILE=ci .venv/bin/python -m pytest -q tests/property
+```
+
+The `dev` profile uses 50 examples per property and the `ci` profile uses 200. Both disable deadlines so slower shared runners do not create false failures. Hypothesis still reports and shrinks the minimal failing example.
+
+The current properties cover block precedence, unrelated-entry stability, order/duplicate invariance, canonical host variants, malformed hosts, and Discord identifier validation. They intentionally avoid arbitrary full runtime state and operation sequences; lifecycle generation belongs to the stateful assurance stage.
