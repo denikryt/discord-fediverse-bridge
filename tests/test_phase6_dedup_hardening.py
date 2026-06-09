@@ -18,6 +18,7 @@ Dedup paths covered:
 """
 
 from __future__ import annotations
+from support.runtime import build_test_policy_service
 
 import asyncio
 from datetime import datetime, timezone
@@ -72,7 +73,8 @@ def _community_runtime(database: Database, *, bot: object | None = None) -> Comm
         database=database,
         fedify_gateway=AsyncMock(),
         bridge_prefix="[bridge]",
-    )
+            bridge_policy_service=build_test_policy_service(database),
+)
     return CommunityRuntime(
         database=database,
         content_publish_service=publish_service,

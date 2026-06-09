@@ -258,8 +258,8 @@ class CommandAccessInput:
     database: Database | Any | None
     discord_guild_id: int | None
     discord_user_id: str
+    policy_service: BridgePolicyService
     member_can_manage_guild: bool = False
-    policy_service: BridgePolicyService | None = None
     ban_service: UserBanService | None = None
     _policy_snapshot: BridgePolicySnapshot | None = field(default=None, init=False, repr=False)
     _policy_snapshot_loaded: bool = field(default=False, init=False, repr=False)
@@ -270,13 +270,6 @@ class CommandAccessInput:
     def get_policy_snapshot(self) -> BridgePolicySnapshot:
         """Resolve one memoized effective policy snapshot for all access checks."""
         if not self._policy_snapshot_loaded:
-            if self.policy_service is None:
-                if self.database is None:
-                    raise RuntimeError("Guild policy access requires a database.")
-                self.policy_service = BridgePolicyService(
-                    settings=self.settings,
-                    repository=self.database.bridge_policy_entries,
-                )
             self._policy_snapshot = self.policy_service.snapshot()
             self._policy_snapshot_loaded = True
         assert self._policy_snapshot is not None

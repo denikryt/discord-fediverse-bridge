@@ -7,6 +7,7 @@ forum_channel.create_thread, thread.send, FedifyGatewayClient.
 """
 
 from __future__ import annotations
+from support.runtime import build_test_policy_service
 
 from datetime import datetime, timezone
 from pathlib import Path
@@ -86,7 +87,8 @@ def _publish_service(database: Database, gateway: AsyncMock) -> ContentPublishSe
         database=database,
         fedify_gateway=gateway,
         bridge_prefix="[bridge]",
-    )
+            bridge_policy_service=build_test_policy_service(database),
+)
 
 
 def _community_runtime(database: Database, gateway: AsyncMock, *, bot: object) -> CommunityRuntime:

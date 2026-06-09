@@ -7,6 +7,7 @@ creating new canonical rows or relying on source-message-only ownership.
 """
 
 from __future__ import annotations
+from support.runtime import build_test_policy_service
 
 from pathlib import Path
 from types import SimpleNamespace
@@ -68,13 +69,15 @@ def scenario(tmp_path: Path) -> SimpleNamespace:
         database=database,
         fedify_gateway=gateway,
         bridge_prefix="[bridge]",
-    )
+            bridge_policy_service=build_test_policy_service(database),
+)
     runtime = LocalCommunityRuntime(
         database=database,
         fedify_gateway=gateway,
         content_publish_service=publish_service,
         bridge_prefix="[bridge]",
-    )
+            bridge_policy_service=build_test_policy_service(database),
+)
     LocalCommunityService(
         database=database,
         base_url="https://bridge.example",

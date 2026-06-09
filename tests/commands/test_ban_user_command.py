@@ -7,7 +7,13 @@ from types import SimpleNamespace
 import pytest
 
 from src.commands import ban_user
+from src.bridge_policy import BridgePolicyService
 
+
+
+def _policy_service(database, settings):
+    """Build the explicit policy dependency used by production composition."""
+    return BridgePolicyService(settings=settings, repository=database.bridge_policy_entries)
 
 @pytest.mark.asyncio
 async def test_ban_user_command_passes_user_and_guild_and_returns_ephemeral(command_tree, interaction, database) -> None:
@@ -22,7 +28,7 @@ async def test_ban_user_command_passes_user_and_guild_and_returns_ephemeral(comm
     )
     database.community_actor_bans.get_active_ban_by_handle.return_value = None
 
-    ban_user.register(command_tree, database, settings)
+    ban_user.register(command_tree, database, settings, _policy_service(database, settings))
     command = command_tree.commands["ban-user"]
     await command.callback(interaction, "cats", "alice@example.com", "spam")
 
@@ -51,7 +57,7 @@ async def test_ban_user_command_rejection_stays_ephemeral(command_tree, interact
         status="active",
     )
 
-    ban_user.register(command_tree, database, settings)
+    ban_user.register(command_tree, database, settings, _policy_service(database, settings))
     command = command_tree.commands["ban-user"]
     await command.callback(interaction, "cats", "alice@example.com", "spam")
 
@@ -70,7 +76,7 @@ async def test_ban_community_autocomplete_owner_sees_owned_current_guild(interac
         SimpleNamespace(slug="cats", display_name="Cats", discord_guild_id=99999),
     ]
 
-    choices = await ban_user._ban_community_autocomplete(database, settings)(interaction, "cat")
+    choices = await ban_user._ban_community_autocomplete(database, settings, _policy_service(database, settings))(interaction, "cat")
 
     assert [(choice.name, choice.value) for choice in choices] == [("cats — Cats", "cats")]
     database.local_communities.list_active_local_communities_owned_by_user_in_guild.assert_called_once_with(
@@ -89,7 +95,7 @@ async def test_ban_community_autocomplete_super_admin_sees_all_guilds(interactio
         SimpleNamespace(slug="dogs", display_name="Dogs", discord_guild_id=20),
     ]
 
-    choices = await ban_user._ban_community_autocomplete(database, settings)(interaction, "")
+    choices = await ban_user._ban_community_autocomplete(database, settings, _policy_service(database, settings))(interaction, "")
 
     assert [(choice.name, choice.value) for choice in choices] == [
         ("cats — Cats — guild 10", "cats"),
@@ -108,7 +114,7 @@ async def test_ban_community_autocomplete_filters_by_slug_or_display_name(intera
         SimpleNamespace(slug="dogs", display_name="Dogs", discord_guild_id=99999),
     ]
 
-    choices = await ban_user._ban_community_autocomplete(database, settings)(interaction, "bird")
+    choices = await ban_user._ban_community_autocomplete(database, settings, _policy_service(database, settings))(interaction, "bird")
 
     assert [(choice.name, choice.value) for choice in choices] == [("bird-watch — Bird Watch", "bird-watch")]
 
@@ -122,7 +128,7 @@ async def test_ban_community_autocomplete_caps_at_twenty_five(interaction, datab
         for index in range(30)
     ]
 
-    choices = await ban_user._ban_community_autocomplete(database, settings)(interaction, "")
+    choices = await ban_user._ban_community_autocomplete(database, settings, _policy_service(database, settings))(interaction, "")
 
     assert len(choices) == 25
     assert choices[0].value == "community-00"
@@ -135,7 +141,7 @@ async def test_ban_community_autocomplete_returns_empty_for_guildless_owner(inte
     settings = SimpleNamespace(discord_guild_allowlist=[], bridge_super_admin_user_ids=[])
     interaction.guild_id = None
 
-    choices = await ban_user._ban_community_autocomplete(database, settings)(interaction, "")
+    choices = await ban_user._ban_community_autocomplete(database, settings, _policy_service(database, settings))(interaction, "")
 
     assert choices == []
     database.local_communities.list_active_local_communities_owned_by_user_in_guild.assert_not_called()
@@ -151,7 +157,7 @@ async def test_ban_community_autocomplete_supports_guildless_super_admin(interac
         SimpleNamespace(slug="cats", display_name="Cats", discord_guild_id=10),
     ]
 
-    choices = await ban_user._ban_community_autocomplete(database, settings)(interaction, "")
+    choices = await ban_user._ban_community_autocomplete(database, settings, _policy_service(database, settings))(interaction, "")
 
     assert choices == []
     database.local_communities.list_active_local_communities.assert_not_called()
@@ -165,6 +171,6 @@ async def test_ban_community_autocomplete_returns_empty_on_repository_error(inte
         "database unavailable"
     )
 
-    choices = await ban_user._ban_community_autocomplete(database, settings)(interaction, "")
+    choices = await ban_user._ban_community_autocomplete(database, settings, _policy_service(database, settings))(interaction, "")
 
     assert choices == []

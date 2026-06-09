@@ -1,6 +1,7 @@
 """Behavior scenarios for unsubscribe retry preservation and failure messaging."""
 
 from __future__ import annotations
+from support.runtime import build_test_policy_service
 
 from pathlib import Path
 from types import SimpleNamespace
@@ -75,7 +76,7 @@ async def test_last_channel_remote_unfollow_failure_keeps_bridge_follow_for_retr
         error="network error",
     )
 
-    unsubscribe.register(command_tree, database, fedify_gateway, SimpleNamespace(discord_guild_allowlist=[], federation_allowlist=[]))
+    unsubscribe.register(command_tree, database, fedify_gateway, SimpleNamespace(discord_guild_allowlist=[], federation_allowlist=[]), policy_service=build_test_policy_service(database))
 
     command = command_tree.commands["unsubscribe-channel"]
     await command.callback(interaction, forum_channel)
@@ -120,7 +121,7 @@ async def test_last_channel_missing_follow_activity_id_blocks_local_cleanup(
         status="accepted",
     )
 
-    unsubscribe.register(command_tree, database, fedify_gateway, SimpleNamespace(discord_guild_allowlist=[], federation_allowlist=[]))
+    unsubscribe.register(command_tree, database, fedify_gateway, SimpleNamespace(discord_guild_allowlist=[], federation_allowlist=[]), policy_service=build_test_policy_service(database))
 
     command = command_tree.commands["unsubscribe-channel"]
     await command.callback(interaction, forum_channel)

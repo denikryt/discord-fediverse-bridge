@@ -8,6 +8,7 @@ from types import SimpleNamespace
 from src.local_communities.service import LocalCommunityService
 from src.operations import EditCommunityInput, edit_community_operation
 from support.db import build_database
+from support.runtime import build_test_policy_service
 
 
 def _settings(*, super_admins: list[str] | None = None) -> SimpleNamespace:
@@ -35,6 +36,7 @@ def test_user_action_edits_local_community_metadata_end_to_end(tmp_path: Path) -
         EditCommunityInput(
             database=database,
             settings=_settings(),
+            policy_service=build_test_policy_service(database),
             discord_user_id="111",
             discord_guild_id=10,
             community_slug="cats",
@@ -80,6 +82,7 @@ def test_local_only_metadata_edit_does_not_touch_moderation_or_identity(tmp_path
         EditCommunityInput(
             database=database,
             settings=_settings(),
+            policy_service=build_test_policy_service(database),
             discord_user_id="111",
             discord_guild_id=10,
             community_slug="cats",

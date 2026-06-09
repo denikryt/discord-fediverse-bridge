@@ -1,6 +1,7 @@
 """Behavior scenarios for inbound local-community follow and content routing."""
 
 from __future__ import annotations
+from support.runtime import build_test_policy_service
 
 from pathlib import Path
 from types import SimpleNamespace
@@ -29,13 +30,15 @@ def _runtime(tmp_path: Path) -> tuple[object, LocalCommunityRuntime]:
         database=database,
         fedify_gateway=gateway,
         bridge_prefix="[bridge]",
-    )
+            bridge_policy_service=build_test_policy_service(database),
+)
     runtime = LocalCommunityRuntime(
         database=database,
         fedify_gateway=gateway,
         content_publish_service=publish_service,
         bridge_prefix="[bridge]",
-    )
+            bridge_policy_service=build_test_policy_service(database),
+)
     return database, runtime
 
 

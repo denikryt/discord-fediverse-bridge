@@ -20,6 +20,7 @@ Scenarios covered:
 """
 
 from __future__ import annotations
+from support.runtime import build_test_policy_service
 
 import asyncio
 from datetime import datetime, timezone
@@ -64,7 +65,8 @@ def _community_runtime(
         database=database,
         fedify_gateway=AsyncMock(),
         bridge_prefix="[bridge]",
-    )
+            bridge_policy_service=build_test_policy_service(database),
+)
     return CommunityRuntime(
         database=database,
         content_publish_service=publish_service,
@@ -143,9 +145,14 @@ def _fake_thread_with_message(
     return fake_thread
 
 
-def _fake_fanout(*, bot: object) -> DiscordFanout:
+def _fake_fanout(*, bot: object, database: Database) -> DiscordFanout:
     """Build a real DiscordFanout wired to a fake bot."""
-    return DiscordFanout(bot=bot, mutation_tracker=bot)
+    return DiscordFanout(
+        bot=bot,
+        mutation_tracker=bot,
+        database=database,
+        policy_service=build_test_policy_service(database),
+    )
 
 
 def _setup_subscription(
@@ -331,7 +338,7 @@ async def test_source_thread_message_publishes_to_ap_and_mirrors(tmp_path: Path)
     )
 
     bot = _fake_bot(threads={mirror_thread_id: fake_mirror_thread})
-    fanout = _fake_fanout(bot=bot)
+    fanout = _fake_fanout(bot=bot, database=database)
     community_runtime = _community_runtime(database, bot=bot, discord_fanout=fanout)
     # Set gateway on publish service
     community_runtime.content_publish_service.fedify_gateway = gateway
@@ -392,7 +399,7 @@ async def test_mirror_thread_message_publishes_to_ap_and_fanout(tmp_path: Path) 
     )
 
     bot = _fake_bot(threads={source_thread_id: fake_source_thread})
-    fanout = _fake_fanout(bot=bot)
+    fanout = _fake_fanout(bot=bot, database=database)
     community_runtime = _community_runtime(database, bot=bot, discord_fanout=fanout)
     # Set gateway on publish service
     community_runtime.content_publish_service.fedify_gateway = gateway
@@ -461,7 +468,7 @@ async def test_mirror_thread_message_fans_out_to_all_other_mirrors(tmp_path: Pat
         source_thread_id: fake_source_thread,
         mirror2_thread_id: fake_mirror2_thread,
     })
-    fanout = _fake_fanout(bot=bot)
+    fanout = _fake_fanout(bot=bot, database=database)
     community_runtime = _community_runtime(database, bot=bot, discord_fanout=fanout)
     # Set gateway on publish service
     community_runtime.content_publish_service.fedify_gateway = gateway
@@ -547,7 +554,7 @@ async def test_reply_to_message_in_mirror_thread_resolves_reference(tmp_path: Pa
     )
 
     bot = _fake_bot(threads={source_thread_id: fake_source_thread})
-    fanout = _fake_fanout(bot=bot)
+    fanout = _fake_fanout(bot=bot, database=database)
     community_runtime = _community_runtime(database, bot=bot, discord_fanout=fanout)
     # Set gateway on publish service
     community_runtime.content_publish_service.fedify_gateway = gateway
@@ -607,7 +614,7 @@ async def test_reply_to_mirror_starter_is_treated_as_root_reply(tmp_path: Path) 
     )
 
     bot = _fake_bot(threads={source_thread_id: fake_source_thread})
-    fanout = _fake_fanout(bot=bot)
+    fanout = _fake_fanout(bot=bot, database=database)
     community_runtime = _community_runtime(database, bot=bot, discord_fanout=fanout)
     # Set gateway on publish service
     community_runtime.content_publish_service.fedify_gateway = gateway
@@ -655,7 +662,7 @@ async def test_bot_message_in_mirror_thread_is_not_re_published(tmp_path: Path) 
     )
 
     bot = _fake_bot(user_id=bot_user_id)
-    fanout = _fake_fanout(bot=bot)
+    fanout = _fake_fanout(bot=bot, database=database)
     community_runtime = _community_runtime(database, bot=bot, discord_fanout=fanout)
 
     # Bot message should be ignored (author guard in on_message)
@@ -705,7 +712,7 @@ async def test_mirror_message_does_not_loop_back_via_fanout(tmp_path: Path) -> N
     )
 
     bot = _fake_bot(threads={source_thread_id: fake_source_thread})
-    fanout = _fake_fanout(bot=bot)
+    fanout = _fake_fanout(bot=bot, database=database)
     community_runtime = _community_runtime(database, bot=bot, discord_fanout=fanout)
     # Set gateway on publish service
     community_runtime.content_publish_service.fedify_gateway = gateway
@@ -763,7 +770,7 @@ async def test_mirror_message_dedup_on_reconnect(tmp_path: Path) -> None:
     )
 
     bot = _fake_bot(threads={source_thread_id: fake_source_thread})
-    fanout = _fake_fanout(bot=bot)
+    fanout = _fake_fanout(bot=bot, database=database)
     community_runtime = _community_runtime(database, bot=bot, discord_fanout=fanout)
     # Set gateway on publish service
     community_runtime.content_publish_service.fedify_gateway = gateway

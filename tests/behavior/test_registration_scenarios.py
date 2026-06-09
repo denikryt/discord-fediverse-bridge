@@ -1,6 +1,7 @@
 """Behavior scenarios for user registration and repeat registration flows."""
 
 from __future__ import annotations
+from support.runtime import build_test_policy_service
 
 from pathlib import Path
 from types import SimpleNamespace
@@ -94,7 +95,7 @@ async def test_unregistered_user_register_command_returns_ephemeral_link(
         discord_guild_allowlist=[],
     )
 
-    register_command.register(command_tree, database, settings)
+    register_command.register(command_tree, database, settings, policy_service=build_test_policy_service(database))
 
     command = command_tree.commands["register"]
     await command.callback(interaction)

@@ -5,9 +5,20 @@ from __future__ import annotations
 from types import SimpleNamespace
 from unittest.mock import AsyncMock
 
+from src.bridge_policy import BridgePolicyService
 from src.community_sync.runtime import CommunityRuntime
 from src.db import Database
 from src.content_publish_service import ContentPublishService
+
+
+def build_test_policy_service(
+    database: Database, settings: object | None = None
+) -> BridgePolicyService:
+    """Build the explicit policy dependency used by scenario tests."""
+    return BridgePolicyService(
+        settings=settings or SimpleNamespace(),
+        repository=database.bridge_policy_entries,
+    )
 
 
 def build_publish_service(database: Database, fedify_gateway: object | None = None) -> ContentPublishService:
@@ -16,6 +27,7 @@ def build_publish_service(database: Database, fedify_gateway: object | None = No
         database=database,
         fedify_gateway=fedify_gateway or AsyncMock(),
         bridge_prefix="[bridge]",
+        bridge_policy_service=build_test_policy_service(database),
     )
 
 

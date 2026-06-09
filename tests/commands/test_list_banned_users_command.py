@@ -7,7 +7,13 @@ from types import SimpleNamespace
 import pytest
 
 from src.commands import list_banned_users
+from src.bridge_policy import BridgePolicyService
 
+
+
+def _policy_service(database, settings):
+    """Build the explicit policy dependency used by production composition."""
+    return BridgePolicyService(settings=settings, repository=database.bridge_policy_entries)
 
 @pytest.mark.asyncio
 async def test_list_banned_users_command_passes_user_and_guild_and_returns_ephemeral(command_tree, interaction, database) -> None:
@@ -22,7 +28,7 @@ async def test_list_banned_users_command_passes_user_and_guild_and_returns_ephem
     )
     database.community_actor_bans.count_active_bans_for_community.return_value = 0
 
-    list_banned_users.register(command_tree, database, settings)
+    list_banned_users.register(command_tree, database, settings, _policy_service(database, settings))
     command = command_tree.commands["list-banned-users"]
     await command.callback(interaction, "cats")
 
@@ -41,7 +47,9 @@ async def test_list_banned_users_community_autocomplete_shows_current_guild_acti
     ]
 
     choices = await list_banned_users._list_community_autocomplete(
-        database, SimpleNamespace(discord_guild_allowlist=[])
+        database,
+        (settings := SimpleNamespace(discord_guild_allowlist=[])),
+        _policy_service(database, settings),
     )(interaction, "")
 
     assert [(choice.name, choice.value) for choice in choices] == [
@@ -59,7 +67,9 @@ async def test_list_banned_users_community_autocomplete_returns_empty_without_gu
     interaction.guild_id = None
 
     choices = await list_banned_users._list_community_autocomplete(
-        database, SimpleNamespace(discord_guild_allowlist=[])
+        database,
+        (settings := SimpleNamespace(discord_guild_allowlist=[])),
+        _policy_service(database, settings),
     )(interaction, "")
 
     assert choices == []
@@ -75,7 +85,9 @@ async def test_list_banned_users_community_autocomplete_caps_at_twenty_five(inte
     ]
 
     choices = await list_banned_users._list_community_autocomplete(
-        database, SimpleNamespace(discord_guild_allowlist=[])
+        database,
+        (settings := SimpleNamespace(discord_guild_allowlist=[])),
+        _policy_service(database, settings),
     )(interaction, "")
 
     assert len(choices) == 25

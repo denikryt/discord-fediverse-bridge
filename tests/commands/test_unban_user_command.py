@@ -7,7 +7,13 @@ from types import SimpleNamespace
 import pytest
 
 from src.commands import unban_user
+from src.bridge_policy import BridgePolicyService
 
+
+
+def _policy_service(database, settings):
+    """Build the explicit policy dependency used by production composition."""
+    return BridgePolicyService(settings=settings, repository=database.bridge_policy_entries)
 
 @pytest.mark.asyncio
 async def test_unban_user_command_passes_user_and_guild_and_returns_ephemeral(command_tree, interaction, database) -> None:
@@ -26,7 +32,7 @@ async def test_unban_user_command_passes_user_and_guild_and_returns_ephemeral(co
         status="active",
     )
 
-    unban_user.register(command_tree, database, settings)
+    unban_user.register(command_tree, database, settings, _policy_service(database, settings))
     command = command_tree.commands["unban-user"]
     await command.callback(interaction, "cats", "alice@example.com")
 
@@ -49,7 +55,7 @@ async def test_unban_community_autocomplete_owner_sees_only_owned_current_guild(
         SimpleNamespace(slug="cats", display_name="Cats", discord_guild_id=99999),
     ]
 
-    choices = await unban_user._unban_community_autocomplete(database, settings)(interaction, "cat")
+    choices = await unban_user._unban_community_autocomplete(database, settings, _policy_service(database, settings))(interaction, "cat")
 
     assert [(choice.name, choice.value) for choice in choices] == [("cats — Cats", "cats")]
     database.local_communities.list_active_local_communities_owned_by_user_in_guild.assert_called_once_with(
@@ -67,7 +73,7 @@ async def test_unban_community_autocomplete_super_admin_sees_all_guilds(interact
         SimpleNamespace(slug="dogs", display_name="Dogs", discord_guild_id=20),
     ]
 
-    choices = await unban_user._unban_community_autocomplete(database, settings)(interaction, "")
+    choices = await unban_user._unban_community_autocomplete(database, settings, _policy_service(database, settings))(interaction, "")
 
     assert [(choice.name, choice.value) for choice in choices] == [
         ("cats — Cats — guild 10", "cats"),
@@ -92,7 +98,7 @@ async def test_unban_user_autocomplete_filters_selected_manageable_community(int
         SimpleNamespace(actor_handle="bob@example.org", reason=None),
     ]
 
-    choices = await unban_user._unban_user_autocomplete(database, settings)(interaction, "example")
+    choices = await unban_user._unban_user_autocomplete(database, settings, _policy_service(database, settings))(interaction, "example")
 
     assert [(choice.name, choice.value) for choice in choices] == [
         ("alice@example.com — spam", "alice@example.com"),
@@ -112,7 +118,7 @@ async def test_unban_user_autocomplete_returns_empty_for_inaccessible_community(
         created_by_discord_user_id="someone-else",
     )
 
-    choices = await unban_user._unban_user_autocomplete(database, settings)(interaction, "")
+    choices = await unban_user._unban_user_autocomplete(database, settings, _policy_service(database, settings))(interaction, "")
 
     assert choices == []
     database.community_actor_bans.list_active_bans_for_community.assert_not_called()
@@ -135,6 +141,6 @@ async def test_unban_user_autocomplete_caps_at_twenty_five(interaction, database
         for index in range(30)
     ]
 
-    choices = await unban_user._unban_user_autocomplete(database, settings)(interaction, "")
+    choices = await unban_user._unban_user_autocomplete(database, settings, _policy_service(database, settings))(interaction, "")
 
     assert len(choices) == 25

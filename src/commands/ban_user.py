@@ -39,9 +39,8 @@ def _matches_current(value: str, current: str) -> bool:
     return current.casefold() in value.casefold()
 
 
-def _ban_community_autocomplete(database: Database, settings: Settings, policy_service: BridgePolicyService | None = None):
+def _ban_community_autocomplete(database: Database, settings: Settings, policy_service: BridgePolicyService):
     """Build autocomplete for `/ban-user community` with owner/admin scope."""
-    policy_service = policy_service or BridgePolicyService(settings=settings, repository=database.bridge_policy_entries)
 
     async def autocomplete(
         interaction: discord.Interaction,
@@ -92,10 +91,9 @@ def register(
     tree: app_commands.CommandTree,
     database: Database,
     settings: Settings,
-    policy_service: BridgePolicyService | None = None,
+    policy_service: BridgePolicyService,
 ) -> None:
     """Register the `/ban-user` command on the Discord application tree."""
-    policy_service = policy_service or BridgePolicyService(settings=settings, repository=database.bridge_policy_entries)
 
     @tree.command(
         name="ban-user",

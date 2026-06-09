@@ -1,6 +1,7 @@
 """Stage 4 scenarios for local-subscriber-originated local-community creates."""
 
 from __future__ import annotations
+from support.runtime import build_test_policy_service
 
 from pathlib import Path
 from types import SimpleNamespace
@@ -30,13 +31,14 @@ def _runtime(tmp_path: Path) -> tuple[object, LocalCommunityRuntime]:
     """Build a Stage 4 runtime with real persistence and fake outer services."""
     database = build_database(tmp_path, "stage4-local-subscriber-origin.db")
     gateway = AsyncMock()
-    publish_service = ContentPublishService(database=database, fedify_gateway=gateway, bridge_prefix="[bridge]")
+    publish_service = ContentPublishService(database=database, fedify_gateway=gateway, bridge_prefix="[bridge]", bridge_policy_service=build_test_policy_service(database))
     runtime = LocalCommunityRuntime(
         database=database,
         fedify_gateway=gateway,
         content_publish_service=publish_service,
         bridge_prefix="[bridge]",
-    )
+            bridge_policy_service=build_test_policy_service(database),
+)
     return database, runtime
 
 
@@ -350,7 +352,7 @@ async def test_inactive_local_subscriber_is_not_routed_as_source(tmp_path: Path)
     local_community = _local_community(database)
     database.local_subscribers.create_local_subscriber(local_community_id=local_community.id, discord_guild_id=10, discord_channel_id=200, initiated_by_discord_user_id="999", status="inactive")
     remote_runtime = AsyncMock()
-    router = DiscordEventRouter(database=database, community_runtime=remote_runtime, local_community_runtime=local_runtime)
+    router = DiscordEventRouter(database=database, community_runtime=remote_runtime, local_community_runtime=local_runtime, bridge_policy_service=build_test_policy_service(database))
     local_runtime.handle_discord_thread_create = AsyncMock()
 
     await router.handle_thread_create(thread=build_thread(thread_id=2200, channel_id=200), starter_message=build_starter_message(message_id=2300))
@@ -373,7 +375,7 @@ async def test_remote_subscription_forum_with_bad_local_subscriber_row_stays_rem
     )
     add_accepted_subscription(database, channel_id=200)
     remote_runtime = AsyncMock()
-    router = DiscordEventRouter(database=database, community_runtime=remote_runtime, local_community_runtime=local_runtime)
+    router = DiscordEventRouter(database=database, community_runtime=remote_runtime, local_community_runtime=local_runtime, bridge_policy_service=build_test_policy_service(database))
     local_runtime.handle_discord_thread_create = AsyncMock()
 
     await router.handle_thread_create(

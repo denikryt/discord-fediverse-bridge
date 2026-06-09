@@ -1,6 +1,7 @@
 """Observable operation tests for `/edit-community` modal submissions."""
 
 from __future__ import annotations
+from src.bridge_policy import BridgePolicyService
 
 from pathlib import Path
 from types import SimpleNamespace
@@ -52,7 +53,8 @@ def _edit(database: object, *, user_id: str = "111", guild_id: int | None = 10, 
             display_name=display_name,
             summary=summary,
             status=status,
-        )
+
+            policy_service=BridgePolicyService(settings=settings or _settings(), repository=database.bridge_policy_entries),)
     )
 
 

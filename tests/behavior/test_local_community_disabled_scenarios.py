@@ -1,6 +1,7 @@
 """Observable behavior for disabled local-community lifecycle gates."""
 
 from __future__ import annotations
+from support.runtime import build_test_policy_service
 
 from pathlib import Path
 from types import SimpleNamespace
@@ -32,9 +33,11 @@ def _runtime(tmp_path: Path, name: str = "disabled-community.db") -> tuple[objec
             database=database,
             fedify_gateway=gateway,
             bridge_prefix="[bridge]",
-        ),
+                    bridge_policy_service=build_test_policy_service(database),
+),
         bridge_prefix="[bridge]",
-    )
+            bridge_policy_service=build_test_policy_service(database),
+)
     return database, runtime
 
 

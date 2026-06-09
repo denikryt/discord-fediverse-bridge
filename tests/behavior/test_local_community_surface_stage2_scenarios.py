@@ -7,6 +7,7 @@ of runtime routing until later stages.
 """
 
 from __future__ import annotations
+from support.runtime import build_test_policy_service
 
 from pathlib import Path
 from types import SimpleNamespace
@@ -31,13 +32,15 @@ def _runtime(tmp_path: Path) -> tuple[object, LocalCommunityRuntime]:
         database=database,
         fedify_gateway=gateway,
         bridge_prefix="[bridge]",
-    )
+            bridge_policy_service=build_test_policy_service(database),
+)
     runtime = LocalCommunityRuntime(
         database=database,
         fedify_gateway=gateway,
         content_publish_service=publish_service,
         bridge_prefix="[bridge]",
-    )
+            bridge_policy_service=build_test_policy_service(database),
+)
     return database, runtime
 
 
@@ -230,7 +233,8 @@ async def test_local_subscriber_forum_is_stage4_runtime_source(
         database=database,
         community_runtime=community_runtime,
         local_community_runtime=local_runtime,
-    )
+            bridge_policy_service=build_test_policy_service(database),
+)
 
     result = await router.handle_thread_create(
         thread=build_thread(thread_id=501, channel_id=101),

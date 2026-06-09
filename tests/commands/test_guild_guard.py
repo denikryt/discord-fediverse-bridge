@@ -7,12 +7,18 @@ from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
+from src.bridge_policy import BridgePolicyService
 from src.commands.guild_guard import (
     GUILD_COMMAND_ACCESS,
     REGISTERED_GUILD_COMMAND_ACCESS,
     command_access_allows_autocomplete,
     reject_if_command_access_denied,
 )
+
+
+def _policy_service(database, settings):
+    """Build the explicit policy dependency used by production composition."""
+    return BridgePolicyService(settings=settings, repository=database.bridge_policy_entries)
 
 
 def _database() -> MagicMock:
@@ -41,8 +47,9 @@ async def test_denied_command_sends_initial_ephemeral_response() -> None:
     stopped = await reject_if_command_access_denied(
         interaction,
         definition=GUILD_COMMAND_ACCESS,
-        settings=SimpleNamespace(discord_guild_allowlist=[]),
-        database=_database(),
+        settings=(settings := SimpleNamespace(discord_guild_allowlist=[])),
+        database=(database := _database()),
+        policy_service=_policy_service(database, settings),
     )
     assert stopped is True
     interaction.response.send_message.assert_awaited_once_with(
@@ -59,8 +66,9 @@ async def test_denied_acknowledged_command_uses_ephemeral_followup() -> None:
     stopped = await reject_if_command_access_denied(
         interaction,
         definition=GUILD_COMMAND_ACCESS,
-        settings=SimpleNamespace(discord_guild_allowlist=["4"]),
-        database=_database(),
+        settings=(settings := SimpleNamespace(discord_guild_allowlist=["4"])),
+        database=(database := _database()),
+        policy_service=_policy_service(database, settings),
     )
     assert stopped is True
     interaction.followup.send.assert_awaited_once_with(
@@ -76,8 +84,9 @@ async def test_allowed_command_returns_false_without_response() -> None:
     stopped = await reject_if_command_access_denied(
         interaction,
         definition=GUILD_COMMAND_ACCESS,
-        settings=SimpleNamespace(discord_guild_allowlist=[]),
-        database=_database(),
+        settings=(settings := SimpleNamespace(discord_guild_allowlist=[])),
+        database=(database := _database()),
+        policy_service=_policy_service(database, settings),
     )
     assert stopped is False
     interaction.response.send_message.assert_not_awaited()
@@ -91,8 +100,9 @@ async def test_autocomplete_denial_is_quiet_and_skips_registration_lookup() -> N
     allowed = await command_access_allows_autocomplete(
         interaction,
         definition=REGISTERED_GUILD_COMMAND_ACCESS,
-        settings=SimpleNamespace(discord_guild_allowlist=[]),
+        settings=(settings := SimpleNamespace(discord_guild_allowlist=[])),
         database=database,
+        policy_service=_policy_service(database, settings),
     )
     assert allowed is False
     database.users.get_user_by_discord_user_id.assert_not_called()

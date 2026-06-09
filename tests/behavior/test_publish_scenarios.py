@@ -1,6 +1,7 @@
 """Behavior scenarios for Discord-originated outbound federation decisions."""
 
 from __future__ import annotations
+from support.runtime import build_test_policy_service
 
 from pathlib import Path
 from types import SimpleNamespace
@@ -59,7 +60,8 @@ def _service(database: Database, fedify_gateway: AsyncMock) -> ContentPublishSer
         database=database,
         fedify_gateway=fedify_gateway,
         bridge_prefix="[bridge]",
-    )
+            bridge_policy_service=build_test_policy_service(database),
+)
 
 
 def _thread() -> SimpleNamespace:

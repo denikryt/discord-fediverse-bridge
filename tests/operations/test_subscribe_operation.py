@@ -1,6 +1,7 @@
 """Operation-level tests for the subscribe channel lifecycle."""
 
 from __future__ import annotations
+from src.bridge_policy import BridgePolicyService
 
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, Mock, call
@@ -18,6 +19,7 @@ async def test_subscribe_operation_rejects_unregistered_user() -> None:
     """Subscribe requires a registered Discord user before any follow work runs."""
     community_actor_url = f"https://{LEMMY_EXAMPLE_DOMAIN}/c/hackers"
     database = Mock()
+    database.bridge_policy_entries.list_all_active.return_value = []
     database.users.get_user_by_discord_user_id.return_value = None
     fedify_gateway = AsyncMock()
 
@@ -33,7 +35,8 @@ async def test_subscribe_operation_rejects_unregistered_user() -> None:
             community_name="hackers",
             numeric_id=777,
             community_handle=f"!hackers@{LEMMY_EXAMPLE_DOMAIN}",
-        ),
+
+            policy_service=BridgePolicyService(settings=SimpleNamespace(), repository=database.bridge_policy_entries),),
     )
 
     assert result.applied is False
@@ -50,6 +53,7 @@ async def test_subscribe_operation_rejects_accepted_subscription() -> None:
     """Accepted subscriptions short-circuit before another bridge follow."""
     community_actor_url = f"https://{LEMMY_EXAMPLE_DOMAIN}/c/hackers"
     database = Mock()
+    database.bridge_policy_entries.list_all_active.return_value = []
     database.users.get_user_by_discord_user_id.return_value = SimpleNamespace(id=1)
     database.remote_subscriptions.get_subscription_by_channel.return_value = SimpleNamespace(
         status="accepted",
@@ -71,7 +75,8 @@ async def test_subscribe_operation_rejects_accepted_subscription() -> None:
             community_name="hackers",
             numeric_id=777,
             community_handle=f"!hackers@{LEMMY_EXAMPLE_DOMAIN}",
-        ),
+
+            policy_service=BridgePolicyService(settings=SimpleNamespace(), repository=database.bridge_policy_entries),),
     )
 
     assert result.applied is False
@@ -86,6 +91,7 @@ async def test_subscribe_operation_rejects_pending_subscription() -> None:
     """Pending subscriptions surface their waiting state without a second follow."""
     community_actor_url = f"https://{LEMMY_EXAMPLE_DOMAIN}/c/hackers"
     database = Mock()
+    database.bridge_policy_entries.list_all_active.return_value = []
     database.users.get_user_by_discord_user_id.return_value = SimpleNamespace(id=1)
     database.remote_subscriptions.get_subscription_by_channel.return_value = SimpleNamespace(
         status="pending",
@@ -107,7 +113,8 @@ async def test_subscribe_operation_rejects_pending_subscription() -> None:
             community_name="hackers",
             numeric_id=777,
             community_handle=f"!hackers@{LEMMY_EXAMPLE_DOMAIN}",
-        ),
+
+            policy_service=BridgePolicyService(settings=SimpleNamespace(), repository=database.bridge_policy_entries),),
     )
 
     assert result.applied is False
@@ -124,6 +131,7 @@ async def test_subscribe_creates_bridge_follow_when_none_exists() -> None:
     """First subscription for a community sends Follow and creates bridge_actor_follows row."""
     community_actor_url = f"https://{LEMMY_EXAMPLE_DOMAIN}/c/hackers"
     database = Mock()
+    database.bridge_policy_entries.list_all_active.return_value = []
     database.users.get_user_by_discord_user_id.return_value = SimpleNamespace(id=1)
     database.remote_subscriptions.get_subscription_by_channel.return_value = None
     # No existing bridge-actor follow for this community.
@@ -147,7 +155,8 @@ async def test_subscribe_creates_bridge_follow_when_none_exists() -> None:
             community_name="hackers",
             numeric_id=777,
             community_handle=f"!hackers@{LEMMY_EXAMPLE_DOMAIN}",
-        ),
+
+            policy_service=BridgePolicyService(settings=SimpleNamespace(), repository=database.bridge_policy_entries),),
     )
 
     assert result.applied is True
@@ -179,6 +188,7 @@ async def test_subscribe_reuses_existing_bridge_follow_when_accepted() -> None:
     """Second channel subscribing to an already-accepted community skips Follow."""
     community_actor_url = f"https://{LEMMY_EXAMPLE_DOMAIN}/c/hackers"
     database = Mock()
+    database.bridge_policy_entries.list_all_active.return_value = []
     database.users.get_user_by_discord_user_id.return_value = SimpleNamespace(id=1)
     # No channel subscription for this specific channel yet.
     database.remote_subscriptions.get_subscription_by_channel.return_value = None
@@ -203,7 +213,8 @@ async def test_subscribe_reuses_existing_bridge_follow_when_accepted() -> None:
             community_name="hackers",
             numeric_id=777,
             community_handle=f"!hackers@{LEMMY_EXAMPLE_DOMAIN}",
-        ),
+
+            policy_service=BridgePolicyService(settings=SimpleNamespace(), repository=database.bridge_policy_entries),),
     )
 
     assert result.applied is True
@@ -231,6 +242,7 @@ async def test_subscribe_reuses_existing_bridge_follow_when_pending() -> None:
     """Second channel subscribing to a pending-follow community also waits for Accept."""
     community_actor_url = f"https://{LEMMY_EXAMPLE_DOMAIN}/c/hackers"
     database = Mock()
+    database.bridge_policy_entries.list_all_active.return_value = []
     database.users.get_user_by_discord_user_id.return_value = SimpleNamespace(id=1)
     database.remote_subscriptions.get_subscription_by_channel.return_value = None
     # Bridge-actor follow is still pending for this community.
@@ -254,7 +266,8 @@ async def test_subscribe_reuses_existing_bridge_follow_when_pending() -> None:
             community_name="hackers",
             numeric_id=777,
             community_handle=f"!hackers@{LEMMY_EXAMPLE_DOMAIN}",
-        ),
+
+            policy_service=BridgePolicyService(settings=SimpleNamespace(), repository=database.bridge_policy_entries),),
     )
 
     assert result.applied is True
@@ -282,6 +295,7 @@ async def test_subscribe_operation_marks_failed_when_follow_dispatch_fails() -> 
     """Gateway follow failures become explicit failed rows for moderator retries."""
     community_actor_url = f"https://{LEMMY_EXAMPLE_DOMAIN}/c/hackers"
     database = Mock()
+    database.bridge_policy_entries.list_all_active.return_value = []
     database.users.get_user_by_discord_user_id.return_value = SimpleNamespace(id=1)
     database.remote_subscriptions.get_subscription_by_channel.return_value = None
     database.bridge_actor_follows.get_bridge_actor_follow.return_value = None
@@ -300,7 +314,8 @@ async def test_subscribe_operation_marks_failed_when_follow_dispatch_fails() -> 
             community_name="hackers",
             numeric_id=777,
             community_handle=f"!hackers@{LEMMY_EXAMPLE_DOMAIN}",
-        ),
+
+            policy_service=BridgePolicyService(settings=SimpleNamespace(), repository=database.bridge_policy_entries),),
     )
 
     assert result.applied is False
@@ -331,6 +346,7 @@ async def test_subscribe_operation_retries_failed_subscription() -> None:
     """Failed rows are deleted before a new pending follow attempt is written."""
     community_actor_url = f"https://{LEMMY_EXAMPLE_DOMAIN}/c/hackers"
     database = Mock()
+    database.bridge_policy_entries.list_all_active.return_value = []
     database.users.get_user_by_discord_user_id.return_value = SimpleNamespace(id=1)
     # The channel has an existing failed subscription.
     database.remote_subscriptions.get_subscription_by_channel.return_value = SimpleNamespace(
@@ -365,7 +381,8 @@ async def test_subscribe_operation_retries_failed_subscription() -> None:
             community_name="hackers",
             numeric_id=777,
             community_handle=f"!hackers@{LEMMY_EXAMPLE_DOMAIN}",
-        ),
+
+            policy_service=BridgePolicyService(settings=SimpleNamespace(), repository=database.bridge_policy_entries),),
     )
 
     assert result.applied is True

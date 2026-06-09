@@ -1,6 +1,7 @@
 """Observable command behavior tests for `/list-banned-users`."""
 
 from __future__ import annotations
+from src.bridge_policy import BridgePolicyService
 
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
@@ -55,7 +56,7 @@ def test_public_caller_lists_current_guild_active_bans_with_reasons(tmp_path: Pa
     _ban(database, community, handle="bob@example.org", reason=None)
 
     result = list_banned_users_operation(
-        ListBannedUsersInput(database, _settings(), "ordinary", 10, "cats")
+        ListBannedUsersInput(database, _settings(), "ordinary", 10, "cats", BridgePolicyService(settings=_settings(), repository=database.bridge_policy_entries))
     )
 
     assert result.applied is True
@@ -72,7 +73,7 @@ def test_empty_active_list_returns_empty_message(tmp_path: Path) -> None:
     _community(database)
 
     result = list_banned_users_operation(
-        ListBannedUsersInput(database, _settings(), "ordinary", 10, "cats")
+        ListBannedUsersInput(database, _settings(), "ordinary", 10, "cats", BridgePolicyService(settings=_settings(), repository=database.bridge_policy_entries))
     )
 
     assert result.applied is True
@@ -91,7 +92,7 @@ def test_inactive_rows_are_excluded_and_rows_are_newest_first(tmp_path: Path) ->
     database.community_actor_bans.deactivate_active_ban_by_handle(local_community_id=community.id, actor_handle=inactive.actor_handle)
 
     result = list_banned_users_operation(
-        ListBannedUsersInput(database, _settings(), "ordinary", 10, "cats")
+        ListBannedUsersInput(database, _settings(), "ordinary", 10, "cats", BridgePolicyService(settings=_settings(), repository=database.bridge_policy_entries))
     )
 
     assert "gone@example.com" not in result.message
@@ -106,7 +107,7 @@ def test_more_than_twenty_bans_are_truncated(tmp_path: Path) -> None:
         _ban(database, community, handle=f"user{index:02d}@example.com", reason="spam")
 
     result = list_banned_users_operation(
-        ListBannedUsersInput(database, _settings(), "ordinary", 10, "cats")
+        ListBannedUsersInput(database, _settings(), "ordinary", 10, "cats", BridgePolicyService(settings=_settings(), repository=database.bridge_policy_entries))
     )
 
     assert result.message.count("- user") == 20
@@ -120,10 +121,10 @@ def test_cross_guild_rejected_for_ordinary_user_but_allowed_for_super_admin(tmp_
     _ban(database, community, handle="alice@example.com", reason="spam")
 
     ordinary = list_banned_users_operation(
-        ListBannedUsersInput(database, _settings(), "ordinary", 10, "cats")
+        ListBannedUsersInput(database, _settings(), "ordinary", 10, "cats", BridgePolicyService(settings=_settings(), repository=database.bridge_policy_entries))
     )
     admin = list_banned_users_operation(
-        ListBannedUsersInput(database, _settings(super_admins=["999"]), "999", 10, "cats")
+        ListBannedUsersInput(database, _settings(super_admins=["999"]), "999", 10, "cats", BridgePolicyService(settings=_settings(super_admins=["999"]), repository=database.bridge_policy_entries))
     )
 
     assert ordinary.reason == "unknown_or_inaccessible_community"
@@ -138,10 +139,10 @@ def test_unknown_slug_and_no_guild_are_rejected(tmp_path: Path) -> None:
     _community(database)
 
     unknown = list_banned_users_operation(
-        ListBannedUsersInput(database, _settings(), "ordinary", 10, "missing")
+        ListBannedUsersInput(database, _settings(), "ordinary", 10, "missing", BridgePolicyService(settings=_settings(), repository=database.bridge_policy_entries))
     )
     no_guild = list_banned_users_operation(
-        ListBannedUsersInput(database, _settings(), "ordinary", None, "cats")
+        ListBannedUsersInput(database, _settings(), "ordinary", None, "cats", BridgePolicyService(settings=_settings(), repository=database.bridge_policy_entries))
     )
 
     assert unknown.message == "Unknown or inaccessible local community: missing"
@@ -158,7 +159,7 @@ def test_inactive_community_is_inaccessible_for_list(tmp_path: Path) -> None:
         persisted.status = "inactive"
 
     result = list_banned_users_operation(
-        ListBannedUsersInput(database, _settings(), "ordinary", 10, "cats")
+        ListBannedUsersInput(database, _settings(), "ordinary", 10, "cats", BridgePolicyService(settings=_settings(), repository=database.bridge_policy_entries))
     )
 
     assert result.reason == "unknown_or_inaccessible_community"
@@ -175,7 +176,7 @@ def test_disabled_community_rejects_list_banned_users(tmp_path: Path) -> None:
         persisted.status = "disabled"
 
     result = list_banned_users_operation(
-        ListBannedUsersInput(database, _settings(), "ordinary", 10, "cats")
+        ListBannedUsersInput(database, _settings(), "ordinary", 10, "cats", BridgePolicyService(settings=_settings(), repository=database.bridge_policy_entries))
     )
 
     assert result.applied is False
@@ -211,7 +212,7 @@ def test_global_list_skips_local_community_repository(tmp_path: Path, monkeypatc
             _settings(super_admins=["999"]),
             "999",
             None,
-            None,
+            None, BridgePolicyService(settings=_settings(super_admins=["999"]), repository=database.bridge_policy_entries),
         )
     )
 

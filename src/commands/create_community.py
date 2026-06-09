@@ -10,6 +10,7 @@ import discord
 from discord import app_commands
 
 from ..config import Settings
+from ..bridge_policy import BridgePolicyService
 from ..db import Database
 from ..discord_directory import record_discord_placement_snapshot
 from ..discord_forum_placement import (
@@ -52,11 +53,12 @@ def _add_labeled_item(modal: discord.ui.Modal, *, text: str, description: str | 
 class CreateCommunityModal(discord.ui.Modal):
     """Collect local-community creation fields and submit the operation."""
 
-    def __init__(self, *, database: Database, settings: Settings) -> None:
+    def __init__(self, *, database: Database, settings: Settings, policy_service: BridgePolicyService) -> None:
         """Build an empty creation modal that defers authorization until submit."""
         super().__init__(title="Create local community")
         self.database = database
         self.settings = settings
+        self.policy_service = policy_service
         self.slug_input = discord.ui.TextInput(
             placeholder="technology_news",
             required=True,
@@ -94,7 +96,7 @@ class CreateCommunityModal(discord.ui.Modal):
 
     async def on_submit(self, interaction: discord.Interaction) -> None:
         """Validate modal input, resolve channel placement, and create the community."""
-        if await reject_if_command_access_denied(interaction, definition=REGISTERED_GUILD_COMMAND_ACCESS, settings=self.settings, database=self.database):
+        if await reject_if_command_access_denied(interaction, definition=REGISTERED_GUILD_COMMAND_ACCESS, settings=self.settings, database=self.database, policy_service=self.policy_service):
             return
 
         guild_id = interaction.guild_id
@@ -175,6 +177,7 @@ def register(
     tree: app_commands.CommandTree,
     database: Database,
     settings: Settings,
+    policy_service: BridgePolicyService,
 ) -> None:
     """Register the `/create_community` modal launcher on the Discord tree."""
 
@@ -184,6 +187,6 @@ def register(
     )
     async def create_community(interaction: discord.Interaction) -> None:
         """Open the local-community creation modal for registered guild users."""
-        if await reject_if_command_access_denied(interaction, definition=REGISTERED_GUILD_COMMAND_ACCESS, settings=settings, database=database):
+        if await reject_if_command_access_denied(interaction, definition=REGISTERED_GUILD_COMMAND_ACCESS, settings=settings, database=database, policy_service=policy_service):
             return
-        await interaction.response.send_modal(CreateCommunityModal(database=database, settings=settings))
+        await interaction.response.send_modal(CreateCommunityModal(database=database, settings=settings, policy_service=policy_service))

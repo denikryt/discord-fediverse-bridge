@@ -27,7 +27,7 @@ class ListBannedUsersInput:
     discord_user_id: str
     discord_guild_id: int | None
     community_slug: str | None
-    policy_service: BridgePolicyService | None = None
+    policy_service: BridgePolicyService
     limit: int = 20
     _policy_snapshot: BridgePolicySnapshot | None = field(default=None, init=False, repr=False)
     _community: LocalCommunity | None = field(default=None, init=False, repr=False)
@@ -47,11 +47,7 @@ class ListBannedUsersInput:
     def get_policy_snapshot(self) -> BridgePolicySnapshot:
         """Return one memoized effective policy snapshot for this operation."""
         if self._policy_snapshot is None:
-            service = self.policy_service or BridgePolicyService(
-                settings=self.settings,
-                repository=self.database.bridge_policy_entries,
-            )
-            self._policy_snapshot = service.snapshot()
+            self._policy_snapshot = self.policy_service.snapshot()
         return self._policy_snapshot
 
     def get_local_community(self) -> LocalCommunity | None:

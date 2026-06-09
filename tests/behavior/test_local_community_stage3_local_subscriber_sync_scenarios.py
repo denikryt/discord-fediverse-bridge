@@ -1,6 +1,7 @@
 """Stage 3 scenarios for one-way local-subscriber Discord fanout."""
 
 from __future__ import annotations
+from support.runtime import build_test_policy_service
 
 from pathlib import Path
 from types import SimpleNamespace
@@ -36,13 +37,15 @@ def _runtime(tmp_path: Path) -> tuple[object, LocalCommunityRuntime]:
         database=database,
         fedify_gateway=gateway,
         bridge_prefix="[bridge]",
-    )
+            bridge_policy_service=build_test_policy_service(database),
+)
     runtime = LocalCommunityRuntime(
         database=database,
         fedify_gateway=gateway,
         content_publish_service=publish_service,
         bridge_prefix="[bridge]",
-    )
+            bridge_policy_service=build_test_policy_service(database),
+)
     return database, runtime
 
 
@@ -392,7 +395,7 @@ async def test_local_subscriber_forum_creates_route_to_local_runtime_after_stage
     local_community = _local_community(database)
     database.local_subscribers.create_local_subscriber(local_community_id=local_community.id, discord_guild_id=10, discord_channel_id=200, initiated_by_discord_user_id="999")
     remote_runtime = AsyncMock()
-    router = DiscordEventRouter(database=database, community_runtime=remote_runtime, local_community_runtime=local_runtime)
+    router = DiscordEventRouter(database=database, community_runtime=remote_runtime, local_community_runtime=local_runtime, bridge_policy_service=build_test_policy_service(database))
     local_runtime.handle_discord_thread_create = AsyncMock()
 
     await router.handle_thread_create(thread=build_thread(thread_id=2200, channel_id=200), starter_message=build_starter_message())

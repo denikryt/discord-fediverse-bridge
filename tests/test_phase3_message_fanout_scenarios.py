@@ -7,6 +7,7 @@ bot.get_thread_by_id, and thread.send.
 """
 
 from __future__ import annotations
+from support.runtime import build_test_policy_service
 
 from pathlib import Path
 from types import SimpleNamespace
@@ -81,7 +82,8 @@ def _publish_service(database: Database, gateway: AsyncMock) -> ContentPublishSe
         database=database,
         fedify_gateway=gateway,
         bridge_prefix="[bridge]",
-    )
+            bridge_policy_service=build_test_policy_service(database),
+)
 
 
 def _community_runtime(
@@ -239,7 +241,12 @@ async def test_phase3_two_subscriptions_message_mirrored_to_sibling_thread(tmp_p
     fake_bot = SimpleNamespace(
         get_thread_by_id=AsyncMock(return_value=fake_mirror_thread),
     )
-    fanout = DiscordFanout(bot=fake_bot, mutation_tracker=fake_bot)
+    fanout = DiscordFanout(
+        bot=fake_bot,
+        mutation_tracker=fake_bot,
+        database=database,
+        policy_service=build_test_policy_service(database),
+    )
     runtime = _community_runtime(database, gateway, discord_fanout=fanout)
     message = _fake_message(message_id=400, thread_id=200, channel_id=100)
 
@@ -380,7 +387,12 @@ async def test_phase3_mirror_message_failure_does_not_block_source_publish(tmp_p
     fake_bot = SimpleNamespace(
         get_thread_by_id=AsyncMock(side_effect=RuntimeError("discord error")),
     )
-    fanout = DiscordFanout(bot=fake_bot, mutation_tracker=fake_bot)
+    fanout = DiscordFanout(
+        bot=fake_bot,
+        mutation_tracker=fake_bot,
+        database=database,
+        policy_service=build_test_policy_service(database),
+    )
     runtime = _community_runtime(database, gateway, discord_fanout=fanout)
     message = _fake_message(message_id=400, thread_id=200, channel_id=100)
 

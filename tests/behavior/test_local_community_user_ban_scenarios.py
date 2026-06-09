@@ -1,6 +1,7 @@
 """Behavior scenarios for community-scoped local user ban enforcement."""
 
 from __future__ import annotations
+from support.runtime import build_test_policy_service
 
 from pathlib import Path
 from types import SimpleNamespace
@@ -37,9 +38,11 @@ def _runtime(tmp_path: Path, name: str = "ban-http.db") -> SimpleNamespace:
             database=database,
             fedify_gateway=gateway,
             bridge_prefix="[bridge]",
-        ),
+                    bridge_policy_service=build_test_policy_service(database),
+),
         bridge_prefix="[bridge]",
-    )
+            bridge_policy_service=build_test_policy_service(database),
+)
     return SimpleNamespace(
         database=database,
         local_community_runtime=local_runtime,

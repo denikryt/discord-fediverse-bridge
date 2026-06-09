@@ -60,7 +60,7 @@ class ContentPublishService:
         fedify_gateway: object,
         bridge_prefix: str,
         settings: Settings | None = None,
-        bridge_policy_service: BridgePolicyService | None = None,
+        bridge_policy_service: BridgePolicyService,
     ) -> None:
         """Initialise with the shared database, AP gateway, and bridge prefix."""
         self.database = database
@@ -82,12 +82,11 @@ class ContentPublishService:
             return PublishResult(status="ignored", reason="no_subscription")
         if subscription.status != "accepted":
             return PublishResult(status="ignored", reason="subscription_not_active")
-        if self.bridge_policy_service is not None:
-            decision = self.bridge_policy_service.snapshot().federation_decision(
-                subscription.lemmy_community_actor_id
-            )
-            if not decision.allowed:
-                return PublishResult(status="ignored", reason=f"federation_policy_{decision.reason.value}")
+        decision = self.bridge_policy_service.snapshot().federation_decision(
+            subscription.lemmy_community_actor_id
+        )
+        if not decision.allowed:
+            return PublishResult(status="ignored", reason=f"federation_policy_{decision.reason.value}")
 
         return await self.publish_post_to_community(
             thread=thread,
@@ -104,12 +103,11 @@ class ContentPublishService:
             return PublishResult(status="ignored", reason="no_subscription")
         if subscription.status != "accepted":
             return PublishResult(status="ignored", reason="subscription_not_active")
-        if self.bridge_policy_service is not None:
-            decision = self.bridge_policy_service.snapshot().federation_decision(
-                subscription.lemmy_community_actor_id
-            )
-            if not decision.allowed:
-                return PublishResult(status="ignored", reason=f"federation_policy_{decision.reason.value}")
+        decision = self.bridge_policy_service.snapshot().federation_decision(
+            subscription.lemmy_community_actor_id
+        )
+        if not decision.allowed:
+            return PublishResult(status="ignored", reason=f"federation_policy_{decision.reason.value}")
 
         thread_group = self.database.discord_fanout_groups.get_thread_group_by_any_thread(getattr(thread, "id"))
         if thread_group is None or thread_group.ap_object_id is None:

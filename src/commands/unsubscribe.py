@@ -81,11 +81,10 @@ def register(
     database: Database,
     fedify_gateway: FedifyGatewayClient,
     settings: Settings,
-    policy_service: BridgePolicyService | None = None,
+    policy_service: BridgePolicyService,
 ) -> None:
     """Register the unsubscribe-channel slash command on the given command tree."""
-    policy_service = policy_service or BridgePolicyService(settings=settings, repository=database.bridge_policy_entries)
-    # The registered slash command adapts Discord input into the operation
+        # The registered slash command adapts Discord input into the operation
     # contract and leaves policy decisions to the framework-backed layer.
     @tree.command(name="unsubscribe-channel", description="Remove a forum channel's Lemmy subscription")
     @app_commands.describe(channel="Forum channel to unsubscribe")

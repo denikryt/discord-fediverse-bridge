@@ -10,7 +10,13 @@ import pytest
 
 from src.commands import create_community
 from src.commands.guild_guard import GUILD_NOT_ALLOWED_MESSAGE, GUILD_ONLY_MESSAGE, REGISTRATION_REQUIRED_MESSAGE
+from src.bridge_policy import BridgePolicyService
 
+
+
+def _policy_service(database, settings):
+    """Build the explicit policy dependency used by production composition."""
+    return BridgePolicyService(settings=settings, repository=database.bridge_policy_entries)
 
 def _settings() -> SimpleNamespace:
     """Return command settings with no guild restriction for create tests."""
@@ -28,7 +34,7 @@ async def test_create_community_opens_blank_modal_for_registered_user(command_tr
     database.users.get_user_by_discord_user_id.return_value = SimpleNamespace(id=1)
     interaction.response.send_modal = AsyncMock()
 
-    create_community.register(command_tree, database, settings)
+    create_community.register(command_tree, database, settings, _policy_service(database, settings))
     command = command_tree.commands["create_community"]
     assert list(inspect.signature(command.callback).parameters) == ["interaction"]
 
@@ -48,7 +54,7 @@ async def test_create_community_rejects_dm_before_modal(command_tree, interactio
     interaction.guild_id = None
     interaction.response.send_modal = AsyncMock()
 
-    create_community.register(command_tree, database, settings)
+    create_community.register(command_tree, database, settings, _policy_service(database, settings))
     command = command_tree.commands["create_community"]
     await command.callback(interaction)
 
@@ -71,7 +77,7 @@ async def test_create_community_rejects_disallowed_guild_before_registration_loo
     interaction.guild_id = 99999
     interaction.response.send_modal = AsyncMock()
 
-    create_community.register(command_tree, database, settings)
+    create_community.register(command_tree, database, settings, _policy_service(database, settings))
     command = command_tree.commands["create_community"]
     await command.callback(interaction)
 
@@ -90,7 +96,7 @@ async def test_create_community_rejects_unregistered_user_before_modal(command_t
     database.users.get_user_by_discord_user_id.return_value = None
     interaction.response.send_modal = AsyncMock()
 
-    create_community.register(command_tree, database, settings)
+    create_community.register(command_tree, database, settings, _policy_service(database, settings))
     command = command_tree.commands["create_community"]
     await command.callback(interaction)
 
@@ -107,7 +113,7 @@ async def test_create_community_modal_rejects_unregistered_user_before_slug_vali
     """Modal submit repeats the registration guard before field processing."""
     settings = _settings()
     database.users.get_user_by_discord_user_id.return_value = None
-    modal = create_community.CreateCommunityModal(database=database, settings=settings)
+    modal = create_community.CreateCommunityModal(database=database, settings=settings, policy_service=_policy_service(database, settings))
     modal.slug_input._value = "Tech-News2"
     modal.display_name_input._value = "Tech News"
     modal.summary_input._value = ""
@@ -128,7 +134,7 @@ async def test_create_community_modal_rejects_invalid_slug_before_placement(inte
     """Invalid slug feedback happens before channel creation or operation calls."""
     settings = _settings()
     database.users.get_user_by_discord_user_id.return_value = SimpleNamespace(id=1)
-    modal = create_community.CreateCommunityModal(database=database, settings=settings)
+    modal = create_community.CreateCommunityModal(database=database, settings=settings, policy_service=_policy_service(database, settings))
     modal.slug_input._value = "Tech-News2"
     modal.display_name_input._value = "Tech News"
     modal.summary_input._value = ""
@@ -150,7 +156,7 @@ async def test_create_community_modal_registered_user_reaches_placement(interact
     """Registered users may create communities without operator allowlist membership."""
     settings = _settings()
     database.users.get_user_by_discord_user_id.return_value = SimpleNamespace(id=1)
-    modal = create_community.CreateCommunityModal(database=database, settings=settings)
+    modal = create_community.CreateCommunityModal(database=database, settings=settings, policy_service=_policy_service(database, settings))
     modal.slug_input._value = "technology_news"
     modal.display_name_input._value = "Technology News"
     modal.summary_input._value = ""
@@ -170,7 +176,7 @@ async def test_create_community_modal_selected_free_channel_snapshots_on_success
     """Successful modal submit binds the selected channel and snapshots it."""
     settings = _settings()
     database.users.get_user_by_discord_user_id.return_value = SimpleNamespace(id=1)
-    modal = create_community.CreateCommunityModal(database=database, settings=settings)
+    modal = create_community.CreateCommunityModal(database=database, settings=settings, policy_service=_policy_service(database, settings))
     modal.slug_input._value = "technology_news"
     modal.display_name_input._value = "Technology News"
     modal.summary_input._value = "A local forum"
@@ -191,7 +197,7 @@ async def test_create_community_modal_selected_free_channel_snapshots_on_success
 def test_create_community_modal_label_descriptions_fit_discord_limit(database) -> None:
     """Modal Label descriptions must satisfy Discord's 1..100 length limit."""
     settings = _settings()
-    modal = create_community.CreateCommunityModal(database=database, settings=settings)
+    modal = create_community.CreateCommunityModal(database=database, settings=settings, policy_service=_policy_service(database, settings))
 
     descriptions = [getattr(child, "description", None) for child in modal.children]
     descriptions = [description for description in descriptions if description is not None]

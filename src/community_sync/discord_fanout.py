@@ -121,8 +121,8 @@ class DiscordFanout:
         *,
         bot: BridgeBot,
         mutation_tracker: DiscordMutationTracker,
-        database: Database | None = None,
-        policy_service: BridgePolicyService | None = None,
+        database: Database,
+        policy_service: BridgePolicyService,
     ) -> None:
         """Initialise fanout with explicit Discord API and mutation-tracking dependencies."""
         self.bot = bot
@@ -132,8 +132,6 @@ class DiscordFanout:
 
     def _channel_is_allowed(self, channel_id: int) -> bool:
         """Return whether the persisted subscription channel's guild is allowed."""
-        if self.database is None or self.policy_service is None:
-            return True
         subscription = self.database.remote_subscriptions.get_subscription_by_channel(channel_id)
         guild_id = getattr(subscription, "discord_guild_id", None) if subscription is not None else None
         # Missing guild metadata is preserved for compatibility; the SDK object

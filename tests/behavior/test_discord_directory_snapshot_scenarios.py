@@ -1,6 +1,7 @@
 """Behavior scenarios for Discord directory snapshot writes."""
 
 from __future__ import annotations
+from support.runtime import build_test_policy_service
 
 from pathlib import Path
 from types import SimpleNamespace
@@ -75,7 +76,7 @@ async def test_create_community_command_stores_guild_and_forum_snapshots(
     _create_bridge_user(database)
     interaction = _interaction()
     forum = _forum_channel(name="community-host")
-    create_community.register(command_tree, database, _settings())
+    create_community.register(command_tree, database, _settings(), policy_service=build_test_policy_service(database))
 
     command = command_tree.commands["create_community"]
     interaction.response.send_modal = AsyncMock()
@@ -111,7 +112,7 @@ async def test_subscribe_community_stores_snapshots_for_remote_subscription(
         community_inbox_url=f"{community_actor_url}/inbox",
         follow_activity_id=f"https://{BRIDGE_EXAMPLE_DOMAIN}/activities/follow/news",
     )
-    subscribe.register(command_tree, database, fedify_gateway, _settings())
+    subscribe.register(command_tree, database, fedify_gateway, _settings(), policy_service=build_test_policy_service(database))
 
     command = command_tree.commands["subscribe-community"]
     await command.callback(
@@ -158,7 +159,7 @@ async def test_subscribe_community_stores_snapshots_for_local_subscription(
         local_community_id=community.id,
         remote_software="bridge",
     )
-    subscribe.register(command_tree, database, fedify_gateway, _settings())
+    subscribe.register(command_tree, database, fedify_gateway, _settings(), policy_service=build_test_policy_service(database))
 
     command = command_tree.commands["subscribe-community"]
     with patch("src.commands.subscribe.resolve_selected_community", new=AsyncMock(return_value=resolved)):

@@ -5,6 +5,7 @@ Discord fanout boundary and then asserts persisted or delivered outcomes.
 """
 
 from __future__ import annotations
+from support.runtime import build_test_policy_service
 
 from dataclasses import dataclass
 from pathlib import Path
@@ -124,7 +125,7 @@ async def test_owner_command_bans_local_user_and_delivers_private_community_noti
     dm_user = SimpleNamespace(send=AsyncMock())
     interaction = _interaction(caller_id="111", dm_user=dm_user)
     tree = _RecordingTree()
-    ban_user.register(tree, database, _settings())
+    ban_user.register(tree, database, _settings(), policy_service=build_test_policy_service(database, _settings(super_admins=["999"])))
 
     await tree.commands["ban-user"].callback(
         interaction,
@@ -156,7 +157,12 @@ async def test_super_admin_command_bans_local_user_globally_and_delivers_private
     dm_user = SimpleNamespace(send=AsyncMock())
     interaction = _interaction(caller_id="999", dm_user=dm_user)
     tree = _RecordingTree()
-    ban_user.register(tree, database, _settings(super_admins=["999"]))
+    ban_user.register(
+        tree,
+        database,
+        _settings(super_admins=["999"]),
+        policy_service=build_test_policy_service(database, _settings(super_admins=["999"])),
+    )
 
     await tree.commands["ban-user"].callback(
         interaction,
@@ -181,7 +187,7 @@ async def test_owner_global_ban_attempt_stops_before_target_lookup_or_mutation(t
     database = build_database(tmp_path, "plan93-command-denied.db")
     interaction = _interaction(caller_id="111")
     tree = _RecordingTree()
-    ban_user.register(tree, database, _settings())
+    ban_user.register(tree, database, _settings(), policy_service=build_test_policy_service(database, _settings()))
 
     await tree.commands["ban-user"].callback(
         interaction,
@@ -208,7 +214,7 @@ async def test_duplicate_active_ban_does_not_create_row_audit_or_second_dm(tmp_p
     dm_user = SimpleNamespace(send=AsyncMock())
     interaction = _interaction(caller_id="111", dm_user=dm_user)
     tree = _RecordingTree()
-    ban_user.register(tree, database, _settings())
+    ban_user.register(tree, database, _settings(), policy_service=build_test_policy_service(database, _settings()))
 
     callback = tree.commands["ban-user"].callback
     await callback(interaction, user="Alice@bridge.example:8443", community="cats", reason="spam")
@@ -231,13 +237,21 @@ async def test_reactivation_reuses_row_updates_reason_and_sends_one_new_dm(tmp_p
     dm_user = SimpleNamespace(send=AsyncMock())
     interaction = _interaction(caller_id="111", dm_user=dm_user)
     tree = _RecordingTree()
-    ban_user.register(tree, database, _settings())
+    ban_user.register(tree, database, _settings(), policy_service=build_test_policy_service(database, _settings()))
     callback = tree.commands["ban-user"].callback
 
     await callback(interaction, user="Alice@bridge.example:8443", community="cats", reason="first")
     original_id = _active_bans(database)[0].id
     removed = unban_user_operation(
-        UnbanUserInput(database, _settings(), "111", 10, "cats", "Alice@bridge.example:8443")
+        UnbanUserInput(
+            database,
+            _settings(),
+            "111",
+            10,
+            "cats",
+            "Alice@bridge.example:8443",
+            build_test_policy_service(database, _settings()),
+        )
     )
     await callback(interaction, user="Alice@bridge.example:8443", community="cats", reason="second")
 
@@ -260,7 +274,7 @@ async def test_dm_failure_does_not_roll_back_committed_ban_or_audit(tmp_path: Pa
     dm_user = SimpleNamespace(send=AsyncMock(side_effect=RuntimeError("DMs closed")))
     interaction = _interaction(caller_id="111", dm_user=dm_user)
     tree = _RecordingTree()
-    ban_user.register(tree, database, _settings())
+    ban_user.register(tree, database, _settings(), policy_service=build_test_policy_service(database, _settings()))
 
     await tree.commands["ban-user"].callback(
         interaction,
@@ -301,7 +315,8 @@ async def test_global_ban_rejects_remote_subscription_starter_before_any_publish
         fedify_gateway=gateway,
         bridge_prefix="[bridge]",
         settings=_settings(),
-    )
+            bridge_policy_service=build_test_policy_service(database),
+)
     starter = build_starter_message(display_name="Changed nickname")
 
     result = await service.publish_thread_starter(thread=build_thread(), starter_message=starter)
@@ -329,7 +344,8 @@ async def test_global_ban_rejects_remote_subscription_comment_before_any_publish
         fedify_gateway=gateway,
         bridge_prefix="[bridge]",
         settings=_settings(),
-    )
+            bridge_policy_service=build_test_policy_service(database),
+)
     message = build_thread_message(message_id=301)
 
     result = await service.publish_thread_message(message=message)
@@ -365,7 +381,8 @@ async def test_community_ban_blocks_only_selected_local_community_and_global_ban
         fedify_gateway=gateway,
         bridge_prefix="[bridge]",
         settings=_settings(),
-    )
+            bridge_policy_service=build_test_policy_service(database),
+)
     cats_message = build_starter_message(message_id=310)
     dogs_message = build_starter_message(message_id=311)
 
@@ -414,7 +431,8 @@ async def test_publish_ban_lookup_failure_is_fail_closed_without_false_ban_claim
         fedify_gateway=gateway,
         bridge_prefix="[bridge]",
         settings=_settings(),
-    )
+            bridge_policy_service=build_test_policy_service(database),
+)
     starter = build_starter_message()
 
     result = await service.publish_thread_starter(thread=build_thread(), starter_message=starter)
@@ -444,6 +462,8 @@ async def test_discord_fanout_uses_registered_handle_not_mutable_nickname(tmp_pa
     )
     fanout = DiscordFanout(
         mutation_tracker=tracker,
+        database=database,
+        policy_service=build_test_policy_service(database, _settings()),
         bot=SimpleNamespace(
             database=database,
             settings=_settings(),

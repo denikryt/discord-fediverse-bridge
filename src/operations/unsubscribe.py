@@ -29,7 +29,7 @@ class UnsubscribeInput:
     fedify_gateway: FedifyGatewayClient
     channel_id: int
     channel_mention: str
-    policy_service: BridgePolicyService | None = None
+    policy_service: BridgePolicyService
     _subscription: object | None = field(default=None, init=False, repr=False)
     _subscription_loaded: bool = field(default=False, init=False, repr=False)
 
@@ -115,10 +115,9 @@ async def _body(operation_input: UnsubscribeInput) -> OperationResult:
                 ),
                 reason="follow_activity_id_missing",
             )
-        if operation_input.policy_service is not None:
-            federation_policy_denied = not operation_input.policy_service.snapshot().federation_decision(
-                community_actor_id
-            ).allowed
+        federation_policy_denied = not operation_input.policy_service.snapshot().federation_decision(
+            community_actor_id
+        ).allowed
 
     deleted = operation_input.database.remote_subscriptions.delete_subscription(operation_input.channel_id)
     if not deleted:

@@ -1,6 +1,7 @@
 """Runtime scenarios for Stage 7 deduplication and inbound hardening."""
 
 from __future__ import annotations
+from support.runtime import build_test_policy_service
 
 from datetime import UTC, datetime
 from pathlib import Path
@@ -35,7 +36,8 @@ def _community_runtime(database: Database) -> CommunityRuntime:
         database=database,
         fedify_gateway=AsyncMock(),
         bridge_prefix="[bridge]",
-    )
+            bridge_policy_service=build_test_policy_service(database),
+)
     return CommunityRuntime(database=database, content_publish_service=publish_service)
 
 

@@ -34,8 +34,8 @@ class EditCommunityInput:
     community_slug: str
     display_name: str
     summary: str | None
+    policy_service: BridgePolicyService
     status: str = "active"
-    policy_service: BridgePolicyService | None = None
     _policy_snapshot: BridgePolicySnapshot | None = field(default=None, init=False, repr=False)
     _community: LocalCommunity | None = field(default=None, init=False, repr=False)
     _community_loaded: bool = field(default=False, init=False, repr=False)
@@ -56,11 +56,7 @@ class EditCommunityInput:
     def get_policy_snapshot(self) -> BridgePolicySnapshot:
         """Return one memoized effective policy snapshot for this operation."""
         if self._policy_snapshot is None:
-            service = self.policy_service or BridgePolicyService(
-                settings=self.settings,
-                repository=self.database.bridge_policy_entries,
-            )
-            self._policy_snapshot = service.snapshot()
+            self._policy_snapshot = self.policy_service.snapshot()
         return self._policy_snapshot
 
     def get_local_community(self) -> LocalCommunity | None:

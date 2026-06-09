@@ -6,8 +6,14 @@ import discord
 import pytest
 
 from src.commands import list_subs
+from src.bridge_policy import BridgePolicyService
 from tests_constants import LEMMY_EXAMPLE_DOMAIN
 
+
+
+def _policy_service(database, settings):
+    """Build the explicit policy dependency used by production composition."""
+    return BridgePolicyService(settings=settings, repository=database.bridge_policy_entries)
 
 @pytest.mark.asyncio
 async def test_list_subscriptions_rejects_empty_state(command_tree, interaction, database):
@@ -16,7 +22,8 @@ async def test_list_subscriptions_rejects_empty_state(command_tree, interaction,
     database.remote_subscriptions.get_subscriptions_by_guild.return_value = []
     database.local_subscribers.list_local_subscribers_by_guild.return_value = []
 
-    list_subs.register(command_tree, database, SimpleNamespace(discord_guild_allowlist=[]))
+    settings = SimpleNamespace(discord_guild_allowlist=[])
+    list_subs.register(command_tree, database, settings, _policy_service(database, settings))
 
     command = command_tree.commands["list-subscriptions"]
     await command.callback(interaction)
@@ -48,7 +55,8 @@ async def test_list_subscriptions_returns_embed_with_expected_items(command_tree
     ]
     database.local_subscribers.list_local_subscribers_by_guild.return_value = []
 
-    list_subs.register(command_tree, database, SimpleNamespace(discord_guild_allowlist=[]))
+    settings = SimpleNamespace(discord_guild_allowlist=[])
+    list_subs.register(command_tree, database, settings, _policy_service(database, settings))
 
     command = command_tree.commands["list-subscriptions"]
     await command.callback(interaction)

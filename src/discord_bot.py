@@ -68,17 +68,17 @@ class BridgeBot(discord.Client):
         # setup_hook runs before the bot connects, making it the right place to
         # register slash commands and sync the tree with Discord.
         from .commands import ban_user, bridge_policy, create_community, edit_community, list_banned_users, list_subs, publish_guild_invite, register, remove_guild_invite, subscribe, unban_user, unsubscribe
-        register.register(self.tree, self.database, self.settings)
+        register.register(self.tree, self.database, self.settings, self.bridge_policy_service)
         subscribe.register(self.tree, self.database, self.fedify_gateway, self.settings, self.bridge_policy_service)
         unsubscribe.register(self.tree, self.database, self.fedify_gateway, self.settings, self.bridge_policy_service)
-        list_subs.register(self.tree, self.database, self.settings)
-        create_community.register(self.tree, self.database, self.settings)
+        list_subs.register(self.tree, self.database, self.settings, self.bridge_policy_service)
+        create_community.register(self.tree, self.database, self.settings, self.bridge_policy_service)
         edit_community.register(self.tree, self.database, self.settings, self.bridge_policy_service)
         ban_user.register(self.tree, self.database, self.settings, self.bridge_policy_service)
         unban_user.register(self.tree, self.database, self.settings, self.bridge_policy_service)
         list_banned_users.register(self.tree, self.database, self.settings, self.bridge_policy_service)
-        publish_guild_invite.register(self.tree, self.database, self.settings)
-        remove_guild_invite.register(self.tree, self.database, self.settings)
+        publish_guild_invite.register(self.tree, self.database, self.settings, self.bridge_policy_service)
+        remove_guild_invite.register(self.tree, self.database, self.settings, self.bridge_policy_service)
         bridge_policy.register(self.tree, self.database, self.bridge_policy_service, self.user_ban_service)
         await self.tree.sync()
 

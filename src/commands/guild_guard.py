@@ -9,6 +9,7 @@ import discord
 from discordops import PolicyDefinition, PolicyResult, evaluate_policy_async
 
 from ..config import Settings
+from ..bridge_policy import BridgePolicyService
 from ..db import Database
 from ..operations.common_preconditions import (
     GUILD_COMMAND_ACCESS,
@@ -26,8 +27,8 @@ async def evaluate_command_access(
     *,
     definition: PolicyDefinition,
     settings: Settings,
-    database: Database | Any | None = None,
-    policy_service: Any | None = None,
+    database: Database | Any | None,
+    policy_service: BridgePolicyService,
     ban_service: Any | None = None,
 ) -> PolicyResult:
     """Evaluate one access policy from primitive interaction identity fields."""
@@ -72,8 +73,8 @@ async def reject_if_command_access_denied(
     *,
     definition: PolicyDefinition,
     settings: Settings,
-    database: Database | Any | None = None,
-    policy_service: Any | None = None,
+    database: Database | Any | None,
+    policy_service: BridgePolicyService,
     ban_service: Any | None = None,
 ) -> bool:
     """Evaluate a policy, present a denial, and report whether handler flow stops."""
@@ -96,8 +97,8 @@ async def command_access_allows_autocomplete(
     *,
     definition: PolicyDefinition,
     settings: Settings,
-    database: Database | Any | None = None,
-    policy_service: Any | None = None,
+    database: Database | Any | None,
+    policy_service: BridgePolicyService,
     ban_service: Any | None = None,
 ) -> bool:
     """Evaluate policy quietly for autocomplete, which cannot send normal replies."""

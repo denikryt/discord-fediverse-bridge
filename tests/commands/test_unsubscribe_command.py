@@ -6,8 +6,14 @@ from unittest.mock import AsyncMock
 import pytest
 
 from src.commands import unsubscribe
+from src.bridge_policy import BridgePolicyService
 from tests_constants import BRIDGE_EXAMPLE_DOMAIN, LEMMY_EXAMPLE_DOMAIN
 
+
+
+def _policy_service(database, settings):
+    """Build the explicit policy dependency used by production composition."""
+    return BridgePolicyService(settings=settings, repository=database.bridge_policy_entries)
 
 @pytest.mark.asyncio
 async def test_unsubscribe_channel_success(command_tree, interaction, forum_channel, database, fedify_gateway):
@@ -23,7 +29,9 @@ async def test_unsubscribe_channel_success(command_tree, interaction, forum_chan
     # other channel still remains subscribed afterward.
     database.remote_subscriptions.count_subscriptions_for_community.return_value = 2
 
-    unsubscribe.register(command_tree, database, fedify_gateway, SimpleNamespace(discord_guild_allowlist=[], federation_allowlist=[]))
+    settings = SimpleNamespace(discord_guild_allowlist=[], federation_allowlist=[])
+
+    unsubscribe.register(command_tree, database, fedify_gateway, settings, _policy_service(database, settings))
 
     command = command_tree.commands["unsubscribe-channel"]
     await command.callback(interaction, forum_channel)
@@ -42,7 +50,9 @@ async def test_unsubscribe_channel_rejects_missing_subscription(command_tree, in
     database.remote_subscriptions.get_subscription_by_channel.return_value = None
     database.local_subscribers.get_local_subscriber_by_channel.return_value = None
 
-    unsubscribe.register(command_tree, database, fedify_gateway, SimpleNamespace(discord_guild_allowlist=[], federation_allowlist=[]))
+    settings = SimpleNamespace(discord_guild_allowlist=[], federation_allowlist=[])
+
+    unsubscribe.register(command_tree, database, fedify_gateway, settings, _policy_service(database, settings))
 
     command = command_tree.commands["unsubscribe-channel"]
     await command.callback(interaction, forum_channel)

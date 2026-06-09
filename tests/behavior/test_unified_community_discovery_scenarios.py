@@ -1,6 +1,7 @@
 """Behavior scenarios for unified community discovery in subscribe-community."""
 
 from __future__ import annotations
+from support.runtime import build_test_policy_service
 
 from pathlib import Path
 from types import SimpleNamespace
@@ -95,7 +96,7 @@ async def test_same_instance_autocomplete_uses_bridge_discovery(
     interaction.user.id = "1234567890"
     interaction.guild_id = 99999
     interaction.namespace = SimpleNamespace(instance_domain="https://bot.example.com")
-    subscribe.register(command_tree, database, fedify_gateway, settings)
+    subscribe.register(command_tree, database, fedify_gateway, settings, policy_service=build_test_policy_service(database))
 
     with patch("src.commands.subscribe.fetch_bridge_community_summaries", new=AsyncMock()) as fetch_mock:
         with patch("src.commands.subscribe.LemmyClient") as lemmy_client_mock:
@@ -144,7 +145,7 @@ async def test_remote_bridge_handle_uses_remote_follow_path_without_numeric_id(
         community_inbox_url=f"{remote_actor_id}/inbox",
         follow_activity_id="https://bot.example.com/activities/follow/1",
     )
-    subscribe.register(command_tree, database, fedify_gateway, settings)
+    subscribe.register(command_tree, database, fedify_gateway, settings, policy_service=build_test_policy_service(database))
 
     with patch("src.commands.subscribe.fetch_bridge_community_summaries", new=AsyncMock()) as fetch_mock:
         with patch("src.commands.subscribe.LemmyClient") as lemmy_client_mock:
@@ -200,7 +201,7 @@ async def test_same_instance_local_actor_url_creates_local_subscriber_state(
         public_bridge_base_url="https://bot.example.com",
         fedify_origin="https://bot.example.com",
     )
-    subscribe.register(command_tree, database, fedify_gateway, settings)
+    subscribe.register(command_tree, database, fedify_gateway, settings, policy_service=build_test_policy_service(database))
 
     with patch("src.commands.subscribe.fetch_bridge_community_summaries", new=AsyncMock()) as fetch_mock:
         fetch_mock.return_value = [

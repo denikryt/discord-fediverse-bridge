@@ -1,6 +1,7 @@
 """Runtime scenarios for Stage 6 Discord-originated ActivityPub publishing."""
 
 from __future__ import annotations
+from support.runtime import build_test_policy_service
 
 from pathlib import Path
 from unittest.mock import AsyncMock
@@ -20,7 +21,8 @@ def _service(database, fedify_gateway: AsyncMock) -> ContentPublishService:
         database=database,
         fedify_gateway=fedify_gateway,
         bridge_prefix="[bridge]",
-    )
+            bridge_policy_service=build_test_policy_service(database),
+)
 
 
 @pytest.mark.asyncio

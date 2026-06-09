@@ -8,7 +8,13 @@ from unittest.mock import AsyncMock
 import pytest
 
 from src.commands import edit_community
+from src.bridge_policy import BridgePolicyService
 
+
+
+def _policy_service(database, settings):
+    """Build the explicit policy dependency used by production composition."""
+    return BridgePolicyService(settings=settings, repository=database.bridge_policy_entries)
 
 @pytest.mark.asyncio
 async def test_edit_command_opens_prefilled_modal_without_defer(command_tree, interaction, database) -> None:
@@ -26,7 +32,7 @@ async def test_edit_command_opens_prefilled_modal_without_defer(command_tree, in
     interaction.response.send_modal = AsyncMock()
     interaction.response.defer = AsyncMock()
 
-    edit_community.register(command_tree, database, settings)
+    edit_community.register(command_tree, database, settings, _policy_service(database, settings))
     command = command_tree.commands["edit-community"]
     await command.callback(interaction, "cats")
 
@@ -47,7 +53,7 @@ async def test_edit_command_rejects_dm_before_modal(command_tree, interaction, d
     interaction.guild_id = None
     interaction.response.send_modal = AsyncMock()
 
-    edit_community.register(command_tree, database, settings)
+    edit_community.register(command_tree, database, settings, _policy_service(database, settings))
     command = command_tree.commands["edit-community"]
     await command.callback(interaction, "cats")
 
@@ -74,7 +80,7 @@ async def test_edit_command_rejects_unauthorized_without_exposing_modal(command_
     )
     interaction.response.send_modal = AsyncMock()
 
-    edit_community.register(command_tree, database, settings)
+    edit_community.register(command_tree, database, settings, _policy_service(database, settings))
     command = command_tree.commands["edit-community"]
     await command.callback(interaction, "cats")
 
@@ -107,6 +113,7 @@ async def test_edit_modal_submit_delegates_to_operation_and_responds_ephemeral(i
     modal = edit_community.EditCommunityModal(
         database=database,
         settings=settings,
+        policy_service=_policy_service(database, settings),
         community_slug="cats",
         display_name="Cats",
         summary="Old summary",
@@ -146,7 +153,7 @@ async def test_edit_community_autocomplete_matches_management_scope(interaction,
         SimpleNamespace(slug="dogs", display_name="Dogs", discord_guild_id=99999, status="disabled"),
     ]
 
-    owner_choices = await edit_community._edit_community_autocomplete(database, owner_settings)(interaction, "cat")
+    owner_choices = await edit_community._edit_community_autocomplete(database, owner_settings, _policy_service(database, owner_settings))(interaction, "cat")
 
     assert [(choice.name, choice.value) for choice in owner_choices] == [("cats — Cats — active", "cats")]
     database.local_communities.list_manageable_local_communities_owned_by_user_in_guild.assert_called_once_with(
@@ -164,7 +171,7 @@ async def test_edit_community_autocomplete_super_admin_sees_all_guilds(interacti
         SimpleNamespace(slug="dogs", display_name="Dogs", discord_guild_id=20, status="disabled"),
     ]
 
-    choices = await edit_community._edit_community_autocomplete(database, settings)(interaction, "")
+    choices = await edit_community._edit_community_autocomplete(database, settings, _policy_service(database, settings))(interaction, "")
 
     assert [(choice.name, choice.value) for choice in choices] == [
         ("cats — Cats — guild 10 — active", "cats"),
@@ -178,6 +185,6 @@ async def test_edit_community_autocomplete_returns_empty_on_error(interaction, d
     settings = SimpleNamespace(discord_guild_allowlist=[], bridge_super_admin_user_ids=[])
     database.local_communities.list_manageable_local_communities_owned_by_user_in_guild.side_effect = RuntimeError("db down")
 
-    choices = await edit_community._edit_community_autocomplete(database, settings)(interaction, "")
+    choices = await edit_community._edit_community_autocomplete(database, settings, _policy_service(database, settings))(interaction, "")
 
     assert choices == []

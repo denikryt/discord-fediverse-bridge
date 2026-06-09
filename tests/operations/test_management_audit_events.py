@@ -1,6 +1,7 @@
 """Observable behavior tests for backend management audit events."""
 
 from __future__ import annotations
+from src.bridge_policy import BridgePolicyService
 
 import json
 from pathlib import Path
@@ -176,7 +177,8 @@ def test_edit_community_audits_metadata_status_forbidden_and_skips_noop(tmp_path
             display_name="Cats",
             summary="Old summary",
             status="active",
-        )
+
+            policy_service=BridgePolicyService(settings=_settings(), repository=database.bridge_policy_entries),)
     )
     updated = edit_community_operation(
         EditCommunityInput(
@@ -188,7 +190,8 @@ def test_edit_community_audits_metadata_status_forbidden_and_skips_noop(tmp_path
             display_name="New Cats",
             summary=None,
             status="disabled",
-        )
+
+            policy_service=BridgePolicyService(settings=_settings(), repository=database.bridge_policy_entries),)
     )
     forbidden = edit_community_operation(
         EditCommunityInput(
@@ -200,7 +203,8 @@ def test_edit_community_audits_metadata_status_forbidden_and_skips_noop(tmp_path
             display_name="Bad Cats",
             summary=None,
             status="disabled",
-        )
+
+            policy_service=BridgePolicyService(settings=_settings(), repository=database.bridge_policy_entries),)
     )
     rows = _rows_after_setup(database)
 
@@ -228,22 +232,22 @@ def test_ban_and_unban_success_forbidden_and_validation_audit_boundaries(tmp_pat
     community = _community(database)
 
     invalid = ban_user_operation(
-        BanUserInput(database, _settings(), "111", 10, "cats", "not a handle", None)
+        BanUserInput(database, _settings(), "111", 10, "cats", "not a handle", BridgePolicyService(settings=_settings(), repository=database.bridge_policy_entries), None)
     )
     created = ban_user_operation(
-        BanUserInput(database, _settings(), "111", 10, "cats", "alice@example.com", "spam")
+        BanUserInput(database, _settings(), "111", 10, "cats", "alice@example.com", BridgePolicyService(settings=_settings(), repository=database.bridge_policy_entries), "spam")
     )
     duplicate = ban_user_operation(
-        BanUserInput(database, _settings(), "111", 10, "cats", "alice@example.com", None)
+        BanUserInput(database, _settings(), "111", 10, "cats", "alice@example.com", BridgePolicyService(settings=_settings(), repository=database.bridge_policy_entries), None)
     )
     removed = unban_user_operation(
-        UnbanUserInput(database, _settings(), "111", 10, "cats", "alice@example.com")
+        UnbanUserInput(database, _settings(), "111", 10, "cats", "alice@example.com", BridgePolicyService(settings=_settings(), repository=database.bridge_policy_entries))
     )
     reactivated = ban_user_operation(
-        BanUserInput(database, _settings(), "111", 10, "cats", "alice@example.com", "again")
+        BanUserInput(database, _settings(), "111", 10, "cats", "alice@example.com", BridgePolicyService(settings=_settings(), repository=database.bridge_policy_entries), "again")
     )
     forbidden = ban_user_operation(
-        BanUserInput(database, _settings(), "222", 10, "cats", "bob@example.com", None)
+        BanUserInput(database, _settings(), "222", 10, "cats", "bob@example.com", BridgePolicyService(settings=_settings(), repository=database.bridge_policy_entries), None)
     )
     rows = _rows_after_setup(database)
 
@@ -287,13 +291,13 @@ def test_disabled_community_denials_are_audited_but_read_only_list_is_not(tmp_pa
         )
 
     ban_result = ban_user_operation(
-        BanUserInput(database, _settings(), "111", 10, "cats", "bob@example.com", None)
+        BanUserInput(database, _settings(), "111", 10, "cats", "bob@example.com", BridgePolicyService(settings=_settings(), repository=database.bridge_policy_entries), None)
     )
     unban_result = unban_user_operation(
-        UnbanUserInput(database, _settings(), "111", 10, "cats", "alice@example.com")
+        UnbanUserInput(database, _settings(), "111", 10, "cats", "alice@example.com", BridgePolicyService(settings=_settings(), repository=database.bridge_policy_entries))
     )
     list_result = list_banned_users_operation(
-        ListBannedUsersInput(database, _settings(), "111", 10, "cats")
+        ListBannedUsersInput(database, _settings(), "111", 10, "cats", BridgePolicyService(settings=_settings(), repository=database.bridge_policy_entries))
     )
     rows = _rows_after_setup(database)
 
@@ -322,13 +326,13 @@ def test_validation_and_guild_context_failures_do_not_create_audit_rows(tmp_path
         )
     )
     unknown_edit = edit_community_operation(
-        EditCommunityInput(database, _settings(), "111", 10, "missing", "Name", None, "active")
+        EditCommunityInput(database, _settings(), "111", 10, "missing", "Name", None, BridgePolicyService(settings=_settings(), repository=database.bridge_policy_entries), "active")
     )
     guildless_ban = ban_user_operation(
-        BanUserInput(database, _settings(super_admins=["111"]), "111", None, "cats", "alice@example.com", None)
+        BanUserInput(database, _settings(super_admins=["111"]), "111", None, "cats", "alice@example.com", BridgePolicyService(settings=_settings(super_admins=["111"]), repository=database.bridge_policy_entries), None)
     )
     no_active_unban = unban_user_operation(
-        UnbanUserInput(database, _settings(), "111", 10, "cats", "alice@example.com")
+        UnbanUserInput(database, _settings(), "111", 10, "cats", "alice@example.com", BridgePolicyService(settings=_settings(), repository=database.bridge_policy_entries))
     )
     rows = _rows_after_setup(database)
 
@@ -379,13 +383,13 @@ def test_successful_edit_and_ban_roll_back_when_audit_insert_fails(tmp_path: Pat
 
     with pytest.raises(RuntimeError, match="audit insert failed"):
         edit_community_operation(
-            EditCommunityInput(database, _settings(), "111", 10, "cats", "New Cats", None, "disabled")
+            EditCommunityInput(database, _settings(), "111", 10, "cats", "New Cats", None, BridgePolicyService(settings=_settings(), repository=database.bridge_policy_entries), "disabled")
         )
     unchanged = database.local_communities.get_local_community_by_slug("cats")
 
     with pytest.raises(RuntimeError, match="audit insert failed"):
         ban_user_operation(
-            BanUserInput(database, _settings(), "111", 10, "cats", "alice@example.com", "spam")
+            BanUserInput(database, _settings(), "111", 10, "cats", "alice@example.com", BridgePolicyService(settings=_settings(), repository=database.bridge_policy_entries), "spam")
         )
     ban = database.community_actor_bans.get_active_ban_by_handle(
         local_community_id=community.id,

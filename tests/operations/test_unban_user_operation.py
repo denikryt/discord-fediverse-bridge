@@ -1,6 +1,7 @@
 """Observable command behavior tests for `/unban-user`."""
 
 from __future__ import annotations
+from src.bridge_policy import BridgePolicyService
 
 from pathlib import Path
 from types import SimpleNamespace
@@ -72,7 +73,7 @@ def test_owner_unbans_active_ban_in_own_community(tmp_path: Path) -> None:
     original = _active_ban(database, community, banner="999")
 
     result = unban_user_operation(
-        UnbanUserInput(database, _settings(), "111", 10, "cats", "alice@example.com")
+        UnbanUserInput(database, _settings(), "111", 10, "cats", "alice@example.com", BridgePolicyService(settings=_settings(), repository=database.bridge_policy_entries))
     )
     bans = _all_bans(database)
 
@@ -91,7 +92,7 @@ def test_super_admin_unbans_someone_elses_community(tmp_path: Path) -> None:
     _active_ban(database, community, banner="111")
 
     result = unban_user_operation(
-        UnbanUserInput(database, _settings(super_admins=["999"]), "999", 10, "cats", "alice@example.com")
+        UnbanUserInput(database, _settings(super_admins=["999"]), "999", 10, "cats", "alice@example.com", BridgePolicyService(settings=_settings(super_admins=["999"]), repository=database.bridge_policy_entries))
     )
 
     assert result.applied is True
@@ -105,7 +106,7 @@ def test_super_admin_unbans_cross_guild_manual_slug(tmp_path: Path) -> None:
     _active_ban(database, community)
 
     result = unban_user_operation(
-        UnbanUserInput(database, _settings(super_admins=["999"]), "999", 10, "cats", "alice@example.com")
+        UnbanUserInput(database, _settings(super_admins=["999"]), "999", 10, "cats", "alice@example.com", BridgePolicyService(settings=_settings(super_admins=["999"]), repository=database.bridge_policy_entries))
     )
 
     assert result.applied is True
@@ -119,7 +120,7 @@ def test_non_owner_is_rejected_and_ban_stays_active(tmp_path: Path) -> None:
     _active_ban(database, community)
 
     result = unban_user_operation(
-        UnbanUserInput(database, _settings(), "222", 10, "cats", "alice@example.com")
+        UnbanUserInput(database, _settings(), "222", 10, "cats", "alice@example.com", BridgePolicyService(settings=_settings(), repository=database.bridge_policy_entries))
     )
 
     assert result.applied is False
@@ -135,7 +136,7 @@ def test_owner_cross_guild_slug_is_unknown_or_inaccessible(tmp_path: Path) -> No
     _active_ban(database, community)
 
     result = unban_user_operation(
-        UnbanUserInput(database, _settings(), "111", 10, "cats", "alice@example.com")
+        UnbanUserInput(database, _settings(), "111", 10, "cats", "alice@example.com", BridgePolicyService(settings=_settings(), repository=database.bridge_policy_entries))
     )
 
     assert result.applied is False
@@ -151,10 +152,10 @@ def test_legacy_null_owner_can_be_unbanned_only_by_super_admin(tmp_path: Path) -
     _active_ban(database, community)
 
     ordinary = unban_user_operation(
-        UnbanUserInput(database, _settings(), "111", 10, "cats", "alice@example.com")
+        UnbanUserInput(database, _settings(), "111", 10, "cats", "alice@example.com", BridgePolicyService(settings=_settings(), repository=database.bridge_policy_entries))
     )
     admin = unban_user_operation(
-        UnbanUserInput(database, _settings(super_admins=["999"]), "999", 10, "cats", "alice@example.com")
+        UnbanUserInput(database, _settings(super_admins=["999"]), "999", 10, "cats", "alice@example.com", BridgePolicyService(settings=_settings(super_admins=["999"]), repository=database.bridge_policy_entries))
     )
 
     assert ordinary.applied is False
@@ -170,10 +171,10 @@ def test_unknown_slug_and_invalid_handle_do_not_change_rows(tmp_path: Path) -> N
     _active_ban(database, community)
 
     unknown = unban_user_operation(
-        UnbanUserInput(database, _settings(), "111", 10, "missing", "not-a-handle")
+        UnbanUserInput(database, _settings(), "111", 10, "missing", "not-a-handle", BridgePolicyService(settings=_settings(), repository=database.bridge_policy_entries))
     )
     invalid = unban_user_operation(
-        UnbanUserInput(database, _settings(), "111", 10, "cats", "https://example.com/u/alice")
+        UnbanUserInput(database, _settings(), "111", 10, "cats", "https://example.com/u/alice", BridgePolicyService(settings=_settings(), repository=database.bridge_policy_entries))
     )
 
     assert unknown.message == "Unknown or inaccessible local community: missing"
@@ -188,7 +189,7 @@ def test_unauthorized_invalid_handle_rejects_permission_first(tmp_path: Path) ->
     _active_ban(database, community)
 
     result = unban_user_operation(
-        UnbanUserInput(database, _settings(), "222", 10, "cats", "not-a-handle")
+        UnbanUserInput(database, _settings(), "222", 10, "cats", "not-a-handle", BridgePolicyService(settings=_settings(), repository=database.bridge_policy_entries))
     )
 
     assert result.reason == "cannot_manage_community"
@@ -207,10 +208,10 @@ def test_no_active_ban_error_is_generic_for_missing_and_inactive_rows(tmp_path: 
     )
 
     missing = unban_user_operation(
-        UnbanUserInput(database, _settings(), "111", 10, "cats", "alice@example.com")
+        UnbanUserInput(database, _settings(), "111", 10, "cats", "alice@example.com", BridgePolicyService(settings=_settings(), repository=database.bridge_policy_entries))
     )
     inactive_result = unban_user_operation(
-        UnbanUserInput(database, _settings(), "111", 10, "cats", "bob@example.com")
+        UnbanUserInput(database, _settings(), "111", 10, "cats", "bob@example.com", BridgePolicyService(settings=_settings(), repository=database.bridge_policy_entries))
     )
 
     assert missing.message == "User alice@example.com is not actively banned in community cats."
@@ -225,7 +226,7 @@ def test_no_guild_context_is_rejected_before_community_lookup(tmp_path: Path) ->
     _active_ban(database, community)
 
     result = unban_user_operation(
-        UnbanUserInput(database, _settings(), "111", None, "cats", "alice@example.com")
+        UnbanUserInput(database, _settings(), "111", None, "cats", "alice@example.com", BridgePolicyService(settings=_settings(), repository=database.bridge_policy_entries))
     )
 
     assert result.reason == "missing_guild_context"
@@ -243,7 +244,7 @@ def test_inactive_community_is_inaccessible_for_unban(tmp_path: Path) -> None:
         persisted.status = "inactive"
 
     result = unban_user_operation(
-        UnbanUserInput(database, _settings(), "111", 10, "cats", "alice@example.com")
+        UnbanUserInput(database, _settings(), "111", 10, "cats", "alice@example.com", BridgePolicyService(settings=_settings(), repository=database.bridge_policy_entries))
     )
 
     assert result.reason == "unknown_or_inaccessible_community"
@@ -260,7 +261,7 @@ def test_disabled_community_rejects_unban_without_changing_ban(tmp_path: Path) -
         persisted.status = "disabled"
 
     result = unban_user_operation(
-        UnbanUserInput(database, _settings(), "111", 10, "cats", "alice@example.com")
+        UnbanUserInput(database, _settings(), "111", 10, "cats", "alice@example.com", BridgePolicyService(settings=_settings(), repository=database.bridge_policy_entries))
     )
 
     assert result.applied is False
@@ -297,7 +298,7 @@ def test_global_unban_skips_local_community_repository(tmp_path: Path, monkeypat
             "999",
             None,
             None,
-            "alice@example.com",
+            "alice@example.com", BridgePolicyService(settings=_settings(super_admins=["999"]), repository=database.bridge_policy_entries),
         )
     )
 

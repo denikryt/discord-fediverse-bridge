@@ -45,9 +45,8 @@ def _matches_current(value: str, current: str) -> bool:
     return current.casefold() in value.casefold()
 
 
-def _edit_community_autocomplete(database: Database, settings: Settings, policy_service: BridgePolicyService | None = None):
+def _edit_community_autocomplete(database: Database, settings: Settings, policy_service: BridgePolicyService):
     """Build `/edit-community community` autocomplete with management scope."""
-    policy_service = policy_service or BridgePolicyService(settings=settings, repository=database.bridge_policy_entries)
 
     async def autocomplete(
         interaction: discord.Interaction,
@@ -101,7 +100,7 @@ class EditCommunityModal(discord.ui.Modal):
         *,
         database: Database,
         settings: Settings,
-        policy_service: BridgePolicyService | None = None,
+        policy_service: BridgePolicyService,
         community_slug: str,
         display_name: str,
         summary: str | None,
@@ -111,7 +110,7 @@ class EditCommunityModal(discord.ui.Modal):
         super().__init__(title=f"Edit {community_slug}")
         self.database = database
         self.settings = settings
-        self.policy_service = policy_service or BridgePolicyService(settings=settings, repository=database.bridge_policy_entries)
+        self.policy_service = policy_service
         self.community_slug = community_slug
         # Discord modal defaults must be supplied when constructing the inputs,
         # so fields are added dynamically instead of as static class attrs.
@@ -221,10 +220,9 @@ def register(
     tree: app_commands.CommandTree,
     database: Database,
     settings: Settings,
-    policy_service: BridgePolicyService | None = None,
+    policy_service: BridgePolicyService,
 ) -> None:
     """Register the `/edit-community` command on the Discord application tree."""
-    policy_service = policy_service or BridgePolicyService(settings=settings, repository=database.bridge_policy_entries)
 
     @tree.command(
         name="edit-community",

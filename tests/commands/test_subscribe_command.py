@@ -10,7 +10,7 @@ from src.bridge_policy import BridgePolicyService
 from tests_constants import BRIDGE_EXAMPLE_DOMAIN, LEMMY_EXAMPLE_DOMAIN
 
 
-def _policy_service(settings, database):
+def _policy_service(database, settings):
     """Build the effective policy dependency used by autocomplete callbacks."""
     return BridgePolicyService(settings=settings, repository=database.bridge_policy_entries)
 
@@ -31,7 +31,9 @@ async def test_subscribe_community_success(
         follow_activity_id=f"https://{BRIDGE_EXAMPLE_DOMAIN}/activities/follow/1",
     )
 
-    subscribe.register(command_tree, database, fedify_gateway, SimpleNamespace(discord_guild_allowlist=[], federation_allowlist=[]))
+    settings = SimpleNamespace(discord_guild_allowlist=[], federation_allowlist=[])
+
+    subscribe.register(command_tree, database, fedify_gateway, settings, _policy_service(database, settings))
 
     command = command_tree.commands["subscribe-community"]
     with patch("src.commands.subscribe.LemmyClient") as MockLemmyClient:
@@ -82,7 +84,9 @@ async def test_subscribe_community_rejects_duplicate_accepted(
         lemmy_community_actor_id=f"https://{LEMMY_EXAMPLE_DOMAIN}/c/hackers",
     )
 
-    subscribe.register(command_tree, database, fedify_gateway, SimpleNamespace(discord_guild_allowlist=[], federation_allowlist=[]))
+    settings = SimpleNamespace(discord_guild_allowlist=[], federation_allowlist=[])
+
+    subscribe.register(command_tree, database, fedify_gateway, settings, _policy_service(database, settings))
 
     command = command_tree.commands["subscribe-community"]
     await command.callback(
@@ -113,7 +117,9 @@ async def test_subscribe_community_rejects_duplicate_pending(
         lemmy_community_actor_id=f"https://{LEMMY_EXAMPLE_DOMAIN}/c/hackers",
     )
 
-    subscribe.register(command_tree, database, fedify_gateway, SimpleNamespace(discord_guild_allowlist=[], federation_allowlist=[]))
+    settings = SimpleNamespace(discord_guild_allowlist=[], federation_allowlist=[])
+
+    subscribe.register(command_tree, database, fedify_gateway, settings, _policy_service(database, settings))
 
     command = command_tree.commands["subscribe-community"]
     await command.callback(
@@ -144,7 +150,9 @@ async def test_subscribe_community_rejects_when_community_resolution_fails(
     # must stop the flow before any DB mutation is attempted.
     database.remote_subscriptions.get_subscription_by_channel.return_value = None
 
-    subscribe.register(command_tree, database, fedify_gateway, SimpleNamespace(discord_guild_allowlist=[], federation_allowlist=[]))
+    settings = SimpleNamespace(discord_guild_allowlist=[], federation_allowlist=[])
+
+    subscribe.register(command_tree, database, fedify_gateway, settings, _policy_service(database, settings))
 
     command = command_tree.commands["subscribe-community"]
     with patch("src.commands.subscribe.LemmyClient") as MockLemmyClient:
@@ -175,7 +183,9 @@ async def test_subscribe_community_marks_failed_when_follow_dispatch_fails(
     database.remote_subscriptions.get_subscription_by_channel.return_value = None
     fedify_gateway.follow_community.side_effect = RuntimeError("boom")
 
-    subscribe.register(command_tree, database, fedify_gateway, SimpleNamespace(discord_guild_allowlist=[], federation_allowlist=[]))
+    settings = SimpleNamespace(discord_guild_allowlist=[], federation_allowlist=[])
+
+    subscribe.register(command_tree, database, fedify_gateway, settings, _policy_service(database, settings))
 
     command = command_tree.commands["subscribe-community"]
     with patch("src.commands.subscribe.LemmyClient") as MockLemmyClient:
@@ -226,7 +236,9 @@ async def test_subscribe_community_retries_failed_subscription(
         follow_activity_id=f"https://{BRIDGE_EXAMPLE_DOMAIN}/activities/follow/2",
     )
 
-    subscribe.register(command_tree, database, fedify_gateway, SimpleNamespace(discord_guild_allowlist=[], federation_allowlist=[]))
+    settings = SimpleNamespace(discord_guild_allowlist=[], federation_allowlist=[])
+
+    subscribe.register(command_tree, database, fedify_gateway, settings, _policy_service(database, settings))
 
     command = command_tree.commands["subscribe-community"]
     await command.callback(
@@ -286,7 +298,8 @@ def test_subscribe_command_callback_uses_instance_domain_parameter(
     command_tree, database, fedify_gateway
 ):
     """The slash-command callback should expose the generic instance parameter name."""
-    subscribe.register(command_tree, database, fedify_gateway, SimpleNamespace(discord_guild_allowlist=[], federation_allowlist=[]))
+    settings = SimpleNamespace(discord_guild_allowlist=[], federation_allowlist=[])
+    subscribe.register(command_tree, database, fedify_gateway, settings, _policy_service(database, settings))
 
     command = command_tree.commands["subscribe-community"]
 
@@ -306,8 +319,8 @@ async def test_subscribe_instance_autocomplete_returns_allowlist_entries(
     # When federation_allowlist is non-empty, _instance_autocomplete must return
     # one Choice per entry with value = "https://" + hostname.
     settings = _settings(["lemmy.world", "beehaw.org"])
-    subscribe.register(command_tree, database, fedify_gateway, settings)
-    autocomplete_fn = subscribe._instance_autocomplete(settings, database, _policy_service(settings, database))
+    subscribe.register(command_tree, database, fedify_gateway, settings, _policy_service(database, settings))
+    autocomplete_fn = subscribe._instance_autocomplete(settings, database, _policy_service(database, settings))
 
     interaction = _make_interaction(None)
     choices = await autocomplete_fn(interaction, "")
@@ -326,8 +339,8 @@ async def test_subscribe_instance_autocomplete_returns_empty_for_open_federation
     # When federation_allowlist is empty, _instance_autocomplete must return []
     # so the user types the URL manually.
     settings = _settings([])
-    subscribe.register(command_tree, database, fedify_gateway, settings)
-    autocomplete_fn = subscribe._instance_autocomplete(settings, database, _policy_service(settings, database))
+    subscribe.register(command_tree, database, fedify_gateway, settings, _policy_service(database, settings))
+    autocomplete_fn = subscribe._instance_autocomplete(settings, database, _policy_service(database, settings))
 
     interaction = _make_interaction(None)
     choices = await autocomplete_fn(interaction, "")
@@ -363,8 +376,8 @@ async def test_subscribe_autocomplete_uses_lemmy_instance_url(
     ]
 
     settings = _settings([])
-    subscribe.register(command_tree, database, fedify_gateway, settings)
-    autocomplete_fn = subscribe._community_autocomplete(settings, database, _policy_service(settings, database))
+    subscribe.register(command_tree, database, fedify_gateway, settings, _policy_service(database, settings))
+    autocomplete_fn = subscribe._community_autocomplete(settings, database, _policy_service(database, settings))
 
     with patch("src.commands.subscribe.LemmyClient") as MockLemmyClient:
         fake_remote = AsyncMock()
@@ -408,7 +421,7 @@ async def test_subscribe_autocomplete_reads_instance_domain_from_raw_payload_whe
     ]
 
     settings = _settings([])
-    autocomplete_fn = subscribe._community_autocomplete(settings, database, _policy_service(settings, database))
+    autocomplete_fn = subscribe._community_autocomplete(settings, database, _policy_service(database, settings))
 
     with patch("src.commands.subscribe.LemmyClient") as MockLemmyClient:
         fake_remote = AsyncMock()
@@ -439,8 +452,8 @@ async def test_subscribe_autocomplete_returns_empty_when_global_cache_is_empty(
     interaction = _make_interaction(None)
 
     settings = _settings([])
-    subscribe.register(command_tree, database, fedify_gateway, settings)
-    autocomplete_fn = subscribe._community_autocomplete(settings, database, _policy_service(settings, database), lemmyverse_cache=EmptyCache())
+    subscribe.register(command_tree, database, fedify_gateway, settings, _policy_service(database, settings))
+    autocomplete_fn = subscribe._community_autocomplete(settings, database, _policy_service(database, settings), lemmyverse_cache=EmptyCache())
 
     with patch("src.commands.subscribe.LemmyClient") as MockLemmyClient:
         choices = await autocomplete_fn(interaction, "")
@@ -458,8 +471,8 @@ async def test_subscribe_autocomplete_rejects_unlisted_instance(
     interaction = _make_interaction("https://forbidden.instance")
 
     settings = _settings(["allowed.example"])
-    subscribe.register(command_tree, database, fedify_gateway, settings)
-    autocomplete_fn = subscribe._community_autocomplete(settings, database, _policy_service(settings, database))
+    subscribe.register(command_tree, database, fedify_gateway, settings, _policy_service(database, settings))
+    autocomplete_fn = subscribe._community_autocomplete(settings, database, _policy_service(database, settings))
 
     with patch("src.commands.subscribe.LemmyClient") as MockLemmyClient:
         choices = await autocomplete_fn(interaction, "")
@@ -475,7 +488,7 @@ async def test_subscribe_community_rejects_unlisted_lemmy_instance(
     # When instance_domain is not in the allowlist, the command handler must
     # return an ephemeral error before touching the DB or Lemmy.
     settings = _settings(["allowed.example"])
-    subscribe.register(command_tree, database, fedify_gateway, settings)
+    subscribe.register(command_tree, database, fedify_gateway, settings, _policy_service(database, settings))
 
     command = command_tree.commands["subscribe-community"]
     await command.callback(
@@ -519,7 +532,7 @@ async def test_subscribe_global_autocomplete_uses_lemmyverse_without_instance(
 
     interaction = _make_interaction(None)
     settings = _settings([])
-    autocomplete_fn = subscribe._community_autocomplete(settings, database, _policy_service(settings, database), lemmyverse_cache=FakeCache())
+    autocomplete_fn = subscribe._community_autocomplete(settings, database, _policy_service(database, settings), lemmyverse_cache=FakeCache())
 
     with patch("src.commands.subscribe.LemmyClient") as MockLemmyClient:
         with patch("src.commands.subscribe.fetch_bridge_community_summaries", new=AsyncMock()) as fetch_mock:
@@ -551,7 +564,7 @@ async def test_subscribe_global_autocomplete_filters_allowlist(
 
     interaction = _make_interaction(None)
     settings = _settings(["allowed.example"])
-    autocomplete_fn = subscribe._community_autocomplete(settings, database, _policy_service(settings, database), lemmyverse_cache=FakeCache())
+    autocomplete_fn = subscribe._community_autocomplete(settings, database, _policy_service(database, settings), lemmyverse_cache=FakeCache())
 
     choices = await autocomplete_fn(interaction, "news")
 
@@ -564,7 +577,7 @@ async def test_subscribe_community_rejects_plain_name_without_instance(
 ):
     """Plain community names are ambiguous when no instance_domain is provided."""
     settings = _settings([])
-    subscribe.register(command_tree, database, fedify_gateway, settings)
+    subscribe.register(command_tree, database, fedify_gateway, settings, _policy_service(database, settings))
 
     command = command_tree.commands["subscribe-community"]
     await command.callback(interaction, community="technology", channel=forum_channel)
@@ -582,7 +595,7 @@ async def test_subscribe_community_rejects_forbidden_actor_url_without_instance(
 ):
     """Submit must re-check allowlist even for manually supplied actor URLs."""
     settings = _settings(["allowed.example"])
-    subscribe.register(command_tree, database, fedify_gateway, settings)
+    subscribe.register(command_tree, database, fedify_gateway, settings, _policy_service(database, settings))
 
     command = command_tree.commands["subscribe-community"]
     await command.callback(interaction, community="https://blocked.example/c/news", channel=forum_channel)
@@ -608,7 +621,8 @@ async def test_subscribe_community_accepts_actor_url_without_instance(
         community_inbox_url=f"{community_actor_url}/inbox",
         follow_activity_id=f"https://{BRIDGE_EXAMPLE_DOMAIN}/activities/follow/1",
     )
-    subscribe.register(command_tree, database, fedify_gateway, _settings([]))
+    settings = _settings([])
+    subscribe.register(command_tree, database, fedify_gateway, settings, _policy_service(database, settings))
 
     command = command_tree.commands["subscribe-community"]
     with patch("src.commands.subscribe.LemmyClient") as MockLemmyClient:
@@ -631,7 +645,7 @@ def test_subscribe_community_channel_description_fits_discord_limit(command_tree
     """Slash option descriptions must satisfy Discord's 100 character limit."""
     settings = SimpleNamespace(discord_guild_allowlist=[], federation_allowlist=[])
 
-    subscribe.register(command_tree, database, fedify_gateway, settings)
+    subscribe.register(command_tree, database, fedify_gateway, settings, _policy_service(database, settings))
     command = command_tree.commands["subscribe-community"]
     descriptions = getattr(command.callback, "__discord_app_commands_param_description__")
 

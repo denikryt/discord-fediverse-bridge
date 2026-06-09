@@ -36,7 +36,7 @@ def register(
     database: Database,
     fedify_gateway: FedifyGatewayClient,
     settings: Settings,
-    policy_service: BridgePolicyService | None = None,
+    policy_service: BridgePolicyService,
     lemmyverse_cache: LemmyverseCommunityCache | None = None,
 ) -> None:
     """Register the subscribe-community slash command on the Discord tree.
@@ -47,7 +47,6 @@ def register(
     handler, keeping this module focused on Discord registration and autocomplete.
     """
     cache = lemmyverse_cache or LemmyverseCommunityCache()
-    policy_service = policy_service or BridgePolicyService(settings=settings, repository=database.bridge_policy_entries)
     handler = SubscribeCommunityCommandHandler(
         database=database,
         fedify_gateway=fedify_gateway,
@@ -75,7 +74,7 @@ def register(
         instance_domain: str | None = None,
     ) -> None:
         """Delegate /subscribe-community submit handling to the command handler."""
-        if await reject_if_command_access_denied(interaction, definition=REGISTERED_GUILD_COMMAND_ACCESS, settings=settings, database=database):
+        if await reject_if_command_access_denied(interaction, definition=REGISTERED_GUILD_COMMAND_ACCESS, settings=settings, database=database, policy_service=policy_service):
             return
         await handler.handle(
             interaction=interaction,
@@ -139,6 +138,7 @@ def _instance_autocomplete(
             definition=GUILD_COMMAND_ACCESS,
             settings=settings,
             database=database,
+            policy_service=policy_service,
         ):
             return []
         snapshot = policy_service.snapshot()
@@ -177,7 +177,7 @@ def _community_autocomplete(
         interaction: discord.Interaction,
         current: str,
     ) -> list[app_commands.Choice[str]]:
-        if not await command_access_allows_autocomplete(interaction, definition=GUILD_COMMAND_ACCESS, settings=settings, database=database):
+        if not await command_access_allows_autocomplete(interaction, definition=GUILD_COMMAND_ACCESS, settings=settings, database=database, policy_service=policy_service):
             return []
         instance_url = _extract_instance_domain_for_autocomplete(interaction)
 

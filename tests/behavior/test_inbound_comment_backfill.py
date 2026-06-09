@@ -8,6 +8,7 @@ System state -> action -> observable result pattern per AGENTS.md.
 """
 
 from __future__ import annotations
+from support.runtime import build_test_policy_service
 
 from pathlib import Path
 from types import SimpleNamespace
@@ -82,7 +83,8 @@ def _community_runtime(database: Database, *, bot: object) -> CommunityRuntime:
         database=database,
         fedify_gateway=AsyncMock(),
         bridge_prefix="[bridge]",
-    )
+            bridge_policy_service=build_test_policy_service(database),
+)
     return CommunityRuntime(database=database, content_publish_service=publish_service, bot=bot)
 
 

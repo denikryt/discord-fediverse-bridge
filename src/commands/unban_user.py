@@ -39,9 +39,8 @@ def _matches_current(value: str, current: str) -> bool:
     return current.casefold() in value.casefold()
 
 
-def _unban_community_autocomplete(database: Database, settings: Settings, policy_service: BridgePolicyService | None = None):
+def _unban_community_autocomplete(database: Database, settings: Settings, policy_service: BridgePolicyService):
     """Build autocomplete for `/unban-user community` with owner/admin scope."""
-    policy_service = policy_service or BridgePolicyService(settings=settings, repository=database.bridge_policy_entries)
 
     async def autocomplete(
         interaction: discord.Interaction,
@@ -81,9 +80,8 @@ def _unban_community_autocomplete(database: Database, settings: Settings, policy
     return autocomplete
 
 
-def _unban_user_autocomplete(database: Database, settings: Settings, policy_service: BridgePolicyService | None = None):
+def _unban_user_autocomplete(database: Database, settings: Settings, policy_service: BridgePolicyService):
     """Build autocomplete for `/unban-user user` from selected community bans."""
-    policy_service = policy_service or BridgePolicyService(settings=settings, repository=database.bridge_policy_entries)
 
     async def autocomplete(
         interaction: discord.Interaction,
@@ -142,10 +140,9 @@ def register(
     tree: app_commands.CommandTree,
     database: Database,
     settings: Settings,
-    policy_service: BridgePolicyService | None = None,
+    policy_service: BridgePolicyService,
 ) -> None:
     """Register the `/unban-user` command on the Discord command tree."""
-    policy_service = policy_service or BridgePolicyService(settings=settings, repository=database.bridge_policy_entries)
 
     @tree.command(
         name="unban-user",

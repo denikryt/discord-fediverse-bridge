@@ -6,6 +6,7 @@ stages will extend the runtime once the participant model is explicit.
 """
 
 from __future__ import annotations
+from support.runtime import build_test_policy_service
 
 from pathlib import Path
 from types import SimpleNamespace
@@ -89,7 +90,7 @@ async def test_subscribe_community_persists_local_subscriber_without_remote_foll
     _register_user(database)
     community = _create_local_community(database, forum_channel_id=100)
 
-    subscribe.register(command_tree, database, fedify_gateway, _settings())
+    subscribe.register(command_tree, database, fedify_gateway, _settings(), policy_service=build_test_policy_service(database))
 
     command = command_tree.commands["subscribe-community"]
     with patch("src.commands.subscribe.resolve_selected_community") as resolve_selected:
@@ -138,7 +139,7 @@ async def test_subscribe_community_rejects_host_forum_as_local_subscriber_target
     community = _create_local_community(database, forum_channel_id=12345)
     host_forum = SimpleNamespace(id=12345, mention="<#12345>")
 
-    subscribe.register(command_tree, database, fedify_gateway, _settings())
+    subscribe.register(command_tree, database, fedify_gateway, _settings(), policy_service=build_test_policy_service(database))
 
     command = command_tree.commands["subscribe-community"]
     with patch("src.commands.subscribe.resolve_selected_community") as resolve_selected:
@@ -186,7 +187,7 @@ async def test_unsubscribe_community_removes_only_local_subscriber_state(
         status="active",
     )
 
-    unsubscribe.register(command_tree, database, fedify_gateway, _settings())
+    unsubscribe.register(command_tree, database, fedify_gateway, _settings(), policy_service=build_test_policy_service(database))
 
     command = command_tree.commands["unsubscribe-channel"]
     await command.callback(interaction, forum_channel)
@@ -229,7 +230,7 @@ async def test_list_subscriptions_renders_remote_and_local_sections(
         status="active",
     )
 
-    list_subs.register(command_tree, database, SimpleNamespace(discord_guild_allowlist=[]))
+    list_subs.register(command_tree, database, SimpleNamespace(discord_guild_allowlist=[]), policy_service=build_test_policy_service(database))
 
     command = command_tree.commands["list-subscriptions"]
     await command.callback(interaction)

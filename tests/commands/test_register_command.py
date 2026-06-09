@@ -5,7 +5,13 @@ from types import SimpleNamespace
 import pytest
 
 from src.commands import register
+from src.bridge_policy import BridgePolicyService
 
+
+
+def _policy_service(database, settings):
+    """Build the explicit policy dependency used by production composition."""
+    return BridgePolicyService(settings=settings, repository=database.bridge_policy_entries)
 
 @pytest.mark.asyncio
 async def test_register_command_returns_ephemeral_registration_link(
@@ -17,7 +23,7 @@ async def test_register_command_returns_ephemeral_registration_link(
         discord_guild_allowlist=[],
     )
 
-    register.register(command_tree, database, settings)
+    register.register(command_tree, database, settings, _policy_service(database, settings))
 
     command = command_tree.commands["register"]
     await command.callback(interaction)
@@ -42,7 +48,7 @@ async def test_register_command_rejects_dm_context(command_tree, interaction, da
     )
     interaction.guild_id = None
 
-    register.register(command_tree, database, settings)
+    register.register(command_tree, database, settings, _policy_service(database, settings))
 
     command = command_tree.commands["register"]
     await command.callback(interaction)
@@ -64,7 +70,7 @@ async def test_register_command_rejects_non_allowlisted_guild(command_tree, inte
     )
     interaction.guild_id = 99999
 
-    register.register(command_tree, database, settings)
+    register.register(command_tree, database, settings, _policy_service(database, settings))
 
     command = command_tree.commands["register"]
     await command.callback(interaction)

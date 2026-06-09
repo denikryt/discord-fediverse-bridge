@@ -23,6 +23,7 @@ Directions covered:
 """
 
 from __future__ import annotations
+from support.runtime import build_test_policy_service
 
 import asyncio
 from datetime import datetime, timezone
@@ -69,7 +70,8 @@ def _community_runtime(
         database=database,
         fedify_gateway=AsyncMock(),
         bridge_prefix="[bridge]",
-    )
+            bridge_policy_service=build_test_policy_service(database),
+)
     return CommunityRuntime(
         database=database,
         content_publish_service=publish_service,
@@ -140,9 +142,14 @@ def _fake_thread_with_message(
     return fake_thread
 
 
-def _fake_fanout(*, bot: object) -> DiscordFanout:
+def _fake_fanout(*, bot: object, database: Database) -> DiscordFanout:
     """Build a real DiscordFanout wired to a fake bot."""
-    return DiscordFanout(bot=bot, mutation_tracker=bot)
+    return DiscordFanout(
+        bot=bot,
+        mutation_tracker=bot,
+        database=database,
+        policy_service=build_test_policy_service(database),
+    )
 
 
 def _setup_message_group_with_deliveries(
@@ -259,7 +266,7 @@ async def test_source_message_edit_propagates_to_mirrors_and_ap(tmp_path: Path) 
         fetch_message=AsyncMock(return_value=fake_mirror_message),
     )
     bot = _fake_bot(threads={mirror_thread_id: fake_mirror_thread})
-    fanout = _fake_fanout(bot=bot)
+    fanout = _fake_fanout(bot=bot, database=database)
     runtime_obj = _fake_runtime()
     community_runtime = _community_runtime(database, bot=bot, discord_fanout=fanout)
 
@@ -331,7 +338,7 @@ async def test_mirror_edit_failure_does_not_block_ap_update(tmp_path: Path) -> N
         mirror_thread_id_1: fail_thread,
         mirror_thread_id_2: success_thread,
     })
-    fanout = _fake_fanout(bot=bot)
+    fanout = _fake_fanout(bot=bot, database=database)
     community_runtime = _community_runtime(database, bot=bot, discord_fanout=fanout)
 
     # Set up thread group and message group with two mirror deliveries.
@@ -405,7 +412,7 @@ async def test_source_message_delete_removes_mirrors_and_sends_ap_delete(tmp_pat
         fetch_message=AsyncMock(return_value=fake_mirror_message),
     )
     bot = _fake_bot(threads={mirror_thread_id: fake_mirror_thread})
-    fanout = _fake_fanout(bot=bot)
+    fanout = _fake_fanout(bot=bot, database=database)
     runtime_obj = _fake_runtime()
     community_runtime = _community_runtime(database, bot=bot, discord_fanout=fanout)
 
@@ -450,7 +457,7 @@ async def test_mirror_delete_failure_does_not_block_ap_delete(tmp_path: Path) ->
         mirror_thread_id_1: fail_thread,
         mirror_thread_id_2: success_thread,
     })
-    fanout = _fake_fanout(bot=bot)
+    fanout = _fake_fanout(bot=bot, database=database)
     community_runtime = _community_runtime(database, bot=bot, discord_fanout=fanout)
 
     thread_group = database.discord_fanout_groups.create_thread_group(
@@ -952,7 +959,7 @@ async def test_mirror_edit_preserves_username_header(tmp_path: Path) -> None:
         fetch_message=AsyncMock(return_value=mirror_message),
     )
     bot = _fake_bot(threads={mirror_thread_id: mirror_thread})
-    fanout = _fake_fanout(bot=bot)
+    fanout = _fake_fanout(bot=bot, database=database)
     runtime_obj = _fake_runtime()
     community_runtime = _community_runtime(database, bot=bot, discord_fanout=fanout)
 
@@ -1040,7 +1047,12 @@ async def test_inbound_comment_update_preserves_username_header(tmp_path: Path) 
     )
 
 
-def test_discord_fanout_requires_mutation_tracker() -> None:
+def test_discord_fanout_requires_mutation_tracker(tmp_path: Path) -> None:
     """Construction rejects an incomplete composition missing dedup tracking."""
+    database = _database(tmp_path)
     with pytest.raises(TypeError):
-        DiscordFanout(bot=SimpleNamespace())
+        DiscordFanout(
+            bot=SimpleNamespace(),
+            database=database,
+            policy_service=build_test_policy_service(database),
+        )
