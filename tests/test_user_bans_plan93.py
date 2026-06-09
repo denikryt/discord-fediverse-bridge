@@ -450,6 +450,7 @@ async def test_discord_fanout_uses_registered_handle_not_mutable_nickname(tmp_pa
     """A real mirror delivery renders the canonical local handle in its header."""
     database = build_database(tmp_path, "plan93-header.db")
     _registered_local_user(database)
+    add_accepted_subscription(database, channel_id=500, guild_id=1)
     forum = build_forum_channel_object_result(channel_id=500, thread_id=600, starter_message_id=700)
 
     async def fetch_forum_channel(channel_id: int) -> object:

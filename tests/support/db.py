@@ -26,6 +26,7 @@ def add_accepted_subscription(
     database: Database,
     *,
     channel_id: int = 100,
+    guild_id: int = 1,
     community_actor_url: str = COMMUNITY_ACTOR_URL,
     community_name: str = "hackers",
     community_id: int = 42,
@@ -33,6 +34,7 @@ def add_accepted_subscription(
     """Insert one accepted subscription row for the shared community."""
     database.remote_subscriptions.create_subscription(
         discord_channel_id=channel_id,
+        discord_guild_id=guild_id,
         lemmy_community_actor_id=community_actor_url,
         lemmy_community_name=community_name,
         lemmy_community_id=community_id,

@@ -36,6 +36,7 @@ def _accepted_subscription(database: Database, *, channel_id: int) -> None:
     """Insert one accepted community subscription for the shared hackers community."""
     database.remote_subscriptions.create_subscription(
         discord_channel_id=channel_id,
+        discord_guild_id=1,
         lemmy_community_actor_id=COMMUNITY_ACTOR_URL,
         lemmy_community_name="hackers",
         lemmy_community_id=42,

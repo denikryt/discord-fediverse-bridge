@@ -35,6 +35,7 @@ This document is a short, feature-oriented index of the test suite. It helps mai
 - Basic outbound post/comment publish behavior — [`tests/behavior/test_publish_scenarios.py`](../../tests/behavior/test_publish_scenarios.py)
 - Discord publish routing and side effects — [`tests/test_discord_publish_flow.py`](../../tests/test_discord_publish_flow.py)
 - Thread fanout to sibling subscriptions — [`tests/test_phase2_fanout_scenarios.py`](../../tests/test_phase2_fanout_scenarios.py)
+- Fail-closed routing metadata and per-target fanout isolation — [`tests/test_policy_routing_metadata.py`](../../tests/test_policy_routing_metadata.py)
 - Message fanout to sibling threads — [`tests/test_phase3_message_fanout_scenarios.py`](../../tests/test_phase3_message_fanout_scenarios.py)
 - Reply and parent preservation — [`tests/test_phase4_reply_preservation.py`](../../tests/test_phase4_reply_preservation.py)
 - Bidirectional mirror-message publishing and loop prevention — [`tests/test_phase9_bidirectional_mirror_messages.py`](../../tests/test_phase9_bidirectional_mirror_messages.py)

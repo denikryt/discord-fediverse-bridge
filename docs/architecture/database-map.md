@@ -36,6 +36,8 @@ Method-level repository split planning lives in `docs/architecture/database-meth
 
 `activitypub_event_receipts` keeps lifecycle `status` separate from semantic `outcome`; legacy rows may have `NULL` outcome. `activitypub_event_receipts`, `message_mappings`, `published_activity_objects`, `remote_actors`, Discord snapshot tables, and the community group tables are shared infrastructure for deduplication, object lookup, dashboard labeling, and fanout. `management_audit_events` is separate backend management observability state, not ActivityPub receipt or fanout infrastructure.
 
+Guild-id columns on remote subscriptions, local communities, and local subscribers may be nullable for legacy or incomplete rows, but such rows are not routable: Discord fanout validates a positive integer guild id and skips malformed targets before Discord, mapping, dedup, or retry side effects.
+
 Channel exclusivity across bridge roles is an application invariant spanning `local_communities.discord_forum_channel_id`, `channel_community_subscriptions.discord_channel_id`, and `local_subscribers.discord_channel_id`. Each table has its own per-channel ownership rule, and command-side placement validation checks all three before binding a selected or bot-created forum channel.
 
 ## Bridge actor signing identity

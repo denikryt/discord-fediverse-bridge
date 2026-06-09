@@ -51,6 +51,14 @@ def _database(tmp_path: Path) -> Database:
     """Create one real SQLite database for Phase 9 bidirectional tests."""
     database = Database(f"sqlite:///{tmp_path / 'phase9.db'}")
     database.create_all()
+    database.remote_subscriptions.create_subscription(
+        discord_channel_id=102,
+        discord_guild_id=1,
+        lemmy_community_actor_id=COMMUNITY_ACTOR_URL,
+        lemmy_community_name="hackers",
+        lemmy_community_id=42,
+        status="accepted",
+    )
     return database
 
 
@@ -163,6 +171,7 @@ def _setup_subscription(
     """Create a subscription for the given channel."""
     database.remote_subscriptions.create_subscription(
         discord_channel_id=channel_id,
+        discord_guild_id=1,
         lemmy_community_actor_id=COMMUNITY_ACTOR_URL,
         lemmy_community_name="hackers",
         lemmy_community_id=42,

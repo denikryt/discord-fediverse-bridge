@@ -25,6 +25,13 @@ if TYPE_CHECKING:
 logger = logging.getLogger(__name__)
 
 
+def _valid_discord_guild_id(value: object) -> int | None:
+    """Return a valid positive Discord guild id, otherwise ``None``."""
+    if isinstance(value, bool) or not isinstance(value, int) or value <= 0:
+        return None
+    return value
+
+
 class DiscordMutationTracker(Protocol):
     """Record bridge-originated Discord mutations for raw-event deduplication."""
 
@@ -131,12 +138,32 @@ class DiscordFanout:
         self.policy_service = policy_service
 
     def _channel_is_allowed(self, channel_id: int) -> bool:
-        """Return whether the persisted subscription channel's guild is allowed."""
-        subscription = self.database.remote_subscriptions.get_subscription_by_channel(channel_id)
-        guild_id = getattr(subscription, "discord_guild_id", None) if subscription is not None else None
-        # Missing guild metadata is preserved for compatibility; the SDK object
-        # path can still proceed, while known denied guilds are skipped early.
-        return guild_id is None or self.policy_service.snapshot().is_discord_guild_allowed(guild_id)
+        """Fail closed when a target channel cannot be tied to an allowed guild."""
+        try:
+            subscription = self.database.remote_subscriptions.get_subscription_by_channel(channel_id)
+            if subscription is None:
+                logger.warning(
+                    "Skipping Discord fanout target with missing subscription channel_id=%s",
+                    channel_id,
+                )
+                return False
+            guild_id = _valid_discord_guild_id(
+                getattr(subscription, "discord_guild_id", None)
+            )
+            if guild_id is None:
+                logger.warning(
+                    "Skipping Discord fanout target with invalid guild metadata channel_id=%s guild_id=%r",
+                    channel_id,
+                    getattr(subscription, "discord_guild_id", None),
+                )
+                return False
+            return self.policy_service.snapshot().is_discord_guild_allowed(guild_id)
+        except Exception:
+            logger.exception(
+                "Failed to validate Discord fanout routing metadata channel_id=%s",
+                channel_id,
+            )
+            return False
 
     def _author_label(self, message: object) -> str | None:
         """Resolve a registered local handle through the bot's shared services."""

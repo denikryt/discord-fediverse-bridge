@@ -22,6 +22,13 @@ from ..db import Database
 logger = logging.getLogger(__name__)
 
 
+def _valid_discord_guild_id(value: object) -> int | None:
+    """Return a valid positive Discord guild id, otherwise ``None``."""
+    if isinstance(value, bool) or not isinstance(value, int) or value <= 0:
+        return None
+    return value
+
+
 def _format_local_mirror_body(*, author_display_name: str | None, content: str) -> str:
     """Render one Discord-authored local-community copy with a stable header.
 
@@ -96,14 +103,51 @@ class LocalCommunityDiscordFanout:
         """Resolve a target forum's owning guild from persisted routing state."""
         subscriber = self.database.local_subscribers.get_local_subscriber_by_channel(forum_channel_id)
         if subscriber is not None:
-            return getattr(subscriber, "discord_guild_id", None)
+            return _valid_discord_guild_id(getattr(subscriber, "discord_guild_id", None))
         community = self.database.local_communities.get_local_community_by_forum_channel_id(forum_channel_id)
-        return getattr(community, "discord_guild_id", None) if community is not None else None
+        if community is None:
+            return None
+        return _valid_discord_guild_id(getattr(community, "discord_guild_id", None))
 
     def _surface_is_allowed(self, forum_channel_id: int) -> bool:
-        """Apply current guild policy before mutating one persisted surface."""
-        guild_id = self._forum_guild_id(forum_channel_id)
-        return guild_id is None or self.policy_service.snapshot().is_discord_guild_allowed(guild_id)
+        """Fail closed before mutating a persisted Discord surface."""
+        try:
+            guild_id = self._forum_guild_id(forum_channel_id)
+            if guild_id is None:
+                logger.warning(
+                    "Skipping local Discord surface with missing or invalid routing metadata forum_channel_id=%s",
+                    forum_channel_id,
+                )
+                return False
+            return self.policy_service.snapshot().is_discord_guild_allowed(guild_id)
+        except Exception:
+            logger.exception(
+                "Failed to validate local Discord surface routing metadata forum_channel_id=%s",
+                forum_channel_id,
+            )
+            return False
+
+    def _target_is_allowed(self, target: LocalDiscordFanoutTarget) -> bool:
+        """Fail closed before creating one selected local Discord target surface."""
+        guild_id = _valid_discord_guild_id(target.discord_guild_id)
+        if guild_id is None:
+            logger.warning(
+                "Skipping local Discord fanout target with invalid guild metadata "
+                "forum_channel_id=%s role=%s guild_id=%r",
+                target.discord_forum_channel_id,
+                target.role,
+                target.discord_guild_id,
+            )
+            return False
+        try:
+            return self.policy_service.snapshot().is_discord_guild_allowed(guild_id)
+        except Exception:
+            logger.exception(
+                "Failed to evaluate local Discord fanout policy forum_channel_id=%s role=%s",
+                target.discord_forum_channel_id,
+                target.role,
+            )
+            return False
 
     async def fanout_thread_to_local_subscribers(
         self,
@@ -144,13 +188,12 @@ class LocalCommunityDiscordFanout:
         failed target without a surface can be retried safely.
         """
         summary = LocalDiscordFanoutSummary()
-        snapshot = self.policy_service.snapshot()
         for target in self._select_targets(
             local_community=local_community,
             include_host=include_host,
             source_forum_channel_id=source_forum_channel_id,
         ):
-            if target.discord_guild_id is not None and not snapshot.is_discord_guild_allowed(target.discord_guild_id):
+            if not self._target_is_allowed(target):
                 continue
             existing = self.database.local_community_surfaces.get_local_community_thread_surface(
                 local_community_thread_id=getattr(thread_row, "id"),
@@ -228,13 +271,12 @@ class LocalCommunityDiscordFanout:
         tree to the root starter message.
         """
         summary = LocalDiscordFanoutSummary()
-        snapshot = self.policy_service.snapshot()
         for target in self._select_targets(
             local_community=local_community,
             include_host=include_host,
             source_forum_channel_id=source_forum_channel_id,
         ):
-            if target.discord_guild_id is not None and not snapshot.is_discord_guild_allowed(target.discord_guild_id):
+            if not self._target_is_allowed(target):
                 continue
             target_thread_surface = self.database.local_community_surfaces.get_local_community_thread_surface(
                 local_community_thread_id=getattr(thread_row, "id"),
