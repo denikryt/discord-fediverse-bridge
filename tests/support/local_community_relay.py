@@ -242,6 +242,60 @@ class LocalCommunityRelayHarness:
             }
         )
 
+    def post_mutation_event(
+        self,
+        *,
+        operation: str,
+        object_suffix: str,
+    ) -> ActivityPubEvent:
+        """Build one update or delete event for an existing post object."""
+        if operation not in {"update", "delete"}:
+            raise ValueError(f"unsupported mutation operation: {operation}")
+        activity_type = operation.capitalize()
+        source_id = (
+            f"https://lemmy.example/activities/{operation}/post/{object_suffix}"
+        )
+        object_id = f"https://lemmy.example/post/{object_suffix}"
+        source = {
+            "type": activity_type,
+            "id": source_id,
+            "actor": "https://lemmy.example/u/bob",
+            "object": {
+                "type": "Page",
+                "id": object_id,
+                "attributedTo": "https://lemmy.example/u/bob",
+                "name": "Remote topic edited",
+                "content": "<p>edited</p>",
+            },
+        }
+        return ActivityPubEvent.model_validate(
+            {
+                "event_type": f"post.{operation}d",
+                "delivery_id": source_id,
+                "source_activity_json": source,
+                "source_activity_id": source_id,
+                "source_announce_id": None,
+                "occurred_at": "2026-05-19T10:10:00Z",
+                "community_actor_id": (
+                    "https://bridge.example/communities/hackers"
+                ),
+                "actor_id": "https://lemmy.example/u/bob",
+                "object": {
+                    "ap_id": object_id,
+                    "kind": "post",
+                    "lemmy_id": 1,
+                    "post_ap_id": None,
+                    "post_lemmy_id": None,
+                    "parent_ap_id": None,
+                    "title": "Remote topic edited",
+                    "body_markdown": "edited",
+                    "url": object_id,
+                    "published_at": "2026-05-19T10:10:00Z",
+                    "author_name": "bob",
+                },
+            }
+        )
+
     def observe(self, event: ActivityPubEvent, *, operation: str = "create") -> RelayObservedState:
         """Collect durable relay state and recorded gateway target batches."""
         source = self.database.local_community_relay.get_local_community_relay_source_activity(

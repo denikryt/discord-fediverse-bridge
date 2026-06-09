@@ -284,3 +284,7 @@ fixed source action and explicit 20x15 development and 75x30 CI budgets.
 
 Create-only relay exploration now generates subscriber and federation-policy
 changes between source actions while keeping per-source delivery history durable.
+
+Update/delete continuity exploration is intentionally separate from create target
+churn. It models delivered-create history plus current accepted subscriptions and
+keeps independent durable source state per operation.

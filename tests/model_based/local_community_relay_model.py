@@ -57,3 +57,25 @@ class RelayModel:
             delivery.relay_activity_id = activity_id or delivery.relay_activity_id
             delivery.last_error = error
             delivery.status = "delivered" if ok else "failed"
+
+
+@dataclass(slots=True)
+class RelayContinuityModel:
+    """Track delivered create history and independent mutation source states."""
+
+    delivered_create_targets: set[str]
+    accepted_subscribers: set[str]
+    update: RelayModel = field(default_factory=RelayModel)
+    delete: RelayModel = field(default_factory=RelayModel)
+
+    def eligible_targets(self) -> set[str]:
+        """Return actors satisfying historical delivery and current subscription."""
+        return self.delivered_create_targets & self.accepted_subscribers
+
+    def model_for(self, operation: str) -> RelayModel:
+        """Return the operation-specific source lifecycle."""
+        if operation == "update":
+            return self.update
+        if operation == "delete":
+            return self.delete
+        raise ValueError(f"unsupported continuity operation: {operation}")
