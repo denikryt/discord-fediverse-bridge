@@ -438,7 +438,12 @@ async def test_discord_fanout_uses_registered_handle_not_mutable_nickname(tmp_pa
         assert channel_id == 500
         return forum
 
+    tracker = SimpleNamespace(
+        track_message_edit=Mock(),
+        track_message_delete=Mock(),
+    )
     fanout = DiscordFanout(
+        mutation_tracker=tracker,
         bot=SimpleNamespace(
             database=database,
             settings=_settings(),

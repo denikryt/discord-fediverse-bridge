@@ -85,6 +85,8 @@ def _fake_runtime(*, gateway: AsyncMock | None = None) -> SimpleNamespace:
         fedify_gateway=gateway,
         bot=SimpleNamespace(
             wait_until_bridge_ready=wait_until_bridge_ready,
+        track_message_edit=MagicMock(),
+        track_message_delete=MagicMock(),
         ),
     )
 
@@ -103,6 +105,8 @@ def _fake_bot(*, threads: dict[int, object] | None = None, user_id: int = 999999
     return SimpleNamespace(
         get_thread_by_id=get_thread_by_id,
         wait_until_bridge_ready=wait_until_bridge_ready,
+        track_message_edit=MagicMock(),
+        track_message_delete=MagicMock(),
         user=SimpleNamespace(id=user_id),
     )
 
@@ -141,7 +145,7 @@ def _fake_thread_with_message(
 
 def _fake_fanout(*, bot: object) -> DiscordFanout:
     """Build a real DiscordFanout wired to a fake bot."""
-    return DiscordFanout(bot=bot)
+    return DiscordFanout(bot=bot, mutation_tracker=bot)
 
 
 def _setup_subscription(

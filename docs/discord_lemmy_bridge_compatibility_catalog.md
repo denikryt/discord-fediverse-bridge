@@ -280,6 +280,29 @@ production.
 
 Already removed by policy cleanup Stage 1.
 
+### 2.6 Discord mutation-tracking capability probe
+
+**Where**
+
+- `src/community_sync/discord_fanout.py`
+- `src/app.py`
+
+**What changed**
+
+Mirror edit and delete fanout no longer probes the bot with `getattr()` before
+recording bridge-originated mutations. `DiscordFanout` now requires an explicit
+`DiscordMutationTracker`, and production composition supplies `BridgeBot`.
+
+**Why the cleanup was safe**
+
+The tracking calls protect raw Discord edit/delete handlers from echoing the
+bridge's own mutations. They are required behavior rather than optional SDK
+compatibility, so tests and production now implement the same direct contract.
+
+**Can it be removed?**
+
+Already removed by policy cleanup Stage 2.
+
 ---
 
 ## 3. Remote subscription lifecycle compatibility

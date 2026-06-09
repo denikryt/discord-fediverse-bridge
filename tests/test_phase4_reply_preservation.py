@@ -239,7 +239,7 @@ async def test_phase4_root_message_mirrored_flat(tmp_path: Path) -> None:
 
     fake_thread = _fake_mirror_thread(thread_id=500, sent_message_id=600)
     fake_bot = SimpleNamespace(get_thread_by_id=AsyncMock(return_value=fake_thread))
-    fanout = DiscordFanout(bot=fake_bot)
+    fanout = DiscordFanout(bot=fake_bot, mutation_tracker=fake_bot)
     runtime = _community_runtime(database, gateway, discord_fanout=fanout)
 
     # No reference — root message.
@@ -284,7 +284,7 @@ async def test_phase4_reply_to_starter_references_mirror_starter(tmp_path: Path)
 
     fake_thread = _fake_mirror_thread(thread_id=500, sent_message_id=600)
     fake_bot = SimpleNamespace(get_thread_by_id=AsyncMock(return_value=fake_thread))
-    fanout = DiscordFanout(bot=fake_bot)
+    fanout = DiscordFanout(bot=fake_bot, mutation_tracker=fake_bot)
     runtime = _community_runtime(database, gateway, discord_fanout=fanout)
 
     # Reference points to the source starter (message 300).
@@ -360,7 +360,7 @@ async def test_phase4_reply_to_mirrored_message_references_mirror_delivery(tmp_p
     gateway = _publish_gateway()
     fake_thread = _fake_mirror_thread(thread_id=500, sent_message_id=700)
     fake_bot = SimpleNamespace(get_thread_by_id=AsyncMock(return_value=fake_thread))
-    fanout = DiscordFanout(bot=fake_bot)
+    fanout = DiscordFanout(bot=fake_bot, mutation_tracker=fake_bot)
     runtime = _community_runtime(database, gateway, discord_fanout=fanout)
 
     # New message 401 is a reply to the previously mirrored message 400.
@@ -405,7 +405,7 @@ async def test_phase4_reply_to_unknown_message_mirrored_flat(tmp_path: Path) -> 
 
     fake_thread = _fake_mirror_thread(thread_id=500, sent_message_id=600)
     fake_bot = SimpleNamespace(get_thread_by_id=AsyncMock(return_value=fake_thread))
-    fanout = DiscordFanout(bot=fake_bot)
+    fanout = DiscordFanout(bot=fake_bot, mutation_tracker=fake_bot)
     runtime = _community_runtime(database, gateway, discord_fanout=fanout)
 
     # Reference to unknown message 999 — no delivery row exists.
@@ -479,7 +479,7 @@ async def test_phase4_reply_db_consistency_mirror_delivery_recorded(tmp_path: Pa
     # sent_message_id=700 — the newly created mirror of message 401 in thread 500.
     fake_thread = _fake_mirror_thread(thread_id=500, sent_message_id=700)
     fake_bot = SimpleNamespace(get_thread_by_id=AsyncMock(return_value=fake_thread))
-    fanout = DiscordFanout(bot=fake_bot)
+    fanout = DiscordFanout(bot=fake_bot, mutation_tracker=fake_bot)
     runtime = _community_runtime(database, gateway, discord_fanout=fanout)
 
     message = _fake_message(

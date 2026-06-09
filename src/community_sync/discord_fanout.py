@@ -11,7 +11,7 @@ from __future__ import annotations
 import asyncio
 import logging
 from dataclasses import dataclass
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Protocol
 
 import discord
 
@@ -23,6 +23,16 @@ if TYPE_CHECKING:
     from ..discord_bot import BridgeBot
 
 logger = logging.getLogger(__name__)
+
+
+class DiscordMutationTracker(Protocol):
+    """Record bridge-originated Discord mutations for raw-event deduplication."""
+
+    def track_message_edit(self, message_id: int) -> None:
+        """Record one successfully edited Discord message."""
+
+    def track_message_delete(self, message_id: int) -> None:
+        """Record one successfully deleted Discord message."""
 
 
 @dataclass(slots=True)
@@ -106,9 +116,17 @@ class DiscordFanout:
     already-resolved sibling targets.
     """
 
-    def __init__(self, *, bot: BridgeBot, database: Database | None = None, policy_service: BridgePolicyService | None = None) -> None:
-        """Initialise fanout with the shared bot instance for Discord API calls."""
+    def __init__(
+        self,
+        *,
+        bot: BridgeBot,
+        mutation_tracker: DiscordMutationTracker,
+        database: Database | None = None,
+        policy_service: BridgePolicyService | None = None,
+    ) -> None:
+        """Initialise fanout with explicit Discord API and mutation-tracking dependencies."""
         self.bot = bot
+        self.mutation_tracker = mutation_tracker
         self.database = database
         self.policy_service = policy_service
 
@@ -268,10 +286,8 @@ class DiscordFanout:
                     fallback_header=author_display_name,
                 )
                 await message.edit(content=updated)
-                # Track that we edited this message to dedup on_raw_message_edit events
-                track_edit = getattr(self.bot, "track_message_edit", None)
-                if callable(track_edit):
-                    track_edit(delivery.discord_message_id)
+                # Record only successful mutations so raw Discord events can suppress echoes.
+                self.mutation_tracker.track_message_edit(delivery.discord_message_id)
                 logger.info(
                     "Edited mirror message %s in thread %s",
                     delivery.discord_message_id,
@@ -307,10 +323,8 @@ class DiscordFanout:
                 thread = await self.bot.get_thread_by_id(delivery.discord_thread_id)
                 message = await thread.fetch_message(delivery.discord_message_id)
                 await message.delete()
-                # Track that we deleted this message to dedup on_raw_message_delete events
-                track_delete = getattr(self.bot, "track_message_delete", None)
-                if callable(track_delete):
-                    track_delete(delivery.discord_message_id)
+                # Record only successful mutations so raw Discord events can suppress echoes.
+                self.mutation_tracker.track_message_delete(delivery.discord_message_id)
                 logger.info(
                     "Deleted mirror message %s in thread %s",
                     delivery.discord_message_id,

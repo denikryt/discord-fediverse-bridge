@@ -90,6 +90,8 @@ def _fake_runtime(*, gateway: AsyncMock | None = None) -> SimpleNamespace:
         fedify_gateway=gateway,
         bot=SimpleNamespace(
             wait_until_bridge_ready=wait_until_bridge_ready,
+            track_message_edit=MagicMock(),
+            track_message_delete=MagicMock(),
         ),
     )
 
@@ -108,6 +110,8 @@ def _fake_bot(*, threads: dict[int, object] | None = None) -> SimpleNamespace:
     return SimpleNamespace(
         get_thread_by_id=get_thread_by_id,
         wait_until_bridge_ready=wait_until_bridge_ready,
+        track_message_edit=MagicMock(),
+        track_message_delete=MagicMock(),
     )
 
 
@@ -138,7 +142,7 @@ def _fake_thread_with_message(
 
 def _fake_fanout(*, bot: object) -> DiscordFanout:
     """Build a real DiscordFanout wired to a fake bot."""
-    return DiscordFanout(bot=bot)
+    return DiscordFanout(bot=bot, mutation_tracker=bot)
 
 
 def _setup_message_group_with_deliveries(
@@ -275,6 +279,7 @@ async def test_source_message_edit_propagates_to_mirrors_and_ap(tmp_path: Path) 
     # Mirror message must be edited with just the new content (no header to preserve).
     fake_mirror_thread.fetch_message.assert_awaited_once_with(mirror_msg_id)
     fake_mirror_message.edit.assert_awaited_once_with(content="Edited content")
+    bot.track_message_edit.assert_called_once_with(mirror_msg_id)
 
 
 @pytest.mark.asyncio
@@ -419,6 +424,7 @@ async def test_source_message_delete_removes_mirrors_and_sends_ap_delete(tmp_pat
     # Mirror message must be deleted via Discord API.
     fake_mirror_thread.fetch_message.assert_awaited_once_with(mirror_msg_id)
     fake_mirror_message.delete.assert_awaited_once()
+    bot.track_message_delete.assert_called_once_with(mirror_msg_id)
 
 
 @pytest.mark.asyncio
@@ -1032,3 +1038,9 @@ async def test_inbound_comment_update_preserves_username_header(tmp_path: Path) 
     message.edit.assert_awaited_once_with(
         content="`bob@lemmy.example`\n\nUpdated comment text"
     )
+
+
+def test_discord_fanout_requires_mutation_tracker() -> None:
+    """Construction rejects an incomplete composition missing dedup tracking."""
+    with pytest.raises(TypeError):
+        DiscordFanout(bot=SimpleNamespace())

@@ -92,7 +92,7 @@ async def test_phase2_two_subscriptions_mirror_thread_created_in_sibling(tmp_pat
     fake_bot = SimpleNamespace(
         fetch_forum_channel=AsyncMock(return_value=fake_forum_channel),
     )
-    fanout = DiscordFanout(bot=fake_bot)
+    fanout = DiscordFanout(bot=fake_bot, mutation_tracker=fake_bot)
     runtime = build_community_runtime(
         database, fedify_gateway=gateway, discord_fanout=fanout
     )
@@ -182,7 +182,7 @@ async def test_phase2_mirror_failure_does_not_block_source_publish(tmp_path: Pat
     fake_bot = SimpleNamespace(
         fetch_forum_channel=AsyncMock(side_effect=RuntimeError("discord error")),
     )
-    fanout = DiscordFanout(bot=fake_bot)
+    fanout = DiscordFanout(bot=fake_bot, mutation_tracker=fake_bot)
     runtime = build_community_runtime(
         database, fedify_gateway=gateway, discord_fanout=fanout
     )
