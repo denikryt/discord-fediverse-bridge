@@ -246,3 +246,7 @@ Operation-level registration, existing channel/follow state, last-channel cleanu
 Outbound fanout remains primarily a named-scenario domain because target-specific mappings, receipts, retries, and mixed outcomes are clearer inline. `tests/support/fanout_contract_manifest.py` assigns stable rule IDs and classifications to the existing routing-metadata cases, remote/local fanout narratives, and deterministic failure-ordering checks. Generate the report with `.venv/bin/python tools/fanout_contract_report.py`.
 
 Shared delivery/mapping/receipt effect fragments remain deferred: subscription operations and multi-target fanout do not yet expose one sufficiently narrow common observation shape.
+
+## Inbound ActivityPub contract migration
+
+Inbound handler outcomes, policy/routing skips, dedup, echo prevention, parent backfill, local-community Follow/Undo/content, mappings/receipts, and internal read APIs are assigned stable rule ownership in `tests/support/inbound_contract_manifest.py`. Protocol-rich payload and out-of-order flows remain named scenarios. Generate the report with `.venv/bin/python tools/inbound_contract_report.py`.
