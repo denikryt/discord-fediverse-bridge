@@ -236,3 +236,7 @@ The report covers only declared community-management rules. It does not infer un
 Deterministic handle normalization, self-contained community resolution, ambiguity rejection, and relay labels are represented by typed cases in `tests/support/identity_discovery_contracts.py`. Database identity integration, registration, unified discovery, and directory-refresh flows remain named scenarios. Generate the report with `.venv/bin/python tools/identity_discovery_contract_report.py`.
 
 No common case/effects base was extracted after this stage: ban, bridge policy, community management, and identity/discovery still have materially different inputs and observations. Passive pytest collection remains the only proven shared primitive.
+
+## Subscription lifecycle contract migration
+
+Operation-level registration, existing channel/follow state, last-channel cleanup, missing Follow IDs, and remote Undo outcomes are formalized in `tests/support/subscription_contracts.py`. Multi-step Follow/Accept/Undo, retry, duplicate activity, and gateway protocol verification remain named integration scenarios. Generate the report with `.venv/bin/python tools/subscription_contract_report.py`.
