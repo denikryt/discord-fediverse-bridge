@@ -174,3 +174,18 @@ HYPOTHESIS_PROFILE=ci .venv/bin/python -m pytest -q tests/stateful
 ```
 
 This layer does not replace named lifecycle scenarios and does not model global scope, local target resolution, community status changes, concurrency, or failures.
+
+## Constrained interaction and cross-entry-point assurance
+
+Ban authorization factors are defined in `tests/support/ban_interactions.py`. A deterministic greedy selector covers every valid 2-way factor/value pair while respecting explicit scope and persistence constraints. The selected suite executes 12 cases from 120 valid constrained candidates and covers all 91 valid pairs.
+
+Generate the interaction report:
+
+```bash
+.venv/bin/python tools/ban_interaction_report.py \
+  --output .artifacts/test-assurance/ban-interactions/report.json
+```
+
+The report measures constrained pair coverage only. It does not imply exhaustive semantic, branch, stateful, failure, or concurrency coverage.
+
+`tests/assurance/test_guild_policy_entry_points.py` checks the same explicit guild access contracts through direct `BridgePolicyService` evaluation and DiscordOps command-access policy. Each path is checked against an independent expected boolean, and adding an unrelated blocked guild must not alter the target guild result. Adding the first allow entry is intentionally not treated as invariant because it changes empty-allowlist open mode into restrictive mode.
