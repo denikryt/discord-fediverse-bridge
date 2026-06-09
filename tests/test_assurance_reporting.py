@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from types import SimpleNamespace
+from dataclasses import dataclass
 
 import pytest
 
@@ -11,17 +11,48 @@ from tools.assurance_reporting import build_case_report, build_owner_report
 from tools.contract_report_support import CollectedCaseResult
 
 
+@dataclass(frozen=True, slots=True)
+class ExampleCase:
+    """Minimal typed case fixture for shared report tests."""
+
+    id: str
+    action: str
+
+
+@dataclass(frozen=True, slots=True)
+class ExampleRule:
+    """Minimal typed rule fixture for shared report tests."""
+
+    id: str
+    description: str
+    represented_by: tuple[str, ...]
+
+
+@dataclass(frozen=True, slots=True)
+class ExampleOwnerEntry:
+    """Minimal typed owner fixture for shared report tests."""
+
+    rule_id: str
+    family: str
+    classification: str
+    node_prefixes: tuple[str, ...]
+
+
 def test_shared_case_report_preserves_domain_dimensions_and_gaps() -> None:
     """Shared wiring must preserve explicit domain serialization and missing rules."""
 
-    case = SimpleNamespace(id="case-a", action="create")
+    case = ExampleCase(id="case-a", action="create")
     result = CollectedCaseResult("file.py::test_a", case, "passed")
     rules = (
-        SimpleNamespace(
-            id="present", description="present", represented_by=("case-a",)
+        ExampleRule(
+            id="present",
+            description="present",
+            represented_by=("case-a",),
         ),
-        SimpleNamespace(
-            id="missing", description="missing", represented_by=("case-b",)
+        ExampleRule(
+            id="missing",
+            description="missing",
+            represented_by=("case-b",),
         ),
     )
     report = build_case_report(
@@ -38,7 +69,7 @@ def test_shared_owner_report_preserves_classification_and_status() -> None:
     """Named scenario reports retain classification and exact owner status."""
 
     entries = (
-        SimpleNamespace(
+        ExampleOwnerEntry(
             rule_id="rule",
             family="routing",
             classification="named_scenario",
@@ -56,13 +87,13 @@ def test_shared_reporting_rejects_duplicate_rule_ids() -> None:
     """Ambiguous registry data fails before a misleading artifact is emitted."""
 
     entries = (
-        SimpleNamespace(
+        ExampleOwnerEntry(
             rule_id="duplicate",
             family="a",
             classification="named_scenario",
             node_prefixes=("a",),
         ),
-        SimpleNamespace(
+        ExampleOwnerEntry(
             rule_id="duplicate",
             family="b",
             classification="named_scenario",

@@ -111,16 +111,16 @@ async def _execute_case(
     )
     if case.action == "subscribe":
         operation_input = SubscribeInput(
-            database,
-            gateway,
-            str(CHANNEL_ID),
-            CHANNEL_ID,
-            CHANNEL_MENTION,
-            ACTOR_ID,
-            "hackers",
-            42,
-            COMMUNITY_HANDLE,
-            policy,
+            database=database,
+            fedify_gateway=gateway,
+            discord_user_id=str(CHANNEL_ID),
+            channel_id=CHANNEL_ID,
+            channel_mention=CHANNEL_MENTION,
+            actor_id=ACTOR_ID,
+            community_name="hackers",
+            numeric_id=42,
+            community_handle=COMMUNITY_HANDLE,
+            policy_service=policy,
         )
         return await run_operation_definition_async(
             subscribe_operation,
@@ -128,11 +128,11 @@ async def _execute_case(
         )
 
     operation_input = UnsubscribeInput(
-        database,
-        gateway,
-        CHANNEL_ID,
-        CHANNEL_MENTION,
-        policy,
+        database=database,
+        fedify_gateway=gateway,
+        channel_id=CHANNEL_ID,
+        channel_mention=CHANNEL_MENTION,
+        policy_service=policy,
     )
     return await run_operation_definition_async(
         unsubscribe_operation,

@@ -2,11 +2,21 @@
 
 from __future__ import annotations
 
-from types import SimpleNamespace
+from dataclasses import dataclass
 
 from support.technical_contract_manifest import TECHNICAL_CONTRACT_ENTRIES
 from tools.gateway_contract_runner import merge_status
 from tools.technical_contract_report import build_report
+
+
+@dataclass(frozen=True, slots=True)
+class TechnicalEntryFixture:
+    """Typed technical-contract entry fixture for report tests."""
+
+    rule_id: str
+    family: str
+    owner_kind: str
+    owners: tuple[str, ...]
 
 
 def test_technical_manifest_has_unique_nonempty_rule_owners() -> None:
@@ -21,10 +31,13 @@ def test_technical_report_detects_missing_native_owner() -> None:
     """A declared rule without collected native evidence remains visible as a gap."""
 
     entries = (
-        SimpleNamespace(
-            rule_id="python", family="x", owner_kind="pytest", owners=("a.py::",)
+        TechnicalEntryFixture(
+            rule_id="python",
+            family="x",
+            owner_kind="pytest",
+            owners=("a.py::",),
         ),
-        SimpleNamespace(
+        TechnicalEntryFixture(
             rule_id="gateway",
             family="x",
             owner_kind="gateway",
