@@ -102,3 +102,12 @@ The pilot covers a bounded authorization and lifecycle subset. Existing named co
 ## Ban observable effects
 
 The pilot collects operation output, persisted active/inactive ban rows, resolved local Discord identity, and management audit actions after each real operation. `tests/support/ban_effects.py` keeps these assertions ban-specific and compares fields separately so failures identify the missing effect. Rejected and validation cases explicitly require the absence of unplanned rows and audit events.
+
+## Generate the ban contract report
+
+```bash
+.venv/bin/python tools/ban_contract_report.py \
+  --output .artifacts/test-assurance/ban-contract/report.json
+```
+
+The CLI runs only the typed ban pilot and passively records each case ID, declared dimensions, pytest status, represented values, selected combinations, and separately declared required rules. The JSON report is generated and ignored by Git. Missing rules are visible facts but do not change pytest's exit code in this stage.

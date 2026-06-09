@@ -161,3 +161,76 @@ BAN_CONTRACT_CASES: tuple[BanContractCase, ...] = (
         expected=BanExpected(False, "no_active_ban", 0),
     ),
 )
+
+
+@dataclass(frozen=True, slots=True)
+class BanRequiredRule:
+    """Declare one reviewable ban rule and the cases that represent it."""
+
+    id: str
+    description: str
+    represented_by: tuple[str, ...]
+
+
+REQUIRED_BAN_RULES: tuple[BanRequiredRule, ...] = (
+    BanRequiredRule(
+        "owner_scoped_create",
+        "Community owner can create a scoped remote ban in an enabled community.",
+        ("owner.scoped.enabled.remote.absent.create",),
+    ),
+    BanRequiredRule(
+        "super_admin_scoped_create",
+        "Super-admin can create a scoped ban without being the owner.",
+        ("super_admin.scoped.enabled.remote.absent.create",),
+    ),
+    BanRequiredRule(
+        "unauthorized_scoped_forbidden",
+        "Unrelated caller cannot create a scoped ban.",
+        ("unauthorized.scoped.enabled.remote.absent.forbidden",),
+    ),
+    BanRequiredRule(
+        "super_admin_global_create",
+        "Super-admin can create a global ban without community scope.",
+        ("super_admin.global.remote.absent.create",),
+    ),
+    BanRequiredRule(
+        "non_admin_global_forbidden",
+        "Non-super-admin cannot create a global ban.",
+        ("owner.global.remote.absent.forbidden",),
+    ),
+    BanRequiredRule(
+        "disabled_community_rejected",
+        "Disabled community rejects scoped ban mutation.",
+        ("owner.scoped.disabled.remote.absent.validation",),
+    ),
+    BanRequiredRule(
+        "missing_community_rejected",
+        "Missing community rejects scoped ban mutation.",
+        ("owner.scoped.missing.remote.absent.validation",),
+    ),
+    BanRequiredRule(
+        "local_target_resolution",
+        "Registered local target resolves to immutable Discord identity.",
+        ("owner.scoped.enabled.local.absent.create",),
+    ),
+    BanRequiredRule(
+        "duplicate_active_rejected",
+        "Duplicate active ban is rejected without another row.",
+        ("owner.scoped.enabled.remote.active.duplicate",),
+    ),
+    BanRequiredRule(
+        "removed_ban_reactivated",
+        "Removed ban is reactivated instead of duplicated.",
+        ("owner.scoped.enabled.remote.removed.reactivate",),
+    ),
+    BanRequiredRule(
+        "active_ban_unbanned",
+        "Active scoped ban can be removed by the owner.",
+        ("owner.scoped.enabled.remote.active.unban",),
+    ),
+    BanRequiredRule(
+        "absent_unban_rejected",
+        "Unban without an active row returns validation failure.",
+        ("owner.scoped.enabled.remote.absent.unban_validation",),
+    ),
+)
