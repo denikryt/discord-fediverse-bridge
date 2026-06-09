@@ -240,3 +240,9 @@ No common case/effects base was extracted after this stage: ban, bridge policy, 
 ## Subscription lifecycle contract migration
 
 Operation-level registration, existing channel/follow state, last-channel cleanup, missing Follow IDs, and remote Undo outcomes are formalized in `tests/support/subscription_contracts.py`. Multi-step Follow/Accept/Undo, retry, duplicate activity, and gateway protocol verification remain named integration scenarios. Generate the report with `.venv/bin/python tools/subscription_contract_report.py`.
+
+## Outbound fanout and routing migration
+
+Outbound fanout remains primarily a named-scenario domain because target-specific mappings, receipts, retries, and mixed outcomes are clearer inline. `tests/support/fanout_contract_manifest.py` assigns stable rule IDs and classifications to the existing routing-metadata cases, remote/local fanout narratives, and deterministic failure-ordering checks. Generate the report with `.venv/bin/python tools/fanout_contract_report.py`.
+
+Shared delivery/mapping/receipt effect fragments remain deferred: subscription operations and multi-target fanout do not yet expose one sufficiently narrow common observation shape.
