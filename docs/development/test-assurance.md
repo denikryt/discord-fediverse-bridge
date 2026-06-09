@@ -278,3 +278,6 @@ payload-projection narratives separate from durable relay lifecycle exploration.
 The relay pilot now includes an independent pure transition model and fixed
 model-vs-SUT examples before generated stateful exploration. The model excludes
 ORM identities, timestamps, and payload rendering.
+
+Generated relay exploration uses a bounded create/retry state machine with a
+fixed source action and explicit 20x15 development and 75x30 CI budgets.
