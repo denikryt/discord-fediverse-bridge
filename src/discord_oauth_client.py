@@ -29,19 +29,12 @@ class DiscordOAuthClient:
         self.settings = settings
         self._client = httpx.AsyncClient(timeout=10.0)
 
-    def _redirect_uri(self) -> str:
-        """Return the derived callback while tolerating older test/config adapters."""
-        resolved = getattr(self.settings, "resolved_discord_oauth_redirect_uri", None)
-        if resolved:
-            return str(resolved)
-        return str(self.settings.discord_oauth_redirect_uri)
-
     def build_authorization_url(self, state: str) -> str:
         """Build the Discord authorize URL for one registration session."""
         query = urlencode(
             {
                 "client_id": self.settings.discord_oauth_client_id,
-                "redirect_uri": self._redirect_uri(),
+                "redirect_uri": self.settings.resolved_discord_oauth_redirect_uri,
                 "response_type": "code",
                 "scope": "identify",
                 "state": state,
@@ -61,7 +54,7 @@ class DiscordOAuthClient:
             data={
                 "grant_type": "authorization_code",
                 "code": code,
-                "redirect_uri": self._redirect_uri(),
+                "redirect_uri": self.settings.resolved_discord_oauth_redirect_uri,
             },
             headers={"content-type": "application/x-www-form-urlencoded"},
             auth=(

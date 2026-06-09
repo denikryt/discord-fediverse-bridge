@@ -184,8 +184,8 @@ class BanUserOperation(Operation):
             "actor_url": target.actor_url,
             "reason": stored_reason,
         }
-        # Preserve the legacy remote-target call shape while attaching immutable
-        # Discord identity only for locally registered users.
+        # Attach immutable Discord identity only for locally registered users;
+        # remote ActivityPub targets do not have a Discord account identifier.
         if target.discord_user_id is not None:
             mutation_kwargs["target_discord_user_id"] = target.discord_user_id
         activation = operation_input.database.management_actions.create_or_reactivate_ban(**mutation_kwargs)

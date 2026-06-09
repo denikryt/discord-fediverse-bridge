@@ -114,10 +114,6 @@ def register(
         reason: str | None = None,
     ) -> None:
         """Run the moderation operation and return an ephemeral command reply."""
-        # Preserve direct-callback compatibility with the previous positional
-        # order used by project tests while Discord itself supplies named options.
-        if community and "@" in community and "@" not in user:
-            user, community = community, user
         if await reject_if_command_access_denied(interaction, definition=GUILD_COMMAND_ACCESS, settings=settings, database=database, policy_service=policy_service):
             return
         result = ban_user_operation(

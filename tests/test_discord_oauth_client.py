@@ -67,7 +67,7 @@ async def test_exchange_code_uses_basic_auth_and_documented_form_body() -> None:
     settings = SimpleNamespace(
         discord_oauth_client_id="client-id",
         discord_oauth_client_secret="client-secret",
-        discord_oauth_redirect_uri="https://bridge.example.com/auth/discord/callback",
+        resolved_discord_oauth_redirect_uri="https://bridge.example.com/auth/discord/callback",
     )
     client = DiscordOAuthClient(settings)
     fake_http = _RecordingAsyncClient(
@@ -94,7 +94,7 @@ async def test_exchange_code_surfaces_discord_error_body() -> None:
     settings = SimpleNamespace(
         discord_oauth_client_id="client-id",
         discord_oauth_client_secret="client-secret",
-        discord_oauth_redirect_uri="https://bridge.example.com/auth/discord/callback",
+        resolved_discord_oauth_redirect_uri="https://bridge.example.com/auth/discord/callback",
     )
     client = DiscordOAuthClient(settings)
     fake_http = _RecordingAsyncClient(
@@ -110,3 +110,16 @@ async def test_exchange_code_surfaces_discord_error_body() -> None:
 
     assert "Discord token exchange failed: 500" in str(excinfo.value)
     assert "Internal Server Error" in str(excinfo.value)
+
+
+def test_oauth_client_requires_resolved_redirect_uri_contract() -> None:
+    """An old settings adapter without the resolved property fails immediately."""
+    settings = SimpleNamespace(
+        discord_oauth_client_id="client-id",
+        discord_oauth_client_secret="client-secret",
+        discord_oauth_redirect_uri="https://legacy.example/callback",
+    )
+    client = DiscordOAuthClient(settings)
+
+    with pytest.raises(AttributeError):
+        client.build_authorization_url("state")

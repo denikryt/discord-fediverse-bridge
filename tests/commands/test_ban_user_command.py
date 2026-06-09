@@ -30,7 +30,7 @@ async def test_ban_user_command_passes_user_and_guild_and_returns_ephemeral(comm
 
     ban_user.register(command_tree, database, settings, _policy_service(database, settings))
     command = command_tree.commands["ban-user"]
-    await command.callback(interaction, "cats", "alice@example.com", "spam")
+    await command.callback(interaction, user="alice@example.com", community="cats", reason="spam")
 
     database.management_actions.create_or_reactivate_ban.assert_called_once_with(
         actor_discord_user_id="1234567890",
@@ -59,7 +59,7 @@ async def test_ban_user_command_rejection_stays_ephemeral(command_tree, interact
 
     ban_user.register(command_tree, database, settings, _policy_service(database, settings))
     command = command_tree.commands["ban-user"]
-    await command.callback(interaction, "cats", "alice@example.com", "spam")
+    await command.callback(interaction, user="alice@example.com", community="cats", reason="spam")
 
     interaction.response.send_message.assert_awaited_once_with(
         "You are not allowed to manage this local community.",
