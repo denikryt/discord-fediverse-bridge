@@ -268,3 +268,9 @@ Dashboard, backup, OAuth, public URL, deployment, schema, and Fedify gateway che
 ## Migration completeness
 
 Run `python tools/migration_completeness_report.py` to collect every project Python test, vendored DiscordOps test, and native gateway verification script. The generated JSON classifies each executable test as typed contract, named scenario, generated assurance, technical/native contract, or proven duplicate/obsolete. `unknown_unreviewed: 0` means every current test has an architectural ownership decision; it does not claim that every possible product rule is known.
+
+### Local-community relay model exploration
+
+Relay resilience setup now lives in `tests/support/local_community_relay.py`, and
+failure/retry/snapshot scenarios live in a focused behavior module. This keeps
+payload-projection narratives separate from durable relay lifecycle exploration.
