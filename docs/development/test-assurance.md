@@ -260,3 +260,7 @@ A shared content/delivery effects record remains deferred because fanout, inboun
 ## Technical contract reporting
 
 Dashboard, backup, OAuth, public URL, deployment, schema, and Fedify gateway checks remain native technical tests. Generate gateway evidence in resumable chunks with `python tools/gateway_contract_runner.py --start 0 --limit 14` and then the remaining chunk. Generate the combined JSON report with `python tools/technical_contract_report.py`. Artifacts are written under `.artifacts/test-assurance/technical-contracts/` and are never edited manually.
+
+## Shared assurance reporting
+
+`tools/assurance_reporting.py` contains only the two report mechanics proven across multiple domains: typed-case rule representation and named/generated node-prefix ownership. Domain inputs, expected effects, serializers, and output paths remain domain-specific. `tools/aggregate_assurance_report.py` combines already-generated JSON artifacts without rerunning tests or inferring new product rules.

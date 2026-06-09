@@ -13,53 +13,28 @@ from typing import Any
 import pytest
 
 try:
-    from tools.contract_report_support import PassiveCaseCollector, status_totals
+    from tools.assurance_reporting import PassiveCaseCollector, build_case_report
 except ModuleNotFoundError:
-    from contract_report_support import PassiveCaseCollector, status_totals
+    from assurance_reporting import PassiveCaseCollector, build_case_report
 
 
 def build_report(results: Sequence[Any], required_rules: Sequence[Any]) -> dict[str, Any]:
-    """Build factual rule representation and case status data."""
+    """Build community-management coverage through shared report mechanics."""
 
-    ids = {result.case.id for result in results}
-    rule_rows = []
-    missing = []
-    for rule in sorted(required_rules, key=lambda value: value.id):
-        represented = bool(ids.intersection(rule.represented_by))
-        rule_rows.append({
-            "id": rule.id,
-            "description": rule.description,
-            "represented": represented,
-            "represented_by": list(rule.represented_by),
-        })
-        if not represented:
-            missing.append(rule.id)
-    return {
-        "domain": "community_management",
-        "summary": {
-            "required_rules": len(rule_rows),
-            "represented_rules": len(rule_rows) - len(missing),
-            "missing_rules": len(missing),
-            "statuses": status_totals(results),
-        },
-        "missing_rule_ids": missing,
-        "required_rules": rule_rows,
-        "cases": [
-            {
-                "id": result.case.id,
-                "nodeid": result.nodeid,
-                "status": result.status,
-                "dimensions": {
-                    "action": result.case.action,
-                    "caller_role": result.case.caller_role,
-                    "community_state": result.case.community_state,
-                    "guild_context": result.case.guild_context,
-                    "requested_status": result.case.requested_status,
-                },
+    return build_case_report(
+        domain="community_management",
+        results=results,
+        required_rules=required_rules,
+        serialize_case=lambda case: {
+            "dimensions": {
+                "action": case.action,
+                "caller_role": case.caller_role,
+                "community_state": case.community_state,
+                "guild_context": case.guild_context,
+                "requested_status": case.requested_status,
             }
-            for result in sorted(results, key=lambda value: value.case.id)
-        ],
-    }
+        },
+    )
 
 
 def main(argv: Sequence[str] | None = None) -> int:
