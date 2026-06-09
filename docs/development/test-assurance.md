@@ -230,3 +230,9 @@ Generate the passive report with:
 ```
 
 The report covers only declared community-management rules. It does not infer unknown product rules or claim that all dashboard/runtime narratives are represented by typed cases.
+
+## Identity and discovery contract migration
+
+Deterministic handle normalization, self-contained community resolution, ambiguity rejection, and relay labels are represented by typed cases in `tests/support/identity_discovery_contracts.py`. Database identity integration, registration, unified discovery, and directory-refresh flows remain named scenarios. Generate the report with `.venv/bin/python tools/identity_discovery_contract_report.py`.
+
+No common case/effects base was extracted after this stage: ban, bridge policy, community management, and identity/discovery still have materially different inputs and observations. Passive pytest collection remains the only proven shared primitive.
