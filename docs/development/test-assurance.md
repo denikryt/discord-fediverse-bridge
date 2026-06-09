@@ -189,3 +189,21 @@ Generate the interaction report:
 The report measures constrained pair coverage only. It does not imply exhaustive semantic, branch, stateful, failure, or concurrency coverage.
 
 `tests/assurance/test_guild_policy_entry_points.py` checks the same explicit guild access contracts through direct `BridgePolicyService` evaluation and DiscordOps command-access policy. Each path is checked against an independent expected boolean, and adding an unrelated blocked guild must not alter the target guild result. Adding the first allow entry is intentionally not treated as invariant because it changes empty-allowlist open mode into restrictive mode.
+
+## Stage 9 failure-ordering and deterministic concurrency checks
+
+Run the local-community federation relay assurance scenarios directly:
+
+```bash
+.venv/bin/python -m pytest -q \
+  tests/behavior/test_local_community_remote_fanout_scenarios.py \
+  -k 'policy_read_failure or partial_relay_failure or policy_change_during'
+```
+
+These scenarios prove three bounded contracts through the real relay repositories and renderer with only the gateway/policy repository edges controlled:
+
+- policy-read failure occurs before relay source, delivery, or transport side effects;
+- mixed per-target outcomes remain isolated and a retry sends only failed targets;
+- an in-flight fanout keeps its action-scoped policy snapshot while the next action observes a concurrent policy change.
+
+The concurrency scenario uses `asyncio.Event` barriers rather than sleeps, so ordering is deterministic. Existing management-audit rollback tests remain the authoritative coverage for mutation-plus-audit atomicity.

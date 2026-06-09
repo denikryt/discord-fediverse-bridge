@@ -3,6 +3,7 @@
 from __future__ import annotations
 from support.runtime import build_test_policy_service
 
+import asyncio
 from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import AsyncMock
@@ -11,6 +12,7 @@ import pytest
 
 from src.activitypub_models import ActivityPubEvent
 from src.fedify_gateway_client import SendLocalCommunityRelayResult, SendLocalCommunityRelayOutcome
+from src.bridge_policy import PolicyType
 from src.content_publish_service import ContentPublishService
 from src.local_communities.runtime import LocalCommunityRuntime
 from src.local_communities.service import LocalCommunityService
@@ -703,3 +705,148 @@ async def test_inbound_post_update_skips_unfollowed_delivered_targets(tmp_path: 
     assert sorted(delivery.target_remote_actor_id for delivery in request["deliveries"]) == [
         "https://lemmy.example/u/carol",
     ]
+
+
+@pytest.mark.asyncio
+async def test_relay_policy_read_failure_happens_before_persistence_or_transport(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A failed policy read must leave no durable or external relay effects."""
+    database, runtime = _runtime(tmp_path)
+    local_community = _local_community(database)
+    _add_followers(database, local_community)
+    event = _post_event(suffix="policy-failure")
+
+    def fail_snapshot() -> object:
+        """Simulate repository failure at the action's first policy boundary."""
+        raise RuntimeError("policy read failed")
+
+    monkeypatch.setattr(runtime.federation_fanout.policy_service, "snapshot", fail_snapshot)
+
+    with pytest.raises(RuntimeError, match="policy read failed"):
+        await runtime.federation_fanout.relay_create(
+            event=event, local_community=local_community, object_kind="post"
+        )
+
+    source = database.local_community_relay.get_local_community_relay_source_activity(
+        local_community_id=local_community.id,
+        operation="create",
+        source_object_ap_id=event.object.ap_id,
+        source_activity_id=event.source_activity_id,
+    )
+    assert source is None
+    runtime.fedify_gateway.send_local_community_relay.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_partial_relay_failure_retries_only_failed_target(tmp_path: Path) -> None:
+    """One failed target remains retryable without redelivering healthy targets."""
+    database, runtime = _runtime(tmp_path)
+    local_community = _local_community(database)
+    _add_followers(database, local_community)
+    event = _post_event(suffix="partial-retry")
+    calls: list[list[str]] = []
+
+    async def gateway_result(*, signing_actor_url: str, deliveries: list[object]) -> SendLocalCommunityRelayResult:
+        """Fail carol once and deliver every later retry."""
+        del signing_actor_url
+        actors = [delivery.target_remote_actor_id for delivery in deliveries]
+        calls.append(actors)
+        first_attempt = len(calls) == 1
+        return SendLocalCommunityRelayResult(
+            outcomes=[
+                SendLocalCommunityRelayOutcome(
+                    delivery_id=delivery.delivery_id,
+                    ok=not (first_attempt and delivery.target_remote_actor_id.endswith("/carol")),
+                    target_remote_actor_id=delivery.target_remote_actor_id,
+                    activity_id=delivery.activity_json["id"],
+                    error=("temporary failure" if first_attempt and delivery.target_remote_actor_id.endswith("/carol") else None),
+                )
+                for delivery in deliveries
+            ]
+        )
+
+    runtime.fedify_gateway.send_local_community_relay.side_effect = gateway_result
+
+    first = await runtime.federation_fanout.relay_create(
+        event=event, local_community=local_community, object_kind="post"
+    )
+    second = await runtime.federation_fanout.relay_create(
+        event=event, local_community=local_community, object_kind="post"
+    )
+
+    assert first == type(first)(attempted=2, delivered=1, failed=1)
+    assert second == type(second)(attempted=1, delivered=1, failed=0)
+    assert sorted(calls[0]) == ["https://lemmy.example/u/alice", "https://lemmy.example/u/carol"]
+    assert calls[1] == ["https://lemmy.example/u/carol"]
+    source = database.local_community_relay.get_local_community_relay_source_activity(
+        local_community_id=local_community.id,
+        operation="create",
+        source_object_ap_id=event.object.ap_id,
+        source_activity_id=event.source_activity_id,
+    )
+    assert source is not None
+    deliveries = database.local_community_relay.list_local_community_relay_deliveries_for_source(source.id)
+    assert {row.target_remote_actor_id: (row.status, row.attempt_count) for row in deliveries} == {
+        "https://lemmy.example/u/alice": ("delivered", 1),
+        "https://lemmy.example/u/carol": ("delivered", 2),
+    }
+
+
+@pytest.mark.asyncio
+async def test_policy_change_during_relay_applies_to_next_action_only(tmp_path: Path) -> None:
+    """An in-flight relay keeps its snapshot while the next action sees new policy."""
+    database, runtime = _runtime(tmp_path)
+    local_community = _local_community(database)
+    _add_followers(database, local_community)
+    entered_gateway = asyncio.Event()
+    release_gateway = asyncio.Event()
+    observed_targets: list[list[str]] = []
+
+    async def blocking_gateway(*, signing_actor_url: str, deliveries: list[object]) -> SendLocalCommunityRelayResult:
+        """Pause after target selection so policy can change deterministically."""
+        del signing_actor_url
+        observed_targets.append([delivery.target_remote_actor_id for delivery in deliveries])
+        entered_gateway.set()
+        await release_gateway.wait()
+        return SendLocalCommunityRelayResult(
+            outcomes=[
+                SendLocalCommunityRelayOutcome(
+                    delivery_id=delivery.delivery_id,
+                    ok=True,
+                    target_remote_actor_id=delivery.target_remote_actor_id,
+                    activity_id=delivery.activity_json["id"],
+                )
+                for delivery in deliveries
+            ]
+        )
+
+    runtime.fedify_gateway.send_local_community_relay.side_effect = blocking_gateway
+    first_task = asyncio.create_task(
+        runtime.federation_fanout.relay_create(
+            event=_post_event(suffix="snapshot-a"),
+            local_community=local_community,
+            object_kind="post",
+        )
+    )
+    await entered_gateway.wait()
+    database.bridge_policy_entries.create_active(
+        policy_type=PolicyType.FEDERATION_BLOCK.value,
+        normalized_subject="lemmy.example",
+        actor_discord_user_id="123",
+        reason="maintenance",
+    )
+    release_gateway.set()
+    first = await first_task
+
+    runtime.fedify_gateway.send_local_community_relay.reset_mock(side_effect=True)
+    second = await runtime.federation_fanout.relay_create(
+        event=_post_event(suffix="snapshot-b"),
+        local_community=local_community,
+        object_kind="post",
+    )
+
+    assert first == type(first)(attempted=2, delivered=2, failed=0)
+    assert sorted(observed_targets[0]) == ["https://lemmy.example/u/alice", "https://lemmy.example/u/carol"]
+    assert second == type(second)(attempted=0, delivered=0, failed=0)
+    runtime.fedify_gateway.send_local_community_relay.assert_not_awaited()
