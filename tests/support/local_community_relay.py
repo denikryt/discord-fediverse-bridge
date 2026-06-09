@@ -152,6 +152,49 @@ class LocalCommunityRelayHarness:
         for name in ("bob", "alice", "carol"):
             self.add_subscriber(name)
 
+
+    def ensure_subscriber(self, name: str, *, host: str) -> str:
+        """Ensure one accepted subscriber exists without duplicating actor rows."""
+        actor_id = f"https://{host}/u/{name}"
+        existing = self.database.remote_subscribers.list_remote_subscribers(
+            self.local_community.id, status="accepted"
+        )
+        if any(row.remote_actor_id == actor_id for row in existing):
+            return actor_id
+        return self.add_subscriber(name, host=host)
+
+    def set_host_blocked(self, host: str, *, blocked: bool) -> None:
+        """Activate or deactivate one federation block entry for target discovery."""
+        repository = self.database.bridge_policy_entries
+        row = repository.get_by_type_and_subject(
+            policy_type="federation_block",
+            normalized_subject=host,
+        )
+        if blocked:
+            if row is None:
+                repository.create_active(
+                    policy_type="federation_block",
+                    normalized_subject=host,
+                    actor_discord_user_id="123",
+                    reason="model exploration",
+                )
+            elif row.status != "active":
+                with self.database.session() as session:
+                    repository.reactivate_in_session(
+                        session,
+                        entry_id=row.id,
+                        actor_discord_user_id="123",
+                        reason="model exploration",
+                    )
+            return
+        if row is not None and row.status == "active":
+            with self.database.session() as session:
+                repository.deactivate_in_session(
+                    session,
+                    entry_id=row.id,
+                    actor_discord_user_id="123",
+                )
+
     def remove_subscriber(self, actor_id: str) -> None:
         """Remove one accepted subscriber from the current target set."""
         self.database.remote_subscribers.delete_remote_subscriber(

@@ -281,3 +281,6 @@ ORM identities, timestamps, and payload rendering.
 
 Generated relay exploration uses a bounded create/retry state machine with a
 fixed source action and explicit 20x15 development and 75x30 CI budgets.
+
+Create-only relay exploration now generates subscriber and federation-policy
+changes between source actions while keeping per-source delivery history durable.
