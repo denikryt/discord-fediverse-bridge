@@ -274,3 +274,7 @@ Run `python tools/migration_completeness_report.py` to collect every project Pyt
 Relay resilience setup now lives in `tests/support/local_community_relay.py`, and
 failure/retry/snapshot scenarios live in a focused behavior module. This keeps
 payload-projection narratives separate from durable relay lifecycle exploration.
+
+The relay pilot now includes an independent pure transition model and fixed
+model-vs-SUT examples before generated stateful exploration. The model excludes
+ORM identities, timestamps, and payload rendering.
