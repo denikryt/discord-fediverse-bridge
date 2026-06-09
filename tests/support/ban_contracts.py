@@ -22,6 +22,7 @@ class BanExpected:
     active_rows: int
     inactive_rows: int = 0
     target_discord_user_id: str | None = None
+    audit_events: tuple[tuple[str, str], ...] = ()
 
 
 @dataclass(frozen=True, slots=True)
@@ -47,7 +48,7 @@ BAN_CONTRACT_CASES: tuple[BanContractCase, ...] = (
         community_state="enabled",
         target_kind="remote",
         existing_ban_state="absent",
-        expected=BanExpected(True, "created", 1),
+        expected=BanExpected(True, "created", 1, audit_events=(("ban.created", "success"),)),
     ),
     BanContractCase(
         id="super_admin.scoped.enabled.remote.absent.create",
@@ -57,7 +58,7 @@ BAN_CONTRACT_CASES: tuple[BanContractCase, ...] = (
         community_state="enabled",
         target_kind="remote",
         existing_ban_state="absent",
-        expected=BanExpected(True, "created", 1),
+        expected=BanExpected(True, "created", 1, audit_events=(("ban.created", "success"),)),
     ),
     BanContractCase(
         id="unauthorized.scoped.enabled.remote.absent.forbidden",
@@ -67,7 +68,7 @@ BAN_CONTRACT_CASES: tuple[BanContractCase, ...] = (
         community_state="enabled",
         target_kind="remote",
         existing_ban_state="absent",
-        expected=BanExpected(False, "cannot_manage_community", 0),
+        expected=BanExpected(False, "cannot_manage_community", 0, audit_events=(("ban.create_forbidden", "forbidden"),)),
     ),
     BanContractCase(
         id="super_admin.global.remote.absent.create",
@@ -77,7 +78,7 @@ BAN_CONTRACT_CASES: tuple[BanContractCase, ...] = (
         community_state="missing",
         target_kind="remote",
         existing_ban_state="absent",
-        expected=BanExpected(True, "created", 1),
+        expected=BanExpected(True, "created", 1, audit_events=(("ban.created", "success"),)),
     ),
     BanContractCase(
         id="owner.global.remote.absent.forbidden",
@@ -87,7 +88,7 @@ BAN_CONTRACT_CASES: tuple[BanContractCase, ...] = (
         community_state="missing",
         target_kind="remote",
         existing_ban_state="absent",
-        expected=BanExpected(False, "global_scope_requires_super_admin", 0),
+        expected=BanExpected(False, "global_scope_requires_super_admin", 0, audit_events=(("ban.create_forbidden", "forbidden"),)),
     ),
     BanContractCase(
         id="owner.scoped.disabled.remote.absent.validation",
@@ -97,7 +98,7 @@ BAN_CONTRACT_CASES: tuple[BanContractCase, ...] = (
         community_state="disabled",
         target_kind="remote",
         existing_ban_state="absent",
-        expected=BanExpected(False, "community_disabled", 0),
+        expected=BanExpected(False, "community_disabled", 0, audit_events=(("ban.create_forbidden", "forbidden"),)),
     ),
     BanContractCase(
         id="owner.scoped.missing.remote.absent.validation",
@@ -117,7 +118,7 @@ BAN_CONTRACT_CASES: tuple[BanContractCase, ...] = (
         community_state="enabled",
         target_kind="local",
         existing_ban_state="absent",
-        expected=BanExpected(True, "created", 1, target_discord_user_id="777"),
+        expected=BanExpected(True, "created", 1, target_discord_user_id="777", audit_events=(("ban.created", "success"),)),
     ),
     BanContractCase(
         id="owner.scoped.enabled.remote.active.duplicate",
@@ -137,7 +138,7 @@ BAN_CONTRACT_CASES: tuple[BanContractCase, ...] = (
         community_state="enabled",
         target_kind="remote",
         existing_ban_state="removed",
-        expected=BanExpected(True, "reactivated", 1),
+        expected=BanExpected(True, "reactivated", 1, audit_events=(("ban.reactivated", "success"),)),
     ),
     BanContractCase(
         id="owner.scoped.enabled.remote.active.unban",
@@ -147,7 +148,7 @@ BAN_CONTRACT_CASES: tuple[BanContractCase, ...] = (
         community_state="enabled",
         target_kind="remote",
         existing_ban_state="active",
-        expected=BanExpected(True, "unbanned", 0, inactive_rows=1),
+        expected=BanExpected(True, "unbanned", 0, inactive_rows=1, audit_events=(("ban.removed", "success"),)),
     ),
     BanContractCase(
         id="owner.scoped.enabled.remote.absent.unban_validation",

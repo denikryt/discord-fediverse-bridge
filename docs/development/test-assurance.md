@@ -98,3 +98,7 @@ tests/operations/test_ban_contract_cases.py
 `BanContractCase` is intentionally domain-specific. Each case declares stable machine-readable dimensions and an explicit expected result, while the harness executes the real ban or unban operation against SQLite persistence. The expected result never calls production policy code.
 
 The pilot covers a bounded authorization and lifecycle subset. Existing named command, audit, and runtime-enforcement scenarios remain the source of clearer transport-specific behavior and are not required to migrate into the typed model.
+
+## Ban observable effects
+
+The pilot collects operation output, persisted active/inactive ban rows, resolved local Discord identity, and management audit actions after each real operation. `tests/support/ban_effects.py` keeps these assertions ban-specific and compares fields separately so failures identify the missing effect. Rejected and validation cases explicitly require the absence of unplanned rows and audit events.

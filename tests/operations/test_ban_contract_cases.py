@@ -6,11 +6,8 @@ from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
-from sqlalchemy import select
-
 from src.bridge_policy import BridgePolicyService
 from src.local_communities.service import LocalCommunityService
-from src.models import CommunityActorBan
 from src.operations import (
     BanUserInput,
     UnbanUserInput,
@@ -18,6 +15,7 @@ from src.operations import (
     unban_user_operation,
 )
 from support.ban_contracts import BAN_CONTRACT_CASES, BanContractCase
+from support.ban_effects import assert_ban_effects, collect_ban_effects
 from support.db import build_database
 
 
@@ -100,12 +98,6 @@ def _seed_existing_ban(
         assert row.id is not None
 
 
-def _all_bans(database: object) -> list[CommunityActorBan]:
-    """Observe all persisted rows after the real operation completes."""
-
-    with database.session() as session:
-        return list(session.scalars(select(CommunityActorBan).order_by(CommunityActorBan.id)))
-
 
 @pytest.mark.parametrize("case", BAN_CONTRACT_CASES, ids=lambda case: case.id)
 def test_ban_operation_contract(case: BanContractCase, tmp_path: Path) -> None:
@@ -115,6 +107,7 @@ def test_ban_operation_contract(case: BanContractCase, tmp_path: Path) -> None:
     community = _seed_community(database, case)
     actor_handle = _seed_target(database, case)
     _seed_existing_ban(database, case, community, actor_handle)
+    audit_offset = len(database.management_audit_events.list_oldest_first())
     caller_id = {"owner": "111", "super_admin": "999", "unauthorized": "222"}[
         case.caller_role
     ]
@@ -154,12 +147,10 @@ def test_ban_operation_contract(case: BanContractCase, tmp_path: Path) -> None:
         )
         target_discord_user_id = None
 
-    rows = _all_bans(database)
-    active_rows = [row for row in rows if row.status == "active"]
-    inactive_rows = [row for row in rows if row.status == "inactive"]
-
-    assert result.applied is case.expected.applied
-    assert result.reason == case.expected.reason
-    assert len(active_rows) == case.expected.active_rows
-    assert len(inactive_rows) == case.expected.inactive_rows
-    assert target_discord_user_id == case.expected.target_discord_user_id
+    observed = collect_ban_effects(
+        database=database,
+        result=result,
+        target_discord_user_id=target_discord_user_id,
+        audit_offset=audit_offset,
+    )
+    assert_ban_effects(observed, case.expected)
