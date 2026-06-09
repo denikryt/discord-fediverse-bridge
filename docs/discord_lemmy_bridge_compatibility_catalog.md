@@ -256,6 +256,32 @@ Older registration call sites/tests may still pass settings using the old signat
 
 Yes, after all call sites use the new signature.
 
+### 2.5 Policy snapshot helper compatibility
+
+**Where**
+
+- `src/lemmyverse_communities.py`
+- `src/local_community_permissions.py`
+
+**What changed**
+
+The bootstrap-only `allowlist=` and `settings=` helper inputs were removed.
+Lemmyverse autocomplete and local-community permission helpers now accept only
+an explicit effective `BridgePolicySnapshot`.
+
+**Why the cleanup was safe**
+
+All production callers already supplied snapshots. The removed forms existed
+only for in-repository tests and could not represent dynamic blocklist or
+super-admin entries. Tests now construct the same snapshot contract used by
+production.
+
+**Can it be removed?**
+
+Already removed by policy cleanup Stage 1.
+
+---
+
 ## 3. Remote subscription lifecycle compatibility
 
 No remote-subscription lifecycle compatibility path remains for `Accept(Follow)`.
