@@ -85,3 +85,16 @@ No project-wide coverage threshold is defined from this baseline.
 ## Initial pilot domain
 
 Ban management is the first bounded contract-formalization pilot. It has explicit role, scope, community-state, target-resolution, persistence, audit, and runtime-enforcement behavior across existing behavior, command, and operation tests.
+
+## Ban contract pilot
+
+The first typed contract pilot lives in:
+
+```text
+tests/support/ban_contracts.py
+tests/operations/test_ban_contract_cases.py
+```
+
+`BanContractCase` is intentionally domain-specific. Each case declares stable machine-readable dimensions and an explicit expected result, while the harness executes the real ban or unban operation against SQLite persistence. The expected result never calls production policy code.
+
+The pilot covers a bounded authorization and lifecycle subset. Existing named command, audit, and runtime-enforcement scenarios remain the source of clearer transport-specific behavior and are not required to migrate into the typed model.
