@@ -207,3 +207,26 @@ These scenarios prove three bounded contracts through the real relay repositorie
 - an in-flight fanout keeps its action-scoped policy snapshot while the next action observes a concurrent policy change.
 
 The concurrency scenario uses `asyncio.Event` barriers rather than sleeps, so ordering is deterministic. Existing management-audit rollback tests remain the authoritative coverage for mutation-plus-audit atomicity.
+
+## Community-management contract migration
+
+Community creation and edit authorization/status decisions are formalized in:
+
+```text
+tests/support/community_management_contracts.py
+tests/support/community_management_effects.py
+tests/operations/test_community_management_contract_cases.py
+```
+
+The typed cases execute real create/edit operations and SQLite persistence, then compare public results, persisted community state, and action-local management audit events with independently declared expectations.
+
+Registration, Discord modal behavior, dashboard flows, and disabled-community runtime behavior remain named scenarios because their multi-step transport narratives are clearer than one shared operation table.
+
+Generate the passive report with:
+
+```bash
+.venv/bin/python tools/community_management_contract_report.py \
+  --output .artifacts/test-assurance/community-management/report.json
+```
+
+The report covers only declared community-management rules. It does not infer unknown product rules or claim that all dashboard/runtime narratives are represented by typed cases.
