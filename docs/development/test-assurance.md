@@ -288,3 +288,10 @@ changes between source actions while keeping per-source delivery history durable
 Update/delete continuity exploration is intentionally separate from create target
 churn. It models delivered-create history plus current accepted subscriptions and
 keeps independent durable source state per operation.
+
+### Relay boundary-failure exploration
+
+The relay model pilot records the current durability boundaries for renderer,
+gateway, and per-outcome persistence failures. Source and pending delivery rows
+may already be durable before rendering or transport, and outcome persistence is
+per target rather than one atomic batch.
