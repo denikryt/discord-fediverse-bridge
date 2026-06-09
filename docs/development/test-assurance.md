@@ -250,3 +250,9 @@ Shared delivery/mapping/receipt effect fragments remain deferred: subscription o
 ## Inbound ActivityPub contract migration
 
 Inbound handler outcomes, policy/routing skips, dedup, echo prevention, parent backfill, local-community Follow/Undo/content, mappings/receipts, and internal read APIs are assigned stable rule ownership in `tests/support/inbound_contract_manifest.py`. Protocol-rich payload and out-of-order flows remain named scenarios. Generate the report with `.venv/bin/python tools/inbound_contract_report.py`.
+
+## Content lifecycle contract migration
+
+Publish, reply, parent resolution, edit, delete, bidirectional mirrors, failure isolation, and dedup/out-of-order contracts are assigned stable rule ownership in `tests/support/content_lifecycle_manifest.py`. Rich conversation and payload scenarios remain explicit. Generate the report with `.venv/bin/python tools/content_lifecycle_contract_report.py`.
+
+A shared content/delivery effects record remains deferred because fanout, inbound, and content tests still require different target-specific observations.
