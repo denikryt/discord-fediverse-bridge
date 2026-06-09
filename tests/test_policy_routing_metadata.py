@@ -28,6 +28,9 @@ class _Policy:
             raise RuntimeError("policy unavailable")
         return _Snapshot(self.denied)
 
+    def is_discord_guild_allowed(self, guild_id: int) -> bool:
+        return self.snapshot().is_discord_guild_allowed(guild_id)
+
 
 class _Forum:
     def __init__(self, channel_id: int, calls: list[int]) -> None:

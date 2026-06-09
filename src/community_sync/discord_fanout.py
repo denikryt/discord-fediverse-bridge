@@ -157,7 +157,7 @@ class DiscordFanout:
                     getattr(subscription, "discord_guild_id", None),
                 )
                 return False
-            return self.policy_service.snapshot().is_discord_guild_allowed(guild_id)
+            return self.policy_service.is_discord_guild_allowed(guild_id)
         except Exception:
             logger.exception(
                 "Failed to validate Discord fanout routing metadata channel_id=%s",

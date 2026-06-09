@@ -33,7 +33,7 @@ class DiscordEventRouter:
 
     def _is_guild_allowed(self, guild_id: int | str | None) -> bool:
         """Evaluate one Discord event against the current guild policy."""
-        return self.bridge_policy_service.snapshot().is_discord_guild_allowed(guild_id)
+        return self.bridge_policy_service.is_discord_guild_allowed(guild_id)
 
     def is_local_community_forum(self, forum_channel_id: int | None) -> bool:
         """Return whether one forum is a local-community create source.

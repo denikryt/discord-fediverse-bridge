@@ -144,6 +144,22 @@ class BridgePolicyService:
         self.settings = settings
         self.repository = repository
 
+    def is_discord_guild_allowed(self, guild_id: int | str | None) -> bool:
+        """Evaluate one guild through a fresh effective-policy read."""
+        return self.snapshot().is_discord_guild_allowed(guild_id)
+
+    def federation_decision(self, url_or_host: str) -> FederationPolicyDecision:
+        """Evaluate one federation subject through a fresh effective-policy read."""
+        return self.snapshot().federation_decision(url_or_host)
+
+    def is_super_admin(self, discord_user_id: str) -> bool:
+        """Evaluate one administrator subject through a fresh policy read."""
+        return self.snapshot().is_super_admin(discord_user_id)
+
+    def list_effective_entries(self, policy_type: PolicyType) -> list[EffectivePolicyEntry]:
+        """List one policy category through a fresh effective-policy read."""
+        return self.snapshot().list_effective_entries(policy_type)
+
     def snapshot(self) -> BridgePolicySnapshot:
         """Read active rows once and merge them with normalized bootstrap policy."""
         bootstrap_values = {

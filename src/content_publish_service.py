@@ -82,7 +82,7 @@ class ContentPublishService:
             return PublishResult(status="ignored", reason="no_subscription")
         if subscription.status != "accepted":
             return PublishResult(status="ignored", reason="subscription_not_active")
-        decision = self.bridge_policy_service.snapshot().federation_decision(
+        decision = self.bridge_policy_service.federation_decision(
             subscription.lemmy_community_actor_id
         )
         if not decision.allowed:
@@ -103,7 +103,7 @@ class ContentPublishService:
             return PublishResult(status="ignored", reason="no_subscription")
         if subscription.status != "accepted":
             return PublishResult(status="ignored", reason="subscription_not_active")
-        decision = self.bridge_policy_service.snapshot().federation_decision(
+        decision = self.bridge_policy_service.federation_decision(
             subscription.lemmy_community_actor_id
         )
         if not decision.allowed:

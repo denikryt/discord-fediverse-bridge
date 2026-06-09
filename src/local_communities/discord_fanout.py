@@ -119,7 +119,7 @@ class LocalCommunityDiscordFanout:
                     forum_channel_id,
                 )
                 return False
-            return self.policy_service.snapshot().is_discord_guild_allowed(guild_id)
+            return self.policy_service.is_discord_guild_allowed(guild_id)
         except Exception:
             logger.exception(
                 "Failed to validate local Discord surface routing metadata forum_channel_id=%s",
@@ -140,7 +140,7 @@ class LocalCommunityDiscordFanout:
             )
             return False
         try:
-            return self.policy_service.snapshot().is_discord_guild_allowed(guild_id)
+            return self.policy_service.is_discord_guild_allowed(guild_id)
         except Exception:
             logger.exception(
                 "Failed to evaluate local Discord fanout policy forum_channel_id=%s role=%s",

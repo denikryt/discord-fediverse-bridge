@@ -1022,7 +1022,7 @@ class LocalCommunityRuntime:
         local_community = self.database.local_communities.get_local_community_by_actor_url(local_community_actor_id)
         if local_community is None:
             return _HandlerResult(status="skipped", outcome=InboundActivityOutcome.IGNORED_UNKNOWN_LOCAL_COMMUNITY, detail="unknown local community")
-        decision = self.bridge_policy_service.snapshot().federation_decision(
+        decision = self.bridge_policy_service.federation_decision(
             remote_inbox_url or remote_actor_id
         )
         if not decision.allowed:

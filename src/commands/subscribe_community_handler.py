@@ -197,7 +197,7 @@ class SubscribeCommunityCommandHandler:
         """Reject disallowed non-bridge origins with the current message text."""
         if origin is None or is_bridge_origin(origin, self.settings):
             return True
-        decision = self.policy_service.snapshot().federation_decision(origin)
+        decision = self.policy_service.federation_decision(origin)
         if decision.allowed:
             return True
         hostname = decision.host or urlparse(origin).hostname or origin

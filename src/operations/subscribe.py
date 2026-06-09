@@ -214,7 +214,7 @@ async def _body(operation_input: SubscribeInput) -> OperationResult:
         # Remove the stale failed bridge follow row before creating a fresh one.
         operation_input.database.bridge_actor_follows.delete_bridge_actor_follow(operation_input.actor_id)
 
-    decision = operation_input.policy_service.snapshot().federation_decision(
+    decision = operation_input.policy_service.federation_decision(
         operation_input.actor_id
     )
     if not decision.allowed:

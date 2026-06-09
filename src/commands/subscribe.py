@@ -199,7 +199,7 @@ def _community_autocomplete(
             return []
         if (
             not is_bridge_origin(normalized_origin, settings)
-            and not policy_service.snapshot().federation_decision(normalized_origin).allowed
+            and not policy_service.federation_decision(normalized_origin).allowed
         ):
             return []
         try:

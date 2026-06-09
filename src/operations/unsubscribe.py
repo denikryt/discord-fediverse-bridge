@@ -115,7 +115,7 @@ async def _body(operation_input: UnsubscribeInput) -> OperationResult:
                 ),
                 reason="follow_activity_id_missing",
             )
-        federation_policy_denied = not operation_input.policy_service.snapshot().federation_decision(
+        federation_policy_denied = not operation_input.policy_service.federation_decision(
             community_actor_id
         ).allowed
 

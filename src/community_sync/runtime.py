@@ -507,7 +507,7 @@ class CommunityRuntime:
         # Send the AP Update if the message group has an AP object and community actor.
         # These are set for all Discord-originated messages published via the bridge.
         if message_group.ap_object_id and message_group.community_actor_id:
-            decision = runtime.bridge_policy_service.snapshot().federation_decision(
+            decision = runtime.bridge_policy_service.federation_decision(
                 message_group.community_actor_id
             )
             if not decision.allowed:
@@ -568,7 +568,7 @@ class CommunityRuntime:
             await self.discord_fanout.propagate_delete(mirror_deliveries=mirror_deliveries)
 
         if message_group.ap_object_id and message_group.community_actor_id:
-            decision = runtime.bridge_policy_service.snapshot().federation_decision(
+            decision = runtime.bridge_policy_service.federation_decision(
                 message_group.community_actor_id
             )
             if not decision.allowed:

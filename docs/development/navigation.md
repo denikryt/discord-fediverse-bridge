@@ -117,3 +117,7 @@ Use `docs/architecture/database-map.md` for table ownership and invariants. Use 
 
 
 Discord OAuth boundary code consumes `Settings.resolved_discord_oauth_redirect_uri` directly; test adapters implement the same contract.
+
+## Bridge policy evaluation
+
+1. `src/bridge_policy.py` for effective policy reads and narrow evaluator methods; 2. `docs/architecture/bridge-policy.md` for command, Discord event, ActivityPub event, dashboard, and fanout read ownership; 3. operation input classes in `src/operations/` for memoized command-action snapshots.

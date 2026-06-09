@@ -67,3 +67,37 @@ def test_empty_allowlists_are_unrestricted_but_blocklists_still_deny(tmp_path: P
     assert snapshot.is_discord_guild_allowed("199") is True
     assert snapshot.is_discord_guild_allowed("200") is False
     assert snapshot.federation_decision("open.example").allowed is True
+
+
+def test_narrow_evaluators_each_perform_one_effective_policy_read() -> None:
+    """Each service evaluator preserves one snapshot read per narrow question."""
+    class _Repository:
+        def __init__(self) -> None:
+            self.reads = 0
+
+        def list_all_active(self) -> list[object]:
+            self.reads += 1
+            return []
+
+    settings = type(
+        "PolicySettings",
+        (),
+        {
+            "federation_allowlist": [],
+            "federation_blocklist": [],
+            "discord_guild_allowlist": [],
+            "discord_guild_blocklist": [],
+            "bridge_super_admin_user_ids": ["100"],
+        },
+    )()
+    repository = _Repository()
+    service = BridgePolicyService(settings=settings, repository=repository)
+
+    assert service.is_discord_guild_allowed(200) is True
+    assert repository.reads == 1
+    assert service.federation_decision("remote.example").allowed is True
+    assert repository.reads == 2
+    assert service.is_super_admin("100") is True
+    assert repository.reads == 3
+    assert service.list_effective_entries(PolicyType.BRIDGE_SUPER_ADMIN)[0].subject == "100"
+    assert repository.reads == 4

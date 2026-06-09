@@ -43,7 +43,7 @@ async def dispatch_activitypub_event(
 ) -> HandlerResult:
     """Route one inbound ActivityPub event after federation policy admission."""
     subject = _allowlist_subject(event, runtime)
-    decision = runtime.bridge_policy_service.snapshot().federation_decision(subject)
+    decision = runtime.bridge_policy_service.federation_decision(subject)
     if not decision.allowed:
         if decision.reason is FederationPolicyReason.BLOCKLISTED:
             outcome = InboundActivityOutcome.IGNORED_INSTANCE_BLOCKLISTED
