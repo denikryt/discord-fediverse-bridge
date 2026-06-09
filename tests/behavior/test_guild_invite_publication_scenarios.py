@@ -1,6 +1,7 @@
 """Behavior tests for guild invite publication and dashboard state."""
 
 from __future__ import annotations
+from support.runtime import build_test_policy_service
 
 from types import SimpleNamespace
 from unittest.mock import AsyncMock
@@ -218,7 +219,13 @@ def test_dashboard_attaches_invite_only_to_existing_guild_bucket(tmp_path) -> No
             fedify_actor_identifier="bridge",
             federation_allowlist=[],
         ),
-    )
+            bridge_policy_service=build_test_policy_service(database, SimpleNamespace(
+            fedify_origin="https://bridge.example",
+            normalized_fedify_origin="https://bridge.example",
+            fedify_actor_identifier="bridge",
+            federation_allowlist=[],
+        )),
+)
     payload = build_dashboard_payload(runtime)
     assert len(payload["discordGuilds"]) == 1
     assert payload["discordGuilds"][0]["inviteUrl"] == "https://discord.gg/abc"

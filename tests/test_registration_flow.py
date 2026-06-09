@@ -1,6 +1,7 @@
 """Runtime registration scenarios for the Stage 5 FastAPI backend."""
 
 from __future__ import annotations
+from support.runtime import build_test_policy_service
 
 from pathlib import Path
 from types import SimpleNamespace
@@ -67,7 +68,8 @@ def _runtime(tmp_path: Path) -> SimpleNamespace:
         discord_oauth_client=FakeDiscordOAuthClient(),
         fedify_gateway=SimpleNamespace(),
         bot=SimpleNamespace(),
-    )
+            bridge_policy_service=build_test_policy_service(database, settings),
+)
 
 
 def _client(tmp_path: Path) -> tuple[TestClient, Database]:

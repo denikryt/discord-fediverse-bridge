@@ -250,7 +250,8 @@ async def test_inbound_local_community_post_update_edits_discord_starter(tmp_pat
         local_community_runtime=local_runtime,
         community_runtime=SimpleNamespace(),
         bot=bot,
-    )
+            bridge_policy_service=build_test_policy_service(database, SimpleNamespace(discord_guild_allowlist=[], federation_allowlist=[])),
+)
 
     result = await dispatch_activitypub_event(_local_post_event(event_type="post.updated"), runtime)
 
@@ -286,7 +287,8 @@ async def test_inbound_local_community_post_delete_marks_discord_starter_deleted
         local_community_runtime=local_runtime,
         community_runtime=SimpleNamespace(),
         bot=bot,
-    )
+            bridge_policy_service=build_test_policy_service(database, SimpleNamespace(discord_guild_allowlist=[], federation_allowlist=[])),
+)
 
     result = await dispatch_activitypub_event(_local_post_event(event_type="post.deleted"), runtime)
 
@@ -329,7 +331,8 @@ async def test_inbound_local_community_comment_update_edits_discord_message(
         local_community_runtime=local_runtime,
         community_runtime=SimpleNamespace(),
         bot=bot,
-    )
+            bridge_policy_service=build_test_policy_service(database, SimpleNamespace(discord_guild_allowlist=[], federation_allowlist=[])),
+)
 
     result = await dispatch_activitypub_event(
         _local_comment_event(event_type="comment.updated"),
@@ -377,7 +380,8 @@ async def test_inbound_local_community_comment_delete_marks_discord_message_dele
         local_community_runtime=local_runtime,
         community_runtime=SimpleNamespace(),
         bot=bot,
-    )
+            bridge_policy_service=build_test_policy_service(database, SimpleNamespace(discord_guild_allowlist=[], federation_allowlist=[])),
+)
 
     result = await dispatch_activitypub_event(
         _local_comment_event(event_type="comment.deleted"),

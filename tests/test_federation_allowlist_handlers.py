@@ -1,6 +1,7 @@
 """Tests for federation allowlist enforcement in activitypub_handlers."""
 
 from __future__ import annotations
+from support.runtime import build_test_policy_service
 
 from datetime import UTC, datetime
 from pathlib import Path
@@ -91,7 +92,8 @@ async def test_dispatch_skips_event_from_unlisted_instance(tmp_path: Path) -> No
         settings=_settings(["allowed.example"]),
         bot=AsyncMock(),
         community_runtime=AsyncMock(),
-    )
+            bridge_policy_service=build_test_policy_service(db, _settings(["allowed.example"])),
+)
     community_actor_id = f"https://{LEMMY_EXAMPLE_DOMAIN}/c/hackers"
     _create_accepted_remote_subscription(db, community_actor_id)
     event = _post_created_event(community_actor_id)
@@ -117,7 +119,8 @@ async def test_dispatch_allows_event_from_listed_instance(tmp_path: Path) -> Non
         settings=_settings([LEMMY_EXAMPLE_DOMAIN]),
         bot=AsyncMock(),
         community_runtime=community_runtime,
-    )
+            bridge_policy_service=build_test_policy_service(db, _settings([LEMMY_EXAMPLE_DOMAIN])),
+)
     community_actor_id = f"https://{LEMMY_EXAMPLE_DOMAIN}/c/hackers"
     _create_accepted_remote_subscription(db, community_actor_id)
     event = _post_created_event(community_actor_id)
@@ -142,7 +145,8 @@ async def test_dispatch_allows_all_when_allowlist_empty(tmp_path: Path) -> None:
         settings=_settings([]),
         bot=AsyncMock(),
         community_runtime=community_runtime,
-    )
+            bridge_policy_service=build_test_policy_service(db, _settings([])),
+)
     community_actor_id = "https://some.random.instance/c/news"
     _create_accepted_remote_subscription(db, community_actor_id)
     event = _post_created_event(community_actor_id)
@@ -183,7 +187,8 @@ async def test_dispatch_follow_accepted_respects_allowlist(tmp_path: Path) -> No
         settings=_settings(["allowed.example"]),
         bot=SimpleNamespace(fetch_user=AsyncMock(return_value=dm_user)),
         community_runtime=AsyncMock(),
-    )
+            bridge_policy_service=build_test_policy_service(db, _settings(["allowed.example"])),
+)
     event = _follow_accepted_event(community_actor_id)
 
     result = await dispatch_activitypub_event(event, runtime)

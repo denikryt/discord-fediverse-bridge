@@ -93,7 +93,8 @@ def _registration_runtime(database: Database) -> SimpleNamespace:
         fedify_gateway=SimpleNamespace(),
         bot=SimpleNamespace(),
         community_runtime=community_runtime,
-    )
+            bridge_policy_service=build_test_policy_service(database, settings),
+)
 
 
 def _register_user(client: TestClient, database: Database, *, username: str) -> None:
@@ -212,7 +213,8 @@ async def test_register_subscribe_accept_publish_then_echo_is_suppressed(
                     return_value=SimpleNamespace(send=AsyncMock())
                 )
             ),
-        ),
+                    bridge_policy_service=build_test_policy_service(database),
+),
     )
     accepted_subscription = database.remote_subscriptions.get_subscription_by_channel(forum_channel.id)
     assert follow_result.status == "processed"
@@ -252,7 +254,8 @@ async def test_register_subscribe_accept_publish_then_echo_is_suppressed(
             database=database,
             content_publish_service=echo_publish_service,
         ),
-    )
+            bridge_policy_service=build_test_policy_service(database),
+)
     echo_result = await dispatch_activitypub_event(
         _echo_post_event(
             object_id=publish_result.object_id or "",
@@ -326,7 +329,8 @@ async def test_lemmy_announce_of_local_post_is_suppressed_via_actor_check(
             database=database,
             content_publish_service=announce_publish_service,
         ),
-    )
+            bridge_policy_service=build_test_policy_service(database),
+)
     result = await dispatch_activitypub_event(lemmy_rewritten_event, runtime)
 
     assert result.status == "skipped"
@@ -398,7 +402,8 @@ async def test_failed_subscribe_retry_then_accept_allows_publish(
                     return_value=SimpleNamespace(send=AsyncMock())
                 )
             ),
-        ),
+                    bridge_policy_service=build_test_policy_service(database),
+),
     )
     accepted_subscription = database.remote_subscriptions.get_subscription_by_channel(forum_channel.id)
     assert accepted_subscription is not None

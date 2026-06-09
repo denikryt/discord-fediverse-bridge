@@ -301,7 +301,8 @@ async def test_follow_accepted_event_promotes_all_pending_subscriptions(
         bot=SimpleNamespace(
             fetch_user=AsyncMock(return_value=dm_user),
         ),
-    )
+            bridge_policy_service=build_test_policy_service(database),
+)
     event = FollowLifecycleEvent(
         event_type="follow.accepted",
         delivery_id=f"https://{LEMMY_EXAMPLE_DOMAIN}/activities/accept/1",

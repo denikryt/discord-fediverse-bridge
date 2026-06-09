@@ -80,7 +80,7 @@ def _community_runtime(
     )
 
 
-def _fake_runtime(*, gateway: AsyncMock | None = None) -> SimpleNamespace:
+def _fake_runtime(*, database: Database, gateway: AsyncMock | None = None) -> SimpleNamespace:
     """Build a minimal fake Runtime carrying a gateway and a noop bot."""
     if gateway is None:
         gateway = AsyncMock()
@@ -90,6 +90,7 @@ def _fake_runtime(*, gateway: AsyncMock | None = None) -> SimpleNamespace:
 
     return SimpleNamespace(
         fedify_gateway=gateway,
+        bridge_policy_service=build_test_policy_service(database),
         bot=SimpleNamespace(
             wait_until_bridge_ready=wait_until_bridge_ready,
             track_message_edit=MagicMock(),
@@ -267,7 +268,7 @@ async def test_source_message_edit_propagates_to_mirrors_and_ap(tmp_path: Path) 
     )
     bot = _fake_bot(threads={mirror_thread_id: fake_mirror_thread})
     fanout = _fake_fanout(bot=bot, database=database)
-    runtime_obj = _fake_runtime()
+    runtime_obj = _fake_runtime(database=database)
     community_runtime = _community_runtime(database, bot=bot, discord_fanout=fanout)
 
     _setup_message_group_with_deliveries(
@@ -294,7 +295,7 @@ async def test_edit_of_unknown_message_is_silently_ignored(tmp_path: Path) -> No
     """Editing a message that has no delivery row does nothing and raises no error."""
     database = _database(tmp_path)
     gateway = AsyncMock()
-    runtime_obj = _fake_runtime(gateway=gateway)
+    runtime_obj = _fake_runtime(database=database, gateway=gateway)
     community_runtime = _community_runtime(database)
 
     # No delivery rows exist for message 999.
@@ -380,7 +381,7 @@ async def test_mirror_edit_failure_does_not_block_ap_update(tmp_path: Path) -> N
         discord_message_id=mirror_msg_id_2, role="mirror",
     )
 
-    runtime_obj = _fake_runtime()
+    runtime_obj = _fake_runtime(database=database)
     # Must not raise even though first mirror fails.
     await community_runtime.handle_discord_message_edit(
         message_id=source_msg_id,
@@ -413,7 +414,7 @@ async def test_source_message_delete_removes_mirrors_and_sends_ap_delete(tmp_pat
     )
     bot = _fake_bot(threads={mirror_thread_id: fake_mirror_thread})
     fanout = _fake_fanout(bot=bot, database=database)
-    runtime_obj = _fake_runtime()
+    runtime_obj = _fake_runtime(database=database)
     community_runtime = _community_runtime(database, bot=bot, discord_fanout=fanout)
 
     _setup_message_group_with_deliveries(
@@ -494,7 +495,7 @@ async def test_mirror_delete_failure_does_not_block_ap_delete(tmp_path: Path) ->
         discord_message_id=mirror_msg_id_2, role="mirror",
     )
 
-    runtime_obj = _fake_runtime()
+    runtime_obj = _fake_runtime(database=database)
     await community_runtime.handle_discord_message_delete(
         message_id=source_msg_id,
         runtime=runtime_obj,
@@ -575,7 +576,7 @@ async def test_inbound_comment_update_edits_all_discord_deliveries(tmp_path: Pat
         post_ap_id=POST_AP_ID,
         post_lemmy_id=1,
     )
-    runtime_obj = _fake_runtime()
+    runtime_obj = _fake_runtime(database=database)
     result = await community_runtime.handle_inbound_comment_update(event, runtime_obj)
 
     assert result.status == "processed"
@@ -601,7 +602,7 @@ async def test_inbound_comment_update_for_unknown_ap_id_returns_skipped(tmp_path
         post_ap_id=POST_AP_ID,
         post_lemmy_id=1,
     )
-    runtime_obj = _fake_runtime()
+    runtime_obj = _fake_runtime(database=database)
     result = await community_runtime.handle_inbound_comment_update(event, runtime_obj)
 
     assert result.status == "skipped"
@@ -669,7 +670,7 @@ async def test_inbound_comment_delete_marks_all_discord_deliveries_deleted(tmp_p
         post_ap_id=POST_AP_ID,
         post_lemmy_id=1,
     )
-    runtime_obj = _fake_runtime()
+    runtime_obj = _fake_runtime(database=database)
     result = await community_runtime.handle_inbound_comment_delete(event, runtime_obj)
 
     assert result.status == "processed"
@@ -729,7 +730,7 @@ async def test_inbound_post_delete_marks_all_thread_starters_deleted(tmp_path: P
         ap_id=POST_AP_ID,
         kind="post",
     )
-    runtime_obj = _fake_runtime()
+    runtime_obj = _fake_runtime(database=database)
     result = await community_runtime.handle_inbound_post_delete(event, runtime_obj)
 
     assert result.status == "processed"
@@ -769,7 +770,8 @@ async def test_dispatch_routes_comment_updated_to_handler(tmp_path: Path) -> Non
         database=database,
         fedify_gateway=AsyncMock(),
         bot=SimpleNamespace(wait_until_bridge_ready=wait_until_bridge_ready),
-    )
+            bridge_policy_service=build_test_policy_service(database),
+)
     # No message group exists → should return skipped, not raise.
     result = await dispatch_activitypub_event(event, runtime_obj)
     assert result.status == "skipped"
@@ -812,7 +814,8 @@ async def test_dispatch_routes_post_deleted_with_existing_thread_group(tmp_path:
         database=database,
         fedify_gateway=AsyncMock(),
         bot=SimpleNamespace(wait_until_bridge_ready=wait_until_bridge_ready),
-    )
+            bridge_policy_service=build_test_policy_service(database),
+)
     result = await dispatch_activitypub_event(event, runtime_obj)
 
     assert result.status == "processed"
@@ -873,7 +876,7 @@ async def test_inbound_post_update_edits_discord_thread_starters(tmp_path: Path)
         kind="post",
         body_markdown="New post body",
     )
-    runtime_obj = _fake_runtime()
+    runtime_obj = _fake_runtime(database=database)
     result = await community_runtime.handle_inbound_post_update(event, runtime_obj)
 
     assert result.status == "processed"
@@ -897,7 +900,7 @@ async def test_inbound_post_update_for_unknown_ap_id_returns_skipped(tmp_path: P
         kind="post",
         body_markdown="Updated",
     )
-    runtime_obj = _fake_runtime()
+    runtime_obj = _fake_runtime(database=database)
     result = await community_runtime.handle_inbound_post_update(event, runtime_obj)
 
     assert result.status == "skipped"
@@ -923,7 +926,8 @@ async def test_dispatch_routes_post_updated_to_handler(tmp_path: Path) -> None:
         database=database,
         fedify_gateway=AsyncMock(),
         bot=SimpleNamespace(wait_until_bridge_ready=wait_until_bridge_ready),
-    )
+            bridge_policy_service=build_test_policy_service(database),
+)
     # No thread group for this AP ID → routes to handler, handler returns skipped.
     result = await dispatch_activitypub_event(event, runtime_obj)
     assert result.status == "skipped"
@@ -960,7 +964,7 @@ async def test_mirror_edit_preserves_username_header(tmp_path: Path) -> None:
     )
     bot = _fake_bot(threads={mirror_thread_id: mirror_thread})
     fanout = _fake_fanout(bot=bot, database=database)
-    runtime_obj = _fake_runtime()
+    runtime_obj = _fake_runtime(database=database)
     community_runtime = _community_runtime(database, bot=bot, discord_fanout=fanout)
 
     _setup_message_group_with_deliveries(
@@ -1037,7 +1041,7 @@ async def test_inbound_comment_update_preserves_username_header(tmp_path: Path) 
         post_ap_id=POST_AP_ID,
         post_lemmy_id=1,
     )
-    runtime_obj = _fake_runtime()
+    runtime_obj = _fake_runtime(database=database)
     result = await community_runtime.handle_inbound_comment_update(event, runtime_obj)
 
     assert result.status == "processed"

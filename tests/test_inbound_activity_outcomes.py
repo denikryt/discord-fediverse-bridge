@@ -1,6 +1,7 @@
 """Tests for the stable inbound activity outcome vocabulary and persistence."""
 
 from __future__ import annotations
+from support.runtime import build_test_policy_service
 
 from pathlib import Path
 from types import SimpleNamespace
@@ -154,7 +155,7 @@ def test_duplicate_legacy_receipt_returns_null_outcome_without_inference(tmp_pat
         outcome=None,
         detail="no subscriptions for this community",
     )
-    runtime = SimpleNamespace(database=database)
+    runtime = SimpleNamespace(database=database, bridge_policy_service=build_test_policy_service(database))
     event = SimpleNamespace(delivery_id="delivery-1")
 
     response = _begin_event_processing(runtime, event)

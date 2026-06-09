@@ -468,7 +468,8 @@ async def test_discord_fanout_uses_registered_handle_not_mutable_nickname(tmp_pa
             database=database,
             settings=_settings(),
             fetch_forum_channel=fetch_forum_channel,
-        )
+                    bridge_policy_service=build_test_policy_service(database, _settings()),
+)
     )
     source = build_starter_message(content="hello", display_name="Changed nickname")
 

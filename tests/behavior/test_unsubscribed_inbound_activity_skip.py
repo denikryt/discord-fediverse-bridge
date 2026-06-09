@@ -1,6 +1,7 @@
 """Regression tests for ignoring remote content after unsubscribe."""
 
 from __future__ import annotations
+from support.runtime import build_test_policy_service
 
 from pathlib import Path
 from types import SimpleNamespace
@@ -40,7 +41,7 @@ class _NoopLocalCommunityRuntime:
 
 def _runtime(database, community_runtime):
     """Build the minimal runtime namespace used by dispatch."""
-    return SimpleNamespace(database=database, community_runtime=community_runtime, local_community_runtime=_NoopLocalCommunityRuntime(), settings=SimpleNamespace(federation_allowlist=[]), bot=SimpleNamespace())
+    return SimpleNamespace(database=database, community_runtime=community_runtime, local_community_runtime=_NoopLocalCommunityRuntime(), settings=SimpleNamespace(federation_allowlist=[]), bot=SimpleNamespace(), bridge_policy_service=build_test_policy_service(database, SimpleNamespace(federation_allowlist=[])))
 
 
 @pytest.mark.asyncio

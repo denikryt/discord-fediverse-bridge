@@ -1,6 +1,7 @@
 """Behavior scenarios for the public bridge dashboard."""
 
 from __future__ import annotations
+from support.runtime import build_test_policy_service
 
 import json
 from pathlib import Path
@@ -38,7 +39,8 @@ def _runtime(database: Database, *, allowlist: list[str] | None = None) -> Simpl
         discord_oauth_client=SimpleNamespace(),
         fedify_gateway=SimpleNamespace(),
         bot=SimpleNamespace(),
-    )
+            bridge_policy_service=build_test_policy_service(database, settings),
+)
 
 
 def _client(database: Database, *, allowlist: list[str] | None = None) -> TestClient:

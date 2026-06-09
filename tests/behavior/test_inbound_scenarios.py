@@ -160,7 +160,8 @@ def test_accepted_subscription_inbound_post_creates_discord_thread_and_receipt(
         database=database,
         bot=bot,
         community_runtime=_community_runtime(database, bot=bot),
-    )
+            bridge_policy_service=build_test_policy_service(database, SimpleNamespace(fedify_shared_secret="secret")),
+)
     client = TestClient(create_http_app(runtime), raise_server_exceptions=False)
     event = _post_event(object_id=f"https://{LEMMY_EXAMPLE_DOMAIN}/post/111")
 
@@ -247,7 +248,8 @@ def test_inbound_post_and_comment_fan_out_to_all_accepted_subscriptions(
         database=database,
         bot=bot,
         community_runtime=_community_runtime(database, bot=bot),
-    )
+            bridge_policy_service=build_test_policy_service(database, SimpleNamespace(fedify_shared_secret="secret")),
+)
     client = TestClient(create_http_app(runtime), raise_server_exceptions=False)
     post_event = _post_event(
         object_id=f"https://{LEMMY_EXAMPLE_DOMAIN}/post/777",
@@ -330,7 +332,8 @@ def test_accepted_subscription_inbound_comment_creates_discord_message_and_recei
         database=database,
         bot=bot,
         community_runtime=_community_runtime(database, bot=bot),
-    )
+            bridge_policy_service=build_test_policy_service(database, SimpleNamespace(fedify_shared_secret="secret")),
+)
     client = TestClient(create_http_app(runtime), raise_server_exceptions=False)
     event = _comment_event(
         object_id=f"https://{LEMMY_EXAMPLE_DOMAIN}/comment/111",
@@ -369,7 +372,8 @@ async def test_no_accepted_subscription_inbound_post_is_skipped(
         database=database,
         bot=bot,
         community_runtime=_community_runtime(database, bot=bot),
-    )
+            bridge_policy_service=build_test_policy_service(database),
+)
 
     result = await dispatch_activitypub_event(
         _post_event(object_id=f"https://{LEMMY_EXAMPLE_DOMAIN}/post/222"),
@@ -404,7 +408,8 @@ def test_duplicate_delivery_id_returns_idempotent_duplicate_without_side_effects
         database=database,
         bot=bot,
         community_runtime=_community_runtime(database, bot=bot),
-    )
+            bridge_policy_service=build_test_policy_service(database, SimpleNamespace(fedify_shared_secret="secret")),
+)
     client = TestClient(create_http_app(runtime), raise_server_exceptions=False)
     event = _post_event(
         object_id=f"https://{LEMMY_EXAMPLE_DOMAIN}/post/333",
@@ -454,7 +459,8 @@ async def test_discord_originated_echo_is_skipped_without_creating_duplicate(
         database=database,
         bot=bot,
         community_runtime=_community_runtime(database, bot=bot),
-    )
+            bridge_policy_service=build_test_policy_service(database),
+)
 
     result = await dispatch_activitypub_event(_post_event(object_id=object_id), runtime)
 
@@ -485,7 +491,8 @@ def test_comment_before_parent_mapping_becomes_deferred_then_retries_processed(
         database=database,
         bot=bot,
         community_runtime=_community_runtime(database, bot=bot),
-    )
+            bridge_policy_service=build_test_policy_service(database, SimpleNamespace(fedify_shared_secret="secret")),
+)
     client = TestClient(create_http_app(runtime), raise_server_exceptions=False)
     post_ap_id = f"https://{LEMMY_EXAMPLE_DOMAIN}/post/111"
     event = _comment_event(
@@ -563,7 +570,8 @@ def test_discord_target_failure_marks_inbound_receipt_failed(
         database=database,
         bot=bot,
         community_runtime=_community_runtime(database, bot=bot),
-    )
+            bridge_policy_service=build_test_policy_service(database, SimpleNamespace(fedify_shared_secret="secret")),
+)
     client = TestClient(create_http_app(runtime), raise_server_exceptions=False)
     event = _post_event(
         object_id=f"https://{LEMMY_EXAMPLE_DOMAIN}/post/444",

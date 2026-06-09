@@ -138,7 +138,8 @@ async def test_inbound_post_with_discord_originated_mapping_is_skipped_as_echo(
             fetch_forum_channel=AsyncMock(),
         ),
         community_runtime=_community_runtime(database),
-    )
+            bridge_policy_service=build_test_policy_service(database),
+)
 
     result = await dispatch_activitypub_event(
         _post_event(object_id=object_id),
@@ -175,7 +176,8 @@ async def test_inbound_comment_with_discord_originated_mapping_is_skipped_as_ech
             get_thread_by_id=AsyncMock(),
         ),
         community_runtime=_community_runtime(database),
-    )
+            bridge_policy_service=build_test_policy_service(database),
+)
 
     result = await dispatch_activitypub_event(
         _comment_event(
@@ -210,7 +212,8 @@ def test_out_of_order_comment_receipt_becomes_deferred_and_retries_successfully(
             ),
         ),
         community_runtime=_community_runtime(database),
-    )
+            bridge_policy_service=build_test_policy_service(database, SimpleNamespace(fedify_shared_secret="secret")),
+)
     client = TestClient(create_http_app(runtime), raise_server_exceptions=False)
     event = _comment_event(
         object_id=f"https://{LEMMY_EXAMPLE_DOMAIN}/comment/222",
@@ -287,7 +290,8 @@ def test_failed_inbound_discord_fanout_marks_receipt_failed(tmp_path: Path) -> N
             ),
         ),
         community_runtime=_community_runtime(database),
-    )
+            bridge_policy_service=build_test_policy_service(database, SimpleNamespace(fedify_shared_secret="secret")),
+)
     client = TestClient(create_http_app(runtime), raise_server_exceptions=False)
     event = _post_event(
         object_id=f"https://{LEMMY_EXAMPLE_DOMAIN}/post/111",
@@ -332,7 +336,8 @@ def test_duplicate_inbound_delivery_returns_duplicate_without_side_effects(
             fetch_forum_channel=AsyncMock(return_value=forum_channel),
         ),
         community_runtime=_community_runtime(database),
-    )
+            bridge_policy_service=build_test_policy_service(database, SimpleNamespace(fedify_shared_secret="secret")),
+)
     client = TestClient(create_http_app(runtime), raise_server_exceptions=False)
     event = _post_event(
         object_id=f"https://{LEMMY_EXAMPLE_DOMAIN}/post/333",

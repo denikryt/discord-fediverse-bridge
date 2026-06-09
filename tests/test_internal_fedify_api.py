@@ -1,6 +1,7 @@
 """Behavior tests for the authenticated Fedify Gateway read API."""
 
 from __future__ import annotations
+from support.runtime import build_test_policy_service
 
 from pathlib import Path
 from types import SimpleNamespace
@@ -31,7 +32,8 @@ def _runtime(tmp_path: Path) -> tuple[SimpleNamespace, Database]:
         discord_oauth_client=SimpleNamespace(),
         fedify_gateway=SimpleNamespace(),
         bot=SimpleNamespace(),
-    )
+            bridge_policy_service=build_test_policy_service(database, settings),
+)
     return runtime, database
 
 

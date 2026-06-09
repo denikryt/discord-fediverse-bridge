@@ -267,7 +267,8 @@ async def test_phase5_inbound_post_creates_thread_group_and_deliveries(
         database=database,
         bot=bot,
         community_runtime=runtime,
-    )
+            bridge_policy_service=build_test_policy_service(database),
+)
 
     result = await runtime.handle_inbound_post(event, fake_runtime)
 
@@ -322,7 +323,7 @@ async def test_phase5_inbound_post_dedup_skips_on_existing_thread_group(
     forum_ch = _fake_forum_channel(channel_id=100, thread_id=999, starter_message_id=998)
     bot = _fake_bot(forum_channels={100: forum_ch})
     runtime = _community_runtime(database, _publish_gateway(), bot=bot)
-    fake_runtime = SimpleNamespace(database=database, bot=bot, community_runtime=runtime)
+    fake_runtime = SimpleNamespace(database=database, bot=bot, community_runtime=runtime, bridge_policy_service=build_test_policy_service(database))
 
     event = _fake_post_event()
     result = await runtime.handle_inbound_post(event, fake_runtime)
@@ -357,7 +358,7 @@ async def test_phase5_inbound_comment_root_creates_message_group_flat(
     fake_thread = _fake_thread(thread_id=200, sent_message_id=400)
     bot = _fake_bot(threads={200: fake_thread})
     runtime = _community_runtime(database, _publish_gateway(), bot=bot)
-    fake_runtime = SimpleNamespace(database=database, bot=bot, community_runtime=runtime)
+    fake_runtime = SimpleNamespace(database=database, bot=bot, community_runtime=runtime, bridge_policy_service=build_test_policy_service(database))
 
     # parent_ap_id=None → root comment, should send flat.
     event = _fake_comment_event(parent_ap_id=None)
@@ -455,7 +456,7 @@ async def test_phase5_inbound_comment_reply_chain_resolves_to_prior_delivery(
     fake_thread_500 = _fake_thread(thread_id=500, sent_message_id=800)
     bot = _fake_bot(threads={200: fake_thread_200, 500: fake_thread_500})
     runtime = _community_runtime(database, _publish_gateway(), bot=bot)
-    fake_runtime = SimpleNamespace(database=database, bot=bot, community_runtime=runtime)
+    fake_runtime = SimpleNamespace(database=database, bot=bot, community_runtime=runtime, bridge_policy_service=build_test_policy_service(database))
 
     # Reply to prior comment M.
     event = _fake_comment_event(ap_id=COMMENT2_AP_ID, parent_ap_id=COMMENT_AP_ID)
@@ -508,7 +509,7 @@ async def test_phase5_inbound_comment_dedup_skips_on_existing_message_group(
     fake_thread = _fake_thread(thread_id=200, sent_message_id=999)
     bot = _fake_bot(threads={200: fake_thread})
     runtime = _community_runtime(database, _publish_gateway(), bot=bot)
-    fake_runtime = SimpleNamespace(database=database, bot=bot, community_runtime=runtime)
+    fake_runtime = SimpleNamespace(database=database, bot=bot, community_runtime=runtime, bridge_policy_service=build_test_policy_service(database))
 
     event = _fake_comment_event()
     result = await runtime.handle_inbound_comment(event, fake_runtime)

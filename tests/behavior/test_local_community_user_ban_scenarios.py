@@ -49,7 +49,8 @@ def _runtime(tmp_path: Path, name: str = "ban-http.db") -> SimpleNamespace:
         community_runtime=SimpleNamespace(),
         settings=_settings(),
         bot=SimpleNamespace(),
-    )
+            bridge_policy_service=build_test_policy_service(database, _settings()),
+)
 
 
 def _local_community(database: object, *, slug: str = "cats", forum_channel_id: int = 100) -> object:

@@ -187,7 +187,8 @@ def test_inbound_comment_creates_post_thread_when_post_not_yet_mapped(
         database=database,
         bot=bot,
         community_runtime=_community_runtime(database, bot=bot),
-    )
+            bridge_policy_service=build_test_policy_service(database, SimpleNamespace(fedify_shared_secret="secret")),
+)
     client = TestClient(create_http_app(runtime), raise_server_exceptions=False)
     event = _comment_event()
 
@@ -294,7 +295,8 @@ def test_inbound_comment_only_backfills_channels_without_existing_delivery(
         database=database,
         bot=bot,
         community_runtime=_community_runtime(database, bot=bot),
-    )
+            bridge_policy_service=build_test_policy_service(database, SimpleNamespace(fedify_shared_secret="secret")),
+)
     client = TestClient(create_http_app(runtime), raise_server_exceptions=False)
     event = _comment_event()
 
@@ -355,7 +357,8 @@ def test_inbound_comment_deferred_when_post_fetch_fails(
         database=database,
         bot=bot,
         community_runtime=_community_runtime(database, bot=bot),
-    )
+            bridge_policy_service=build_test_policy_service(database, SimpleNamespace(fedify_shared_secret="secret")),
+)
     client = TestClient(create_http_app(runtime), raise_server_exceptions=False)
     event = _comment_event()
 

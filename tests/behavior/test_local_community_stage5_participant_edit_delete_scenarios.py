@@ -113,7 +113,8 @@ def scenario(tmp_path: Path) -> SimpleNamespace:
         community=community,
         source=source,
         sibling=sibling,
-    )
+            bridge_policy_service=build_test_policy_service(database),
+)
 
 
 def _thread_with_surfaces(scenario: SimpleNamespace) -> object:
@@ -254,7 +255,8 @@ def _runtime_namespace(scenario: SimpleNamespace, bot: EditableBot) -> SimpleNam
         local_community_runtime=scenario.runtime,
         community_runtime=SimpleNamespace(),
         bot=bot,
-    )
+            bridge_policy_service=build_test_policy_service(scenario.database),
+)
 
 
 def _remote_post_event(event_type: str) -> ActivityPubEvent:

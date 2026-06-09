@@ -223,7 +223,7 @@ async def test_replayed_inbound_post_returns_skipped(tmp_path: Path) -> None:
     forum_channel = _fake_forum_channel(channel_id=100, thread_id=999, starter_message_id=998)
     bot = _fake_bot(forum_channels={100: forum_channel})
     runtime = _community_runtime(database, bot=bot)
-    fake_runtime = SimpleNamespace(database=database, bot=bot, community_runtime=runtime)
+    fake_runtime = SimpleNamespace(database=database, bot=bot, community_runtime=runtime, bridge_policy_service=build_test_policy_service(database))
 
     result = await runtime.handle_inbound_post(_fake_post_event(), fake_runtime)
 
@@ -262,7 +262,7 @@ async def test_partial_delivery_retry_returns_skipped_not_delivered(tmp_path: Pa
     )
     bot = _fake_bot(forum_channels={101: forum_channel_101})
     runtime = _community_runtime(database, bot=bot)
-    fake_runtime = SimpleNamespace(database=database, bot=bot, community_runtime=runtime)
+    fake_runtime = SimpleNamespace(database=database, bot=bot, community_runtime=runtime, bridge_policy_service=build_test_policy_service(database))
 
     result = await runtime.handle_inbound_post(_fake_post_event(), fake_runtime)
 
@@ -309,7 +309,7 @@ async def test_replayed_inbound_comment_returns_skipped(tmp_path: Path) -> None:
     fake_thread = SimpleNamespace(id=200, send=AsyncMock())
     bot = _fake_bot(threads={200: fake_thread})
     runtime = _community_runtime(database, bot=bot)
-    fake_runtime = SimpleNamespace(database=database, bot=bot, community_runtime=runtime)
+    fake_runtime = SimpleNamespace(database=database, bot=bot, community_runtime=runtime, bridge_policy_service=build_test_policy_service(database))
 
     result = await runtime.handle_inbound_comment(_fake_comment_event(), fake_runtime)
 
@@ -579,7 +579,8 @@ async def test_inbound_post_from_own_actor_is_suppressed_before_handler(
         database=database,
         bot=fake_bot,
         community_runtime=community_rt,
-    )
+            bridge_policy_service=build_test_policy_service(database),
+)
 
     # The echo arrives with the same object_id the bridge originally published.
     event = ActivityPubEvent.model_validate({

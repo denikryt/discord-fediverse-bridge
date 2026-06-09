@@ -1,6 +1,7 @@
 """Runtime-oriented follow lifecycle scenarios for Stage 4 subscriptions."""
 
 from __future__ import annotations
+from support.runtime import build_test_policy_service
 
 from datetime import UTC, datetime
 from pathlib import Path
@@ -72,7 +73,8 @@ async def test_follow_accept_event_marks_bridge_follow_and_channel_accepted(
         bot=SimpleNamespace(
             fetch_user=AsyncMock(return_value=dm_user),
         ),
-    )
+            bridge_policy_service=build_test_policy_service(database),
+)
     event = FollowLifecycleEvent(
         event_type="follow.accepted",
         delivery_id=f"https://{LEMMY_EXAMPLE_DOMAIN}/activities/accept/1",
@@ -123,7 +125,8 @@ async def test_follow_accept_without_bridge_follow_does_not_accept_channel_subsc
         bot=SimpleNamespace(
             fetch_user=AsyncMock(return_value=dm_user),
         ),
-    )
+            bridge_policy_service=build_test_policy_service(database),
+)
     event = FollowLifecycleEvent(
         event_type="follow.accepted",
         delivery_id=f"https://{LEMMY_EXAMPLE_DOMAIN}/activities/accept/legacy",

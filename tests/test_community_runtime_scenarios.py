@@ -7,6 +7,7 @@ Only outer boundaries are mocked: FedifyGatewayClient and Discord SDK calls.
 """
 
 from __future__ import annotations
+from support.runtime import build_test_policy_service
 
 from pathlib import Path
 from types import SimpleNamespace
@@ -170,7 +171,8 @@ async def test_community_runtime_inbound_post_creates_discord_thread(
         database=database,
         bot=fake_bot,
         community_runtime=community_rt,
-    )
+            bridge_policy_service=build_test_policy_service(database),
+)
     event = build_post_created_event(object_id=post_ap_id)
 
     result = await community_rt.handle_inbound_post(event, runtime_obj)
@@ -231,7 +233,8 @@ async def test_community_runtime_inbound_comment_creates_discord_message(
         database=database,
         bot=fake_bot,
         community_runtime=community_rt,
-    )
+            bridge_policy_service=build_test_policy_service(database),
+)
     event = build_comment_created_event(object_id=comment_ap_id, post_ap_id=post_ap_id)
 
     result = await community_rt.handle_inbound_comment(event, runtime_obj)
