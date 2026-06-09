@@ -156,3 +156,21 @@ HYPOTHESIS_PROFILE=ci .venv/bin/python -m pytest -q tests/property
 The `dev` profile uses 50 examples per property and the `ci` profile uses 200. Both disable deadlines so slower shared runners do not create false failures. Hypothesis still reports and shrinks the minimal failing example.
 
 The current properties cover block precedence, unrelated-entry stability, order/duplicate invariance, canonical host variants, malformed hosts, and Discord identifier validation. They intentionally avoid arbitrary full runtime state and operation sequences; lifecycle generation belongs to the stateful assurance stage.
+
+## Stateful ban lifecycle assurance
+
+The bounded state machine in `tests/stateful/test_ban_lifecycle_state_machine.py` generates repeated create, remove, reactivate, duplicate-create, duplicate-remove, query, and enforcement sequences for one community-scoped remote actor. Its independent model tracks only `ABSENT`, `ACTIVE`, and `REMOVED`; the system under test uses real operations, SQLite persistence, audit writes, and `UserBanService` enforcement.
+
+Run the development sequence budget:
+
+```bash
+HYPOTHESIS_PROFILE=dev .venv/bin/python -m pytest -q tests/stateful
+```
+
+Run the larger CI sequence budget:
+
+```bash
+HYPOTHESIS_PROFILE=ci .venv/bin/python -m pytest -q tests/stateful
+```
+
+This layer does not replace named lifecycle scenarios and does not model global scope, local target resolution, community status changes, concurrency, or failures.
