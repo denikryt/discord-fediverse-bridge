@@ -256,3 +256,7 @@ Inbound handler outcomes, policy/routing skips, dedup, echo prevention, parent b
 Publish, reply, parent resolution, edit, delete, bidirectional mirrors, failure isolation, and dedup/out-of-order contracts are assigned stable rule ownership in `tests/support/content_lifecycle_manifest.py`. Rich conversation and payload scenarios remain explicit. Generate the report with `.venv/bin/python tools/content_lifecycle_contract_report.py`.
 
 A shared content/delivery effects record remains deferred because fanout, inbound, and content tests still require different target-specific observations.
+
+## Technical contract reporting
+
+Dashboard, backup, OAuth, public URL, deployment, schema, and Fedify gateway checks remain native technical tests. Generate gateway evidence in resumable chunks with `python tools/gateway_contract_runner.py --start 0 --limit 14` and then the remaining chunk. Generate the combined JSON report with `python tools/technical_contract_report.py`. Artifacts are written under `.artifacts/test-assurance/technical-contracts/` and are never edited manually.
