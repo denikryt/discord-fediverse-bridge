@@ -37,20 +37,29 @@ echo "$GHCR_TOKEN" | docker login ghcr.io -u YOUR_GITHUB_USER --password-stdin
 
 ### 2. Pull and start the containers
 
-```bash
-docker compose --env-file .env pull
-docker compose --env-file .env up -d
-```
-
-### 3. Install nginx for this instance
-
-The domain in `PUBLIC_BASE_URL` must already point to this server.
+Use the deploy helper for the selected env file. It prepares `BACKUP_HOST_DIR`, fixes permissions, and starts Compose:
 
 ```bash
-sudo fedify-gateway/nginx-setup.sh --name prod --env-file .env
+./scripts/deploy.sh --env-file .env --with-nginx
 ```
 
-### 4. Check the deployment
+If you start Compose manually instead of using the helper, make sure `BACKUP_HOST_DIR`
+exists and is writable by the container user (`10001:10001`) before `docker compose up`:
+
+```bash
+mkdir -p "$BACKUP_HOST_DIR"
+sudo chown 10001:10001 "$BACKUP_HOST_DIR"
+```
+
+If you want to do that from the env file directly without starting Compose yet:
+
+```bash
+BACKUP_HOST_DIR="$(grep -E '^BACKUP_HOST_DIR=' .env.sandbox | tail -n1 | cut -d= -f2-)"
+mkdir -p "$BACKUP_HOST_DIR"
+sudo chown 10001:10001 "$BACKUP_HOST_DIR"
+```
+
+### 3. Check the deployment
 
 ```bash
 docker compose --env-file .env ps
@@ -89,21 +98,30 @@ BACKUP_HOST_DIR=./backups-dev
 
 ### 2. Build the current working tree and start it
 
-```bash
-docker compose \
-  --env-file .env.dev \
-  -f compose.yaml \
-  -f compose.build.yaml \
-  up -d --build
-```
-
-### 3. Install the development nginx site
+Use the deploy helper for the selected env file. It prepares `BACKUP_HOST_DIR`, fixes permissions, builds the working tree, and starts Compose:
 
 ```bash
-sudo fedify-gateway/nginx-setup.sh --name dev --env-file .env.dev
+./scripts/deploy.sh --env-file .env.dev --build --with-nginx
 ```
 
-### 4. Check the development instance
+
+If you start Compose manually instead of using the helper, make sure `BACKUP_HOST_DIR`
+exists and is writable by the container user (`10001:10001`) before `docker compose up`:
+
+```bash
+mkdir -p "$BACKUP_HOST_DIR"
+sudo chown 10001:10001 "$BACKUP_HOST_DIR"
+```
+
+If you want to do that from the env file directly without starting Compose yet:
+
+```bash
+BACKUP_HOST_DIR="$(grep -E '^BACKUP_HOST_DIR=' .env.dev | tail -n1 | cut -d= -f2-)"
+mkdir -p "$BACKUP_HOST_DIR"
+sudo chown 10001:10001 "$BACKUP_HOST_DIR"
+```
+
+### 3. Check the development instance
 
 ```bash
 docker compose \
@@ -127,8 +145,7 @@ BRIDGE_VERSION=0.2.0
 Then run:
 
 ```bash
-docker compose --env-file .env pull
-docker compose --env-file .env up -d
+./scripts/deploy.sh --env-file .env --with-nginx
 docker compose --env-file .env ps
 ```
 
@@ -145,8 +162,7 @@ A database backup should exist before changing versions.
 Set the previous `BRIDGE_VERSION` in `.env`, then run:
 
 ```bash
-docker compose --env-file .env pull
-docker compose --env-file .env up -d
+./scripts/deploy.sh --env-file .env --with-nginx
 ```
 
 If the newer version changed the database schema incompatibly, restore the database backup created before the update as well.

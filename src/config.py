@@ -36,6 +36,10 @@ class Settings(BaseSettings):
         default=None, alias="FEDIFY_BRIDGE_PUBLIC_KEY_JWK_JSON"
     )
     bridge_display_prefix: str = Field(default="[bridge]", alias="BRIDGE_DISPLAY_PREFIX")
+    dashboard_page_title: str = Field(
+        default="Discord/Fediverse Bridge Instance",
+        alias="DASHBOARD_PAGE_TITLE",
+    )
     log_level: str = Field(default="INFO", alias="LOG_LEVEL")
     # Bootstrap policy remains immutable for the process lifetime. Dynamic
     # entries are persisted separately and merged by BridgePolicyService.

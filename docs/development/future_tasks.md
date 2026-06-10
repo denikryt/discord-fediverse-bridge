@@ -259,8 +259,31 @@ Open details:
 - how edits, deletes, pagination, and partial retries are handled;
 - whether restored history should be published to Discord.
 
+## 25. Human-facing local community pages with ActivityPub negotiation
+
+Local community URLs currently act as ActivityPub actor endpoints only. The project does not yet provide a human-facing per-community page comparable to Lemmy or Mastodon resource pages.
+
+Future work should design one browser-facing local community route while preserving federation-compatible actor resolution.
+
+Open details:
+
+- whether the canonical route should remain `/communities/{slug}` or move the human-facing page to `/c/{slug}`;
+- whether browser requests should receive HTML via content negotiation while `Accept: application/activity+json` continues to return the actor document;
+- whether the HTML page should be static server-rendered community metadata, a dashboard-style generated page, or a richer per-community view;
+- how to expose a stable link between the human page and the ActivityPub actor document, similar to other Fediverse software;
+- how to keep WebFinger, actor ids, and remote fetch behavior fully compatible during the transition.
+
 ## 27. Dashboard active-user statistics
 
 The dashboard does not currently show activity metrics such as daily or monthly active users.
 
 A later design should define what counts as an active user, which bridge or Discord/Fediverse events are authoritative, how metrics are aggregated over time, and whether statistics are shown per guild, per community, or for the whole instance.
+
+## 28. Dashboard remote community display names
+
+The dashboard does not consistently have real human-readable names for remote communities in the subscribed-community view.
+
+Future work should define how remote community names are sourced and refreshed for dashboard rendering, for example from subscription-time metadata, later background refreshes, or explicit remote fetch rules. The implementation should avoid inventing names from actor URLs when no verified display name is available.
+- Add host-configurable legal documentation pages: `Terms of Service` and `Privacy Policy`, with project-level templates plus deploy-specific operator/contact/retention placeholders.
+- Add a public Discord slash command to list all local communities on the current guild, responding ephemerally.
+- Add a public Discord slash command that returns the dashboard URL from `PUBLIC_BASE_URL` for quick discovery.

@@ -3,34 +3,70 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>Discord/Fediverse Bridge Instance</title>
-  <link rel="stylesheet" href="/dashboard/static/dashboard.css?v=2026-06-06-project-version">
+  <title>__DASHBOARD_PAGE_TITLE__</title>
+  <link rel="icon" type="image/png" href="/dashboard/static/icon.png?v=__DASHBOARD_ICON_VERSION__">
+  <link rel="stylesheet" href="/dashboard/static/dashboard.css?v=__DASHBOARD_CSS_VERSION__">
 </head>
 <body data-dashboard-endpoint="__DASHBOARD_DATA_ENDPOINT__">
 <main>
-  <header>
-    <h1>Discord/Fediverse Bridge Instance</h1>
+  <header class="hero">
+    <p class="eyebrow">Discord x Fediverse</p>
+    <h1>__DASHBOARD_PAGE_TITLE__</h1>
     <p class="muted section-copy">This instance bridges Discord communities into the Fediverse.</p>
+    <p class="muted dashboard-credits">Made with passion by&nbsp;<a href="https://nachitima.com">Nachitima</a><span class="credits-separator" aria-hidden="true">&nbsp;·&nbsp;</span><span id="project-version" class="project-version" hidden></span><span class="credits-separator" aria-hidden="true">&nbsp;·&nbsp;</span><a class="source-link" href="https://github.com/denikryt/discord-fediverse-bridge" target="_blank" rel="noreferrer">Source code</a></p>
   </header>
   <section id="summary" class="stats"></section>
-  <section>
-    <h2>Bridge actor follows</h2>
-    <div id="follows" class="panel"></div>
+  <section class="directory-shell">
+    <nav class="view-tabs" aria-label="Directory sections">
+      <button id="view-tab-communities" class="view-tab is-active" type="button" data-view-tab="communities" aria-pressed="true">Communities</button>
+      <button id="view-tab-guilds" class="view-tab" type="button" data-view-tab="guilds" aria-pressed="false">Guilds</button>
+    </nav>
+
+    <section id="view-communities" class="directory-view">
+      <div class="section-head">
+        <div>
+          <h2 id="community-section-title">Local communities</h2>
+        </div>
+        <div class="filter-tabs" aria-label="Community filters">
+          <button class="filter-tab" type="button" data-community-filter="subscribed" aria-pressed="false">Subscribed</button>
+          <button class="filter-tab is-active" type="button" data-community-filter="local" aria-pressed="true">Local</button>
+          <button class="filter-tab" type="button" data-community-filter="all" aria-pressed="false">All</button>
+        </div>
+      </div>
+      <div class="directory-table">
+        <div class="directory-table-head community-columns">
+          <span>Name</span>
+          <span>Handle</span>
+          <span>Subscribers</span>
+        </div>
+        <div id="community-table" class="directory-table-body"></div>
+      </div>
+    </section>
+
+    <section id="view-guilds" class="directory-view" hidden>
+      <div class="section-head">
+        <div>
+          <h2>List of guilds</h2>
+        </div>
+      </div>
+      <div class="directory-table">
+        <div class="directory-table-head guild-columns">
+          <span>Guild</span>
+          <span>Hosted</span>
+          <span>Subscriptions</span>
+          <span>Invite</span>
+        </div>
+        <div id="guild-table" class="directory-table-body"></div>
+      </div>
+    </section>
   </section>
-  <section>
-    <h2>Local communities</h2>
-    <div id="communities" class="stack"></div>
+  <section class="meta-grid">
+    <div class="panel">
+      <h2>Federation policy</h2>
+      <div id="federation"></div>
+    </div>
   </section>
-  <section>
-    <h2>Discord guilds</h2>
-    <div id="discord-guilds" class="stack"></div>
-  </section>
-  <section>
-    <h2>Federation policy</h2>
-    <div id="federation" class="panel"></div>
-  </section>
-  <footer class="muted">Made with passion by <a href="https://nachitima.com">Nachitima</a><span id="project-version" class="project-version" hidden></span></footer>
 </main>
-<script src="/dashboard/static/dashboard.js?v=2026-06-06-project-version"></script>
+<script src="/dashboard/static/dashboard.js?v=__DASHBOARD_JS_VERSION__"></script>
 </body>
 </html>

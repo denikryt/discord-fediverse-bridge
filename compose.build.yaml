@@ -6,6 +6,13 @@ services:
       args:
         APP_VERSION: ${BRIDGE_VERSION:?BRIDGE_VERSION is required}
 
+  backup:
+    build:
+      context: .
+      dockerfile: Dockerfile
+      args:
+        APP_VERSION: ${BRIDGE_VERSION:?BRIDGE_VERSION is required}
+
   fedify-gateway:
     build:
       context: .

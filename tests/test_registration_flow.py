@@ -79,13 +79,16 @@ def _client(tmp_path: Path) -> tuple[TestClient, Database]:
 
 
 def test_register_page_returns_simple_html(tmp_path: Path) -> None:
-    """The entry page should render without requiring any OAuth state first."""
+    """The entry page should render the styled registration shell."""
     client, _database = _client(tmp_path)
 
     response = client.get("/register")
 
     assert response.status_code == 200
     assert "Continue with Discord" in response.text
+    assert '/dashboard/static/dashboard.css?v=' in response.text
+    assert 'class="hero"' in response.text
+    assert 'class="panel registration-panel"' in response.text
 
 
 def test_auth_start_creates_session_and_redirects_to_discord(tmp_path: Path) -> None:

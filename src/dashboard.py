@@ -9,6 +9,7 @@ private keys, raw database paths, or internal service URLs.
 from __future__ import annotations
 
 from collections import defaultdict
+from html import escape
 from pathlib import Path
 from typing import Any
 from urllib.parse import urlparse
@@ -18,6 +19,7 @@ from .project_version import APP_VERSION
 
 WEB_DIR = Path(__file__).resolve().parent.parent / "web"
 DASHBOARD_HTML_PATH = WEB_DIR / "dashboard.html"
+DEFAULT_DASHBOARD_PAGE_TITLE = "Discord/Fediverse Bridge Instance"
 UNKNOWN_GUILD = "Unknown guild"
 UNKNOWN_FORUM_CHANNEL = "Unknown forum channel"
 
@@ -31,15 +33,18 @@ def build_dashboard_payload(runtime: Any) -> dict[str, object]:
     database = runtime.database
     snapshot = runtime.bridge_policy_service.snapshot()
     local_communities = [
-        row for row in database.local_communities.list_local_communities()
-        if snapshot.is_discord_guild_allowed(getattr(row, "discord_guild_id", None))
+        row
+        for row in database.local_communities.list_local_communities()
+        if _is_visible_local_community(row, snapshot)
     ]
+    visible_local_community_ids = {getattr(community, "id") for community in local_communities}
     registered_users = database.users.list_users()
     remote_subscribers = [
         row for row in database.remote_subscribers.list_remote_subscribers_for_all(status="accepted")
         if snapshot.federation_decision(
             getattr(row, "remote_actor_id", None) or getattr(row, "remote_inbox_url", "")
         ).allowed
+        and getattr(row, "local_community_id", None) in visible_local_community_ids
     ]
     bridge_follows = [
         row for row in database.bridge_actor_follows.list_bridge_actor_follows()
@@ -53,6 +58,12 @@ def build_dashboard_payload(runtime: Any) -> dict[str, object]:
     active_local_subscribers = [
         row for row in database.local_subscribers.list_all_local_subscribers(status="active")
         if snapshot.is_discord_guild_allowed(getattr(row, "discord_guild_id", None))
+        and _is_visible_local_community(
+            database.local_communities.get_local_community_by_id(
+                getattr(row, "local_community_id", None)
+            ),
+            snapshot,
+        )
     ]
     invite_publications = [
         row for row in database.guild_invite_publications.list_publications()
@@ -66,9 +77,19 @@ def build_dashboard_payload(runtime: Any) -> dict[str, object]:
         local_subscribers=active_local_subscribers,
     )
 
+    publications_by_guild = {int(row.discord_guild_id): row for row in invite_publications}
     remote_subscribers_by_community: dict[int, list[object]] = defaultdict(list)
     for remote_subscriber in remote_subscribers:
         remote_subscribers_by_community[getattr(remote_subscriber, "local_community_id")].append(remote_subscriber)
+    remote_subscription_names_by_actor: dict[str, str] = {}
+    remote_subscription_handles_by_actor: dict[str, str] = {}
+    for subscription in accepted_remote_subscriptions:
+        actor_url = getattr(subscription, "lemmy_community_actor_id", "")
+        display_name = _remote_community_display_name(subscription)
+        if actor_url and display_name:
+            remote_subscription_names_by_actor.setdefault(actor_url, display_name)
+        if actor_url:
+            remote_subscription_handles_by_actor.setdefault(actor_url, _remote_subscription_label(subscription))
 
     local_community_by_id = {getattr(community, "id"): community for community in local_communities}
     community_payloads = []
@@ -122,6 +143,15 @@ def build_dashboard_payload(runtime: Any) -> dict[str, object]:
                 "remoteSubscriberCount": len(community_remote_subscribers),
                 "localSubscriberCount": local_subscriber_count,
                 "followers": remote_subscriber_payloads,
+                # The same guild invite appears on the guild card and on the
+                # hosted local community so operators can discover it from both
+                # navigation paths without exposing Discord ids.
+                "inviteUrl": (
+                    str(publications_by_guild[int(getattr(community, "discord_guild_id"))].invite_url)
+                    if getattr(community, "discord_guild_id", None) is not None
+                    and int(getattr(community, "discord_guild_id")) in publications_by_guild
+                    else None
+                ),
             }
         )
         bucket = _guild_bucket(
@@ -176,9 +206,37 @@ def build_dashboard_payload(runtime: Any) -> dict[str, object]:
         for entry in snapshot.list_effective_entries(PolicyType.FEDERATION_ALLOW)
         if snapshot.federation_decision(entry.subject).allowed
     ]
+    # The public dashboard treats federation peers as the union of inbound
+    # remote follower instances and outbound remote community instances.
+    federated_instances = sorted(
+        {
+            host
+            for host in (
+                _hostname_from_url(getattr(subscriber, "remote_actor_id", ""))
+                or _hostname_from_url(getattr(subscriber, "remote_inbox_url", ""))
+                for subscriber in remote_subscribers
+            )
+            if host
+        }
+        | {
+            host
+            for host in (
+                _hostname_from_url(getattr(follow, "community_actor_id", ""))
+                or _hostname_from_url(getattr(follow, "community_inbox_url", ""))
+                for follow in bridge_follows
+            )
+            if host
+        }
+    )
     bridge_follow_payloads = [
         {
             "communityActorUrl": getattr(follow, "community_actor_id"),
+            "communityName": remote_subscription_names_by_actor.get(
+                getattr(follow, "community_actor_id", ""),
+            ),
+            "communityHandle": remote_subscription_handles_by_actor.get(
+                getattr(follow, "community_actor_id", ""),
+            ),
             "instanceHost": _hostname_from_url(getattr(follow, "community_actor_id", "")),
             "status": getattr(follow, "status"),
             "technicalDetails": {
@@ -188,14 +246,13 @@ def build_dashboard_payload(runtime: Any) -> dict[str, object]:
         for follow in bridge_follows
     ]
 
-    publications_by_guild = {int(row.discord_guild_id): row for row in invite_publications}
     for guild_id, bucket in guild_buckets.items():
         publication = publications_by_guild.get(guild_id) if guild_id is not None else None
         bucket["inviteUrl"] = str(publication.invite_url) if publication is not None else None
 
     return {
         "instance": {
-            "title": "Discord/Fediverse Bridge Instance",
+            "title": getattr(settings, "dashboard_page_title", DEFAULT_DASHBOARD_PAGE_TITLE),
             "version": APP_VERSION,
             "origin": origin,
             "bridgeActorUrl": f"{origin}/actors/{actor_identifier}",
@@ -210,6 +267,7 @@ def build_dashboard_payload(runtime: Any) -> dict[str, object]:
         "federation": {
             "mode": "restricted_allowlist" if allowlist else "open",
             "allowlist": allowlist,
+            "instances": federated_instances,
         },
         "credits": {
             "label": "Made with passion by Nachitima",
@@ -218,17 +276,37 @@ def build_dashboard_payload(runtime: Any) -> dict[str, object]:
     }
 
 
-def render_dashboard_html(payload_endpoint: str = "/dashboard/data") -> str:
+def render_dashboard_html(
+    payload_endpoint: str = "/dashboard/data",
+    page_title: str = DEFAULT_DASHBOARD_PAGE_TITLE,
+) -> str:
     """Render the dashboard shell from the external HTML asset.
 
     The shell stays in a dedicated HTML file so the route layer does not keep
     large embedded CSS and JavaScript strings in Python source. Only the JSON
-    endpoint placeholder is injected dynamically.
+    endpoint placeholder and the browser tab title are injected dynamically.
     """
     template = DASHBOARD_HTML_PATH.read_text(encoding="utf-8")
     # The dashboard JSON route remains configurable from Python so tests can
     # exercise alternate route wiring without editing the static asset.
-    return template.replace("__DASHBOARD_DATA_ENDPOINT__", payload_endpoint)
+    return (
+        template.replace("__DASHBOARD_DATA_ENDPOINT__", escape(payload_endpoint, quote=True))
+        .replace("__DASHBOARD_PAGE_TITLE__", escape(page_title, quote=True))
+        .replace("__DASHBOARD_ICON_VERSION__", _asset_cache_token(WEB_DIR / "icon.png"))
+        .replace("__DASHBOARD_CSS_VERSION__", _asset_cache_token(WEB_DIR / "dashboard.css"))
+        .replace("__DASHBOARD_JS_VERSION__", _asset_cache_token(WEB_DIR / "dashboard.js"))
+    )
+
+
+def _asset_cache_token(path: Path) -> str:
+    """Return one deterministic cache-busting token for one static dashboard asset.
+
+    The public dashboard HTML can update independently from the separately
+    cached JS/CSS files served under `/dashboard/static`. Using the file mtime
+    in the query string forces browsers and reverse proxies to fetch the new
+    asset whenever the image is rebuilt with changed static files.
+    """
+    return str(path.stat().st_mtime_ns)
 
 
 def _load_discord_snapshots(
@@ -358,6 +436,16 @@ def _remote_subscription_label(subscription: object) -> str:
     )
 
 
+def _remote_community_display_name(subscription: object) -> str:
+    """Return a human-readable remote community name for directory rows.
+
+    The subscribed communities view should prefer plain community names over
+    federation handles or raw actor URLs when the subscription catalog already
+    knows the remote community name.
+    """
+    return str(getattr(subscription, "lemmy_community_name", None) or "")
+
+
 def _local_subscriber_label(community: object | None, origin_host: str) -> str:
     """Return the bridge-facing community handle for one local subscriber."""
     if community is None:
@@ -371,6 +459,8 @@ def _hostname_from_url(value: str | None) -> str | None:
         return None
     parsed = urlparse(value if "://" in value else f"https://{value}")
     return parsed.hostname.lower() if parsed.hostname else None
+
+
 
 
 def _normalize_host_list(values: list[str]) -> list[str]:
@@ -388,3 +478,16 @@ def _local_community_relay_handle(slug: str, origin_host: str) -> str:
     if not origin_host:
         return f"!{slug}"
     return f"!{slug}@{origin_host}"
+
+
+def _is_visible_local_community(community: object | None, snapshot: object) -> bool:
+    """Return whether one community should appear in the public dashboard.
+
+    Disabled communities stay operationally hidden from the public dashboard so
+    readers see only communities that are still meant to be surfaced.
+    """
+    if community is None:
+        return False
+    if getattr(community, "status", "active") == "disabled":
+        return False
+    return snapshot.is_discord_guild_allowed(getattr(community, "discord_guild_id", None))

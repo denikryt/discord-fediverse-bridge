@@ -9,6 +9,7 @@ from types import SimpleNamespace
 
 from fastapi.testclient import TestClient
 
+from src.dashboard import DEFAULT_DASHBOARD_PAGE_TITLE
 from src.db import Database
 from src.http_api import create_http_app
 from src.local_communities.service import LocalCommunityService
@@ -27,6 +28,7 @@ def _runtime(database: Database, *, allowlist: list[str] | None = None) -> Simpl
         fedify_origin="https://discrod-bridge.example.com",
         normalized_fedify_origin="https://discrod-bridge.example.com",
         fedify_actor_identifier="bridge",
+        dashboard_page_title=DEFAULT_DASHBOARD_PAGE_TITLE,
         federation_allowlist=allowlist or [],
         fedify_shared_secret="test-secret",
         registration_session_cookie_name="bridge_registration_session",
@@ -39,7 +41,7 @@ def _runtime(database: Database, *, allowlist: list[str] | None = None) -> Simpl
         discord_oauth_client=SimpleNamespace(),
         fedify_gateway=SimpleNamespace(),
         bot=SimpleNamespace(),
-            bridge_policy_service=build_test_policy_service(database, settings),
+        bridge_policy_service=build_test_policy_service(database, settings),
 )
 
 
@@ -72,6 +74,7 @@ def test_empty_dashboard_state_renders_open_federation(tmp_path: Path) -> None:
 
     assert response.status_code == 200
     payload = response.json()
+    assert payload["instance"]["title"] == DEFAULT_DASHBOARD_PAGE_TITLE
     assert payload["instance"]["origin"] == "https://discrod-bridge.example.com"
     assert payload["instance"]["version"] == "0.1.0"
     assert payload["instance"]["bridgeActorUrl"] == "https://discrod-bridge.example.com/actors/bridge"
@@ -80,6 +83,7 @@ def test_empty_dashboard_state_renders_open_federation(tmp_path: Path) -> None:
     assert payload["bridgeActorFollows"] == []
     assert payload["federation"]["mode"] == "open"
     assert payload["federation"]["allowlist"] == []
+    assert payload["federation"]["instances"] == []
 
 
 def test_local_communities_show_safe_public_metadata_and_counts(tmp_path: Path) -> None:
@@ -153,6 +157,15 @@ def test_bridge_actor_follows_do_not_change_federation_policy_payload(tmp_path: 
     """Outbound bridge follows stay separate from the public federation policy block."""
     database = _database(tmp_path)
     community = _create_local_community(database)
+    database.remote_subscriptions.create_subscription(
+        discord_channel_id=501,
+        discord_guild_id=55,
+        lemmy_community_actor_id="https://lemmy.world/c/news",
+        lemmy_community_name="news",
+        lemmy_community_id=1,
+        community_handle="!news@lemmy.world",
+        status="accepted",
+    )
     database.bridge_actor_follows.create_bridge_actor_follow(
         community_actor_id="https://lemmy.world/c/news",
         follow_activity_id="https://discrod-bridge.example.com/activities/follow/news",
@@ -169,10 +182,11 @@ def test_bridge_actor_follows_do_not_change_federation_policy_payload(tmp_path: 
     payload = _client(database).get("/dashboard/data").json()
 
     assert payload["bridgeActorFollows"][0]["communityActorUrl"] == "https://lemmy.world/c/news"
-    assert payload["federation"] == {
-        "mode": "open",
-        "allowlist": [],
-    }
+    assert payload["bridgeActorFollows"][0]["communityName"] == "news"
+    assert payload["bridgeActorFollows"][0]["communityHandle"] == "!news@lemmy.world"
+    assert payload["federation"]["mode"] == "open"
+    assert payload["federation"]["allowlist"] == []
+    assert payload["federation"]["instances"] == ["beehaw.org", "lemmy.world"]
 
 
 def test_allowlist_mode_is_explicit_and_normalized(tmp_path: Path) -> None:
@@ -182,6 +196,7 @@ def test_allowlist_mode_is_explicit_and_normalized(tmp_path: Path) -> None:
 
     assert payload["federation"]["mode"] == "restricted_allowlist"
     assert payload["federation"]["allowlist"] == ["beehaw.org", "lemmy.world"]
+    assert payload["federation"]["instances"] == []
 
 
 def test_healthcheck_exposes_project_version(tmp_path: Path) -> None:
@@ -199,17 +214,39 @@ def test_dashboard_html_loads_and_includes_credits(tmp_path: Path) -> None:
     response = _client(database).get("/")
 
     assert response.status_code == 200
-    assert "Discord/Fediverse Bridge Instance" in response.text
+    assert DEFAULT_DASHBOARD_PAGE_TITLE in response.text
     assert "/dashboard/data" in response.text
-    assert "/dashboard/static/dashboard.css?v=2026-06-06-project-version" in response.text
-    assert "/dashboard/static/dashboard.js?v=2026-06-06-project-version" in response.text
+    assert '/dashboard/static/icon.png?v=' in response.text
+    assert "/dashboard/static/dashboard.css?v=" in response.text
+    assert "/dashboard/static/dashboard.js?v=" in response.text
     assert 'data-dashboard-endpoint="/dashboard/data"' in response.text
-    assert "Remote follower relays" not in response.text
-    assert '<span class="stat-label">Origin</span>' not in response.text
-    assert '<span class="stat-label">Bridge actor</span>' not in response.text
+    assert "Local communities" in response.text
+    assert "List of guilds" in response.text
+    assert 'data-view-tab="communities"' in response.text
+    assert 'data-view-tab="guilds"' in response.text
+    assert 'data-community-filter="subscribed"' in response.text
+    assert 'data-community-filter="local"' in response.text
+    assert 'data-community-filter="all"' in response.text
+    assert 'id="community-table"' in response.text
+    assert 'id="guild-table"' in response.text
+    assert "Bridge actor follows" not in response.text
     assert "https://nachitima.com" in response.text
     assert "Nachitima" in response.text
+    assert "https://github.com/denikryt/discord-fediverse-bridge" in response.text
+    assert "Source code" in response.text
     assert 'id="project-version"' in response.text
+
+
+def test_dashboard_page_title_can_be_overridden_via_settings(tmp_path: Path) -> None:
+    """The dashboard shell uses the configured browser-tab title."""
+    database = _database(tmp_path)
+    runtime = _runtime(database)
+    runtime.settings.dashboard_page_title = "Custom Bridge Title"
+    response = TestClient(create_http_app(runtime)).get("/")
+
+    assert response.status_code == 200
+    assert "<title>Custom Bridge Title</title>" in response.text
+    assert "<h1>Custom Bridge Title</h1>" in response.text
 
 
 def test_dashboard_path_redirects_to_root(tmp_path: Path) -> None:
@@ -227,24 +264,34 @@ def test_dashboard_static_assets_are_served_under_dashboard_prefix(tmp_path: Pat
     client = _client(database)
 
     css = client.get("/dashboard/static/dashboard.css")
+    icon = client.get("/dashboard/static/icon.png")
     script = client.get("/dashboard/static/dashboard.js")
 
     assert css.status_code == 200
     assert css.headers["content-type"].startswith("text/css")
     assert ":root" in css.text
+    assert icon.status_code == 200
+    assert icon.headers["content-type"].startswith("image/png")
     assert script.status_code == 200
     assert script.headers["content-type"].startswith("text/javascript") or script.headers[
         "content-type"
     ].startswith("application/javascript")
     assert "data-dashboard-endpoint" in script.text
-    assert "Local subscribers" not in script.text
+    assert "activeCommunityFilter" in script.text
+    assert 'let activeCommunityFilter = "local"' in script.text
+    assert "activeDirectoryView" in script.text
+    assert "buildCommunityRows" in script.text
+    assert "renderGuildRow" in script.text
+    assert "Description" in script.text
     assert "discordChannelName" in script.text
     assert "actorHandleFromUrl" in script.text
     assert "communityHandleFromUrl" in script.text
-    assert "<details open>\n        <summary>Hosted communities" not in script.text
-    assert "<details open>\n        <summary>Remote subscriptions" not in script.text
-    assert "<details open>\n        <summary>Local subscriptions" not in script.text
+    assert "data-view-tab" in script.text
+    assert "data-community-filter" in script.text
+    assert ".directory-table-head" in css.text
+    assert ".relay-pill" in css.text
     assert "grid-template-columns: repeat(2, minmax(0, 1fr))" in css.text
+    assert "[hidden]" in css.text
 
 
 def test_local_community_host_discord_names_appear_in_dashboard_payload(tmp_path: Path) -> None:
@@ -268,6 +315,36 @@ def test_local_community_host_discord_names_appear_in_dashboard_payload(tmp_path
         "guildName": "Guild 1",
         "forumChannelName": "community-host",
     }
+
+
+def test_published_guild_invites_appear_on_guild_and_local_community_cards(tmp_path: Path) -> None:
+    """One published guild invite is exposed on both related public dashboard surfaces."""
+    database = _database(tmp_path)
+    _create_local_community(database)
+    database.discord_directory.upsert_guild_snapshot(
+        discord_guild_id=10,
+        guild_name="Guild 1",
+    )
+    database.discord_directory.upsert_channel_snapshot(
+        discord_channel_id=100,
+        discord_guild_id=10,
+        channel_name="community-host",
+        channel_type="forum",
+    )
+    with database.session() as session:
+        database.guild_invite_publications.replace_in_session(
+            session,
+            discord_guild_id=10,
+            discord_channel_id=100,
+            invite_code="test",
+            invite_url="https://discord.gg/test",
+            published_by_discord_user_id="123",
+        )
+
+    payload = _client(database).get("/dashboard/data").json()
+
+    assert payload["localCommunities"][0]["inviteUrl"] == "https://discord.gg/test"
+    assert payload["discordGuilds"][0]["inviteUrl"] == "https://discord.gg/test"
 
 
 def test_accepted_remote_subscriptions_are_grouped_by_discord_guild(tmp_path: Path) -> None:
@@ -388,6 +465,30 @@ def test_dashboard_guild_visibility_redacts_numeric_discord_ids(tmp_path: Path) 
     assert "discord_channel_id" not in serialized
     assert "private_key_pem" not in serialized
     assert "fedify_shared_secret" not in serialized
+
+
+def test_disabled_local_communities_are_hidden_from_dashboard(tmp_path: Path) -> None:
+    """Disabled local communities do not appear in the public dashboard payload."""
+    database = _database(tmp_path)
+    community = _create_local_community(database)
+    with database.session() as session:
+        persisted = session.merge(database.local_communities.get_local_community_by_slug("hackers"))
+        persisted.status = "disabled"
+
+    database.local_subscribers.create_local_subscriber(
+        local_community_id=community.id,
+        discord_guild_id=77,
+        discord_channel_id=701,
+        initiated_by_discord_user_id="123",
+        status="active",
+    )
+
+    payload = _client(database).get("/dashboard/data").json()
+
+    assert payload["instance"]["localCommunityCount"] == 0
+    assert payload["localCommunities"] == []
+    assert payload["instance"]["localCommunityFollowerCount"] == 0
+    assert payload["discordGuilds"] == []
 
 
 def test_missing_discord_snapshots_render_fallback_labels(tmp_path: Path) -> None:

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import logging
 from datetime import timedelta
+from html import escape
 from urllib.parse import parse_qs
 
 from fastapi import FastAPI, Header, HTTPException, Request, Response, status
@@ -12,7 +13,11 @@ from fastapi.staticfiles import StaticFiles
 
 from .activitypub_handlers import dispatch_activitypub_event
 from .inbound_activity_outcomes import InboundActivityOutcome
-from .dashboard import WEB_DIR, build_dashboard_payload, render_dashboard_html
+from .dashboard import (
+    WEB_DIR,
+    build_dashboard_payload,
+    render_dashboard_html,
+)
 from .activitypub_models import BridgeGatewayEvent
 from .registration_service import RegistrationError, generate_oauth_state, generate_session_token
 from .runtime import Runtime
@@ -22,6 +27,7 @@ from .internal_auth import validate_internal_bearer
 from .internal_fedify_api import create_internal_fedify_router
 
 logger = logging.getLogger(__name__)
+REGISTRATION_HTML_PATH = WEB_DIR / "registration.html"
 
 
 def create_http_app(runtime: Runtime) -> FastAPI:
@@ -54,10 +60,10 @@ def create_http_app(runtime: Runtime) -> FastAPI:
         if existing_user is not None:
             response = _html_response(
                 title="Already registered",
+                heading="Already registered",
+                subtitle="This Discord account already owns one local ActivityPub identity.",
                 body=(
-                    "<h1>Already registered</h1>"
                     f"<p>Your ActivityPub identity already exists as <strong>{_actor_handle(runtime, existing_user.activitypub_username)}</strong>.</p>"
-                    f"<p>Actor URL: <a href=\"{existing_user.actor_url}\">{existing_user.actor_url}</a></p>"
                 ),
             )
             _apply_session_cookie(runtime, response, session.session_token)
@@ -66,13 +72,15 @@ def create_http_app(runtime: Runtime) -> FastAPI:
         if session.discord_user_id is not None:
             response = _html_response(
                 title="Choose username",
+                heading="Choose your ActivityPub username",
+                subtitle="Finish registration by choosing the public username that this bridge will expose to the Fediverse.",
                 body=(
-                    "<h1>Choose your ActivityPub username</h1>"
                     f"<p>Signed in as Discord user <strong>{session.discord_username or session.discord_user_id}</strong>.</p>"
-                    "<form method=\"post\" action=\"/register/complete\">"
+                    "<form class=\"registration-form\" method=\"post\" action=\"/register/complete\">"
                     "<label for=\"username\">Username</label>"
+                    "<p class=\"muted registration-form-help\">Use a stable lowercase name you want to keep as your local actor handle.</p>"
                     "<input id=\"username\" name=\"username\" type=\"text\" required />"
-                    "<button type=\"submit\">Create identity</button>"
+                    "<button class=\"registration-submit\" type=\"submit\">Create identity</button>"
                     "</form>"
                 ),
             )
@@ -81,10 +89,11 @@ def create_http_app(runtime: Runtime) -> FastAPI:
 
         response = _html_response(
             title="Register",
+            heading="Register your ActivityPub identity",
+            subtitle="Use Discord OAuth to verify account ownership before choosing a local ActivityPub username.",
             body=(
-                "<h1>Register your ActivityPub identity</h1>"
-                "<p>Use Discord OAuth to verify ownership of your Discord account before choosing a local ActivityPub username.</p>"
-                "<p><a href=\"/auth/discord/start\">Continue with Discord</a></p>"
+                "<p>This flow creates one local Fediverse identity linked to your Discord account.</p>"
+                "<div class=\"registration-actions\"><a class=\"button-link\" href=\"/auth/discord/start\">Continue with Discord</a></div>"
             ),
         )
         _apply_session_cookie(runtime, response, session.session_token)
@@ -160,17 +169,19 @@ def create_http_app(runtime: Runtime) -> FastAPI:
         except RegistrationError as exc:
             return _html_response(
                 title="Registration error",
-                body=f"<h1>Registration error</h1><p>{exc}</p>",
+                heading="Registration error",
+                subtitle="The bridge could not complete this registration request.",
+                body=f"<p>{exc}</p>",
                 status_code=status.HTTP_400_BAD_REQUEST,
             )
 
         if outcome == "existing":
             return _html_response(
                 title="Already registered",
+                heading="Already registered",
+                subtitle="This Discord account already owns one local ActivityPub identity.",
                 body=(
-                    "<h1>Already registered</h1>"
                     f"<p>Your ActivityPub identity already exists as <strong>{_actor_handle(runtime, actor.activitypub_username)}</strong>.</p>"
-                    f"<p>Actor URL: <a href=\"{actor.actor_url}\">{actor.actor_url}</a></p>"
                 ),
             )
 
@@ -205,17 +216,19 @@ def create_http_app(runtime: Runtime) -> FastAPI:
             )
         return _html_response(
             title="Registration complete",
+            heading="Registration complete",
+            subtitle="Your local ActivityPub identity is ready to use.",
             body=(
-                "<h1>Registration complete</h1>"
                 f"<p>Your ActivityPub handle is <strong>{_actor_handle(runtime, user.activitypub_username)}</strong>.</p>"
-                f"<p>Actor URL: <a href=\"{user.actor_url}\">{user.actor_url}</a></p>"
             ),
         )
 
     @app.get("/", response_class=HTMLResponse)
     async def dashboard_page() -> HTMLResponse:
         """Render the public dashboard browser shell on the root URL."""
-        return HTMLResponse(render_dashboard_html())
+        return HTMLResponse(
+            render_dashboard_html(page_title=runtime.settings.dashboard_page_title)
+        )
 
     @app.get("/dashboard")
     async def dashboard_redirect() -> RedirectResponse:
@@ -340,20 +353,33 @@ def _actor_handle(runtime: Runtime, username: str) -> str:
     return runtime.registration_service.actor_handle(username)
 
 
-def _html_response(*, title: str, body: str, status_code: int = 200) -> HTMLResponse:
-    """Wrap one small plain-HTML page used by the registration flow."""
+def _html_response(
+    *,
+    title: str,
+    heading: str,
+    subtitle: str,
+    body: str,
+    status_code: int = 200,
+) -> HTMLResponse:
+    """Render one styled registration page from the shared HTML shell."""
+    template = REGISTRATION_HTML_PATH.read_text(encoding="utf-8")
+    rendered = (
+        template.replace("__REGISTRATION_TITLE__", escape(title, quote=True))
+        .replace("__REGISTRATION_HEADING__", escape(heading))
+        .replace("__REGISTRATION_SUBTITLE__", escape(subtitle))
+        .replace("__REGISTRATION_BODY__", body)
+        .replace("__REGISTRATION_ICON_VERSION__", _registration_asset_cache_token(WEB_DIR / "icon.png"))
+        .replace("__REGISTRATION_CSS_VERSION__", _registration_asset_cache_token(WEB_DIR / "dashboard.css"))
+    )
     return HTMLResponse(
-        (
-            "<!doctype html>"
-            "<html><head>"
-            f"<title>{title}</title>"
-            "<meta charset=\"utf-8\" />"
-            "</head><body>"
-            f"{body}"
-            "</body></html>"
-        ),
+        rendered,
         status_code=status_code,
     )
+
+
+def _registration_asset_cache_token(path) -> str:
+    """Return one cache-busting token for registration-page static assets."""
+    return str(path.stat().st_mtime_ns)
 
 
 def _validate_delivery_header(x_bridge_delivery_id: str | None, delivery_id: str) -> None:
