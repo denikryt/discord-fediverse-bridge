@@ -42,3 +42,7 @@ This document explains HTTP route ownership between the Python bridge and the Fe
 All `/internal/*` routes are authenticated with the shared gateway secret and must not be routed publicly by nginx.
 
 `/users/`, `/communities/`, `/c/`, `/.well-known/webfinger`, `/.well-known/discord-fediverse-bridge/communities`, and `/inbox` are gateway-owned public identity, discovery, or delivery paths and should stay out of the Python bridge namespace.
+
+## Profile media
+
+`GET /media/profile/{public_id}` resolves an opaque persisted media ID through SQLite before opening canonical bytes beneath the configured media root. It does not mount or enumerate the media directory and returns immutable cache headers plus `nosniff`.

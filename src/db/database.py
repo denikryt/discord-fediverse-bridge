@@ -5,7 +5,7 @@ from __future__ import annotations
 from collections.abc import Iterator
 from contextlib import contextmanager
 
-from sqlalchemy import create_engine
+from sqlalchemy import create_engine, event, text
 from sqlalchemy.orm import Session, sessionmaker
 
 from ..management_actions import ManagementActions
@@ -34,6 +34,8 @@ from .repositories import (
     RemoteSubscriberRepository,
     RemoteSubscriptionRepository,
     UserRepository,
+    UserProfileRepository,
+    ProfileMediaRepository,
 )
 
 
@@ -43,6 +45,14 @@ class Database:
     def __init__(self, url: str) -> None:
         connect_args = {"check_same_thread": False} if url.startswith("sqlite") else {}
         self.engine = create_engine(url, future=True, connect_args=connect_args)
+        if url.startswith("sqlite"):
+            # Every connection must enforce the foreign-key invariants used by
+            # profile cleanup, backup, and future actor rendering.
+            @event.listens_for(self.engine, "connect")
+            def _enable_sqlite_foreign_keys(dbapi_connection: object, _connection_record: object) -> None:
+                cursor = dbapi_connection.cursor()
+                cursor.execute("PRAGMA foreign_keys=ON")
+                cursor.close()
         self.session_factory = sessionmaker(self.engine, expire_on_commit=False, class_=Session)
         self.bridge_actor_keys = BridgeActorKeyRepository(self.session)
         self.local_communities = LocalCommunityRepository(self.session)
@@ -59,6 +69,8 @@ class Database:
         self.bridge_policy_entries = BridgePolicyEntryRepository(self.session)
         self.event_receipts = EventReceiptRepository(self.session)
         self.users = UserRepository(self.session)
+        self.user_profiles = UserProfileRepository(self.session)
+        self.profile_media = ProfileMediaRepository(self.session)
         self.registration_sessions = RegistrationSessionRepository(self.session)
         self.message_mappings = MessageMappingRepository(self.session)
         self.activitypub_objects = ActivityPubObjectRepository(self.session)
@@ -83,6 +95,24 @@ class Database:
     def migrate(self) -> None:
         """Apply additive schema migrations that create_all cannot handle."""
         migrations.migrate(self.engine)
+
+    @contextmanager
+    def immediate_session(self) -> Iterator[Session]:
+        """Yield one SQLite writer-reserved transaction for cleanup coordination."""
+        session = self.session_factory()
+        try:
+            session.execute(text("BEGIN IMMEDIATE"))
+            yield session
+            session.commit()
+        except Exception:
+            session.rollback()
+            raise
+        finally:
+            session.close()
+
+    def close(self) -> None:
+        """Dispose pooled connections before releasing the deployment lease."""
+        self.engine.dispose()
 
     @contextmanager
     def session(self) -> Iterator[Session]:

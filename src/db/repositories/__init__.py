@@ -51,3 +51,5 @@ __all__ = [
     "DiscordDirectoryRepository",
     "GuildInvitePublicationRepository",
 ]
+
+from .user_profiles import ProfileMediaRepository, UserProfileRepository, UserProfileView

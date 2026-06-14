@@ -14,6 +14,8 @@ from .content_publish_service import ContentPublishService
 from .fedify_gateway_client import FedifyGatewayClient
 from .local_communities.runtime import LocalCommunityRuntime
 from .registration_service import RegistrationService
+from .profile_media import FileLock, ProfileMediaStore
+from .user_profiles import UserProfileService
 
 
 @dataclass(slots=True)
@@ -36,3 +38,15 @@ class Runtime:
     bot: BridgeBot
     community_runtime: CommunityRuntime
     local_community_runtime: LocalCommunityRuntime
+    profile_media_store: ProfileMediaStore
+    user_profile_service: UserProfileService
+    deployment_state_lease: FileLock
+
+    async def close(self) -> None:
+        """Close live-state owners before releasing the deployment generation lease."""
+        # The ordering prevents restore from replacing DB/media paths while a
+        # client, pooled connection, or HTTP reader can still use them.
+        await self.discord_oauth_client.close()
+        await self.fedify_gateway.close()
+        self.database.close()
+        self.deployment_state_lease.close()

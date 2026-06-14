@@ -8,7 +8,7 @@ from html import escape
 from urllib.parse import parse_qs
 
 from fastapi import FastAPI, Header, HTTPException, Request, Response, status
-from fastapi.responses import HTMLResponse, RedirectResponse
+from fastapi.responses import FileResponse, HTMLResponse, RedirectResponse
 from fastapi.staticfiles import StaticFiles
 
 from .activitypub_handlers import dispatch_activitypub_event
@@ -46,6 +46,30 @@ def create_http_app(runtime: Runtime) -> FastAPI:
         name="dashboard-static",
     )
 
+    @app.get("/media/profile/{public_id}")
+    async def profile_media(public_id: str) -> Response:
+        """Serve only persisted immutable profile media through opaque IDs."""
+        import re
+
+        if re.fullmatch(r"[A-Za-z0-9_-]{20,64}", public_id) is None:
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND)
+        asset = runtime.database.profile_media.get_by_public_id(public_id)
+        if asset is None:
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND)
+        try:
+            path = runtime.profile_media_store.resolve_storage_key(asset.storage_key)
+        except (FileNotFoundError, ValueError):
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND) from None
+        return FileResponse(
+            path,
+            media_type=asset.content_type,
+            headers={
+                "Cache-Control": "public, max-age=31536000, immutable",
+                "X-Content-Type-Options": "nosniff",
+                "Content-Length": str(asset.byte_size),
+            },
+        )
+
     @app.get("/healthz")
     async def healthcheck() -> dict[str, str]:
         """Return a minimal healthcheck for process supervision."""
@@ -64,6 +88,7 @@ def create_http_app(runtime: Runtime) -> FastAPI:
                 subtitle="This Discord account already owns one local ActivityPub identity.",
                 body=(
                     f"<p>Your ActivityPub identity already exists as <strong>{_actor_handle(runtime, existing_user.activitypub_username)}</strong>.</p>"
+                    f"<p><a href=\"{existing_user.actor_url}\">{existing_user.actor_url}</a></p>"
                 ),
             )
             _apply_session_cookie(runtime, response, session.session_token)
@@ -182,6 +207,7 @@ def create_http_app(runtime: Runtime) -> FastAPI:
                 subtitle="This Discord account already owns one local ActivityPub identity.",
                 body=(
                     f"<p>Your ActivityPub identity already exists as <strong>{_actor_handle(runtime, actor.activitypub_username)}</strong>.</p>"
+                    f"<p><a href=\"{actor.actor_url}\">{actor.actor_url}</a></p>"
                 ),
             )
 
@@ -220,6 +246,7 @@ def create_http_app(runtime: Runtime) -> FastAPI:
             subtitle="Your local ActivityPub identity is ready to use.",
             body=(
                 f"<p>Your ActivityPub handle is <strong>{_actor_handle(runtime, user.activitypub_username)}</strong>.</p>"
+                f"<p>Your actor URL is <a href=\"{user.actor_url}\">{user.actor_url}</a>.</p>"
             ),
         )
 

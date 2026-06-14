@@ -43,3 +43,7 @@ Channel exclusivity across bridge roles is an application invariant spanning `lo
 ## Bridge actor signing identity
 
 `bridge_actor_keys` stores the single bridge service actor keypair. Registered-user keys remain on `users`, and local-community keys remain on `local_communities`; backups of the SQLite database therefore preserve all local actor identities together.
+
+## User profile foundation
+
+`users` now owns nullable `display_name`, `summary`, `avatar_media_id`, and `header_media_id`. `user_profile_fields` stores up to four ordered metadata rows. `profile_media_assets` stores immutable media metadata; bytes live under the durable profile-media root. SQLite foreign keys use `ON DELETE RESTRICT`, and triggers enforce that avatar/header slots reference matching media kinds.

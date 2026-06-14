@@ -48,6 +48,13 @@ class Settings(BaseSettings):
     discord_guild_allowlist: list[str] = Field(default_factory=list, alias="DISCORD_GUILD_ALLOWLIST")
     discord_guild_blocklist: list[str] = Field(default_factory=list, alias="DISCORD_GUILD_BLOCKLIST")
     bridge_super_admin_user_ids: list[str] = Field(alias="BRIDGE_SUPER_ADMIN_USER_IDS")
+    profile_media_root: str = Field(default="/data/profile-media", alias="PROFILE_MEDIA_ROOT")
+    deployment_state_lock_path: str = Field(default="/data/deployment-state.lock", alias="DEPLOYMENT_STATE_LOCK_PATH")
+    profile_media_lock_path: str = Field(default="/data/profile-media.lock", alias="PROFILE_MEDIA_LOCK_PATH")
+    profile_media_max_upload_bytes: int = Field(default=10_485_760, ge=1_048_576, le=26_214_400, alias="PROFILE_MEDIA_MAX_UPLOAD_BYTES")
+    profile_media_max_pixels: int = Field(default=20_000_000, ge=1_000_000, le=40_000_000, alias="PROFILE_MEDIA_MAX_PIXELS")
+    profile_media_orphan_grace_seconds: int = Field(default=86_400, ge=300, le=604_800, alias="PROFILE_MEDIA_ORPHAN_GRACE_SECONDS")
+    profile_media_lock_timeout_seconds: int = Field(default=30, ge=1, le=300, alias="PROFILE_MEDIA_LOCK_TIMEOUT_SECONDS")
 
     @field_validator("federation_allowlist", "federation_blocklist", mode="before")
     @classmethod
@@ -98,6 +105,29 @@ class Settings(BaseSettings):
         """Fail startup when no immutable bridge administrator is configured."""
         if not self.bridge_super_admin_user_ids:
             raise ValueError("BRIDGE_SUPER_ADMIN_USER_IDS must contain at least one Discord user ID")
+        return self
+
+    @model_validator(mode="after")
+    def _validate_profile_media_paths(self) -> "Settings":
+        """Reject unsafe or overlapping durable-state lock and media paths."""
+        from pathlib import Path
+
+        media_root = Path(self.profile_media_root)
+        deployment_lock = Path(self.deployment_state_lock_path)
+        media_lock = Path(self.profile_media_lock_path)
+        if not media_root.is_absolute() or not deployment_lock.is_absolute() or not media_lock.is_absolute():
+            raise ValueError("profile media and lock paths must be absolute")
+        data_root = Path("/data").resolve()
+        media_root = media_root.resolve(strict=False)
+        deployment_lock = deployment_lock.resolve(strict=False)
+        media_lock = media_lock.resolve(strict=False)
+        for path in (media_root, deployment_lock, media_lock):
+            if data_root not in (path, *path.parents):
+                raise ValueError("profile media and lock paths must be contained beneath /data")
+        if deployment_lock == media_lock:
+            raise ValueError("deployment and media lifecycle lock paths must be distinct")
+        if media_root in (deployment_lock, *deployment_lock.parents) or media_root in (media_lock, *media_lock.parents):
+            raise ValueError("lock paths must not be inside the profile media root")
         return self
 
     @property

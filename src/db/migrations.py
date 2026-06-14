@@ -11,7 +11,7 @@ from __future__ import annotations
 from sqlalchemy import text
 from sqlalchemy.engine import Connection, Engine
 
-from ..models import Base, BridgeActorKey, BridgePolicyEntry, CommunityActorBan, GuildInvitePublication, LocalCommunityMessageSurface, LocalCommunityThreadSurface, ManagementAuditEvent
+from ..models import Base, BridgeActorKey, BridgePolicyEntry, CommunityActorBan, GuildInvitePublication, LocalCommunityMessageSurface, LocalCommunityThreadSurface, ManagementAuditEvent, ProfileMediaAsset, UserProfileField
 
 
 def migrate(engine: Engine) -> None:
@@ -38,6 +38,10 @@ def migrate(engine: Engine) -> None:
             "outcome",
             "ALTER TABLE activitypub_event_receipts ADD COLUMN outcome VARCHAR(64)",
         ),
+        ("users", "display_name", "ALTER TABLE users ADD COLUMN display_name VARCHAR(30)"),
+        ("users", "summary", "ALTER TABLE users ADD COLUMN summary VARCHAR(500)"),
+        ("users", "avatar_media_id", "ALTER TABLE users ADD COLUMN avatar_media_id INTEGER REFERENCES profile_media_assets(id) ON DELETE RESTRICT"),
+        ("users", "header_media_id", "ALTER TABLE users ADD COLUMN header_media_id INTEGER REFERENCES profile_media_assets(id) ON DELETE RESTRICT"),
     ]
     # Stage 2 adds explicit local-community surface tables. Creating them here
     # keeps interrupted deployments and migrate-only test fixtures aligned with
@@ -52,6 +56,8 @@ def migrate(engine: Engine) -> None:
             LocalCommunityMessageSurface.__table__,
             ManagementAuditEvent.__table__,
             GuildInvitePublication.__table__,
+            ProfileMediaAsset.__table__,
+            UserProfileField.__table__,
         ],
     )
     with engine.connect() as conn:
@@ -78,6 +84,8 @@ def migrate(engine: Engine) -> None:
             if "local_subscriber_id" not in columns:
                 conn.execute(text(f"ALTER TABLE {table} ADD COLUMN local_subscriber_id INTEGER"))
         _verify_stage2_surface_invariants(conn)
+        _migrate_profile_field_name_width(conn)
+        _install_profile_media_triggers(conn)
         conn.commit()
 
 
@@ -274,3 +282,73 @@ def _verify_stage2_surface_invariants(conn: Connection) -> None:
         raise RuntimeError(
             "Stage 2 migration requires exactly one host message surface per canonical message"
         )
+
+
+
+def _migrate_profile_field_name_width(conn: Connection) -> None:
+    """Rebuild legacy profile fields so metadata names expose VARCHAR(255)."""
+    table_info = _table_info(conn, "user_profile_fields")
+    if not table_info:
+        return
+    name_row = next((row for row in table_info if row[1] == "name"), None)
+    if name_row is None or str(name_row[2]).upper() != "VARCHAR(30)":
+        return
+    # SQLite does not enforce VARCHAR widths, but schema parity is part of the
+    # durable contract handed to later stages and external schema inspection.
+    conn.execute(text("ALTER TABLE user_profile_fields RENAME TO user_profile_fields_legacy_name_width"))
+    conn.execute(text("""
+        CREATE TABLE user_profile_fields (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+            position INTEGER NOT NULL,
+            name VARCHAR(255) NOT NULL,
+            value VARCHAR(255) NOT NULL,
+            created_at DATETIME NOT NULL,
+            updated_at DATETIME NOT NULL,
+            UNIQUE (user_id, position),
+            CONSTRAINT ck_user_profile_field_position CHECK (position >= 0 AND position <= 3)
+        )
+    """))
+    conn.execute(text("""
+        INSERT INTO user_profile_fields (id, user_id, position, name, value, created_at, updated_at)
+        SELECT id, user_id, position, name, value, created_at, updated_at
+        FROM user_profile_fields_legacy_name_width
+    """))
+    conn.execute(text("DROP TABLE user_profile_fields_legacy_name_width"))
+
+def _install_profile_media_triggers(conn: Connection) -> None:
+    """Enforce slot-to-kind consistency for every SQLite write path."""
+    if not _table_columns(conn, "users") or not _table_columns(conn, "profile_media_assets"):
+        return
+    conn.execute(text("""
+        CREATE TRIGGER IF NOT EXISTS users_avatar_media_kind_insert
+        BEFORE INSERT ON users WHEN NEW.avatar_media_id IS NOT NULL
+        BEGIN
+          SELECT CASE WHEN (SELECT media_kind FROM profile_media_assets WHERE id = NEW.avatar_media_id) != 'avatar'
+            THEN RAISE(ABORT, 'avatar_media_id must reference avatar media') END;
+        END
+    """))
+    conn.execute(text("""
+        CREATE TRIGGER IF NOT EXISTS users_avatar_media_kind_update
+        BEFORE UPDATE OF avatar_media_id ON users WHEN NEW.avatar_media_id IS NOT NULL
+        BEGIN
+          SELECT CASE WHEN (SELECT media_kind FROM profile_media_assets WHERE id = NEW.avatar_media_id) != 'avatar'
+            THEN RAISE(ABORT, 'avatar_media_id must reference avatar media') END;
+        END
+    """))
+    conn.execute(text("""
+        CREATE TRIGGER IF NOT EXISTS users_header_media_kind_insert
+        BEFORE INSERT ON users WHEN NEW.header_media_id IS NOT NULL
+        BEGIN
+          SELECT CASE WHEN (SELECT media_kind FROM profile_media_assets WHERE id = NEW.header_media_id) != 'header'
+            THEN RAISE(ABORT, 'header_media_id must reference header media') END;
+        END
+    """))
+    conn.execute(text("""
+        CREATE TRIGGER IF NOT EXISTS users_header_media_kind_update
+        BEFORE UPDATE OF header_media_id ON users WHEN NEW.header_media_id IS NOT NULL
+        BEGIN
+          SELECT CASE WHEN (SELECT media_kind FROM profile_media_assets WHERE id = NEW.header_media_id) != 'header'
+            THEN RAISE(ABORT, 'header_media_id must reference header media') END;
+        END
+    """))

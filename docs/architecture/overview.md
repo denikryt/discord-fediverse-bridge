@@ -62,3 +62,7 @@ Start with this document, then read `docs/architecture/bridge-modes.md` for conc
 ## What this document does not cover
 
 This document does not define exact payload fields, every route, or every table invariant. Use the focused architecture documents for those details and the source code as the final implementation authority.
+
+## Profile persistence and media ownership
+
+Python owns profile persistence and bridge-managed profile image bytes. The main runtime holds a shared deployment-generation lease while DB and media paths are open; backup shares that generation, while restore and startup recovery require exclusive ownership. The Fedify gateway does not receive filesystem access. Stage 1 does not change actor serialization.

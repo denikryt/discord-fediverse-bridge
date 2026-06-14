@@ -197,3 +197,9 @@ docker compose \
 ```
 
 Do not add `-v` for production. It deletes the database volume.
+
+## Durable user profile media
+
+The bridge stores validated profile images under `/data/profile-media` and keeps their metadata and user references in `/data/bridge.db`. Back up and restore these paths only through `python -m src.db.backup` complete-archive commands; copying or restoring the SQLite file alone is incomplete after profile media exists.
+
+The bridge process holds a shared lock on `/data/deployment-state.lock` for its full lifetime. Complete restore requires the exclusive form of that lock, so it fails or waits while the bridge is running. The backup service uses only explicit database, media, lock, interval, retention, and output paths; it must not receive Discord, OAuth, gateway, or signing secrets.

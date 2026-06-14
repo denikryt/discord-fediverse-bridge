@@ -307,3 +307,9 @@ This inventory remains a migration/history map from the former facade methods to
 ## Bridge actor keys
 
 `BridgeActorKeyRepository.get`, `get_by_actor_url`, and `create` own persistence for the bridge service actor keypair. `ActorKeyService` provides explicit bridge, user, and local-community access methods without merging their physical storage.
+
+## User profiles and profile media
+
+- `UserProfileRepository.get/update_text/switch_slot`: effective profile reads and transaction-scoped profile writes.
+- `ProfileMediaRepository.insert/get_by_public_id/is_referenced`: immutable media metadata and liveness.
+- `UserProfileService`: owns mutation transaction boundaries; `ProfileMediaStore` owns only byte validation and filesystem publication.

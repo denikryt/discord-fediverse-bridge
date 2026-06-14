@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from datetime import datetime, timezone
 
-from sqlalchemy import CheckConstraint, DateTime, Integer, JSON, String, Text, UniqueConstraint
+from sqlalchemy import CheckConstraint, DateTime, ForeignKey, Integer, JSON, String, Text, UniqueConstraint
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column
 
 
@@ -166,6 +166,30 @@ class ChannelCommunitySubscription(Base):
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, onupdate=utcnow, nullable=False)
 
 
+class ProfileMediaAsset(Base):
+    """Persist metadata for one immutable bridge-owned profile image."""
+
+    __tablename__ = "profile_media_assets"
+    __table_args__ = (
+        UniqueConstraint("public_id"),
+        UniqueConstraint("storage_key"),
+        CheckConstraint("media_kind IN ('avatar', 'header')", name="ck_profile_media_kind"),
+        CheckConstraint("byte_size > 0", name="ck_profile_media_byte_size"),
+        CheckConstraint("width > 0 AND height > 0", name="ck_profile_media_dimensions"),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    public_id: Mapped[str] = mapped_column(String(64), nullable=False)
+    storage_key: Mapped[str] = mapped_column(String(255), nullable=False)
+    media_kind: Mapped[str] = mapped_column(String(16), nullable=False)
+    content_type: Mapped[str] = mapped_column(String(64), nullable=False)
+    byte_size: Mapped[int] = mapped_column(Integer, nullable=False)
+    width: Mapped[int] = mapped_column(Integer, nullable=False)
+    height: Mapped[int] = mapped_column(Integer, nullable=False)
+    sha256_hex: Mapped[str] = mapped_column(String(64), nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, nullable=False)
+
+
 class User(Base):
     """Store the local ActivityPub identity owned by one Discord user."""
 
@@ -188,6 +212,28 @@ class User(Base):
     followers_url: Mapped[str] = mapped_column(String(512), nullable=False)
     public_key_pem: Mapped[str] = mapped_column(String, nullable=False)
     private_key_pem: Mapped[str] = mapped_column(String, nullable=False)
+    display_name: Mapped[str | None] = mapped_column(String(30), nullable=True)
+    summary: Mapped[str | None] = mapped_column(String(500), nullable=True)
+    avatar_media_id: Mapped[int | None] = mapped_column(ForeignKey("profile_media_assets.id", ondelete="RESTRICT"), nullable=True)
+    header_media_id: Mapped[int | None] = mapped_column(ForeignKey("profile_media_assets.id", ondelete="RESTRICT"), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, nullable=False)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, onupdate=utcnow, nullable=False)
+
+
+class UserProfileField(Base):
+    """Persist one ordered profile metadata name/value pair for a local user."""
+
+    __tablename__ = "user_profile_fields"
+    __table_args__ = (
+        UniqueConstraint("user_id", "position"),
+        CheckConstraint("position >= 0 AND position <= 3", name="ck_user_profile_field_position"),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    user_id: Mapped[int] = mapped_column(ForeignKey("users.id", ondelete="CASCADE"), nullable=False)
+    position: Mapped[int] = mapped_column(Integer, nullable=False)
+    name: Mapped[str] = mapped_column(String(255), nullable=False)
+    value: Mapped[str] = mapped_column(String(255), nullable=False)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, nullable=False)
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, onupdate=utcnow, nullable=False)
 

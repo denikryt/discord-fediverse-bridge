@@ -9,6 +9,9 @@ services:
       BRIDGE_BIND_HOST: 0.0.0.0
       BRIDGE_BIND_PORT: 8080
       BRIDGE_GATEWAY_URL: http://fedify-gateway:3000
+      PROFILE_MEDIA_ROOT: /data/profile-media
+      DEPLOYMENT_STATE_LOCK_PATH: /data/deployment-state.lock
+      PROFILE_MEDIA_LOCK_PATH: /data/profile-media.lock
     ports:
       - "127.0.0.1:${BRIDGE_PUBLISHED_PORT:-8080}:8080"
     volumes:
@@ -47,8 +50,6 @@ services:
   backup:
     image: ${BRIDGE_IMAGE:-discord-fediverse-bridge}:${BRIDGE_VERSION:?BRIDGE_VERSION is required}
     restart: unless-stopped
-    env_file:
-      - ${COMPOSE_ENV_FILE:-.env}
     command:
       - python
       - -m
@@ -58,6 +59,14 @@ services:
       - /data/bridge.db
       - --output-dir
       - /backups
+      - --media-root
+      - /data/profile-media
+      - --deployment-lock
+      - /data/deployment-state.lock
+      - --media-lock
+      - /data/profile-media.lock
+      - --lock-timeout-seconds
+      - ${PROFILE_MEDIA_LOCK_TIMEOUT_SECONDS:-30}
       - --interval-seconds
       - ${BACKUP_INTERVAL_SECONDS:-86400}
       - --retention-count

@@ -43,10 +43,10 @@ def test_primary_compose_has_two_versioned_services_and_shared_state() -> None:
 
 
 def test_build_override_builds_both_images_with_shared_version() -> None:
-    """Local builds must stamp both images with the selected release version."""
+    """Local builds must stamp both Python services and the gateway with one version."""
     compose = _read("compose.build.yaml")
 
-    assert compose.count("APP_VERSION: ${BRIDGE_VERSION:?") == 2
+    assert compose.count("APP_VERSION: ${BRIDGE_VERSION:?") == 3
     assert "dockerfile: Dockerfile" in compose
     assert "dockerfile: fedify-gateway/Dockerfile" in compose
 
@@ -104,13 +104,13 @@ def test_dockerignore_excludes_local_secrets_and_generated_state() -> None:
 
 
 def test_deployment_uses_one_root_env_file() -> None:
-    """All supported launch paths must read the same root .env file."""
+    """Only secret-bearing application services read the shared root env file."""
     compose = _read("compose.yaml")
     package = _read("fedify-gateway/package.json")
     systemd = _read("systemd-services.sh")
     env_example = _read(".env.example")
 
-    assert compose.count("      - ${COMPOSE_ENV_FILE:-.env}") == 3
+    assert compose.count("      - ${COMPOSE_ENV_FILE:-.env}") == 2
     assert "BRIDGE_ENV_FILE" not in compose
     assert "GATEWAY_ENV_FILE" not in compose
     assert "--env-file=../.env --env-file=.env" not in package

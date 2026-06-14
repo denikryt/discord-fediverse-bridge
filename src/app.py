@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+from pathlib import Path
 
 import uvicorn
 
@@ -24,6 +25,9 @@ from .logging_setup import configure_logging
 from .registration_service import RegistrationService
 from .project_version import APP_VERSION
 from .runtime import Runtime
+from .profile_media import FileLock, ProfileMediaStore
+from .user_profiles import UserProfileService
+from .db.backup import recover_incomplete_restore
 
 logger = logging.getLogger(__name__)
 
@@ -54,21 +58,45 @@ async def main() -> None:
     async def run_http_server() -> None:
         await http_server.serve()
 
-    async with asyncio.TaskGroup() as task_group:
-        # Both tasks are mandatory for the bridge to function, so they share one lifecycle.
-        task_group.create_task(run_bot(), name="discord-bot")
-        task_group.create_task(run_http_server(), name="internal-http-server")
+    try:
+        async with asyncio.TaskGroup() as task_group:
+            # Both tasks are mandatory for the bridge to function, so they share one lifecycle.
+            task_group.create_task(run_bot(), name="discord-bot")
+            task_group.create_task(run_http_server(), name="internal-http-server")
+    finally:
+        await runtime.close()
 
 
 def build_runtime(settings: Settings) -> Runtime:
-    """Construct the full long-lived runtime for both bridge modes.
+    """Recover durable state, acquire a lifetime lease, and build the runtime."""
+    deployment_lock_path = Path(settings.deployment_state_lock_path)
+    with FileLock(deployment_lock_path).acquire(
+        exclusive=True, timeout_seconds=settings.profile_media_lock_timeout_seconds
+    ):
+        recover_incomplete_restore(
+            Path(settings.database_url.removeprefix("sqlite:///")),
+            Path(settings.profile_media_root),
+        )
+    deployment_lease = FileLock(deployment_lock_path).acquire(
+        exclusive=False, timeout_seconds=settings.profile_media_lock_timeout_seconds
+    )
+    try:
+        return _build_live_runtime(settings, deployment_lease)
+    except Exception:
+        # Failed startup must not leave restore blocked by a leaked descriptor.
+        deployment_lease.close()
+        raise
 
-    Startup wiring lives here instead of inline in `main()` so adding new
-    runtimes does not hide lifecycle composition inside one large bootstrap
-    function.
-    """
 
+def _build_live_runtime(settings: Settings, deployment_lease: FileLock) -> Runtime:
+    """Open DB/media state only while the caller-owned shared lease is held."""
     database = Database(settings.database_url)
+    media_store = ProfileMediaStore(
+        Path(settings.profile_media_root),
+        max_upload_bytes=settings.profile_media_max_upload_bytes,
+        max_pixels=settings.profile_media_max_pixels,
+    )
+    media_store.initialize()
     database.create_all()
     database.migrate()
     BridgeActorKeyBootstrap(database=database, settings=settings).ensure()
@@ -83,6 +111,7 @@ def build_runtime(settings: Settings) -> Runtime:
         settings=settings,
         bridge_policy_service=bridge_policy_service,
     )
+    user_profile_service = UserProfileService(database, media_store)
     registration_service = RegistrationService(
         database=database,
         base_url=settings.normalized_fedify_origin,
@@ -134,6 +163,9 @@ def build_runtime(settings: Settings) -> Runtime:
         bot=bot,
         community_runtime=community_runtime,
         local_community_runtime=local_community_runtime,
+        profile_media_store=media_store,
+        user_profile_service=user_profile_service,
+        deployment_state_lease=deployment_lease,
     )
     # Inject runtime into bot so edit/delete handlers can call AP gateway
     bot.set_runtime(runtime)
