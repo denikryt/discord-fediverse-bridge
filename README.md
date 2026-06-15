@@ -191,6 +191,7 @@ The creator becomes the local community owner. Community management is then rest
 Registered commands include:
 
 - `/register`
+- `/account-settings view|profile|metadata|avatar|header|clear-avatar|clear-header`
 - `/subscribe-community`
 - `/unsubscribe-channel`
 - `/list-subscriptions`

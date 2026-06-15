@@ -10,6 +10,9 @@ export interface BridgeActorKeyRow {
   privateKeyData: string;
 }
 
+export interface UserProfileFieldRow { name: string; value: string; }
+export interface UserProfileMediaRow { url: string; contentType: string; width: number; height: number; }
+
 export interface RegisteredUserRow {
   activitypubUsername: string;
   actorUrl: string;
@@ -18,6 +21,11 @@ export interface RegisteredUserRow {
   followersUrl: string;
   publicKeyPem: string;
   privateKeyPem: string;
+  displayName: string;
+  summary: string | null;
+  fields: UserProfileFieldRow[];
+  avatar: UserProfileMediaRow | null;
+  header: UserProfileMediaRow | null;
 }
 
 export interface LocalCommunityRow {
@@ -111,6 +119,14 @@ export class PythonBridgeClient implements PythonBridgeReadClient {
       followersUrl: requiredString(row, "followers_url"),
       publicKeyPem: requiredString(row, "public_key_pem"),
       privateKeyPem: requiredString(row, "private_key_pem"),
+      displayName: requiredString(row, "display_name"),
+      summary: nullableString(row, "summary"),
+      fields: requiredArray(row, "fields").map((value) => {
+        const field = requiredRecord(value);
+        return { name: requiredString(field, "name"), value: requiredString(field, "value") };
+      }),
+      avatar: nullableMedia(row, "avatar"),
+      header: nullableMedia(row, "header"),
     };
   }
 
@@ -325,6 +341,18 @@ function mapCommunity(row: Record<string, unknown>): LocalCommunityRow {
   };
 }
 function requiredRecord(value: unknown): Record<string, unknown> { if (value == null || typeof value !== "object" || Array.isArray(value)) throw new Error("Malformed Python bridge response"); return value as Record<string, unknown>; }
+function nullableMedia(row: Record<string, unknown>, key: string): UserProfileMediaRow | null {
+  const value = row[key];
+  if (value == null) return null;
+  const media = requiredRecord(value);
+  return {
+    url: requiredString(media, "url"),
+    contentType: requiredString(media, "content_type"),
+    width: requiredNumber(media, "width"),
+    height: requiredNumber(media, "height"),
+  };
+}
+
 function requiredString(row: Record<string, unknown>, key: string): string { const value=row[key]; if(typeof value!=="string") throw new Error(`Malformed Python bridge response field: ${key}`); return value; }
 function nullableString(row: Record<string, unknown>, key: string): string | null { const value=row[key]; if(value===null||value===undefined)return null; if(typeof value!=="string")throw new Error(`Malformed Python bridge response field: ${key}`); return value; }
 function requiredNumber(row: Record<string, unknown>, key: string): number { const value=row[key]; if(typeof value!=="number")throw new Error(`Malformed Python bridge response field: ${key}`); return value; }

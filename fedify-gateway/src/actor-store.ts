@@ -36,6 +36,11 @@ export interface UserActorIdentity {
   publicKeyPem: string;
   privateKeyPem: string;
   username: string;
+  displayName: string;
+  summary: string | null;
+  fields: { name: string; value: string }[];
+  avatar: { url: URL; contentType: string; width: number; height: number } | null;
+  header: { url: URL; contentType: string; width: number; height: number } | null;
 }
 
 export interface LocalCommunityIdentity {
@@ -176,6 +181,11 @@ function mapRegisteredUserRow(row: RegisteredUserRow): UserActorIdentity {
     publicKeyPem: row.publicKeyPem,
     privateKeyPem: row.privateKeyPem,
     username: row.activitypubUsername,
+    displayName: row.displayName,
+    summary: row.summary,
+    fields: row.fields,
+    avatar: row.avatar == null ? null : { ...row.avatar, url: new URL(row.avatar.url) },
+    header: row.header == null ? null : { ...row.header, url: new URL(row.header.url) },
   };
 }
 

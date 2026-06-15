@@ -8,7 +8,7 @@ from typing import BinaryIO
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
-from sqlalchemy import select, text
+from sqlalchemy import select
 
 from .db.database import Database
 from .db.repositories.user_profiles import UserProfileView
@@ -35,19 +35,35 @@ class UserProfileService:
         """Normalize and atomically replace scalar and ordered metadata fields."""
         normalized_display = self._optional_text(display_name, 30, "display name")
         normalized_summary = self._optional_text(summary, 500, "summary")
-        if len(fields) > 4:
-            raise UserProfileValidationError("at most four profile fields are allowed")
-        normalized_fields: list[tuple[str, str]] = []
-        for name, value in fields:
-            normalized_name = self._required_text(name, 255, "field name")
-            normalized_value = self._required_text(value, 255, "field value")
-            normalized_fields.append((normalized_name, normalized_value))
+        normalized_fields = self._normalize_fields(fields)
         with self.database.session() as session:
             self.database.user_profiles.update_text(session, user_id, normalized_display, normalized_summary, normalized_fields)
         profile = self.get_profile(user_id)
         if profile is None:
             raise LookupError("registered user not found")
         return profile
+
+
+    def update_identity_text(
+        self, user_id: int, display_name: str | None, summary: str | None
+    ) -> UserProfileView:
+        """Atomically replace display name and summary without touching metadata."""
+        normalized_display = self._optional_text(display_name, 30, "display name")
+        normalized_summary = self._optional_text(summary, 500, "summary")
+        with self.database.session() as session:
+            self.database.user_profiles.update_scalar_text(
+                session, user_id, normalized_display, normalized_summary
+            )
+        return self._require_profile(user_id)
+
+    def replace_metadata(
+        self, user_id: int, fields: list[tuple[str, str]]
+    ) -> UserProfileView:
+        """Atomically replace ordered metadata without touching scalar profile text."""
+        normalized_fields = self._normalize_fields(fields)
+        with self.database.session() as session:
+            self.database.user_profiles.replace_fields(session, user_id, normalized_fields)
+        return self._require_profile(user_id)
 
     def replace_media(self, user_id: int, slot: str, source_stream: BinaryIO) -> UserProfileView:
         """Publish bytes first, then atomically insert metadata and switch one slot."""
@@ -57,20 +73,13 @@ class UserProfileService:
         with self.database.session() as session:
             asset = self.database.profile_media.insert(session, published)
             self.database.user_profiles.switch_slot(session, user_id, slot, asset.id)
-        profile = self.get_profile(user_id)
-        if profile is None:
-            raise LookupError("registered user not found")
-        return profile
+        return self._require_profile(user_id)
 
     def clear_media(self, user_id: int, slot: str) -> UserProfileView:
         """Clear exactly one slot without synchronously unlinking prior bytes."""
         with self.database.session() as session:
             self.database.user_profiles.switch_slot(session, user_id, slot, None)
-        profile = self.get_profile(user_id)
-        if profile is None:
-            raise LookupError("registered user not found")
-        return profile
-
+        return self._require_profile(user_id)
 
     def cleanup_orphans(
         self,
@@ -121,6 +130,26 @@ class UserProfileService:
         finally:
             if deployment_lock is not None:
                 deployment_lock.close()
+
+
+    def _require_profile(self, user_id: int) -> UserProfileView:
+        """Return the post-commit profile or report a broken user invariant."""
+        profile = self.get_profile(user_id)
+        if profile is None:
+            raise LookupError("registered user not found")
+        return profile
+
+    def _normalize_fields(self, fields: list[tuple[str, str]]) -> list[tuple[str, str]]:
+        """Validate the four-row plain-text metadata contract."""
+        if len(fields) > 4:
+            raise UserProfileValidationError("at most four profile fields are allowed")
+        return [
+            (
+                self._required_text(name, 255, "field name"),
+                self._required_text(value, 255, "field value"),
+            )
+            for name, value in fields
+        ]
 
     @staticmethod
     def _normalize(value: str) -> str:

@@ -10,6 +10,7 @@ from pydantic import BaseModel, model_validator
 from .actor_key_service import ActorKeyService
 from .internal_auth import validate_internal_bearer
 from .runtime import Runtime
+from .models import ProfileMediaAsset
 
 
 class ActorUrlRequest(BaseModel):
@@ -47,6 +48,22 @@ class BridgeActorKeyResponse(BaseModel):
     private_key_data: str
 
 
+class UserActorProfileFieldResponse(BaseModel):
+    """Expose one ordered public profile metadata row."""
+
+    name: str
+    value: str
+
+
+class UserActorMediaResponse(BaseModel):
+    """Expose only public media rendering metadata to the gateway."""
+
+    url: str
+    content_type: str
+    width: int
+    height: int
+
+
 class UserActorResponse(BaseModel):
     activitypub_username: str
     actor_url: str
@@ -55,6 +72,11 @@ class UserActorResponse(BaseModel):
     followers_url: str
     public_key_pem: str
     private_key_pem: str
+    display_name: str
+    summary: str | None
+    fields: list[UserActorProfileFieldResponse]
+    avatar: UserActorMediaResponse | None
+    header: UserActorMediaResponse | None
 
 
 class CommunityActorResponse(BaseModel):
@@ -186,6 +208,25 @@ def create_internal_fedify_router(runtime: Runtime) -> APIRouter:
         row = runtime.database.users.get_user_by_activitypub_username(username)
         if row is None:
             raise HTTPException(status_code=404, detail="User actor not found")
+        profile = runtime.database.user_profiles.get(row.id)
+        if profile is None:
+            raise HTTPException(
+                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                detail="User profile invariant failed",
+            )
+
+        def media_payload(asset: ProfileMediaAsset | None) -> UserActorMediaResponse | None:
+            """Map a persisted asset without exposing storage ownership details."""
+            if asset is None:
+                return None
+            base = runtime.settings.normalized_public_bridge_base_url.rstrip("/")
+            return UserActorMediaResponse(
+                url=f"{base}/media/profile/{asset.public_id}",
+                content_type=asset.content_type,
+                width=asset.width,
+                height=asset.height,
+            )
+
         return UserActorResponse(
             activitypub_username=row.activitypub_username,
             actor_url=row.actor_url,
@@ -194,6 +235,14 @@ def create_internal_fedify_router(runtime: Runtime) -> APIRouter:
             followers_url=row.followers_url,
             public_key_pem=row.public_key_pem,
             private_key_pem=row.private_key_pem,
+            display_name=profile.display_name,
+            summary=profile.summary,
+            fields=[
+                UserActorProfileFieldResponse(name=name, value=value)
+                for name, value in profile.fields
+            ],
+            avatar=media_payload(profile.avatar),
+            header=media_payload(profile.header),
         )
 
     def community_payload(row: object) -> CommunityActorResponse:

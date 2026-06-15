@@ -55,7 +55,18 @@ function route(db: DatabaseSync, path: string, method: string, body: string, res
   if (path === "/internal/activitypub/events" && method === "POST") return json(res, { status: "processed", outcome: "delivered", detail: "fixture" });
   if (path === "/internal/fedify/actors/bridge/key") return row(res, one(db, "SELECT actor_url, key_id, key_format, algorithm, public_key_data, private_key_data FROM bridge_actor_keys LIMIT 1"));
   const user = path.match(/^\/internal\/fedify\/actors\/users\/(.+)$/);
-  if (user) return row(res, one(db, "SELECT activitypub_username, actor_url, inbox_url, outbox_url, followers_url, public_key_pem, private_key_pem FROM users WHERE activitypub_username = ?", decodeURIComponent(user[1])));
+  if (user) {
+    const value = one(db, "SELECT activitypub_username, actor_url, inbox_url, outbox_url, followers_url, public_key_pem, private_key_pem FROM users WHERE activitypub_username = ?", decodeURIComponent(user[1]));
+    if (value == null) return missing(res);
+    return json(res, {
+      ...value,
+      display_name: value.activitypub_username,
+      summary: null,
+      fields: [],
+      avatar: null,
+      header: null,
+    });
+  }
   const community = path.match(/^\/internal\/fedify\/actors\/communities\/([^/]+)$/);
   if (community && path !== "/internal/fedify/actors/communities/resolve") return row(res, one(db, "SELECT slug, actor_url, inbox_url, outbox_url, followers_url, display_name, summary, public_key_pem, private_key_pem FROM local_communities WHERE slug = ?", decodeURIComponent(community[1])));
   if (path === "/internal/fedify/actors/communities/resolve") { const value=JSON.parse(body) as {actor_url:string}; return row(res, one(db, "SELECT slug, actor_url, inbox_url, outbox_url, followers_url, display_name, summary, public_key_pem, private_key_pem FROM local_communities WHERE actor_url = ?", value.actor_url)); }

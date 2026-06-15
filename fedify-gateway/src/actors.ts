@@ -5,6 +5,8 @@ import {
   OrderedCollection,
   Person,
   Service,
+  Image,
+  PropertyValue,
 } from "@fedify/vocab";
 
 import type {
@@ -51,7 +53,24 @@ export function buildUserPersonActor(
   return new Person({
     id: identity.actorId,
     preferredUsername: identity.username,
-    name: identity.username,
+    name: identity.displayName,
+    summary: escapeProfileText(identity.summary),
+    icon: identity.avatar == null ? null : new Image({
+      url: identity.avatar.url,
+      mediaType: identity.avatar.contentType,
+      width: identity.avatar.width,
+      height: identity.avatar.height,
+    }),
+    image: identity.header == null ? null : new Image({
+      url: identity.header.url,
+      mediaType: identity.header.contentType,
+      width: identity.header.width,
+      height: identity.header.height,
+    }),
+    attachments: identity.fields.map((field) => new PropertyValue({
+      name: field.name,
+      value: escapeProfileText(field.value),
+    })),
     inbox: identity.inboxId,
     outbox: identity.outboxId,
     followers: identity.followersId,
@@ -92,4 +111,18 @@ export function buildEmptyOrderedCollection(collectionId: URL): OrderedCollectio
     totalItems: 0,
     items: [],
   });
+}
+
+
+function escapeProfileText(value: string | null): string | null {
+  // Persisted profile text is untrusted plain text. Escape exactly once at the
+  // public actor boundary and preserve line breaks for Mastodon rendering.
+  if (value == null) return null;
+  return value
+    .replaceAll("&", "&amp;")
+    .replaceAll("<", "&lt;")
+    .replaceAll(">", "&gt;")
+    .replaceAll('"', "&quot;")
+    .replaceAll("'", "&#39;")
+    .replaceAll("\n", "<br>");
 }

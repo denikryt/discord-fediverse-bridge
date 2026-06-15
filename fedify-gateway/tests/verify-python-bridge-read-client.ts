@@ -26,7 +26,7 @@ const server = createServer(async (request, response) => {
     return;
   }
   if (path.startsWith("/internal/fedify/actors/users/")) {
-    response.end(JSON.stringify({ activitypub_username: "alice", actor_url: "https://bridge.example/users/alice", inbox_url: "https://bridge.example/users/alice/inbox", outbox_url: "https://bridge.example/users/alice/outbox", followers_url: "https://bridge.example/users/alice/followers", public_key_pem: "public", private_key_pem: "private" }));
+    response.end(JSON.stringify({ activitypub_username: "alice", actor_url: "https://bridge.example/users/alice", inbox_url: "https://bridge.example/users/alice/inbox", outbox_url: "https://bridge.example/users/alice/outbox", followers_url: "https://bridge.example/users/alice/followers", public_key_pem: "public", private_key_pem: "private", display_name: "Alice", summary: null, fields: [], avatar: null, header: null }));
     return;
   }
   if (path.startsWith("/internal/fedify/actors/communities/")) {

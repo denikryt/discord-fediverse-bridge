@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 from dataclasses import asdict, dataclass
-from datetime import datetime
 
 from sqlalchemy import delete, or_, select
 from sqlalchemy.orm import Session
@@ -54,16 +53,43 @@ class UserProfileRepository(BaseRepository):
             )
 
     @staticmethod
-    def update_text(session: Session, user_id: int, display_name: str | None, summary: str | None, fields: list[tuple[str, str]]) -> None:
-        """Replace all text profile state inside the caller-owned transaction."""
+    def update_scalar_text(
+        session: Session, user_id: int, display_name: str | None, summary: str | None
+    ) -> None:
+        """Replace only scalar profile text in the caller-owned transaction."""
         user = session.get(User, user_id)
         if user is None:
             raise LookupError("registered user not found")
         user.display_name = display_name
         user.summary = summary
+
+    @staticmethod
+    def replace_fields(
+        session: Session, user_id: int, fields: list[tuple[str, str]]
+    ) -> None:
+        """Replace ordered metadata fields without changing scalar profile text."""
+        if session.get(User, user_id) is None:
+            raise LookupError("registered user not found")
         session.execute(delete(UserProfileField).where(UserProfileField.user_id == user_id))
         for position, (name, value) in enumerate(fields):
-            session.add(UserProfileField(user_id=user_id, position=position, name=name, value=value))
+            session.add(
+                UserProfileField(
+                    user_id=user_id, position=position, name=name, value=value
+                )
+            )
+
+    @classmethod
+    def update_text(
+        cls,
+        session: Session,
+        user_id: int,
+        display_name: str | None,
+        summary: str | None,
+        fields: list[tuple[str, str]],
+    ) -> None:
+        """Preserve the Stage 1 atomic combined-update compatibility contract."""
+        cls.update_scalar_text(session, user_id, display_name, summary)
+        cls.replace_fields(session, user_id, fields)
 
     @staticmethod
     def switch_slot(session: Session, user_id: int, slot: str, asset_id: int | None) -> None:

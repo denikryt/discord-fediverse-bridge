@@ -82,7 +82,8 @@ def test_migration_rebuilds_legacy_profile_field_name_width(tmp_path: Path) -> N
 
     path = tmp_path / "legacy.db"
     database = Database(f"sqlite:///{path}")
-    database.create_all(); database.migrate()
+    database.create_all()
+    database.migrate()
     database.close()
     with sqlite3.connect(path) as connection:
         connection.execute("ALTER TABLE user_profile_fields RENAME TO user_profile_fields_current")
@@ -105,3 +106,16 @@ def test_migration_rebuilds_legacy_profile_field_name_width(tmp_path: Path) -> N
     with migrated.engine.connect() as connection:
         rows = connection.execute(text("PRAGMA table_info(user_profile_fields)")).fetchall()
     assert next(row[2] for row in rows if row[1] == "name") == "VARCHAR(255)"
+
+
+
+def test_independent_profile_forms_do_not_overwrite_each_other(tmp_path: Path) -> None:
+    """Scalar and metadata submissions retain concurrently changed sibling state."""
+    _database, service, user_id = _system(tmp_path)
+    service.replace_metadata(user_id, [("Site", "https://example.com")])
+    service.update_identity_text(user_id, "Display", "Bio")
+    assert service.get_profile(user_id).fields == (("Site", "https://example.com"),)
+    service.replace_metadata(user_id, [("Pronouns", "they/them")])
+    profile = service.get_profile(user_id)
+    assert profile.display_name == "Display"
+    assert profile.summary == "Bio"

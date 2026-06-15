@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+from typing import TYPE_CHECKING
 
 import discord
 from discord import app_commands
@@ -16,6 +17,9 @@ from .fedify_gateway_client import FedifyGatewayClient
 from .discord_directory import refresh_discord_directory_from_bot
 from .command_tree import BridgeCommandTree
 from .user_bans import UserBanService
+
+if TYPE_CHECKING:
+    from .user_profiles import UserProfileService
 
 logger = logging.getLogger(__name__)
 
@@ -34,6 +38,7 @@ class BridgeBot(discord.Client):
         fedify_gateway: FedifyGatewayClient,
         event_router: DiscordEventRouter,
         bridge_policy_service: BridgePolicyService,
+        user_profile_service: UserProfileService | None = None,
     ) -> None:
         """Initialise the bot with shared services and Discord intent configuration."""
         intents = discord.Intents.default()
@@ -46,6 +51,7 @@ class BridgeBot(discord.Client):
         self.fedify_gateway = fedify_gateway
         self.event_router = event_router
         self.bridge_policy_service = bridge_policy_service
+        self.user_profile_service = user_profile_service
         # Keep the current runtime reachable for edit/delete paths that still
         # belong only to the remote-subscription mode today.
         self.community_runtime = event_router.community_runtime
@@ -67,7 +73,7 @@ class BridgeBot(discord.Client):
     async def setup_hook(self) -> None:
         # setup_hook runs before the bot connects, making it the right place to
         # register slash commands and sync the tree with Discord.
-        from .commands import ban_user, bridge_policy, create_community, edit_community, list_banned_users, list_subs, publish_guild_invite, register, remove_guild_invite, subscribe, unban_user, unsubscribe
+        from .commands import account_settings, ban_user, bridge_policy, create_community, edit_community, list_banned_users, list_subs, publish_guild_invite, register, remove_guild_invite, subscribe, unban_user, unsubscribe
         register.register(self.tree, self.database, self.settings, self.bridge_policy_service)
         subscribe.register(self.tree, self.database, self.fedify_gateway, self.settings, self.bridge_policy_service)
         unsubscribe.register(self.tree, self.database, self.fedify_gateway, self.settings, self.bridge_policy_service)
@@ -80,6 +86,8 @@ class BridgeBot(discord.Client):
         publish_guild_invite.register(self.tree, self.database, self.settings, self.bridge_policy_service)
         remove_guild_invite.register(self.tree, self.database, self.settings, self.bridge_policy_service)
         bridge_policy.register(self.tree, self.database, self.bridge_policy_service, self.user_ban_service)
+        if self.user_profile_service is not None:
+            account_settings.register(self.tree, self.database, self.settings, self.bridge_policy_service, self.user_profile_service)
         await self.tree.sync()
 
     async def on_ready(self) -> None:

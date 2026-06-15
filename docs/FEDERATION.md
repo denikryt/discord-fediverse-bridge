@@ -45,7 +45,7 @@ The gateway serves these ActivityPub actor categories:
 | Registered Discord user | `Person` | `/users/{username}` | Per-user ActivityPub identity for registered Discord users. |
 | Local community | `Group` | `/communities/{slug}` and `/c/{slug}` | Discord forum channel exposed as a local ActivityPub community. |
 
-Actor documents are intended to provide the fields needed by common fediverse peers: stable `id`, `preferredUsername`, `name`, `summary`, `inbox`, `outbox`, `followers`, shared inbox metadata, and public-key material.
+Actor documents provide stable identity and routing fields plus editable registered-user profile data. User `Person` actors expose immutable `preferredUsername`, editable `name` and escaped `summary`, optional `icon` and `image` objects backed by bridge-owned immutable media URLs, and up to four ordered `PropertyValue` attachments. Profile edits are visible when a peer re-fetches the actor; active `Update(Person)` delivery is not implemented in this stage.
 
 The project does not implement full actor collection behavior. Some collection routes exist so peers have stable URLs, but outbox and followers collections are minimal and are not a complete historical activity archive.
 
@@ -155,7 +155,7 @@ These assumptions are not required by the base ActivityPub specification. They a
 
 ## Mastodon compatibility
 
-Mastodon compatibility is partial and local-community-focused.
+Mastodon compatibility is partial. Registered user actors expose Mastodon-compatible display name, bio, avatar, header, and up to four profile metadata fields; local-community reply interoperability remains supported.
 
 The bridge can handle selected Mastodon-style `Create(Note)` replies that target local communities, and local community relay code can render compatibility payloads for selected reply flows.
 
@@ -164,7 +164,6 @@ The project does not implement a full Mastodon-compatible server profile. Notabl
 ```text
 NodeInfo
 featured / featuredTags collections
-Mastodon profile extension fields as a complete set
 full Like / boost / notification semantics
 polls
 custom emoji handling

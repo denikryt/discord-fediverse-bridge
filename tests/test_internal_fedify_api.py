@@ -19,6 +19,7 @@ def _runtime(tmp_path: Path) -> tuple[SimpleNamespace, Database]:
     settings = SimpleNamespace(
         fedify_shared_secret="internal-secret",
         normalized_fedify_origin="https://bridge.example",
+        normalized_public_bridge_base_url="https://bridge.example",
         fedify_origin="https://bridge.example",
         fedify_actor_identifier="bridge",
         federation_allowlist=[],
@@ -180,3 +181,89 @@ def test_internal_fedify_resolves_community_subscribers_objects_and_mappings(tmp
         json={"object_id": "x", "activity_id": "y"},
     )
     assert ambiguous.status_code == 422
+
+
+
+def test_internal_user_actor_profile_dto_exposes_public_fields_without_storage_details(
+    tmp_path: Path,
+) -> None:
+    """The gateway DTO carries ordered profile data but no media storage internals."""
+    from io import BytesIO
+
+    from PIL import Image
+
+    from src.profile_media import ProfileMediaStore
+    from src.user_profiles import UserProfileService
+
+    runtime, database = _runtime(tmp_path)
+    user = database.users.create_user(
+        discord_user_id="2",
+        activitypub_username="bob",
+        actor_url="https://bridge.example/users/bob",
+        inbox_url="https://bridge.example/users/bob/inbox",
+        outbox_url="https://bridge.example/users/bob/outbox",
+        followers_url="https://bridge.example/users/bob/followers",
+        public_key_pem="user-public",
+        private_key_pem="user-private",
+    )
+    store = ProfileMediaStore(
+        tmp_path / "media", max_upload_bytes=1024 * 1024, max_pixels=1_000_000
+    )
+    store.initialize()
+    service = UserProfileService(database, store)
+    service.update_identity_text(user.id, "Bob & Co", "Line one\nLine two")
+    service.replace_metadata(
+        user.id,
+        [("Research & Development", "First\nSecond"), ("Site", "https://example.com")],
+    )
+    image = BytesIO()
+    Image.new("RGB", (8, 8), (1, 2, 3)).save(image, "PNG")
+    image.seek(0)
+    service.replace_media(user.id, "avatar", image)
+
+    response = TestClient(create_http_app(runtime)).get(
+        "/internal/fedify/actors/users/bob", headers=_headers()
+    )
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["display_name"] == "Bob & Co"
+    assert payload["summary"] == "Line one\nLine two"
+    assert payload["fields"] == [
+        {"name": "Research & Development", "value": "First\nSecond"},
+        {"name": "Site", "value": "https://example.com"},
+    ]
+    assert payload["avatar"]["url"].startswith(
+        "https://bridge.example/media/profile/"
+    )
+    assert set(payload["avatar"]) == {"url", "content_type", "width", "height"}
+    serialized = response.text
+    assert "storage_key" not in serialized
+    assert "sha256" not in serialized
+    assert str(tmp_path) not in serialized
+
+
+def test_internal_user_actor_profile_defaults_and_cleared_media_are_omitted(
+    tmp_path: Path,
+) -> None:
+    """Legacy users retain username fallback and absent optional profile members."""
+    runtime, database = _runtime(tmp_path)
+    database.users.create_user(
+        discord_user_id="3",
+        activitypub_username="carol",
+        actor_url="https://bridge.example/users/carol",
+        inbox_url="https://bridge.example/users/carol/inbox",
+        outbox_url="https://bridge.example/users/carol/outbox",
+        followers_url="https://bridge.example/users/carol/followers",
+        public_key_pem="user-public",
+        private_key_pem="user-private",
+    )
+    response = TestClient(create_http_app(runtime)).get(
+        "/internal/fedify/actors/users/carol", headers=_headers()
+    )
+    assert response.status_code == 200
+    assert response.json() | {} == response.json()
+    assert response.json()["display_name"] == "carol"
+    assert response.json()["summary"] is None
+    assert response.json()["fields"] == []
+    assert response.json()["avatar"] is None
+    assert response.json()["header"] is None
