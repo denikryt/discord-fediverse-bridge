@@ -135,3 +135,60 @@ async def test_policy_change_during_relay_applies_to_next_action_only(
     assert (first.attempted, first.delivered, first.failed) == (2, 2, 0)
     assert second.attempted == 0
     assert len(harness.gateway.calls) == 1
+
+
+@pytest.mark.asyncio
+async def test_failed_delivery_is_not_retried_while_target_is_ineligible(
+    tmp_path: Path,
+) -> None:
+    """Retry durable failures only while the target is currently eligible."""
+    harness = LocalCommunityRelayHarness(tmp_path)
+    harness.add_subscriber("bob", host="lemmy.example")
+    alice = harness.add_subscriber("alice", host="alice.example")
+    event = harness.post_event(suffix="eligibility-retry")
+    harness.gateway.plan_next(
+        {alice: PlannedOutcome(ok=False, error="temporary failure")}
+    )
+
+    first = await harness.runtime.federation_fanout.relay_create(
+        event=event,
+        local_community=harness.local_community,
+        object_kind="post",
+    )
+    harness.remove_subscriber(alice)
+    second = await harness.runtime.federation_fanout.relay_create(
+        event=event,
+        local_community=harness.local_community,
+        object_kind="post",
+    )
+
+    observed_while_removed = harness.observe(event)
+    row = next(
+        delivery
+        for delivery in observed_while_removed.deliveries
+        if delivery.target_actor_id == alice
+    )
+    assert (first.attempted, first.failed) == (1, 1)
+    assert second.attempted == 0
+    assert row.status == "failed"
+    assert row.attempt_count == 1
+    assert observed_while_removed.gateway_calls == ((alice,),)
+
+    harness.ensure_subscriber("alice", host="alice.example")
+    harness.gateway.plan_next({alice: PlannedOutcome(ok=True)})
+    third = await harness.runtime.federation_fanout.relay_create(
+        event=event,
+        local_community=harness.local_community,
+        object_kind="post",
+    )
+
+    observed_after_reaccept = harness.observe(event)
+    row = next(
+        delivery
+        for delivery in observed_after_reaccept.deliveries
+        if delivery.target_actor_id == alice
+    )
+    assert (third.attempted, third.delivered) == (1, 1)
+    assert row.status == "delivered"
+    assert row.attempt_count == 2
+    assert observed_after_reaccept.gateway_calls == ((alice,), (alice,))

@@ -75,7 +75,8 @@ def test_generated_subscriber_and_policy_churn(
         eligible = {
             actor_id
             for actor_id, delivery in model.deliveries.items()
-            if delivery.status in {"pending", "failed"}
+            if actor_id in allowed
+            and delivery.status in {"pending", "failed"}
         }
         if not model.source_exists:
             eligible = set(allowed)

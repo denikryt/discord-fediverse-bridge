@@ -44,7 +44,8 @@ class RelayModel:
             sorted(
                 actor_id
                 for actor_id, delivery in self.deliveries.items()
-                if delivery.status in {"pending", "failed"}
+                if actor_id in allowed_targets
+                and delivery.status in {"pending", "failed"}
             )
         )
         if not attempted:

@@ -12,6 +12,7 @@ fedify-gateway/node_modules/
 dev/*
 !dev/
 !dev/future_tasks.md
+!dev/dump_local_users.py
 AGENTS.md
 *sqlite3
 CLAUDE.md

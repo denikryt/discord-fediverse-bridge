@@ -135,7 +135,13 @@ class LocalCommunityFederationFanout:
             source_activity=source,
             targets=targets,
         )
-        pending = [row for row in deliveries if row.status in {"pending", "failed"}]
+        eligible_actor_ids = {target["remote_actor_id"] for target in targets}
+        pending = [
+            row
+            for row in deliveries
+            if row.status in {"pending", "failed"}
+            and row.target_remote_actor_id in eligible_actor_ids
+        ]
         if not pending:
             return RelayFanoutSummary(attempted=0, delivered=0, failed=0)
 
