@@ -28,6 +28,8 @@ from .runtime import Runtime
 from .profile_media import FileLock, ProfileMediaStore
 from .user_profiles import UserProfileService
 from .user_actor_followers import UserActorFollowService
+from .user_actor_delivery import UserActorDeliveryService
+from .user_actor_delivery_worker import UserActorDeliveryWorker
 from .db.backup import recover_incomplete_restore
 
 logger = logging.getLogger(__name__)
@@ -60,6 +62,9 @@ async def main() -> None:
         await http_server.serve()
 
     try:
+        # Recovery starts before either long-lived server task, but inside the
+        # same close boundary so partial startup cannot leak its DB/gateway use.
+        runtime.user_actor_delivery_worker.start()
         async with asyncio.TaskGroup() as task_group:
             # Both tasks are mandatory for the bridge to function, so they share one lifecycle.
             task_group.create_task(run_bot(), name="discord-bot")
@@ -112,7 +117,17 @@ def _build_live_runtime(settings: Settings, deployment_lease: FileLock) -> Runti
         settings=settings,
         bridge_policy_service=bridge_policy_service,
     )
-    user_profile_service = UserProfileService(database, media_store)
+    user_actor_delivery_service = UserActorDeliveryService(
+        database, fedify_gateway, bridge_policy_service
+    )
+    user_actor_delivery_worker = UserActorDeliveryWorker(user_actor_delivery_service)
+    user_profile_service = UserProfileService(
+        database,
+        media_store,
+        settings.normalized_fedify_origin,
+        delivery_service=user_actor_delivery_service,
+        delivery_worker=user_actor_delivery_worker,
+    )
     registration_service = RegistrationService(
         database=database,
         base_url=settings.normalized_fedify_origin,
@@ -171,6 +186,8 @@ def _build_live_runtime(settings: Settings, deployment_lease: FileLock) -> Runti
         profile_media_store=media_store,
         user_profile_service=user_profile_service,
         user_actor_follow_service=user_actor_follow_service,
+        user_actor_delivery_service=user_actor_delivery_service,
+        user_actor_delivery_worker=user_actor_delivery_worker,
         deployment_state_lease=deployment_lease,
     )
     # Inject runtime into bot so edit/delete handlers can call AP gateway

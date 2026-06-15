@@ -120,6 +120,22 @@ class UserActorFollowerRepository(BaseRepository):
         with self.session() as session:
             return session.scalar(select(UserActorFollower).where(UserActorFollower.user_id == user_id, UserActorFollower.remote_actor_id == remote_actor_id))
 
+    @staticmethod
+    def list_accepted_for_snapshot(
+        session: Session, *, user_id: int
+    ) -> list[UserActorFollower]:
+        """Return every accepted row in deterministic relationship order."""
+        return list(
+            session.scalars(
+                select(UserActorFollower)
+                .where(
+                    UserActorFollower.user_id == user_id,
+                    UserActorFollower.status == "accepted",
+                )
+                .order_by(UserActorFollower.id)
+            )
+        )
+
     def count_accepted(self, *, user_id: int) -> int:
         """Count accepted followers for one local user."""
         with self.session() as session:

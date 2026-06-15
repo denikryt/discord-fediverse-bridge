@@ -112,7 +112,13 @@ async def test_media_modal_defers_before_download_and_worker_submission(monkeypa
         events.append("worker")
         operation()
 
-    service = SimpleNamespace(replace_media=lambda *_args: events.append("mutation"))
+    async def fanout(_result):
+        return SimpleNamespace(render_pending=False, outstanding=0)
+
+    service = SimpleNamespace(
+        replace_media=lambda *_args: events.append("mutation") or SimpleNamespace(source_id=1),
+        fanout=fanout,
+    )
     settings = SimpleNamespace(profile_media_max_upload_bytes=100)
     modal = account_settings.ProfileMediaModal(
         SimpleNamespace(), settings, SimpleNamespace(), service, "avatar"
@@ -171,7 +177,8 @@ async def test_metadata_modal_replaces_ordered_rows_atomically_with_multiline_va
         item._value = value
     interaction = SimpleNamespace(
         user=SimpleNamespace(id=7),
-        response=SimpleNamespace(send_message=AsyncMock()),
+        response=SimpleNamespace(defer=AsyncMock(), send_message=AsyncMock()),
+        edit_original_response=AsyncMock(),
     )
 
     async def authorized(*_args, **_kwargs):
@@ -229,7 +236,8 @@ async def test_metadata_modal_partial_row_rejects_whole_replacement(
     modal.row_inputs[1]._value = "Partial only"
     interaction = SimpleNamespace(
         user=SimpleNamespace(id=7),
-        response=SimpleNamespace(send_message=AsyncMock()),
+        response=SimpleNamespace(defer=AsyncMock(), send_message=AsyncMock()),
+        edit_original_response=AsyncMock(),
     )
 
     async def authorized(*_args, **_kwargs):
@@ -239,7 +247,7 @@ async def test_metadata_modal_partial_row_rejects_whole_replacement(
     await modal.on_submit(interaction)
 
     assert service.get_profile(user.id).fields == (("Existing", "Preserved"),)
-    interaction.response.send_message.assert_awaited_once()
+    interaction.edit_original_response.assert_awaited_once()
 
 @pytest.mark.asyncio
 async def test_profile_modal_policy_change_prevents_mutation(monkeypatch) -> None:
@@ -340,3 +348,39 @@ async def test_media_modal_download_failure_preserves_slot_and_returns_bounded_e
     interaction.edit_original_response.assert_awaited_once_with(
         content="The image could not be processed."
     )
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("summary", "expected"),
+    [
+        (
+            SimpleNamespace(render_pending=True, outstanding=1),
+            "Profile updated locally, but federation refresh is pending.",
+        ),
+        (
+            SimpleNamespace(render_pending=False, outstanding=1),
+            "Profile updated locally. Some remote followers may refresh later.",
+        ),
+        (
+            SimpleNamespace(render_pending=False, outstanding=0),
+            "Profile updated.",
+        ),
+    ],
+)
+async def test_profile_mutation_response_separates_local_success_from_remote_state(
+    summary, expected
+) -> None:
+    """Command output never asks the user to repeat an already committed mutation."""
+    from unittest.mock import AsyncMock
+
+    from src.commands.account_settings import _finish_profile_mutation
+
+    service = SimpleNamespace(fanout=AsyncMock(return_value=summary))
+    interaction = SimpleNamespace(edit_original_response=AsyncMock())
+    result = SimpleNamespace(source_id=17)
+
+    await _finish_profile_mutation(
+        interaction, service, result, success_message="Profile updated."
+    )
+
+    interaction.edit_original_response.assert_awaited_once_with(content=expected)

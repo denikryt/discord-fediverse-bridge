@@ -55,3 +55,4 @@ __all__ = [
 ]
 
 from .user_profiles import ProfileMediaRepository, UserProfileRepository, UserProfileView
+from .user_actor_deliveries import UserActorDeliveryRepository

@@ -216,6 +216,7 @@ class User(Base):
     summary: Mapped[str | None] = mapped_column(String(500), nullable=True)
     avatar_media_id: Mapped[int | None] = mapped_column(ForeignKey("profile_media_assets.id", ondelete="RESTRICT"), nullable=True)
     header_media_id: Mapped[int | None] = mapped_column(ForeignKey("profile_media_assets.id", ondelete="RESTRICT"), nullable=True)
+    profile_version: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, nullable=False)
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, onupdate=utcnow, nullable=False)
 
@@ -280,6 +281,111 @@ class UserProfileField(Base):
     value: Mapped[str] = mapped_column(String(255), nullable=False)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, nullable=False)
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, onupdate=utcnow, nullable=False)
+
+
+class UserActorOutboundSource(Base):
+    """Persist one immutable User Actor outbound activity source."""
+
+    __tablename__ = "user_actor_outbound_sources"
+    __table_args__ = (
+        UniqueConstraint("user_id", "source_kind", "logical_version"),
+        UniqueConstraint("activity_id"),
+        CheckConstraint("logical_version >= 1", name="ck_user_actor_source_version"),
+        CheckConstraint(
+            "length(profile_snapshot_json) > 0",
+            name="ck_user_actor_source_snapshot_nonempty",
+        ),
+        CheckConstraint("source_kind = 'profile_update'", name="ck_user_actor_source_kind"),
+        CheckConstraint("state IN ('render_pending', 'ready', 'render_failed')", name="ck_user_actor_source_state"),
+        CheckConstraint("render_attempt_count >= 0", name="ck_user_actor_source_render_attempts"),
+        CheckConstraint("(state = 'ready' AND activity_json IS NOT NULL) OR (state != 'ready' AND activity_json IS NULL)", name="ck_user_actor_source_activity_state"),
+        Index("ix_user_actor_sources_retry", "state", "next_attempt_at", "user_id", "logical_version"),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    user_id: Mapped[int] = mapped_column(ForeignKey("users.id", ondelete="CASCADE"), nullable=False)
+    source_kind: Mapped[str] = mapped_column(String(32), nullable=False)
+    logical_version: Mapped[int] = mapped_column(Integer, nullable=False)
+    activity_id: Mapped[str] = mapped_column(String(512), nullable=False)
+    profile_snapshot_json: Mapped[str] = mapped_column(String, nullable=False)
+    activity_json: Mapped[str | None] = mapped_column(String, nullable=True)
+    state: Mapped[str] = mapped_column(String(32), nullable=False, default="render_pending")
+    render_attempt_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    last_render_attempted_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    last_error: Mapped[str | None] = mapped_column(String(512), nullable=True)
+    next_attempt_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, nullable=False)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, onupdate=utcnow, nullable=False)
+
+
+class UserActorOutboundDelivery(Base):
+    """Persist one endpoint-scoped transport outcome for an outbound source."""
+
+    __tablename__ = "user_actor_outbound_deliveries"
+    __table_args__ = (
+        UniqueConstraint("source_id", "target_endpoint_url"),
+        CheckConstraint("status IN ('pending', 'sending', 'delivered', 'failed', 'ineligible', 'superseded')", name="ck_user_actor_delivery_status"),
+        CheckConstraint("attempt_count >= 0", name="ck_user_actor_delivery_attempts"),
+        CheckConstraint(
+            "length(target_endpoint_url) > 0",
+            name="ck_user_actor_delivery_endpoint_nonempty",
+        ),
+        Index("ix_user_actor_deliveries_retry", "status", "next_attempt_at", "claimed_at"),
+        Index("ix_user_actor_deliveries_endpoint", "target_endpoint_url", "status", "source_id"),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    source_id: Mapped[int] = mapped_column(ForeignKey("user_actor_outbound_sources.id", ondelete="CASCADE"), nullable=False)
+    target_endpoint_url: Mapped[str] = mapped_column(String(512), nullable=False)
+    status: Mapped[str] = mapped_column(String(32), nullable=False, default="pending")
+    claim_token: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    claimed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    attempt_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    last_attempted_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    delivered_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    last_error: Mapped[str | None] = mapped_column(String(512), nullable=True)
+    next_attempt_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, nullable=False)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, onupdate=utcnow, nullable=False)
+
+
+class UserActorOutboundDeliveryFollower(Base):
+    """Retain immutable follower-incarnation evidence for one endpoint delivery."""
+
+    __tablename__ = "user_actor_outbound_delivery_followers"
+    __table_args__ = (
+        UniqueConstraint("delivery_id", "relationship_id_snapshot"),
+        Index(
+            "ix_user_actor_delivery_followers_relationship",
+            "relationship_id_snapshot",
+            "delivery_id",
+        ),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    delivery_id: Mapped[int] = mapped_column(ForeignKey("user_actor_outbound_deliveries.id", ondelete="CASCADE"), nullable=False)
+    relationship_id_snapshot: Mapped[int] = mapped_column(Integer, nullable=False)
+    remote_actor_id: Mapped[str] = mapped_column(String(512), nullable=False)
+    snapshotted_endpoint_url: Mapped[str] = mapped_column(String(512), nullable=False)
+
+
+class UserActorOutboundSourceMedia(Base):
+    """Keep profile media alive while an immutable outbound source can execute."""
+
+    __tablename__ = "user_actor_outbound_source_media"
+    __table_args__ = (
+        UniqueConstraint("source_id", "slot_kind"),
+        CheckConstraint(
+            "slot_kind IN ('avatar', 'header')",
+            name="ck_user_actor_source_media_slot",
+        ),
+        Index("ix_user_actor_source_media_asset", "media_asset_id", "source_id"),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    source_id: Mapped[int] = mapped_column(ForeignKey("user_actor_outbound_sources.id", ondelete="CASCADE"), nullable=False)
+    media_asset_id: Mapped[int] = mapped_column(ForeignKey("profile_media_assets.id", ondelete="RESTRICT"), nullable=False)
+    slot_kind: Mapped[str] = mapped_column(String(16), nullable=False)
 
 
 class RegistrationSession(Base):

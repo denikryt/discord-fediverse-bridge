@@ -191,3 +191,36 @@ export interface SendLocalCommunityRelayOutcome {
 export interface SendLocalCommunityRelayResult {
   outcomes: SendLocalCommunityRelayOutcome[];
 }
+
+export interface UserActorProfileSnapshot {
+  schemaVersion: number;
+  actorId: string;
+  username: string;
+  displayName: string;
+  summary: string | null;
+  inboxId: string;
+  outboxId: string;
+  followersId: string;
+  publicKeyId: string;
+  publicKeyPem: string;
+  fields: { name: string; value: string }[];
+  avatar: { url: string; contentType: string; width: number; height: number } | null;
+  header: { url: string; contentType: string; width: number; height: number } | null;
+}
+
+export interface RenderUserActorProfileUpdateRequest {
+  activityId: string;
+  profileSnapshot: UserActorProfileSnapshot;
+}
+
+export interface SendUserActorDelivery {
+  deliveryId: number;
+  targetEndpointUrl: string;
+  activityJson: Record<string, unknown>;
+}
+
+export interface SendUserActorDeliveriesRequest {
+  signingActorUrl: string;
+  actorUsername: string;
+  deliveries: SendUserActorDelivery[];
+}

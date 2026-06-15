@@ -7,7 +7,7 @@ import { Accept, Announce, Create, Delete, Follow, Note, Page, Source, Undo, Upd
 import type { Federation } from "@fedify/fedify";
 import type { GatewayConfig } from "./config.js";
 import { appendDebugFileLog } from "./debug-file-log.js";
-import { loadActorKeyPair } from "./actor-store.js";
+import { loadActorKeyPair, loadUserActorIdentity } from "./actor-store.js";
 import { loadAcceptedRemoteSubscribersByActorUrl } from "./python-bridge-client.js";
 import {
   loadLocalCommunitySigningKey,
@@ -23,6 +23,7 @@ import type {
   PublishLocalCommunityContentResult,
   SendLocalCommunityRelayRequest,
   SendLocalCommunityRelayResult,
+  SendUserActorDeliveriesRequest,
   UpdateContentRequest,
 } from "./types.js";
 
@@ -527,6 +528,8 @@ export async function acceptLocalCommunityFollow(
 
 interface SignedJsonDeliveryOptions {
   debugDelivery: boolean;
+  includeRequestDetailsInDiagnostics?: boolean;
+  includeResponseBodyInDiagnostics?: boolean;
 }
 
 async function sendSignedJsonActivity(
@@ -574,12 +577,20 @@ async function sendSignedJsonActivity(
   };
 
   if (options.debugDelivery) {
-    console.log(`[${label}] Raw ActivityPub request:`, {
-      inboxUrl,
-      body,
-      headers,
-      signingString,
-    });
+    if (options.includeRequestDetailsInDiagnostics === false) {
+      console.log(`[${label}] ActivityPub request:`, {
+        inboxUrl,
+        activityId:
+          typeof activityJson.id === "string" ? activityJson.id : null,
+      });
+    } else {
+      console.log(`[${label}] Raw ActivityPub request:`, {
+        inboxUrl,
+        body,
+        headers,
+        signingString,
+      });
+    }
   }
   const response = await fetch(inbox, { method: "POST", headers, body });
   const responseBody = await response.text();
@@ -588,12 +599,15 @@ async function sendSignedJsonActivity(
       inboxUrl,
       status: response.status,
       statusText: response.statusText,
-      responseBody,
+      ...(options.includeResponseBodyInDiagnostics === false ? {} : { responseBody }),
     });
   }
   if (!response.ok) {
+    const suffix = options.includeResponseBodyInDiagnostics === false
+      ? ""
+      : `: ${responseBody}`;
     throw new Error(
-      `${label} signed JSON delivery failed with HTTP ${response.status}: ${responseBody}`,
+      `${label} signed JSON delivery failed with HTTP ${response.status}${suffix}`,
     );
   }
 }
@@ -991,4 +1005,48 @@ async function fetchRemoteCommunity(
   }
 
   return { communityId, inboxUrl };
+}
+
+
+export async function sendUserActorDeliveries(
+  config: GatewayConfig,
+  request: SendUserActorDeliveriesRequest,
+): Promise<{ outcomes: Array<{ deliveryId: number; ok: boolean; error: string | null }> }> {
+  // Stage 4 keeps durable retry ownership in Python. The gateway only resolves
+  // the canonical local key and signs each explicit endpoint independently.
+  const identity = await loadUserActorIdentity(config, request.actorUsername);
+  if (identity == null || identity.actorId.href !== request.signingActorUrl) {
+    throw new Error("actorUsername and signingActorUrl must identify the same local User Actor");
+  }
+  const keyPair = await loadActorKeyPair(config, request.actorUsername);
+  if (keyPair == null) throw new Error("User Actor signing key not found");
+  const signingKey = { keyId: new URL("#main-key", identity.actorId), privateKey: keyPair.privateKey };
+  const outcomes = [];
+  for (const delivery of request.deliveries) {
+    if (delivery.activityJson.actor !== request.signingActorUrl) {
+      outcomes.push({ deliveryId: delivery.deliveryId, ok: false, error: "activity.actor must match signingActorUrl" });
+      continue;
+    }
+    try {
+      await sendSignedJsonActivity(
+        "UserActorDelivery",
+        delivery.targetEndpointUrl,
+        signingKey,
+        delivery.activityJson,
+        {
+          debugDelivery: shouldLogSignedJsonDelivery(config),
+          includeRequestDetailsInDiagnostics: false,
+          includeResponseBodyInDiagnostics: false,
+        },
+      );
+      outcomes.push({ deliveryId: delivery.deliveryId, ok: true, error: null });
+    } catch (error) {
+      outcomes.push({
+        deliveryId: delivery.deliveryId,
+        ok: false,
+        error: (error instanceof Error ? error.message : String(error)).slice(0, 500),
+      });
+    }
+  }
+  return { outcomes };
 }

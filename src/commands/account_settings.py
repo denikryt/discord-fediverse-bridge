@@ -13,7 +13,8 @@ from discord import app_commands
 from ..bridge_policy import BridgePolicyService
 from ..config import Settings
 from ..db import Database
-from ..user_profiles import UserProfileService, UserProfileValidationError
+from ..user_actor_delivery import ProfileFanoutSummary
+from ..user_profiles import ProfileMutationResult, UserProfileService, UserProfileValidationError
 from .guild_guard import REGISTERED_GUILD_COMMAND_ACCESS, reject_if_command_access_denied
 
 logger = logging.getLogger(__name__)
@@ -35,6 +36,29 @@ async def _run_owned_sync_mutation(operation: Callable[[], T]) -> T:
             await worker
         finally:
             raise
+
+
+
+async def _finish_profile_mutation(
+    interaction: discord.Interaction,
+    service: UserProfileService,
+    result: ProfileMutationResult,
+    *,
+    success_message: str,
+) -> None:
+    """Attempt immediate fanout and report local success separately from remote state."""
+    try:
+        summary = await service.fanout(result)
+    except Exception:
+        logger.exception("Immediate profile fanout failed source=%s", result.source_id)
+        summary = None
+    if summary is None or summary.render_pending:
+        message = "Profile updated locally, but federation refresh is pending."
+    elif summary.outstanding > 0:
+        message = "Profile updated locally. Some remote followers may refresh later."
+    else:
+        message = success_message
+    await interaction.edit_original_response(content=message)
 
 
 def _parse_metadata_row(value: str) -> tuple[str, str] | None:
@@ -105,12 +129,22 @@ class ProfileTextModal(discord.ui.Modal, title="Edit account profile"):
         user = await _resolve_authorized_user(interaction, database=self.database, settings=self.settings, policy_service=self.policy_service)
         if user is None:
             return
+        await interaction.response.defer(ephemeral=True, thinking=True)
         try:
-            self.service.update_identity_text(user.id, str(self.display_name), str(self.summary))
+            result = await _run_owned_sync_mutation(
+                lambda: self.service.update_identity_text(
+                    user.id, str(self.display_name), str(self.summary)
+                )
+            )
         except UserProfileValidationError as exc:
-            await interaction.response.send_message(str(exc), ephemeral=True)
+            await interaction.edit_original_response(content=str(exc))
             return
-        await interaction.response.send_message("Profile text updated. Your ActivityPub handle is unchanged.", ephemeral=True)
+        await _finish_profile_mutation(
+            interaction,
+            self.service,
+            result,
+            success_message="Profile text updated. Your ActivityPub handle is unchanged.",
+        )
 
 
 class ProfileMetadataModal(discord.ui.Modal, title="Edit profile metadata"):
@@ -154,14 +188,19 @@ class ProfileMetadataModal(discord.ui.Modal, title="Edit profile metadata"):
         user = await _resolve_authorized_user(interaction, database=self.database, settings=self.settings, policy_service=self.policy_service)
         if user is None:
             return
+        await interaction.response.defer(ephemeral=True, thinking=True)
         try:
             parsed = [_parse_metadata_row(str(item)) for item in self.row_inputs]
             fields = [field for field in parsed if field is not None]
-            self.service.replace_metadata(user.id, fields)
+            result = await _run_owned_sync_mutation(
+                lambda: self.service.replace_metadata(user.id, fields)
+            )
         except UserProfileValidationError as exc:
-            await interaction.response.send_message(str(exc), ephemeral=True)
+            await interaction.edit_original_response(content=str(exc))
             return
-        await interaction.response.send_message("Profile metadata updated.", ephemeral=True)
+        await _finish_profile_mutation(
+            interaction, self.service, result, success_message="Profile metadata updated."
+        )
 
 
 class ProfileMediaModal(discord.ui.Modal):
@@ -199,7 +238,7 @@ class ProfileMediaModal(discord.ui.Modal):
         await interaction.response.defer(ephemeral=True, thinking=True)
         try:
             payload = await attachment.read()
-            await _run_owned_sync_mutation(
+            result = await _run_owned_sync_mutation(
                 lambda: self.service.replace_media(user.id, self.slot, BytesIO(payload))
             )
         except UserProfileValidationError as exc:
@@ -209,7 +248,9 @@ class ProfileMediaModal(discord.ui.Modal):
             logger.exception("Profile media replacement failed user=%s slot=%s", interaction.user.id, self.slot)
             await interaction.edit_original_response(content="The image could not be processed.")
             return
-        await interaction.edit_original_response(content=f"{self.slot.title()} updated.")
+        await _finish_profile_mutation(
+            interaction, self.service, result, success_message=f"{self.slot.title()} updated."
+        )
 
 
 def register(tree: app_commands.CommandTree, database: Database, settings: Settings, policy_service: BridgePolicyService, service: UserProfileService) -> None:
@@ -269,8 +310,11 @@ def register(tree: app_commands.CommandTree, database: Database, settings: Setti
         user, _ = await authorized_profile(interaction)
         if user is None:
             return
-        service.clear_media(user.id, slot)
-        await interaction.response.send_message(f"{slot.title()} cleared.", ephemeral=True)
+        await interaction.response.defer(ephemeral=True, thinking=True)
+        result = await _run_owned_sync_mutation(lambda: service.clear_media(user.id, slot))
+        await _finish_profile_mutation(
+            interaction, service, result, success_message=f"{slot.title()} cleared."
+        )
 
     @group.command(name="clear-avatar", description="Remove your profile avatar")
     async def clear_avatar(interaction: discord.Interaction) -> None:

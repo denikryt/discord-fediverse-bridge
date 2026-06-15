@@ -11,7 +11,7 @@ from __future__ import annotations
 from sqlalchemy import text
 from sqlalchemy.engine import Connection, Engine
 
-from ..models import Base, BridgeActorKey, BridgePolicyEntry, CommunityActorBan, GuildInvitePublication, LocalCommunityMessageSurface, LocalCommunityThreadSurface, ManagementAuditEvent, ProfileMediaAsset, UserProfileField, UserActorFollower, UserActorFollowActivityId
+from ..models import Base, BridgeActorKey, BridgePolicyEntry, CommunityActorBan, GuildInvitePublication, LocalCommunityMessageSurface, LocalCommunityThreadSurface, ManagementAuditEvent, ProfileMediaAsset, UserProfileField, UserActorFollower, UserActorFollowActivityId, UserActorOutboundSource, UserActorOutboundDelivery, UserActorOutboundDeliveryFollower, UserActorOutboundSourceMedia
 
 
 def migrate(engine: Engine) -> None:
@@ -42,6 +42,7 @@ def migrate(engine: Engine) -> None:
         ("users", "summary", "ALTER TABLE users ADD COLUMN summary VARCHAR(500)"),
         ("users", "avatar_media_id", "ALTER TABLE users ADD COLUMN avatar_media_id INTEGER REFERENCES profile_media_assets(id) ON DELETE RESTRICT"),
         ("users", "header_media_id", "ALTER TABLE users ADD COLUMN header_media_id INTEGER REFERENCES profile_media_assets(id) ON DELETE RESTRICT"),
+        ("users", "profile_version", "ALTER TABLE users ADD COLUMN profile_version INTEGER NOT NULL DEFAULT 0"),
     ]
     # Stage 2 adds explicit local-community surface tables. Creating them here
     # keeps interrupted deployments and migrate-only test fixtures aligned with
@@ -60,6 +61,10 @@ def migrate(engine: Engine) -> None:
             UserProfileField.__table__,
             UserActorFollower.__table__,
             UserActorFollowActivityId.__table__,
+            UserActorOutboundSource.__table__,
+            UserActorOutboundDelivery.__table__,
+            UserActorOutboundDeliveryFollower.__table__,
+            UserActorOutboundSourceMedia.__table__,
         ],
     )
     with engine.connect() as conn:

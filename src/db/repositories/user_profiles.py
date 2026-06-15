@@ -7,7 +7,14 @@ from dataclasses import asdict, dataclass
 from sqlalchemy import delete, or_, select
 from sqlalchemy.orm import Session
 
-from ...models import ProfileMediaAsset, User, UserProfileField
+from ...models import (
+    ProfileMediaAsset,
+    User,
+    UserActorOutboundDelivery,
+    UserActorOutboundSource,
+    UserActorOutboundSourceMedia,
+    UserProfileField,
+)
 from ...profile_media import PublishedMediaObject
 from .base import BaseRepository
 
@@ -48,8 +55,16 @@ class UserProfileRepository(BaseRepository):
                 stored_display_name=user.display_name,
                 summary=user.summary,
                 fields=fields,
-                avatar=session.get(ProfileMediaAsset, user.avatar_media_id) if user.avatar_media_id else None,
-                header=session.get(ProfileMediaAsset, user.header_media_id) if user.header_media_id else None,
+                avatar=(
+                    session.get(ProfileMediaAsset, user.avatar_media_id)
+                    if user.avatar_media_id
+                    else None
+                ),
+                header=(
+                    session.get(ProfileMediaAsset, user.header_media_id)
+                    if user.header_media_id
+                    else None
+                ),
             )
 
     @staticmethod
@@ -70,7 +85,9 @@ class UserProfileRepository(BaseRepository):
         """Replace ordered metadata fields without changing scalar profile text."""
         if session.get(User, user_id) is None:
             raise LookupError("registered user not found")
-        session.execute(delete(UserProfileField).where(UserProfileField.user_id == user_id))
+        session.execute(
+            delete(UserProfileField).where(UserProfileField.user_id == user_id)
+        )
         for position, (name, value) in enumerate(fields):
             session.add(
                 UserProfileField(
@@ -92,7 +109,9 @@ class UserProfileRepository(BaseRepository):
         cls.replace_fields(session, user_id, fields)
 
     @staticmethod
-    def switch_slot(session: Session, user_id: int, slot: str, asset_id: int | None) -> None:
+    def switch_slot(
+        session: Session, user_id: int, slot: str, asset_id: int | None
+    ) -> None:
         """Switch exactly one typed media slot inside the caller-owned transaction."""
         user = session.get(User, user_id)
         if user is None:
@@ -117,11 +136,78 @@ class ProfileMediaRepository(BaseRepository):
     def get_by_public_id(self, public_id: str) -> ProfileMediaAsset | None:
         """Load one publicly addressable asset by opaque identifier."""
         with self.session() as session:
-            return session.scalar(select(ProfileMediaAsset).where(ProfileMediaAsset.public_id == public_id))
+            return session.scalar(
+                select(ProfileMediaAsset).where(
+                    ProfileMediaAsset.public_id == public_id
+                )
+            )
+
+    @staticmethod
+    def release_releasable_source_media(session: Session) -> int:
+        """Delete media ownership rows whose source can no longer execute."""
+        references = list(session.scalars(select(UserActorOutboundSourceMedia)))
+        released = 0
+        for reference in references:
+            source = session.get(UserActorOutboundSource, reference.source_id)
+            if source is None or source.state != "ready":
+                continue
+            unfinished = session.scalar(
+                select(UserActorOutboundDelivery.id)
+                .where(
+                    UserActorOutboundDelivery.source_id == source.id,
+                    UserActorOutboundDelivery.status.in_(
+                        ("pending", "sending", "failed")
+                    ),
+                )
+                .limit(1)
+            )
+            if unfinished is None:
+                session.delete(reference)
+                released += 1
+        session.flush()
+        return released
 
     @staticmethod
     def is_referenced(session: Session, asset_id: int) -> bool:
         """Check both user slots inside the cleanup write transaction."""
-        return session.scalar(
-            select(User.id).where(or_(User.avatar_media_id == asset_id, User.header_media_id == asset_id)).limit(1)
-        ) is not None
+        current_slot = (
+            session.scalar(
+                select(User.id)
+                .where(
+                    or_(
+                        User.avatar_media_id == asset_id,
+                        User.header_media_id == asset_id,
+                    )
+                )
+                .limit(1)
+            )
+            is not None
+        )
+        if current_slot:
+            return True
+        # A historical source owns media until rendering is complete and every
+        # endpoint is terminal; this preserves immutable retry payloads.
+        live_source = session.scalar(
+            select(UserActorOutboundSourceMedia.id)
+            .join(
+                UserActorOutboundSource,
+                UserActorOutboundSource.id
+                == UserActorOutboundSourceMedia.source_id,
+            )
+            .where(
+                UserActorOutboundSourceMedia.media_asset_id == asset_id,
+                or_(
+                    UserActorOutboundSource.state != "ready",
+                    select(UserActorOutboundDelivery.id)
+                    .where(
+                        UserActorOutboundDelivery.source_id == UserActorOutboundSource.id,
+                        UserActorOutboundDelivery.status.in_(
+                        ("pending", "sending", "failed")
+                    ),
+                    )
+                    .exists(),
+                ),
+            )
+            .limit(1)
+        )
+        return live_source is not None

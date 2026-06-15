@@ -45,7 +45,7 @@ The gateway serves these ActivityPub actor categories:
 | Registered Discord user | `Person` | `/users/{username}` | Per-user ActivityPub identity for registered Discord users. |
 | Local community | `Group` | `/communities/{slug}` and `/c/{slug}` | Discord forum channel exposed as a local ActivityPub community. |
 
-Actor documents provide stable identity and routing fields plus editable registered-user profile data. User `Person` actors expose immutable `preferredUsername`, editable `name` and escaped `summary`, optional `icon` and `image` objects backed by bridge-owned immutable media URLs, and up to four ordered `PropertyValue` attachments. Profile edits are visible when a peer re-fetches the actor; active `Update(Person)` delivery is not implemented in this stage.
+Actor documents provide stable identity and routing fields plus editable registered-user profile data. User `Person` actors expose immutable `preferredUsername`, editable `name` and escaped `summary`, optional `icon` and `image` objects backed by bridge-owned immutable media URLs, and up to four ordered `PropertyValue` attachments. Successful profile edits also create a durable complete `Update(Person)` and deliver it to the unique accepted follower endpoints.
 
 Registered User Actor followers are auto-accepted and stored separately from local-community subscribers. Their canonical `/actors/{username}/followers` collection, with `/users/{username}/followers` as a compatibility alias, publicly exposes accepted remote actor IDs through bounded pages. User outboxes remain empty placeholders, and follower content delivery is deferred to later stages.
 
@@ -234,3 +234,11 @@ Relevant implementation areas:
 - `src/activitypub_handlers.py` — Python dispatch from normalized ActivityPub events to bridge runtimes.
 - `src/local_communities/activitypub_renderers.py` — local-community compatibility object rendering.
 - `src/fedify_gateway_client.py` — Python-to-gateway internal command client.
+
+## Registered-user profile update delivery
+
+Successful registered-user profile mutations create one immutable logical profile version and one durable `Update(Person)` source in the same SQLite transaction as the local profile change. The transaction also fixes the accepted follower audience, deduplicates exact shared or individual inbox endpoints, snapshots follower relationship incarnation IDs, and retains referenced profile media until the source is no longer transportable.
+
+The Python runtime owns source state, retry timing, endpoint claims, ordering, and per-target outcomes. The Fedify gateway renders the complete `Person` through the same actor builder used by the public actor route and performs signed endpoint delivery as the owning User Actor. Retry uses the persisted activity JSON and stable activity ID; it does not re-read a newer profile into an older source.
+
+Profile delivery is partial-failure tolerant. A failed endpoint does not roll back the local profile or block healthy endpoints. Account settings report local success separately from pending remote refresh. Existing user-authored content recipients are unchanged in Stage 4.

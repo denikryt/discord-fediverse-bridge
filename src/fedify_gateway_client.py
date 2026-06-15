@@ -125,6 +125,17 @@ class SendLocalCommunityRelayResult:
     outcomes: list[SendLocalCommunityRelayOutcome]
 
 
+
+
+@dataclass(slots=True)
+class UserActorDeliveryOutcome:
+    """Describe one per-endpoint User Actor transport outcome."""
+
+    delivery_id: int
+    ok: bool
+    error: str | None = None
+
+
 @dataclass(slots=True)
 class AcceptUserActorFollowRequest:
     """Carry one signed Accept(Follow) request for a registered User Actor."""
@@ -364,6 +375,46 @@ class FedifyGatewayClient:
                 for item in payload.get("outcomes", [])
             ]
         )
+
+
+    async def render_user_actor_profile_update(
+        self, *, activity_id: str, profile_snapshot: dict
+    ) -> dict:
+        """Render one complete Update(Person) from immutable non-secret input."""
+        response = await self._client.post(
+            "/render-user-actor-profile-update",
+            headers={"Authorization": f"Bearer {self._shared_secret}"},
+            json={"activityId": activity_id, "profileSnapshot": profile_snapshot},
+        )
+        response.raise_for_status()
+        return response.json()["activityJson"]
+
+    async def send_user_actor_deliveries(
+        self,
+        *,
+        signing_actor_url: str,
+        actor_username: str,
+        deliveries: list[dict],
+    ) -> list[UserActorDeliveryOutcome]:
+        """Send already-rendered activities and retain independent target outcomes."""
+        response = await self._client.post(
+            "/send-user-actor-deliveries",
+            headers={"Authorization": f"Bearer {self._shared_secret}"},
+            json={
+                "signingActorUrl": signing_actor_url,
+                "actorUsername": actor_username,
+                "deliveries": deliveries,
+            },
+        )
+        response.raise_for_status()
+        return [
+            UserActorDeliveryOutcome(
+                delivery_id=int(item["deliveryId"]),
+                ok=bool(item["ok"]),
+                error=item.get("error"),
+            )
+            for item in response.json()["outcomes"]
+        ]
 
     async def accept_local_community_follow(
         self,

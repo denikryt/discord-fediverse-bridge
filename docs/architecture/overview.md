@@ -66,3 +66,9 @@ This document does not define exact payload fields, every route, or every table 
 ## Profile persistence and media ownership
 
 Python owns profile persistence and bridge-managed profile image bytes. The main runtime holds a shared deployment-generation lease while DB and media paths are open; backup shares that generation, while restore and startup recovery require exclusive ownership. The Fedify gateway does not receive filesystem access. Stage 1 does not change actor serialization.
+
+## User Actor profile delivery recovery
+
+Profile mutations are owned by one synchronous `BEGIN IMMEDIATE` operation that writes the profile change, increments `users.profile_version`, stores immutable rendering input, snapshots accepted follower relationship incarnations, groups exact delivery endpoints, and records media ownership. Network rendering and transport occur only after commit.
+
+`UserActorDeliveryService` renders and claims bounded work. Claims use durable `sending` ownership, stale-claim recovery, exact-incarnation eligibility, global federation policy, and a per-user/per-endpoint logical-version barrier. `UserActorDeliveryWorker` owns one process-lifetime asyncio task, drains immediately at startup, wakes after new profile sources, and is cancelled and awaited before the gateway client and database close.

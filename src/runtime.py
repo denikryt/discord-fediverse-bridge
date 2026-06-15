@@ -17,6 +17,8 @@ from .registration_service import RegistrationService
 from .profile_media import FileLock, ProfileMediaStore
 from .user_profiles import UserProfileService
 from .user_actor_followers import UserActorFollowService
+from .user_actor_delivery import UserActorDeliveryService
+from .user_actor_delivery_worker import UserActorDeliveryWorker
 
 
 @dataclass(slots=True)
@@ -42,12 +44,15 @@ class Runtime:
     profile_media_store: ProfileMediaStore
     user_profile_service: UserProfileService
     user_actor_follow_service: UserActorFollowService
+    user_actor_delivery_service: UserActorDeliveryService
+    user_actor_delivery_worker: UserActorDeliveryWorker
     deployment_state_lease: FileLock
 
     async def close(self) -> None:
         """Close live-state owners before releasing the deployment generation lease."""
         # The ordering prevents restore from replacing DB/media paths while a
         # client, pooled connection, or HTTP reader can still use them.
+        await self.user_actor_delivery_worker.stop()
         await self.discord_oauth_client.close()
         await self.fedify_gateway.close()
         self.database.close()

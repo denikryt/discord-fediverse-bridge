@@ -80,8 +80,17 @@ def test_cleanup_removes_metadata_when_orphan_bytes_were_already_unlinked(tmp_pa
     from src.models import ProfileMediaAsset
 
     database, store, service, user = _system(tmp_path)
-    asset = service.replace_media(user.id, "avatar", _png()).avatar
+    replacement = service.replace_media(user.id, "avatar", _png())
+    asset = replacement.avatar
     service.clear_media(user.id, "avatar")
+    # Zero-audience sources release media only after canonical rendering is
+    # durably complete; before that, cleanup must retain immutable retry input.
+    database.user_actor_deliveries.record_rendered(
+        replacement.source_id, {"id": replacement.activity_id, "type": "Update"}
+    )
+    assert database.user_actor_deliveries.release_terminal_source_media(
+        replacement.source_id
+    ) == 1
     with database.session() as session:
         row = session.scalar(select(ProfileMediaAsset).where(ProfileMediaAsset.id == asset.id))
         row.created_at = datetime.now(timezone.utc) - timedelta(days=2)
