@@ -4,8 +4,6 @@ from __future__ import annotations
 
 import os
 import sqlite3
-import subprocess
-import sys
 from pathlib import Path
 
 from src.db import Database
@@ -67,7 +65,9 @@ def test_write_user_identity_backup_creates_restore_usable_sqlite_db(
     )
 
 
-def test_dump_local_users_cli_writes_users_db_backup(tmp_path: Path) -> None:
+def test_dump_local_users_cli_writes_users_db_backup(
+    tmp_path: Path, capsys,
+) -> None:
     """The CLI should write a standalone SQLite file with the users table only."""
 
     database = _database(tmp_path)
@@ -83,24 +83,19 @@ def test_dump_local_users_cli_writes_users_db_backup(tmp_path: Path) -> None:
     )
     output_path = tmp_path / "users.db.backup"
 
-    result = subprocess.run(
+    exit_code = dump_users_cli_main(
         [
-            sys.executable,
-            "dev/dump_local_users.py",
             "--database-url",
             f"sqlite:///{tmp_path / 'bridge-users.db'}",
             "--output",
             str(output_path),
-        ],
-        cwd=Path(__file__).resolve().parents[1],
-        check=True,
-        capture_output=True,
-        text=True,
+        ]
     )
 
     # The CLI prints the written path so operators can compose this utility in
     # shell backup scripts without extra parsing.
-    assert result.stdout.strip() == str(output_path)
+    assert exit_code == 0
+    assert capsys.readouterr().out.strip() == str(output_path)
     with sqlite3.connect(output_path) as connection:
         tables = connection.execute(
             "SELECT name FROM sqlite_master WHERE type='table' ORDER BY name"
