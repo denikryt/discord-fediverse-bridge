@@ -267,3 +267,47 @@ def test_internal_user_actor_profile_defaults_and_cleared_media_are_omitted(
     assert response.json()["fields"] == []
     assert response.json()["avatar"] is None
     assert response.json()["header"] is None
+
+
+def test_internal_user_followers_are_newest_first_and_fixed_to_forty(tmp_path: Path) -> None:
+    """Gateway reads receive deterministic newest-first pages with the fixed contract size."""
+    runtime, database = _runtime(tmp_path)
+    user = database.users.create_user(
+        discord_user_id="4",
+        activitypub_username="dana",
+        actor_url="https://bridge.example/actors/dana",
+        inbox_url="https://bridge.example/actors/dana/inbox",
+        outbox_url="https://bridge.example/actors/dana/outbox",
+        followers_url="https://bridge.example/actors/dana/followers",
+        public_key_pem="user-public",
+        private_key_pem="user-private",
+    )
+    for index in range(1, 4):
+        with database.immediate_session() as session:
+            database.user_actor_followers.create_or_refresh(
+                session,
+                user_id=user.id,
+                remote_actor_id=f"https://remote.example/users/{index}",
+                remote_inbox_url=f"https://remote.example/users/{index}/inbox",
+                remote_shared_inbox_url=None,
+                follow_activity_id=f"https://remote.example/activities/follow-{index}",
+            )
+
+    client = TestClient(create_http_app(runtime))
+    response = client.get(
+        "/internal/fedify/actors/users/dana/followers?page=1&page_size=40",
+        headers=_headers(),
+    )
+    assert response.status_code == 200
+    assert response.json()["actor_ids"] == [
+        "https://remote.example/users/3",
+        "https://remote.example/users/2",
+        "https://remote.example/users/1",
+    ]
+    assert response.json()["page_size"] == 40
+
+    variable_page = client.get(
+        "/internal/fedify/actors/users/dana/followers?page=1&page_size=80",
+        headers=_headers(),
+    )
+    assert variable_page.status_code == 400

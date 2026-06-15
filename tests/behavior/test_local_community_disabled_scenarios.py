@@ -12,7 +12,7 @@ from sqlalchemy import func, select
 
 from discordops import run_operation_definition
 from src.activitypub_handlers import dispatch_activitypub_event
-from src.activitypub_models import ActivityPubEvent, LocalCommunityFollowRequestEvent
+from src.activitypub_models import ActivityPubEvent, LocalFollowRequestEvent
 from src.content_publish_service import ContentPublishService
 from src.local_communities.runtime import LocalCommunityRuntime
 from src.local_communities.service import LocalCommunityService
@@ -87,14 +87,15 @@ def _post_event() -> ActivityPubEvent:
     )
 
 
-def _follow_event() -> LocalCommunityFollowRequestEvent:
+def _follow_event() -> LocalFollowRequestEvent:
     """Build one remote Follow targeting the disabled local community."""
-    return LocalCommunityFollowRequestEvent.model_validate(
+    return LocalFollowRequestEvent.model_validate(
         {
             "event_type": "local.follow_requested",
             "delivery_id": "https://remote.example/activities/follow/1",
             "occurred_at": "2026-05-19T10:00:00Z",
-            "community_actor_id": "https://bridge.example/communities/cats",
+            "target_actor_kind": "community",
+            "target_actor_id": "https://bridge.example/communities/cats",
             "actor_id": "https://remote.example/u/alice",
             "object": {
                 "follow_activity_id": "https://remote.example/activities/follow/1",

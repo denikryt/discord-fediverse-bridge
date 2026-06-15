@@ -27,6 +27,7 @@ from .legacy_lemmy_mappings import LegacyLemmyMappingRepository
 from .discord_fanout_groups import DiscordFanoutGroupRepository
 from .discord_directory import DiscordDirectoryRepository
 from .guild_invite_publications import GuildInvitePublicationRepository
+from .user_actor_followers import UserActorFollowerRepository
 __all__ = [
     "BridgeActorKeyRepository",
     "CommunityActorBanRepository",
@@ -50,6 +51,7 @@ __all__ = [
     "DiscordFanoutGroupRepository",
     "DiscordDirectoryRepository",
     "GuildInvitePublicationRepository",
+    "UserActorFollowerRepository",
 ]
 
 from .user_profiles import ProfileMediaRepository, UserProfileRepository, UserProfileView

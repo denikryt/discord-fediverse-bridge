@@ -86,16 +86,17 @@ class FollowLifecycleEvent(BaseModel):
     object: FollowLifecycleObject
 
 
-class LocalCommunityFollowRequestObject(BaseModel):
+class LocalFollowRequestObject(BaseModel):
     """Carry the identifiers needed to persist and accept a remote follow."""
 
     model_config = ConfigDict(extra="forbid")
 
     follow_activity_id: str
     remote_inbox_url: str
+    remote_shared_inbox_url: str | None = None
 
 
-class LocalCommunityFollowRequestEvent(BaseModel):
+class LocalFollowRequestEvent(BaseModel):
     """Describe one inbound Follow addressed to a local community actor."""
 
     model_config = ConfigDict(extra="forbid")
@@ -103,12 +104,13 @@ class LocalCommunityFollowRequestEvent(BaseModel):
     event_type: Literal["local.follow_requested"]
     delivery_id: str
     occurred_at: datetime
-    community_actor_id: str
+    target_actor_kind: Literal["community", "user"]
+    target_actor_id: str
     actor_id: str
-    object: LocalCommunityFollowRequestObject
+    object: LocalFollowRequestObject
 
 
-class LocalCommunityUnfollowRequestObject(BaseModel):
+class LocalUnfollowRequestObject(BaseModel):
     """Carry the original Follow ID when a remote actor unfollows a local community."""
 
     model_config = ConfigDict(extra="forbid")
@@ -116,7 +118,7 @@ class LocalCommunityUnfollowRequestObject(BaseModel):
     follow_activity_id: str | None = None
 
 
-class LocalCommunityUnfollowRequestEvent(BaseModel):
+class LocalUnfollowRequestEvent(BaseModel):
     """Describe one inbound Undo(Follow) addressed to a local community actor."""
 
     model_config = ConfigDict(extra="forbid")
@@ -124,12 +126,13 @@ class LocalCommunityUnfollowRequestEvent(BaseModel):
     event_type: Literal["local.unfollow_requested"]
     delivery_id: str
     occurred_at: datetime
-    community_actor_id: str
+    target_actor_kind: Literal["community", "user"]
+    target_actor_id: str
     actor_id: str
-    object: LocalCommunityUnfollowRequestObject
+    object: LocalUnfollowRequestObject
 
 
 BridgeGatewayEvent = Annotated[
-    ActivityPubEvent | FollowLifecycleEvent | LocalCommunityFollowRequestEvent | LocalCommunityUnfollowRequestEvent,
+    ActivityPubEvent | FollowLifecycleEvent | LocalFollowRequestEvent | LocalUnfollowRequestEvent,
     Field(discriminator="event_type"),
 ]

@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from datetime import datetime, timezone
 
-from sqlalchemy import CheckConstraint, DateTime, ForeignKey, Integer, JSON, String, Text, UniqueConstraint
+from sqlalchemy import CheckConstraint, Index, DateTime, ForeignKey, Integer, JSON, String, Text, UniqueConstraint
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column
 
 
@@ -218,6 +218,50 @@ class User(Base):
     header_media_id: Mapped[int | None] = mapped_column(ForeignKey("profile_media_assets.id", ondelete="RESTRICT"), nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, nullable=False)
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, onupdate=utcnow, nullable=False)
+
+
+class UserActorFollower(Base):
+    """Persist one accepted remote follower relationship for a local User Actor."""
+
+    __tablename__ = "user_actor_followers"
+    __table_args__ = (
+        UniqueConstraint("user_id", "remote_actor_id"),
+        CheckConstraint("status = 'accepted'", name="ck_user_actor_follower_status"),
+        CheckConstraint(
+            "owner_notification_state IN ('pending', 'attempted')",
+            name="ck_user_actor_follower_notification_state",
+        ),
+        Index("ix_user_actor_followers_collection", "user_id", "status", "id"),
+        {"sqlite_autoincrement": True},
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    user_id: Mapped[int] = mapped_column(ForeignKey("users.id", ondelete="CASCADE"), nullable=False)
+    remote_actor_id: Mapped[str] = mapped_column(String(512), nullable=False)
+    remote_inbox_url: Mapped[str] = mapped_column(String(512), nullable=False)
+    remote_shared_inbox_url: Mapped[str | None] = mapped_column(String(512), nullable=True)
+    follow_activity_id: Mapped[str] = mapped_column(String(512), nullable=False)
+    status: Mapped[str] = mapped_column(String(32), nullable=False, default="accepted")
+    owner_notification_state: Mapped[str] = mapped_column(String(32), nullable=False, default="pending")
+    owner_notification_attempted_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, nullable=False)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, onupdate=utcnow, nullable=False)
+
+
+class UserActorFollowActivityId(Base):
+    """Retain immutable global ownership of every observed User Actor Follow ID."""
+
+    __tablename__ = "user_actor_follow_activity_ids"
+    __table_args__ = (
+        UniqueConstraint("follow_activity_id"),
+        Index("ix_user_actor_follow_activity_owner", "user_id", "remote_actor_id"),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    follow_activity_id: Mapped[str] = mapped_column(String(512), nullable=False)
+    user_id: Mapped[int] = mapped_column(ForeignKey("users.id", ondelete="CASCADE"), nullable=False)
+    remote_actor_id: Mapped[str] = mapped_column(String(512), nullable=False)
+    first_seen_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, nullable=False)
 
 
 class UserProfileField(Base):

@@ -63,7 +63,7 @@ async def dispatch_activitypub_event(
     if disabled is not None:
         return disabled
 
-    ban = find_local_community_actor_ban_for_event(event, runtime)
+    ban = None if getattr(event, "target_actor_kind", "community") == "user" else find_local_community_actor_ban_for_event(event, runtime)
     if ban is not None:
         actor_handle = getattr(ban, "actor_handle", "unknown")
         actor_url = getattr(event, "actor_id", None)
@@ -102,15 +102,29 @@ async def dispatch_activitypub_event(
     if event.event_type == "follow.accepted":
         return await handle_follow_accepted(event, runtime)
     if event.event_type == "local.follow_requested":
+        if event.target_actor_kind == "user":
+            return await runtime.user_actor_follow_service.handle_follow(
+                target_actor_id=event.target_actor_id,
+                remote_actor_id=event.actor_id,
+                remote_inbox_url=event.object.remote_inbox_url,
+                remote_shared_inbox_url=event.object.remote_shared_inbox_url,
+                follow_activity_id=event.object.follow_activity_id,
+            )
         return await runtime.local_community_runtime.handle_follow_request(
-            local_community_actor_id=event.community_actor_id,
+            local_community_actor_id=event.target_actor_id,
             remote_actor_id=event.actor_id,
             remote_inbox_url=event.object.remote_inbox_url,
             follow_activity_id=event.object.follow_activity_id,
         )
     if event.event_type == "local.unfollow_requested":
+        if event.target_actor_kind == "user":
+            return await runtime.user_actor_follow_service.handle_unfollow(
+                target_actor_id=event.target_actor_id,
+                remote_actor_id=event.actor_id,
+                follow_activity_id=event.object.follow_activity_id,
+            )
         return await runtime.local_community_runtime.handle_unfollow_request(
-            local_community_actor_id=event.community_actor_id,
+            local_community_actor_id=event.target_actor_id,
             remote_actor_id=event.actor_id,
             follow_activity_id=event.object.follow_activity_id,
         )
@@ -120,7 +134,9 @@ async def dispatch_activitypub_event(
 
 def _disabled_local_community_for_event(event: BridgeGatewayEvent, runtime: Runtime) -> object | None:
     """Return disabled target local community for one inbound event, if known."""
-    community_actor_id = getattr(event, "community_actor_id", None)
+    if getattr(event, "target_actor_kind", "community") != "community":
+        return None
+    community_actor_id = getattr(event, "target_actor_id", None) or getattr(event, "community_actor_id", None)
     if not community_actor_id:
         return None
     local_community = resolve_local_community_by_actor_url(runtime.database, community_actor_id)
@@ -382,6 +398,8 @@ def _is_local_community_target(event: ActivityPubEvent, runtime: Runtime) -> boo
 
 def _allowlist_subject(event: BridgeGatewayEvent, runtime: Runtime) -> str:
     """Return the remote URL whose instance should be checked against the allowlist."""
+    if hasattr(event, "target_actor_kind"):
+        return getattr(event, "actor_id")
     if (
         hasattr(event, "community_actor_id")
         and resolve_local_community_by_actor_url(runtime.database, event.community_actor_id) is not None

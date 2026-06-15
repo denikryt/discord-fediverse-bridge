@@ -35,6 +35,7 @@ from .repositories import (
     RemoteSubscriptionRepository,
     UserRepository,
     UserProfileRepository,
+    UserActorFollowerRepository,
     ProfileMediaRepository,
 )
 
@@ -70,6 +71,7 @@ class Database:
         self.event_receipts = EventReceiptRepository(self.session)
         self.users = UserRepository(self.session)
         self.user_profiles = UserProfileRepository(self.session)
+        self.user_actor_followers = UserActorFollowerRepository(self.session)
         self.profile_media = ProfileMediaRepository(self.session)
         self.registration_sessions = RegistrationSessionRepository(self.session)
         self.message_mappings = MessageMappingRepository(self.session)

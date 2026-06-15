@@ -126,6 +126,17 @@ class SendLocalCommunityRelayResult:
 
 
 @dataclass(slots=True)
+class AcceptUserActorFollowRequest:
+    """Carry one signed Accept(Follow) request for a registered User Actor."""
+
+    actor_username: str
+    actor_url: str
+    remote_actor_id: str
+    remote_inbox_url: str
+    follow_activity_id: str
+
+
+@dataclass(slots=True)
 class AcceptLocalCommunityFollowRequest:
     """Carry one signed Accept(Follow) request for a local community actor."""
 
@@ -150,6 +161,29 @@ class FedifyGatewayClient:
     async def close(self) -> None:
         """Close the underlying HTTP client when the runtime shuts down."""
         await self._client.aclose()
+
+    async def accept_user_actor_follow(
+        self,
+        *,
+        actor_username: str,
+        actor_url: str,
+        remote_actor_id: str,
+        remote_inbox_url: str,
+        follow_activity_id: str,
+    ) -> None:
+        """Ask the gateway to sign and deliver Accept as the owning User Actor."""
+        response = await self._client.post(
+            "/accept-user-actor-follow",
+            headers={"Authorization": f"Bearer {self._shared_secret}"},
+            json={
+                "actorUsername": actor_username,
+                "actorUrl": actor_url,
+                "remoteActorId": remote_actor_id,
+                "remoteInboxUrl": remote_inbox_url,
+                "followActivityId": follow_activity_id,
+            },
+        )
+        response.raise_for_status()
 
     async def follow_community(self, community_actor_url: str) -> FollowCommunityResult:
         """Trigger one gateway-side Follow and return the stored metadata."""

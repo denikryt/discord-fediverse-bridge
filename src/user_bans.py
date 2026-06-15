@@ -107,6 +107,15 @@ class UserBanService:
         )
         return self._decision(ban, local_community=local_community)
 
+    def check_global_activitypub_actor(
+        self, *, actor_url: str, actor_handle: str | None
+    ) -> BanDecision:
+        """Apply only instance-wide ActivityPub actor moderation."""
+        ban = self.database.community_actor_bans.find_active_ban_for_actor(
+            local_community_id=None, actor_url=actor_url, actor_handle=actor_handle
+        )
+        return self._decision(ban)
+
     def check_activitypub_actor(
         self, *, local_community_id: int, actor_url: str, actor_handle: str | None
     ) -> BanDecision:

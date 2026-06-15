@@ -260,7 +260,7 @@ export function createGatewayFederation(
       await deliverNormalizedEvent(config, event, {
         deliveryId: event.delivery_id,
         eventType: event.event_type,
-        communityActorUrl: event.community_actor_id,
+        communityActorUrl: event.target_actor_id,
         remoteActorId: event.actor_id,
       });
     })
@@ -276,7 +276,7 @@ export function createGatewayFederation(
       await deliverNormalizedEvent(config, event, {
         deliveryId: event.delivery_id,
         eventType: event.event_type,
-        communityActorUrl: event.community_actor_id,
+        communityActorUrl: event.target_actor_id,
         remoteActorId: event.actor_id,
         followActivityId: event.object.follow_activity_id,
       });
@@ -503,80 +503,65 @@ export async function buildLocalFollowRequestedEvent(
 ): Promise<LocalFollowRequestedEvent | null> {
   const targetActorId = activity.objectId?.href;
   const remoteActorId = activity.actorId?.href;
-  if (targetActorId == null || remoteActorId == null) {
-    return null;
-  }
+  if (targetActorId == null || remoteActorId == null || activity.id == null) return null;
 
-  const localCommunity = await resolveLocalCommunityByActorUrl(config, targetActorId);
-  if (localCommunity == null) {
-    // Only follows addressed to owned local communities should go through
-    // this local-community follow path.
-    return null;
+  const community = await resolveLocalCommunityByActorUrl(config, targetActorId);
+  let targetKind: "community" | "user" | null = community == null ? null : "community";
+  if (targetKind == null) {
+    const username = parseUserAlias(new URL(targetActorId), config.fedifyOrigin);
+    const user = username == null ? null : await loadUserActorIdentity(config, username);
+    if (user != null && user.actorId.href === targetActorId) targetKind = "user";
   }
+  if (targetKind == null) return null;
 
   const remoteActor = await activity.getActor({ suppressError: true });
   const remoteInboxUrl = remoteActor?.inboxId?.href;
-  if (remoteInboxUrl == null) {
-    return null;
-  }
+  if (remoteInboxUrl == null) return null;
+  const endpoints = asRecord((remoteActor as unknown as Record<string, unknown>)?.endpoints);
+  const remoteSharedInboxUrl = asString(endpoints?.sharedInbox);
 
   return {
     actor_id: remoteActorId,
-    community_actor_id: targetActorId,
-    delivery_id:
-      activity.id?.href
-      ?? `local-follow:${localCommunity.slug}:${Date.now()}`,
+    target_actor_kind: targetKind,
+    target_actor_id: targetActorId,
+    delivery_id: activity.id.href,
     event_type: "local.follow_requested",
     object: {
-      follow_activity_id: activity.id?.href ?? `local-follow:${localCommunity.slug}`,
+      follow_activity_id: activity.id.href,
       remote_inbox_url: remoteInboxUrl,
+      remote_shared_inbox_url: remoteSharedInboxUrl,
     },
     occurred_at: new Date().toISOString(),
   };
 }
-
 
 export async function buildLocalUnfollowRequestedEvent(
   config: GatewayContextData,
   activity: Undo,
   rawJson: Record<string, unknown> | null,
 ): Promise<LocalUnfollowRequestedEvent | null> {
-  // Undo(Follow) uses the embedded Follow object to identify the local
-  // community target. Only Undo activities from the same remote actor that sent
-  // the original Follow are accepted into the local-community unfollow path.
   const undoActorId = activity.actorId?.href ?? asString(rawJson?.actor);
   const embeddedFollow = asRecord(rawJson?.object);
-  if (undoActorId == null || embeddedFollow == null || embeddedFollow.type !== "Follow") {
-    return null;
-  }
-
-  const followActorId = asString(embeddedFollow.actor);
-  if (followActorId !== undoActorId) {
-    logDebug(config.logLevel === "debug", "Ignoring Undo(Follow) with mismatched actor");
-    return null;
-  }
-
+  if (undoActorId == null || embeddedFollow?.type !== "Follow") return null;
+  if (asString(embeddedFollow.actor) !== undoActorId) return null;
   const targetActorId = asString(embeddedFollow.object);
-  if (targetActorId == null) {
-    return null;
-  }
+  if (targetActorId == null) return null;
 
-  const localCommunity = await resolveLocalCommunityByActorUrl(config, targetActorId);
-  if (localCommunity == null) {
-    return null;
+  const community = await resolveLocalCommunityByActorUrl(config, targetActorId);
+  let targetKind: "community" | "user" | null = community == null ? null : "community";
+  if (targetKind == null) {
+    const username = parseUserAlias(new URL(targetActorId), config.fedifyOrigin);
+    const user = username == null ? null : await loadUserActorIdentity(config, username);
+    if (user != null && user.actorId.href === targetActorId) targetKind = "user";
   }
-
+  if (targetKind == null) return null;
   return {
     actor_id: undoActorId,
-    community_actor_id: targetActorId,
-    delivery_id:
-      activity.id?.href
-      ?? asString(rawJson?.id)
-      ?? `local-unfollow:${localCommunity.slug}:${Date.now()}`,
+    target_actor_kind: targetKind,
+    target_actor_id: targetActorId,
+    delivery_id: activity.id?.href ?? asString(rawJson?.id) ?? `local-unfollow:${Date.now()}`,
     event_type: "local.unfollow_requested",
-    object: {
-      follow_activity_id: asString(embeddedFollow.id) ?? `local-follow:${localCommunity.slug}`,
-    },
+    object: { follow_activity_id: asString(embeddedFollow.id) },
     occurred_at: new Date().toISOString(),
   };
 }

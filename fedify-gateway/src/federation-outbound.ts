@@ -15,6 +15,7 @@ import {
 } from "./local-community-keys.js";
 import type {
   AcceptLocalCommunityFollowRequest,
+  AcceptUserActorFollowRequest,
   DeleteContentRequest,
   PublishContentRequest,
   PublishContentResult,
@@ -422,6 +423,38 @@ export async function sendLocalCommunityRelay(
   return { outcomes };
 }
 
+
+
+export async function acceptUserActorFollow(
+  federation: Federation<GatewayConfig>,
+  config: GatewayConfig,
+  request: AcceptUserActorFollowRequest,
+): Promise<void> {
+  // Sign and deliver one deterministic Accept as the registered User Actor.
+  const identity = await import("./actor-store.js").then((m) => m.loadUserActorIdentity(config, request.actorUsername));
+  if (identity == null || identity.actorId.href !== request.actorUrl) {
+    throw new Error("actorUsername and actorUrl must identify the same registered user");
+  }
+  const keyPair = await loadActorKeyPair(config, request.actorUsername);
+  if (keyPair == null) throw new Error("User Actor signing key not found");
+  const hash = createHash("sha256").update(request.followActivityId).digest("hex");
+  const accept = new Accept({
+    id: buildGatewayUrl(config, `/actors/${request.actorUsername}/activities/accept/${hash}`),
+    actor: new URL(request.actorUrl),
+    to: new URL(request.remoteActorId),
+    object: new Follow({
+      id: new URL(request.followActivityId),
+      actor: new URL(request.remoteActorId),
+      object: new URL(request.actorUrl),
+    }),
+  });
+  const ctx = federation.createContext(new URL(config.fedifyOrigin), config);
+  await ctx.sendActivity(
+    [{ keyId: new URL(`${request.actorUrl}#main-key`), privateKey: keyPair.privateKey }],
+    { id: new URL(request.remoteActorId), inboxId: new URL(request.remoteInboxUrl) },
+    accept,
+  );
+}
 
 export async function acceptLocalCommunityFollow(
   federation: Federation<GatewayConfig>,

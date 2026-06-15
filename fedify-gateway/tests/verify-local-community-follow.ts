@@ -109,7 +109,8 @@ async function main(): Promise<void> {
 
   assert.ok(event != null);
   assert.equal(event?.event_type, "local.follow_requested");
-  assert.equal(event?.community_actor_id, `${TEST_ORIGIN}communities/hackers`);
+  assert.equal(event?.target_actor_id, `${TEST_ORIGIN}communities/hackers`);
+  assert.equal(event?.target_actor_kind, "community");
   assert.equal(event?.actor_id, `${REMOTE_ORIGIN}u/bob`);
   assert.equal(event?.object.follow_activity_id, `${REMOTE_ORIGIN}activities/follow/1`);
   assert.equal(event?.object.remote_inbox_url, `${REMOTE_ORIGIN}u/bob/inbox`);

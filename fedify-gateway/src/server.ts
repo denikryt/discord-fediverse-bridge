@@ -25,12 +25,14 @@ import {
 } from "./config.js";
 import {
   listLocalCommunities,
+  loadUserFollowers,
   loadPublishedActivityObjectByActivityId,
   loadPublishedActivityObjectByObjectId,
 } from "./python-bridge-client.js";
 import { createGatewayFederation } from "./federation.js";
 import {
   acceptLocalCommunityFollow,
+  acceptUserActorFollow,
   deleteContent,
   followCommunity,
   publishContent,
@@ -45,6 +47,7 @@ import {
 } from "./published-objects.js";
 import type {
   AcceptLocalCommunityFollowRequest,
+  AcceptUserActorFollowRequest,
   DeleteContentRequest,
   PublishContentRequest,
   PublishLocalCommunityContentRequest,
@@ -206,15 +209,7 @@ export function createGatewayApp(config: GatewayConfig): Hono {
   });
 
   app.get("/users/:username/followers", async (context) => {
-    const username = context.req.param("username");
-    if ((await loadUserActorIdentity(config, username)) == null) {
-      return context.json({ error: "user actor not found" }, 404);
-    }
-    return activityJsonResponse(
-      await buildEmptyOrderedCollection(
-        new URL(`/users/${username}/followers`, config.fedifyOrigin),
-      ).toJsonLd(),
-    );
+    return await renderUserFollowers(context, config, context.req.param("username"));
   });
 
 
@@ -274,14 +269,11 @@ export function createGatewayApp(config: GatewayConfig): Hono {
 
   app.get("/actors/:identifier/followers", async (context) => {
     const identifier = context.req.param("identifier");
-    if (!(await hasLocalActor(config, identifier))) {
-      return context.json({ error: "actor not found" }, 404);
+    if ((await loadUserActorIdentity(config, identifier)) != null) {
+      return await renderUserFollowers(context, config, identifier);
     }
-    return activityJsonResponse(
-      await buildEmptyOrderedCollection(
-        new URL(`/actors/${identifier}/followers`, config.fedifyOrigin),
-      ).toJsonLd(),
-    );
+    if (!(await hasLocalActor(config, identifier))) return context.json({ error: "actor not found" }, 404);
+    return activityJsonResponse(await buildEmptyOrderedCollection(new URL(`/actors/${identifier}/followers`, config.fedifyOrigin)).toJsonLd());
   });
 
   app.post("/follow-community", async (context) => {
@@ -504,6 +496,24 @@ app.post("/send-local-community-relay", async (context) => {
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
     return context.json({ error: message }, { status: 500 });
+  }
+});
+
+app.post("/accept-user-actor-follow", async (context) => {
+  if (!hasValidInternalAuthorization(config, context.req.header("Authorization") ?? null)) {
+    return context.json({ error: "invalid authorization" }, { status: 401 });
+  }
+  const payload = (await context.req.json()) as Partial<AcceptUserActorFollowRequest>;
+  if (typeof payload.actorUsername !== "string" || typeof payload.actorUrl !== "string" ||
+      typeof payload.remoteActorId !== "string" || typeof payload.remoteInboxUrl !== "string" ||
+      typeof payload.followActivityId !== "string") {
+    return context.json({ error: "invalid user actor follow accept request" }, { status: 400 });
+  }
+  try {
+    await acceptUserActorFollow(fedify, config, payload as AcceptUserActorFollowRequest);
+    return context.json({ status: "ok" });
+  } catch (error) {
+    return context.json({ error: error instanceof Error ? error.message : String(error) }, { status: 500 });
   }
 });
 
@@ -900,4 +910,59 @@ interface RawRequestContext {
   req: {
     raw: Request;
   };
+}
+
+async function renderUserFollowers(context: any, config: GatewayConfig, username: string): Promise<Response> {
+  const pageMarker = context.req.query("page");
+  const requestedPageNumber = context.req.query("page_number");
+  const isPageRequest = pageMarker != null;
+  if (isPageRequest && pageMarker !== "true") {
+    return context.json({ error: "invalid pagination" }, 400);
+  }
+
+  // The public ActivityStreams contract has a fixed page size.  Keeping the
+  // size out of client control makes page URLs stable across peers and releases.
+  const pageSize = 40;
+  const page = requestedPageNumber == null ? 1 : Number(requestedPageNumber);
+  if (!Number.isInteger(page) || page < 1 || (!isPageRequest && requestedPageNumber != null)) {
+    return context.json({ error: "invalid pagination" }, 400);
+  }
+
+  let data;
+  try {
+    data = await loadUserFollowers(config, username, page, pageSize);
+  } catch {
+    // A failed persistence read must never be rendered as an empty social graph.
+    return context.json({ error: "followers collection unavailable" }, 502);
+  }
+  if (data == null) return context.json({ error: "user actor not found" }, 404);
+
+  const id = data.followersUrl;
+  if (!isPageRequest) {
+    return activityJsonResponse({
+      "@context": "https://www.w3.org/ns/activitystreams",
+      type: "OrderedCollection",
+      id,
+      totalItems: data.totalItems,
+      ...(data.totalItems > 0 ? { first: `${id}?page=true` } : {}),
+    });
+  }
+
+  const totalPages = Math.ceil(data.totalItems / pageSize);
+  if (page > totalPages || totalPages === 0) {
+    return context.json({ error: "followers page not found" }, 404);
+  }
+  const pageId = page === 1
+    ? `${id}?page=true`
+    : `${id}?page=true&page_number=${page}`;
+  return activityJsonResponse({
+    "@context": "https://www.w3.org/ns/activitystreams",
+    type: "OrderedCollectionPage",
+    id: pageId,
+    partOf: id,
+    totalItems: data.totalItems,
+    orderedItems: data.actorIds,
+    ...(page > 1 ? { prev: `${id}?page=true&page_number=${page - 1}` } : {}),
+    ...(page < totalPages ? { next: `${id}?page=true&page_number=${page + 1}` } : {}),
+  });
 }

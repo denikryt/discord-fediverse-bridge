@@ -79,6 +79,16 @@ class UserActorResponse(BaseModel):
     header: UserActorMediaResponse | None
 
 
+class UserFollowersResponse(BaseModel):
+    """Expose one bounded page of public follower actor identities."""
+
+    followers_url: str
+    total_items: int
+    page: int
+    page_size: int
+    actor_ids: list[str]
+
+
 class CommunityActorResponse(BaseModel):
     slug: str
     actor_url: str
@@ -243,6 +253,32 @@ def create_internal_fedify_router(runtime: Runtime) -> APIRouter:
             ],
             avatar=media_payload(profile.avatar),
             header=media_payload(profile.header),
+        )
+
+    @router.get("/actors/users/{username}/followers", response_model=UserFollowersResponse)
+    def user_followers(
+        username: str,
+        response: Response,
+        page: int = 1,
+        page_size: int = 40,
+        authorization: str | None = Header(default=None),
+    ) -> UserFollowersResponse:
+        """Return one bounded page of accepted User Actor follower IDs."""
+        authorize(authorization)
+        no_store(response)
+        if page < 1 or page_size != 40:
+            raise HTTPException(status_code=400, detail="page must be positive and page_size must equal 40")
+        user = runtime.database.users.get_user_by_activitypub_username(username)
+        if user is None:
+            raise HTTPException(status_code=404, detail="User actor not found")
+        return UserFollowersResponse(
+            followers_url=user.followers_url,
+            total_items=runtime.database.user_actor_followers.count_accepted(user_id=user.id),
+            page=page,
+            page_size=page_size,
+            actor_ids=runtime.database.user_actor_followers.list_accepted_actor_ids(
+                user_id=user.id, offset=(page - 1) * page_size, limit=page_size
+            ),
         )
 
     def community_payload(row: object) -> CommunityActorResponse:

@@ -16,6 +16,7 @@ from .local_communities.runtime import LocalCommunityRuntime
 from .registration_service import RegistrationService
 from .profile_media import FileLock, ProfileMediaStore
 from .user_profiles import UserProfileService
+from .user_actor_followers import UserActorFollowService
 
 
 @dataclass(slots=True)
@@ -40,6 +41,7 @@ class Runtime:
     local_community_runtime: LocalCommunityRuntime
     profile_media_store: ProfileMediaStore
     user_profile_service: UserProfileService
+    user_actor_follow_service: UserActorFollowService
     deployment_state_lease: FileLock
 
     async def close(self) -> None:

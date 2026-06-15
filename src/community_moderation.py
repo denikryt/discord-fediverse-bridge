@@ -15,7 +15,7 @@ def find_local_community_actor_ban_for_event(
     runtime: Runtime,
 ) -> CommunityActorBan | None:
     """Return the effective global-first actor ban before inbound side effects."""
-    community_actor_id = getattr(event, "community_actor_id", None)
+    community_actor_id = getattr(event, "target_actor_id", None) or getattr(event, "community_actor_id", None)
     actor_url = getattr(event, "actor_id", None)
     if not community_actor_id or not actor_url:
         return None

@@ -50,11 +50,13 @@ export interface FollowAcceptedEvent {
 export interface LocalFollowRequestedObject {
   follow_activity_id: string;
   remote_inbox_url: string;
+  remote_shared_inbox_url: string | null;
 }
 
 export interface LocalFollowRequestedEvent {
   actor_id: string;
-  community_actor_id: string;
+  target_actor_kind: "community" | "user";
+  target_actor_id: string;
   delivery_id: string;
   event_type: "local.follow_requested";
   object: LocalFollowRequestedObject;
@@ -67,7 +69,8 @@ export interface LocalUnfollowRequestedObject {
 
 export interface LocalUnfollowRequestedEvent {
   actor_id: string;
-  community_actor_id: string;
+  target_actor_kind: "community" | "user";
+  target_actor_id: string;
   delivery_id: string;
   event_type: "local.unfollow_requested";
   object: LocalUnfollowRequestedObject;
@@ -79,6 +82,14 @@ export type InternalBridgeEvent =
   | FollowAcceptedEvent
   | LocalFollowRequestedEvent
   | LocalUnfollowRequestedEvent;
+
+export interface AcceptUserActorFollowRequest {
+  actorUsername: string;
+  actorUrl: string;
+  remoteActorId: string;
+  remoteInboxUrl: string;
+  followActivityId: string;
+}
 
 export interface PublishContentRequest {
   actorUsername: string;

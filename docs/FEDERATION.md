@@ -47,7 +47,7 @@ The gateway serves these ActivityPub actor categories:
 
 Actor documents provide stable identity and routing fields plus editable registered-user profile data. User `Person` actors expose immutable `preferredUsername`, editable `name` and escaped `summary`, optional `icon` and `image` objects backed by bridge-owned immutable media URLs, and up to four ordered `PropertyValue` attachments. Profile edits are visible when a peer re-fetches the actor; active `Update(Person)` delivery is not implemented in this stage.
 
-The project does not implement full actor collection behavior. Some collection routes exist so peers have stable URLs, but outbox and followers collections are minimal and are not a complete historical activity archive.
+Registered User Actor followers are auto-accepted and stored separately from local-community subscribers. Their canonical `/actors/{username}/followers` collection, with `/users/{username}/followers` as a compatibility alias, publicly exposes accepted remote actor IDs through bounded pages. User outboxes remain empty placeholders, and follower content delivery is deferred to later stages.
 
 ## Supported discovery
 

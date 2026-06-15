@@ -124,7 +124,8 @@ def _follow_payload(*, delivery_id: str, actor_id: str, community_actor_id: str)
         "event_type": "local.follow_requested",
         "delivery_id": delivery_id,
         "occurred_at": "2026-05-19T10:00:00Z",
-        "community_actor_id": community_actor_id,
+        "target_actor_kind": "community",
+        "target_actor_id": community_actor_id,
         "actor_id": actor_id,
         "object": {
             "follow_activity_id": delivery_id,
@@ -139,7 +140,8 @@ def _unfollow_payload(*, delivery_id: str, actor_id: str, community_actor_id: st
         "event_type": "local.unfollow_requested",
         "delivery_id": delivery_id,
         "occurred_at": "2026-05-19T10:00:00Z",
-        "community_actor_id": community_actor_id,
+        "target_actor_kind": "community",
+        "target_actor_id": community_actor_id,
         "actor_id": actor_id,
         "object": {
             "follow_activity_id": "https://example.com/activities/follow/original",

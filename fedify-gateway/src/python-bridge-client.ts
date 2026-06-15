@@ -28,6 +28,15 @@ export interface RegisteredUserRow {
   header: UserProfileMediaRow | null;
 }
 
+
+export interface UserFollowersRow {
+  followersUrl: string;
+  totalItems: number;
+  page: number;
+  pageSize: number;
+  actorIds: string[];
+}
+
 export interface LocalCommunityRow {
   slug: string;
   actorUrl: string;
@@ -127,6 +136,23 @@ export class PythonBridgeClient implements PythonBridgeReadClient {
       }),
       avatar: nullableMedia(row, "avatar"),
       header: nullableMedia(row, "header"),
+    };
+  }
+
+  async loadUserFollowers(username: string, page: number, pageSize: number): Promise<UserFollowersRow | null> {
+    const row = await this.fetchJson<Record<string, unknown>>(
+      `/internal/fedify/actors/users/${encodeURIComponent(username)}/followers?page=${page}&page_size=${pageSize}`,
+      { notFound: true },
+    );
+    return row == null ? null : {
+      followersUrl: requiredString(row, "followers_url"),
+      totalItems: requiredNumber(row, "total_items"),
+      page: requiredNumber(row, "page"),
+      pageSize: requiredNumber(row, "page_size"),
+      actorIds: requiredArray(row, "actor_ids").map((value) => {
+        if (typeof value !== "string") throw new Error("actor_ids must contain strings");
+        return value;
+      }),
     };
   }
 
@@ -311,6 +337,9 @@ export async function loadBridgeActorKey(config: GatewayConfig): Promise<BridgeA
 }
 export async function loadRegisteredUserByUsername(config: GatewayConfig, username: string): Promise<RegisteredUserRow | null> {
   return await getPythonBridgeClient(config).loadRegisteredUserByUsername(username);
+}
+export async function loadUserFollowers(config: GatewayConfig, username: string, page: number, pageSize: number): Promise<UserFollowersRow | null> {
+  return await getPythonBridgeClient(config).loadUserFollowers(username, page, pageSize);
 }
 export async function loadLocalCommunityBySlug(config: GatewayConfig, slug: string): Promise<LocalCommunityRow | null> {
   return await getPythonBridgeClient(config).loadLocalCommunityBySlug(slug);

@@ -27,6 +27,7 @@ from .project_version import APP_VERSION
 from .runtime import Runtime
 from .profile_media import FileLock, ProfileMediaStore
 from .user_profiles import UserProfileService
+from .user_actor_followers import UserActorFollowService
 from .db.backup import recover_incomplete_restore
 
 logger = logging.getLogger(__name__)
@@ -153,6 +154,9 @@ def _build_live_runtime(settings: Settings, deployment_lease: FileLock) -> Runti
     # discord_fanout is injected late — bot depends on community_runtime existing first.
     community_runtime.bot = bot
     local_community_runtime.bot = bot
+    user_actor_follow_service = UserActorFollowService(
+        database=database, fedify_gateway=fedify_gateway, bot=bot, settings=settings
+    )
     runtime = Runtime(
         settings=settings,
         database=database,
@@ -166,6 +170,7 @@ def _build_live_runtime(settings: Settings, deployment_lease: FileLock) -> Runti
         local_community_runtime=local_community_runtime,
         profile_media_store=media_store,
         user_profile_service=user_profile_service,
+        user_actor_follow_service=user_actor_follow_service,
         deployment_state_lease=deployment_lease,
     )
     # Inject runtime into bot so edit/delete handlers can call AP gateway
