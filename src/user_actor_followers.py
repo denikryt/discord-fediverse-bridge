@@ -6,7 +6,6 @@ import logging
 from urllib.parse import urlparse
 
 from .inbound_activity_outcomes import InboundActivityOutcome
-from .user_bans import UserBanService
 
 logger = logging.getLogger(__name__)
 
@@ -14,12 +13,11 @@ logger = logging.getLogger(__name__)
 class UserActorFollowService:
     """Own User Actor follower persistence, Accept delivery, and owner notification."""
 
-    def __init__(self, *, database: object, fedify_gateway: object, bot: object, settings: object) -> None:
+    def __init__(self, *, database: object, fedify_gateway: object, bot: object) -> None:
         """Bind persistence and outer delivery boundaries used by the lifecycle."""
         self.database = database
         self.fedify_gateway = fedify_gateway
         self.bot = bot
-        self.bans = UserBanService(database=database, settings=settings)
 
     async def handle_follow(
         self,
@@ -36,10 +34,6 @@ class UserActorFollowService:
         user = self.database.users.get_user_by_actor_url(target_actor_id)
         if user is None:
             return HandlerResult("skipped", InboundActivityOutcome.IGNORED_UNKNOWN_FOLLOW, "unknown local user actor")
-        decision = self.bans.check_global_activitypub_actor(actor_url=remote_actor_id, actor_handle=None)
-        if decision.banned:
-            return HandlerResult("skipped", InboundActivityOutcome.IGNORED_BY_BAN, "actor is globally banned")
-
         # The immediate transaction makes ledger ownership and relationship refresh
         # one atomic decision under concurrent duplicate deliveries.
         try:

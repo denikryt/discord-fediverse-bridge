@@ -9,12 +9,17 @@ from __future__ import annotations
 import logging
 from dataclasses import dataclass
 
-from .community_moderation import find_local_community_actor_ban_for_event
+from .community_moderation import (
+    find_global_activitypub_actor_ban_for_event,
+    find_local_community_actor_ban_for_event,
+)
 from .inbound_activity_outcomes import InboundActivityOutcome
 from .activitypub_models import (
     ActivityPubEvent,
     BridgeGatewayEvent,
     FollowLifecycleEvent,
+    LocalFollowRequestEvent,
+    LocalUnfollowRequestEvent,
 )
 from .community_sync.inbound_mapping import get_accepted_subscriptions
 from .local_community_lifecycle import evaluate_local_community_lifecycle
@@ -59,24 +64,18 @@ async def dispatch_activitypub_event(
         )
         return HandlerResult(status="skipped", outcome=outcome, detail=detail)
 
+    global_ban = find_global_activitypub_actor_ban_for_event(event, runtime)
+    if global_ban is not None:
+        return _banned_actor_result(event, global_ban, scope="global")
+
     disabled = _skip_disabled_local_community(event, runtime)
     if disabled is not None:
         return disabled
 
-    ban = None if getattr(event, "target_actor_kind", "community") == "user" else find_local_community_actor_ban_for_event(event, runtime)
-    if ban is not None:
-        actor_handle = getattr(ban, "actor_handle", "unknown")
-        actor_url = getattr(event, "actor_id", None)
-        logger.info(
-            "Skipping inbound ActivityPub activity from banned actor "
-            "community=%s actor_handle=%s actor_url=%s event_type=%s delivery_id=%s",
-            getattr(event, "community_actor_id", None),
-            actor_handle,
-            actor_url,
-            getattr(event, "event_type", None),
-            getattr(event, "delivery_id", None),
-        )
-        return HandlerResult(status="skipped", outcome=InboundActivityOutcome.IGNORED_BY_BAN, detail="actor is banned for this community")
+    if _event_target_actor_kind(event) == "community":
+        community_ban = find_local_community_actor_ban_for_event(event, runtime)
+        if community_ban is not None:
+            return _banned_actor_result(event, community_ban, scope="community")
 
     # Keep dispatch explicit so supported inbound event types stay obvious.
     if event.event_type == "post.created":
@@ -132,9 +131,46 @@ async def dispatch_activitypub_event(
 
 
 
+def _event_target_actor_kind(event: BridgeGatewayEvent) -> str:
+    """Return the explicit local target kind for lifecycle events.
+
+    Content and outbound-follow acceptance events remain community events by
+    schema. Inbound Follow and Undo(Follow) carry the discriminant explicitly.
+    """
+    if isinstance(event, (LocalFollowRequestEvent, LocalUnfollowRequestEvent)):
+        return event.target_actor_kind
+    return "community"
+
+
+def _banned_actor_result(
+    event: BridgeGatewayEvent, ban: object, *, scope: str
+) -> HandlerResult:
+    """Render one uniform moderation result after the relevant policy check."""
+    logger.info(
+        "Skipping inbound ActivityPub activity from banned actor "
+        "scope=%s community=%s actor_handle=%s actor_url=%s event_type=%s delivery_id=%s",
+        scope,
+        getattr(event, "community_actor_id", None),
+        getattr(ban, "actor_handle", "unknown"),
+        getattr(event, "actor_id", None),
+        getattr(event, "event_type", None),
+        getattr(event, "delivery_id", None),
+    )
+    detail = (
+        "actor is globally banned"
+        if scope == "global"
+        else "actor is banned for this community"
+    )
+    return HandlerResult(
+        status="skipped",
+        outcome=InboundActivityOutcome.IGNORED_BY_BAN,
+        detail=detail,
+    )
+
+
 def _disabled_local_community_for_event(event: BridgeGatewayEvent, runtime: Runtime) -> object | None:
     """Return disabled target local community for one inbound event, if known."""
-    if getattr(event, "target_actor_kind", "community") != "community":
+    if _event_target_actor_kind(event) != "community":
         return None
     community_actor_id = getattr(event, "target_actor_id", None) or getattr(event, "community_actor_id", None)
     if not community_actor_id:

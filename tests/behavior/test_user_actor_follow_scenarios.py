@@ -72,7 +72,6 @@ def follow_runtime(tmp_path):
         database=database,
         fedify_gateway=gateway,
         bot=bot,
-        settings=SimpleNamespace(normalized_public_base_url="https://bridge.example"),
     )
     runtime = SimpleNamespace(
         database=database,

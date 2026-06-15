@@ -155,7 +155,7 @@ def _build_live_runtime(settings: Settings, deployment_lease: FileLock) -> Runti
     community_runtime.bot = bot
     local_community_runtime.bot = bot
     user_actor_follow_service = UserActorFollowService(
-        database=database, fedify_gateway=fedify_gateway, bot=bot, settings=settings
+        database=database, fedify_gateway=fedify_gateway, bot=bot
     )
     runtime = Runtime(
         settings=settings,

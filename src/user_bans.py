@@ -116,18 +116,31 @@ class UserBanService:
         )
         return self._decision(ban)
 
+    def check_local_community_activitypub_actor(
+        self, *, local_community_id: int, actor_url: str, actor_handle: str | None
+    ) -> BanDecision:
+        """Apply only one local-community-scoped ActivityPub actor ban."""
+        ban = self.database.community_actor_bans.find_active_ban_for_actor(
+            local_community_id=local_community_id,
+            actor_url=actor_url,
+            actor_handle=actor_handle,
+        )
+        return self._decision(ban)
+
     def check_activitypub_actor(
         self, *, local_community_id: int, actor_url: str, actor_handle: str | None
     ) -> BanDecision:
-        """Apply URL-first/handle-fallback matching globally then per community."""
-        ban = self.database.community_actor_bans.find_active_ban_for_actor(
-            local_community_id=None, actor_url=actor_url, actor_handle=actor_handle
+        """Compatibility wrapper applying global-first then community moderation."""
+        decision = self.check_global_activitypub_actor(
+            actor_url=actor_url, actor_handle=actor_handle
         )
-        if ban is None:
-            ban = self.database.community_actor_bans.find_active_ban_for_actor(
-                local_community_id=local_community_id, actor_url=actor_url, actor_handle=actor_handle
-            )
-        return self._decision(ban)
+        if decision.banned:
+            return decision
+        return self.check_local_community_activitypub_actor(
+            local_community_id=local_community_id,
+            actor_url=actor_url,
+            actor_handle=actor_handle,
+        )
 
     def _decision(self, ban: object | None, *, local_community: object | None = None) -> BanDecision:
         """Convert one persisted row into a transport-independent policy result."""
