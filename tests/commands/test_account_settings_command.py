@@ -384,3 +384,135 @@ async def test_profile_mutation_response_separates_local_success_from_remote_sta
     )
 
     interaction.edit_original_response.assert_awaited_once_with(content=expected)
+
+
+def _registered_account_settings_group(database, personal_feed_service):
+    """Register the real command callbacks and return the captured command group."""
+    from src.commands.account_settings import register
+
+    class Tree:
+        command = None
+
+        def add_command(self, command):
+            self.command = command
+
+    tree = Tree()
+    register(
+        tree,
+        database,
+        SimpleNamespace(),
+        SimpleNamespace(),
+        SimpleNamespace(),
+        personal_feed_service,
+    )
+    return tree.command
+
+
+@pytest.mark.asyncio
+async def test_feed_view_callback_reports_unbound_and_bound_state(tmp_path, monkeypatch) -> None:
+    """The real feed-view callback reads an existing two-entity binding row."""
+    from unittest.mock import AsyncMock
+
+    from src.commands import account_settings
+    from src.db import Database
+    from src.models import User
+    from src.personal_feeds import PersonalFeedService
+
+    database = Database(f"sqlite:///{tmp_path / 'bridge.sqlite3'}")
+    database.create_all()
+    database.migrate()
+    with database.session() as session:
+        session.add(
+            User(
+                discord_user_id="7",
+                activitypub_username="alice",
+                actor_url="https://bridge.test/users/alice",
+                inbox_url="https://bridge.test/users/alice/inbox",
+                outbox_url="https://bridge.test/users/alice/outbox",
+                followers_url="https://bridge.test/users/alice/followers",
+                public_key_pem="public",
+                private_key_pem="private",
+            )
+        )
+    user = database.users.get_user_by_discord_user_id("7")
+    service = PersonalFeedService(database)
+    group = _registered_account_settings_group(database, service)
+    command = group.get_command("feed-view")
+    interaction = SimpleNamespace(
+        user=SimpleNamespace(id=7),
+        response=SimpleNamespace(send_message=AsyncMock()),
+    )
+
+    async def authorized(*_args, **_kwargs):
+        return user
+
+    monkeypatch.setattr(account_settings, "_resolve_authorized_user", authorized)
+
+    await command.callback(interaction)
+    interaction.response.send_message.assert_awaited_once_with(
+        "No personal-feed channel is bound.", ephemeral=True
+    )
+
+    interaction.response.send_message.reset_mock()
+    assert service.bind_or_move("7", 100, 200).status == "bound"
+    await command.callback(interaction)
+    interaction.response.send_message.assert_awaited_once_with(
+        "Personal feed: <#200> (guild `100`).", ephemeral=True
+    )
+    database.close()
+
+
+def test_feed_bind_registration_allows_only_guild_text_channels() -> None:
+    """The real application-command option excludes announcement channels."""
+    import discord
+
+    group = _registered_account_settings_group(
+        SimpleNamespace(), SimpleNamespace()
+    )
+    command = group.get_command("feed-bind")
+    parameter = command.parameters[0]
+
+    assert parameter.name == "channel"
+    assert parameter.type is discord.AppCommandOptionType.channel
+    assert parameter.channel_types == [discord.ChannelType.text]
+    assert discord.ChannelType.news not in parameter.channel_types
+
+
+@pytest.mark.asyncio
+async def test_feed_bind_forged_announcement_channel_is_rejected_before_mutation(
+    monkeypatch,
+) -> None:
+    """Runtime validation remains authoritative when Discord metadata is bypassed."""
+    import discord
+    from unittest.mock import AsyncMock, Mock
+
+    from src.commands import account_settings
+
+    service = Mock()
+    group = _registered_account_settings_group(SimpleNamespace(), service)
+    command = group.get_command("feed-bind")
+    interaction = SimpleNamespace(
+        user=SimpleNamespace(
+            id=7,
+            guild_permissions=SimpleNamespace(manage_guild=True),
+        ),
+        guild=SimpleNamespace(id=100),
+        response=SimpleNamespace(send_message=AsyncMock(), defer=AsyncMock()),
+        edit_original_response=AsyncMock(),
+    )
+    announcement = object.__new__(discord.TextChannel)
+    announcement._type = discord.ChannelType.news.value
+
+    async def authorized(*_args, **_kwargs):
+        return SimpleNamespace(id=11)
+
+    monkeypatch.setattr(account_settings, "_resolve_authorized_user", authorized)
+
+    await command.callback(interaction, announcement)
+
+    interaction.response.send_message.assert_awaited_once_with(
+        "Choose an ordinary text channel in this server; announcement channels are not supported.",
+        ephemeral=True,
+    )
+    interaction.response.defer.assert_not_awaited()
+    service.bind_or_move.assert_not_called()

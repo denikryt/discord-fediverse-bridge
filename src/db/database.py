@@ -39,6 +39,7 @@ from .repositories import (
     ProfileMediaRepository,
     UserActorDeliveryRepository,
     ContentMutationRepository,
+    PersonalFeedBindingRepository,
 )
 
 
@@ -77,6 +78,7 @@ class Database:
         self.profile_media = ProfileMediaRepository(self.session)
         self.user_actor_deliveries = UserActorDeliveryRepository(self.session, self.immediate_session)
         self.content_mutations = ContentMutationRepository(self.session, self.immediate_session)
+        self.personal_feed_bindings = PersonalFeedBindingRepository(self.session)
         self.registration_sessions = RegistrationSessionRepository(self.session)
         self.message_mappings = MessageMappingRepository(self.session)
         self.activitypub_objects = ActivityPubObjectRepository(self.session)

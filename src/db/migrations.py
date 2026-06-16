@@ -11,7 +11,7 @@ from __future__ import annotations
 from sqlalchemy import text
 from sqlalchemy.engine import Connection, Engine
 
-from ..models import Base, BridgeActorKey, BridgePolicyEntry, CommunityActorBan, GuildInvitePublication, LocalCommunityMessageSurface, LocalCommunityThreadSurface, ManagementAuditEvent, ProfileMediaAsset, UserProfileField, UserActorFollower, UserActorFollowActivityId, UserActorOutboundSource, UserActorOutboundDelivery, UserActorOutboundDeliveryFollower, UserActorOutboundSourceMedia, UserActorContentMutation, PublishedActivityObject
+from ..models import Base, BridgeActorKey, BridgePolicyEntry, CommunityActorBan, GuildInvitePublication, LocalCommunityMessageSurface, LocalCommunityThreadSurface, ManagementAuditEvent, ProfileMediaAsset, UserProfileField, UserActorFollower, UserActorFollowActivityId, UserActorOutboundSource, UserActorOutboundDelivery, UserActorOutboundDeliveryFollower, UserActorOutboundSourceMedia, UserActorContentMutation, PublishedActivityObject, PersonalFeedBinding
 
 
 def migrate(engine: Engine) -> None:
@@ -77,6 +77,7 @@ def migrate(engine: Engine) -> None:
             UserActorOutboundDeliveryFollower.__table__,
             UserActorOutboundSourceMedia.__table__,
             UserActorContentMutation.__table__,
+            PersonalFeedBinding.__table__,
         ],
     )
     with engine.connect() as conn:

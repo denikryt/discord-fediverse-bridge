@@ -20,6 +20,7 @@ from .user_bans import UserBanService
 
 if TYPE_CHECKING:
     from .user_profiles import UserProfileService
+    from .personal_feeds import PersonalFeedService
 
 logger = logging.getLogger(__name__)
 
@@ -39,6 +40,7 @@ class BridgeBot(discord.Client):
         event_router: DiscordEventRouter,
         bridge_policy_service: BridgePolicyService,
         user_profile_service: UserProfileService | None = None,
+        personal_feed_service: PersonalFeedService | None = None,
     ) -> None:
         """Initialise the bot with shared services and Discord intent configuration."""
         intents = discord.Intents.default()
@@ -52,6 +54,7 @@ class BridgeBot(discord.Client):
         self.event_router = event_router
         self.bridge_policy_service = bridge_policy_service
         self.user_profile_service = user_profile_service
+        self.personal_feed_service = personal_feed_service
         # Keep the current runtime reachable for edit/delete paths that still
         # belong only to the remote-subscription mode today.
         self.community_runtime = event_router.community_runtime
@@ -87,7 +90,7 @@ class BridgeBot(discord.Client):
         remove_guild_invite.register(self.tree, self.database, self.settings, self.bridge_policy_service)
         bridge_policy.register(self.tree, self.database, self.bridge_policy_service, self.user_ban_service)
         if self.user_profile_service is not None:
-            account_settings.register(self.tree, self.database, self.settings, self.bridge_policy_service, self.user_profile_service)
+            account_settings.register(self.tree, self.database, self.settings, self.bridge_policy_service, self.user_profile_service, self.personal_feed_service)
         await self.tree.sync()
 
     async def on_ready(self) -> None:
@@ -154,6 +157,16 @@ class BridgeBot(discord.Client):
             return
         if message.author.bot:
             return
+        # Stage 6 recognizes ordinary guild-text personal-feed roots before the
+        # existing thread-only return, but deliberately performs no publication.
+        from .discord_channel_types import is_normal_guild_text_channel
+        if is_normal_guild_text_channel(message.channel):
+            guild_id = getattr(getattr(message, "guild", None), "id", None)
+            binding = self.event_router.resolve_personal_feed_root(guild_id, message.channel.id) if guild_id else None
+            if binding is not None:
+                # Both owner and non-owner roots are no-ops until Stage 7; returning
+                # here prevents leakage into community routing or bot responses.
+                return
         if not isinstance(message.channel, discord.Thread):
             return
         if message.channel.parent_id is None:

@@ -120,3 +120,11 @@ This document explains the major runtime traces through the bridge: user/platfor
 3. Inbound ActivityPub deliveries targeting a disabled local community are acknowledged and routed through the existing skipped result path before domain mutation, fanout, subscriber creation, or outbound federation.
 4. Discord-originated post, comment, edit, delete, and local subscription paths resolve the local community and stop before publish, persistence, relay, or Discord fanout when status is disabled.
 5. Existing actor/object routes, content rows, subscribers, and Discord surfaces remain readable and unchanged; re-enabling returns existing subscriber rows to normal fanout behavior.
+
+## Personal-feed binding and Stage 6 routing flow
+
+1. `/account-settings feed-bind` resolves the invoking registered user, checks the existing guild policy, requires Discord Manage Server permission, and accepts only protocol `GUILD_TEXT` channels.
+2. The command snapshots the caller's current binding and submits one cancellation-safe synchronous mutation to `PersonalFeedService`.
+3. The service acquires SQLite's writer reservation, rechecks user/guild/channel uniqueness and cross-mode channel ownership, then inserts or compare-and-set moves the single binding.
+4. `/account-settings feed-view` reads the durable assignment; `feed-unbind` removes only the caller's current assignment. Historical publication/thread/message mappings are not modified.
+5. `BridgeBot.on_message` recognizes owner-authored root messages in an active ordinary text-channel binding before existing forum routing, but Stage 6 returns without publication or any other side effect. Non-owner roots, announcement channels, stale bindings, threads, DMs, and unrelated channels do not classify as personal-feed roots.

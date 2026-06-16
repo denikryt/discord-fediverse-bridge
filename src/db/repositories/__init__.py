@@ -28,6 +28,7 @@ from .discord_fanout_groups import DiscordFanoutGroupRepository
 from .discord_directory import DiscordDirectoryRepository
 from .guild_invite_publications import GuildInvitePublicationRepository
 from .user_actor_followers import UserActorFollowerRepository
+from .personal_feed_bindings import PersonalFeedBindingRepository
 __all__ = [
     "BridgeActorKeyRepository",
     "CommunityActorBanRepository",
@@ -52,6 +53,7 @@ __all__ = [
     "DiscordDirectoryRepository",
     "GuildInvitePublicationRepository",
     "UserActorFollowerRepository",
+    "PersonalFeedBindingRepository",
     "ContentMutationRepository",
 ]
 

@@ -15,10 +15,33 @@ from ..config import Settings
 from ..db import Database
 from ..user_actor_delivery import ProfileFanoutSummary
 from ..user_profiles import ProfileMutationResult, UserProfileService, UserProfileValidationError
+from ..personal_feeds import PersonalFeedService
+from ..discord_channel_types import is_normal_guild_text_channel
 from .guild_guard import REGISTERED_GUILD_COMMAND_ACCESS, reject_if_command_access_denied
 
 logger = logging.getLogger(__name__)
 T = TypeVar("T")
+
+
+class GuildTextChannelTransformer(app_commands.Transformer):
+    """Advertise and accept only Discord protocol GUILD_TEXT channels."""
+
+    @property
+    def type(self) -> discord.AppCommandOptionType:
+        return discord.AppCommandOptionType.channel
+
+    @property
+    def channel_types(self) -> list[discord.ChannelType]:
+        return [discord.ChannelType.text]
+
+    async def transform(
+        self, interaction: discord.Interaction, value: object
+    ) -> discord.TextChannel:
+        if not is_normal_guild_text_channel(value):
+            raise app_commands.TransformerError(
+                value, discord.AppCommandOptionType.channel, self
+            )
+        return value
 
 
 async def _run_owned_sync_mutation(operation: Callable[[], T]) -> T:
@@ -253,7 +276,7 @@ class ProfileMediaModal(discord.ui.Modal):
         )
 
 
-def register(tree: app_commands.CommandTree, database: Database, settings: Settings, policy_service: BridgePolicyService, service: UserProfileService) -> None:
+def register(tree: app_commands.CommandTree, database: Database, settings: Settings, policy_service: BridgePolicyService, service: UserProfileService, personal_feed_service: PersonalFeedService | None = None) -> None:
     """Register the registered-user-only ``/account-settings`` command family."""
     group = app_commands.Group(name="account-settings", description="Manage your ActivityPub profile")
 
@@ -323,5 +346,67 @@ def register(tree: app_commands.CommandTree, database: Database, settings: Setti
     @group.command(name="clear-header", description="Remove your profile header")
     async def clear_header(interaction: discord.Interaction) -> None:
         await clear_slot(interaction, "header")
+
+    @group.command(name="feed-view", description="View your personal-feed channel binding")
+    async def feed_view(interaction: discord.Interaction) -> None:
+        """Show the caller's current binding using durable IDs when cache data is absent."""
+        user = await _resolve_authorized_user(interaction, database=database, settings=settings, policy_service=policy_service)
+        if user is None or personal_feed_service is None:
+            return
+        binding = personal_feed_service.get_by_discord_user_id(str(interaction.user.id))
+        content = "No personal-feed channel is bound." if binding is None else f"Personal feed: <#{binding.discord_channel_id}> (guild `{binding.discord_guild_id}`)."
+        await interaction.response.send_message(content, ephemeral=True)
+
+    @group.command(name="feed-bind", description="Bind or move your personal-feed channel")
+    @app_commands.describe(channel="An ordinary guild text channel")
+    async def feed_bind(
+        interaction: discord.Interaction,
+        channel: app_commands.Transform[discord.TextChannel, GuildTextChannelTransformer],
+    ) -> None:
+        """Validate Discord authority and atomically bind one ordinary text channel."""
+        user = await _resolve_authorized_user(interaction, database=database, settings=settings, policy_service=policy_service)
+        if user is None or personal_feed_service is None:
+            return
+        guild = interaction.guild
+        member = interaction.user
+        if guild is None or not getattr(getattr(member, "guild_permissions", None), "manage_guild", False):
+            await interaction.response.send_message("You must have Manage Server permission to bind a personal feed.", ephemeral=True)
+            return
+        if not is_normal_guild_text_channel(channel) or channel.guild.id != guild.id:
+            await interaction.response.send_message("Choose an ordinary text channel in this server; announcement channels are not supported.", ephemeral=True)
+            return
+        # Snapshot the current row before worker submission. The service uses
+        # this compare-and-set token so a delayed first-bind cannot overwrite
+        # another request that acquired SQLite's writer reservation first.
+        expected = personal_feed_service.get_by_discord_user_id(str(interaction.user.id))
+        await interaction.response.defer(ephemeral=True, thinking=True)
+        result = await _run_owned_sync_mutation(
+            lambda: personal_feed_service.bind_or_move(
+                str(interaction.user.id),
+                guild.id,
+                channel.id,
+                expected_binding_id=None if expected is None else expected.id,
+            )
+        )
+        messages = {
+            "bound": "Personal-feed channel bound.",
+            "moved": "Personal-feed channel moved.",
+            "already_bound": "That channel is already your personal feed.",
+            "guild_conflict": "This server already has a personal-feed binding.",
+            "channel_conflict": "That channel is already owned by another bridge mode.",
+            "binding_changed": "Your personal-feed binding changed while this request was running. Try again.",
+        }
+        await interaction.edit_original_response(content=messages.get(result.status, "The personal-feed binding could not be changed."))
+
+    @group.command(name="feed-unbind", description="Remove your current personal-feed binding")
+    async def feed_unbind(interaction: discord.Interaction) -> None:
+        """Remove only the caller's current binding through the owned sync worker."""
+        user = await _resolve_authorized_user(interaction, database=database, settings=settings, policy_service=policy_service)
+        if user is None or personal_feed_service is None:
+            return
+        await interaction.response.defer(ephemeral=True, thinking=True)
+        result = await _run_owned_sync_mutation(lambda: personal_feed_service.unbind(str(interaction.user.id)))
+        content = "Personal-feed binding removed." if result.status == "unbound" else "No personal-feed channel is bound."
+        await interaction.edit_original_response(content=content)
 
     tree.add_command(group)

@@ -24,3 +24,11 @@ Stage 5 makes `LocalSubscriber` forums full create/edit/delete local-community p
 Primary files: `src/commands/create_community.py`, `src/operations/create_community.py`, `src/local_communities/service.py`, `src/local_communities/runtime.py`, `src/local_communities/federation_fanout.py`, `src/local_communities/activitypub_renderers.py`, `fedify-gateway/src/actor-store.ts`, `fedify-gateway/src/server.ts`, and `fedify-gateway/src/federation-outbound.ts`.
 
 `src/local_communities/` implements Discord forum channels exposed as local ActivityPub Group actors. It does not implement remote Lemmy subscription binding.
+
+## Personal-feed control-plane mode
+
+A registered local User Actor may own one Discord guild channel assignment for a future personal federated feed. Stage 6 stores only the assignment and classifies eligible root-message events; it does not publish ActivityPub content.
+
+The binding is a separate bridge mode, not a remote subscription, local community, local subscriber, or token-linked channel. Database uniqueness enforces one binding per user, guild, and channel. Bind and move operations require the invoking registered user to have Discord Manage Server permission in the target guild, require an ordinary protocol `GUILD_TEXT` channel, and reject channels already owned by another supported bridge mode. Unbind and move preserve historical publication and message mappings for later stages.
+
+`src/personal_feeds.py` owns binding mutations and active-binding lookup. `src/discord_event_router.py` exposes classification and current-channel comparison without publishing, replying, editing, deleting, or creating threads.

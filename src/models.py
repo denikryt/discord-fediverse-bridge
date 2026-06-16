@@ -221,6 +221,26 @@ class User(Base):
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, onupdate=utcnow, nullable=False)
 
 
+class PersonalFeedBinding(Base):
+    """Persist the single current Discord text-channel binding for one User Actor."""
+
+    __tablename__ = "personal_feed_bindings"
+    __table_args__ = (
+        UniqueConstraint("user_id"),
+        UniqueConstraint("discord_guild_id"),
+        UniqueConstraint("discord_channel_id"),
+        CheckConstraint("discord_guild_id > 0", name="ck_personal_feed_guild_positive"),
+        CheckConstraint("discord_channel_id > 0", name="ck_personal_feed_channel_positive"),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    user_id: Mapped[int] = mapped_column(ForeignKey("users.id", ondelete="CASCADE"), nullable=False)
+    discord_guild_id: Mapped[int] = mapped_column(Integer, nullable=False)
+    discord_channel_id: Mapped[int] = mapped_column(Integer, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, nullable=False)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, onupdate=utcnow, nullable=False)
+
+
 class UserActorFollower(Base):
     """Persist one accepted remote follower relationship for a local User Actor."""
 

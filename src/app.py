@@ -30,6 +30,7 @@ from .user_profiles import UserProfileService
 from .user_actor_followers import UserActorFollowService
 from .user_actor_delivery import UserActorDeliveryService
 from .user_actor_delivery_worker import UserActorDeliveryWorker
+from .personal_feeds import PersonalFeedService
 from .db.backup import recover_incomplete_restore
 
 logger = logging.getLogger(__name__)
@@ -150,11 +151,13 @@ def _build_live_runtime(settings: Settings, deployment_lease: FileLock) -> Runti
         database=database,
         content_publish_service=content_publish_service,
     )
+    personal_feed_service = PersonalFeedService(database)
     event_router = DiscordEventRouter(
         database=database,
         community_runtime=community_runtime,
         local_community_runtime=local_community_runtime,
         bridge_policy_service=bridge_policy_service,
+        personal_feed_service=personal_feed_service,
     )
     bot = BridgeBot(
         settings=settings,
@@ -163,6 +166,7 @@ def _build_live_runtime(settings: Settings, deployment_lease: FileLock) -> Runti
         event_router=event_router,
         bridge_policy_service=bridge_policy_service,
         user_profile_service=user_profile_service,
+        personal_feed_service=personal_feed_service,
     )
     discord_fanout = DiscordFanout(bot=bot, mutation_tracker=bot, database=database, policy_service=bridge_policy_service)
     community_runtime.discord_fanout = discord_fanout

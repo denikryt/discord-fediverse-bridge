@@ -12,6 +12,7 @@ from .bridge_policy import BridgePolicyService
 from .community_sync.runtime import CommunityRuntime
 from .local_communities.runtime import LocalCommunityRuntime
 from .local_communities.participant_routing import resolve_local_community_source_for_forum
+from .personal_feeds import PersonalFeedBindingView, PersonalFeedService
 
 
 class DiscordEventRouter:
@@ -24,16 +25,30 @@ class DiscordEventRouter:
         community_runtime: CommunityRuntime,
         local_community_runtime: LocalCommunityRuntime,
         bridge_policy_service: BridgePolicyService,
+        personal_feed_service: PersonalFeedService | None = None,
     ) -> None:
         """Initialise the router with the runtimes for both bridge modes."""
         self.database = database
         self.community_runtime = community_runtime
         self.local_community_runtime = local_community_runtime
         self.bridge_policy_service = bridge_policy_service
+        # Default construction preserves direct test/runtime builders while the
+        # production composition root injects the shared service explicitly.
+        self.personal_feed_service = personal_feed_service or PersonalFeedService(database)
 
     def _is_guild_allowed(self, guild_id: int | str | None) -> bool:
         """Evaluate one Discord event against the current guild policy."""
         return self.bridge_policy_service.is_discord_guild_allowed(guild_id)
+
+    def resolve_personal_feed_root(self, guild_id: int, channel_id: int) -> PersonalFeedBindingView | None:
+        """Resolve an allowed guild/channel pair to its current personal-feed owner."""
+        if not self._is_guild_allowed(guild_id):
+            return None
+        return self.personal_feed_service.resolve_root_binding(guild_id, channel_id)
+
+    def is_active_personal_feed_channel(self, user_id: int, channel_id: int) -> bool:
+        """Expose the durable current-channel comparison required by later stages."""
+        return self.personal_feed_service.is_active_personal_feed_channel(user_id, channel_id)
 
     def is_local_community_forum(self, forum_channel_id: int | None) -> bool:
         """Return whether one forum is a local-community create source.
