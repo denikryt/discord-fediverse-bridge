@@ -685,7 +685,7 @@ app.post("/update", async (context) => {
   }
 
   try {
-    await updateContent(fedify, config, {
+    const result = await updateContent(fedify, config, {
       actorUsername: payload.actorUsername,
       communityActorUrl: payload.communityActorUrl,
       apObjectId: payload.apObjectId,
@@ -702,8 +702,13 @@ app.post("/update", async (context) => {
       targetInboxUrls: Array.isArray(payload.targetInboxUrls)
         ? payload.targetInboxUrls.filter((value): value is string => typeof value === "string")
         : null,
+      operationId: typeof payload.operationId === "string" ? payload.operationId : null,
+      activityId: typeof payload.activityId === "string" ? payload.activityId : null,
+      mutationTimestamp: typeof payload.mutationTimestamp === "string" ? payload.mutationTimestamp : null,
+      expectedRevision: typeof payload.expectedRevision === "number" ? payload.expectedRevision : null,
+      nextRevision: typeof payload.nextRevision === "number" ? payload.nextRevision : null,
     });
-    return context.json({ status: "ok" });
+    return context.json(result);
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
     return context.json({ error: message }, { status: 500 });
@@ -734,15 +739,20 @@ app.post("/delete", async (context) => {
   }
 
   try {
-    await deleteContent(fedify, config, {
+    const result = await deleteContent(fedify, config, {
       actorUsername: payload.actorUsername,
       communityActorUrl: payload.communityActorUrl,
       apObjectId: payload.apObjectId,
       targetInboxUrls: Array.isArray(payload.targetInboxUrls)
         ? payload.targetInboxUrls.filter((value): value is string => typeof value === "string")
         : null,
+      operationId: typeof payload.operationId === "string" ? payload.operationId : null,
+      activityId: typeof payload.activityId === "string" ? payload.activityId : null,
+      mutationTimestamp: typeof payload.mutationTimestamp === "string" ? payload.mutationTimestamp : null,
+      expectedRevision: typeof payload.expectedRevision === "number" ? payload.expectedRevision : null,
+      nextRevision: typeof payload.nextRevision === "number" ? payload.nextRevision : null,
     });
-    return context.json({ status: "ok" });
+    return context.json(result);
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
     return context.json({ error: message }, { status: 500 });

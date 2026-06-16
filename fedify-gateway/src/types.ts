@@ -104,6 +104,7 @@ export interface PublishContentResult {
   activityId: string;
   objectId: string;
   communityActorUrl: string;
+  activityJson: Record<string, unknown>;
 }
 
 export interface PublishLocalCommunityContentRequest {
@@ -122,6 +123,13 @@ export interface PublishLocalCommunityContentResult {
   communityActorUrl: string;
   deliveredFollowerCount: number;
   failedFollowerCount: number;
+  activityJson: Record<string, unknown>;
+}
+
+export interface CanonicalMutationResult {
+  activityId: string;
+  objectId: string;
+  activityJson: Record<string, unknown>;
 }
 
 export interface UpdateContentRequest {
@@ -138,6 +146,11 @@ export interface UpdateContentRequest {
   // Lemmy will not process comment updates without this field.
   inReplyToObjectId?: string | null;
   targetInboxUrls?: string[] | null;
+  operationId?: string | null;
+  activityId?: string | null;
+  mutationTimestamp?: string | null;
+  expectedRevision?: number | null;
+  nextRevision?: number | null;
 }
 
 export interface DeleteContentRequest {
@@ -146,6 +159,11 @@ export interface DeleteContentRequest {
   communityActorUrl: string;
   apObjectId: string;
   targetInboxUrls?: string[] | null;
+  operationId?: string | null;
+  activityId?: string | null;
+  mutationTimestamp?: string | null;
+  expectedRevision?: number | null;
+  nextRevision?: number | null;
 }
 
 export interface AcceptLocalCommunityFollowRequest {

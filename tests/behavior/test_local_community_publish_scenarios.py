@@ -211,3 +211,70 @@ async def test_local_community_reply_semantics_preserve_nested_and_unknown_fallb
     unknown_request = runtime.fedify_gateway.publish_local_community_content.await_args_list[3].args[0]
     assert nested_request.in_reply_to_object_id == "https://bridge.example/users/alice/comment/0"
     assert unknown_request.in_reply_to_object_id == "https://bridge.example/users/alice/post/1"
+
+@pytest.mark.asyncio
+async def test_local_community_create_preserves_canonical_create_for_direct_follower_fanout(
+    tmp_path: Path,
+) -> None:
+    """Real local runtime persists the exact embedded Create, not the community Announce."""
+    from src.models import UserActorOutboundDelivery, UserActorOutboundSource
+
+    database, runtime = _runtime(tmp_path)
+    _local_community(database)
+    add_registered_user(database)
+    user = database.users.get_user_by_discord_user_id("123")
+    assert user is not None
+    with database.immediate_session() as session:
+        database.user_actor_followers.create_or_refresh(
+            session,
+            user_id=user.id,
+            remote_actor_id="https://remote.example/users/follower",
+            remote_inbox_url="https://remote.example/users/follower/inbox",
+            remote_shared_inbox_url="https://remote.example/inbox",
+            follow_activity_id="https://remote.example/follows/1",
+        )
+
+    canonical = {
+        "id": "https://bridge.example/users/alice/activities/create/post/1",
+        "type": "Create",
+        "actor": user.actor_url,
+        "to": ["https://www.w3.org/ns/activitystreams#Public", "https://bridge.example/communities/hackers"],
+        "cc": [user.followers_url],
+        "object": {
+            "id": "https://bridge.example/users/alice/post/1",
+            "type": "Page",
+            "attributedTo": user.actor_url,
+            "audience": "https://bridge.example/communities/hackers",
+        },
+    }
+    runtime.fedify_gateway.publish_local_community_content.return_value = (
+        PublishLocalCommunityContentResult(
+            activity_id=canonical["id"],
+            object_id=canonical["object"]["id"],
+            community_actor_url="https://bridge.example/communities/hackers",
+            delivered_follower_count=1,
+            failed_follower_count=0,
+            activity_json=canonical,
+        )
+    )
+
+    result = await runtime.handle_discord_thread_create(
+        thread=build_thread(), starter_message=build_starter_message()
+    )
+
+    assert result.status == "published"
+    with database.session() as session:
+        source = session.scalar(
+            select(UserActorOutboundSource).where(
+                UserActorOutboundSource.source_kind == "content_create"
+            )
+        )
+        delivery = session.scalar(select(UserActorOutboundDelivery))
+        assert source is not None
+        assert source.activity_id == canonical["id"]
+        assert source.activity_json is not None
+        import json
+
+        assert json.loads(source.activity_json) == canonical
+        assert delivery is not None
+        assert delivery.target_endpoint_url == "https://remote.example/inbox"

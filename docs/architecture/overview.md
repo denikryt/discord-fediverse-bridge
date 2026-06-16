@@ -72,3 +72,9 @@ Python owns profile persistence and bridge-managed profile image bytes. The main
 Profile mutations are owned by one synchronous `BEGIN IMMEDIATE` operation that writes the profile change, increments `users.profile_version`, stores immutable rendering input, snapshots accepted follower relationship incarnations, groups exact delivery endpoints, and records media ownership. Network rendering and transport occur only after commit.
 
 `UserActorDeliveryService` renders and claims bounded work. Claims use durable `sending` ownership, stale-claim recovery, exact-incarnation eligibility, global federation policy, and a per-user/per-endpoint logical-version barrier. `UserActorDeliveryWorker` owns one process-lifetime asyncio task, drains immediately at startup, wakes after new profile sources, and is cancelled and awaited before the gateway client and database close.
+
+## User Actor content mutation and follower fanout
+
+Existing Discord-backed publication modes retain their authorization and routing ownership. After those checks, Create persistence atomically records the canonical gateway result, published-object mapping, immutable outbound source, and accepted-follower endpoint snapshot. Update and Delete first persist Discord-derived desired state and a stable mutation reservation; the gateway then validates the deterministic operation identity, serializes and signs the canonical activity, and returns the exact JSON that Python commits with the next object revision and follower source.
+
+The existing `UserActorDeliveryWorker` is the single process-owned recovery loop for both pre-source mutation reservations and post-source endpoint deliveries. Database claims and leases provide multi-process exclusion and restart recovery; no SQL transaction is held across Discord fetches or gateway HTTP. Private signing keys remain confined to the gateway boundary.

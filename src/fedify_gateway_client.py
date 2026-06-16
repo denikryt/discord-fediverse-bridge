@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 
 import httpx
 
@@ -46,11 +46,12 @@ class PublishContentRequest:
 
 @dataclass(slots=True)
 class PublishContentResult:
-    # The returned IDs are the canonical AP identifiers Python must persist for
-    # dedup and later inbound loop suppression.
+    """Return the exact canonical Create rendered and sent by the gateway."""
+
     activity_id: str
     object_id: str
     community_actor_url: str
+    activity_json: dict = field(default_factory=dict)
 
 
 @dataclass(slots=True)
@@ -68,6 +69,16 @@ class PublishLocalCommunityContentResult:
     community_actor_url: str
     delivered_follower_count: int
     failed_follower_count: int
+    activity_json: dict = field(default_factory=dict)
+
+
+@dataclass(slots=True)
+class CanonicalMutationResult:
+    """Return one stable canonical Update/Delete rendered by the gateway."""
+
+    activity_id: str
+    object_id: str
+    activity_json: dict
 
 
 @dataclass(slots=True)
@@ -85,6 +96,11 @@ class UpdateContentRequest:
     # Lemmy will not process comment updates without this field.
     in_reply_to_object_id: str | None = None
     target_inbox_urls: list[str] | None = None
+    operation_id: str | None = None
+    activity_id: str | None = None
+    mutation_timestamp: str | None = None
+    expected_revision: int | None = None
+    next_revision: int | None = None
 
 
 @dataclass(slots=True)
@@ -94,6 +110,11 @@ class DeleteContentRequest:
     community_actor_url: str
     ap_object_id: str
     target_inbox_urls: list[str] | None = None
+    operation_id: str | None = None
+    activity_id: str | None = None
+    mutation_timestamp: str | None = None
+    expected_revision: int | None = None
+    next_revision: int | None = None
 
 
 
@@ -235,6 +256,7 @@ class FedifyGatewayClient:
             activity_id=payload["activityId"],
             object_id=payload["objectId"],
             community_actor_url=payload["communityActorUrl"],
+            activity_json=payload["activityJson"],
         )
 
     async def publish_local_community_content(
@@ -257,6 +279,9 @@ class FedifyGatewayClient:
                 "bodyMarkdown": request.body_markdown,
                 "inReplyToObjectId": request.in_reply_to_object_id,
                 "targetInboxUrls": request.target_inbox_urls,
+                "operationId": request.operation_id,
+                "activityId": request.activity_id,
+                "mutationTimestamp": request.mutation_timestamp,
             },
         )
         response.raise_for_status()
@@ -267,6 +292,7 @@ class FedifyGatewayClient:
             community_actor_url=payload["communityActorUrl"],
             delivered_follower_count=int(payload["deliveredFollowerCount"]),
             failed_follower_count=int(payload["failedFollowerCount"]),
+            activity_json=payload["activityJson"],
         )
 
     async def unfollow_community(
@@ -305,8 +331,8 @@ class FedifyGatewayClient:
             )
         return UnfollowCommunityResult(accepted=True)
 
-    async def update_content(self, request: UpdateContentRequest) -> None:
-        """Trigger one gateway-side Update activity for an edited post or comment."""
+    async def update_content(self, request: UpdateContentRequest) -> CanonicalMutationResult:
+        """Trigger and return one canonical gateway-side Update activity."""
         response = await self._client.post(
             "/update",
             headers={"Authorization": f"Bearer {self._shared_secret}"},
@@ -319,12 +345,23 @@ class FedifyGatewayClient:
                 "title": request.title,
                 "inReplyToObjectId": request.in_reply_to_object_id,
                 "targetInboxUrls": request.target_inbox_urls,
+                "operationId": request.operation_id,
+                "activityId": request.activity_id,
+                "mutationTimestamp": request.mutation_timestamp,
+                "expectedRevision": request.expected_revision,
+                "nextRevision": request.next_revision,
             },
         )
         response.raise_for_status()
+        payload = response.json()
+        return CanonicalMutationResult(
+            activity_id=payload["activityId"],
+            object_id=payload["objectId"],
+            activity_json=payload["activityJson"],
+        )
 
-    async def delete_content(self, request: DeleteContentRequest) -> None:
-        """Trigger one gateway-side Delete activity for a deleted post or comment."""
+    async def delete_content(self, request: DeleteContentRequest) -> CanonicalMutationResult:
+        """Trigger and return one canonical gateway-side Delete activity."""
         response = await self._client.post(
             "/delete",
             headers={"Authorization": f"Bearer {self._shared_secret}"},
@@ -333,9 +370,20 @@ class FedifyGatewayClient:
                 "communityActorUrl": request.community_actor_url,
                 "apObjectId": request.ap_object_id,
                 "targetInboxUrls": request.target_inbox_urls,
+                "operationId": request.operation_id,
+                "activityId": request.activity_id,
+                "mutationTimestamp": request.mutation_timestamp,
+                "expectedRevision": request.expected_revision,
+                "nextRevision": request.next_revision,
             },
         )
         response.raise_for_status()
+        payload = response.json()
+        return CanonicalMutationResult(
+            activity_id=payload["activityId"],
+            object_id=payload["objectId"],
+            activity_json=payload["activityJson"],
+        )
 
 
     async def send_local_community_relay(

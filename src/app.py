@@ -110,17 +110,18 @@ def _build_live_runtime(settings: Settings, deployment_lease: FileLock) -> Runti
     bridge_policy_service = BridgePolicyService(settings=settings, repository=database.bridge_policy_entries)
     fedify_gateway = FedifyGatewayClient(settings)
     discord_oauth_client = DiscordOAuthClient(settings)
+    user_actor_delivery_service = UserActorDeliveryService(
+        database, fedify_gateway, bridge_policy_service
+    )
+    user_actor_delivery_worker = UserActorDeliveryWorker(user_actor_delivery_service)
     content_publish_service = ContentPublishService(
         database=database,
         fedify_gateway=fedify_gateway,
         bridge_prefix=settings.bridge_display_prefix,
         settings=settings,
         bridge_policy_service=bridge_policy_service,
+        delivery_worker=user_actor_delivery_worker,
     )
-    user_actor_delivery_service = UserActorDeliveryService(
-        database, fedify_gateway, bridge_policy_service
-    )
-    user_actor_delivery_worker = UserActorDeliveryWorker(user_actor_delivery_service)
     user_profile_service = UserProfileService(
         database,
         media_store,
@@ -192,6 +193,7 @@ def _build_live_runtime(settings: Settings, deployment_lease: FileLock) -> Runti
     )
     # Inject runtime into bot so edit/delete handlers can call AP gateway
     bot.set_runtime(runtime)
+    user_actor_delivery_service.discord_message_reader = bot
     return runtime
 
 

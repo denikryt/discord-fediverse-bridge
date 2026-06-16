@@ -671,11 +671,13 @@ class LocalCommunityRuntime:
             and getattr(local_subscriber, "id") == getattr(surface, "local_subscriber_id")
         )
 
-    async def _send_update_request(self, *, runtime: object, published: object, new_content: str) -> None:
-        """Send one gateway Update request for a canonical published object."""
-        gateway = getattr(runtime, "fedify_gateway", self.fedify_gateway)
-        try:
-            await gateway.update_content(
+    async def _send_update_request(
+        self, *, runtime: object, published: object, new_content: str, edited_timestamp
+    ) -> None:
+        """Durably admit one local-community edit before gateway I/O."""
+        service = getattr(runtime, "user_actor_delivery_service", None)
+        if service is None:
+            await getattr(runtime, "fedify_gateway", self.fedify_gateway).update_content(
                 UpdateContentRequest(
                     actor_username=published.actor_username,
                     community_actor_url=published.community_actor_url,
@@ -684,30 +686,54 @@ class LocalCommunityRuntime:
                     title=published.title,
                     body_markdown=new_content,
                     in_reply_to_object_id=published.in_reply_to_object_id,
-                    target_inbox_urls=self._allowed_remote_inboxes(
-                        published.community_actor_url
-                    ),
+                    target_inbox_urls=self._allowed_remote_inboxes(published.community_actor_url),
                 )
             )
+            return
+        if edited_timestamp is None:
+            logger.warning("Ignoring durable local-community edit without Discord edited_timestamp object=%s", published.object_id)
+            return
+        try:
+            await service.submit_update(
+                object_id=published.object_id,
+                title=published.title,
+                body_markdown=new_content,
+                edited_timestamp=edited_timestamp,
+                target_inbox_urls=self._allowed_remote_inboxes(
+                    published.community_actor_url
+                ),
+            )
+            worker = getattr(runtime, "user_actor_delivery_worker", None)
+            if worker is not None:
+                worker.wake()
         except Exception:
-            logger.exception("Failed to send local-community edit for AP object %s", published.object_id)
+            logger.exception("Failed to reserve local-community edit for AP object %s", published.object_id)
 
     async def _send_delete_request(self, *, runtime: object, published: object) -> None:
-        """Send one gateway Delete request for a canonical published object."""
-        gateway = getattr(runtime, "fedify_gateway", self.fedify_gateway)
-        try:
-            await gateway.delete_content(
+        """Durably admit one terminal local-community delete."""
+        service = getattr(runtime, "user_actor_delivery_service", None)
+        if service is None:
+            await getattr(runtime, "fedify_gateway", self.fedify_gateway).delete_content(
                 DeleteContentRequest(
                     actor_username=published.actor_username,
                     community_actor_url=published.community_actor_url,
                     ap_object_id=published.object_id,
-                    target_inbox_urls=self._allowed_remote_inboxes(
-                        published.community_actor_url
-                    ),
+                    target_inbox_urls=self._allowed_remote_inboxes(published.community_actor_url),
                 )
             )
+            return
+        try:
+            await service.submit_delete(
+                object_id=published.object_id,
+                target_inbox_urls=self._allowed_remote_inboxes(
+                    published.community_actor_url
+                ),
+            )
+            worker = getattr(runtime, "user_actor_delivery_worker", None)
+            if worker is not None:
+                worker.wake()
         except Exception:
-            logger.exception("Failed to send local-community delete for AP object %s", published.object_id)
+            logger.exception("Failed to reserve local-community delete for AP object %s", published.object_id)
 
 
     def _allowed_remote_inboxes(self, community_actor_url: str) -> list[str]:
@@ -815,6 +841,7 @@ class LocalCommunityRuntime:
         new_content: str,
         runtime: object,
         author_display_name: str = "",
+        edited_timestamp=None,
     ) -> None:
         """Propagate one Discord-authored local-community edit to all participants.
 
@@ -835,7 +862,7 @@ class LocalCommunityRuntime:
             published = self.database.activitypub_objects.get_published_activity_object_by_object_id(getattr(thread_row, "ap_object_id"))
             if published is None:
                 return
-            await self._send_update_request(runtime=runtime, published=published, new_content=new_content)
+            await self._send_update_request(runtime=runtime, published=published, new_content=new_content, edited_timestamp=edited_timestamp)
             await self._fanout_thread_edit(
                 runtime=runtime,
                 thread_row=thread_row,
@@ -858,7 +885,7 @@ class LocalCommunityRuntime:
         published = self.database.activitypub_objects.get_published_activity_object_by_object_id(getattr(message_row, "ap_object_id"))
         if published is None:
             return
-        await self._send_update_request(runtime=runtime, published=published, new_content=new_content)
+        await self._send_update_request(runtime=runtime, published=published, new_content=new_content, edited_timestamp=edited_timestamp)
         await self._fanout_message_edit(
             runtime=runtime,
             message_row=message_row,

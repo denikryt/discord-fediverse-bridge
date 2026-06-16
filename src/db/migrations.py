@@ -11,7 +11,7 @@ from __future__ import annotations
 from sqlalchemy import text
 from sqlalchemy.engine import Connection, Engine
 
-from ..models import Base, BridgeActorKey, BridgePolicyEntry, CommunityActorBan, GuildInvitePublication, LocalCommunityMessageSurface, LocalCommunityThreadSurface, ManagementAuditEvent, ProfileMediaAsset, UserProfileField, UserActorFollower, UserActorFollowActivityId, UserActorOutboundSource, UserActorOutboundDelivery, UserActorOutboundDeliveryFollower, UserActorOutboundSourceMedia
+from ..models import Base, BridgeActorKey, BridgePolicyEntry, CommunityActorBan, GuildInvitePublication, LocalCommunityMessageSurface, LocalCommunityThreadSurface, ManagementAuditEvent, ProfileMediaAsset, UserProfileField, UserActorFollower, UserActorFollowActivityId, UserActorOutboundSource, UserActorOutboundDelivery, UserActorOutboundDeliveryFollower, UserActorOutboundSourceMedia, UserActorContentMutation, PublishedActivityObject
 
 
 def migrate(engine: Engine) -> None:
@@ -43,6 +43,17 @@ def migrate(engine: Engine) -> None:
         ("users", "avatar_media_id", "ALTER TABLE users ADD COLUMN avatar_media_id INTEGER REFERENCES profile_media_assets(id) ON DELETE RESTRICT"),
         ("users", "header_media_id", "ALTER TABLE users ADD COLUMN header_media_id INTEGER REFERENCES profile_media_assets(id) ON DELETE RESTRICT"),
         ("users", "profile_version", "ALTER TABLE users ADD COLUMN profile_version INTEGER NOT NULL DEFAULT 0"),
+        ("published_activity_objects", "content_revision", "ALTER TABLE published_activity_objects ADD COLUMN content_revision INTEGER NOT NULL DEFAULT 1"),
+        ("published_activity_objects", "deleted_at", "ALTER TABLE published_activity_objects ADD COLUMN deleted_at DATETIME"),
+        ("published_activity_objects", "desired_kind", "ALTER TABLE published_activity_objects ADD COLUMN desired_kind VARCHAR(16) NOT NULL DEFAULT 'none'"),
+        ("published_activity_objects", "desired_title", "ALTER TABLE published_activity_objects ADD COLUMN desired_title VARCHAR(512)"),
+        ("published_activity_objects", "desired_body_markdown", "ALTER TABLE published_activity_objects ADD COLUMN desired_body_markdown TEXT"),
+        ("published_activity_objects", "desired_edited_timestamp", "ALTER TABLE published_activity_objects ADD COLUMN desired_edited_timestamp DATETIME"),
+        ("published_activity_objects", "desired_fingerprint", "ALTER TABLE published_activity_objects ADD COLUMN desired_fingerprint VARCHAR(64)"),
+        ("published_activity_objects", "discord_reconciliation_needed", "ALTER TABLE published_activity_objects ADD COLUMN discord_reconciliation_needed BOOLEAN NOT NULL DEFAULT 0"),
+        ("published_activity_objects", "discord_reconciliation_attempt_count", "ALTER TABLE published_activity_objects ADD COLUMN discord_reconciliation_attempt_count INTEGER NOT NULL DEFAULT 0"),
+        ("published_activity_objects", "discord_reconciliation_next_attempt_at", "ALTER TABLE published_activity_objects ADD COLUMN discord_reconciliation_next_attempt_at DATETIME"),
+        ("published_activity_objects", "discord_reconciliation_last_error", "ALTER TABLE published_activity_objects ADD COLUMN discord_reconciliation_last_error VARCHAR(512)"),
     ]
     # Stage 2 adds explicit local-community surface tables. Creating them here
     # keeps interrupted deployments and migrate-only test fixtures aligned with
@@ -65,9 +76,11 @@ def migrate(engine: Engine) -> None:
             UserActorOutboundDelivery.__table__,
             UserActorOutboundDeliveryFollower.__table__,
             UserActorOutboundSourceMedia.__table__,
+            UserActorContentMutation.__table__,
         ],
     )
     with engine.connect() as conn:
+        _migrate_published_activity_objects_stage5(conn)
         for table, column, stmt in migrations:
             # PRAGMA table_info returns one row per column; skip if already present.
             existing = _table_columns(conn, table)
@@ -92,10 +105,84 @@ def migrate(engine: Engine) -> None:
                 conn.execute(text(f"ALTER TABLE {table} ADD COLUMN local_subscriber_id INTEGER"))
         _verify_stage2_surface_invariants(conn)
         _migrate_profile_field_name_width(conn)
+        _migrate_user_actor_outbound_sources_stage5(conn)
         _install_profile_media_triggers(conn)
         conn.commit()
 
 
+
+
+def _migrate_published_activity_objects_stage5(conn: Connection) -> None:
+    """Rebuild the Stage 4 authored-object table to the exact Stage 5 model DDL."""
+    columns = _table_columns(conn, "published_activity_objects")
+    required = {column.name for column in PublishedActivityObject.__table__.columns}
+    if not columns or required.issubset(columns):
+        return
+
+    conn.execute(text("PRAGMA foreign_keys=OFF"))
+    conn.execute(text("PRAGMA legacy_alter_table=ON"))
+    conn.execute(text(
+        "ALTER TABLE published_activity_objects "
+        "RENAME TO published_activity_objects_stage4"
+    ))
+    conn.execute(text("PRAGMA legacy_alter_table=OFF"))
+    PublishedActivityObject.__table__.create(conn)
+    conn.execute(text(
+        """
+        INSERT INTO published_activity_objects (
+            id, actor_username, actor_url, community_actor_url, activity_id,
+            object_id, kind, title, body_markdown, in_reply_to_object_id,
+            discord_channel_id, discord_message_id, content_revision,
+            deleted_at, desired_kind, desired_title, desired_body_markdown,
+            desired_edited_timestamp, desired_fingerprint,
+            discord_reconciliation_needed,
+            discord_reconciliation_attempt_count,
+            discord_reconciliation_next_attempt_at,
+            discord_reconciliation_last_error, published_at, created_at
+        )
+        SELECT id, actor_username, actor_url, community_actor_url, activity_id,
+               object_id, kind, title, body_markdown, in_reply_to_object_id,
+               discord_channel_id, discord_message_id, 1, NULL, 'none', NULL,
+               NULL, NULL, NULL, 0, 0, NULL, NULL, published_at, created_at
+        FROM published_activity_objects_stage4
+        """
+    ))
+    conn.execute(text("DROP TABLE published_activity_objects_stage4"))
+    conn.execute(text("PRAGMA foreign_keys=ON"))
+
+
+
+def _migrate_user_actor_outbound_sources_stage5(conn: Connection) -> None:
+    """Generalize Stage 4 profile sources without losing retry state."""
+    columns = _table_columns(conn, "user_actor_outbound_sources")
+    if not columns or "snapshot_json" in columns:
+        return
+    conn.execute(text("PRAGMA foreign_keys=OFF"))
+    # SQLite normally rewrites child-table foreign-key SQL during RENAME even
+    # while enforcement is disabled.  Preserve the Stage 4 child references to
+    # the canonical table name while this parent table is rebuilt.
+    conn.execute(text("PRAGMA legacy_alter_table=ON"))
+    conn.execute(text("ALTER TABLE user_actor_outbound_sources RENAME TO user_actor_outbound_sources_stage4"))
+    conn.execute(text("PRAGMA legacy_alter_table=OFF"))
+    conn.execute(text("DROP INDEX IF EXISTS ix_user_actor_sources_retry"))
+    UserActorOutboundSource.__table__.create(conn)
+    conn.execute(text(
+        """
+        INSERT INTO user_actor_outbound_sources (
+            id, user_id, source_kind, ordering_key, logical_version, activity_id,
+            published_object_id, snapshot_json, activity_json, state,
+            render_attempt_count, last_render_attempted_at, last_error,
+            next_attempt_at, created_at, updated_at
+        )
+        SELECT id, user_id, source_kind, 'profile:' || user_id, logical_version,
+               activity_id, NULL, profile_snapshot_json, activity_json, state,
+               render_attempt_count, last_render_attempted_at, last_error,
+               next_attempt_at, created_at, updated_at
+        FROM user_actor_outbound_sources_stage4
+        """
+    ))
+    conn.execute(text("DROP TABLE user_actor_outbound_sources_stage4"))
+    conn.execute(text("PRAGMA foreign_keys=ON"))
 
 def _migrate_generalized_user_bans(conn: Connection) -> None:
     """Rebuild legacy community-only ban rows into explicit scoped rows.

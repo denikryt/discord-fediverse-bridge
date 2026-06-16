@@ -52,7 +52,10 @@ __all__ = [
     "DiscordDirectoryRepository",
     "GuildInvitePublicationRepository",
     "UserActorFollowerRepository",
+    "ContentMutationRepository",
 ]
 
 from .user_profiles import ProfileMediaRepository, UserProfileRepository, UserProfileView
 from .user_actor_deliveries import UserActorDeliveryRepository
+
+from .content_mutations import ContentMutationRepository

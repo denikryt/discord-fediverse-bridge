@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from datetime import datetime, timezone
 
-from sqlalchemy import CheckConstraint, Index, DateTime, ForeignKey, Integer, JSON, String, Text, UniqueConstraint
+from sqlalchemy import Boolean, CheckConstraint, Index, DateTime, ForeignKey, Integer, JSON, String, Text, UniqueConstraint
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column
 
 
@@ -284,30 +284,32 @@ class UserProfileField(Base):
 
 
 class UserActorOutboundSource(Base):
-    """Persist one immutable User Actor outbound activity source."""
+    """Persist one immutable User Actor activity and fixed follower audience."""
 
     __tablename__ = "user_actor_outbound_sources"
     __table_args__ = (
-        UniqueConstraint("user_id", "source_kind", "logical_version"),
         UniqueConstraint("activity_id"),
+        UniqueConstraint("ordering_key", "logical_version"),
         CheckConstraint("logical_version >= 1", name="ck_user_actor_source_version"),
+        CheckConstraint("length(snapshot_json) > 0", name="ck_user_actor_source_snapshot_nonempty"),
         CheckConstraint(
-            "length(profile_snapshot_json) > 0",
-            name="ck_user_actor_source_snapshot_nonempty",
+            "source_kind IN ('profile_update', 'content_create', 'content_update', 'content_delete')",
+            name="ck_user_actor_source_kind",
         ),
-        CheckConstraint("source_kind = 'profile_update'", name="ck_user_actor_source_kind"),
         CheckConstraint("state IN ('render_pending', 'ready', 'render_failed')", name="ck_user_actor_source_state"),
         CheckConstraint("render_attempt_count >= 0", name="ck_user_actor_source_render_attempts"),
         CheckConstraint("(state = 'ready' AND activity_json IS NOT NULL) OR (state != 'ready' AND activity_json IS NULL)", name="ck_user_actor_source_activity_state"),
-        Index("ix_user_actor_sources_retry", "state", "next_attempt_at", "user_id", "logical_version"),
+        Index("ix_user_actor_sources_retry", "state", "next_attempt_at", "user_id", "ordering_key", "logical_version"),
     )
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
     user_id: Mapped[int] = mapped_column(ForeignKey("users.id", ondelete="CASCADE"), nullable=False)
     source_kind: Mapped[str] = mapped_column(String(32), nullable=False)
+    ordering_key: Mapped[str] = mapped_column(String(512), nullable=False)
     logical_version: Mapped[int] = mapped_column(Integer, nullable=False)
     activity_id: Mapped[str] = mapped_column(String(512), nullable=False)
-    profile_snapshot_json: Mapped[str] = mapped_column(String, nullable=False)
+    published_object_id: Mapped[int | None] = mapped_column(ForeignKey("published_activity_objects.id", ondelete="CASCADE"), nullable=True)
+    snapshot_json: Mapped[str] = mapped_column(String, nullable=False)
     activity_json: Mapped[str | None] = mapped_column(String, nullable=True)
     state: Mapped[str] = mapped_column(String(32), nullable=False, default="render_pending")
     render_attempt_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
@@ -316,6 +318,11 @@ class UserActorOutboundSource(Base):
     next_attempt_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, nullable=False)
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, onupdate=utcnow, nullable=False)
+
+    @property
+    def profile_snapshot_json(self) -> str:
+        """Expose the Stage 4 name for profile-only callers during migration."""
+        return self.snapshot_json
 
 
 class UserActorOutboundDelivery(Base):
@@ -461,12 +468,58 @@ class PublishedActivityObject(Base):
     )
     discord_channel_id: Mapped[int | None] = mapped_column(Integer, nullable=True)
     discord_message_id: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    content_revision: Mapped[int] = mapped_column(Integer, nullable=False, default=1)
+    deleted_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    desired_kind: Mapped[str] = mapped_column(String(16), nullable=False, default="none")
+    desired_title: Mapped[str | None] = mapped_column(String(512), nullable=True)
+    desired_body_markdown: Mapped[str | None] = mapped_column(String, nullable=True)
+    desired_edited_timestamp: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    desired_fingerprint: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    discord_reconciliation_needed: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
+    discord_reconciliation_attempt_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    discord_reconciliation_next_attempt_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    discord_reconciliation_last_error: Mapped[str | None] = mapped_column(String(512), nullable=True)
     published_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), default=utcnow, nullable=False
     )
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), default=utcnow, nullable=False
     )
+
+
+class UserActorContentMutation(Base):
+    """Persist one replayable pre-gateway content mutation reservation."""
+
+    __tablename__ = "user_actor_content_mutations"
+    __table_args__ = (
+        UniqueConstraint("operation_id"),
+        UniqueConstraint("activity_id"),
+        CheckConstraint("kind IN ('content_update', 'content_delete')", name="ck_user_actor_content_mutation_kind"),
+        CheckConstraint("state IN ('reserved', 'dispatching', 'ambiguous', 'canonical_ready', 'committed', 'aborted_pre_send')", name="ck_user_actor_content_mutation_state"),
+        Index("ix_user_actor_content_mutations_recovery", "state", "next_attempt_at", "claimed_at", "id"),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    published_object_id: Mapped[int] = mapped_column(ForeignKey("published_activity_objects.id", ondelete="CASCADE"), nullable=False)
+    user_id: Mapped[int] = mapped_column(ForeignKey("users.id", ondelete="CASCADE"), nullable=False)
+    kind: Mapped[str] = mapped_column(String(32), nullable=False)
+    expected_revision: Mapped[int] = mapped_column(Integer, nullable=False)
+    next_revision: Mapped[int] = mapped_column(Integer, nullable=False)
+    operation_id: Mapped[str] = mapped_column(String(64), nullable=False)
+    activity_id: Mapped[str] = mapped_column(String(512), nullable=False)
+    request_json: Mapped[str] = mapped_column(String, nullable=False)
+    request_fingerprint: Mapped[str] = mapped_column(String(64), nullable=False)
+    state: Mapped[str] = mapped_column(String(32), nullable=False, default="reserved")
+    canonical_activity_json: Mapped[str | None] = mapped_column(String, nullable=True)
+    claim_token: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    side_effect_classification: Mapped[str] = mapped_column(String(32), nullable=False, default="not_dispatched")
+    lease_expires_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    claimed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    attempt_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    next_attempt_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    last_error: Mapped[str | None] = mapped_column(String(512), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, nullable=False)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, onupdate=utcnow, nullable=False)
 
 
 class CommunityThreadGroup(Base):

@@ -61,6 +61,7 @@ class ContentPublishService:
         bridge_prefix: str,
         settings: Settings | None = None,
         bridge_policy_service: BridgePolicyService,
+        delivery_worker: object | None = None,
     ) -> None:
         """Initialise with the shared database, AP gateway, and bridge prefix."""
         self.database = database
@@ -68,6 +69,7 @@ class ContentPublishService:
         self.bridge_prefix = bridge_prefix
         self.settings = settings
         self.bridge_policy_service = bridge_policy_service
+        self.delivery_worker = delivery_worker
         self.user_ban_service = UserBanService(database=database, settings=settings) if settings is not None else None
 
     async def publish_thread_starter(
@@ -193,7 +195,7 @@ class ContentPublishService:
             )
         )
 
-        persist_publish_artifacts(
+        source_id = persist_publish_artifacts(
             self.database,
             source_id=str(getattr(starter_message, "id")),
             actor_username=user.activitypub_username,
@@ -201,6 +203,7 @@ class ContentPublishService:
             community_actor_url=community_actor_url,
             activity_id=publish_result.activity_id,
             object_id=publish_result.object_id,
+            activity_json=getattr(publish_result, "activity_json", {}),
             kind="post",
             title=title,
             body_markdown=body,
@@ -208,6 +211,8 @@ class ContentPublishService:
             discord_channel_id=getattr(thread, "parent_id", None),
             discord_message_id=getattr(starter_message, "id"),
         )
+        if self.delivery_worker is not None:
+            self.delivery_worker.wake()
         logger.info(
             "Published Discord thread %s starter %s via AP actor %s",
             getattr(thread, "id"),
@@ -266,6 +271,7 @@ class ContentPublishService:
             community_actor_url=community_actor_url,
             activity_id=publish_result.activity_id,
             object_id=publish_result.object_id,
+            activity_json=getattr(publish_result, "activity_json", {}),
             kind="comment",
             title=None,
             body_markdown=body,
@@ -273,6 +279,8 @@ class ContentPublishService:
             discord_channel_id=getattr(thread, "parent_id", None),
             discord_message_id=getattr(message, "id"),
         )
+        if self.delivery_worker is not None:
+            self.delivery_worker.wake()
         logger.info(
             "Published Discord message %s in thread %s via AP actor %s",
             getattr(message, "id"),

@@ -9,7 +9,7 @@ from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from urllib.parse import urlparse
 
-from sqlalchemy import and_, delete, func, or_, select, update
+from sqlalchemy import and_, case, delete, func, or_, select, update
 from sqlalchemy.orm import Session
 
 from ...models import (
@@ -75,12 +75,59 @@ class UserActorDeliveryRepository(BaseRepository):
             source_kind="profile_update",
             logical_version=logical_version,
             activity_id=activity_id,
-            profile_snapshot_json=profile_snapshot_json,
+            ordering_key=f"profile:{user_id}",
+            snapshot_json=profile_snapshot_json,
             state="render_pending",
         )
         session.add(source)
         session.flush()
 
+        UserActorDeliveryRepository._insert_audience(session, source.id, followers)
+        for slot, asset_id in media_refs:
+            session.add(
+                UserActorOutboundSourceMedia(
+                    source_id=source.id, media_asset_id=asset_id, slot_kind=slot
+                )
+            )
+        session.flush()
+        return source
+
+    @staticmethod
+    def insert_ready_content_source(
+        session: Session,
+        *,
+        user_id: int,
+        source_kind: str,
+        logical_version: int,
+        activity_id: str,
+        published_object_id: int,
+        object_id: str,
+        activity_json: dict,
+        snapshot: dict,
+        followers: list[UserActorFollower],
+    ) -> UserActorOutboundSource:
+        """Insert one already-rendered content source and immutable audience."""
+        source = UserActorOutboundSource(
+            user_id=user_id,
+            source_kind=source_kind,
+            ordering_key=f"content:{object_id}",
+            logical_version=logical_version,
+            activity_id=activity_id,
+            published_object_id=published_object_id,
+            snapshot_json=json.dumps(snapshot, separators=(",", ":"), sort_keys=True),
+            activity_json=json.dumps(activity_json, separators=(",", ":"), sort_keys=True),
+            state="ready",
+        )
+        session.add(source)
+        session.flush()
+        UserActorDeliveryRepository._insert_audience(session, source.id, followers)
+        return source
+
+    @staticmethod
+    def _insert_audience(
+        session: Session, source_id: int, followers: list[UserActorFollower]
+    ) -> None:
+        """Snapshot accepted follower incarnations with shared-inbox deduplication."""
         grouped: dict[str, list[UserActorFollower]] = {}
         for follower in followers:
             endpoint = UserActorDeliveryRepository.validate_endpoint(
@@ -89,7 +136,7 @@ class UserActorDeliveryRepository(BaseRepository):
             grouped.setdefault(endpoint, []).append(follower)
         for endpoint in sorted(grouped):
             delivery = UserActorOutboundDelivery(
-                source_id=source.id, target_endpoint_url=endpoint, status="pending"
+                source_id=source_id, target_endpoint_url=endpoint, status="pending"
             )
             session.add(delivery)
             session.flush()
@@ -102,14 +149,6 @@ class UserActorDeliveryRepository(BaseRepository):
                         snapshotted_endpoint_url=endpoint,
                     )
                 )
-        for slot, asset_id in media_refs:
-            session.add(
-                UserActorOutboundSourceMedia(
-                    source_id=source.id, media_asset_id=asset_id, slot_kind=slot
-                )
-            )
-        session.flush()
-        return source
 
     def get_source(self, source_id: int) -> UserActorOutboundSource | None:
         """Load one durable source without consulting mutable profile state."""
@@ -200,6 +239,19 @@ class UserActorDeliveryRepository(BaseRepository):
                     per_user_limit=per_user_limit,
                 ):
                     continue
+                # A newer content Delete is a terminal barrier even while it is
+                # waiting in retry backoff.  Older Create/Update rows remain
+                # durable but non-claimable until that Delete succeeds; once it
+                # is delivered they are finalized as superseded.
+                newer_delete_status = self._newer_delete_status(
+                    session, delivery=delivery, source=source
+                )
+                if newer_delete_status == "delivered":
+                    self._mark_terminal_without_claim(delivery, status="superseded")
+                    continue
+                if newer_delete_status in {"pending", "failed", "sending"}:
+                    continue
+
                 # A newer acknowledged profile makes this older replacement
                 # permanently obsolete; a merely pending newer row does not.
                 if self._has_newer_delivered(session, delivery=delivery, source=source):
@@ -270,9 +322,17 @@ class UserActorDeliveryRepository(BaseRepository):
                 )
                 .order_by(
                     UserActorOutboundSource.user_id,
+                    UserActorOutboundDelivery.target_endpoint_url,
+                    # A terminal Delete must be evaluated before older pending/failed
+                    # rows for the same endpoint so its explicit bypass policy can
+                    # take effect.  _has_lower_unfinished still blocks in-flight
+                    # sending work, while non-Delete lifecycle rows retain FIFO.
+                    case(
+                        (UserActorOutboundSource.source_kind == "content_delete", 0),
+                        else_=1,
+                    ),
                     UserActorOutboundSource.logical_version,
                     UserActorOutboundSource.id,
-                    UserActorOutboundDelivery.target_endpoint_url,
                     UserActorOutboundDelivery.id,
                 )
             ).all()
@@ -294,6 +354,33 @@ class UserActorDeliveryRepository(BaseRepository):
         )
 
     @staticmethod
+    def _newer_delete_status(
+        session: Session,
+        *,
+        delivery: UserActorOutboundDelivery,
+        source: UserActorOutboundSource,
+    ) -> str | None:
+        """Return the nearest newer terminal Delete status for content rows."""
+        if source.source_kind not in {"content_create", "content_update"}:
+            return None
+        return session.scalar(
+            select(UserActorOutboundDelivery.status)
+            .join(UserActorOutboundSource)
+            .where(
+                UserActorOutboundSource.ordering_key == source.ordering_key,
+                UserActorOutboundDelivery.target_endpoint_url
+                == delivery.target_endpoint_url,
+                UserActorOutboundSource.logical_version > source.logical_version,
+                UserActorOutboundSource.source_kind == "content_delete",
+                UserActorOutboundDelivery.status.in_(
+                    ("pending", "failed", "sending", "delivered")
+                ),
+            )
+            .order_by(UserActorOutboundSource.logical_version.desc())
+            .limit(1)
+        )
+
+    @staticmethod
     def _has_newer_delivered(
         session: Session,
         *,
@@ -306,10 +393,15 @@ class UserActorDeliveryRepository(BaseRepository):
                 select(UserActorOutboundDelivery.id)
                 .join(UserActorOutboundSource)
                 .where(
-                    UserActorOutboundSource.user_id == source.user_id,
+                    UserActorOutboundSource.ordering_key == source.ordering_key,
                     UserActorOutboundDelivery.target_endpoint_url
                     == delivery.target_endpoint_url,
                     UserActorOutboundSource.logical_version > source.logical_version,
+                    (
+                        UserActorOutboundSource.source_kind == "profile_update"
+                        if source.source_kind == "profile_update"
+                        else UserActorOutboundSource.source_kind == "content_delete"
+                    ),
                     UserActorOutboundDelivery.status == "delivered",
                 )
                 .limit(1)
@@ -324,19 +416,18 @@ class UserActorDeliveryRepository(BaseRepository):
         delivery: UserActorOutboundDelivery,
         source: UserActorOutboundSource,
     ) -> bool:
-        """Preserve monotonic endpoint observation across profile versions."""
+        """Apply FIFO except that terminal Delete may bypass unsent failures."""
+        blocking_statuses = ("sending",) if source.source_kind == "content_delete" else ("pending", "failed", "sending")
         return (
             session.scalar(
                 select(UserActorOutboundDelivery.id)
                 .join(UserActorOutboundSource)
                 .where(
-                    UserActorOutboundSource.user_id == source.user_id,
+                    UserActorOutboundSource.ordering_key == source.ordering_key,
                     UserActorOutboundDelivery.target_endpoint_url
                     == delivery.target_endpoint_url,
                     UserActorOutboundSource.logical_version < source.logical_version,
-                    UserActorOutboundDelivery.status.in_(
-                        ("pending", "failed", "sending")
-                    ),
+                    UserActorOutboundDelivery.status.in_(blocking_statuses),
                 )
                 .limit(1)
             )
@@ -481,6 +572,31 @@ class UserActorDeliveryRepository(BaseRepository):
                 delivery.delivered_at = now
                 delivery.last_error = None
                 delivery.next_attempt_at = None
+                source = session.get(UserActorOutboundSource, delivery.source_id)
+                if source is not None and source.source_kind == "content_delete":
+                    older_ids = session.scalars(
+                        select(UserActorOutboundDelivery.id)
+                        .join(UserActorOutboundSource)
+                        .where(
+                            UserActorOutboundSource.ordering_key == source.ordering_key,
+                            UserActorOutboundSource.logical_version < source.logical_version,
+                            UserActorOutboundDelivery.target_endpoint_url
+                            == delivery.target_endpoint_url,
+                            UserActorOutboundDelivery.status.in_(("pending", "failed")),
+                        )
+                    ).all()
+                    if older_ids:
+                        session.execute(
+                            update(UserActorOutboundDelivery)
+                            .where(UserActorOutboundDelivery.id.in_(older_ids))
+                            .values(
+                                status="superseded",
+                                claim_token=None,
+                                claimed_at=None,
+                                next_attempt_at=None,
+                                last_error=None,
+                            )
+                        )
             else:
                 delivery.status = "failed"
                 delivery.last_error = self._bounded_error(error or "delivery failed")

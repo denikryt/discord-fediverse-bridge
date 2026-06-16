@@ -106,6 +106,7 @@ class DiscordEventRouter:
         new_content: str,
         author_display_name: str,
         runtime: object,
+        edited_timestamp=None,
         guild_id: int | None = None,
     ) -> None:
         """Route one raw Discord edit event into the owning bridge mode."""
@@ -117,6 +118,7 @@ class DiscordEventRouter:
                 new_content=new_content,
                 author_display_name=author_display_name,
                 runtime=runtime,
+                edited_timestamp=edited_timestamp,
             )
             return
         await self.community_runtime.handle_discord_message_edit(
@@ -124,6 +126,7 @@ class DiscordEventRouter:
             new_content=new_content,
             author_display_name=author_display_name,
             runtime=runtime,
+            edited_timestamp=edited_timestamp,
         )
 
     async def handle_message_delete(

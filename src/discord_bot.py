@@ -226,6 +226,39 @@ class BridgeBot(discord.Client):
             logger.debug("[on_raw_message_edit] no content in payload for msg=%s", payload.message_id)
             return
 
+        # Discord provides edited_timestamp as the only durable external
+        # ordering evidence for content edits. Partial events without it are
+        # reconciled through the current message resource before admission.
+        from datetime import datetime
+        edited_timestamp_raw = payload.data.get("edited_timestamp")
+        edited_timestamp = None
+        if isinstance(edited_timestamp_raw, str):
+            edited_timestamp = datetime.fromisoformat(
+                edited_timestamp_raw.replace("Z", "+00:00")
+            )
+        if edited_timestamp is None:
+            try:
+                channel = self.get_channel(payload.channel_id) or await self.fetch_channel(payload.channel_id)
+                current_message = await channel.fetch_message(payload.message_id)
+                edited_timestamp = getattr(current_message, "edited_at", None)
+                if edited_timestamp is None:
+                    return
+                new_content = getattr(current_message, "content", new_content)
+            except discord.HTTPException as exc:
+                logger.exception(
+                    "[on_raw_message_edit] failed to reconcile partial edit msg=%s",
+                    payload.message_id,
+                )
+                self.database.content_mutations.request_discord_reconciliation(
+                    channel_id=payload.channel_id,
+                    message_id=payload.message_id,
+                    error=str(exc),
+                )
+                runtime = self._get_runtime()
+                if runtime is not None:
+                    runtime.user_actor_delivery_worker.wake()
+                return
+
         # Extract author display name from payload for mirror header attribution.
         # global_name is the Display Name set by the user; falls back to username.
         author_data = payload.data.get("author") or {}
@@ -244,6 +277,7 @@ class BridgeBot(discord.Client):
                 new_content=new_content,
                 author_display_name=author_display_name,
                 runtime=runtime,
+                edited_timestamp=edited_timestamp,
                 guild_id=getattr(payload, "guild_id", None),
             )
         except Exception:
@@ -298,6 +332,15 @@ class BridgeBot(discord.Client):
             )
         except Exception:
             logger.exception("[on_raw_message_delete] exception in handle_discord_message_delete for msg=%s", payload.message_id)
+
+
+    async def fetch_message_state(self, channel_id: int, message_id: int) -> tuple[str, object | None]:
+        """Fetch authoritative Discord message state for durable reconciliation."""
+        try:
+            channel = self.get_channel(channel_id) or await self.fetch_channel(channel_id)
+            return "present", await channel.fetch_message(message_id)
+        except discord.NotFound:
+            return "missing", None
 
     def _get_runtime(self) -> object | None:
         """Return the bridge Runtime instance, if available.

@@ -385,7 +385,7 @@ def test_source_state_constraints_reject_payload_state_mismatch(tmp_path) -> Non
                 text("""
                     INSERT INTO user_actor_outbound_sources (
                         user_id, source_kind, logical_version, activity_id,
-                        profile_snapshot_json, activity_json, state,
+                        snapshot_json, activity_json, state,
                         render_attempt_count, created_at, updated_at
                     ) VALUES (
                         :user_id, :source_kind, :logical_version, :activity_id,
@@ -401,7 +401,7 @@ def test_source_state_constraints_reject_payload_state_mismatch(tmp_path) -> Non
                 text("""
                     INSERT INTO user_actor_outbound_sources (
                         user_id, source_kind, logical_version, activity_id,
-                        profile_snapshot_json, activity_json, state,
+                        snapshot_json, activity_json, state,
                         render_attempt_count, created_at, updated_at
                     ) VALUES (
                         :user_id, :source_kind, :logical_version, :activity_id,

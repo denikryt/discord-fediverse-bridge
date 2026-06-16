@@ -470,6 +470,7 @@ class CommunityRuntime:
         new_content: str,
         runtime: Runtime,
         author_display_name: str = "",
+        edited_timestamp=None,
     ) -> None:
         """Propagate a Discord source-message edit to all mirror messages and to AP.
 
@@ -530,14 +531,18 @@ class CommunityRuntime:
                         if thread_group:
                             in_reply_to_object_id = thread_group.ap_object_id
 
-                    await runtime.fedify_gateway.update_content(UpdateContentRequest(
-                        actor_username=actor_username,
-                        community_actor_url=message_group.community_actor_id,
-                        ap_object_id=message_group.ap_object_id,
-                        kind="comment",
+                    published = self.database.activitypub_objects.get_published_activity_object_by_object_id(
+                        message_group.ap_object_id
+                    )
+                    if published is None or published.actor_username != actor_username or edited_timestamp is None:
+                        return
+                    await runtime.user_actor_delivery_service.submit_update(
+                        object_id=published.object_id,
+                        title=published.title,
                         body_markdown=new_content,
-                        in_reply_to_object_id=in_reply_to_object_id,
-                    ))
+                        edited_timestamp=edited_timestamp,
+                    )
+                    runtime.user_actor_delivery_worker.wake()
                 except Exception:
                     logger.exception("Failed to send message edit to AP gateway")
 
@@ -578,11 +583,15 @@ class CommunityRuntime:
             )
             if actor_username:
                 try:
-                    await runtime.fedify_gateway.delete_content(DeleteContentRequest(
-                        actor_username=actor_username,
-                        community_actor_url=message_group.community_actor_id,
-                        ap_object_id=message_group.ap_object_id,
-                    ))
+                    published = self.database.activitypub_objects.get_published_activity_object_by_object_id(
+                        message_group.ap_object_id
+                    )
+                    if published is None or published.actor_username != actor_username:
+                        return
+                    await runtime.user_actor_delivery_service.submit_delete(
+                        object_id=published.object_id
+                    )
+                    runtime.user_actor_delivery_worker.wake()
                 except Exception:
                     logger.exception("Failed to send message delete to AP gateway")
 

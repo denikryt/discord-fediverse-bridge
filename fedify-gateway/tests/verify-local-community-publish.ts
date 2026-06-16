@@ -106,6 +106,7 @@ async function testLocalCommunityPostPublishesAnnounceCreatePage(): Promise<void
     assert.notEqual(delivery.payload.actor, embeddedObject.attributedTo);
     assert.equal(result.activityId, embeddedCreate.id);
     assert.equal(result.objectId, embeddedObject.id);
+    assert.deepEqual(result.activityJson, embeddedCreate);
     assert.notEqual(result.activityId, delivery.payload.id);
   }
 }
@@ -155,6 +156,7 @@ async function testLocalCommunityCommentPublishesAnnounceCreateNote(): Promise<v
     assert.ok(toList(embeddedObject.inReplyTo).includes(parentObjectId));
     assert.equal(result.activityId, embeddedCreate.id);
     assert.equal(result.objectId, embeddedObject.id);
+    assert.deepEqual(result.activityJson, embeddedCreate);
   }
 }
 

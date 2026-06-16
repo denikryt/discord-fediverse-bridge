@@ -242,3 +242,9 @@ Successful registered-user profile mutations create one immutable logical profil
 The Python runtime owns source state, retry timing, endpoint claims, ordering, and per-target outcomes. The Fedify gateway renders the complete `Person` through the same actor builder used by the public actor route and performs signed endpoint delivery as the owning User Actor. Retry uses the persisted activity JSON and stable activity ID; it does not re-read a newer profile into an older source.
 
 Profile delivery is partial-failure tolerant. A failed endpoint does not roll back the local profile or block healthy endpoints. Account settings report local success separately from pending remote refresh. Existing user-authored content recipients are unchanged in Stage 4.
+
+## User Actor content follower delivery
+
+Public user-authored `Create`, `Update`, and `Delete` activities keep their existing canonical object and activity identities and existing community/conversation delivery. The same canonical activity JSON is also stored by Python and delivered asynchronously to the accepted followers of the author, grouped by exact inbox or shared-inbox endpoint. Local-community `Announce` remains a distinct community-owned envelope; it is not replaced by direct User Actor delivery.
+
+Create persistence snapshots the accepted follower relationships in the same database transaction as the published object and Discord mapping. Content mutations use durable desired state and a stable pre-gateway reservation so duplicate or concurrent Discord events cannot allocate a second logical mutation identity. The gateway remains the signing and canonical serialization boundary, while Python owns restart recovery, endpoint eligibility, policy checks, retry state, and partial-failure isolation. A delivered terminal `Delete` prevents later stale `Create` or `Update` delivery for the same object and endpoint.

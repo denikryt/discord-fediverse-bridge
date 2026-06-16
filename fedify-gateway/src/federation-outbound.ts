@@ -19,6 +19,7 @@ import type {
   DeleteContentRequest,
   PublishContentRequest,
   PublishContentResult,
+  CanonicalMutationResult,
   PublishLocalCommunityContentRequest,
   PublishLocalCommunityContentResult,
   SendLocalCommunityRelayRequest,
@@ -262,6 +263,7 @@ export async function publishContent(
     activityId: activityId.href,
     objectId: objectId.href,
     communityActorUrl: communityId,
+    activityJson: await renderPublicActivityJson(activity),
   };
 }
 
@@ -350,12 +352,17 @@ export async function publishLocalCommunityContent(
     throw new Error("Local community publish failed for all accepted remote subscribers");
   }
 
+  const canonicalCreateJson = activityJson.object;
+  if (canonicalCreateJson == null || typeof canonicalCreateJson !== "object" || Array.isArray(canonicalCreateJson)) {
+    throw new Error("Local community Announce did not contain a canonical Create object");
+  }
   return {
     activityId: activityId.href,
     objectId: objectId.href,
     communityActorUrl: request.communityActorUrl,
     deliveredFollowerCount: deliveredRemoteSubscriberCount,
     failedFollowerCount: failedRemoteSubscriberCount,
+    activityJson: canonicalCreateJson as Record<string, unknown>,
   };
 }
 
@@ -704,6 +711,7 @@ export function buildPublishCreateActivity(
   const object = buildPublishObject(request, actorUri, objectId, communityId);
   const PUBLIC = new URL("https://www.w3.org/ns/activitystreams#Public");
   const community = new URL(resolvedCommunityId ?? request.communityActorUrl);
+  const followers = buildGatewayUrl(config, `/actors/${request.actorUsername}/followers`);
   return {
     actorUri,
     activityId,
@@ -713,7 +721,7 @@ export function buildPublishCreateActivity(
       actor: actorUri,
       object,
       tos: [PUBLIC, community],
-      ccs: [actorUri],
+      ccs: [actorUri, followers],
     }),
   };
 }
@@ -724,17 +732,60 @@ function buildUserActorUri(config: GatewayConfig, actorUsername: string): URL {
   return buildGatewayUrl(config, `/actors/${actorUsername}`);
 }
 
+
+function stableJson(value: unknown): string {
+  if (value === null || typeof value !== "object") return JSON.stringify(value);
+  if (Array.isArray(value)) return `[${value.map(stableJson).join(",")}]`;
+  const record = value as Record<string, unknown>;
+  return `{${Object.keys(record).sort().map((key) => `${JSON.stringify(key)}:${stableJson(record[key])}`).join(",")}}`;
+}
+
+export function verifyMutationIdentity(config: GatewayConfig, request: UpdateContentRequest | DeleteContentRequest, kind: "content_update" | "content_delete"): void {
+  if (request.operationId == null && request.activityId == null) return;
+  if (request.operationId == null || request.activityId == null || request.expectedRevision == null || request.nextRevision == null) {
+    throw new Error("mutation idempotency fields must be supplied together");
+  }
+  const requestShape: Record<string, unknown> = {
+    actorUsername: request.actorUsername,
+    communityActorUrl: request.communityActorUrl,
+    apObjectId: request.apObjectId,
+    kind: "kind" in request ? request.kind : null,
+    title: "title" in request ? request.title ?? null : null,
+    bodyMarkdown: "bodyMarkdown" in request ? request.bodyMarkdown : null,
+    inReplyToObjectId: "inReplyToObjectId" in request ? request.inReplyToObjectId ?? null : null,
+    targetInboxUrls: request.targetInboxUrls ?? null,
+    mutationTimestamp: request.mutationTimestamp ?? null,
+  };
+  const identity = stableJson({
+    objectId: request.apObjectId,
+    kind,
+    expectedRevision: request.expectedRevision,
+    nextRevision: request.nextRevision,
+    request: requestShape,
+  });
+  const expectedOperationId = createHash("sha256").update(identity).digest("hex");
+  if (expectedOperationId !== request.operationId) throw new Error("mutation operation identity mismatch");
+  const expectedActivityId = buildGatewayUrl(
+    config,
+    `/users/${request.actorUsername}/activities/${kind === "content_delete" ? "delete" : "update"}/${expectedOperationId}`,
+  ).href;
+  if (expectedActivityId !== new URL(request.activityId).href) throw new Error("mutation activity identity mismatch");
+}
+
 function buildUpdateActivity(
   config: GatewayConfig,
   request: UpdateContentRequest,
 ): { activity: Update; activityId: URL } {
   /** Build one user-authored Update with the full object shape Lemmy expects. */
+  verifyMutationIdentity(config, request, "content_update");
   const actorUri = buildUserActorUri(config, request.actorUsername);
   const objectId = new URL(request.apObjectId);
-  const activityId = buildGatewayUrl(
-    config,
-    `/users/${request.actorUsername}/activities/update/${request.kind}/${Date.now()}-${Math.random().toString(36).slice(2)}`,
-  );
+  const activityId = request.activityId == null
+    ? buildGatewayUrl(
+        config,
+        `/users/${request.actorUsername}/activities/update/${request.kind}/${Date.now()}-${Math.random().toString(36).slice(2)}`,
+      )
+    : new URL(request.activityId);
   const htmlContent = markdownToHtml(request.bodyMarkdown);
   const source = new Source({
     content: request.bodyMarkdown,
@@ -742,7 +793,10 @@ function buildUpdateActivity(
   });
   const PUBLIC = new URL("https://www.w3.org/ns/activitystreams#Public");
   const community = new URL(request.communityActorUrl);
-  const updated = Temporal.Now.instant();
+  const followers = buildGatewayUrl(config, `/actors/${request.actorUsername}/followers`);
+  const updated = request.mutationTimestamp == null
+    ? Temporal.Now.instant()
+    : Temporal.Instant.from(request.mutationTimestamp);
 
   let object;
   if (request.kind === "post") {
@@ -782,7 +836,7 @@ function buildUpdateActivity(
       actor: actorUri,
       object,
       tos: [PUBLIC, community],
-      ccs: [actorUri],
+      ccs: [actorUri, followers],
     }),
   };
 }
@@ -792,13 +846,17 @@ function buildDeleteActivity(
   request: DeleteContentRequest,
 ): { activity: Delete; activityId: URL } {
   /** Build one user-authored Delete using the Lemmy URL-object convention. */
+  verifyMutationIdentity(config, request, "content_delete");
   const actorUri = buildUserActorUri(config, request.actorUsername);
-  const activityId = buildGatewayUrl(
-    config,
-    `/users/${request.actorUsername}/activities/delete/${Date.now()}-${Math.random().toString(36).slice(2)}`,
-  );
+  const activityId = request.activityId == null
+    ? buildGatewayUrl(
+        config,
+        `/users/${request.actorUsername}/activities/delete/${Date.now()}-${Math.random().toString(36).slice(2)}`,
+      )
+    : new URL(request.activityId);
   const PUBLIC = new URL("https://www.w3.org/ns/activitystreams#Public");
   const community = new URL(request.communityActorUrl);
+  const followers = buildGatewayUrl(config, `/actors/${request.actorUsername}/followers`);
   return {
     activityId,
     activity: new Delete({
@@ -806,7 +864,7 @@ function buildDeleteActivity(
       actor: actorUri,
       object: new URL(request.apObjectId),
       tos: [PUBLIC, community],
-      ccs: [actorUri],
+      ccs: [actorUri, followers],
     }),
   };
 }
@@ -899,12 +957,16 @@ export async function updateContent(
   federation: Federation<GatewayConfig>,
   config: GatewayConfig,
   request: UpdateContentRequest,
-): Promise<void> {
+): Promise<CanonicalMutationResult> {
   // Update delivery mirrors publish delivery: same actor URI, same community
   // fetch, but wraps the object in an Update activity instead of Create.
   const builtUpdate = buildUpdateActivity(config, request);
   if (await maybeDeliverLocalCommunityMutation(config, request.communityActorUrl, builtUpdate.activity, request.targetInboxUrls)) {
-    return;
+    return {
+      activityId: builtUpdate.activityId.href,
+      objectId: request.apObjectId,
+      activityJson: await renderPublicActivityJson(builtUpdate.activity),
+    };
   }
 
   const ctx = federation.createContext(new URL(config.fedifyOrigin), config);
@@ -930,6 +992,11 @@ export async function updateContent(
       builtUpdate.activity,
     );
     console.log("[Update] sendActivity completed successfully");
+    return {
+      activityId: builtUpdate.activityId.href,
+      objectId: request.apObjectId,
+      activityJson: await renderPublicActivityJson(builtUpdate.activity),
+    };
   } catch (err) {
     console.error("[Update] sendActivity failed:", err);
     throw err;
@@ -940,12 +1007,16 @@ export async function deleteContent(
   federation: Federation<GatewayConfig>,
   config: GatewayConfig,
   request: DeleteContentRequest,
-): Promise<void> {
+): Promise<CanonicalMutationResult> {
   // Delete delivery uses the AP object URL as the object field (string form, not
   // a full object), matching the Lemmy federation protocol for Delete activities.
   const builtDelete = buildDeleteActivity(config, request);
   if (await maybeDeliverLocalCommunityMutation(config, request.communityActorUrl, builtDelete.activity, request.targetInboxUrls)) {
-    return;
+    return {
+      activityId: builtDelete.activityId.href,
+      objectId: request.apObjectId,
+      activityJson: await renderPublicActivityJson(builtDelete.activity),
+    };
   }
 
   const ctx = federation.createContext(new URL(config.fedifyOrigin), config);
@@ -965,6 +1036,11 @@ export async function deleteContent(
       builtDelete.activity,
     );
     console.log("[Delete] sendActivity completed successfully");
+    return {
+      activityId: builtDelete.activityId.href,
+      objectId: request.apObjectId,
+      activityJson: await renderPublicActivityJson(builtDelete.activity),
+    };
   } catch (err) {
     console.error("[Delete] sendActivity failed:", err);
     throw err;
