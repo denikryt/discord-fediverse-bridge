@@ -206,4 +206,4 @@ The bridge process holds a shared lock on `/data/deployment-state.lock` for its 
 
 ## Discord Message Content intent and personal feeds
 
-The bot already enables Discord's Message Content intent. Keep that privileged intent enabled in the Discord application and deployment configuration: Stage 6 only recognizes eligible personal-feed events, while Stage 7 publication will require access to root message content. Disabling the intent leaves the control-plane binding rows intact but prevents the later personal-feed publication path from receiving usable message text.
+The bot enables Discord's Message Content intent in code. Keep that privileged intent enabled and, where required by Discord, approved in the Discord Developer Portal for every production application. Personal-feed root publication requires the complete message body; disabling the portal-side intent leaves binding rows intact but causes text-only roots to arrive without usable content and be ignored. Attachments and embeds without text are not published in Stage 7.

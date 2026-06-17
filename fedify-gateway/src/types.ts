@@ -91,6 +91,22 @@ export interface AcceptUserActorFollowRequest {
   followActivityId: string;
 }
 
+export interface RenderPersonalFeedRequest {
+  actorUsername: string;
+  operationId: string;
+  activityId: string;
+  objectId: string;
+  bodyMarkdown: string;
+  publishedAt: string;
+}
+
+export interface RenderPersonalFeedResult {
+  activityId: string;
+  objectId: string;
+  publishedAt: string;
+  activityJson: Record<string, unknown>;
+}
+
 export interface PublishContentRequest {
   actorUsername: string;
   communityActorUrl: string;

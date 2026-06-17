@@ -15,61 +15,53 @@ export function buildPublishedActivityObjectJson(
   const attributedTo = canonicalActorUrlForRecord(record);
   const published = normalizePublishedTimestamp(record.publishedAt);
   const htmlContent = markdownToHtml(record.bodyMarkdown);
-
-  // Stored local objects must stay reconstructible after a restart, so the
-  // route builds a deterministic AP payload directly from the durable DB row.
-  const base = {
-    "@context": "https://www.w3.org/ns/activitystreams",
-    id: record.objectId,
-    attributedTo,
-    audience: record.communityActorUrl,
-    to: [ACTIVITYSTREAMS_PUBLIC, record.communityActorUrl],
-    cc: [attributedTo],
-    source: {
-      content: record.bodyMarkdown,
-      mediaType: "text/markdown",
-    },
-    content: htmlContent,
-    published,
-    url: record.objectId,
-  };
-
-  if (record.kind === "post") {
+  if (record.publicationContext === "personal_feed") {
     return {
-      ...base,
-      type: "Page",
-      name: record.title ?? "Untitled Discord Post",
+      "@context": "https://www.w3.org/ns/activitystreams",
+      type: "Note",
+      id: record.objectId,
+      url: record.objectId,
+      attributedTo,
+      to: [ACTIVITYSTREAMS_PUBLIC],
+      cc: [`${attributedTo}/followers`],
+      source: { content: record.bodyMarkdown, mediaType: "text/markdown" },
+      content: safeMarkdownToHtml(record.bodyMarkdown),
+      published,
     };
   }
-
-  return {
-    ...base,
-    type: "Note",
-    ...(record.inReplyToObjectId
-      ? { inReplyTo: record.inReplyToObjectId }
-      : {}),
+  if (record.communityActorUrl == null) {
+    throw new Error("community publication is missing communityActorUrl");
+  }
+  const base = {
+    "@context": "https://www.w3.org/ns/activitystreams",
+    id: record.objectId, attributedTo, audience: record.communityActorUrl,
+    to: [ACTIVITYSTREAMS_PUBLIC, record.communityActorUrl], cc: [attributedTo],
+    source: { content: record.bodyMarkdown, mediaType: "text/markdown" },
+    content: htmlContent, published, url: record.objectId,
   };
+  return record.kind === "post"
+    ? { ...base, type: "Page", name: record.title ?? "Untitled Discord Post" }
+    : { ...base, type: "Note", ...(record.inReplyToObjectId ? { inReplyTo: record.inReplyToObjectId } : {}) };
 }
 
-/**
- * Render the durable embedded Create activity for ActivityPub dereferencing.
- *
- * Mastodon dereferences Announce.object.id after accepting local-community
- * Announce(Create(Page|Note)) deliveries, so the stored Create must be
- * fetchable from bridge-owned persistence instead of existing only inside the original POST body.
- */
 export function buildPublishedCreateActivityJson(
   record: PublishedActivityObjectRow,
 ): Record<string, unknown> {
   const actor = canonicalActorUrlForRecord(record);
+  if (record.publicationContext === "personal_feed") {
+    return {
+      "@context": "https://www.w3.org/ns/activitystreams", id: record.activityId,
+      type: "Create", actor, to: [ACTIVITYSTREAMS_PUBLIC],
+      cc: [actor, `${actor}/followers`], object: buildPublishedActivityObjectJson(record),
+    };
+  }
+  if (record.communityActorUrl == null) {
+    throw new Error("community publication is missing communityActorUrl");
+  }
   return {
-    "@context": "https://www.w3.org/ns/activitystreams",
-    id: record.activityId,
-    type: "Create",
-    actor,
-    to: [ACTIVITYSTREAMS_PUBLIC, record.communityActorUrl],
-    cc: [actor],
-    object: buildPublishedActivityObjectJson(record),
+    "@context": "https://www.w3.org/ns/activitystreams", id: record.activityId,
+    type: "Create", actor, to: [ACTIVITYSTREAMS_PUBLIC, record.communityActorUrl],
+    cc: [actor], object: buildPublishedActivityObjectJson(record),
   };
 }
 
@@ -90,6 +82,14 @@ function normalizePublishedTimestamp(value: string): string {
     return normalized.replace(/z$/, "Z");
   }
   return `${normalized}Z`;
+}
+
+function safeMarkdownToHtml(markdown: string): string {
+  // Personal-feed content is untrusted Discord input and must not become raw
+  // HTML when reconstructed after restart.
+  const escaped = markdown.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;").replace(/'/g, "&#39;");
+  return escaped.split(/\n\n+/).map((paragraph) => `<p>${paragraph.trim().replace(/\n/g, "<br>")}</p>`).join("\n");
 }
 
 function markdownToHtml(markdown: string): string {

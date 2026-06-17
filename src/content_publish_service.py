@@ -70,7 +70,11 @@ class ContentPublishService:
         self.settings = settings
         self.bridge_policy_service = bridge_policy_service
         self.delivery_worker = delivery_worker
-        self.user_ban_service = UserBanService(database=database, settings=settings) if settings is not None else None
+        self.user_ban_service = (
+            UserBanService(database=database, settings=settings)
+            if settings is not None
+            else None
+        )
 
     async def publish_thread_starter(
         self,
@@ -79,7 +83,9 @@ class ContentPublishService:
         starter_message: object,
     ) -> PublishResult:
         """Publish one Discord forum-thread starter into a remote subscribed community."""
-        subscription = self.database.remote_subscriptions.get_subscription_by_channel(getattr(thread, "parent_id"))
+        subscription = self.database.remote_subscriptions.get_subscription_by_channel(
+            getattr(thread, "parent_id")
+        )
         if subscription is None:
             return PublishResult(status="ignored", reason="no_subscription")
         if subscription.status != "accepted":
@@ -88,7 +94,9 @@ class ContentPublishService:
             subscription.lemmy_community_actor_id
         )
         if not decision.allowed:
-            return PublishResult(status="ignored", reason=f"federation_policy_{decision.reason.value}")
+            return PublishResult(
+                status="ignored", reason=f"federation_policy_{decision.reason.value}"
+            )
 
         return await self.publish_post_to_community(
             thread=thread,
@@ -100,7 +108,9 @@ class ContentPublishService:
     async def publish_thread_message(self, *, message: object) -> PublishResult:
         """Publish one Discord thread message into a remote subscribed community."""
         thread = getattr(message, "channel")
-        subscription = self.database.remote_subscriptions.get_subscription_by_channel(getattr(thread, "parent_id"))
+        subscription = self.database.remote_subscriptions.get_subscription_by_channel(
+            getattr(thread, "parent_id")
+        )
         if subscription is None:
             return PublishResult(status="ignored", reason="no_subscription")
         if subscription.status != "accepted":
@@ -109,16 +119,26 @@ class ContentPublishService:
             subscription.lemmy_community_actor_id
         )
         if not decision.allowed:
-            return PublishResult(status="ignored", reason=f"federation_policy_{decision.reason.value}")
+            return PublishResult(
+                status="ignored", reason=f"federation_policy_{decision.reason.value}"
+            )
 
-        thread_group = self.database.discord_fanout_groups.get_thread_group_by_any_thread(getattr(thread, "id"))
+        thread_group = (
+            self.database.discord_fanout_groups.get_thread_group_by_any_thread(
+                getattr(thread, "id")
+            )
+        )
         if thread_group is None or thread_group.ap_object_id is None:
             return PublishResult(status="ignored", reason="no_post_context")
 
         if thread_group.source_starter_message_id == getattr(message, "id"):
-            return PublishResult(status="ignored", reason="starter_message_already_handled")
+            return PublishResult(
+                status="ignored", reason="starter_message_already_handled"
+            )
 
-        reply_target_ap_id = self._resolve_reply_target(message=message, thread_group=thread_group)
+        reply_target_ap_id = self._resolve_reply_target(
+            message=message, thread_group=thread_group
+        )
         return await self.publish_comment_to_community(
             message=message,
             community_actor_url=subscription.lemmy_community_actor_id,
@@ -195,7 +215,7 @@ class ContentPublishService:
             )
         )
 
-        source_id = persist_publish_artifacts(
+        persisted = persist_publish_artifacts(
             self.database,
             source_id=str(getattr(starter_message, "id")),
             actor_username=user.activitypub_username,
@@ -211,7 +231,7 @@ class ContentPublishService:
             discord_channel_id=getattr(thread, "parent_id", None),
             discord_message_id=getattr(starter_message, "id"),
         )
-        if self.delivery_worker is not None:
+        if self.delivery_worker is not None and persisted.created:
             self.delivery_worker.wake()
         logger.info(
             "Published Discord thread %s starter %s via AP actor %s",
@@ -296,7 +316,9 @@ class ContentPublishService:
 
     def canonical_author_name_for_discord(self, author: object) -> str:
         """Return a stable local handle when the Discord account is registered."""
-        user = self.database.users.get_user_by_discord_user_id(str(getattr(author, "id")))
+        user = self.database.users.get_user_by_discord_user_id(
+            str(getattr(author, "id"))
+        )
         if user is not None and self.settings is not None:
             return canonical_local_user_handle(
                 username=str(user.activitypub_username), settings=self.settings
@@ -314,7 +336,11 @@ class ContentPublishService:
             return None, PublishResult(status="ignored", reason="unregistered_user")
         if self.user_ban_service is not None:
             try:
-                local_community = self.database.local_communities.get_local_community_by_actor_url(community_actor_url)
+                local_community = (
+                    self.database.local_communities.get_local_community_by_actor_url(
+                        community_actor_url
+                    )
+                )
                 decision = self.user_ban_service.check_discord_user(
                     discord_user_id=discord_user_id,
                     local_community=local_community,
@@ -322,28 +348,36 @@ class ContentPublishService:
             except Exception:
                 # Database uncertainty must never reopen the publish path. The
                 # generic message avoids falsely claiming that the user is banned.
-                logger.exception("Discord publish ban lookup failed for user %s", discord_user_id)
+                logger.exception(
+                    "Discord publish ban lookup failed for user %s", discord_user_id
+                )
                 try:
                     await getattr(reply_target, "reply")(
                         "The bridge could not verify publishing access. Please try again later."
                     )
                 except Exception:
-                    logger.exception("Failed to send publishing access verification error")
+                    logger.exception(
+                        "Failed to send publishing access verification error"
+                    )
                 return None, PublishResult(status="rejected", reason="ban_check_failed")
             if decision.banned:
                 try:
                     await getattr(reply_target, "reply")(render_ban_message(decision))
                 except Exception:
                     # Rejection delivery is best-effort; moderation remains fail-closed.
-                    logger.exception("Failed to send Discord ban rejection for user %s", discord_user_id)
+                    logger.exception(
+                        "Failed to send Discord ban rejection for user %s",
+                        discord_user_id,
+                    )
                 return None, PublishResult(status="rejected", reason="user_banned")
         return user, None
 
-
     def _allowed_local_follower_inboxes(self, community_actor_url: str) -> list[str]:
         """Return accepted follower inboxes permitted by one current snapshot."""
-        local_community = self.database.local_communities.get_local_community_by_actor_url(
-            community_actor_url
+        local_community = (
+            self.database.local_communities.get_local_community_by_actor_url(
+                community_actor_url
+            )
         )
         if local_community is None:
             return []
@@ -368,12 +402,18 @@ class ContentPublishService:
         if referenced_id is None:
             return post_ap_id
 
-        thread_deliveries = self.database.discord_fanout_groups.get_thread_deliveries(thread_group.id)
+        thread_deliveries = self.database.discord_fanout_groups.get_thread_deliveries(
+            thread_group.id
+        )
         for delivery in thread_deliveries:
             if referenced_id == delivery.discord_starter_message_id:
                 return post_ap_id
 
-        parent_group = self.database.discord_fanout_groups.get_message_group_by_delivered_message(referenced_id)
+        parent_group = (
+            self.database.discord_fanout_groups.get_message_group_by_delivered_message(
+                referenced_id
+            )
+        )
         if parent_group is None or parent_group.ap_object_id is None:
             return post_ap_id
         return parent_group.ap_object_id

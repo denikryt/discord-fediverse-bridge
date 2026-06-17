@@ -4,7 +4,18 @@ from __future__ import annotations
 
 from datetime import datetime, timezone
 
-from sqlalchemy import Boolean, CheckConstraint, Index, DateTime, ForeignKey, Integer, JSON, String, Text, UniqueConstraint
+from sqlalchemy import (
+    Boolean,
+    CheckConstraint,
+    Index,
+    DateTime,
+    ForeignKey,
+    Integer,
+    JSON,
+    String,
+    Text,
+    UniqueConstraint,
+)
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column
 
 
@@ -15,6 +26,7 @@ def utcnow() -> datetime:
 
 class Base(DeclarativeBase):
     """Base class for all ORM models used by the bridge."""
+
     pass
 
 
@@ -35,8 +47,12 @@ class BridgeActorKey(Base):
     algorithm: Mapped[str] = mapped_column(String(64), nullable=False)
     public_key_data: Mapped[str] = mapped_column(Text, nullable=False)
     private_key_data: Mapped[str] = mapped_column(Text, nullable=False)
-    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, nullable=False)
-    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, onupdate=utcnow, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=utcnow, nullable=False
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=utcnow, onupdate=utcnow, nullable=False
+    )
 
     def __repr__(self) -> str:
         """Represent metadata only so private key material cannot leak to logs."""
@@ -63,9 +79,13 @@ class PostLink(Base):
     lemmy_post_ap_id: Mapped[str | None] = mapped_column(String(512), nullable=True)
     discord_forum_channel_id: Mapped[int | None] = mapped_column(Integer, nullable=True)
     discord_forum_thread_id: Mapped[int] = mapped_column(Integer, nullable=False)
-    discord_starter_message_id: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    discord_starter_message_id: Mapped[int | None] = mapped_column(
+        Integer, nullable=True
+    )
     direction: Mapped[str] = mapped_column(String(32), nullable=False)
-    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=utcnow, nullable=False
+    )
 
 
 class CommentLink(Base):
@@ -83,12 +103,16 @@ class CommentLink(Base):
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
     lemmy_comment_id: Mapped[int] = mapped_column(Integer, nullable=False)
     lemmy_comment_ap_id: Mapped[str | None] = mapped_column(String(512), nullable=True)
-    lemmy_parent_comment_ap_id: Mapped[str | None] = mapped_column(String(512), nullable=True)
+    lemmy_parent_comment_ap_id: Mapped[str | None] = mapped_column(
+        String(512), nullable=True
+    )
     lemmy_post_id: Mapped[int] = mapped_column(Integer, nullable=False)
     discord_forum_thread_id: Mapped[int] = mapped_column(Integer, nullable=False)
     discord_message_id: Mapped[int] = mapped_column(Integer, nullable=False)
     direction: Mapped[str] = mapped_column(String(32), nullable=False)
-    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=utcnow, nullable=False
+    )
 
 
 class ActivityPubEventReceipt(Base):
@@ -105,8 +129,12 @@ class ActivityPubEventReceipt(Base):
     status: Mapped[str] = mapped_column(String(32), nullable=False)
     outcome: Mapped[str | None] = mapped_column(String(64), nullable=True)
     detail: Mapped[str | None] = mapped_column(String(1024), nullable=True)
-    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, nullable=False)
-    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, onupdate=utcnow, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=utcnow, nullable=False
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=utcnow, onupdate=utcnow, nullable=False
+    )
 
 
 class DiscordGuildSnapshot(Base):
@@ -120,8 +148,12 @@ class DiscordGuildSnapshot(Base):
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
     discord_guild_id: Mapped[int] = mapped_column(Integer, nullable=False)
     guild_name: Mapped[str] = mapped_column(String(255), nullable=False)
-    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, nullable=False)
-    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, onupdate=utcnow, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=utcnow, nullable=False
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=utcnow, onupdate=utcnow, nullable=False
+    )
 
 
 class DiscordChannelSnapshot(Base):
@@ -138,8 +170,12 @@ class DiscordChannelSnapshot(Base):
     discord_guild_id: Mapped[int | None] = mapped_column(Integer, nullable=True)
     channel_name: Mapped[str] = mapped_column(String(255), nullable=False)
     channel_type: Mapped[str] = mapped_column(String(64), nullable=False)
-    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, nullable=False)
-    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, onupdate=utcnow, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=utcnow, nullable=False
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=utcnow, onupdate=utcnow, nullable=False
+    )
 
 
 class ChannelCommunitySubscription(Base):
@@ -152,7 +188,9 @@ class ChannelCommunitySubscription(Base):
     __tablename__ = "channel_community_subscriptions"
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
-    discord_channel_id: Mapped[int] = mapped_column(Integer, nullable=False, unique=True)
+    discord_channel_id: Mapped[int] = mapped_column(
+        Integer, nullable=False, unique=True
+    )
     discord_guild_id: Mapped[int | None] = mapped_column(Integer, nullable=True)
     lemmy_community_actor_id: Mapped[str] = mapped_column(String(512), nullable=False)
     lemmy_community_name: Mapped[str | None] = mapped_column(String(255), nullable=True)
@@ -160,10 +198,16 @@ class ChannelCommunitySubscription(Base):
     community_handle: Mapped[str | None] = mapped_column(String(255), nullable=True)
     community_inbox_url: Mapped[str | None] = mapped_column(String(512), nullable=True)
     follow_activity_id: Mapped[str | None] = mapped_column(String(512), nullable=True)
-    initiated_by_discord_user_id: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    initiated_by_discord_user_id: Mapped[str | None] = mapped_column(
+        String(64), nullable=True
+    )
     status: Mapped[str] = mapped_column(String(32), nullable=False, default="pending")
-    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, nullable=False)
-    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, onupdate=utcnow, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=utcnow, nullable=False
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=utcnow, onupdate=utcnow, nullable=False
+    )
 
 
 class ProfileMediaAsset(Base):
@@ -173,7 +217,9 @@ class ProfileMediaAsset(Base):
     __table_args__ = (
         UniqueConstraint("public_id"),
         UniqueConstraint("storage_key"),
-        CheckConstraint("media_kind IN ('avatar', 'header')", name="ck_profile_media_kind"),
+        CheckConstraint(
+            "media_kind IN ('avatar', 'header')", name="ck_profile_media_kind"
+        ),
         CheckConstraint("byte_size > 0", name="ck_profile_media_byte_size"),
         CheckConstraint("width > 0 AND height > 0", name="ck_profile_media_dimensions"),
     )
@@ -187,7 +233,9 @@ class ProfileMediaAsset(Base):
     width: Mapped[int] = mapped_column(Integer, nullable=False)
     height: Mapped[int] = mapped_column(Integer, nullable=False)
     sha256_hex: Mapped[str] = mapped_column(String(64), nullable=False)
-    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=utcnow, nullable=False
+    )
 
 
 class User(Base):
@@ -214,11 +262,19 @@ class User(Base):
     private_key_pem: Mapped[str] = mapped_column(String, nullable=False)
     display_name: Mapped[str | None] = mapped_column(String(30), nullable=True)
     summary: Mapped[str | None] = mapped_column(String(500), nullable=True)
-    avatar_media_id: Mapped[int | None] = mapped_column(ForeignKey("profile_media_assets.id", ondelete="RESTRICT"), nullable=True)
-    header_media_id: Mapped[int | None] = mapped_column(ForeignKey("profile_media_assets.id", ondelete="RESTRICT"), nullable=True)
+    avatar_media_id: Mapped[int | None] = mapped_column(
+        ForeignKey("profile_media_assets.id", ondelete="RESTRICT"), nullable=True
+    )
+    header_media_id: Mapped[int | None] = mapped_column(
+        ForeignKey("profile_media_assets.id", ondelete="RESTRICT"), nullable=True
+    )
     profile_version: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
-    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, nullable=False)
-    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, onupdate=utcnow, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=utcnow, nullable=False
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=utcnow, onupdate=utcnow, nullable=False
+    )
 
 
 class PersonalFeedBinding(Base):
@@ -230,15 +286,23 @@ class PersonalFeedBinding(Base):
         UniqueConstraint("discord_guild_id"),
         UniqueConstraint("discord_channel_id"),
         CheckConstraint("discord_guild_id > 0", name="ck_personal_feed_guild_positive"),
-        CheckConstraint("discord_channel_id > 0", name="ck_personal_feed_channel_positive"),
+        CheckConstraint(
+            "discord_channel_id > 0", name="ck_personal_feed_channel_positive"
+        ),
     )
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
-    user_id: Mapped[int] = mapped_column(ForeignKey("users.id", ondelete="CASCADE"), nullable=False)
+    user_id: Mapped[int] = mapped_column(
+        ForeignKey("users.id", ondelete="CASCADE"), nullable=False
+    )
     discord_guild_id: Mapped[int] = mapped_column(Integer, nullable=False)
     discord_channel_id: Mapped[int] = mapped_column(Integer, nullable=False)
-    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, nullable=False)
-    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, onupdate=utcnow, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=utcnow, nullable=False
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=utcnow, onupdate=utcnow, nullable=False
+    )
 
 
 class UserActorFollower(Base):
@@ -257,16 +321,28 @@ class UserActorFollower(Base):
     )
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
-    user_id: Mapped[int] = mapped_column(ForeignKey("users.id", ondelete="CASCADE"), nullable=False)
+    user_id: Mapped[int] = mapped_column(
+        ForeignKey("users.id", ondelete="CASCADE"), nullable=False
+    )
     remote_actor_id: Mapped[str] = mapped_column(String(512), nullable=False)
     remote_inbox_url: Mapped[str] = mapped_column(String(512), nullable=False)
-    remote_shared_inbox_url: Mapped[str | None] = mapped_column(String(512), nullable=True)
+    remote_shared_inbox_url: Mapped[str | None] = mapped_column(
+        String(512), nullable=True
+    )
     follow_activity_id: Mapped[str] = mapped_column(String(512), nullable=False)
     status: Mapped[str] = mapped_column(String(32), nullable=False, default="accepted")
-    owner_notification_state: Mapped[str] = mapped_column(String(32), nullable=False, default="pending")
-    owner_notification_attempted_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
-    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, nullable=False)
-    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, onupdate=utcnow, nullable=False)
+    owner_notification_state: Mapped[str] = mapped_column(
+        String(32), nullable=False, default="pending"
+    )
+    owner_notification_attempted_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=utcnow, nullable=False
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=utcnow, onupdate=utcnow, nullable=False
+    )
 
 
 class UserActorFollowActivityId(Base):
@@ -280,9 +356,13 @@ class UserActorFollowActivityId(Base):
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
     follow_activity_id: Mapped[str] = mapped_column(String(512), nullable=False)
-    user_id: Mapped[int] = mapped_column(ForeignKey("users.id", ondelete="CASCADE"), nullable=False)
+    user_id: Mapped[int] = mapped_column(
+        ForeignKey("users.id", ondelete="CASCADE"), nullable=False
+    )
     remote_actor_id: Mapped[str] = mapped_column(String(512), nullable=False)
-    first_seen_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, nullable=False)
+    first_seen_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=utcnow, nullable=False
+    )
 
 
 class UserProfileField(Base):
@@ -291,16 +371,24 @@ class UserProfileField(Base):
     __tablename__ = "user_profile_fields"
     __table_args__ = (
         UniqueConstraint("user_id", "position"),
-        CheckConstraint("position >= 0 AND position <= 3", name="ck_user_profile_field_position"),
+        CheckConstraint(
+            "position >= 0 AND position <= 3", name="ck_user_profile_field_position"
+        ),
     )
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
-    user_id: Mapped[int] = mapped_column(ForeignKey("users.id", ondelete="CASCADE"), nullable=False)
+    user_id: Mapped[int] = mapped_column(
+        ForeignKey("users.id", ondelete="CASCADE"), nullable=False
+    )
     position: Mapped[int] = mapped_column(Integer, nullable=False)
     name: Mapped[str] = mapped_column(String(255), nullable=False)
     value: Mapped[str] = mapped_column(String(255), nullable=False)
-    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, nullable=False)
-    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, onupdate=utcnow, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=utcnow, nullable=False
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=utcnow, onupdate=utcnow, nullable=False
+    )
 
 
 class UserActorOutboundSource(Base):
@@ -311,33 +399,66 @@ class UserActorOutboundSource(Base):
         UniqueConstraint("activity_id"),
         UniqueConstraint("ordering_key", "logical_version"),
         CheckConstraint("logical_version >= 1", name="ck_user_actor_source_version"),
-        CheckConstraint("length(snapshot_json) > 0", name="ck_user_actor_source_snapshot_nonempty"),
+        CheckConstraint(
+            "length(snapshot_json) > 0", name="ck_user_actor_source_snapshot_nonempty"
+        ),
         CheckConstraint(
             "source_kind IN ('profile_update', 'content_create', 'content_update', 'content_delete')",
             name="ck_user_actor_source_kind",
         ),
-        CheckConstraint("state IN ('render_pending', 'ready', 'render_failed')", name="ck_user_actor_source_state"),
-        CheckConstraint("render_attempt_count >= 0", name="ck_user_actor_source_render_attempts"),
-        CheckConstraint("(state = 'ready' AND activity_json IS NOT NULL) OR (state != 'ready' AND activity_json IS NULL)", name="ck_user_actor_source_activity_state"),
-        Index("ix_user_actor_sources_retry", "state", "next_attempt_at", "user_id", "ordering_key", "logical_version"),
+        CheckConstraint(
+            "state IN ('render_pending', 'ready', 'render_failed')",
+            name="ck_user_actor_source_state",
+        ),
+        CheckConstraint(
+            "render_attempt_count >= 0", name="ck_user_actor_source_render_attempts"
+        ),
+        CheckConstraint(
+            "(state = 'ready' AND activity_json IS NOT NULL) OR (state != 'ready' AND activity_json IS NULL)",
+            name="ck_user_actor_source_activity_state",
+        ),
+        Index(
+            "ix_user_actor_sources_retry",
+            "state",
+            "next_attempt_at",
+            "user_id",
+            "ordering_key",
+            "logical_version",
+        ),
     )
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
-    user_id: Mapped[int] = mapped_column(ForeignKey("users.id", ondelete="CASCADE"), nullable=False)
+    user_id: Mapped[int] = mapped_column(
+        ForeignKey("users.id", ondelete="CASCADE"), nullable=False
+    )
     source_kind: Mapped[str] = mapped_column(String(32), nullable=False)
     ordering_key: Mapped[str] = mapped_column(String(512), nullable=False)
     logical_version: Mapped[int] = mapped_column(Integer, nullable=False)
     activity_id: Mapped[str] = mapped_column(String(512), nullable=False)
-    published_object_id: Mapped[int | None] = mapped_column(ForeignKey("published_activity_objects.id", ondelete="CASCADE"), nullable=True)
+    published_object_id: Mapped[int | None] = mapped_column(
+        ForeignKey("published_activity_objects.id", ondelete="CASCADE"), nullable=True
+    )
     snapshot_json: Mapped[str] = mapped_column(String, nullable=False)
     activity_json: Mapped[str | None] = mapped_column(String, nullable=True)
-    state: Mapped[str] = mapped_column(String(32), nullable=False, default="render_pending")
-    render_attempt_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
-    last_render_attempted_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    state: Mapped[str] = mapped_column(
+        String(32), nullable=False, default="render_pending"
+    )
+    render_attempt_count: Mapped[int] = mapped_column(
+        Integer, nullable=False, default=0
+    )
+    last_render_attempted_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
     last_error: Mapped[str | None] = mapped_column(String(512), nullable=True)
-    next_attempt_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
-    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, nullable=False)
-    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, onupdate=utcnow, nullable=False)
+    next_attempt_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=utcnow, nullable=False
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=utcnow, onupdate=utcnow, nullable=False
+    )
 
     @property
     def profile_snapshot_json(self) -> str:
@@ -351,29 +472,53 @@ class UserActorOutboundDelivery(Base):
     __tablename__ = "user_actor_outbound_deliveries"
     __table_args__ = (
         UniqueConstraint("source_id", "target_endpoint_url"),
-        CheckConstraint("status IN ('pending', 'sending', 'delivered', 'failed', 'ineligible', 'superseded')", name="ck_user_actor_delivery_status"),
+        CheckConstraint(
+            "status IN ('pending', 'sending', 'delivered', 'failed', 'ineligible', 'superseded')",
+            name="ck_user_actor_delivery_status",
+        ),
         CheckConstraint("attempt_count >= 0", name="ck_user_actor_delivery_attempts"),
         CheckConstraint(
             "length(target_endpoint_url) > 0",
             name="ck_user_actor_delivery_endpoint_nonempty",
         ),
-        Index("ix_user_actor_deliveries_retry", "status", "next_attempt_at", "claimed_at"),
-        Index("ix_user_actor_deliveries_endpoint", "target_endpoint_url", "status", "source_id"),
+        Index(
+            "ix_user_actor_deliveries_retry", "status", "next_attempt_at", "claimed_at"
+        ),
+        Index(
+            "ix_user_actor_deliveries_endpoint",
+            "target_endpoint_url",
+            "status",
+            "source_id",
+        ),
     )
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
-    source_id: Mapped[int] = mapped_column(ForeignKey("user_actor_outbound_sources.id", ondelete="CASCADE"), nullable=False)
+    source_id: Mapped[int] = mapped_column(
+        ForeignKey("user_actor_outbound_sources.id", ondelete="CASCADE"), nullable=False
+    )
     target_endpoint_url: Mapped[str] = mapped_column(String(512), nullable=False)
     status: Mapped[str] = mapped_column(String(32), nullable=False, default="pending")
     claim_token: Mapped[str | None] = mapped_column(String(64), nullable=True)
-    claimed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    claimed_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
     attempt_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
-    last_attempted_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
-    delivered_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    last_attempted_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+    delivered_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
     last_error: Mapped[str | None] = mapped_column(String(512), nullable=True)
-    next_attempt_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
-    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, nullable=False)
-    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, onupdate=utcnow, nullable=False)
+    next_attempt_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=utcnow, nullable=False
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=utcnow, onupdate=utcnow, nullable=False
+    )
 
 
 class UserActorOutboundDeliveryFollower(Base):
@@ -390,7 +535,10 @@ class UserActorOutboundDeliveryFollower(Base):
     )
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
-    delivery_id: Mapped[int] = mapped_column(ForeignKey("user_actor_outbound_deliveries.id", ondelete="CASCADE"), nullable=False)
+    delivery_id: Mapped[int] = mapped_column(
+        ForeignKey("user_actor_outbound_deliveries.id", ondelete="CASCADE"),
+        nullable=False,
+    )
     relationship_id_snapshot: Mapped[int] = mapped_column(Integer, nullable=False)
     remote_actor_id: Mapped[str] = mapped_column(String(512), nullable=False)
     snapshotted_endpoint_url: Mapped[str] = mapped_column(String(512), nullable=False)
@@ -410,8 +558,12 @@ class UserActorOutboundSourceMedia(Base):
     )
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
-    source_id: Mapped[int] = mapped_column(ForeignKey("user_actor_outbound_sources.id", ondelete="CASCADE"), nullable=False)
-    media_asset_id: Mapped[int] = mapped_column(ForeignKey("profile_media_assets.id", ondelete="RESTRICT"), nullable=False)
+    source_id: Mapped[int] = mapped_column(
+        ForeignKey("user_actor_outbound_sources.id", ondelete="CASCADE"), nullable=False
+    )
+    media_asset_id: Mapped[int] = mapped_column(
+        ForeignKey("profile_media_assets.id", ondelete="RESTRICT"), nullable=False
+    )
     slot_kind: Mapped[str] = mapped_column(String(16), nullable=False)
 
 
@@ -431,9 +583,15 @@ class RegistrationSession(Base):
     discord_avatar_url: Mapped[str | None] = mapped_column(String(512), nullable=True)
     activitypub_username: Mapped[str | None] = mapped_column(String(255), nullable=True)
     status: Mapped[str] = mapped_column(String(32), nullable=False, default="started")
-    expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
-    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, nullable=False)
-    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, onupdate=utcnow, nullable=False)
+    expires_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False
+    )
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=utcnow, nullable=False
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=utcnow, onupdate=utcnow, nullable=False
+    )
 
 
 class MessageMapping(Base):
@@ -448,6 +606,13 @@ class MessageMapping(Base):
         UniqueConstraint("activity_id"),
         UniqueConstraint("object_id"),
         UniqueConstraint("discord_message_id"),
+        CheckConstraint(
+            "(publication_context = 'community' AND community_actor_url IS NOT NULL) OR "
+            "(publication_context = 'personal_feed' AND community_actor_url IS NULL "
+            "AND discord_guild_id IS NOT NULL AND discord_channel_id IS NOT NULL "
+            "AND discord_message_id IS NOT NULL)",
+            name="ck_message_mapping_publication_context",
+        ),
     )
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
@@ -456,10 +621,16 @@ class MessageMapping(Base):
     activity_id: Mapped[str] = mapped_column(String(512), nullable=False)
     object_id: Mapped[str] = mapped_column(String(512), nullable=False)
     actor_url: Mapped[str] = mapped_column(String(512), nullable=False)
-    community_actor_url: Mapped[str] = mapped_column(String(512), nullable=False)
+    publication_context: Mapped[str] = mapped_column(
+        String(32), nullable=False, default="community"
+    )
+    community_actor_url: Mapped[str | None] = mapped_column(String(512), nullable=True)
+    discord_guild_id: Mapped[int | None] = mapped_column(Integer, nullable=True)
     discord_channel_id: Mapped[int | None] = mapped_column(Integer, nullable=True)
     discord_message_id: Mapped[int | None] = mapped_column(Integer, nullable=True)
-    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=utcnow, nullable=False
+    )
 
 
 class PublishedActivityObject(Base):
@@ -472,12 +643,22 @@ class PublishedActivityObject(Base):
     __table_args__ = (
         UniqueConstraint("activity_id"),
         UniqueConstraint("object_id"),
+        CheckConstraint(
+            "(publication_context = 'community' AND community_actor_url IS NOT NULL) OR "
+            "(publication_context = 'personal_feed' AND community_actor_url IS NULL "
+            "AND discord_guild_id IS NOT NULL AND discord_channel_id IS NOT NULL "
+            "AND discord_message_id IS NOT NULL)",
+            name="ck_published_object_publication_context",
+        ),
     )
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
     actor_username: Mapped[str] = mapped_column(String(255), nullable=False)
     actor_url: Mapped[str] = mapped_column(String(512), nullable=False)
-    community_actor_url: Mapped[str] = mapped_column(String(512), nullable=False)
+    publication_context: Mapped[str] = mapped_column(
+        String(32), nullable=False, default="community"
+    )
+    community_actor_url: Mapped[str | None] = mapped_column(String(512), nullable=True)
     activity_id: Mapped[str] = mapped_column(String(512), nullable=False)
     object_id: Mapped[str] = mapped_column(String(512), nullable=False)
     kind: Mapped[str] = mapped_column(String(32), nullable=False)
@@ -486,19 +667,34 @@ class PublishedActivityObject(Base):
     in_reply_to_object_id: Mapped[str | None] = mapped_column(
         String(512), nullable=True
     )
+    discord_guild_id: Mapped[int | None] = mapped_column(Integer, nullable=True)
     discord_channel_id: Mapped[int | None] = mapped_column(Integer, nullable=True)
     discord_message_id: Mapped[int | None] = mapped_column(Integer, nullable=True)
     content_revision: Mapped[int] = mapped_column(Integer, nullable=False, default=1)
-    deleted_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
-    desired_kind: Mapped[str] = mapped_column(String(16), nullable=False, default="none")
+    deleted_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+    desired_kind: Mapped[str] = mapped_column(
+        String(16), nullable=False, default="none"
+    )
     desired_title: Mapped[str | None] = mapped_column(String(512), nullable=True)
     desired_body_markdown: Mapped[str | None] = mapped_column(String, nullable=True)
-    desired_edited_timestamp: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    desired_edited_timestamp: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
     desired_fingerprint: Mapped[str | None] = mapped_column(String(64), nullable=True)
-    discord_reconciliation_needed: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
-    discord_reconciliation_attempt_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
-    discord_reconciliation_next_attempt_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
-    discord_reconciliation_last_error: Mapped[str | None] = mapped_column(String(512), nullable=True)
+    discord_reconciliation_needed: Mapped[bool] = mapped_column(
+        Boolean, nullable=False, default=False
+    )
+    discord_reconciliation_attempt_count: Mapped[int] = mapped_column(
+        Integer, nullable=False, default=0
+    )
+    discord_reconciliation_next_attempt_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+    discord_reconciliation_last_error: Mapped[str | None] = mapped_column(
+        String(512), nullable=True
+    )
     published_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), default=utcnow, nullable=False
     )
@@ -514,14 +710,30 @@ class UserActorContentMutation(Base):
     __table_args__ = (
         UniqueConstraint("operation_id"),
         UniqueConstraint("activity_id"),
-        CheckConstraint("kind IN ('content_update', 'content_delete')", name="ck_user_actor_content_mutation_kind"),
-        CheckConstraint("state IN ('reserved', 'dispatching', 'ambiguous', 'canonical_ready', 'committed', 'aborted_pre_send')", name="ck_user_actor_content_mutation_state"),
-        Index("ix_user_actor_content_mutations_recovery", "state", "next_attempt_at", "claimed_at", "id"),
+        CheckConstraint(
+            "kind IN ('content_update', 'content_delete')",
+            name="ck_user_actor_content_mutation_kind",
+        ),
+        CheckConstraint(
+            "state IN ('reserved', 'dispatching', 'ambiguous', 'canonical_ready', 'committed', 'aborted_pre_send')",
+            name="ck_user_actor_content_mutation_state",
+        ),
+        Index(
+            "ix_user_actor_content_mutations_recovery",
+            "state",
+            "next_attempt_at",
+            "claimed_at",
+            "id",
+        ),
     )
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
-    published_object_id: Mapped[int] = mapped_column(ForeignKey("published_activity_objects.id", ondelete="CASCADE"), nullable=False)
-    user_id: Mapped[int] = mapped_column(ForeignKey("users.id", ondelete="CASCADE"), nullable=False)
+    published_object_id: Mapped[int] = mapped_column(
+        ForeignKey("published_activity_objects.id", ondelete="CASCADE"), nullable=False
+    )
+    user_id: Mapped[int] = mapped_column(
+        ForeignKey("users.id", ondelete="CASCADE"), nullable=False
+    )
     kind: Mapped[str] = mapped_column(String(32), nullable=False)
     expected_revision: Mapped[int] = mapped_column(Integer, nullable=False)
     next_revision: Mapped[int] = mapped_column(Integer, nullable=False)
@@ -532,14 +744,26 @@ class UserActorContentMutation(Base):
     state: Mapped[str] = mapped_column(String(32), nullable=False, default="reserved")
     canonical_activity_json: Mapped[str | None] = mapped_column(String, nullable=True)
     claim_token: Mapped[str | None] = mapped_column(String(64), nullable=True)
-    side_effect_classification: Mapped[str] = mapped_column(String(32), nullable=False, default="not_dispatched")
-    lease_expires_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
-    claimed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    side_effect_classification: Mapped[str] = mapped_column(
+        String(32), nullable=False, default="not_dispatched"
+    )
+    lease_expires_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+    claimed_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
     attempt_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
-    next_attempt_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    next_attempt_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
     last_error: Mapped[str | None] = mapped_column(String(512), nullable=True)
-    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, nullable=False)
-    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, onupdate=utcnow, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=utcnow, nullable=False
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=utcnow, onupdate=utcnow, nullable=False
+    )
 
 
 class CommunityThreadGroup(Base):
@@ -555,11 +779,17 @@ class CommunityThreadGroup(Base):
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
     community_actor_id: Mapped[str] = mapped_column(String(512), nullable=False)
     source_channel_id: Mapped[int | None] = mapped_column(Integer, nullable=True)
-    source_thread_id: Mapped[int | None] = mapped_column(Integer, nullable=True, unique=True)
-    source_starter_message_id: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    source_thread_id: Mapped[int | None] = mapped_column(
+        Integer, nullable=True, unique=True
+    )
+    source_starter_message_id: Mapped[int | None] = mapped_column(
+        Integer, nullable=True
+    )
     ap_activity_id: Mapped[str | None] = mapped_column(String(512), nullable=True)
     ap_object_id: Mapped[str | None] = mapped_column(String(512), nullable=True)
-    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=utcnow, nullable=False
+    )
 
 
 class CommunityThreadGroupDelivery(Base):
@@ -603,7 +833,9 @@ class CommunityMessageGroup(Base):
     ap_object_id: Mapped[str | None] = mapped_column(String(512), nullable=True)
     # FK to another CommunityMessageGroup if this message is a reply.
     parent_message_group_id: Mapped[int | None] = mapped_column(Integer, nullable=True)
-    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=utcnow, nullable=False
+    )
 
 
 class CommunityMessageGroupDelivery(Base):
@@ -644,12 +876,18 @@ class BridgeActorFollow(Base):
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
     # Canonical AP actor URL for the remote community — UNIQUE enforces the
     # one-follow-per-community invariant at the DB level.
-    community_actor_id: Mapped[str] = mapped_column(String(512), nullable=False, unique=True)
+    community_actor_id: Mapped[str] = mapped_column(
+        String(512), nullable=False, unique=True
+    )
     follow_activity_id: Mapped[str | None] = mapped_column(String(512), nullable=True)
     community_inbox_url: Mapped[str | None] = mapped_column(String(512), nullable=True)
     status: Mapped[str] = mapped_column(String(32), nullable=False, default="pending")
-    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, nullable=False)
-    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, onupdate=utcnow, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=utcnow, nullable=False
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=utcnow, onupdate=utcnow, nullable=False
+    )
 
 
 class RemoteActor(Base):
@@ -667,9 +905,15 @@ class RemoteActor(Base):
     inbox_url: Mapped[str] = mapped_column(String(512), nullable=False)
     shared_inbox_url: Mapped[str | None] = mapped_column(String(512), nullable=True)
     public_key_pem: Mapped[str] = mapped_column(String, nullable=False)
-    last_fetched_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, nullable=False)
-    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, nullable=False)
-    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, onupdate=utcnow, nullable=False)
+    last_fetched_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=utcnow, nullable=False
+    )
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=utcnow, nullable=False
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=utcnow, onupdate=utcnow, nullable=False
+    )
 
 
 class LocalCommunity(Base):
@@ -695,7 +939,9 @@ class LocalCommunity(Base):
     slug: Mapped[str] = mapped_column(String(255), nullable=False)
     display_name: Mapped[str] = mapped_column(String(255), nullable=False)
     summary: Mapped[str | None] = mapped_column(String, nullable=True)
-    created_by_discord_user_id: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    created_by_discord_user_id: Mapped[str | None] = mapped_column(
+        String(64), nullable=True
+    )
     actor_url: Mapped[str] = mapped_column(String(512), nullable=False)
     inbox_url: Mapped[str] = mapped_column(String(512), nullable=False)
     outbox_url: Mapped[str] = mapped_column(String(512), nullable=False)
@@ -703,10 +949,12 @@ class LocalCommunity(Base):
     public_key_pem: Mapped[str] = mapped_column(String, nullable=False)
     private_key_pem: Mapped[str] = mapped_column(String, nullable=False)
     status: Mapped[str] = mapped_column(String(32), nullable=False, default="active")
-    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, nullable=False)
-    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, onupdate=utcnow, nullable=False)
-
-
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=utcnow, nullable=False
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=utcnow, onupdate=utcnow, nullable=False
+    )
 
 
 class CommunityActorBan(Base):
@@ -720,9 +968,7 @@ class CommunityActorBan(Base):
     """
 
     __tablename__ = "community_actor_bans"
-    __table_args__ = (
-        UniqueConstraint("scope", "scope_key", "actor_handle", "status"),
-    )
+    __table_args__ = (UniqueConstraint("scope", "scope_key", "actor_handle", "status"),)
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
     scope: Mapped[str] = mapped_column(String(32), nullable=False, default="community")
@@ -730,12 +976,20 @@ class CommunityActorBan(Base):
     local_community_id: Mapped[int | None] = mapped_column(Integer, nullable=True)
     actor_handle: Mapped[str] = mapped_column(String(255), nullable=False)
     actor_url: Mapped[str | None] = mapped_column(String(512), nullable=True)
-    target_discord_user_id: Mapped[str | None] = mapped_column(String(64), nullable=True, index=True)
+    target_discord_user_id: Mapped[str | None] = mapped_column(
+        String(64), nullable=True, index=True
+    )
     status: Mapped[str] = mapped_column(String(32), nullable=False, default="active")
-    created_by_discord_user_id: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    created_by_discord_user_id: Mapped[str | None] = mapped_column(
+        String(64), nullable=True
+    )
     reason: Mapped[str | None] = mapped_column(String(1024), nullable=True)
-    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, nullable=False)
-    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, onupdate=utcnow, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=utcnow, nullable=False
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=utcnow, onupdate=utcnow, nullable=False
+    )
 
 
 class BridgePolicyEntry(Base):
@@ -746,13 +1000,21 @@ class BridgePolicyEntry(Base):
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
     policy_type: Mapped[str] = mapped_column(String(64), nullable=False, index=True)
-    normalized_subject: Mapped[str] = mapped_column(String(512), nullable=False, index=True)
-    status: Mapped[str] = mapped_column(String(32), nullable=False, default="active", index=True)
+    normalized_subject: Mapped[str] = mapped_column(
+        String(512), nullable=False, index=True
+    )
+    status: Mapped[str] = mapped_column(
+        String(32), nullable=False, default="active", index=True
+    )
     reason: Mapped[str | None] = mapped_column(String(500), nullable=True)
     created_by_discord_user_id: Mapped[str] = mapped_column(String(64), nullable=False)
     updated_by_discord_user_id: Mapped[str] = mapped_column(String(64), nullable=False)
-    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, nullable=False)
-    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, onupdate=utcnow, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=utcnow, nullable=False
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=utcnow, onupdate=utcnow, nullable=False
+    )
 
 
 class ManagementAuditEvent(Base):
@@ -768,14 +1030,24 @@ class ManagementAuditEvent(Base):
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
     action: Mapped[str] = mapped_column(String(64), nullable=False, index=True)
     result: Mapped[str] = mapped_column(String(32), nullable=False, index=True)
-    reason_code: Mapped[str | None] = mapped_column(String(64), nullable=True, index=True)
-    actor_discord_user_id: Mapped[str] = mapped_column(String(64), nullable=False, index=True)
-    local_community_id: Mapped[int | None] = mapped_column(Integer, nullable=True, index=True)
+    reason_code: Mapped[str | None] = mapped_column(
+        String(64), nullable=True, index=True
+    )
+    actor_discord_user_id: Mapped[str] = mapped_column(
+        String(64), nullable=False, index=True
+    )
+    local_community_id: Mapped[int | None] = mapped_column(
+        Integer, nullable=True, index=True
+    )
     target_type: Mapped[str] = mapped_column(String(64), nullable=False, index=True)
-    target_id: Mapped[str | None] = mapped_column(String(512), nullable=True, index=True)
+    target_id: Mapped[str | None] = mapped_column(
+        String(512), nullable=True, index=True
+    )
     before_json: Mapped[str | None] = mapped_column(Text, nullable=True)
     after_json: Mapped[str | None] = mapped_column(Text, nullable=True)
-    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, nullable=False, index=True)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=utcnow, nullable=False, index=True
+    )
 
 
 class GuildInvitePublication(Base):
@@ -789,9 +1061,15 @@ class GuildInvitePublication(Base):
     discord_channel_id: Mapped[int] = mapped_column(Integer, nullable=False)
     invite_code: Mapped[str] = mapped_column(String(128), nullable=False)
     invite_url: Mapped[str] = mapped_column(String(512), nullable=False)
-    published_by_discord_user_id: Mapped[str] = mapped_column(String(64), nullable=False)
-    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, nullable=False)
-    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, onupdate=utcnow, nullable=False)
+    published_by_discord_user_id: Mapped[str] = mapped_column(
+        String(64), nullable=False
+    )
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=utcnow, nullable=False
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=utcnow, onupdate=utcnow, nullable=False
+    )
 
 
 class RemoteSubscriber(Base):
@@ -814,8 +1092,12 @@ class RemoteSubscriber(Base):
     remote_inbox_url: Mapped[str] = mapped_column(String(512), nullable=False)
     follow_activity_id: Mapped[str] = mapped_column(String(512), nullable=False)
     status: Mapped[str] = mapped_column(String(32), nullable=False, default="accepted")
-    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, nullable=False)
-    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, onupdate=utcnow, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=utcnow, nullable=False
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=utcnow, onupdate=utcnow, nullable=False
+    )
 
 
 class LocalSubscriber(Base):
@@ -836,10 +1118,17 @@ class LocalSubscriber(Base):
     local_community_id: Mapped[int] = mapped_column(Integer, nullable=False)
     discord_guild_id: Mapped[int | None] = mapped_column(Integer, nullable=True)
     discord_channel_id: Mapped[int] = mapped_column(Integer, nullable=False)
-    initiated_by_discord_user_id: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    initiated_by_discord_user_id: Mapped[str | None] = mapped_column(
+        String(64), nullable=True
+    )
     status: Mapped[str] = mapped_column(String(32), nullable=False, default="active")
-    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, nullable=False)
-    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, onupdate=utcnow, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=utcnow, nullable=False
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=utcnow, onupdate=utcnow, nullable=False
+    )
+
 
 class LocalCommunityRelaySourceActivity(Base):
     """Store one immutable inbound ActivityPub source activity for relay.
@@ -851,7 +1140,12 @@ class LocalCommunityRelaySourceActivity(Base):
 
     __tablename__ = "local_community_relay_source_activities"
     __table_args__ = (
-        UniqueConstraint("local_community_id", "operation", "source_object_ap_id", "source_activity_id"),
+        UniqueConstraint(
+            "local_community_id",
+            "operation",
+            "source_object_ap_id",
+            "source_activity_id",
+        ),
     )
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
@@ -863,7 +1157,9 @@ class LocalCommunityRelaySourceActivity(Base):
     source_announce_id: Mapped[str | None] = mapped_column(String(512), nullable=True)
     origin_remote_actor_id: Mapped[str] = mapped_column(String(512), nullable=False)
     source_activity_json: Mapped[dict] = mapped_column(JSON, nullable=False)
-    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=utcnow, nullable=False
+    )
 
 
 class LocalCommunityRelayDelivery(Base):
@@ -889,14 +1185,22 @@ class LocalCommunityRelayDelivery(Base):
     origin_remote_actor_id: Mapped[str] = mapped_column(String(512), nullable=False)
     target_remote_actor_id: Mapped[str] = mapped_column(String(512), nullable=False)
     target_inbox_url: Mapped[str] = mapped_column(String(512), nullable=False)
-    delivery_profile: Mapped[str] = mapped_column(String(64), nullable=False, default="threadiverse_group")
+    delivery_profile: Mapped[str] = mapped_column(
+        String(64), nullable=False, default="threadiverse_group"
+    )
     relay_activity_id: Mapped[str | None] = mapped_column(String(512), nullable=True)
     status: Mapped[str] = mapped_column(String(32), nullable=False, default="pending")
     attempt_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
-    last_attempted_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    last_attempted_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
     last_error: Mapped[str | None] = mapped_column(String(1024), nullable=True)
-    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, nullable=False)
-    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, onupdate=utcnow, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=utcnow, nullable=False
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=utcnow, onupdate=utcnow, nullable=False
+    )
 
 
 class LocalCommunityThread(Base):
@@ -919,7 +1223,9 @@ class LocalCommunityThread(Base):
     ap_object_id: Mapped[str] = mapped_column(String(512), nullable=False)
     direction: Mapped[str] = mapped_column(String(32), nullable=False)
     origin_kind: Mapped[str] = mapped_column(String(32), nullable=False)
-    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=utcnow, nullable=False
+    )
 
 
 class LocalCommunityMessage(Base):
@@ -943,7 +1249,9 @@ class LocalCommunityMessage(Base):
     ap_object_id: Mapped[str] = mapped_column(String(512), nullable=False)
     parent_ap_object_id: Mapped[str | None] = mapped_column(String(512), nullable=True)
     direction: Mapped[str] = mapped_column(String(32), nullable=False)
-    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=utcnow, nullable=False
+    )
 
 
 class LocalCommunityThreadSurface(Base):
@@ -985,16 +1293,22 @@ class LocalCommunityMessageSurface(Base):
 
     __tablename__ = "local_community_message_surfaces"
     __table_args__ = (
-        UniqueConstraint("local_community_message_id", "local_community_thread_surface_id"),
+        UniqueConstraint(
+            "local_community_message_id", "local_community_thread_surface_id"
+        ),
         UniqueConstraint("discord_message_id"),
     )
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
     local_community_message_id: Mapped[int] = mapped_column(Integer, nullable=False)
-    local_community_thread_surface_id: Mapped[int] = mapped_column(Integer, nullable=False)
+    local_community_thread_surface_id: Mapped[int] = mapped_column(
+        Integer, nullable=False
+    )
     discord_forum_channel_id: Mapped[int] = mapped_column(Integer, nullable=False)
     discord_message_id: Mapped[int] = mapped_column(Integer, nullable=False)
-    parent_discord_message_id: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    parent_discord_message_id: Mapped[int | None] = mapped_column(
+        Integer, nullable=True
+    )
     # Host surfaces keep this empty. Local-subscriber surfaces store the row
     # that selected the target forum, preserving historical target identity.
     local_subscriber_id: Mapped[int | None] = mapped_column(Integer, nullable=True)

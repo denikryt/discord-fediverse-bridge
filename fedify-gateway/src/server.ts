@@ -38,6 +38,7 @@ import {
   followCommunity,
   publishContent,
   publishLocalCommunityContent,
+  renderPersonalFeedCreate,
   sendLocalCommunityRelay,
   sendUserActorDeliveries,
   unfollowCommunity,
@@ -53,6 +54,7 @@ import type {
   DeleteContentRequest,
   PublishContentRequest,
   PublishLocalCommunityContentRequest,
+  RenderPersonalFeedRequest,
   SendLocalCommunityRelayRequest,
   RenderUserActorProfileUpdateRequest,
   SendUserActorDeliveriesRequest,
@@ -339,6 +341,23 @@ app.post("/unfollow-community", async (context) => {
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
     return context.json({ error: message }, { status: 500 });
+  }
+});
+
+app.post("/render-personal-feed", async (context) => {
+  if (!hasValidInternalAuthorization(config, context.req.header("Authorization") ?? null)) {
+    return context.json({ error: "invalid authorization" }, { status: 401 });
+  }
+  const payload = (await context.req.json()) as Partial<RenderPersonalFeedRequest>;
+  if (typeof payload.actorUsername !== "string" || typeof payload.operationId !== "string" ||
+      typeof payload.activityId !== "string" || typeof payload.objectId !== "string" ||
+      typeof payload.bodyMarkdown !== "string" || typeof payload.publishedAt !== "string") {
+    return context.json({ error: "invalid personal-feed render request" }, { status: 400 });
+  }
+  try {
+    return context.json(renderPersonalFeedCreate(config, payload as RenderPersonalFeedRequest));
+  } catch (error) {
+    return context.json({ error: error instanceof Error ? error.message : String(error) }, { status: 400 });
   }
 });
 

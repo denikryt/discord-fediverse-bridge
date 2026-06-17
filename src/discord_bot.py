@@ -7,7 +7,6 @@ import logging
 from typing import TYPE_CHECKING
 
 import discord
-from discord import app_commands
 
 from .config import Settings
 from .bridge_policy import BridgePolicyService
@@ -41,6 +40,7 @@ class BridgeBot(discord.Client):
         bridge_policy_service: BridgePolicyService,
         user_profile_service: UserProfileService | None = None,
         personal_feed_service: PersonalFeedService | None = None,
+        user_ban_service: UserBanService | None = None,
     ) -> None:
         """Initialise the bot with shared services and Discord intent configuration."""
         intents = discord.Intents.default()
@@ -58,7 +58,9 @@ class BridgeBot(discord.Client):
         # Keep the current runtime reachable for edit/delete paths that still
         # belong only to the remote-subscription mode today.
         self.community_runtime = event_router.community_runtime
-        self.user_ban_service = UserBanService(database=database, settings=settings)
+        self.user_ban_service = user_ban_service or UserBanService(
+            database=database, settings=settings
+        )
         self.tree = BridgeCommandTree(self)
         self.bridge_ready = asyncio.Event()
         # Per-thread locks prevent duplicate Lemmy posts when Discord fires
@@ -76,21 +78,75 @@ class BridgeBot(discord.Client):
     async def setup_hook(self) -> None:
         # setup_hook runs before the bot connects, making it the right place to
         # register slash commands and sync the tree with Discord.
-        from .commands import account_settings, ban_user, bridge_policy, create_community, edit_community, list_banned_users, list_subs, publish_guild_invite, register, remove_guild_invite, subscribe, unban_user, unsubscribe
-        register.register(self.tree, self.database, self.settings, self.bridge_policy_service)
-        subscribe.register(self.tree, self.database, self.fedify_gateway, self.settings, self.bridge_policy_service)
-        unsubscribe.register(self.tree, self.database, self.fedify_gateway, self.settings, self.bridge_policy_service)
-        list_subs.register(self.tree, self.database, self.settings, self.bridge_policy_service)
-        create_community.register(self.tree, self.database, self.settings, self.bridge_policy_service)
-        edit_community.register(self.tree, self.database, self.settings, self.bridge_policy_service)
-        ban_user.register(self.tree, self.database, self.settings, self.bridge_policy_service)
-        unban_user.register(self.tree, self.database, self.settings, self.bridge_policy_service)
-        list_banned_users.register(self.tree, self.database, self.settings, self.bridge_policy_service)
-        publish_guild_invite.register(self.tree, self.database, self.settings, self.bridge_policy_service)
-        remove_guild_invite.register(self.tree, self.database, self.settings, self.bridge_policy_service)
-        bridge_policy.register(self.tree, self.database, self.bridge_policy_service, self.user_ban_service)
+        from .commands import (
+            account_settings,
+            ban_user,
+            bridge_policy,
+            create_community,
+            edit_community,
+            list_banned_users,
+            list_subs,
+            publish_guild_invite,
+            register,
+            remove_guild_invite,
+            subscribe,
+            unban_user,
+            unsubscribe,
+        )
+
+        register.register(
+            self.tree, self.database, self.settings, self.bridge_policy_service
+        )
+        subscribe.register(
+            self.tree,
+            self.database,
+            self.fedify_gateway,
+            self.settings,
+            self.bridge_policy_service,
+        )
+        unsubscribe.register(
+            self.tree,
+            self.database,
+            self.fedify_gateway,
+            self.settings,
+            self.bridge_policy_service,
+        )
+        list_subs.register(
+            self.tree, self.database, self.settings, self.bridge_policy_service
+        )
+        create_community.register(
+            self.tree, self.database, self.settings, self.bridge_policy_service
+        )
+        edit_community.register(
+            self.tree, self.database, self.settings, self.bridge_policy_service
+        )
+        ban_user.register(
+            self.tree, self.database, self.settings, self.bridge_policy_service
+        )
+        unban_user.register(
+            self.tree, self.database, self.settings, self.bridge_policy_service
+        )
+        list_banned_users.register(
+            self.tree, self.database, self.settings, self.bridge_policy_service
+        )
+        publish_guild_invite.register(
+            self.tree, self.database, self.settings, self.bridge_policy_service
+        )
+        remove_guild_invite.register(
+            self.tree, self.database, self.settings, self.bridge_policy_service
+        )
+        bridge_policy.register(
+            self.tree, self.database, self.bridge_policy_service, self.user_ban_service
+        )
         if self.user_profile_service is not None:
-            account_settings.register(self.tree, self.database, self.settings, self.bridge_policy_service, self.user_profile_service, self.personal_feed_service)
+            account_settings.register(
+                self.tree,
+                self.database,
+                self.settings,
+                self.bridge_policy_service,
+                self.user_profile_service,
+                self.personal_feed_service,
+            )
         await self.tree.sync()
 
     async def on_ready(self) -> None:
@@ -132,13 +188,21 @@ class BridgeBot(discord.Client):
             # Re-check both the in-memory set and the DB inside the lock.
             if thread.id in self._synced_threads:
                 return
-            if self.database.legacy_lemmy_mappings.get_post_link_by_thread_id(thread.id) is not None:
+            if (
+                self.database.legacy_lemmy_mappings.get_post_link_by_thread_id(
+                    thread.id
+                )
+                is not None
+            ):
                 self._synced_threads.add(thread.id)
                 return
 
             starter_message = await self._fetch_starter_message(thread)
             if starter_message is None:
-                logger.warning("Could not fetch starter message for Discord forum thread %s", thread.id)
+                logger.warning(
+                    "Could not fetch starter message for Discord forum thread %s",
+                    thread.id,
+                )
                 return
             if starter_message.author.bot:
                 return
@@ -160,12 +224,22 @@ class BridgeBot(discord.Client):
         # Stage 6 recognizes ordinary guild-text personal-feed roots before the
         # existing thread-only return, but deliberately performs no publication.
         from .discord_channel_types import is_normal_guild_text_channel
+
         if is_normal_guild_text_channel(message.channel):
             guild_id = getattr(getattr(message, "guild", None), "id", None)
-            binding = self.event_router.resolve_personal_feed_root(guild_id, message.channel.id) if guild_id else None
+            binding = (
+                self.event_router.resolve_personal_feed_root(
+                    guild_id, message.channel.id
+                )
+                if guild_id
+                else None
+            )
             if binding is not None:
-                # Both owner and non-owner roots are no-ops until Stage 7; returning
-                # here prevents leakage into community routing or bot responses.
+                # Personal-feed channels are exclusive routing surfaces. The
+                # publisher performs a second durable binding/owner check.
+                await self.event_router.handle_personal_feed_root(
+                    message=message, binding=binding
+                )
                 return
         if not isinstance(message.channel, discord.Thread):
             return
@@ -177,10 +251,14 @@ class BridgeBot(discord.Client):
         ):
             return
 
-        delivery = self.database.discord_fanout_groups.get_thread_delivery_by_thread(message.channel.id)
+        delivery = self.database.discord_fanout_groups.get_thread_delivery_by_thread(
+            message.channel.id
+        )
         logger.info(
             "[on_message] msg=%s thread=%s channel=%s author=%s delivery_role=%s",
-            getattr(message, "id", None), message.channel.id, message.channel.parent_id,
+            getattr(message, "id", None),
+            message.channel.id,
+            message.channel.parent_id,
             getattr(getattr(message, "author", None), "id", None),
             delivery.role if delivery else None,
         )
@@ -204,6 +282,7 @@ class BridgeBot(discord.Client):
         creating infinite loops (edit→fanout→edit→fanout...).
         """
         import time
+
         logger.debug("[on_raw_message_edit] msg=%s", payload.message_id)
 
         # Dedup: if we edited this message recently, skip to avoid loop.
@@ -211,13 +290,25 @@ class BridgeBot(discord.Client):
         if payload.message_id in self._recent_edits:
             edit_age = now - self._recent_edits[payload.message_id]
             if edit_age < 5.0:  # Within 5 seconds of our edit
-                logger.debug("[on_raw_message_edit] skipping recent edit (age=%.1fs)", edit_age)
+                logger.debug(
+                    "[on_raw_message_edit] skipping recent edit (age=%.1fs)", edit_age
+                )
                 return
 
-        is_local_message = self.event_router.is_local_community_message(payload.message_id)
-        delivery = None if is_local_message else self.database.discord_fanout_groups.get_message_delivery_by_message(payload.message_id)
+        is_local_message = self.event_router.is_local_community_message(
+            payload.message_id
+        )
+        delivery = (
+            None
+            if is_local_message
+            else self.database.discord_fanout_groups.get_message_delivery_by_message(
+                payload.message_id
+            )
+        )
         if delivery is None and not is_local_message:
-            logger.debug("[on_raw_message_edit] no delivery found for msg=%s", payload.message_id)
+            logger.debug(
+                "[on_raw_message_edit] no delivery found for msg=%s", payload.message_id
+            )
             return
 
         # Only propagate edits from source messages — those written by the user.
@@ -225,7 +316,9 @@ class BridgeBot(discord.Client):
         # propagation writes) must not re-trigger fanout or an infinite loop results.
         # Inbound AP messages are handled via AP Update events, not Discord events.
         if delivery is not None and delivery.role != "source":
-            logger.debug("[on_raw_message_edit] role=%s — skipping (not source)", delivery.role)
+            logger.debug(
+                "[on_raw_message_edit] role=%s — skipping (not source)", delivery.role
+            )
             return
 
         # Extract updated content from the raw payload data.
@@ -236,13 +329,17 @@ class BridgeBot(discord.Client):
             len(new_content) if new_content else 0,
         )
         if not new_content:
-            logger.debug("[on_raw_message_edit] no content in payload for msg=%s", payload.message_id)
+            logger.debug(
+                "[on_raw_message_edit] no content in payload for msg=%s",
+                payload.message_id,
+            )
             return
 
         # Discord provides edited_timestamp as the only durable external
         # ordering evidence for content edits. Partial events without it are
         # reconciled through the current message resource before admission.
         from datetime import datetime
+
         edited_timestamp_raw = payload.data.get("edited_timestamp")
         edited_timestamp = None
         if isinstance(edited_timestamp_raw, str):
@@ -251,7 +348,9 @@ class BridgeBot(discord.Client):
             )
         if edited_timestamp is None:
             try:
-                channel = self.get_channel(payload.channel_id) or await self.fetch_channel(payload.channel_id)
+                channel = self.get_channel(
+                    payload.channel_id
+                ) or await self.fetch_channel(payload.channel_id)
                 current_message = await channel.fetch_message(payload.message_id)
                 edited_timestamp = getattr(current_message, "edited_at", None)
                 if edited_timestamp is None:
@@ -275,15 +374,23 @@ class BridgeBot(discord.Client):
         # Extract author display name from payload for mirror header attribution.
         # global_name is the Display Name set by the user; falls back to username.
         author_data = payload.data.get("author") or {}
-        author_display_name = author_data.get("global_name") or author_data.get("username") or ""
+        author_display_name = (
+            author_data.get("global_name") or author_data.get("username") or ""
+        )
 
-        from .runtime import Runtime
         runtime = self._get_runtime()
         if runtime is None:
-            logger.warning("[on_raw_message_edit] no runtime available for msg=%s", payload.message_id)
+            logger.warning(
+                "[on_raw_message_edit] no runtime available for msg=%s",
+                payload.message_id,
+            )
             return
 
-        logger.info("Discord message edit msg=%s thread=%s", payload.message_id, payload.channel_id)
+        logger.info(
+            "Discord message edit msg=%s thread=%s",
+            payload.message_id,
+            payload.channel_id,
+        )
         try:
             await self.event_router.handle_message_edit(
                 message_id=payload.message_id,
@@ -294,9 +401,14 @@ class BridgeBot(discord.Client):
                 guild_id=getattr(payload, "guild_id", None),
             )
         except Exception:
-            logger.exception("[on_raw_message_edit] exception in handle_discord_message_edit for msg=%s", payload.message_id)
+            logger.exception(
+                "[on_raw_message_edit] exception in handle_discord_message_edit for msg=%s",
+                payload.message_id,
+            )
 
-    async def on_raw_message_delete(self, payload: discord.RawMessageDeleteEvent) -> None:
+    async def on_raw_message_delete(
+        self, payload: discord.RawMessageDeleteEvent
+    ) -> None:
         """Forward a deleted Discord message to CommunityRuntime for propagation.
 
         Uses the raw event so deletes fire for all messages, not just cached ones.
@@ -308,6 +420,7 @@ class BridgeBot(discord.Client):
         We track recently-deleted messages to avoid re-processing our own deletes.
         """
         import time
+
         logger.debug("[on_raw_message_delete] msg=%s", payload.message_id)
 
         # Dedup: if we deleted this message recently, skip to avoid loop.
@@ -315,28 +428,50 @@ class BridgeBot(discord.Client):
         if payload.message_id in self._recent_deletes:
             delete_age = now - self._recent_deletes[payload.message_id]
             if delete_age < 5.0:  # Within 5 seconds of our delete
-                logger.debug("[on_raw_message_delete] skipping recent delete (age=%.1fs)", delete_age)
+                logger.debug(
+                    "[on_raw_message_delete] skipping recent delete (age=%.1fs)",
+                    delete_age,
+                )
                 return
 
-        is_local_message = self.event_router.is_local_community_message(payload.message_id)
-        delivery = None if is_local_message else self.database.discord_fanout_groups.get_message_delivery_by_message(payload.message_id)
+        is_local_message = self.event_router.is_local_community_message(
+            payload.message_id
+        )
+        delivery = (
+            None
+            if is_local_message
+            else self.database.discord_fanout_groups.get_message_delivery_by_message(
+                payload.message_id
+            )
+        )
         if delivery is None and not is_local_message:
-            logger.debug("[on_raw_message_delete] no delivery found for msg=%s", payload.message_id)
+            logger.debug(
+                "[on_raw_message_delete] no delivery found for msg=%s",
+                payload.message_id,
+            )
             return
 
         # Only process Discord-originated messages (source or mirror role).
         # Inbound AP messages should not be deleted via Discord events.
         if delivery is not None and delivery.role == "inbound":
-            logger.debug("[on_raw_message_delete] inbound message — skipping (handled via AP events)")
+            logger.debug(
+                "[on_raw_message_delete] inbound message — skipping (handled via AP events)"
+            )
             return
 
-        from .runtime import Runtime
         runtime = self._get_runtime()
         if runtime is None:
-            logger.warning("[on_raw_message_delete] no runtime available for msg=%s", payload.message_id)
+            logger.warning(
+                "[on_raw_message_delete] no runtime available for msg=%s",
+                payload.message_id,
+            )
             return
 
-        logger.info("Discord message delete msg=%s thread=%s", payload.message_id, payload.channel_id)
+        logger.info(
+            "Discord message delete msg=%s thread=%s",
+            payload.message_id,
+            payload.channel_id,
+        )
         try:
             await self.event_router.handle_message_delete(
                 message_id=payload.message_id,
@@ -344,13 +479,19 @@ class BridgeBot(discord.Client):
                 guild_id=getattr(payload, "guild_id", None),
             )
         except Exception:
-            logger.exception("[on_raw_message_delete] exception in handle_discord_message_delete for msg=%s", payload.message_id)
+            logger.exception(
+                "[on_raw_message_delete] exception in handle_discord_message_delete for msg=%s",
+                payload.message_id,
+            )
 
-
-    async def fetch_message_state(self, channel_id: int, message_id: int) -> tuple[str, object | None]:
+    async def fetch_message_state(
+        self, channel_id: int, message_id: int
+    ) -> tuple[str, object | None]:
         """Fetch authoritative Discord message state for durable reconciliation."""
         try:
-            channel = self.get_channel(channel_id) or await self.fetch_channel(channel_id)
+            channel = self.get_channel(channel_id) or await self.fetch_channel(
+                channel_id
+            )
             return "present", await channel.fetch_message(message_id)
         except discord.NotFound:
             return "missing", None
@@ -371,14 +512,18 @@ class BridgeBot(discord.Client):
     def track_message_edit(self, message_id: int) -> None:
         """Record that we just edited this message to dedup on_raw_message_edit."""
         import time
+
         self._recent_edits[message_id] = time.time()
 
     def track_message_delete(self, message_id: int) -> None:
         """Record that we just deleted this message to dedup on_raw_message_delete."""
         import time
+
         self._recent_deletes[message_id] = time.time()
 
-    async def _fetch_starter_message(self, thread: discord.Thread) -> discord.Message | None:
+    async def _fetch_starter_message(
+        self, thread: discord.Thread
+    ) -> discord.Message | None:
         # Discord APIs are inconsistent here, so we try the direct starter
         # message path first and then fall back to oldest history.
         if thread.starter_message is not None:
@@ -387,7 +532,10 @@ class BridgeBot(discord.Client):
             return await thread.fetch_message(thread.id)
         except discord.NotFound:
             try:
-                history = [message async for message in thread.history(limit=1, oldest_first=True)]
+                history = [
+                    message
+                    async for message in thread.history(limit=1, oldest_first=True)
+                ]
                 return history[0] if history else None
             except discord.HTTPException:
                 return None

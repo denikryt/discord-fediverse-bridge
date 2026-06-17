@@ -127,7 +127,8 @@ class RemoteSubscriberListResponse(BaseModel):
 class PublishedObjectResponse(BaseModel):
     actor_username: str
     actor_url: str
-    community_actor_url: str
+    publication_context: str
+    community_actor_url: str | None
     activity_id: str
     object_id: str
     kind: str
@@ -135,6 +136,7 @@ class PublishedObjectResponse(BaseModel):
     body_markdown: str
     in_reply_to_object_id: str | None
     published_at: str
+    discord_guild_id: int | None
     discord_channel_id: int | None
     discord_message_id: int | None
 
@@ -145,7 +147,9 @@ class MessageMappingResponse(BaseModel):
     activity_id: str
     object_id: str
     actor_url: str
-    community_actor_url: str
+    publication_context: str
+    community_actor_url: str | None
+    discord_guild_id: int | None
     discord_channel_id: int | None
     discord_message_id: int | None
 
@@ -225,7 +229,9 @@ def create_internal_fedify_router(runtime: Runtime) -> APIRouter:
                 detail="User profile invariant failed",
             )
 
-        def media_payload(asset: ProfileMediaAsset | None) -> UserActorMediaResponse | None:
+        def media_payload(
+            asset: ProfileMediaAsset | None,
+        ) -> UserActorMediaResponse | None:
             """Map a persisted asset without exposing storage ownership details."""
             if asset is None:
                 return None
@@ -255,7 +261,9 @@ def create_internal_fedify_router(runtime: Runtime) -> APIRouter:
             header=media_payload(profile.header),
         )
 
-    @router.get("/actors/users/{username}/followers", response_model=UserFollowersResponse)
+    @router.get(
+        "/actors/users/{username}/followers", response_model=UserFollowersResponse
+    )
     def user_followers(
         username: str,
         response: Response,
@@ -267,13 +275,18 @@ def create_internal_fedify_router(runtime: Runtime) -> APIRouter:
         authorize(authorization)
         no_store(response)
         if page < 1 or page_size != 40:
-            raise HTTPException(status_code=400, detail="page must be positive and page_size must equal 40")
+            raise HTTPException(
+                status_code=400,
+                detail="page must be positive and page_size must equal 40",
+            )
         user = runtime.database.users.get_user_by_activitypub_username(username)
         if user is None:
             raise HTTPException(status_code=404, detail="User actor not found")
         return UserFollowersResponse(
             followers_url=user.followers_url,
-            total_items=runtime.database.user_actor_followers.count_accepted(user_id=user.id),
+            total_items=runtime.database.user_actor_followers.count_accepted(
+                user_id=user.id
+            ),
             page=page,
             page_size=page_size,
             actor_ids=runtime.database.user_actor_followers.list_accepted_actor_ids(
@@ -348,7 +361,9 @@ def create_internal_fedify_router(runtime: Runtime) -> APIRouter:
             ]
         )
 
-    @router.post("/communities/subscribers", response_model=RemoteSubscriberListResponse)
+    @router.post(
+        "/communities/subscribers", response_model=RemoteSubscriberListResponse
+    )
     def community_subscribers(
         request: ActorUrlRequest,
         response: Response,
@@ -399,6 +414,7 @@ def create_internal_fedify_router(runtime: Runtime) -> APIRouter:
         return PublishedObjectResponse(
             actor_username=row.actor_username,
             actor_url=row.actor_url,
+            publication_context=row.publication_context,
             community_actor_url=row.community_actor_url,
             activity_id=row.activity_id,
             object_id=row.object_id,
@@ -407,6 +423,7 @@ def create_internal_fedify_router(runtime: Runtime) -> APIRouter:
             body_markdown=row.body_markdown,
             in_reply_to_object_id=row.in_reply_to_object_id,
             published_at=_isoformat(row.published_at),
+            discord_guild_id=row.discord_guild_id,
             discord_channel_id=row.discord_channel_id,
             discord_message_id=row.discord_message_id,
         )
@@ -431,7 +448,9 @@ def create_internal_fedify_router(runtime: Runtime) -> APIRouter:
             activity_id=row.activity_id,
             object_id=row.object_id,
             actor_url=row.actor_url,
+            publication_context=row.publication_context,
             community_actor_url=row.community_actor_url,
+            discord_guild_id=row.discord_guild_id,
             discord_channel_id=row.discord_channel_id,
             discord_message_id=row.discord_message_id,
         )

@@ -11,7 +11,9 @@ from .db import Database
 from .bridge_policy import BridgePolicyService
 from .community_sync.runtime import CommunityRuntime
 from .local_communities.runtime import LocalCommunityRuntime
-from .local_communities.participant_routing import resolve_local_community_source_for_forum
+from .local_communities.participant_routing import (
+    resolve_local_community_source_for_forum,
+)
 from .personal_feeds import PersonalFeedBindingView, PersonalFeedService
 
 
@@ -26,6 +28,7 @@ class DiscordEventRouter:
         local_community_runtime: LocalCommunityRuntime,
         bridge_policy_service: BridgePolicyService,
         personal_feed_service: PersonalFeedService | None = None,
+        personal_feed_publisher: object | None = None,
     ) -> None:
         """Initialise the router with the runtimes for both bridge modes."""
         self.database = database
@@ -34,21 +37,38 @@ class DiscordEventRouter:
         self.bridge_policy_service = bridge_policy_service
         # Default construction preserves direct test/runtime builders while the
         # production composition root injects the shared service explicitly.
-        self.personal_feed_service = personal_feed_service or PersonalFeedService(database)
+        self.personal_feed_service = personal_feed_service or PersonalFeedService(
+            database
+        )
+        self.personal_feed_publisher = personal_feed_publisher
 
     def _is_guild_allowed(self, guild_id: int | str | None) -> bool:
         """Evaluate one Discord event against the current guild policy."""
         return self.bridge_policy_service.is_discord_guild_allowed(guild_id)
 
-    def resolve_personal_feed_root(self, guild_id: int, channel_id: int) -> PersonalFeedBindingView | None:
+    def resolve_personal_feed_root(
+        self, guild_id: int, channel_id: int
+    ) -> PersonalFeedBindingView | None:
         """Resolve an allowed guild/channel pair to its current personal-feed owner."""
         if not self._is_guild_allowed(guild_id):
             return None
         return self.personal_feed_service.resolve_root_binding(guild_id, channel_id)
 
+    async def handle_personal_feed_root(
+        self, *, message: object, binding: PersonalFeedBindingView
+    ) -> object:
+        """Forward one classified root to the dedicated personal-feed publisher."""
+        if self.personal_feed_publisher is None:
+            return None
+        return await self.personal_feed_publisher.publish_root(
+            message=message, binding=binding
+        )
+
     def is_active_personal_feed_channel(self, user_id: int, channel_id: int) -> bool:
         """Expose the durable current-channel comparison required by later stages."""
-        return self.personal_feed_service.is_active_personal_feed_channel(user_id, channel_id)
+        return self.personal_feed_service.is_active_personal_feed_channel(
+            user_id, channel_id
+        )
 
     def is_local_community_forum(self, forum_channel_id: int | None) -> bool:
         """Return whether one forum is a local-community create source.
@@ -57,13 +77,21 @@ class DiscordEventRouter:
         subscriber forums.  The helper keeps inactive subscribers and unrelated
         forums out of local-community mode while preserving host precedence.
         """
-        return resolve_local_community_source_for_forum(self.database, forum_channel_id) is not None
+        return (
+            resolve_local_community_source_for_forum(self.database, forum_channel_id)
+            is not None
+        )
 
     def is_remote_subscription_forum(self, forum_channel_id: int | None) -> bool:
         """Return whether the given forum channel is subscribed to a remote community."""
         if forum_channel_id is None:
             return False
-        return self.database.remote_subscriptions.get_subscription_by_channel(forum_channel_id) is not None
+        return (
+            self.database.remote_subscriptions.get_subscription_by_channel(
+                forum_channel_id
+            )
+            is not None
+        )
 
     def is_local_community_message(self, message_id: int) -> bool:
         """Return whether one Discord message belongs to local-community mode.
@@ -73,7 +101,9 @@ class DiscordEventRouter:
         of checking canonical local-community rows directly.
         """
         return (
-            self.database.local_community_surfaces.get_local_community_thread_surface_by_starter_message_id(message_id)
+            self.database.local_community_surfaces.get_local_community_thread_surface_by_starter_message_id(
+                message_id
+            )
             is not None
             or self.database.local_community_surfaces.get_local_community_message_surface_by_discord_message_id(
                 message_id
@@ -81,7 +111,9 @@ class DiscordEventRouter:
             is not None
         )
 
-    async def handle_thread_create(self, *, thread: object, starter_message: object) -> object:
+    async def handle_thread_create(
+        self, *, thread: object, starter_message: object
+    ) -> object:
         """Route one thread-create event into the owning bridge mode."""
         guild = getattr(thread, "guild", None)
         guild_id = getattr(guild, "id", None) or getattr(thread, "guild_id", None)

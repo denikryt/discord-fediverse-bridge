@@ -47,7 +47,9 @@ The gateway serves these ActivityPub actor categories:
 
 Actor documents provide stable identity and routing fields plus editable registered-user profile data. User `Person` actors expose immutable `preferredUsername`, editable `name` and escaped `summary`, optional `icon` and `image` objects backed by bridge-owned immutable media URLs, and up to four ordered `PropertyValue` attachments. Successful profile edits also create a durable complete `Update(Person)` and deliver it to the unique accepted follower endpoints.
 
-Registered User Actor followers are auto-accepted and stored separately from local-community subscribers. Their canonical `/actors/{username}/followers` collection, with `/users/{username}/followers` as a compatibility alias, publicly exposes accepted remote actor IDs through bounded pages. User outboxes remain empty placeholders, and follower content delivery is deferred to later stages.
+Registered User Actor followers are auto-accepted and stored separately from local-community subscribers. Their canonical `/actors/{username}/followers` collection, with `/users/{username}/followers` as a compatibility alias, publicly exposes accepted remote actor IDs through bounded pages. User-authored public content is delivered to the accepted follower endpoint snapshot through durable per-target retry. User outboxes remain empty placeholders until the dedicated outbox stage.
+
+A bound personal-feed guild text channel publishes only owner-authored root messages. Each accepted root becomes one bridge-owned public `Create(Note)` with deterministic object/activity IDs, a canonical `published` value derived from the Discord message creation time, Public addressing, and the User Actor followers collection in `cc`. The gateway render endpoint performs serialization only; signed follower delivery remains the existing post-commit worker boundary. Replies, edits, deletes, attachments, and inbound conversation synchronization are not part of this stage.
 
 ## Supported discovery
 

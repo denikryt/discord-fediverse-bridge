@@ -78,3 +78,10 @@ Profile mutations are owned by one synchronous `BEGIN IMMEDIATE` operation that 
 Existing Discord-backed publication modes retain their authorization and routing ownership. After those checks, Create persistence atomically records the canonical gateway result, published-object mapping, immutable outbound source, and accepted-follower endpoint snapshot. Update and Delete first persist Discord-derived desired state and a stable mutation reservation; the gateway then validates the deterministic operation identity, serializes and signs the canonical activity, and returns the exact JSON that Python commits with the next object revision and follower source.
 
 The existing `UserActorDeliveryWorker` is the single process-owned recovery loop for both pre-source mutation reservations and post-source endpoint deliveries. Database claims and leases provide multi-process exclusion and restart recovery; no SQL transaction is held across Discord fetches or gateway HTTP. Private signing keys remain confined to the gateway boundary.
+
+
+## Personal-feed root publication
+
+Stage 7 adds a dedicated `PersonalFeedPublisher` between Discord routing and the existing User Actor follower-delivery domain. The publisher reloads the active binding, validates exact owner identity and global ban state, derives deterministic object/activity IDs plus a Discord-derived publication timestamp, asks the gateway for render-only `Create(Note)` JSON, and commits mapping, canonical object, follower snapshot, source, and deliveries in one SQLite `BEGIN IMMEDIATE` transaction.
+
+`message_mappings` and `published_activity_objects` carry an explicit `community` or `personal_feed` context. Database checks require personal-feed rows to retain guild, channel, and message identity while forbidding a fabricated community URL. Gateway rendering occurs before the transaction because it has no delivery or signing side effect; the delivery worker is woken only after a newly created source commits. Existing community publication, reply routing, mutation handling, and the empty User Actor outbox remain separate contracts.

@@ -44,9 +44,18 @@ async def test_build_runtime_wires_user_actor_follow_service_after_bot_and_close
 
     assert runtime.user_actor_follow_service.bot is runtime.bot
     assert runtime.bot._runtime is runtime
-    assert runtime.user_profile_service.delivery_service is runtime.user_actor_delivery_service
-    assert runtime.user_profile_service.delivery_worker is runtime.user_actor_delivery_worker
+    assert (
+        runtime.user_profile_service.delivery_service
+        is runtime.user_actor_delivery_service
+    )
+    assert (
+        runtime.user_profile_service.delivery_worker
+        is runtime.user_actor_delivery_worker
+    )
     assert runtime.user_actor_delivery_service.discord_message_reader is runtime.bot
+    publisher = runtime.bot.event_router.personal_feed_publisher
+    assert publisher.user_ban_service is runtime.bot.user_ban_service
+    assert publisher.bridge_policy_service is runtime.bridge_policy_service
 
     close_order: list[str] = []
 

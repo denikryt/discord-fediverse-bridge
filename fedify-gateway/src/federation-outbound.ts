@@ -19,6 +19,8 @@ import type {
   DeleteContentRequest,
   PublishContentRequest,
   PublishContentResult,
+  RenderPersonalFeedRequest,
+  RenderPersonalFeedResult,
   CanonicalMutationResult,
   PublishLocalCommunityContentRequest,
   PublishLocalCommunityContentResult,
@@ -218,6 +220,66 @@ export function buildLemmyCompatibleUnfollowActivity(
     }),
     tos: [communityActorUrl],
   });
+}
+
+
+function escapeHtml(value: string): string {
+  // User-authored Discord text crosses a public HTML boundary; escape before
+  // adding paragraph and line-break markup.
+  return value.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;").replace(/'/g, "&#39;");
+}
+
+export function renderPersonalFeedCreate(
+  config: GatewayConfig,
+  request: RenderPersonalFeedRequest,
+): RenderPersonalFeedResult {
+  // This builder is deliberately render-only: it loads no key material and
+  // performs no network delivery. Python persists this exact JSON first.
+  const origin = new URL(config.fedifyOrigin).origin;
+  const actorId = new URL(`/actors/${encodeURIComponent(request.actorUsername)}`, origin).href;
+  const followersId = `${actorId}/followers`;
+  const expectedObjectId = new URL(`/users/${encodeURIComponent(request.actorUsername)}/post/${request.operationId}`, origin).href;
+  const expectedActivityId = new URL(`/users/${encodeURIComponent(request.actorUsername)}/activities/create/post/${request.operationId}`, origin).href;
+  if (request.objectId !== expectedObjectId || request.activityId !== expectedActivityId) {
+    throw new Error("personal-feed IDs do not match canonical origin/path");
+  }
+  if (!/^[a-f0-9]{64}$/.test(request.operationId)) {
+    throw new Error("operationId must be a lowercase SHA-256 hex digest");
+  }
+  const parsedPublished = new Date(request.publishedAt);
+  if (Number.isNaN(parsedPublished.getTime()) || parsedPublished.toISOString() !== request.publishedAt) {
+    throw new Error("publishedAt must be canonical UTC RFC3339 with milliseconds");
+  }
+  const object = {
+    "@context": "https://www.w3.org/ns/activitystreams",
+    type: "Note",
+    id: request.objectId,
+    url: request.objectId,
+    attributedTo: actorId,
+    to: [ACTIVITYSTREAMS_PUBLIC_IRI],
+    cc: [followersId],
+    source: { mediaType: "text/markdown", content: request.bodyMarkdown },
+    content: request.bodyMarkdown
+      .split(/\n\n+/)
+      .map((paragraph) => `<p>${escapeHtml(paragraph.trim()).replace(/\n/g, "<br>")}</p>`)
+      .join("\n"),
+    published: request.publishedAt,
+  };
+  return {
+    activityId: request.activityId,
+    objectId: request.objectId,
+    publishedAt: request.publishedAt,
+    activityJson: {
+      "@context": "https://www.w3.org/ns/activitystreams",
+      type: "Create",
+      id: request.activityId,
+      actor: actorId,
+      to: [ACTIVITYSTREAMS_PUBLIC_IRI],
+      cc: [actorId, followersId],
+      object,
+    },
+  };
 }
 
 export async function publishContent(

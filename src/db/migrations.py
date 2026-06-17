@@ -11,7 +11,28 @@ from __future__ import annotations
 from sqlalchemy import text
 from sqlalchemy.engine import Connection, Engine
 
-from ..models import Base, BridgeActorKey, BridgePolicyEntry, CommunityActorBan, GuildInvitePublication, LocalCommunityMessageSurface, LocalCommunityThreadSurface, ManagementAuditEvent, ProfileMediaAsset, UserProfileField, UserActorFollower, UserActorFollowActivityId, UserActorOutboundSource, UserActorOutboundDelivery, UserActorOutboundDeliveryFollower, UserActorOutboundSourceMedia, UserActorContentMutation, PublishedActivityObject, PersonalFeedBinding
+from ..models import (
+    Base,
+    BridgeActorKey,
+    BridgePolicyEntry,
+    CommunityActorBan,
+    GuildInvitePublication,
+    LocalCommunityMessageSurface,
+    LocalCommunityThreadSurface,
+    ManagementAuditEvent,
+    ProfileMediaAsset,
+    UserProfileField,
+    UserActorFollower,
+    UserActorFollowActivityId,
+    UserActorOutboundSource,
+    UserActorOutboundDelivery,
+    UserActorOutboundDeliveryFollower,
+    UserActorOutboundSourceMedia,
+    UserActorContentMutation,
+    PublishedActivityObject,
+    PersonalFeedBinding,
+    MessageMapping,
+)
 
 
 def migrate(engine: Engine) -> None:
@@ -38,22 +59,82 @@ def migrate(engine: Engine) -> None:
             "outcome",
             "ALTER TABLE activitypub_event_receipts ADD COLUMN outcome VARCHAR(64)",
         ),
-        ("users", "display_name", "ALTER TABLE users ADD COLUMN display_name VARCHAR(30)"),
+        (
+            "users",
+            "display_name",
+            "ALTER TABLE users ADD COLUMN display_name VARCHAR(30)",
+        ),
         ("users", "summary", "ALTER TABLE users ADD COLUMN summary VARCHAR(500)"),
-        ("users", "avatar_media_id", "ALTER TABLE users ADD COLUMN avatar_media_id INTEGER REFERENCES profile_media_assets(id) ON DELETE RESTRICT"),
-        ("users", "header_media_id", "ALTER TABLE users ADD COLUMN header_media_id INTEGER REFERENCES profile_media_assets(id) ON DELETE RESTRICT"),
-        ("users", "profile_version", "ALTER TABLE users ADD COLUMN profile_version INTEGER NOT NULL DEFAULT 0"),
-        ("published_activity_objects", "content_revision", "ALTER TABLE published_activity_objects ADD COLUMN content_revision INTEGER NOT NULL DEFAULT 1"),
-        ("published_activity_objects", "deleted_at", "ALTER TABLE published_activity_objects ADD COLUMN deleted_at DATETIME"),
-        ("published_activity_objects", "desired_kind", "ALTER TABLE published_activity_objects ADD COLUMN desired_kind VARCHAR(16) NOT NULL DEFAULT 'none'"),
-        ("published_activity_objects", "desired_title", "ALTER TABLE published_activity_objects ADD COLUMN desired_title VARCHAR(512)"),
-        ("published_activity_objects", "desired_body_markdown", "ALTER TABLE published_activity_objects ADD COLUMN desired_body_markdown TEXT"),
-        ("published_activity_objects", "desired_edited_timestamp", "ALTER TABLE published_activity_objects ADD COLUMN desired_edited_timestamp DATETIME"),
-        ("published_activity_objects", "desired_fingerprint", "ALTER TABLE published_activity_objects ADD COLUMN desired_fingerprint VARCHAR(64)"),
-        ("published_activity_objects", "discord_reconciliation_needed", "ALTER TABLE published_activity_objects ADD COLUMN discord_reconciliation_needed BOOLEAN NOT NULL DEFAULT 0"),
-        ("published_activity_objects", "discord_reconciliation_attempt_count", "ALTER TABLE published_activity_objects ADD COLUMN discord_reconciliation_attempt_count INTEGER NOT NULL DEFAULT 0"),
-        ("published_activity_objects", "discord_reconciliation_next_attempt_at", "ALTER TABLE published_activity_objects ADD COLUMN discord_reconciliation_next_attempt_at DATETIME"),
-        ("published_activity_objects", "discord_reconciliation_last_error", "ALTER TABLE published_activity_objects ADD COLUMN discord_reconciliation_last_error VARCHAR(512)"),
+        (
+            "users",
+            "avatar_media_id",
+            "ALTER TABLE users ADD COLUMN avatar_media_id INTEGER REFERENCES profile_media_assets(id) ON DELETE RESTRICT",
+        ),
+        (
+            "users",
+            "header_media_id",
+            "ALTER TABLE users ADD COLUMN header_media_id INTEGER REFERENCES profile_media_assets(id) ON DELETE RESTRICT",
+        ),
+        (
+            "users",
+            "profile_version",
+            "ALTER TABLE users ADD COLUMN profile_version INTEGER NOT NULL DEFAULT 0",
+        ),
+        (
+            "published_activity_objects",
+            "content_revision",
+            "ALTER TABLE published_activity_objects ADD COLUMN content_revision INTEGER NOT NULL DEFAULT 1",
+        ),
+        (
+            "published_activity_objects",
+            "deleted_at",
+            "ALTER TABLE published_activity_objects ADD COLUMN deleted_at DATETIME",
+        ),
+        (
+            "published_activity_objects",
+            "desired_kind",
+            "ALTER TABLE published_activity_objects ADD COLUMN desired_kind VARCHAR(16) NOT NULL DEFAULT 'none'",
+        ),
+        (
+            "published_activity_objects",
+            "desired_title",
+            "ALTER TABLE published_activity_objects ADD COLUMN desired_title VARCHAR(512)",
+        ),
+        (
+            "published_activity_objects",
+            "desired_body_markdown",
+            "ALTER TABLE published_activity_objects ADD COLUMN desired_body_markdown TEXT",
+        ),
+        (
+            "published_activity_objects",
+            "desired_edited_timestamp",
+            "ALTER TABLE published_activity_objects ADD COLUMN desired_edited_timestamp DATETIME",
+        ),
+        (
+            "published_activity_objects",
+            "desired_fingerprint",
+            "ALTER TABLE published_activity_objects ADD COLUMN desired_fingerprint VARCHAR(64)",
+        ),
+        (
+            "published_activity_objects",
+            "discord_reconciliation_needed",
+            "ALTER TABLE published_activity_objects ADD COLUMN discord_reconciliation_needed BOOLEAN NOT NULL DEFAULT 0",
+        ),
+        (
+            "published_activity_objects",
+            "discord_reconciliation_attempt_count",
+            "ALTER TABLE published_activity_objects ADD COLUMN discord_reconciliation_attempt_count INTEGER NOT NULL DEFAULT 0",
+        ),
+        (
+            "published_activity_objects",
+            "discord_reconciliation_next_attempt_at",
+            "ALTER TABLE published_activity_objects ADD COLUMN discord_reconciliation_next_attempt_at DATETIME",
+        ),
+        (
+            "published_activity_objects",
+            "discord_reconciliation_last_error",
+            "ALTER TABLE published_activity_objects ADD COLUMN discord_reconciliation_last_error VARCHAR(512)",
+        ),
     ]
     # Stage 2 adds explicit local-community surface tables. Creating them here
     # keeps interrupted deployments and migrate-only test fixtures aligned with
@@ -82,6 +163,7 @@ def migrate(engine: Engine) -> None:
     )
     with engine.connect() as conn:
         _migrate_published_activity_objects_stage5(conn)
+        _migrate_message_mappings_stage7(conn)
         for table, column, stmt in migrations:
             # PRAGMA table_info returns one row per column; skip if already present.
             existing = _table_columns(conn, table)
@@ -103,7 +185,9 @@ def migrate(engine: Engine) -> None:
         ):
             columns = _table_columns(conn, table)
             if "local_subscriber_id" not in columns:
-                conn.execute(text(f"ALTER TABLE {table} ADD COLUMN local_subscriber_id INTEGER"))
+                conn.execute(
+                    text(f"ALTER TABLE {table} ADD COLUMN local_subscriber_id INTEGER")
+                )
         _verify_stage2_surface_invariants(conn)
         _migrate_profile_field_name_width(conn)
         _migrate_user_actor_outbound_sources_stage5(conn)
@@ -111,10 +195,8 @@ def migrate(engine: Engine) -> None:
         conn.commit()
 
 
-
-
 def _migrate_published_activity_objects_stage5(conn: Connection) -> None:
-    """Rebuild the Stage 4 authored-object table to the exact Stage 5 model DDL."""
+    """Rebuild authored objects to the current typed publication-context schema."""
     columns = _table_columns(conn, "published_activity_objects")
     required = {column.name for column in PublishedActivityObject.__table__.columns}
     if not columns or required.issubset(columns):
@@ -122,35 +204,81 @@ def _migrate_published_activity_objects_stage5(conn: Connection) -> None:
 
     conn.execute(text("PRAGMA foreign_keys=OFF"))
     conn.execute(text("PRAGMA legacy_alter_table=ON"))
-    conn.execute(text(
-        "ALTER TABLE published_activity_objects "
-        "RENAME TO published_activity_objects_stage4"
-    ))
+    conn.execute(
+        text(
+            "ALTER TABLE published_activity_objects RENAME TO published_activity_objects_legacy"
+        )
+    )
     conn.execute(text("PRAGMA legacy_alter_table=OFF"))
     PublishedActivityObject.__table__.create(conn)
-    conn.execute(text(
-        """
+    optional = {
+        "content_revision": "1",
+        "deleted_at": "NULL",
+        "desired_kind": "'none'",
+        "desired_title": "NULL",
+        "desired_body_markdown": "NULL",
+        "desired_edited_timestamp": "NULL",
+        "desired_fingerprint": "NULL",
+        "discord_reconciliation_needed": "0",
+        "discord_reconciliation_attempt_count": "0",
+        "discord_reconciliation_next_attempt_at": "NULL",
+        "discord_reconciliation_last_error": "NULL",
+    }
+
+    def expr(name: str) -> str:
+        return name if name in columns else optional[name]
+
+    conn.execute(
+        text(f"""
         INSERT INTO published_activity_objects (
-            id, actor_username, actor_url, community_actor_url, activity_id,
-            object_id, kind, title, body_markdown, in_reply_to_object_id,
-            discord_channel_id, discord_message_id, content_revision,
+            id, actor_username, actor_url, publication_context, community_actor_url,
+            activity_id, object_id, kind, title, body_markdown, in_reply_to_object_id,
+            discord_guild_id, discord_channel_id, discord_message_id, content_revision,
             deleted_at, desired_kind, desired_title, desired_body_markdown,
-            desired_edited_timestamp, desired_fingerprint,
-            discord_reconciliation_needed,
-            discord_reconciliation_attempt_count,
-            discord_reconciliation_next_attempt_at,
+            desired_edited_timestamp, desired_fingerprint, discord_reconciliation_needed,
+            discord_reconciliation_attempt_count, discord_reconciliation_next_attempt_at,
             discord_reconciliation_last_error, published_at, created_at
         )
-        SELECT id, actor_username, actor_url, community_actor_url, activity_id,
-               object_id, kind, title, body_markdown, in_reply_to_object_id,
-               discord_channel_id, discord_message_id, 1, NULL, 'none', NULL,
-               NULL, NULL, NULL, 0, 0, NULL, NULL, published_at, created_at
-        FROM published_activity_objects_stage4
-        """
-    ))
-    conn.execute(text("DROP TABLE published_activity_objects_stage4"))
+        SELECT id, actor_username, actor_url, 'community', community_actor_url,
+               activity_id, object_id, kind, title, body_markdown, in_reply_to_object_id,
+               NULL, discord_channel_id, discord_message_id, {expr("content_revision")},
+               {expr("deleted_at")}, {expr("desired_kind")}, {expr("desired_title")},
+               {expr("desired_body_markdown")}, {expr("desired_edited_timestamp")},
+               {expr("desired_fingerprint")}, {expr("discord_reconciliation_needed")},
+               {expr("discord_reconciliation_attempt_count")},
+               {expr("discord_reconciliation_next_attempt_at")},
+               {expr("discord_reconciliation_last_error")}, published_at, created_at
+        FROM published_activity_objects_legacy
+    """)
+    )
+    conn.execute(text("DROP TABLE published_activity_objects_legacy"))
     conn.execute(text("PRAGMA foreign_keys=ON"))
 
+
+def _migrate_message_mappings_stage7(conn: Connection) -> None:
+    """Rebuild mappings with typed context and durable Discord guild identity."""
+    columns = _table_columns(conn, "message_mappings")
+    required = {column.name for column in MessageMapping.__table__.columns}
+    if not columns or required.issubset(columns):
+        return
+    conn.execute(text("PRAGMA foreign_keys=OFF"))
+    conn.execute(text("ALTER TABLE message_mappings RENAME TO message_mappings_legacy"))
+    MessageMapping.__table__.create(conn)
+    conn.execute(
+        text("""
+        INSERT INTO message_mappings (
+            id, source_platform, source_id, activity_id, object_id, actor_url,
+            publication_context, community_actor_url, discord_guild_id,
+            discord_channel_id, discord_message_id, created_at
+        )
+        SELECT id, source_platform, source_id, activity_id, object_id, actor_url,
+               'community', community_actor_url, NULL, discord_channel_id,
+               discord_message_id, created_at
+        FROM message_mappings_legacy
+    """)
+    )
+    conn.execute(text("DROP TABLE message_mappings_legacy"))
+    conn.execute(text("PRAGMA foreign_keys=ON"))
 
 
 def _migrate_user_actor_outbound_sources_stage5(conn: Connection) -> None:
@@ -163,12 +291,17 @@ def _migrate_user_actor_outbound_sources_stage5(conn: Connection) -> None:
     # while enforcement is disabled.  Preserve the Stage 4 child references to
     # the canonical table name while this parent table is rebuilt.
     conn.execute(text("PRAGMA legacy_alter_table=ON"))
-    conn.execute(text("ALTER TABLE user_actor_outbound_sources RENAME TO user_actor_outbound_sources_stage4"))
+    conn.execute(
+        text(
+            "ALTER TABLE user_actor_outbound_sources RENAME TO user_actor_outbound_sources_stage4"
+        )
+    )
     conn.execute(text("PRAGMA legacy_alter_table=OFF"))
     conn.execute(text("DROP INDEX IF EXISTS ix_user_actor_sources_retry"))
     UserActorOutboundSource.__table__.create(conn)
-    conn.execute(text(
-        """
+    conn.execute(
+        text(
+            """
         INSERT INTO user_actor_outbound_sources (
             id, user_id, source_kind, ordering_key, logical_version, activity_id,
             published_object_id, snapshot_json, activity_json, state,
@@ -181,9 +314,11 @@ def _migrate_user_actor_outbound_sources_stage5(conn: Connection) -> None:
                next_attempt_at, created_at, updated_at
         FROM user_actor_outbound_sources_stage4
         """
-    ))
+        )
+    )
     conn.execute(text("DROP TABLE user_actor_outbound_sources_stage4"))
     conn.execute(text("PRAGMA foreign_keys=ON"))
+
 
 def _migrate_generalized_user_bans(conn: Connection) -> None:
     """Rebuild legacy community-only ban rows into explicit scoped rows.
@@ -195,9 +330,14 @@ def _migrate_generalized_user_bans(conn: Connection) -> None:
     columns = _table_columns(conn, "community_actor_bans")
     if not columns or "scope" in columns:
         return
-    conn.execute(text("ALTER TABLE community_actor_bans RENAME TO community_actor_bans_legacy_scope"))
-    conn.execute(text(
-        """
+    conn.execute(
+        text(
+            "ALTER TABLE community_actor_bans RENAME TO community_actor_bans_legacy_scope"
+        )
+    )
+    conn.execute(
+        text(
+            """
         CREATE TABLE community_actor_bans (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             scope VARCHAR(32) NOT NULL,
@@ -214,9 +354,11 @@ def _migrate_generalized_user_bans(conn: Connection) -> None:
             UNIQUE (scope, scope_key, actor_handle, status)
         )
         """
-    ))
-    conn.execute(text(
-        """
+        )
+    )
+    conn.execute(
+        text(
+            """
         INSERT INTO community_actor_bans (
             id, scope, scope_key, local_community_id, actor_handle, actor_url,
             target_discord_user_id, status, created_by_discord_user_id, reason,
@@ -227,12 +369,16 @@ def _migrate_generalized_user_bans(conn: Connection) -> None:
                created_by_discord_user_id, reason, created_at, updated_at
         FROM community_actor_bans_legacy_scope
         """
-    ))
+        )
+    )
     conn.execute(text("DROP TABLE community_actor_bans_legacy_scope"))
-    conn.execute(text(
-        "CREATE INDEX IF NOT EXISTS ix_community_actor_bans_target_discord_user_id "
-        "ON community_actor_bans (target_discord_user_id)"
-    ))
+    conn.execute(
+        text(
+            "CREATE INDEX IF NOT EXISTS ix_community_actor_bans_target_discord_user_id "
+            "ON community_actor_bans (target_discord_user_id)"
+        )
+    )
+
 
 def _table_columns(conn: Connection, table: str) -> set[str]:
     """Return the current SQLite column names for one table."""
@@ -262,7 +408,11 @@ def _migrate_local_communities_summary_nullable(conn: Connection) -> None:
 
     existing_columns = {str(row[1]) for row in table_info}
     conn.execute(text("PRAGMA foreign_keys=OFF"))
-    conn.execute(text("ALTER TABLE local_communities RENAME TO local_communities_legacy_summary_not_null"))
+    conn.execute(
+        text(
+            "ALTER TABLE local_communities RENAME TO local_communities_legacy_summary_not_null"
+        )
+    )
     conn.execute(
         text(
             """
@@ -291,7 +441,11 @@ def _migrate_local_communities_summary_nullable(conn: Connection) -> None:
         )
     )
 
-    created_by_expr = "created_by_discord_user_id" if "created_by_discord_user_id" in existing_columns else "NULL"
+    created_by_expr = (
+        "created_by_discord_user_id"
+        if "created_by_discord_user_id" in existing_columns
+        else "NULL"
+    )
     # Keep the column list explicit so future table changes do not get silently
     # dropped into this compatibility path without a deliberate migration plan.
     conn.execute(
@@ -379,7 +533,6 @@ def _verify_stage2_surface_invariants(conn: Connection) -> None:
         )
 
 
-
 def _migrate_profile_field_name_width(conn: Connection) -> None:
     """Rebuild legacy profile fields so metadata names expose VARCHAR(255)."""
     table_info = _table_info(conn, "user_profile_fields")
@@ -390,8 +543,13 @@ def _migrate_profile_field_name_width(conn: Connection) -> None:
         return
     # SQLite does not enforce VARCHAR widths, but schema parity is part of the
     # durable contract handed to later stages and external schema inspection.
-    conn.execute(text("ALTER TABLE user_profile_fields RENAME TO user_profile_fields_legacy_name_width"))
-    conn.execute(text("""
+    conn.execute(
+        text(
+            "ALTER TABLE user_profile_fields RENAME TO user_profile_fields_legacy_name_width"
+        )
+    )
+    conn.execute(
+        text("""
         CREATE TABLE user_profile_fields (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
@@ -403,47 +561,61 @@ def _migrate_profile_field_name_width(conn: Connection) -> None:
             UNIQUE (user_id, position),
             CONSTRAINT ck_user_profile_field_position CHECK (position >= 0 AND position <= 3)
         )
-    """))
-    conn.execute(text("""
+    """)
+    )
+    conn.execute(
+        text("""
         INSERT INTO user_profile_fields (id, user_id, position, name, value, created_at, updated_at)
         SELECT id, user_id, position, name, value, created_at, updated_at
         FROM user_profile_fields_legacy_name_width
-    """))
+    """)
+    )
     conn.execute(text("DROP TABLE user_profile_fields_legacy_name_width"))
+
 
 def _install_profile_media_triggers(conn: Connection) -> None:
     """Enforce slot-to-kind consistency for every SQLite write path."""
-    if not _table_columns(conn, "users") or not _table_columns(conn, "profile_media_assets"):
+    if not _table_columns(conn, "users") or not _table_columns(
+        conn, "profile_media_assets"
+    ):
         return
-    conn.execute(text("""
+    conn.execute(
+        text("""
         CREATE TRIGGER IF NOT EXISTS users_avatar_media_kind_insert
         BEFORE INSERT ON users WHEN NEW.avatar_media_id IS NOT NULL
         BEGIN
           SELECT CASE WHEN (SELECT media_kind FROM profile_media_assets WHERE id = NEW.avatar_media_id) != 'avatar'
             THEN RAISE(ABORT, 'avatar_media_id must reference avatar media') END;
         END
-    """))
-    conn.execute(text("""
+    """)
+    )
+    conn.execute(
+        text("""
         CREATE TRIGGER IF NOT EXISTS users_avatar_media_kind_update
         BEFORE UPDATE OF avatar_media_id ON users WHEN NEW.avatar_media_id IS NOT NULL
         BEGIN
           SELECT CASE WHEN (SELECT media_kind FROM profile_media_assets WHERE id = NEW.avatar_media_id) != 'avatar'
             THEN RAISE(ABORT, 'avatar_media_id must reference avatar media') END;
         END
-    """))
-    conn.execute(text("""
+    """)
+    )
+    conn.execute(
+        text("""
         CREATE TRIGGER IF NOT EXISTS users_header_media_kind_insert
         BEFORE INSERT ON users WHEN NEW.header_media_id IS NOT NULL
         BEGIN
           SELECT CASE WHEN (SELECT media_kind FROM profile_media_assets WHERE id = NEW.header_media_id) != 'header'
             THEN RAISE(ABORT, 'header_media_id must reference header media') END;
         END
-    """))
-    conn.execute(text("""
+    """)
+    )
+    conn.execute(
+        text("""
         CREATE TRIGGER IF NOT EXISTS users_header_media_kind_update
         BEFORE UPDATE OF header_media_id ON users WHEN NEW.header_media_id IS NOT NULL
         BEGIN
           SELECT CASE WHEN (SELECT media_kind FROM profile_media_assets WHERE id = NEW.header_media_id) != 'header'
             THEN RAISE(ABORT, 'header_media_id must reference header media') END;
         END
-    """))
+    """)
+    )

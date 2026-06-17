@@ -73,6 +73,28 @@ class PublishLocalCommunityContentResult:
 
 
 @dataclass(slots=True)
+class RenderPersonalFeedRequest:
+    """Carry one deterministic render-only personal-feed publication request."""
+
+    actor_username: str
+    operation_id: str
+    activity_id: str
+    object_id: str
+    body_markdown: str
+    published_at: str
+
+
+@dataclass(slots=True)
+class RenderPersonalFeedResult:
+    """Return one canonical render-only Create(Note) result."""
+
+    activity_id: str
+    object_id: str
+    published_at: str
+    activity_json: dict = field(default_factory=dict)
+
+
+@dataclass(slots=True)
 class CanonicalMutationResult:
     """Return one stable canonical Update/Delete rendered by the gateway."""
 
@@ -117,7 +139,6 @@ class DeleteContentRequest:
     next_revision: int | None = None
 
 
-
 @dataclass(slots=True)
 class SendLocalCommunityRelayDelivery:
     """Carry one already-rendered relay activity to one remote inbox."""
@@ -144,8 +165,6 @@ class SendLocalCommunityRelayResult:
     """Return all per-target outcomes for one relay request."""
 
     outcomes: list[SendLocalCommunityRelayOutcome]
-
-
 
 
 @dataclass(slots=True)
@@ -232,6 +251,31 @@ class FedifyGatewayClient:
             community_actor_url=payload["communityActorUrl"],
             community_inbox_url=payload["communityInboxUrl"],
             follow_activity_id=payload["followActivityId"],
+        )
+
+    async def render_personal_feed(
+        self, request: RenderPersonalFeedRequest
+    ) -> RenderPersonalFeedResult:
+        """Render one canonical personal-feed Create without delivery or signing."""
+        response = await self._client.post(
+            "/render-personal-feed",
+            headers={"Authorization": f"Bearer {self._shared_secret}"},
+            json={
+                "actorUsername": request.actor_username,
+                "operationId": request.operation_id,
+                "activityId": request.activity_id,
+                "objectId": request.object_id,
+                "bodyMarkdown": request.body_markdown,
+                "publishedAt": request.published_at,
+            },
+        )
+        response.raise_for_status()
+        payload = response.json()
+        return RenderPersonalFeedResult(
+            activity_id=payload["activityId"],
+            object_id=payload["objectId"],
+            published_at=payload["publishedAt"],
+            activity_json=payload["activityJson"],
         )
 
     async def publish_content(
@@ -331,7 +375,9 @@ class FedifyGatewayClient:
             )
         return UnfollowCommunityResult(accepted=True)
 
-    async def update_content(self, request: UpdateContentRequest) -> CanonicalMutationResult:
+    async def update_content(
+        self, request: UpdateContentRequest
+    ) -> CanonicalMutationResult:
         """Trigger and return one canonical gateway-side Update activity."""
         response = await self._client.post(
             "/update",
@@ -360,7 +406,9 @@ class FedifyGatewayClient:
             activity_json=payload["activityJson"],
         )
 
-    async def delete_content(self, request: DeleteContentRequest) -> CanonicalMutationResult:
+    async def delete_content(
+        self, request: DeleteContentRequest
+    ) -> CanonicalMutationResult:
         """Trigger and return one canonical gateway-side Delete activity."""
         response = await self._client.post(
             "/delete",
@@ -384,7 +432,6 @@ class FedifyGatewayClient:
             object_id=payload["objectId"],
             activity_json=payload["activityJson"],
         )
-
 
     async def send_local_community_relay(
         self,
@@ -423,7 +470,6 @@ class FedifyGatewayClient:
                 for item in payload.get("outcomes", [])
             ]
         )
-
 
     async def render_user_actor_profile_update(
         self, *, activity_id: str, profile_snapshot: dict

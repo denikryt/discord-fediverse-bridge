@@ -62,7 +62,9 @@ export interface MessageMappingRow {
   activityId: string;
   objectId: string;
   actorUrl: string;
-  communityActorUrl: string;
+  publicationContext: "community" | "personal_feed";
+  communityActorUrl: string | null;
+  discordGuildId: number | null;
   discordChannelId: number | null;
   discordMessageId: number | null;
 }
@@ -70,7 +72,8 @@ export interface MessageMappingRow {
 export interface PublishedActivityObjectRow {
   actorUsername: string;
   actorUrl: string;
-  communityActorUrl: string;
+  publicationContext: "community" | "personal_feed";
+  communityActorUrl: string | null;
   activityId: string;
   objectId: string;
   kind: "post" | "comment";
@@ -78,6 +81,7 @@ export interface PublishedActivityObjectRow {
   bodyMarkdown: string;
   inReplyToObjectId: string | null;
   publishedAt: string;
+  discordGuildId: number | null;
   discordChannelId: number | null;
   discordMessageId: number | null;
 }
@@ -228,7 +232,9 @@ export class PythonBridgeClient implements PythonBridgeReadClient {
       activityId: requiredString(row, "activity_id"),
       objectId: requiredString(row, "object_id"),
       actorUrl: requiredString(row, "actor_url"),
-      communityActorUrl: requiredString(row, "community_actor_url"),
+      publicationContext: optionalPublicationContext(row, "publication_context"),
+      communityActorUrl: nullableString(row, "community_actor_url"),
+      discordGuildId: nullableNumber(row, "discord_guild_id"),
       discordChannelId: nullableNumber(row, "discord_channel_id"),
       discordMessageId: nullableNumber(row, "discord_message_id"),
     };
@@ -278,7 +284,8 @@ export class PythonBridgeClient implements PythonBridgeReadClient {
     return row == null ? null : {
       actorUsername: requiredString(row, "actor_username"),
       actorUrl: requiredString(row, "actor_url"),
-      communityActorUrl: requiredString(row, "community_actor_url"),
+      publicationContext: optionalPublicationContext(row, "publication_context"),
+      communityActorUrl: nullableString(row, "community_actor_url"),
       activityId: requiredString(row, "activity_id"),
       objectId: requiredString(row, "object_id"),
       kind: requiredKind(row, "kind"),
@@ -286,6 +293,7 @@ export class PythonBridgeClient implements PythonBridgeReadClient {
       bodyMarkdown: requiredString(row, "body_markdown"),
       inReplyToObjectId: nullableString(row, "in_reply_to_object_id"),
       publishedAt: requiredString(row, "published_at"),
+      discordGuildId: nullableNumber(row, "discord_guild_id"),
       discordChannelId: nullableNumber(row, "discord_channel_id"),
       discordMessageId: nullableNumber(row, "discord_message_id"),
     };
@@ -388,5 +396,15 @@ function requiredNumber(row: Record<string, unknown>, key: string): number { con
 function nullableNumber(row: Record<string, unknown>, key: string): number | null { const value=row[key]; if(value===null||value===undefined)return null; if(typeof value!=="number")throw new Error(`Malformed Python bridge response field: ${key}`); return value; }
 function requiredArray(row: Record<string, unknown>, key: string): unknown[] { const value=row[key]; if(!Array.isArray(value))throw new Error(`Malformed Python bridge response field: ${key}`); return value; }
 function requiredKeyFormat(row: Record<string, unknown>, key: string): "jwk"|"pem" { const value=requiredString(row,key); if(value!=="jwk"&&value!=="pem")throw new Error(`Malformed Python bridge response field: ${key}`); return value; }
+function optionalPublicationContext(record: Record<string, unknown>, key: string): "community" | "personal_feed" {
+  const raw = record[key];
+  if (raw == null) return "community";
+  const value = requiredString(record, key);
+  if (value !== "community" && value !== "personal_feed") {
+    throw new Error(`${key} must be a supported publication context`);
+  }
+  return value;
+}
+
 function requiredKind(row: Record<string, unknown>, key: string): "post"|"comment" { const value=requiredString(row,key); if(value!=="post"&&value!=="comment")throw new Error(`Malformed Python bridge response field: ${key}`); return value; }
 function errorMessage(error: unknown): string { return error instanceof Error ? error.message : String(error); }

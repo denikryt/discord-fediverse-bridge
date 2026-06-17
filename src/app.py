@@ -31,6 +31,8 @@ from .user_actor_followers import UserActorFollowService
 from .user_actor_delivery import UserActorDeliveryService
 from .user_actor_delivery_worker import UserActorDeliveryWorker
 from .personal_feeds import PersonalFeedService
+from .personal_feed_publisher import PersonalFeedPublisher
+from .user_bans import UserBanService
 from .db.backup import recover_incomplete_restore
 
 logger = logging.getLogger(__name__)
@@ -108,7 +110,9 @@ def _build_live_runtime(settings: Settings, deployment_lease: FileLock) -> Runti
     database.migrate()
     BridgeActorKeyBootstrap(database=database, settings=settings).ensure()
 
-    bridge_policy_service = BridgePolicyService(settings=settings, repository=database.bridge_policy_entries)
+    bridge_policy_service = BridgePolicyService(
+        settings=settings, repository=database.bridge_policy_entries
+    )
     fedify_gateway = FedifyGatewayClient(settings)
     discord_oauth_client = DiscordOAuthClient(settings)
     user_actor_delivery_service = UserActorDeliveryService(
@@ -152,12 +156,23 @@ def _build_live_runtime(settings: Settings, deployment_lease: FileLock) -> Runti
         content_publish_service=content_publish_service,
     )
     personal_feed_service = PersonalFeedService(database)
+    user_ban_service = UserBanService(database=database, settings=settings)
+    personal_feed_publisher = PersonalFeedPublisher(
+        database=database,
+        personal_feed_service=personal_feed_service,
+        fedify_gateway=fedify_gateway,
+        user_ban_service=user_ban_service,
+        bridge_policy_service=bridge_policy_service,
+        fedify_origin=settings.normalized_fedify_origin,
+        delivery_worker=user_actor_delivery_worker,
+    )
     event_router = DiscordEventRouter(
         database=database,
         community_runtime=community_runtime,
         local_community_runtime=local_community_runtime,
         bridge_policy_service=bridge_policy_service,
         personal_feed_service=personal_feed_service,
+        personal_feed_publisher=personal_feed_publisher,
     )
     bot = BridgeBot(
         settings=settings,
@@ -167,8 +182,14 @@ def _build_live_runtime(settings: Settings, deployment_lease: FileLock) -> Runti
         bridge_policy_service=bridge_policy_service,
         user_profile_service=user_profile_service,
         personal_feed_service=personal_feed_service,
+        user_ban_service=user_ban_service,
     )
-    discord_fanout = DiscordFanout(bot=bot, mutation_tracker=bot, database=database, policy_service=bridge_policy_service)
+    discord_fanout = DiscordFanout(
+        bot=bot,
+        mutation_tracker=bot,
+        database=database,
+        policy_service=bridge_policy_service,
+    )
     community_runtime.discord_fanout = discord_fanout
     # Wire bot into CommunityRuntime after construction for the same reason
     # discord_fanout is injected late — bot depends on community_runtime existing first.
