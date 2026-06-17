@@ -10,7 +10,6 @@ directions, using the same delivery row tables for reverse-lookup.
 
 from __future__ import annotations
 
-import asyncio
 import logging
 from typing import TYPE_CHECKING
 
@@ -37,7 +36,11 @@ from .edit_delete import (
     propagate_inbound_post_update,
     resolve_actor_username,
 )
-from .inbound_mapping import get_accepted_subscriptions, get_parent_message_group, needs_backfill
+from .inbound_mapping import (
+    get_accepted_subscriptions,
+    get_parent_message_group,
+    needs_backfill,
+)
 from .reply_mapping import resolve_inbound_reference, resolve_reply_context
 
 if TYPE_CHECKING:
@@ -45,7 +48,6 @@ if TYPE_CHECKING:
     from ..activitypub_models import ActivityPubEvent
     from ..db import Database
     from ..content_publish_service import ContentPublishService, PublishResult
-    from ..fedify_gateway_client import DeleteContentRequest, UpdateContentRequest
     from ..runtime import Runtime
     from .discord_fanout import DiscordFanout
 
@@ -102,7 +104,9 @@ class CommunityRuntime:
         # Dedup: if a thread group already exists for this source thread,
         # a reconnect or duplicate event fired — skip without re-publishing.
         if get_thread_group_for_source_thread(self.database, thread.id) is not None:
-            logger.info("Thread %s already has a thread group — skipping duplicate", thread.id)
+            logger.info(
+                "Thread %s already has a thread group — skipping duplicate", thread.id
+            )
             return _ignored_result("duplicate_discord_thread")
 
         # Publish to AP via existing service; return early on non-publish outcomes.
@@ -116,7 +120,9 @@ class CommunityRuntime:
         # Resolve subscription for the source channel to get community_actor_id.
         # subscription is guaranteed non-None here: publish_thread_starter already
         # validated it and returned status="published" only when it was accepted.
-        subscription = self.database.remote_subscriptions.get_subscription_by_channel(thread.parent_id)
+        subscription = self.database.remote_subscriptions.get_subscription_by_channel(
+            thread.parent_id
+        )
 
         # Create the canonical thread group for this source event.
         thread_group = self.database.discord_fanout_groups.create_thread_group(
@@ -186,11 +192,16 @@ class CommunityRuntime:
         # Dedup: if a message group already exists for this source message,
         # a reconnect or duplicate Discord event fired — skip without re-publishing.
         if get_message_group_for_source_message(self.database, message.id) is not None:
-            logger.info("Message %s already has a message group — skipping duplicate", message.id)
+            logger.info(
+                "Message %s already has a message group — skipping duplicate",
+                message.id,
+            )
             return _ignored_result("duplicate_discord_message")
 
         # AP publish via existing service; return early on non-publish outcomes.
-        result = await self.content_publish_service.publish_thread_message(message=message)
+        result = await self.content_publish_service.publish_thread_message(
+            message=message
+        )
         if result.status != "published":
             return result
 
@@ -286,13 +297,27 @@ class CommunityRuntime:
 
         # Dedup: if a thread group already exists for this AP object, a duplicate
         # or replayed event arrived — skip without creating more threads.
-        if get_thread_group_for_ap_object(self.database, event.object.ap_id) is not None:
-            logger.info("Post %s already mapped to a thread group — skipping", event.object.ap_id)
-            return _HandlerResult(status="skipped", outcome=InboundActivityOutcome.IGNORED_ALREADY_APPLIED, detail="post already mapped")
+        if (
+            get_thread_group_for_ap_object(self.database, event.object.ap_id)
+            is not None
+        ):
+            logger.info(
+                "Post %s already mapped to a thread group — skipping",
+                event.object.ap_id,
+            )
+            return _HandlerResult(
+                status="skipped",
+                outcome=InboundActivityOutcome.IGNORED_ALREADY_APPLIED,
+                detail="post already mapped",
+            )
 
         accepted = get_accepted_subscriptions(self.database, event.community_actor_id)
         if not accepted:
-            return _HandlerResult(status="skipped", outcome=InboundActivityOutcome.IGNORED_NO_SUBSCRIPTION, detail="no subscriptions for this community")
+            return _HandlerResult(
+                status="skipped",
+                outcome=InboundActivityOutcome.IGNORED_NO_SUBSCRIPTION,
+                detail="no subscriptions for this community",
+            )
 
         # Use self.bot when available; fall back to runtime.bot for backward compat
         # with callers that pass the full Runtime (e.g. existing integration tests).
@@ -315,7 +340,9 @@ class CommunityRuntime:
         from ..bridge_lemmy_to_discord import _create_inbound_discord_thread
 
         for subscription in accepted:
-            forum_channel = await bot.fetch_forum_channel(subscription.discord_channel_id)
+            forum_channel = await bot.fetch_forum_channel(
+                subscription.discord_channel_id
+            )
             thread_id, starter_message_id = await _create_inbound_discord_thread(
                 forum_channel=forum_channel,
                 event=event,
@@ -330,9 +357,14 @@ class CommunityRuntime:
 
         logger.info(
             "Delivered inbound post %s into %d subscribed channel(s)",
-            event.object.ap_id, len(accepted),
+            event.object.ap_id,
+            len(accepted),
         )
-        return _HandlerResult(status="processed", outcome=InboundActivityOutcome.APPLIED, detail="post created")
+        return _HandlerResult(
+            status="processed",
+            outcome=InboundActivityOutcome.APPLIED,
+            detail="post created",
+        )
 
     async def handle_inbound_comment(
         self,
@@ -366,13 +398,22 @@ class CommunityRuntime:
 
         logger.debug(
             "[handle_inbound_comment] ap_id=%s post_ap_id=%s parent_ap_id=%s",
-            event.object.ap_id, event.object.post_ap_id, event.object.parent_ap_id,
+            event.object.ap_id,
+            event.object.post_ap_id,
+            event.object.parent_ap_id,
         )
 
         # Dedup: if a message group already exists for this AP object, skip.
-        if get_message_group_for_ap_object(self.database, event.object.ap_id) is not None:
+        if (
+            get_message_group_for_ap_object(self.database, event.object.ap_id)
+            is not None
+        ):
             logger.info("Comment %s already mapped — skipping", event.object.ap_id)
-            return _HandlerResult(status="skipped", outcome=InboundActivityOutcome.IGNORED_ALREADY_APPLIED, detail="comment already mapped")
+            return _HandlerResult(
+                status="skipped",
+                outcome=InboundActivityOutcome.IGNORED_ALREADY_APPLIED,
+                detail="comment already mapped",
+            )
 
         # Resolve the thread group and ensure all subscribed channels have a delivery
         # row. When the group is missing entirely, or when some channels have no
@@ -398,21 +439,48 @@ class CommunityRuntime:
             if thread_group is None:
                 logger.info(
                     "Deferring comment %s — parent post %s not mapped and fetch failed",
-                    event.object.ap_id, event.object.post_ap_id,
+                    event.object.ap_id,
+                    event.object.post_ap_id,
                 )
-                return _HandlerResult(status="deferred", outcome=InboundActivityOutcome.DEFERRED_MISSING_DEPENDENCY, detail="parent post not mapped and fetch failed")
+                return _HandlerResult(
+                    status="deferred",
+                    outcome=InboundActivityOutcome.DEFERRED_MISSING_DEPENDENCY,
+                    detail="parent post not mapped and fetch failed",
+                )
 
         if thread_group is None:
             logger.info(
                 "Skipping comment %s — parent post %s is not mapped and no backfill is needed",
-                event.object.ap_id, event.object.post_ap_id,
+                event.object.ap_id,
+                event.object.post_ap_id,
             )
-            return _HandlerResult(status="skipped", outcome=InboundActivityOutcome.IGNORED_UNMAPPED_CONTEXT, detail="parent post not mapped")
+            return _HandlerResult(
+                status="skipped",
+                outcome=InboundActivityOutcome.IGNORED_UNMAPPED_CONTEXT,
+                detail="parent post not mapped",
+            )
 
         logger.debug(
             "[handle_inbound_comment] thread_group=%s deliveries=%s",
             thread_group.id,
-            [d.discord_thread_id for d in self.database.discord_fanout_groups.get_thread_deliveries(thread_group.id)],
+            [
+                d.discord_thread_id
+                for d in self.database.discord_fanout_groups.get_thread_deliveries(
+                    thread_group.id
+                )
+            ],
+        )
+
+        self.database.personal_feed_conversations.retain_community_create(
+            activity_id=event.source_activity_id or event.delivery_id,
+            object_id=event.object.ap_id,
+            root_object_id=event.object.post_ap_id or "",
+            parent_object_id=event.object.parent_ap_id,
+            actor_id=event.actor_id,
+            actor_name=event.object.author_name,
+            content_markdown=event.object.body_markdown or "",
+            published_at=event.object.published_at,
+            source_activity=event.source_activity_json,
         )
 
         bot = self.bot or runtime.bot
@@ -421,7 +489,9 @@ class CommunityRuntime:
         # Resolve the parent message group when this is a reply to a prior comment.
         # get_message_group_by_ap_object returns None when parent_ap_id is the post
         # itself (root comment), which is the correct flat-send fallback.
-        parent_group = get_parent_message_group(self.database, event.object.parent_ap_id)
+        parent_group = get_parent_message_group(
+            self.database, event.object.parent_ap_id
+        )
 
         message_group = self.database.discord_fanout_groups.create_message_group(
             community_actor_id=event.community_actor_id,
@@ -436,7 +506,9 @@ class CommunityRuntime:
 
         from ..bridge_lemmy_to_discord import _send_inbound_comment
 
-        thread_deliveries = self.database.discord_fanout_groups.get_thread_deliveries(thread_group.id)
+        thread_deliveries = self.database.discord_fanout_groups.get_thread_deliveries(
+            thread_group.id
+        )
         for thread_delivery in thread_deliveries:
             thread = await bot.get_thread_by_id(thread_delivery.discord_thread_id)
             # Resolve the per-thread Discord reply reference. Returns None when the
@@ -459,10 +531,14 @@ class CommunityRuntime:
 
         logger.info(
             "Delivered inbound comment %s into %d thread(s)",
-            event.object.ap_id, len(thread_deliveries),
+            event.object.ap_id,
+            len(thread_deliveries),
         )
-        return _HandlerResult(status="processed", outcome=InboundActivityOutcome.APPLIED, detail="comment created")
-
+        return _HandlerResult(
+            status="processed",
+            outcome=InboundActivityOutcome.APPLIED,
+            detail="comment created",
+        )
 
     async def handle_discord_message_edit(
         self,
@@ -484,18 +560,21 @@ class CommunityRuntime:
         If a mirror edit fails, the error is logged and the AP Update is still sent —
         individual mirror failures do not abort the outbound AP propagation.
         """
-        from ..fedify_gateway_client import UpdateContentRequest
 
         # Reverse-lookup the message group by the Discord message ID.
         # Covers both source and mirror deliveries via the delivery table.
-        message_group = get_message_group_for_delivered_message(self.database, message_id)
+        message_group = get_message_group_for_delivered_message(
+            self.database, message_id
+        )
         if message_group is None:
             return
 
         # Mirror deliveries are the bot-owned copies that need to be updated.
         # Only role="mirror" — inbound deliveries are owned by the AP sender,
         # not the bot, so editing them would result in a 403 Forbidden.
-        all_deliveries = self.database.discord_fanout_groups.get_message_deliveries(message_group.id)
+        all_deliveries = self.database.discord_fanout_groups.get_message_deliveries(
+            message_group.id
+        )
         mirror_deliveries = get_outbound_edit_deliveries(all_deliveries)
 
         if self.discord_fanout is not None and mirror_deliveries:
@@ -515,26 +594,17 @@ class CommunityRuntime:
                 return
             # Resolve the actor username from the source thread's publish record.
             # The actor owns the AP object and must be the one who sends Update.
-            actor_username = await resolve_actor_username(
-                self.database, message_group
-            )
+            actor_username = await resolve_actor_username(self.database, message_group)
             if actor_username:
                 try:
-                    # For comments, resolve the parent post AP object ID
-                    in_reply_to_object_id = None
-                    if message_group.parent_message_group_id:
-                        parent = self.database.discord_fanout_groups.get_message_group_by_id(message_group.parent_message_group_id)
-                        if parent:
-                            in_reply_to_object_id = parent.ap_object_id
-                    elif message_group.thread_group_id:
-                        thread_group = self.database.discord_fanout_groups.get_thread_group_by_id(message_group.thread_group_id)
-                        if thread_group:
-                            in_reply_to_object_id = thread_group.ap_object_id
-
                     published = self.database.activitypub_objects.get_published_activity_object_by_object_id(
                         message_group.ap_object_id
                     )
-                    if published is None or published.actor_username != actor_username or edited_timestamp is None:
+                    if (
+                        published is None
+                        or published.actor_username != actor_username
+                        or edited_timestamp is None
+                    ):
                         return
                     await runtime.user_actor_delivery_service.submit_update(
                         object_id=published.object_id,
@@ -560,17 +630,22 @@ class CommunityRuntime:
         If a mirror delete fails, the error is logged and the AP Delete is still sent —
         individual mirror failures do not abort the outbound AP propagation.
         """
-        from ..fedify_gateway_client import DeleteContentRequest
 
-        message_group = get_message_group_for_delivered_message(self.database, message_id)
+        message_group = get_message_group_for_delivered_message(
+            self.database, message_id
+        )
         if message_group is None:
             return
 
-        all_deliveries = self.database.discord_fanout_groups.get_message_deliveries(message_group.id)
+        all_deliveries = self.database.discord_fanout_groups.get_message_deliveries(
+            message_group.id
+        )
         mirror_deliveries = get_outbound_delete_deliveries(all_deliveries)
 
         if self.discord_fanout is not None and mirror_deliveries:
-            await self.discord_fanout.propagate_delete(mirror_deliveries=mirror_deliveries)
+            await self.discord_fanout.propagate_delete(
+                mirror_deliveries=mirror_deliveries
+            )
 
         if message_group.ap_object_id and message_group.community_actor_id:
             decision = runtime.bridge_policy_service.federation_decision(
@@ -578,9 +653,7 @@ class CommunityRuntime:
             )
             if not decision.allowed:
                 return
-            actor_username = await resolve_actor_username(
-                self.database, message_group
-            )
+            actor_username = await resolve_actor_username(self.database, message_group)
             if actor_username:
                 try:
                     published = self.database.activitypub_objects.get_published_activity_object_by_object_id(
@@ -610,12 +683,25 @@ class CommunityRuntime:
 
         thread_group = get_thread_group_for_ap_object(self.database, event.object.ap_id)
         if thread_group is None:
-            logger.info("Post update for %s — no thread group found, skipping", event.object.ap_id)
-            return _HandlerResult(status="skipped", outcome=InboundActivityOutcome.IGNORED_UNMAPPED_CONTEXT, detail="post not yet mapped")
+            logger.info(
+                "Post update for %s — no thread group found, skipping",
+                event.object.ap_id,
+            )
+            return _HandlerResult(
+                status="skipped",
+                outcome=InboundActivityOutcome.IGNORED_UNMAPPED_CONTEXT,
+                detail="post not yet mapped",
+            )
 
-        thread_deliveries = self.database.discord_fanout_groups.get_thread_deliveries(thread_group.id)
+        thread_deliveries = self.database.discord_fanout_groups.get_thread_deliveries(
+            thread_group.id
+        )
         if not thread_deliveries:
-            return _HandlerResult(status="skipped", outcome=InboundActivityOutcome.IGNORED_UNMAPPED_CONTEXT, detail="no thread deliveries")
+            return _HandlerResult(
+                status="skipped",
+                outcome=InboundActivityOutcome.IGNORED_UNMAPPED_CONTEXT,
+                detail="no thread deliveries",
+            )
 
         bot = self.bot or runtime.bot
         new_content = event.object.body_markdown or ""
@@ -624,7 +710,11 @@ class CommunityRuntime:
             bot=bot, thread_deliveries=thread_deliveries, new_content=new_content
         )
 
-        return _HandlerResult(status="processed", outcome=InboundActivityOutcome.APPLIED, detail="post updated")
+        return _HandlerResult(
+            status="processed",
+            outcome=InboundActivityOutcome.APPLIED,
+            detail="post updated",
+        )
 
     async def handle_inbound_post_delete(
         self,
@@ -641,16 +731,31 @@ class CommunityRuntime:
 
         thread_group = get_thread_group_for_ap_object(self.database, event.object.ap_id)
         if thread_group is None:
-            logger.info("Post delete for %s — no thread group found, skipping", event.object.ap_id)
-            return _HandlerResult(status="skipped", outcome=InboundActivityOutcome.IGNORED_UNMAPPED_CONTEXT, detail="post not yet mapped")
+            logger.info(
+                "Post delete for %s — no thread group found, skipping",
+                event.object.ap_id,
+            )
+            return _HandlerResult(
+                status="skipped",
+                outcome=InboundActivityOutcome.IGNORED_UNMAPPED_CONTEXT,
+                detail="post not yet mapped",
+            )
 
-        thread_deliveries = self.database.discord_fanout_groups.get_thread_deliveries(thread_group.id)
+        thread_deliveries = self.database.discord_fanout_groups.get_thread_deliveries(
+            thread_group.id
+        )
 
         bot = self.bot or runtime.bot
 
-        await propagate_inbound_post_delete(bot=bot, thread_deliveries=thread_deliveries)
+        await propagate_inbound_post_delete(
+            bot=bot, thread_deliveries=thread_deliveries
+        )
 
-        return _HandlerResult(status="processed", outcome=InboundActivityOutcome.APPLIED, detail="post deleted")
+        return _HandlerResult(
+            status="processed",
+            outcome=InboundActivityOutcome.APPLIED,
+            detail="post deleted",
+        )
 
     async def handle_inbound_comment_update(
         self,
@@ -664,21 +769,33 @@ class CommunityRuntime:
         """
         from ..activitypub_handlers import HandlerResult as _HandlerResult
 
-        message_group = get_message_group_for_ap_object(self.database, event.object.ap_id)
+        message_group = get_message_group_for_ap_object(
+            self.database, event.object.ap_id
+        )
         if message_group is None:
             logger.info(
                 "Comment update for %s — no message group found, skipping",
                 event.object.ap_id,
             )
-            return _HandlerResult(status="skipped", outcome=InboundActivityOutcome.IGNORED_UNMAPPED_CONTEXT, detail="comment not yet mapped")
+            return _HandlerResult(
+                status="skipped",
+                outcome=InboundActivityOutcome.IGNORED_UNMAPPED_CONTEXT,
+                detail="comment not yet mapped",
+            )
 
-        all_deliveries = self.database.discord_fanout_groups.get_message_deliveries(message_group.id)
+        all_deliveries = self.database.discord_fanout_groups.get_message_deliveries(
+            message_group.id
+        )
         # Only edit messages the bot itself wrote: inbound (created by bot from AP)
         # and mirror (bot-owned copies in sibling channels).
         # Source messages are user-authored — editing them returns 403 Forbidden.
         deliveries = get_inbound_comment_edit_deliveries(all_deliveries)
         if not deliveries:
-            return _HandlerResult(status="skipped", outcome=InboundActivityOutcome.IGNORED_UNMAPPED_CONTEXT, detail="no message deliveries")
+            return _HandlerResult(
+                status="skipped",
+                outcome=InboundActivityOutcome.IGNORED_UNMAPPED_CONTEXT,
+                detail="no message deliveries",
+            )
 
         bot = self.bot or runtime.bot
         new_content = event.object.body_markdown or ""
@@ -687,7 +804,11 @@ class CommunityRuntime:
             bot=bot, deliveries=deliveries, new_content=new_content
         )
 
-        return _HandlerResult(status="processed", outcome=InboundActivityOutcome.APPLIED, detail="comment updated")
+        return _HandlerResult(
+            status="processed",
+            outcome=InboundActivityOutcome.APPLIED,
+            detail="comment updated",
+        )
 
     async def handle_inbound_comment_delete(
         self,
@@ -702,15 +823,23 @@ class CommunityRuntime:
         """
         from ..activitypub_handlers import HandlerResult as _HandlerResult
 
-        message_group = get_message_group_for_ap_object(self.database, event.object.ap_id)
+        message_group = get_message_group_for_ap_object(
+            self.database, event.object.ap_id
+        )
         if message_group is None:
             logger.info(
                 "Comment delete for %s — no message group found, skipping",
                 event.object.ap_id,
             )
-            return _HandlerResult(status="skipped", outcome=InboundActivityOutcome.IGNORED_UNMAPPED_CONTEXT, detail="comment not yet mapped")
+            return _HandlerResult(
+                status="skipped",
+                outcome=InboundActivityOutcome.IGNORED_UNMAPPED_CONTEXT,
+                detail="comment not yet mapped",
+            )
 
-        all_deliveries = self.database.discord_fanout_groups.get_message_deliveries(message_group.id)
+        all_deliveries = self.database.discord_fanout_groups.get_message_deliveries(
+            message_group.id
+        )
         # Only edit messages the bot itself wrote — source messages are user-authored.
         deliveries = get_inbound_comment_edit_deliveries(all_deliveries)
 
@@ -718,7 +847,12 @@ class CommunityRuntime:
 
         await propagate_inbound_comment_delete(bot=bot, deliveries=deliveries)
 
-        return _HandlerResult(status="processed", outcome=InboundActivityOutcome.APPLIED, detail="comment deleted")
+        return _HandlerResult(
+            status="processed",
+            outcome=InboundActivityOutcome.APPLIED,
+            detail="comment deleted",
+        )
+
 
 def _ignored_result(reason: str) -> PublishResult:
     """Build a PublishResult for events that are intentionally skipped.
@@ -727,4 +861,5 @@ def _ignored_result(reason: str) -> PublishResult:
     without touching the AP gateway or creating any DB rows.
     """
     from ..content_publish_service import PublishResult
+
     return PublishResult(status="ignored", reason=reason)

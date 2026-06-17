@@ -32,6 +32,8 @@ from .user_actor_delivery import UserActorDeliveryService
 from .user_actor_delivery_worker import UserActorDeliveryWorker
 from .personal_feeds import PersonalFeedService
 from .personal_feed_publisher import PersonalFeedPublisher
+from .personal_feed_conversations import PersonalFeedConversationRuntime
+from .personal_feed_discord_delivery_worker import PersonalFeedDiscordDeliveryWorker
 from .user_bans import UserBanService
 from .db.backup import recover_incomplete_restore
 
@@ -166,6 +168,15 @@ def _build_live_runtime(settings: Settings, deployment_lease: FileLock) -> Runti
         fedify_origin=settings.normalized_fedify_origin,
         delivery_worker=user_actor_delivery_worker,
     )
+    personal_feed_conversation_runtime = PersonalFeedConversationRuntime(
+        database=database,
+        personal_feed_service=personal_feed_service,
+        fedify_gateway=fedify_gateway,
+        user_ban_service=user_ban_service,
+        bridge_policy_service=bridge_policy_service,
+        fedify_origin=settings.normalized_fedify_origin,
+        delivery_worker=None,
+    )
     event_router = DiscordEventRouter(
         database=database,
         community_runtime=community_runtime,
@@ -173,6 +184,7 @@ def _build_live_runtime(settings: Settings, deployment_lease: FileLock) -> Runti
         bridge_policy_service=bridge_policy_service,
         personal_feed_service=personal_feed_service,
         personal_feed_publisher=personal_feed_publisher,
+        personal_feed_conversation_runtime=personal_feed_conversation_runtime,
     )
     bot = BridgeBot(
         settings=settings,
@@ -183,6 +195,12 @@ def _build_live_runtime(settings: Settings, deployment_lease: FileLock) -> Runti
         user_profile_service=user_profile_service,
         personal_feed_service=personal_feed_service,
         user_ban_service=user_ban_service,
+    )
+    personal_feed_discord_delivery_worker = PersonalFeedDiscordDeliveryWorker(
+        database=database, bot=bot, personal_feed_service=personal_feed_service
+    )
+    personal_feed_conversation_runtime.delivery_worker = (
+        personal_feed_discord_delivery_worker
     )
     discord_fanout = DiscordFanout(
         bot=bot,
@@ -214,6 +232,8 @@ def _build_live_runtime(settings: Settings, deployment_lease: FileLock) -> Runti
         user_actor_follow_service=user_actor_follow_service,
         user_actor_delivery_service=user_actor_delivery_service,
         user_actor_delivery_worker=user_actor_delivery_worker,
+        personal_feed_conversation_runtime=personal_feed_conversation_runtime,
+        personal_feed_discord_delivery_worker=personal_feed_discord_delivery_worker,
         deployment_state_lease=deployment_lease,
     )
     # Inject runtime into bot so edit/delete handlers can call AP gateway

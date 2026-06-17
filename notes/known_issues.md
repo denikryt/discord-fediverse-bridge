@@ -10,3 +10,6 @@ Gateway outcomes are applied one row at a time through repository methods that o
 separate sessions. If persistence fails after one outcome is committed, earlier
 rows remain updated while later rows remain pending. Pending rows are retryable,
 but the fanout call itself raises and does not return a complete summary.
+## Personal-feed history is not replayed after rebinding
+
+Inbound personal-feed comments are retained even when the active binding is removed, moved, or Discord delivery reaches its three-attempt terminal failure. Stage 8 deliberately suppresses synchronization to stale channels and does not reconstruct retained roots, threads, or comments in a replacement Discord channel. Restore/replay tooling remains future work.

@@ -29,6 +29,8 @@ from .discord_directory import DiscordDirectoryRepository
 from .guild_invite_publications import GuildInvitePublicationRepository
 from .user_actor_followers import UserActorFollowerRepository
 from .personal_feed_bindings import PersonalFeedBindingRepository
+from .personal_feed_conversations import PersonalFeedConversationRepository
+
 __all__ = [
     "BridgeActorKeyRepository",
     "CommunityActorBanRepository",
@@ -54,10 +56,19 @@ __all__ = [
     "GuildInvitePublicationRepository",
     "UserActorFollowerRepository",
     "PersonalFeedBindingRepository",
+    "PersonalFeedConversationRepository",
     "ContentMutationRepository",
+    "UserActorDeliveryRepository",
+    "UserProfileView",
+    "UserProfileRepository",
+    "ProfileMediaRepository",
 ]
 
-from .user_profiles import ProfileMediaRepository, UserProfileRepository, UserProfileView
+from .user_profiles import (
+    ProfileMediaRepository,
+    UserProfileRepository,
+    UserProfileView,
+)
 from .user_actor_deliveries import UserActorDeliveryRepository
 
 from .content_mutations import ContentMutationRepository

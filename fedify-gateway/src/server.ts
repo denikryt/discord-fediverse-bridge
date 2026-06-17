@@ -351,7 +351,8 @@ app.post("/render-personal-feed", async (context) => {
   const payload = (await context.req.json()) as Partial<RenderPersonalFeedRequest>;
   if (typeof payload.actorUsername !== "string" || typeof payload.operationId !== "string" ||
       typeof payload.activityId !== "string" || typeof payload.objectId !== "string" ||
-      typeof payload.bodyMarkdown !== "string" || typeof payload.publishedAt !== "string") {
+      typeof payload.bodyMarkdown !== "string" || typeof payload.publishedAt !== "string" ||
+      (payload.kind !== undefined && payload.kind !== "post" && payload.kind !== "comment")) {
     return context.json({ error: "invalid personal-feed render request" }, { status: 400 });
   }
   try {
@@ -689,7 +690,9 @@ app.post("/update", async (context) => {
   const payload = (await context.req.json()) as Partial<UpdateContentRequest>;
   if (
     typeof payload.actorUsername !== "string" ||
-    typeof payload.communityActorUrl !== "string" ||
+    (payload.publicationContext !== undefined && payload.publicationContext !== "community" && payload.publicationContext !== "personal_feed") ||
+    (payload.publicationContext !== "personal_feed" && typeof payload.communityActorUrl !== "string") ||
+    (payload.publicationContext === "personal_feed" && payload.communityActorUrl != null) ||
     typeof payload.apObjectId !== "string" ||
     (payload.kind !== "post" && payload.kind !== "comment") ||
     typeof payload.bodyMarkdown !== "string"
@@ -706,7 +709,9 @@ app.post("/update", async (context) => {
   try {
     const result = await updateContent(fedify, config, {
       actorUsername: payload.actorUsername,
-      communityActorUrl: payload.communityActorUrl,
+      publicationContext: payload.publicationContext ?? "community",
+      communityActorUrl: typeof payload.communityActorUrl === "string" ? payload.communityActorUrl : null,
+      conversationRootObjectId: typeof payload.conversationRootObjectId === "string" ? payload.conversationRootObjectId : null,
       apObjectId: payload.apObjectId,
       kind: payload.kind,
       bodyMarkdown: payload.bodyMarkdown,
@@ -748,7 +753,9 @@ app.post("/delete", async (context) => {
   const payload = (await context.req.json()) as Partial<DeleteContentRequest>;
   if (
     typeof payload.actorUsername !== "string" ||
-    typeof payload.communityActorUrl !== "string" ||
+    (payload.publicationContext !== undefined && payload.publicationContext !== "community" && payload.publicationContext !== "personal_feed") ||
+    (payload.publicationContext !== "personal_feed" && typeof payload.communityActorUrl !== "string") ||
+    (payload.publicationContext === "personal_feed" && payload.communityActorUrl != null) ||
     typeof payload.apObjectId !== "string"
   ) {
     return context.json(
@@ -760,7 +767,9 @@ app.post("/delete", async (context) => {
   try {
     const result = await deleteContent(fedify, config, {
       actorUsername: payload.actorUsername,
-      communityActorUrl: payload.communityActorUrl,
+      publicationContext: payload.publicationContext ?? "community",
+      communityActorUrl: typeof payload.communityActorUrl === "string" ? payload.communityActorUrl : null,
+      conversationRootObjectId: typeof payload.conversationRootObjectId === "string" ? payload.conversationRootObjectId : null,
       apObjectId: payload.apObjectId,
       targetInboxUrls: Array.isArray(payload.targetInboxUrls)
         ? payload.targetInboxUrls.filter((value): value is string => typeof value === "string")

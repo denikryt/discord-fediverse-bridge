@@ -71,6 +71,7 @@ def _existing_result(
     published_at: datetime | None = None,
     kind: str = "post",
     in_reply_to_object_id: str | None = None,
+    conversation_root_object_id: str | None = None,
     source_kind: str = "content_create",
     logical_version: int = 1,
 ) -> PersistPublishResult:
@@ -95,6 +96,8 @@ def _existing_result(
         and published.object_id == object_id
         and published.kind == kind
         and published.in_reply_to_object_id == in_reply_to_object_id
+        and published.conversation_root_object_id
+        == (conversation_root_object_id or object_id)
     )
     if not expected_published:
         raise PublicationConflictError(
@@ -142,6 +145,9 @@ def inspect_publish_artifacts(
     activity_id: str,
     object_id: str,
     published_at: datetime | None = None,
+    kind: str = "post",
+    in_reply_to_object_id: str | None = None,
+    conversation_root_object_id: str | None = None,
 ) -> PersistPublishResult | None:
     """Return an exact durable duplicate or fail closed on partial/conflicting state."""
     expected = dict(
@@ -180,6 +186,9 @@ def inspect_publish_artifacts(
             activity_id=activity_id,
             object_id=object_id,
             published_at=published_at,
+            kind=kind,
+            in_reply_to_object_id=in_reply_to_object_id,
+            conversation_root_object_id=conversation_root_object_id,
         )
 
 
@@ -197,11 +206,13 @@ def persist_publish_artifacts(
     title: str | None,
     body_markdown: str,
     in_reply_to_object_id: str | None,
+    conversation_root_object_id: str | None = None,
     discord_channel_id: int | None,
     discord_message_id: int | None,
     publication_context: str = "community",
     discord_guild_id: int | None = None,
     published_at: datetime | None = None,
+    direct_target_inbox_urls: list[str] | None = None,
 ) -> PersistPublishResult:
     """Commit mapping, public object, and fixed follower audience atomically.
 
@@ -250,6 +261,9 @@ def persist_publish_artifacts(
                     activity_id=activity_id,
                     object_id=object_id,
                     published_at=published_at,
+                    kind=kind,
+                    in_reply_to_object_id=in_reply_to_object_id,
+                    conversation_root_object_id=conversation_root_object_id,
                 )
 
             mapping = MessageMapping(
@@ -275,6 +289,7 @@ def persist_publish_artifacts(
                 title=title,
                 body_markdown=body_markdown,
                 in_reply_to_object_id=in_reply_to_object_id,
+                conversation_root_object_id=conversation_root_object_id or object_id,
                 discord_guild_id=discord_guild_id,
                 discord_channel_id=discord_channel_id,
                 discord_message_id=discord_message_id,
@@ -302,6 +317,7 @@ def persist_publish_artifacts(
                     "contentRevision": 1,
                 },
                 followers=followers,
+                direct_target_inbox_urls=direct_target_inbox_urls,
             )
             return PersistPublishResult(source.id, True)
     except IntegrityError:
@@ -334,6 +350,9 @@ def persist_publish_artifacts(
                     activity_id=activity_id,
                     object_id=object_id,
                     published_at=published_at,
+                    kind=kind,
+                    in_reply_to_object_id=in_reply_to_object_id,
+                    conversation_root_object_id=conversation_root_object_id,
                 )
         raise PublicationConflictError(
             "uniqueness collision did not resolve to the expected canonical publication"

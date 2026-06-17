@@ -234,24 +234,30 @@ export function renderPersonalFeedCreate(
   config: GatewayConfig,
   request: RenderPersonalFeedRequest,
 ): RenderPersonalFeedResult {
-  // This builder is deliberately render-only: it loads no key material and
-  // performs no network delivery. Python persists this exact JSON first.
+  // Stage 8 keeps one render-only boundary for both personal-feed roots and
+  // comments. Python owns persistence and delivery; the gateway owns canonical
+  // ActivityStreams construction without loading signing keys.
   const origin = new URL(config.fedifyOrigin).origin;
   const actorId = new URL(`/actors/${encodeURIComponent(request.actorUsername)}`, origin).href;
   const followersId = `${actorId}/followers`;
-  const expectedObjectId = new URL(`/users/${encodeURIComponent(request.actorUsername)}/post/${request.operationId}`, origin).href;
-  const expectedActivityId = new URL(`/users/${encodeURIComponent(request.actorUsername)}/activities/create/post/${request.operationId}`, origin).href;
+  const kind = request.kind ?? "post";
+  const objectSegment = kind === "comment" ? "comment" : "post";
+  const expectedObjectId = new URL(`/users/${encodeURIComponent(request.actorUsername)}/${objectSegment}/${request.operationId}`, origin).href;
+  const expectedActivityId = new URL(`/users/${encodeURIComponent(request.actorUsername)}/activities/create/${objectSegment}/${request.operationId}`, origin).href;
   if (request.objectId !== expectedObjectId || request.activityId !== expectedActivityId) {
     throw new Error("personal-feed IDs do not match canonical origin/path");
   }
   if (!/^[a-f0-9]{64}$/.test(request.operationId)) {
     throw new Error("operationId must be a lowercase SHA-256 hex digest");
   }
+  if (kind === "comment" && (typeof request.inReplyToObjectId !== "string" || request.inReplyToObjectId.length === 0)) {
+    throw new Error("personal-feed comments require inReplyToObjectId");
+  }
   const parsedPublished = new Date(request.publishedAt);
   if (Number.isNaN(parsedPublished.getTime()) || parsedPublished.toISOString() !== request.publishedAt) {
     throw new Error("publishedAt must be canonical UTC RFC3339 with milliseconds");
   }
-  const object = {
+  const object: Record<string, unknown> = {
     "@context": "https://www.w3.org/ns/activitystreams",
     type: "Note",
     id: request.objectId,
@@ -266,6 +272,7 @@ export function renderPersonalFeedCreate(
       .join("\n"),
     published: request.publishedAt,
   };
+  if (kind === "comment") object.inReplyTo = request.inReplyToObjectId;
   return {
     activityId: request.activityId,
     objectId: request.objectId,
@@ -782,7 +789,7 @@ export function buildPublishCreateActivity(
       id: activityId,
       actor: actorUri,
       object,
-      tos: [PUBLIC, community],
+      tos: community == null ? [PUBLIC] : [PUBLIC, community],
       ccs: [actorUri, followers],
     }),
   };
@@ -854,7 +861,14 @@ function buildUpdateActivity(
     mediaType: "text/markdown",
   });
   const PUBLIC = new URL("https://www.w3.org/ns/activitystreams#Public");
-  const community = new URL(request.communityActorUrl);
+  const personalFeed = request.publicationContext === "personal_feed";
+  const community = request.communityActorUrl == null ? null : new URL(request.communityActorUrl);
+  if (!personalFeed && community == null) {
+    throw new Error("community mutation requires communityActorUrl");
+  }
+  if (personalFeed && community != null) {
+    throw new Error("personal-feed mutation cannot carry communityActorUrl");
+  }
   const followers = buildGatewayUrl(config, `/actors/${request.actorUsername}/followers`);
   const updated = request.mutationTimestamp == null
     ? Temporal.Now.instant()
@@ -866,9 +880,9 @@ function buildUpdateActivity(
       id: objectId,
       name: request.title ?? "Untitled Discord Post",
       attribution: actorUri,
-      audience: community,
-      tos: [PUBLIC, community],
-      ccs: [actorUri],
+      ...(community == null ? {} : { audience: community }),
+      tos: community == null ? [PUBLIC] : [PUBLIC, community],
+      ccs: personalFeed ? [followers] : [actorUri],
       source,
       content: htmlContent,
       updated,
@@ -878,9 +892,9 @@ function buildUpdateActivity(
     const noteParams: ConstructorParameters<typeof Note>[0] = {
       id: objectId,
       attribution: actorUri,
-      audience: community,
-      tos: [PUBLIC, community],
-      ccs: [actorUri],
+      ...(community == null ? {} : { audience: community }),
+      tos: community == null ? [PUBLIC] : [PUBLIC, community],
+      ccs: personalFeed ? [followers] : [actorUri],
       source,
       content: htmlContent,
       updated,
@@ -897,7 +911,7 @@ function buildUpdateActivity(
       id: activityId,
       actor: actorUri,
       object,
-      tos: [PUBLIC, community],
+      tos: community == null ? [PUBLIC] : [PUBLIC, community],
       ccs: [actorUri, followers],
     }),
   };
@@ -917,7 +931,14 @@ function buildDeleteActivity(
       )
     : new URL(request.activityId);
   const PUBLIC = new URL("https://www.w3.org/ns/activitystreams#Public");
-  const community = new URL(request.communityActorUrl);
+  const personalFeed = request.publicationContext === "personal_feed";
+  const community = request.communityActorUrl == null ? null : new URL(request.communityActorUrl);
+  if (!personalFeed && community == null) {
+    throw new Error("community mutation requires communityActorUrl");
+  }
+  if (personalFeed && community != null) {
+    throw new Error("personal-feed mutation cannot carry communityActorUrl");
+  }
   const followers = buildGatewayUrl(config, `/actors/${request.actorUsername}/followers`);
   return {
     activityId,
@@ -925,7 +946,7 @@ function buildDeleteActivity(
       id: activityId,
       actor: actorUri,
       object: new URL(request.apObjectId),
-      tos: [PUBLIC, community],
+      tos: community == null ? [PUBLIC] : [PUBLIC, community],
       ccs: [actorUri, followers],
     }),
   };
@@ -1023,6 +1044,14 @@ export async function updateContent(
   // Update delivery mirrors publish delivery: same actor URI, same community
   // fetch, but wraps the object in an Update activity instead of Create.
   const builtUpdate = buildUpdateActivity(config, request);
+  if (request.publicationContext === "personal_feed") {
+    return {
+      activityId: builtUpdate.activityId.href,
+      objectId: request.apObjectId,
+      activityJson: await renderPublicActivityJson(builtUpdate.activity),
+    };
+  }
+  if (request.communityActorUrl == null) throw new Error("community mutation requires communityActorUrl");
   if (await maybeDeliverLocalCommunityMutation(config, request.communityActorUrl, builtUpdate.activity, request.targetInboxUrls)) {
     return {
       activityId: builtUpdate.activityId.href,
@@ -1073,6 +1102,14 @@ export async function deleteContent(
   // Delete delivery uses the AP object URL as the object field (string form, not
   // a full object), matching the Lemmy federation protocol for Delete activities.
   const builtDelete = buildDeleteActivity(config, request);
+  if (request.publicationContext === "personal_feed") {
+    return {
+      activityId: builtDelete.activityId.href,
+      objectId: request.apObjectId,
+      activityJson: await renderPublicActivityJson(builtDelete.activity),
+    };
+  }
+  if (request.communityActorUrl == null) throw new Error("community mutation requires communityActorUrl");
   if (await maybeDeliverLocalCommunityMutation(config, request.communityActorUrl, builtDelete.activity, request.targetInboxUrls)) {
     return {
       activityId: builtDelete.activityId.href,

@@ -32,6 +32,9 @@ from ..models import (
     PublishedActivityObject,
     PersonalFeedBinding,
     MessageMapping,
+    PersonalFeedThreadMapping,
+    InboundConversationObject,
+    InboundDiscordDelivery,
 )
 
 
@@ -135,6 +138,11 @@ def migrate(engine: Engine) -> None:
             "discord_reconciliation_last_error",
             "ALTER TABLE published_activity_objects ADD COLUMN discord_reconciliation_last_error VARCHAR(512)",
         ),
+        (
+            "published_activity_objects",
+            "conversation_root_object_id",
+            "ALTER TABLE published_activity_objects ADD COLUMN conversation_root_object_id VARCHAR(512)",
+        ),
     ]
     # Stage 2 adds explicit local-community surface tables. Creating them here
     # keeps interrupted deployments and migrate-only test fixtures aligned with
@@ -159,6 +167,9 @@ def migrate(engine: Engine) -> None:
             UserActorOutboundSourceMedia.__table__,
             UserActorContentMutation.__table__,
             PersonalFeedBinding.__table__,
+            PersonalFeedThreadMapping.__table__,
+            InboundConversationObject.__table__,
+            InboundDiscordDelivery.__table__,
         ],
     )
     with engine.connect() as conn:
@@ -174,6 +185,22 @@ def migrate(engine: Engine) -> None:
                 continue
             if column not in existing:
                 conn.execute(text(stmt))
+        if "conversation_root_object_id" in _table_columns(
+            conn, "published_activity_objects"
+        ):
+            conn.execute(
+                text(
+                    "UPDATE published_activity_objects SET conversation_root_object_id = "
+                    "CASE WHEN kind = 'post' THEN object_id ELSE COALESCE(in_reply_to_object_id, object_id) END "
+                    "WHERE conversation_root_object_id IS NULL"
+                )
+            )
+            conn.execute(
+                text(
+                    "CREATE INDEX IF NOT EXISTS ix_published_activity_objects_conversation_root_object_id "
+                    "ON published_activity_objects (conversation_root_object_id)"
+                )
+            )
         _migrate_local_communities_summary_nullable(conn)
         _migrate_generalized_user_bans(conn)
         # Stage 3 stores the selected LocalSubscriber on subscriber surface rows.

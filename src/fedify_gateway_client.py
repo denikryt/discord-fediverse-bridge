@@ -82,6 +82,9 @@ class RenderPersonalFeedRequest:
     object_id: str
     body_markdown: str
     published_at: str
+    kind: str = "post"
+    in_reply_to_object_id: str | None = None
+    conversation_root_object_id: str | None = None
 
 
 @dataclass(slots=True)
@@ -108,10 +111,11 @@ class UpdateContentRequest:
     # actorUsername must match the original object attributedTo — Lemmy enforces
     # this ownership check and rejects Updates from any other actor.
     actor_username: str
-    community_actor_url: str
+    community_actor_url: str | None
     ap_object_id: str
     kind: str
     body_markdown: str
+    publication_context: str = "community"
     # title is required for posts; None for comments.
     title: str | None = None
     # in_reply_to_object_id is required for comments to identify the parent post.
@@ -129,8 +133,9 @@ class UpdateContentRequest:
 class DeleteContentRequest:
     # actorUsername must match the original attributedTo — same ownership rule.
     actor_username: str
-    community_actor_url: str
+    community_actor_url: str | None
     ap_object_id: str
+    publication_context: str = "community"
     target_inbox_urls: list[str] | None = None
     operation_id: str | None = None
     activity_id: str | None = None
@@ -267,6 +272,9 @@ class FedifyGatewayClient:
                 "objectId": request.object_id,
                 "bodyMarkdown": request.body_markdown,
                 "publishedAt": request.published_at,
+                "kind": request.kind,
+                "inReplyToObjectId": request.in_reply_to_object_id,
+                "conversationRootObjectId": request.conversation_root_object_id,
             },
         )
         response.raise_for_status()
@@ -385,6 +393,7 @@ class FedifyGatewayClient:
             json={
                 "actorUsername": request.actor_username,
                 "communityActorUrl": request.community_actor_url,
+                "publicationContext": request.publication_context,
                 "apObjectId": request.ap_object_id,
                 "kind": request.kind,
                 "bodyMarkdown": request.body_markdown,
@@ -416,6 +425,7 @@ class FedifyGatewayClient:
             json={
                 "actorUsername": request.actor_username,
                 "communityActorUrl": request.community_actor_url,
+                "publicationContext": request.publication_context,
                 "apObjectId": request.ap_object_id,
                 "targetInboxUrls": request.target_inbox_urls,
                 "operationId": request.operation_id,

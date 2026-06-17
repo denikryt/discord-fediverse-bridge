@@ -29,6 +29,7 @@ class DiscordEventRouter:
         bridge_policy_service: BridgePolicyService,
         personal_feed_service: PersonalFeedService | None = None,
         personal_feed_publisher: object | None = None,
+        personal_feed_conversation_runtime: object | None = None,
     ) -> None:
         """Initialise the router with the runtimes for both bridge modes."""
         self.database = database
@@ -41,6 +42,7 @@ class DiscordEventRouter:
             database
         )
         self.personal_feed_publisher = personal_feed_publisher
+        self.personal_feed_conversation_runtime = personal_feed_conversation_runtime
 
     def _is_guild_allowed(self, guild_id: int | str | None) -> bool:
         """Evaluate one Discord event against the current guild policy."""
@@ -62,6 +64,24 @@ class DiscordEventRouter:
             return None
         return await self.personal_feed_publisher.publish_root(
             message=message, binding=binding
+        )
+
+    def is_personal_feed_thread(self, thread_id: int | None) -> bool:
+        """Return whether one Discord thread is durably owned by a personal-feed root."""
+        return bool(
+            thread_id is not None
+            and self.database.personal_feed_conversations.get_thread_by_thread_id(
+                thread_id
+            )
+            is not None
+        )
+
+    def handle_personal_feed_thread_create(self, *, thread: object) -> object:
+        """Adopt a manually created thread before community routing can capture it."""
+        if self.personal_feed_conversation_runtime is None:
+            return None
+        return self.personal_feed_conversation_runtime.adopt_manual_thread(
+            thread=thread
         )
 
     def is_active_personal_feed_channel(self, user_id: int, channel_id: int) -> bool:
@@ -120,6 +140,9 @@ class DiscordEventRouter:
         if not self._is_guild_allowed(guild_id):
             return None
         forum_channel_id = getattr(thread, "parent_id", None)
+        personal = self.handle_personal_feed_thread_create(thread=thread)
+        if personal is not None and getattr(personal, "status", None) != "ignored":
+            return personal
         if self.is_local_community_forum(forum_channel_id):
             return await self.local_community_runtime.handle_discord_thread_create(
                 thread=thread,
@@ -137,7 +160,16 @@ class DiscordEventRouter:
         if not self._is_guild_allowed(guild_id):
             return None
         thread = getattr(message, "channel")
+        if self.is_personal_feed_thread(getattr(thread, "id", None)):
+            if self.personal_feed_conversation_runtime is None:
+                return None
+            return await self.personal_feed_conversation_runtime.publish_local_reply(
+                message=message
+            )
         forum_channel_id = getattr(thread, "parent_id", None)
+        personal = self.handle_personal_feed_thread_create(thread=thread)
+        if personal is not None and getattr(personal, "status", None) != "ignored":
+            return personal
         if self.is_local_community_forum(forum_channel_id):
             return await self.local_community_runtime.handle_discord_message(
                 message=message,
@@ -158,6 +190,19 @@ class DiscordEventRouter:
     ) -> None:
         """Route one raw Discord edit event into the owning bridge mode."""
         if guild_id is not None and not self._is_guild_allowed(guild_id):
+            return
+        mapping = (
+            self.database.message_mappings.get_message_mapping_by_discord_message_id(
+                message_id
+            )
+        )
+        if mapping is not None and mapping.publication_context == "personal_feed":
+            await runtime.user_actor_delivery_service.submit_update(
+                object_id=mapping.object_id,
+                title=None,
+                body_markdown=new_content,
+                edited_timestamp=edited_timestamp,
+            )
             return
         if self.is_local_community_message(message_id):
             await self.local_community_runtime.handle_discord_message_edit(
@@ -185,6 +230,16 @@ class DiscordEventRouter:
     ) -> None:
         """Route one raw Discord delete event into the owning bridge mode."""
         if guild_id is not None and not self._is_guild_allowed(guild_id):
+            return
+        mapping = (
+            self.database.message_mappings.get_message_mapping_by_discord_message_id(
+                message_id
+            )
+        )
+        if mapping is not None and mapping.publication_context == "personal_feed":
+            await runtime.user_actor_delivery_service.submit_delete(
+                object_id=mapping.object_id
+            )
             return
         if self.is_local_community_message(message_id):
             await self.local_community_runtime.handle_discord_message_delete(

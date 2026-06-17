@@ -153,6 +153,11 @@ class BridgeBot(discord.Client):
         # Signal inbound event handlers that the bot is connected and Discord
         # API calls (thread/message creation) can proceed.
         self.bridge_ready.set()
+        # Discord delivery recovery starts only after the client can resolve and
+        # fetch channels. Starting earlier would consume retry attempts during
+        # normal connection establishment rather than actual delivery failures.
+        runtime = self._get_runtime()
+        runtime.personal_feed_discord_delivery_worker.start()
         # Refresh last-known Discord labels at startup so old rows and renamed
         # guilds/forums converge without live lookups during dashboard requests.
         refresh_discord_directory_from_bot(self.database, self)
@@ -167,8 +172,15 @@ class BridgeBot(discord.Client):
         # Threads created by the bot itself are skipped to break the echo loop.
         if thread.parent_id is None:
             return
+        personal_root = self.database.activitypub_objects.get_published_activity_object_by_discord_message_id(
+            thread.id
+        )
         if not (
-            self.event_router.is_remote_subscription_forum(thread.parent_id)
+            (
+                personal_root is not None
+                and personal_root.publication_context == "personal_feed"
+            )
+            or self.event_router.is_remote_subscription_forum(thread.parent_id)
             or self.event_router.is_local_community_forum(thread.parent_id)
         ):
             return
@@ -246,7 +258,8 @@ class BridgeBot(discord.Client):
         if message.channel.parent_id is None:
             return
         if not (
-            self.event_router.is_remote_subscription_forum(message.channel.parent_id)
+            self.event_router.is_personal_feed_thread(message.channel.id)
+            or self.event_router.is_remote_subscription_forum(message.channel.parent_id)
             or self.event_router.is_local_community_forum(message.channel.parent_id)
         ):
             return
@@ -295,17 +308,26 @@ class BridgeBot(discord.Client):
                 )
                 return
 
+        personal_mapping = (
+            self.database.message_mappings.get_message_mapping_by_discord_message_id(
+                payload.message_id
+            )
+        )
+        is_personal_message = (
+            personal_mapping is not None
+            and personal_mapping.publication_context == "personal_feed"
+        )
         is_local_message = self.event_router.is_local_community_message(
             payload.message_id
         )
         delivery = (
             None
-            if is_local_message
+            if is_local_message or is_personal_message
             else self.database.discord_fanout_groups.get_message_delivery_by_message(
                 payload.message_id
             )
         )
-        if delivery is None and not is_local_message:
+        if delivery is None and not is_local_message and not is_personal_message:
             logger.debug(
                 "[on_raw_message_edit] no delivery found for msg=%s", payload.message_id
             )
@@ -434,17 +456,26 @@ class BridgeBot(discord.Client):
                 )
                 return
 
+        personal_mapping = (
+            self.database.message_mappings.get_message_mapping_by_discord_message_id(
+                payload.message_id
+            )
+        )
+        is_personal_message = (
+            personal_mapping is not None
+            and personal_mapping.publication_context == "personal_feed"
+        )
         is_local_message = self.event_router.is_local_community_message(
             payload.message_id
         )
         delivery = (
             None
-            if is_local_message
+            if is_local_message or is_personal_message
             else self.database.discord_fanout_groups.get_message_delivery_by_message(
                 payload.message_id
             )
         )
-        if delivery is None and not is_local_message:
+        if delivery is None and not is_local_message and not is_personal_message:
             logger.debug(
                 "[on_raw_message_delete] no delivery found for msg=%s",
                 payload.message_id,

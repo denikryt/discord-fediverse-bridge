@@ -84,16 +84,25 @@ export async function normalizeUpdateActivityFromJson(
 
   if (object.type === "Note") {
     const event = await normalizeCommentActivityFromJson(activity, object, options);
-    // Override event_type: same shape as Create but this is an edit.
-    return { ...event, event_type: "comment.updated" };
+    const revisionTime = asString(object.updated) ?? asString(activity.updated)
+      ?? asString(activity.published) ?? event.occurred_at;
+    // For Update, published_at carries the accepted remote revision timestamp
+    // used by the Python ownership+ordering transaction.
+    return {
+      ...event,
+      event_type: "comment.updated",
+      occurred_at: revisionTime,
+      object: { ...event.object, published_at: revisionTime },
+    };
   }
 
   return null;
 }
 
-export function normalizeDeleteActivityFromJson(
+export async function normalizeDeleteActivityFromJson(
   activity: unknown,
-): BridgeEvent | null {
+  options: NormalizeOptions = {},
+): Promise<BridgeEvent | null> {
   // Handles the unwrapped Delete record extracted from Announce(Delete(...)).
   // Lemmy 0.19 sends object as a plain string URL (primary path).
   // Older format fallback: object may be { id: "..." }.
@@ -109,6 +118,27 @@ export function normalizeDeleteActivityFromJson(
 
   if (!apId) {
     return null;
+  }
+
+  const personalTarget = await loadPersonalConversationTarget(apId, options);
+  if (personalTarget != null) {
+    const actorId = asCanonicalActorId(activity.actor);
+    if (actorId == null) return null;
+    const now = new Date().toISOString();
+    return {
+      actor_id: actorId,
+      community_actor_id: null,
+      target: { kind: "personal_feed", root_object_id: personalTarget.rootObjectId },
+      delivery_id: asString(activity.id) ?? randomUUID(),
+      event_type: "comment.deleted",
+      occurred_at: now,
+      object: {
+        ap_id: apId, author_name: "", body_markdown: null, kind: "comment",
+        lemmy_id: null, parent_ap_id: null, post_ap_id: personalTarget.rootObjectId,
+        post_lemmy_id: null, published_at: now, title: null, url: apId,
+        attributed_to_actor_id: personalTarget.actorId,
+      },
+    };
   }
 
   // community_actor_id lives directly on the Delete record's audience field —
@@ -196,6 +226,31 @@ async function normalizeCommentActivity(
   const replyTargetId = object.replyTargetId?.href;
   if (!replyTargetId) {
     throw new Error(`Comment ${apId} is missing inReplyTo/replyTarget`);
+  }
+
+  const personalTarget = await loadPersonalConversationTarget(replyTargetId, options);
+  if (personalTarget != null) {
+    const actorId = activity.actorId?.href ?? "";
+    const attributedTo = (object as unknown as { attributionId?: URL }).attributionId?.href;
+    if (!actorId || !attributedTo) {
+      throw new Error(`Personal-feed comment ${apId} has missing actor ownership`);
+    }
+    const publishedAt = toIsoString(object.published) ?? toIsoString(activity.published);
+    return {
+      actor_id: actorId,
+      community_actor_id: null,
+      target: { kind: "personal_feed", root_object_id: personalTarget.rootObjectId },
+      delivery_id: activity.id?.href ?? randomUUID(),
+      event_type: "comment.created",
+      occurred_at: publishedAt,
+      object: {
+        ap_id: apId, author_name: await resolveAuthorName(activity),
+        body_markdown: resolveMarkdownBody(object), kind: "comment", lemmy_id: null,
+        parent_ap_id: replyTargetId, post_ap_id: personalTarget.rootObjectId, post_lemmy_id: null,
+        published_at: publishedAt, title: null, url: resolveObjectUrl(object) ?? apId,
+        attributed_to_actor_id: attributedTo,
+      },
+    };
   }
 
   const replyContext = await resolveReplyChainContext(replyTargetId, options);
@@ -366,6 +421,31 @@ async function normalizeCommentActivityFromJson(
   const replyTarget = asString(object.inReplyTo) ?? asString(object.replyTarget);
   if (!replyTarget) {
     throw new Error(`Comment ${apId} is missing inReplyTo`);
+  }
+
+  const personalTarget = await loadPersonalConversationTarget(replyTarget, options);
+  if (personalTarget != null) {
+    const actorId = asCanonicalActorId(activity.actor);
+    const attributedTo = asCanonicalActorId(object.attributedTo);
+    if (actorId == null || attributedTo == null) {
+      throw new Error(`Personal-feed comment ${apId} has missing or ambiguous actor ownership`);
+    }
+    const publishedAt = asString(object.published) ?? asString(activity.published) ?? new Date().toISOString();
+    return {
+      actor_id: actorId,
+      community_actor_id: null,
+      target: { kind: "personal_feed", root_object_id: personalTarget.rootObjectId },
+      delivery_id: asString(activity.id) ?? randomUUID(),
+      event_type: "comment.created",
+      occurred_at: publishedAt,
+      object: {
+        ap_id: apId, author_name: resolveAuthorNameFromJson(activity, object),
+        body_markdown: resolveMarkdownBodyFromJson(object), kind: "comment", lemmy_id: null,
+        parent_ap_id: replyTarget, post_ap_id: personalTarget.rootObjectId, post_lemmy_id: null,
+        published_at: publishedAt, title: null, url: asString(object.url) ?? apId,
+        attributed_to_actor_id: attributedTo,
+      },
+    };
   }
 
   const replyContext = await resolveReplyChainContext(replyTarget, options);
@@ -692,6 +772,33 @@ async function fetchActivityObject(
   } catch {
     return null;
   }
+}
+
+function asCanonicalActorId(value: unknown): string | null {
+  // Actor references may be a URL string, a one-element array, or an object with id.
+  // Multiple distinct values are ambiguous and fail closed.
+  const values = Array.isArray(value) ? value : [value];
+  const ids = values.flatMap((item) => {
+    const direct = asString(item);
+    if (direct != null) return [direct];
+    const record = asRecord(item);
+    const id = record == null ? null : asString(record.id);
+    return id == null ? [] : [id];
+  });
+  return ids.length === 1 ? ids[0] : null;
+}
+
+async function loadPersonalConversationTarget(
+  objectId: string,
+  options: NormalizeOptions,
+): Promise<{ rootObjectId: string; actorId: string | null } | null> {
+  const client = options.pythonBridgeClient;
+  if (client == null) return null;
+  const row = client.loadConversationTargetByObjectId == null
+    ? null
+    : await client.loadConversationTargetByObjectId(objectId);
+  if (row == null || row.publicationContext !== "personal_feed") return null;
+  return { rootObjectId: row.rootObjectId, actorId: row.actorId };
 }
 
 async function loadLocalParentMessageMapping(

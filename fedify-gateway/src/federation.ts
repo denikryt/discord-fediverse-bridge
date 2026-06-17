@@ -224,7 +224,7 @@ export function createGatewayFederation(
 
         const deleteRecord = extractDeleteRecord(announceEnvelope.rawRecord);
         if (deleteRecord != null) {
-          const event = normalizeDeleteActivityFromJson(deleteRecord);
+          const event = await normalizeDeleteActivityFromJson(deleteRecord, { pythonBridgeClient: getPythonBridgeClient(config) });
           if (event == null) {
             logDebug(isDebug, "normalizeDeleteActivityFromJson returned null");
             return;
@@ -355,7 +355,7 @@ export async function deliverDirectDeleteActivity(
 ): Promise<void> {
   /** Normalize one direct Delete and deliver it to the Python bridge. */
   const sourceActivityJson = await activity.toJsonLd() as Record<string, unknown>;
-  const event = normalizeDeleteActivityFromJson(sourceActivityJson);
+  const event = await normalizeDeleteActivityFromJson(sourceActivityJson, { pythonBridgeClient: getPythonBridgeClient(config) });
   if (event == null) {
     logDebug(isDebug, "normalizeDeleteActivityFromJson returned null for direct Delete");
     return;

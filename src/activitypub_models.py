@@ -15,15 +15,24 @@ class ActivityPubObject(BaseModel):
 
     ap_id: str
     kind: Literal["post", "comment"]
-    lemmy_id: int = Field(alias="lemmy_id")
+    lemmy_id: int | None = Field(default=None, alias="lemmy_id")
     post_ap_id: str | None = None
     post_lemmy_id: int | None = None
     parent_ap_id: str | None = None
     title: str | None = None
     body_markdown: str | None = None
-    url: str
+    url: str | None = None
     published_at: datetime
     author_name: str
+    attributed_to_actor_id: str | None = None
+
+
+class ActivityPubTarget(BaseModel):
+    """Discriminate community and personal-feed routing without fake ownership."""
+
+    model_config = ConfigDict(extra="forbid")
+    kind: Literal["community", "personal_feed"]
+    root_object_id: str | None = None
 
 
 class ActivityPubEvent(BaseModel):
@@ -41,7 +50,8 @@ class ActivityPubEvent(BaseModel):
     ]
     delivery_id: str
     occurred_at: datetime
-    community_actor_id: str
+    community_actor_id: str | None = None
+    target: ActivityPubTarget | None = None
     actor_id: str
     object: ActivityPubObject
     source_activity_json: dict[str, Any] | None = None
@@ -58,10 +68,32 @@ class ActivityPubEvent(BaseModel):
             raise ValueError(f"{self.event_type} requires object.kind='post'")
         if self.event_type in comment_events and self.object.kind != "comment":
             raise ValueError(f"{self.event_type} requires object.kind='comment'")
-        if self.event_type == "comment.created" and not self.object.post_ap_id:
-            raise ValueError("comment.created requires object.post_ap_id")
-        if self.event_type == "comment.created" and self.object.post_lemmy_id is None:
-            raise ValueError("comment.created requires object.post_lemmy_id")
+        personal = self.target is not None and self.target.kind == "personal_feed"
+        if personal:
+            if self.community_actor_id is not None:
+                raise ValueError("personal_feed target cannot carry community_actor_id")
+            if not self.target.root_object_id:
+                raise ValueError("personal_feed target requires root_object_id")
+            if self.object.kind != "comment":
+                raise ValueError("personal_feed inbound content must be a comment")
+            if not self.object.parent_ap_id:
+                raise ValueError("personal_feed comment requires parent_ap_id")
+            if not self.object.attributed_to_actor_id:
+                raise ValueError(
+                    "personal_feed content requires attributed_to_actor_id"
+                )
+        else:
+            if not self.community_actor_id:
+                raise ValueError("community content requires community_actor_id")
+            if self.event_type == "comment.created" and not self.object.post_ap_id:
+                raise ValueError("comment.created requires object.post_ap_id")
+            if (
+                self.event_type == "comment.created"
+                and self.object.post_lemmy_id is None
+            ):
+                raise ValueError("comment.created requires object.post_lemmy_id")
+            if self.object.lemmy_id is None:
+                raise ValueError("community content requires object.lemmy_id")
         return self
 
 
@@ -81,7 +113,8 @@ class FollowLifecycleEvent(BaseModel):
     event_type: Literal["follow.accepted"]
     delivery_id: str
     occurred_at: datetime
-    community_actor_id: str
+    community_actor_id: str | None = None
+    target: ActivityPubTarget | None = None
     actor_id: str
     object: FollowLifecycleObject
 
@@ -133,6 +166,9 @@ class LocalUnfollowRequestEvent(BaseModel):
 
 
 BridgeGatewayEvent = Annotated[
-    ActivityPubEvent | FollowLifecycleEvent | LocalFollowRequestEvent | LocalUnfollowRequestEvent,
+    ActivityPubEvent
+    | FollowLifecycleEvent
+    | LocalFollowRequestEvent
+    | LocalUnfollowRequestEvent,
     Field(discriminator="event_type"),
 ]

@@ -69,6 +69,12 @@ export interface MessageMappingRow {
   discordMessageId: number | null;
 }
 
+export interface ConversationTargetRow {
+  publicationContext: "community" | "personal_feed";
+  rootObjectId: string;
+  actorId: string | null;
+}
+
 export interface PublishedActivityObjectRow {
   actorUsername: string;
   actorUrl: string;
@@ -95,6 +101,7 @@ export interface ChannelCommunitySubscriptionRow {
 export interface PythonBridgeReadClient {
   loadMessageMappingByObjectId(objectId: string): Promise<MessageMappingRow | null>;
   loadPublishedActivityObjectByObjectId(objectId: string): Promise<PublishedActivityObjectRow | null>;
+  loadConversationTargetByObjectId?(objectId: string): Promise<ConversationTargetRow | null>;
 }
 
 export class PythonBridgeClient implements PythonBridgeReadClient {
@@ -219,6 +226,18 @@ export class PythonBridgeClient implements PythonBridgeReadClient {
 
   async loadPublishedActivityObjectByActivityId(activityId: string): Promise<PublishedActivityObjectRow | null> {
     return await this.resolvePublishedObject({ activity_id: activityId });
+  }
+
+  async loadConversationTargetByObjectId(objectId: string): Promise<ConversationTargetRow | null> {
+    const row = await this.fetchJson<Record<string, unknown>>(
+      "/internal/fedify/conversation-targets/resolve",
+      { method: "POST", body: { object_id: objectId }, notFound: true },
+    );
+    return row == null ? null : {
+      publicationContext: optionalPublicationContext(row, "publication_context"),
+      rootObjectId: requiredString(row, "root_object_id"),
+      actorId: nullableString(row, "actor_id"),
+    };
   }
 
   async loadMessageMappingByObjectId(objectId: string): Promise<MessageMappingRow | null> {

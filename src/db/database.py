@@ -40,6 +40,7 @@ from .repositories import (
     UserActorDeliveryRepository,
     ContentMutationRepository,
     PersonalFeedBindingRepository,
+    PersonalFeedConversationRepository,
 )
 
 
@@ -53,11 +54,16 @@ class Database:
             # Every connection must enforce the foreign-key invariants used by
             # profile cleanup, backup, and future actor rendering.
             @event.listens_for(self.engine, "connect")
-            def _enable_sqlite_foreign_keys(dbapi_connection: object, _connection_record: object) -> None:
+            def _enable_sqlite_foreign_keys(
+                dbapi_connection: object, _connection_record: object
+            ) -> None:
                 cursor = dbapi_connection.cursor()
                 cursor.execute("PRAGMA foreign_keys=ON")
                 cursor.close()
-        self.session_factory = sessionmaker(self.engine, expire_on_commit=False, class_=Session)
+
+        self.session_factory = sessionmaker(
+            self.engine, expire_on_commit=False, class_=Session
+        )
         self.bridge_actor_keys = BridgeActorKeyRepository(self.session)
         self.local_communities = LocalCommunityRepository(self.session)
         self.community_actor_bans = CommunityActorBanRepository(self.session)
@@ -76,9 +82,16 @@ class Database:
         self.user_profiles = UserProfileRepository(self.session)
         self.user_actor_followers = UserActorFollowerRepository(self.session)
         self.profile_media = ProfileMediaRepository(self.session)
-        self.user_actor_deliveries = UserActorDeliveryRepository(self.session, self.immediate_session)
-        self.content_mutations = ContentMutationRepository(self.session, self.immediate_session)
+        self.user_actor_deliveries = UserActorDeliveryRepository(
+            self.session, self.immediate_session
+        )
+        self.content_mutations = ContentMutationRepository(
+            self.session, self.immediate_session
+        )
         self.personal_feed_bindings = PersonalFeedBindingRepository(self.session)
+        self.personal_feed_conversations = PersonalFeedConversationRepository(
+            self.session, self.immediate_session
+        )
         self.registration_sessions = RegistrationSessionRepository(self.session)
         self.message_mappings = MessageMappingRepository(self.session)
         self.activitypub_objects = ActivityPubObjectRepository(self.session)

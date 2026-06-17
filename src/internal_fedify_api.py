@@ -39,6 +39,14 @@ class MessageMappingResolveRequest(BaseModel):
     object_id: str
 
 
+class ConversationTargetResponse(BaseModel):
+    """Expose only non-secret routing identity for one known conversation object."""
+
+    publication_context: str
+    root_object_id: str
+    actor_id: str | None
+
+
 class BridgeActorKeyResponse(BaseModel):
     actor_url: str
     key_id: str
@@ -426,6 +434,31 @@ def create_internal_fedify_router(runtime: Runtime) -> APIRouter:
             discord_guild_id=row.discord_guild_id,
             discord_channel_id=row.discord_channel_id,
             discord_message_id=row.discord_message_id,
+        )
+
+    @router.post(
+        "/conversation-targets/resolve", response_model=ConversationTargetResponse
+    )
+    def resolve_conversation_target(
+        request: MessageMappingResolveRequest,
+        response: Response,
+        authorization: str | None = Header(default=None),
+    ) -> ConversationTargetResponse:
+        """Resolve bridge-owned or retained inbound objects before community routing."""
+        authorize(authorization)
+        no_store(response)
+        resolved = (
+            runtime.database.personal_feed_conversations.resolve_conversation_object(
+                request.object_id
+            )
+        )
+        if resolved is None:
+            raise HTTPException(status_code=404, detail="Conversation object not found")
+        context, root_object_id, actor_id = resolved
+        return ConversationTargetResponse(
+            publication_context=context,
+            root_object_id=root_object_id,
+            actor_id=actor_id,
         )
 
     @router.post("/message-mappings/resolve", response_model=MessageMappingResponse)

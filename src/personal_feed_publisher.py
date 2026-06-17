@@ -139,6 +139,7 @@ class PersonalFeedPublisher:
             title=None,
             body_markdown=body,
             in_reply_to_object_id=None,
+            conversation_root_object_id=object_id,
             discord_guild_id=guild_id,
             discord_channel_id=channel_id,
             discord_message_id=message_id,

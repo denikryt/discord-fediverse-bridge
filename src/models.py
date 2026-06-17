@@ -667,6 +667,9 @@ class PublishedActivityObject(Base):
     in_reply_to_object_id: Mapped[str | None] = mapped_column(
         String(512), nullable=True
     )
+    conversation_root_object_id: Mapped[str | None] = mapped_column(
+        String(512), nullable=True, index=True
+    )
     discord_guild_id: Mapped[int | None] = mapped_column(Integer, nullable=True)
     discord_channel_id: Mapped[int | None] = mapped_column(Integer, nullable=True)
     discord_message_id: Mapped[int | None] = mapped_column(Integer, nullable=True)
@@ -700,6 +703,124 @@ class PublishedActivityObject(Base):
     )
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), default=utcnow, nullable=False
+    )
+
+
+class PersonalFeedThreadMapping(Base):
+    """Persist the single Discord thread identity owned by one personal-feed root."""
+
+    __tablename__ = "personal_feed_thread_mappings"
+    __table_args__ = (
+        UniqueConstraint("root_published_object_id"),
+        UniqueConstraint("thread_id"),
+        CheckConstraint(
+            "thread_id = root_discord_message_id",
+            name="ck_personal_feed_thread_identity",
+        ),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    root_published_object_id: Mapped[int] = mapped_column(
+        ForeignKey("published_activity_objects.id", ondelete="CASCADE"), nullable=False
+    )
+    root_discord_channel_id: Mapped[int] = mapped_column(Integer, nullable=False)
+    root_discord_message_id: Mapped[int] = mapped_column(Integer, nullable=False)
+    thread_id: Mapped[int] = mapped_column(Integer, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=utcnow, nullable=False
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=utcnow, onupdate=utcnow, nullable=False
+    )
+
+
+class InboundConversationObject(Base):
+    """Store one canonical remote-authored comment independently of Discord delivery."""
+
+    __tablename__ = "inbound_conversation_objects"
+    __table_args__ = (
+        UniqueConstraint("object_id"),
+        UniqueConstraint("activity_id"),
+        Index(
+            "ix_inbound_conversation_root_parent",
+            "conversation_root_object_id",
+            "parent_object_id",
+        ),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    object_id: Mapped[str] = mapped_column(String(512), nullable=False)
+    publication_context: Mapped[str] = mapped_column(
+        String(32), nullable=False, default="personal_feed"
+    )
+    activity_id: Mapped[str | None] = mapped_column(String(512), nullable=True)
+    conversation_root_object_id: Mapped[str] = mapped_column(
+        String(512), nullable=False
+    )
+    parent_object_id: Mapped[str | None] = mapped_column(String(512), nullable=True)
+    actor_id: Mapped[str] = mapped_column(String(512), nullable=False)
+    actor_name: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    content_markdown: Mapped[str] = mapped_column(Text, nullable=False)
+    source_activity_json: Mapped[str | None] = mapped_column(Text, nullable=True)
+    published_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+    updated_at_remote: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+    deleted_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+    revision_fingerprint: Mapped[str] = mapped_column(String(64), nullable=False)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=utcnow, nullable=False
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=utcnow, onupdate=utcnow, nullable=False
+    )
+
+
+class InboundDiscordDelivery(Base):
+    """Track bounded Discord rendering for one retained inbound comment."""
+
+    __tablename__ = "inbound_discord_deliveries"
+    __table_args__ = (
+        UniqueConstraint("inbound_object_id", "root_published_object_id"),
+        UniqueConstraint("discord_message_id"),
+        CheckConstraint(
+            "state IN ('pending_parent','pending_thread','ready','dispatching','delivered','suppressed','failed')",
+            name="ck_inbound_discord_delivery_state",
+        ),
+        CheckConstraint(
+            "attempt_count >= 0 AND attempt_count <= 3",
+            name="ck_inbound_discord_attempt_count",
+        ),
+        Index("ix_inbound_discord_due", "state", "next_attempt_at", "id"),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    inbound_object_id: Mapped[int] = mapped_column(
+        ForeignKey("inbound_conversation_objects.id", ondelete="CASCADE"),
+        nullable=False,
+    )
+    root_published_object_id: Mapped[int] = mapped_column(
+        ForeignKey("published_activity_objects.id", ondelete="CASCADE"), nullable=False
+    )
+    destination_channel_id: Mapped[int] = mapped_column(Integer, nullable=False)
+    destination_thread_id: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    discord_message_id: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    state: Mapped[str] = mapped_column(String(32), nullable=False)
+    attempt_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    next_attempt_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+    last_error: Mapped[str | None] = mapped_column(String(512), nullable=True)
+    last_applied_revision: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=utcnow, nullable=False
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=utcnow, onupdate=utcnow, nullable=False
     )
 
 

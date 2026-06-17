@@ -19,6 +19,8 @@ from .user_profiles import UserProfileService
 from .user_actor_followers import UserActorFollowService
 from .user_actor_delivery import UserActorDeliveryService
 from .user_actor_delivery_worker import UserActorDeliveryWorker
+from .personal_feed_conversations import PersonalFeedConversationRuntime
+from .personal_feed_discord_delivery_worker import PersonalFeedDiscordDeliveryWorker
 
 
 @dataclass(slots=True)
@@ -46,12 +48,15 @@ class Runtime:
     user_actor_follow_service: UserActorFollowService
     user_actor_delivery_service: UserActorDeliveryService
     user_actor_delivery_worker: UserActorDeliveryWorker
+    personal_feed_conversation_runtime: PersonalFeedConversationRuntime
+    personal_feed_discord_delivery_worker: PersonalFeedDiscordDeliveryWorker
     deployment_state_lease: FileLock
 
     async def close(self) -> None:
         """Close live-state owners before releasing the deployment generation lease."""
         # The ordering prevents restore from replacing DB/media paths while a
         # client, pooled connection, or HTTP reader can still use them.
+        await self.personal_feed_discord_delivery_worker.stop()
         await self.user_actor_delivery_worker.stop()
         await self.discord_oauth_client.close()
         await self.fedify_gateway.close()

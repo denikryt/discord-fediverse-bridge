@@ -1,20 +1,27 @@
+export interface BridgeTarget {
+  kind: "community" | "personal_feed";
+  root_object_id?: string | null;
+}
+
 export interface BridgeObject {
   ap_id: string;
   author_name: string;
   body_markdown: string | null;
   kind: "post" | "comment";
-  lemmy_id: number;
+  lemmy_id: number | null;
   parent_ap_id: string | null;
   post_ap_id: string | null;
   post_lemmy_id: number | null;
   published_at: string;
   title: string | null;
   url: string;
+  attributed_to_actor_id?: string | null;
 }
 
 export interface BridgeContentEvent {
   actor_id: string;
-  community_actor_id: string;
+  community_actor_id?: string | null;
+  target?: BridgeTarget | null;
   delivery_id: string;
   event_type:
     | "post.created"
@@ -98,6 +105,9 @@ export interface RenderPersonalFeedRequest {
   objectId: string;
   bodyMarkdown: string;
   publishedAt: string;
+  kind?: "post" | "comment";
+  inReplyToObjectId?: string | null;
+  conversationRootObjectId?: string | null;
 }
 
 export interface RenderPersonalFeedResult {
@@ -152,7 +162,9 @@ export interface UpdateContentRequest {
   // actorUsername must match the original attributedTo — Lemmy enforces this
   // ownership check and rejects Updates from any other actor.
   actorUsername: string;
-  communityActorUrl: string;
+  publicationContext?: "community" | "personal_feed";
+  communityActorUrl: string | null;
+  conversationRootObjectId?: string | null;
   apObjectId: string;
   kind: "post" | "comment";
   bodyMarkdown: string;
@@ -172,7 +184,9 @@ export interface UpdateContentRequest {
 export interface DeleteContentRequest {
   // actorUsername must match the original attributedTo — same ownership rule as Update.
   actorUsername: string;
-  communityActorUrl: string;
+  publicationContext?: "community" | "personal_feed";
+  communityActorUrl: string | null;
+  conversationRootObjectId?: string | null;
   apObjectId: string;
   targetInboxUrls?: string[] | null;
   operationId?: string | null;

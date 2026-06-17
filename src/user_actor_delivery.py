@@ -20,7 +20,9 @@ class FederationDecision(Protocol):
 
 
 class DiscordMessageStateReader(Protocol):
-    async def fetch_message_state(self, channel_id: int, message_id: int) -> tuple[str, object | None]:
+    async def fetch_message_state(
+        self, channel_id: int, message_id: int
+    ) -> tuple[str, object | None]:
         """Return (present|missing, message-or-None), raising on transient failure."""
 
 
@@ -74,20 +76,34 @@ class UserActorDeliveryService:
                     profile_snapshot=json.loads(source.profile_snapshot_json),
                 )
                 self.database.user_actor_deliveries.record_rendered(source_id, activity)
-                self.database.user_actor_deliveries.release_terminal_source_media(source_id)
+                self.database.user_actor_deliveries.release_terminal_source_media(
+                    source_id
+                )
             except Exception as exc:
-                self.database.user_actor_deliveries.record_render_failure(source_id, str(exc))
-                delivered, outstanding, total = self.database.user_actor_deliveries.source_summary(source_id)
-                return ProfileFanoutSummary(source_id, total, delivered, outstanding, True)
+                self.database.user_actor_deliveries.record_render_failure(
+                    source_id, str(exc)
+                )
+                delivered, outstanding, total = (
+                    self.database.user_actor_deliveries.source_summary(source_id)
+                )
+                return ProfileFanoutSummary(
+                    source_id, total, delivered, outstanding, True
+                )
         await self.drain_deliveries()
-        delivered, outstanding, total = self.database.user_actor_deliveries.source_summary(source_id)
+        delivered, outstanding, total = (
+            self.database.user_actor_deliveries.source_summary(source_id)
+        )
         return ProfileFanoutSummary(source_id, total, delivered, outstanding)
 
-    async def drain_once(self, *, source_limit: int = 10, delivery_limit: int = CLAIM_BATCH_SIZE) -> int:
+    async def drain_once(
+        self, *, source_limit: int = 10, delivery_limit: int = CLAIM_BATCH_SIZE
+    ) -> int:
         """Recover pre-source mutations, then render and transport bounded work."""
         processed = await self.drain_reconciliations(limit=source_limit)
         processed += await self.drain_mutations(limit=source_limit)
-        for source_id in self.database.user_actor_deliveries.due_source_ids(source_limit):
+        for source_id in self.database.user_actor_deliveries.due_source_ids(
+            source_limit
+        ):
             source = self.database.user_actor_deliveries.get_source(source_id)
             if source is None:
                 continue
@@ -97,13 +113,16 @@ class UserActorDeliveryService:
                     profile_snapshot=json.loads(source.profile_snapshot_json),
                 )
                 self.database.user_actor_deliveries.record_rendered(source_id, activity)
-                self.database.user_actor_deliveries.release_terminal_source_media(source_id)
+                self.database.user_actor_deliveries.release_terminal_source_media(
+                    source_id
+                )
             except Exception as exc:
-                self.database.user_actor_deliveries.record_render_failure(source_id, str(exc))
+                self.database.user_actor_deliveries.record_render_failure(
+                    source_id, str(exc)
+                )
             processed += 1
         processed += await self.drain_deliveries(limit=delivery_limit)
         return processed
-
 
     async def drain_reconciliations(self, *, limit: int = 10) -> int:
         """Resolve durable partial Discord edits before mutation reservation scan."""
@@ -112,7 +131,9 @@ class UserActorDeliveryService:
         rows = self.database.content_mutations.due_reconciliations(limit=limit)
         for channel_id, message_id, object_id, title in rows:
             try:
-                status, message = await self.discord_message_reader.fetch_message_state(channel_id, message_id)
+                status, message = await self.discord_message_reader.fetch_message_state(
+                    channel_id, message_id
+                )
                 if status == "missing":
                     outcome = self.database.content_mutations.record_desired_delete(
                         object_id=object_id
@@ -121,19 +142,23 @@ class UserActorDeliveryService:
                     edited_at = getattr(message, "edited_at", None)
                     content = getattr(message, "content", None)
                     if edited_at is None or content is None:
-                        raise ValueError("Discord message state lacks edited timestamp or content")
-                    target_inbox_urls = self._replay_target_inboxes(object_id)
-                    outcome = (
-                        self.database.content_mutations
-                        .reconcile_authoritative_update_and_reserve(
-                            object_id=object_id,
-                            title=title,
-                            body_markdown=content,
-                            edited_timestamp=edited_at,
-                            target_inbox_urls=target_inbox_urls,
+                        raise ValueError(
+                            "Discord message state lacks edited timestamp or content"
                         )
+                    target_inbox_urls = self._replay_target_inboxes(object_id)
+                    outcome = self.database.content_mutations.reconcile_authoritative_update_and_reserve(
+                        object_id=object_id,
+                        title=title,
+                        body_markdown=content,
+                        edited_timestamp=edited_at,
+                        target_inbox_urls=target_inbox_urls,
                     )
-                    if outcome not in {"accepted", "duplicate", "deleted", "not_needed"}:
+                    if outcome not in {
+                        "accepted",
+                        "duplicate",
+                        "deleted",
+                        "not_needed",
+                    }:
                         raise ValueError(
                             f"Discord reconciliation unresolved: {outcome}"
                         )
@@ -145,22 +170,26 @@ class UserActorDeliveryService:
                     object_id=object_id,
                     target_inbox_urls=target_inbox_urls,
                 )
-                self.database.content_mutations.clear_reconciliation(object_id=object_id)
+                self.database.content_mutations.clear_reconciliation(
+                    object_id=object_id
+                )
             except Exception as exc:
-                self.database.content_mutations.record_reconciliation_failure(object_id=object_id, error=str(exc))
+                self.database.content_mutations.record_reconciliation_failure(
+                    object_id=object_id, error=str(exc)
+                )
         return len(rows)
-
 
     def _replay_target_inboxes(self, object_id: str) -> list[str] | None:
         """Recompute the mode-specific safe gateway target snapshot for recovery."""
-        published = (
-            self.database.activitypub_objects
-            .get_published_activity_object_by_object_id(object_id)
+        published = self.database.activitypub_objects.get_published_activity_object_by_object_id(
+            object_id
         )
         if published is None:
             return []
-        local_community = self.database.local_communities.get_local_community_by_actor_url(
-            published.community_actor_url
+        local_community = (
+            self.database.local_communities.get_local_community_by_actor_url(
+                published.community_actor_url
+            )
         )
         if local_community is None:
             return None
@@ -204,7 +233,9 @@ class UserActorDeliveryService:
         self, *, object_id: str, target_inbox_urls: list[str] | None = None
     ) -> str:
         """Durably admit terminal deletion and start replayable orchestration."""
-        outcome = self.database.content_mutations.record_desired_delete(object_id=object_id)
+        outcome = self.database.content_mutations.record_desired_delete(
+            object_id=object_id
+        )
         if outcome == "accepted":
             self.database.content_mutations.reserve_next(
                 object_id=object_id, target_inbox_urls=target_inbox_urls
@@ -225,13 +256,18 @@ class UserActorDeliveryService:
                 if canonical is None:
                     request = claim.request
                     self._validate_mutation_request(claim)
-                    if not self.database.content_mutations.mark_send_possible(claim.mutation_id, claim.claim_token):
+                    if not self.database.content_mutations.mark_send_possible(
+                        claim.mutation_id, claim.claim_token
+                    ):
                         continue
                     if claim.kind == "content_delete":
                         result = await self.gateway.delete_content(
                             DeleteContentRequest(
                                 actor_username=request["actorUsername"],
-                                community_actor_url=request["communityActorUrl"],
+                                community_actor_url=request.get("communityActorUrl"),
+                                publication_context=request.get(
+                                    "publicationContext", "community"
+                                ),
                                 ap_object_id=request["apObjectId"],
                                 target_inbox_urls=request.get("targetInboxUrls"),
                                 operation_id=claim.operation_id,
@@ -245,7 +281,10 @@ class UserActorDeliveryService:
                         result = await self.gateway.update_content(
                             UpdateContentRequest(
                                 actor_username=request["actorUsername"],
-                                community_actor_url=request["communityActorUrl"],
+                                community_actor_url=request.get("communityActorUrl"),
+                                publication_context=request.get(
+                                    "publicationContext", "community"
+                                ),
                                 ap_object_id=request["apObjectId"],
                                 kind=request["kind"],
                                 title=request.get("title"),
@@ -286,7 +325,9 @@ class UserActorDeliveryService:
                 )
             except asyncio.CancelledError:
                 self.database.content_mutations.record_retryable_failure(
-                    claim.mutation_id, claim.claim_token, "worker cancelled after dispatch boundary"
+                    claim.mutation_id,
+                    claim.claim_token,
+                    "worker cancelled after dispatch boundary",
                 )
                 raise
             except Exception as exc:
@@ -301,12 +342,28 @@ class UserActorDeliveryService:
         request = claim.request
         if request.get("apObjectId") is None or request.get("actorUsername") is None:
             raise ValueError("mutation reservation is missing object ownership data")
-        if claim.kind == "content_update" and request.get("kind") not in {"post", "comment"}:
+        context = request.get("publicationContext", "community")
+        if context not in {"community", "personal_feed"}:
+            raise ValueError(
+                "mutation reservation has an unsupported publication context"
+            )
+        if context == "community" and not request.get("communityActorUrl"):
+            raise ValueError("community mutation is missing community ownership")
+        if context == "personal_feed" and request.get("communityActorUrl") is not None:
+            raise ValueError("personal-feed mutation cannot carry community ownership")
+        if claim.kind == "content_update" and request.get("kind") not in {
+            "post",
+            "comment",
+        }:
             raise ValueError("mutation reservation has an unsupported object kind")
         if request.get("operationId") != claim.operation_id:
-            raise ValueError("mutation operation identity does not match its reservation")
+            raise ValueError(
+                "mutation operation identity does not match its reservation"
+            )
         if request.get("activityId") != claim.activity_id:
-            raise ValueError("mutation activity identity does not match its reservation")
+            raise ValueError(
+                "mutation activity identity does not match its reservation"
+            )
 
     async def drain_deliveries(self, *, limit: int = CLAIM_BATCH_SIZE) -> int:
         """Claim and submit a bounded batch with isolated per-target outcomes."""
@@ -350,9 +407,7 @@ class UserActorDeliveryService:
                 claim.delivery_id, claim.claim_token
             ):
                 continue
-            groups.setdefault((claim.actor_url, claim.actor_username), []).append(
-                claim
-            )
+            groups.setdefault((claim.actor_url, claim.actor_username), []).append(claim)
         for (actor_url, username), group in groups.items():
             payload = [
                 {
@@ -379,17 +434,19 @@ class UserActorDeliveryService:
                             None
                             if outcome and outcome.ok
                             else (
-                                outcome.error
-                                if outcome
-                                else "gateway omitted outcome"
+                                outcome.error if outcome else "gateway omitted outcome"
                             )
                         ),
                     )
-                    self.database.user_actor_deliveries.release_terminal_source_media(claim.source_id)
+                    self.database.user_actor_deliveries.release_terminal_source_media(
+                        claim.source_id
+                    )
             except Exception as exc:
                 for claim in group:
                     self.database.user_actor_deliveries.record_outcome(
                         claim.delivery_id, claim.claim_token, ok=False, error=str(exc)
                     )
-                    self.database.user_actor_deliveries.release_terminal_source_media(claim.source_id)
+                    self.database.user_actor_deliveries.release_terminal_source_media(
+                        claim.source_id
+                    )
         return len(claims)

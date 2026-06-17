@@ -56,8 +56,19 @@ async def test_build_runtime_wires_user_actor_follow_service_after_bot_and_close
     publisher = runtime.bot.event_router.personal_feed_publisher
     assert publisher.user_ban_service is runtime.bot.user_ban_service
     assert publisher.bridge_policy_service is runtime.bridge_policy_service
+    assert (
+        runtime.bot.event_router.personal_feed_conversation_runtime
+        is runtime.personal_feed_conversation_runtime
+    )
+    assert (
+        runtime.personal_feed_conversation_runtime.delivery_worker
+        is runtime.personal_feed_discord_delivery_worker
+    )
 
     close_order: list[str] = []
+
+    async def stop_discord_worker() -> None:
+        close_order.append("discord-worker")
 
     async def stop_worker() -> None:
         close_order.append("worker")
@@ -82,11 +93,13 @@ async def test_build_runtime_wires_user_actor_follow_service_after_bot_and_close
     original_gateway_close = runtime.fedify_gateway.close
     original_database_close = runtime.database.close
     original_lease_close = runtime.deployment_state_lease.close
+    discord_worker_stop = AsyncMock(side_effect=stop_discord_worker)
     worker_stop = AsyncMock(side_effect=stop_worker)
     oauth_close = AsyncMock(side_effect=close_oauth)
     gateway_close = AsyncMock(side_effect=close_gateway)
     database_close = Mock(side_effect=close_database)
     lease_close = Mock(side_effect=close_lease)
+    runtime.personal_feed_discord_delivery_worker.stop = discord_worker_stop
     runtime.user_actor_delivery_worker.stop = worker_stop
     runtime.discord_oauth_client.close = oauth_close
     runtime.fedify_gateway.close = gateway_close
@@ -95,9 +108,17 @@ async def test_build_runtime_wires_user_actor_follow_service_after_bot_and_close
 
     await runtime.close()
 
+    discord_worker_stop.assert_awaited_once_with()
     worker_stop.assert_awaited_once_with()
     oauth_close.assert_awaited_once_with()
     gateway_close.assert_awaited_once_with()
     database_close.assert_called_once_with()
     lease_close.assert_called_once_with()
-    assert close_order == ["worker", "oauth", "gateway", "database", "lease"]
+    assert close_order == [
+        "discord-worker",
+        "worker",
+        "oauth",
+        "gateway",
+        "database",
+        "lease",
+    ]

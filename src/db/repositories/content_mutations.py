@@ -142,13 +142,13 @@ class ContentMutationRepository(BaseRepository):
         if user is None:
             raise ValueError("published object actor is not a registered User Actor")
         kind = (
-            "content_delete"
-            if published.desired_kind == "delete"
-            else "content_update"
+            "content_delete" if published.desired_kind == "delete" else "content_update"
         )
         request = {
             "actorUsername": published.actor_username,
+            "publicationContext": published.publication_context,
             "communityActorUrl": published.community_actor_url,
+            "conversationRootObjectId": published.conversation_root_object_id,
             "apObjectId": published.object_id,
             "kind": published.kind,
             "title": published.desired_title,
@@ -165,7 +165,9 @@ class ContentMutationRepository(BaseRepository):
         next_revision = expected + 1
         identity_request = {
             "actorUsername": request["actorUsername"],
+            "publicationContext": request["publicationContext"],
             "communityActorUrl": request["communityActorUrl"],
+            "conversationRootObjectId": request["conversationRootObjectId"],
             "apObjectId": request["apObjectId"],
             "kind": request["kind"] if kind == "content_update" else None,
             "title": request["title"] if kind == "content_update" else None,
@@ -173,9 +175,7 @@ class ContentMutationRepository(BaseRepository):
                 request["bodyMarkdown"] if kind == "content_update" else None
             ),
             "inReplyToObjectId": (
-                request["inReplyToObjectId"]
-                if kind == "content_update"
-                else None
+                request["inReplyToObjectId"] if kind == "content_update" else None
             ),
             "targetInboxUrls": request["targetInboxUrls"],
             "mutationTimestamp": request["mutationTimestamp"],
@@ -208,7 +208,8 @@ class ContentMutationRepository(BaseRepository):
             operation_id=operation_id,
             activity_id=activity_id,
             request_json=json.dumps(request, separators=(",", ":"), sort_keys=True),
-            request_fingerprint=published.desired_fingerprint or hashlib.sha256(
+            request_fingerprint=published.desired_fingerprint
+            or hashlib.sha256(
                 json.dumps(request, separators=(",", ":"), sort_keys=True).encode()
             ).hexdigest(),
             state="reserved",
@@ -217,7 +218,9 @@ class ContentMutationRepository(BaseRepository):
         session.flush()
         return mutation.id
 
-    def reserve_next(self, *, object_id: str, target_inbox_urls: list[str] | None) -> int | None:
+    def reserve_next(
+        self, *, object_id: str, target_inbox_urls: list[str] | None
+    ) -> int | None:
         """Reserve one transition from committed state to current desired state."""
         with self._immediate_session_provider() as session:
             published = session.scalar(
@@ -296,10 +299,11 @@ class ContentMutationRepository(BaseRepository):
             published.discord_reconciliation_last_error = None
             return outcome
 
-    def claim_due(self, *, limit: int, stale_after_seconds: int) -> list[ClaimedContentMutation]:
+    def claim_due(
+        self, *, limit: int, stale_after_seconds: int
+    ) -> list[ClaimedContentMutation]:
         """Claim bounded reserved or stale operations for one recovery owner."""
         now = datetime.now(timezone.utc)
-        stale_before = now - timedelta(seconds=stale_after_seconds)
         claims: list[ClaimedContentMutation] = []
         with self._immediate_session_provider() as session:
             rows = session.execute(
@@ -313,7 +317,9 @@ class ContentMutationRepository(BaseRepository):
                 .where(
                     or_(
                         and_(
-                            UserActorContentMutation.state.in_(("reserved", "ambiguous", "canonical_ready")),
+                            UserActorContentMutation.state.in_(
+                                ("reserved", "ambiguous", "canonical_ready")
+                            ),
                             or_(
                                 UserActorContentMutation.next_attempt_at.is_(None),
                                 UserActorContentMutation.next_attempt_at <= now,
@@ -358,11 +364,13 @@ class ContentMutationRepository(BaseRepository):
     def mark_send_possible(self, mutation_id: int, claim_token: str) -> bool:
         """Persist the boundary after which a remote side effect is possible."""
         with self.session() as session:
-            mutation = session.scalar(select(UserActorContentMutation).where(
-                UserActorContentMutation.id == mutation_id,
-                UserActorContentMutation.claim_token == claim_token,
-                UserActorContentMutation.state == "dispatching",
-            ))
+            mutation = session.scalar(
+                select(UserActorContentMutation).where(
+                    UserActorContentMutation.id == mutation_id,
+                    UserActorContentMutation.claim_token == claim_token,
+                    UserActorContentMutation.state == "dispatching",
+                )
+            )
             if mutation is None:
                 return False
             mutation.side_effect_classification = "send_possible"
@@ -436,7 +444,9 @@ class ContentMutationRepository(BaseRepository):
             mutation.lease_expires_at = None
             mutation.last_error = error[:500]
             mutation.next_attempt_at = None
-            published = session.get(PublishedActivityObject, mutation.published_object_id)
+            published = session.get(
+                PublishedActivityObject, mutation.published_object_id
+            )
             if (
                 published is not None
                 and published.desired_kind == "update"
@@ -468,8 +478,13 @@ class ContentMutationRepository(BaseRepository):
             )
             if mutation is None:
                 return None
-            published = session.get(PublishedActivityObject, mutation.published_object_id)
-            if published is None or published.content_revision != mutation.expected_revision:
+            published = session.get(
+                PublishedActivityObject, mutation.published_object_id
+            )
+            if (
+                published is None
+                or published.content_revision != mutation.expected_revision
+            ):
                 return None
             request = json.loads(mutation.request_json)
             if mutation.kind == "content_delete":
@@ -505,7 +520,9 @@ class ContentMutationRepository(BaseRepository):
                 snapshot={
                     "schemaVersion": 1,
                     "objectId": published.object_id,
-                    "activityType": "Delete" if mutation.kind == "content_delete" else "Update",
+                    "activityType": "Delete"
+                    if mutation.kind == "content_delete"
+                    else "Update",
                     "contentRevision": mutation.next_revision,
                 },
                 followers=followers,
@@ -531,44 +548,85 @@ class ContentMutationRepository(BaseRepository):
                 return None
             return json.loads(mutation.canonical_activity_json)
 
-
-    def request_discord_reconciliation(self, *, channel_id: int, message_id: int, error: str) -> str:
+    def request_discord_reconciliation(
+        self, *, channel_id: int, message_id: int, error: str
+    ) -> str:
         """Durably request current Discord message-state reconciliation."""
         with self._immediate_session_provider() as session:
-            published = session.scalar(select(PublishedActivityObject).where(
-                PublishedActivityObject.discord_channel_id == channel_id,
-                PublishedActivityObject.discord_message_id == message_id,
-            ))
+            published = session.scalar(
+                select(PublishedActivityObject).where(
+                    PublishedActivityObject.discord_channel_id == channel_id,
+                    PublishedActivityObject.discord_message_id == message_id,
+                )
+            )
             if published is None:
                 return "missing"
             if published.deleted_at is not None or published.desired_kind == "delete":
                 return "deleted"
             published.discord_reconciliation_needed = True
             published.discord_reconciliation_last_error = error[:500]
-            published.discord_reconciliation_next_attempt_at = datetime.now(timezone.utc)
+            published.discord_reconciliation_next_attempt_at = datetime.now(
+                timezone.utc
+            )
             return "accepted"
 
-    def due_reconciliations(self, *, limit: int) -> list[tuple[int, int, str, str | None]]:
+    def due_reconciliations(
+        self, *, limit: int
+    ) -> list[tuple[int, int, str, str | None]]:
         now = datetime.now(timezone.utc)
         with self.session() as session:
-            rows = session.scalars(select(PublishedActivityObject).where(
-                PublishedActivityObject.discord_reconciliation_needed.is_(True),
-                or_(PublishedActivityObject.discord_reconciliation_next_attempt_at.is_(None), PublishedActivityObject.discord_reconciliation_next_attempt_at <= now),
-            ).order_by(PublishedActivityObject.id).limit(limit)).all()
-            return [(int(r.discord_channel_id), int(r.discord_message_id), r.object_id, r.title) for r in rows if r.discord_channel_id is not None and r.discord_message_id is not None]
+            rows = session.scalars(
+                select(PublishedActivityObject)
+                .where(
+                    PublishedActivityObject.discord_reconciliation_needed.is_(True),
+                    or_(
+                        PublishedActivityObject.discord_reconciliation_next_attempt_at.is_(
+                            None
+                        ),
+                        PublishedActivityObject.discord_reconciliation_next_attempt_at
+                        <= now,
+                    ),
+                )
+                .order_by(PublishedActivityObject.id)
+                .limit(limit)
+            ).all()
+            return [
+                (
+                    int(r.discord_channel_id),
+                    int(r.discord_message_id),
+                    r.object_id,
+                    r.title,
+                )
+                for r in rows
+                if r.discord_channel_id is not None and r.discord_message_id is not None
+            ]
 
     def record_reconciliation_failure(self, *, object_id: str, error: str) -> None:
         with self._immediate_session_provider() as session:
-            published = session.scalar(select(PublishedActivityObject).where(PublishedActivityObject.object_id == object_id))
+            published = session.scalar(
+                select(PublishedActivityObject).where(
+                    PublishedActivityObject.object_id == object_id
+                )
+            )
             if published is None:
                 return
             published.discord_reconciliation_attempt_count += 1
             published.discord_reconciliation_last_error = error[:500]
-            published.discord_reconciliation_next_attempt_at = datetime.now(timezone.utc) + timedelta(seconds=min(300, 2 ** min(published.discord_reconciliation_attempt_count, 8)))
+            published.discord_reconciliation_next_attempt_at = datetime.now(
+                timezone.utc
+            ) + timedelta(
+                seconds=min(
+                    300, 2 ** min(published.discord_reconciliation_attempt_count, 8)
+                )
+            )
 
     def clear_reconciliation(self, *, object_id: str) -> None:
         with self._immediate_session_provider() as session:
-            published = session.scalar(select(PublishedActivityObject).where(PublishedActivityObject.object_id == object_id))
+            published = session.scalar(
+                select(PublishedActivityObject).where(
+                    PublishedActivityObject.object_id == object_id
+                )
+            )
             if published is None:
                 return
             published.discord_reconciliation_needed = False

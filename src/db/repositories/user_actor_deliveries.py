@@ -105,6 +105,7 @@ class UserActorDeliveryRepository(BaseRepository):
         activity_json: dict,
         snapshot: dict,
         followers: list[UserActorFollower],
+        direct_target_inbox_urls: list[str] | None = None,
     ) -> UserActorOutboundSource:
         """Insert one already-rendered content source and immutable audience."""
         source = UserActorOutboundSource(
@@ -115,12 +116,31 @@ class UserActorDeliveryRepository(BaseRepository):
             activity_id=activity_id,
             published_object_id=published_object_id,
             snapshot_json=json.dumps(snapshot, separators=(",", ":"), sort_keys=True),
-            activity_json=json.dumps(activity_json, separators=(",", ":"), sort_keys=True),
+            activity_json=json.dumps(
+                activity_json, separators=(",", ":"), sort_keys=True
+            ),
             state="ready",
         )
         session.add(source)
         session.flush()
         UserActorDeliveryRepository._insert_audience(session, source.id, followers)
+        existing_endpoints = {
+            UserActorDeliveryRepository.validate_endpoint(
+                follower.remote_shared_inbox_url or follower.remote_inbox_url
+            )
+            for follower in followers
+        }
+        for endpoint_url in sorted(set(direct_target_inbox_urls or [])):
+            endpoint = UserActorDeliveryRepository.validate_endpoint(endpoint_url)
+            if endpoint not in existing_endpoints:
+                session.add(
+                    UserActorOutboundDelivery(
+                        source_id=source.id,
+                        target_endpoint_url=endpoint,
+                        status="pending",
+                    )
+                )
+                existing_endpoints.add(endpoint)
         return source
 
     @staticmethod
@@ -163,7 +183,9 @@ class UserActorDeliveryRepository(BaseRepository):
                 session.scalars(
                     select(UserActorOutboundSource.id)
                     .where(
-                        UserActorOutboundSource.state.in_(("render_pending", "render_failed")),
+                        UserActorOutboundSource.state.in_(
+                            ("render_pending", "render_failed")
+                        ),
                         or_(
                             UserActorOutboundSource.next_attempt_at.is_(None),
                             UserActorOutboundSource.next_attempt_at <= now,
@@ -188,7 +210,9 @@ class UserActorDeliveryRepository(BaseRepository):
                 .where(
                     UserActorOutboundSource.id == source_id,
                     UserActorOutboundSource.activity_json.is_(None),
-                    UserActorOutboundSource.state.in_(("render_pending", "render_failed")),
+                    UserActorOutboundSource.state.in_(
+                        ("render_pending", "render_failed")
+                    ),
                 )
                 .values(
                     activity_json=encoded,
@@ -196,7 +220,8 @@ class UserActorDeliveryRepository(BaseRepository):
                     last_error=None,
                     next_attempt_at=None,
                     last_render_attempted_at=now,
-                    render_attempt_count=UserActorOutboundSource.render_attempt_count + 1,
+                    render_attempt_count=UserActorOutboundSource.render_attempt_count
+                    + 1,
                 )
             )
             return result.rowcount == 1
@@ -212,7 +237,9 @@ class UserActorDeliveryRepository(BaseRepository):
             source.last_render_attempted_at = now
             source.state = "render_failed"
             source.last_error = self._bounded_error(error)
-            source.next_attempt_at = now + timedelta(seconds=min(300, 2 ** min(source.render_attempt_count, 8)))
+            source.next_attempt_at = now + timedelta(
+                seconds=min(300, 2 ** min(source.render_attempt_count, 8))
+            )
 
     def claim_due(
         self, *, limit: int, per_user_limit: int, stale_after_seconds: int
@@ -259,7 +286,9 @@ class UserActorDeliveryRepository(BaseRepository):
                     continue
                 # Older unfinished work is the endpoint ordering barrier,
                 # including failed rows whose retry backoff is not yet due.
-                if self._has_lower_unfinished(session, delivery=delivery, source=source):
+                if self._has_lower_unfinished(
+                    session, delivery=delivery, source=source
+                ):
                     continue
 
                 # Historical audience rows are transportable only while an
@@ -299,16 +328,13 @@ class UserActorDeliveryRepository(BaseRepository):
                 select(UserActorOutboundDelivery, UserActorOutboundSource)
                 .join(
                     UserActorOutboundSource,
-                    UserActorOutboundSource.id
-                    == UserActorOutboundDelivery.source_id,
+                    UserActorOutboundSource.id == UserActorOutboundDelivery.source_id,
                 )
                 .where(
                     UserActorOutboundSource.state == "ready",
                     or_(
                         and_(
-                            UserActorOutboundDelivery.status.in_(
-                                ("pending", "failed")
-                            ),
+                            UserActorOutboundDelivery.status.in_(("pending", "failed")),
                             or_(
                                 UserActorOutboundDelivery.next_attempt_at.is_(None),
                                 UserActorOutboundDelivery.next_attempt_at <= now,
@@ -417,7 +443,11 @@ class UserActorDeliveryRepository(BaseRepository):
         source: UserActorOutboundSource,
     ) -> bool:
         """Apply FIFO except that terminal Delete may bypass unsent failures."""
-        blocking_statuses = ("sending",) if source.source_kind == "content_delete" else ("pending", "failed", "sending")
+        blocking_statuses = (
+            ("sending",)
+            if source.source_kind == "content_delete"
+            else ("pending", "failed", "sending")
+        )
         return (
             session.scalar(
                 select(UserActorOutboundDelivery.id)
@@ -552,7 +582,9 @@ class UserActorDeliveryRepository(BaseRepository):
             )
             return result.rowcount == 1
 
-    def record_outcome(self, delivery_id: int, claim_token: str, *, ok: bool, error: str | None = None) -> None:
+    def record_outcome(
+        self, delivery_id: int, claim_token: str, *, ok: bool, error: str | None = None
+    ) -> None:
         """Complete only the currently owned claim and preserve retryability."""
         now = datetime.now(timezone.utc)
         with self.session() as session:
@@ -579,7 +611,8 @@ class UserActorDeliveryRepository(BaseRepository):
                         .join(UserActorOutboundSource)
                         .where(
                             UserActorOutboundSource.ordering_key == source.ordering_key,
-                            UserActorOutboundSource.logical_version < source.logical_version,
+                            UserActorOutboundSource.logical_version
+                            < source.logical_version,
                             UserActorOutboundDelivery.target_endpoint_url
                             == delivery.target_endpoint_url,
                             UserActorOutboundDelivery.status.in_(("pending", "failed")),
@@ -600,8 +633,9 @@ class UserActorDeliveryRepository(BaseRepository):
             else:
                 delivery.status = "failed"
                 delivery.last_error = self._bounded_error(error or "delivery failed")
-                delivery.next_attempt_at = now + timedelta(seconds=min(300, 2 ** min(delivery.attempt_count, 8)))
-
+                delivery.next_attempt_at = now + timedelta(
+                    seconds=min(300, 2 ** min(delivery.attempt_count, 8))
+                )
 
     def release_terminal_source_media(self, source_id: int) -> int:
         """Release source media only after rendering and all targets are terminal."""
@@ -613,7 +647,9 @@ class UserActorDeliveryRepository(BaseRepository):
                 select(UserActorOutboundDelivery.id)
                 .where(
                     UserActorOutboundDelivery.source_id == source_id,
-                    UserActorOutboundDelivery.status.in_(("pending", "sending", "failed")),
+                    UserActorOutboundDelivery.status.in_(
+                        ("pending", "sending", "failed")
+                    ),
                 )
                 .limit(1)
             )
@@ -637,7 +673,9 @@ class UserActorDeliveryRepository(BaseRepository):
         counts = {status: count for status, count in rows}
         total = sum(counts.values())
         delivered = counts.get("delivered", 0)
-        outstanding = sum(counts.get(status, 0) for status in ("pending", "sending", "failed"))
+        outstanding = sum(
+            counts.get(status, 0) for status in ("pending", "sending", "failed")
+        )
         return delivered, outstanding, total
 
     @classmethod
@@ -649,7 +687,5 @@ class UserActorDeliveryRepository(BaseRepository):
             error,
             flags=re.DOTALL | re.IGNORECASE,
         )
-        redacted = re.sub(
-            r"(?i)bearer\s+[^\s,;]+", "Bearer [redacted]", redacted
-        )
+        redacted = re.sub(r"(?i)bearer\s+[^\s,;]+", "Bearer [redacted]", redacted)
         return " ".join(redacted.split())[: cls.ERROR_LIMIT]
