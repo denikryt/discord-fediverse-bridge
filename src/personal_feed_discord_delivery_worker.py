@@ -39,12 +39,25 @@ class PersonalFeedDiscordDeliveryWorker:
         self._wake.set()
 
     async def stop(self) -> None:
-        """Stop intake and await the scheduler before bot/database shutdown."""
+        """Cancel in-flight Discord work and leave claimed rows restart-recoverable."""
         self._stopping = True
         self._wake.set()
-        if self._task is not None:
-            await self._task
-            self._task = None
+        task = self._task
+        self._task = None
+        if task is None:
+            return
+        # Discord API awaits can stall indefinitely during network loss.  The
+        # scheduler owns those awaits, so shutdown must cancel that task before
+        # the bot and database it depends on are closed.
+        task.cancel()
+        try:
+            await task
+        except asyncio.CancelledError:
+            pass
+        # A cancelled delivery may have been claimed but not attempted.  Reset
+        # process-local dispatching state while the database is still open so a
+        # restarted worker can resume it without consuming retry budget.
+        self.database.personal_feed_conversations.recover_dispatching()
 
     async def _run(self) -> None:
         """Drain due rows while keeping Discord calls outside DB transactions."""
@@ -128,6 +141,11 @@ class PersonalFeedDiscordDeliveryWorker:
                     allowed_mentions=discord.AllowedMentions.none(),
                 )
                 result_message_id = int(message.id)
+        except asyncio.CancelledError:
+            # Cancellation is lifecycle control, not a Discord failure.  Do not
+            # increment the attempt budget or convert the durable claim into an
+            # error outcome; stop() recovers dispatching rows for restart.
+            raise
         except Exception as exc:
             logger.warning(
                 "Personal-feed Discord delivery failed object=%s", claim.object_id

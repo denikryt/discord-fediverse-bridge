@@ -4,6 +4,8 @@ from __future__ import annotations
 
 from datetime import datetime, timedelta, timezone
 
+import pytest
+
 from src.db import Database
 from src.models import (
     InboundConversationObject,
@@ -315,3 +317,240 @@ def test_community_comment_is_retained_without_personal_feed_delivery_state() ->
         row = session.get(InboundConversationObject, result.object_id)
         assert row.publication_context == "community"
         assert session.query(InboundDiscordDelivery).count() == 0
+
+
+@pytest.mark.asyncio
+async def test_worker_stop_cancels_blocked_discord_call_without_spending_attempt(
+    tmp_path,
+) -> None:
+    """Shutdown interrupts a stalled Discord await and leaves the claim restartable."""
+    import asyncio
+    from types import SimpleNamespace
+
+    from src.models import InboundDiscordDelivery, User
+    from src.personal_feed_discord_delivery_worker import (
+        PersonalFeedDiscordDeliveryWorker,
+    )
+    from src.personal_feeds import PersonalFeedService
+
+    database = Database(f"sqlite:///{tmp_path / 'cancel.sqlite3'}")
+    database.create_all()
+    database.migrate()
+    with database.session() as session:
+        session.add(
+            User(
+                discord_user_id="10",
+                activitypub_username="alice",
+                actor_url="https://bridge.example/users/alice",
+                inbox_url="https://bridge.example/users/alice/inbox",
+                outbox_url="https://bridge.example/users/alice/outbox",
+                followers_url="https://bridge.example/users/alice/followers",
+                public_key_pem="public",
+                private_key_pem="private",
+            )
+        )
+    service = PersonalFeedService(database)
+    service.bind_or_move("10", 1, 10)
+    _root(database)
+    created = database.personal_feed_conversations.admit_create(
+        activity_id="https://remote.example/a/blocked",
+        object_id="https://remote.example/o/blocked",
+        root_object_id="https://bridge.example/o/root",
+        parent_object_id="https://bridge.example/o/root",
+        activity_actor_id="https://remote.example/users/bob",
+        attributed_to_actor_id="https://remote.example/users/bob",
+        actor_name="Bob",
+        content_markdown="blocked",
+        published_at=datetime.now(timezone.utc),
+        source_activity={"type": "Create"},
+        destination_channel_id=10,
+        parent_known=True,
+    )
+    entered = asyncio.Event()
+    never = asyncio.Event()
+
+    async def blocked_fetch(_channel_id: int) -> object:
+        entered.set()
+        await never.wait()
+        raise AssertionError("unreachable")
+
+    bot = SimpleNamespace(get_channel=lambda _id: None, fetch_channel=blocked_fetch)
+    worker = PersonalFeedDiscordDeliveryWorker(
+        database=database, bot=bot, personal_feed_service=service
+    )
+    worker.start()
+    await asyncio.wait_for(entered.wait(), timeout=1)
+
+    await asyncio.wait_for(worker.stop(), timeout=1)
+
+    with database.session() as session:
+        delivery = session.get(InboundDiscordDelivery, created.delivery_id)
+        assert delivery.state == "ready"
+        assert delivery.attempt_count == 0
+
+
+@pytest.mark.asyncio
+async def test_worker_creates_deterministic_thread_and_sends_without_mentions(
+    tmp_path,
+) -> None:
+    """A retained remote reply creates the root thread once and records one Discord message."""
+    from types import SimpleNamespace
+
+    import discord
+
+    from src.models import InboundDiscordDelivery, User
+    from src.personal_feed_discord_delivery_worker import (
+        PersonalFeedDiscordDeliveryWorker,
+    )
+    from src.personal_feeds import PersonalFeedService
+
+    database = Database(f"sqlite:///{tmp_path / 'worker.sqlite3'}")
+    database.create_all()
+    database.migrate()
+    with database.session() as session:
+        session.add(
+            User(
+                discord_user_id="10",
+                activitypub_username="alice",
+                actor_url="https://bridge.example/users/alice",
+                inbox_url="https://bridge.example/users/alice/inbox",
+                outbox_url="https://bridge.example/users/alice/outbox",
+                followers_url="https://bridge.example/users/alice/followers",
+                public_key_pem="public",
+                private_key_pem="private",
+            )
+        )
+    service = PersonalFeedService(database)
+    service.bind_or_move("10", 1, 10)
+    _root(database)
+    created = database.personal_feed_conversations.admit_create(
+        activity_id="https://remote.example/a/1",
+        object_id="https://remote.example/o/1",
+        root_object_id="https://bridge.example/o/root",
+        parent_object_id="https://bridge.example/o/root",
+        activity_actor_id="https://remote.example/users/bob",
+        attributed_to_actor_id="https://remote.example/users/bob",
+        actor_name="Bob",
+        content_markdown="hello @everyone",
+        published_at=datetime.now(timezone.utc),
+        source_activity={"type": "Create"},
+        destination_channel_id=10,
+        parent_known=True,
+    )
+    sent: list[tuple[str, object]] = []
+
+    async def send(content: str, *, allowed_mentions: object) -> object:
+        sent.append((content, allowed_mentions))
+        return SimpleNamespace(id=777)
+
+    thread = SimpleNamespace(send=send)
+
+    async def create_thread(*, name: str) -> object:
+        assert "@" not in name
+        return thread
+
+    root_message = SimpleNamespace(create_thread=create_thread)
+    channel = SimpleNamespace(fetch_message=lambda _id: _async_value(root_message))
+    bot = SimpleNamespace(
+        get_channel=lambda _id: None,
+        fetch_channel=lambda _id: _async_value(channel),
+    )
+    worker = PersonalFeedDiscordDeliveryWorker(
+        database=database, bot=bot, personal_feed_service=service
+    )
+
+    claim = database.personal_feed_conversations.claim_due()[0]
+    await worker._deliver(claim)
+
+    assert sent and sent[0][0].endswith("hello @everyone")
+    assert isinstance(sent[0][1], discord.AllowedMentions)
+    with database.session() as session:
+        delivery = session.get(InboundDiscordDelivery, created.delivery_id)
+        assert delivery.state == "delivered"
+        assert delivery.discord_message_id == 777
+        assert delivery.attempt_count == 1
+
+
+def _async_value(value):
+    """Return one value through an awaitable outer-boundary fake."""
+
+    async def inner():
+        return value
+
+    return inner()
+
+
+@pytest.mark.asyncio
+async def test_worker_rechecks_binding_after_network_lookup_before_discord_send(
+    tmp_path,
+) -> None:
+    """A move during Discord lookup suppresses the side effect without spending retry budget."""
+    from types import SimpleNamespace
+
+    from src.models import InboundDiscordDelivery, User
+    from src.personal_feed_discord_delivery_worker import (
+        PersonalFeedDiscordDeliveryWorker,
+    )
+
+    database = Database(f"sqlite:///{tmp_path / 'stale-race.sqlite3'}")
+    database.create_all()
+    database.migrate()
+    with database.session() as session:
+        session.add(
+            User(
+                discord_user_id="10",
+                activitypub_username="alice",
+                actor_url="https://bridge.example/users/alice",
+                inbox_url="https://bridge.example/users/alice/inbox",
+                outbox_url="https://bridge.example/users/alice/outbox",
+                followers_url="https://bridge.example/users/alice/followers",
+                public_key_pem="public",
+                private_key_pem="private",
+            )
+        )
+    _root(database)
+    created = database.personal_feed_conversations.admit_create(
+        activity_id="https://remote.example/a/race",
+        object_id="https://remote.example/o/race",
+        root_object_id="https://bridge.example/o/root",
+        parent_object_id="https://bridge.example/o/root",
+        activity_actor_id="https://remote.example/users/bob",
+        attributed_to_actor_id="https://remote.example/users/bob",
+        actor_name="Bob",
+        content_markdown="reply",
+        published_at=datetime.now(timezone.utc),
+        source_activity={"type": "Create"},
+        destination_channel_id=10,
+        parent_known=True,
+    )
+    checks = iter((True, False))
+    service = SimpleNamespace(
+        is_active_personal_feed_channel=lambda _user_id, _channel_id: next(checks)
+    )
+    send_calls: list[str] = []
+
+    async def fetch_message(_message_id: int) -> object:
+        return SimpleNamespace(
+            create_thread=lambda **_kwargs: _async_value(
+                SimpleNamespace(
+                    send=lambda *_args, **_kwargs: send_calls.append("send")
+                )
+            )
+        )
+
+    channel = SimpleNamespace(fetch_message=fetch_message)
+    bot = SimpleNamespace(
+        get_channel=lambda _id: None,
+        fetch_channel=lambda _id: _async_value(channel),
+    )
+    worker = PersonalFeedDiscordDeliveryWorker(
+        database=database, bot=bot, personal_feed_service=service
+    )
+
+    await worker._deliver(database.personal_feed_conversations.claim_due()[0])
+
+    assert send_calls == []
+    with database.session() as session:
+        delivery = session.get(InboundDiscordDelivery, created.delivery_id)
+        assert delivery.state == "suppressed"
+        assert delivery.attempt_count == 0

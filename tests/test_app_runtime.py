@@ -122,3 +122,104 @@ async def test_build_runtime_wires_user_actor_follow_service_after_bot_and_close
         "database",
         "lease",
     ]
+
+
+@pytest.mark.asyncio
+async def test_runtime_close_cancels_inflight_personal_feed_delivery_before_dependencies(
+    tmp_path: Path,
+) -> None:
+    """Runtime shutdown interrupts Discord I/O before closing shared dependencies."""
+    import asyncio
+    from datetime import datetime, timezone
+    from types import SimpleNamespace
+
+    from src.db import Database
+    from src.models import InboundDiscordDelivery, PublishedActivityObject, User
+
+    runtime = build_runtime(_settings(tmp_path))
+    with runtime.database.session() as session:
+        user = User(
+            discord_user_id="10",
+            activitypub_username="alice",
+            actor_url="https://bridge.example/users/alice",
+            inbox_url="https://bridge.example/users/alice/inbox",
+            outbox_url="https://bridge.example/users/alice/outbox",
+            followers_url="https://bridge.example/users/alice/followers",
+            public_key_pem="public",
+            private_key_pem="private",
+        )
+        session.add(user)
+        session.flush()
+        session.add(
+            PublishedActivityObject(
+                actor_username="alice",
+                actor_url=user.actor_url,
+                publication_context="personal_feed",
+                community_actor_url=None,
+                activity_id="https://bridge.example/a/root",
+                object_id="https://bridge.example/o/root",
+                kind="post",
+                title=None,
+                body_markdown="root",
+                in_reply_to_object_id=None,
+                conversation_root_object_id="https://bridge.example/o/root",
+                discord_guild_id=1,
+                discord_channel_id=10,
+                discord_message_id=100,
+            )
+        )
+    runtime.bot.event_router.personal_feed_service.bind_or_move("10", 1, 10)
+    admitted = runtime.database.personal_feed_conversations.admit_create(
+        activity_id="https://remote.example/a/blocked",
+        object_id="https://remote.example/o/blocked",
+        root_object_id="https://bridge.example/o/root",
+        parent_object_id="https://bridge.example/o/root",
+        activity_actor_id="https://remote.example/users/bob",
+        attributed_to_actor_id="https://remote.example/users/bob",
+        actor_name="Bob",
+        content_markdown="blocked",
+        published_at=datetime.now(timezone.utc),
+        source_activity={"type": "Create"},
+        destination_channel_id=10,
+        parent_known=True,
+    )
+    entered = asyncio.Event()
+    never = asyncio.Event()
+
+    async def blocked_fetch(_channel_id: int) -> object:
+        entered.set()
+        await never.wait()
+        raise AssertionError("unreachable")
+
+    runtime.personal_feed_discord_delivery_worker.bot = SimpleNamespace(
+        get_channel=lambda _id: None,
+        fetch_channel=blocked_fetch,
+    )
+    close_order: list[str] = []
+    original_database_close = runtime.database.close
+    original_lease_close = runtime.deployment_state_lease.close
+    runtime.user_actor_delivery_worker.stop = AsyncMock(
+        side_effect=lambda: close_order.append("user-worker")
+    )
+    runtime.discord_oauth_client.close = AsyncMock(
+        side_effect=lambda: close_order.append("oauth")
+    )
+    runtime.fedify_gateway.close = AsyncMock(
+        side_effect=lambda: close_order.append("gateway")
+    )
+    runtime.database.close = Mock(
+        side_effect=lambda: (close_order.append("database"), original_database_close())
+    )
+    runtime.deployment_state_lease.close = Mock(
+        side_effect=lambda: (close_order.append("lease"), original_lease_close())
+    )
+    runtime.personal_feed_discord_delivery_worker.start()
+    await asyncio.wait_for(entered.wait(), timeout=1)
+
+    await asyncio.wait_for(runtime.close(), timeout=1)
+
+    assert close_order == ["user-worker", "oauth", "gateway", "database", "lease"]
+    with Database(f"sqlite:///{tmp_path / 'bridge.db'}").session() as session:
+        delivery = session.get(InboundDiscordDelivery, admitted.delivery_id)
+        assert delivery.state == "ready"
+        assert delivery.attempt_count == 0

@@ -158,6 +158,11 @@ class PersonalFeedConversationRuntime:
         )
         if root is None:
             return PersonalFeedConversationResult("ignored", "unknown_thread")
+        # A terminally deleted root no longer accepts outbound Discord replies.
+        # The thread mapping remains archival, but it must not mint new objects
+        # after the conversation owner deleted the root publication.
+        if root.deleted_at is not None:
+            return PersonalFeedConversationResult("ignored", "root_deleted")
         guild_id = getattr(getattr(message, "guild", None), "id", None)
         if not self.bridge_policy_service.is_discord_guild_allowed(guild_id):
             return PersonalFeedConversationResult("ignored", "guild_disallowed")
