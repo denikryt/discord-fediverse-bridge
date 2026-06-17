@@ -22,7 +22,9 @@ def test_one_public_base_url_drives_all_public_endpoints() -> None:
 
     assert settings.normalized_public_base_url == "https://bridge.example.com/base"
     assert settings.normalized_fedify_origin == "https://bridge.example.com/base"
-    assert settings.normalized_public_bridge_base_url == "https://bridge.example.com/base"
+    assert (
+        settings.normalized_public_bridge_base_url == "https://bridge.example.com/base"
+    )
     assert settings.resolved_discord_oauth_redirect_uri == (
         "https://bridge.example.com/base/auth/discord/callback"
     )

@@ -101,7 +101,9 @@ def test_blocklisted_guild_short_circuits_before_registration_lookup() -> None:
     database = MagicMock()
     result = evaluate_policy(
         REGISTERED_GUILD_COMMAND_ACCESS,
-        _input(guild_id=2, snapshot=_snapshot(blocked_guilds=("2",)), database=database),
+        _input(
+            guild_id=2, snapshot=_snapshot(blocked_guilds=("2",)), database=database
+        ),
     )
 
     assert result.reason == "guild_not_allowed"
@@ -117,15 +119,21 @@ def test_empty_effective_allowlist_allows_any_non_blocklisted_guild() -> None:
 def test_dynamic_or_bootstrap_allowlist_permits_listed_guild_only() -> None:
     snapshot = _snapshot(allowed_guilds=("2",))
 
-    assert evaluate_policy(GUILD_COMMAND_ACCESS, _input(guild_id=2, snapshot=snapshot)).allowed
-    denied = evaluate_policy(GUILD_COMMAND_ACCESS, _input(guild_id=3, snapshot=snapshot))
+    assert evaluate_policy(
+        GUILD_COMMAND_ACCESS, _input(guild_id=2, snapshot=snapshot)
+    ).allowed
+    denied = evaluate_policy(
+        GUILD_COMMAND_ACCESS, _input(guild_id=3, snapshot=snapshot)
+    )
     assert denied.reason == "guild_not_allowed"
 
 
 def test_blocklist_overrides_allowlist_for_same_guild() -> None:
     snapshot = _snapshot(allowed_guilds=("2",), blocked_guilds=("2",))
 
-    result = evaluate_policy(GUILD_COMMAND_ACCESS, _input(guild_id=2, snapshot=snapshot))
+    result = evaluate_policy(
+        GUILD_COMMAND_ACCESS, _input(guild_id=2, snapshot=snapshot)
+    )
 
     assert result.reason == "guild_not_allowed"
 

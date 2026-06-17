@@ -4,7 +4,7 @@ from __future__ import annotations
 from src.bridge_policy import BridgePolicyService
 
 from types import SimpleNamespace
-from unittest.mock import AsyncMock, Mock, call
+from unittest.mock import AsyncMock, Mock
 
 import pytest
 
@@ -35,8 +35,10 @@ async def test_subscribe_operation_rejects_unregistered_user() -> None:
             community_name="hackers",
             numeric_id=777,
             community_handle=f"!hackers@{LEMMY_EXAMPLE_DOMAIN}",
-
-            policy_service=BridgePolicyService(settings=SimpleNamespace(), repository=database.bridge_policy_entries),),
+            policy_service=BridgePolicyService(
+                settings=SimpleNamespace(), repository=database.bridge_policy_entries
+            ),
+        ),
     )
 
     assert result.applied is False
@@ -55,11 +57,13 @@ async def test_subscribe_operation_rejects_accepted_subscription() -> None:
     database = Mock()
     database.bridge_policy_entries.list_all_active.return_value = []
     database.users.get_user_by_discord_user_id.return_value = SimpleNamespace(id=1)
-    database.remote_subscriptions.get_subscription_by_channel.return_value = SimpleNamespace(
-        status="accepted",
-        community_handle=f"!hackers@{LEMMY_EXAMPLE_DOMAIN}",
-        lemmy_community_name="hackers",
-        lemmy_community_actor_id=community_actor_url,
+    database.remote_subscriptions.get_subscription_by_channel.return_value = (
+        SimpleNamespace(
+            status="accepted",
+            community_handle=f"!hackers@{LEMMY_EXAMPLE_DOMAIN}",
+            lemmy_community_name="hackers",
+            lemmy_community_actor_id=community_actor_url,
+        )
     )
     fedify_gateway = AsyncMock()
 
@@ -75,13 +79,18 @@ async def test_subscribe_operation_rejects_accepted_subscription() -> None:
             community_name="hackers",
             numeric_id=777,
             community_handle=f"!hackers@{LEMMY_EXAMPLE_DOMAIN}",
-
-            policy_service=BridgePolicyService(settings=SimpleNamespace(), repository=database.bridge_policy_entries),),
+            policy_service=BridgePolicyService(
+                settings=SimpleNamespace(), repository=database.bridge_policy_entries
+            ),
+        ),
     )
 
     assert result.applied is False
     assert result.reason == "channel_subscription_already_accepted"
-    assert result.message == f"Channel <#123> is already subscribed to **!hackers@{LEMMY_EXAMPLE_DOMAIN}**."
+    assert (
+        result.message
+        == f"Channel <#123> is already subscribed to **!hackers@{LEMMY_EXAMPLE_DOMAIN}**."
+    )
     fedify_gateway.follow_community.assert_not_awaited()
     database.remote_subscriptions.create_subscription.assert_not_called()
 
@@ -93,11 +102,13 @@ async def test_subscribe_operation_rejects_pending_subscription() -> None:
     database = Mock()
     database.bridge_policy_entries.list_all_active.return_value = []
     database.users.get_user_by_discord_user_id.return_value = SimpleNamespace(id=1)
-    database.remote_subscriptions.get_subscription_by_channel.return_value = SimpleNamespace(
-        status="pending",
-        community_handle=f"!hackers@{LEMMY_EXAMPLE_DOMAIN}",
-        lemmy_community_name="hackers",
-        lemmy_community_actor_id=community_actor_url,
+    database.remote_subscriptions.get_subscription_by_channel.return_value = (
+        SimpleNamespace(
+            status="pending",
+            community_handle=f"!hackers@{LEMMY_EXAMPLE_DOMAIN}",
+            lemmy_community_name="hackers",
+            lemmy_community_actor_id=community_actor_url,
+        )
     )
     fedify_gateway = AsyncMock()
 
@@ -113,8 +124,10 @@ async def test_subscribe_operation_rejects_pending_subscription() -> None:
             community_name="hackers",
             numeric_id=777,
             community_handle=f"!hackers@{LEMMY_EXAMPLE_DOMAIN}",
-
-            policy_service=BridgePolicyService(settings=SimpleNamespace(), repository=database.bridge_policy_entries),),
+            policy_service=BridgePolicyService(
+                settings=SimpleNamespace(), repository=database.bridge_policy_entries
+            ),
+        ),
     )
 
     assert result.applied is False
@@ -155,8 +168,10 @@ async def test_subscribe_creates_bridge_follow_when_none_exists() -> None:
             community_name="hackers",
             numeric_id=777,
             community_handle=f"!hackers@{LEMMY_EXAMPLE_DOMAIN}",
-
-            policy_service=BridgePolicyService(settings=SimpleNamespace(), repository=database.bridge_policy_entries),),
+            policy_service=BridgePolicyService(
+                settings=SimpleNamespace(), repository=database.bridge_policy_entries
+            ),
+        ),
     )
 
     assert result.applied is True
@@ -193,11 +208,13 @@ async def test_subscribe_reuses_existing_bridge_follow_when_accepted() -> None:
     # No channel subscription for this specific channel yet.
     database.remote_subscriptions.get_subscription_by_channel.return_value = None
     # Bridge-actor follow already accepted for this community.
-    database.bridge_actor_follows.get_bridge_actor_follow.return_value = SimpleNamespace(
-        community_actor_id=community_actor_url,
-        status="accepted",
-        follow_activity_id=f"https://{BRIDGE_EXAMPLE_DOMAIN}/activities/follow/1",
-        community_inbox_url=f"{community_actor_url}/inbox",
+    database.bridge_actor_follows.get_bridge_actor_follow.return_value = (
+        SimpleNamespace(
+            community_actor_id=community_actor_url,
+            status="accepted",
+            follow_activity_id=f"https://{BRIDGE_EXAMPLE_DOMAIN}/activities/follow/1",
+            community_inbox_url=f"{community_actor_url}/inbox",
+        )
     )
     fedify_gateway = AsyncMock()
 
@@ -213,8 +230,10 @@ async def test_subscribe_reuses_existing_bridge_follow_when_accepted() -> None:
             community_name="hackers",
             numeric_id=777,
             community_handle=f"!hackers@{LEMMY_EXAMPLE_DOMAIN}",
-
-            policy_service=BridgePolicyService(settings=SimpleNamespace(), repository=database.bridge_policy_entries),),
+            policy_service=BridgePolicyService(
+                settings=SimpleNamespace(), repository=database.bridge_policy_entries
+            ),
+        ),
     )
 
     assert result.applied is True
@@ -246,11 +265,13 @@ async def test_subscribe_reuses_existing_bridge_follow_when_pending() -> None:
     database.users.get_user_by_discord_user_id.return_value = SimpleNamespace(id=1)
     database.remote_subscriptions.get_subscription_by_channel.return_value = None
     # Bridge-actor follow is still pending for this community.
-    database.bridge_actor_follows.get_bridge_actor_follow.return_value = SimpleNamespace(
-        community_actor_id=community_actor_url,
-        status="pending",
-        follow_activity_id=f"https://{BRIDGE_EXAMPLE_DOMAIN}/activities/follow/1",
-        community_inbox_url=f"{community_actor_url}/inbox",
+    database.bridge_actor_follows.get_bridge_actor_follow.return_value = (
+        SimpleNamespace(
+            community_actor_id=community_actor_url,
+            status="pending",
+            follow_activity_id=f"https://{BRIDGE_EXAMPLE_DOMAIN}/activities/follow/1",
+            community_inbox_url=f"{community_actor_url}/inbox",
+        )
     )
     fedify_gateway = AsyncMock()
 
@@ -266,8 +287,10 @@ async def test_subscribe_reuses_existing_bridge_follow_when_pending() -> None:
             community_name="hackers",
             numeric_id=777,
             community_handle=f"!hackers@{LEMMY_EXAMPLE_DOMAIN}",
-
-            policy_service=BridgePolicyService(settings=SimpleNamespace(), repository=database.bridge_policy_entries),),
+            policy_service=BridgePolicyService(
+                settings=SimpleNamespace(), repository=database.bridge_policy_entries
+            ),
+        ),
     )
 
     assert result.applied is True
@@ -314,13 +337,18 @@ async def test_subscribe_operation_marks_failed_when_follow_dispatch_fails() -> 
             community_name="hackers",
             numeric_id=777,
             community_handle=f"!hackers@{LEMMY_EXAMPLE_DOMAIN}",
-
-            policy_service=BridgePolicyService(settings=SimpleNamespace(), repository=database.bridge_policy_entries),),
+            policy_service=BridgePolicyService(
+                settings=SimpleNamespace(), repository=database.bridge_policy_entries
+            ),
+        ),
     )
 
     assert result.applied is False
     assert result.reason == "follow_dispatch_failed"
-    assert result.message == "Could not subscribe <#123> to **hackers** because the bridge Follow request failed."
+    assert (
+        result.message
+        == "Could not subscribe <#123> to **hackers** because the bridge Follow request failed."
+    )
     # Both a failed bridge follow row and a failed channel subscription row are written.
     database.bridge_actor_follows.create_bridge_actor_follow.assert_called_once_with(
         community_actor_id=community_actor_url,
@@ -349,18 +377,22 @@ async def test_subscribe_operation_retries_failed_subscription() -> None:
     database.bridge_policy_entries.list_all_active.return_value = []
     database.users.get_user_by_discord_user_id.return_value = SimpleNamespace(id=1)
     # The channel has an existing failed subscription.
-    database.remote_subscriptions.get_subscription_by_channel.return_value = SimpleNamespace(
-        status="failed",
-        community_handle=f"!hackers@{LEMMY_EXAMPLE_DOMAIN}",
-        lemmy_community_name="hackers",
-        lemmy_community_actor_id=community_actor_url,
+    database.remote_subscriptions.get_subscription_by_channel.return_value = (
+        SimpleNamespace(
+            status="failed",
+            community_handle=f"!hackers@{LEMMY_EXAMPLE_DOMAIN}",
+            lemmy_community_name="hackers",
+            lemmy_community_actor_id=community_actor_url,
+        )
     )
     # The bridge follow is also failed.
-    database.bridge_actor_follows.get_bridge_actor_follow.return_value = SimpleNamespace(
-        community_actor_id=community_actor_url,
-        status="failed",
-        follow_activity_id=None,
-        community_inbox_url=None,
+    database.bridge_actor_follows.get_bridge_actor_follow.return_value = (
+        SimpleNamespace(
+            community_actor_id=community_actor_url,
+            status="failed",
+            follow_activity_id=None,
+            community_inbox_url=None,
+        )
     )
     fedify_gateway = AsyncMock()
     fedify_gateway.follow_community.return_value = SimpleNamespace(
@@ -381,14 +413,18 @@ async def test_subscribe_operation_retries_failed_subscription() -> None:
             community_name="hackers",
             numeric_id=777,
             community_handle=f"!hackers@{LEMMY_EXAMPLE_DOMAIN}",
-
-            policy_service=BridgePolicyService(settings=SimpleNamespace(), repository=database.bridge_policy_entries),),
+            policy_service=BridgePolicyService(
+                settings=SimpleNamespace(), repository=database.bridge_policy_entries
+            ),
+        ),
     )
 
     assert result.applied is True
     # Both stale rows must be cleared.
     database.remote_subscriptions.delete_subscription.assert_called_once_with(123)
-    database.bridge_actor_follows.delete_bridge_actor_follow.assert_called_once_with(community_actor_url)
+    database.bridge_actor_follows.delete_bridge_actor_follow.assert_called_once_with(
+        community_actor_url
+    )
     # Fresh bridge follow and channel subscription rows are created.
     database.bridge_actor_follows.create_bridge_actor_follow.assert_called_once_with(
         community_actor_id=community_actor_url,

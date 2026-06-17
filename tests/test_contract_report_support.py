@@ -27,7 +27,11 @@ def test_passive_collector_filters_cases_and_records_terminal_statuses() -> None
     collector.pytest_collection_modifyitems(items)
     collector.pytest_runtest_logreport(
         SimpleNamespace(
-            nodeid="node::accepted", failed=False, skipped=False, when="call", passed=True
+            nodeid="node::accepted",
+            failed=False,
+            skipped=False,
+            when="call",
+            passed=True,
         )
     )
 

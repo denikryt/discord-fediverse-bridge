@@ -95,7 +95,9 @@ def test_service_rejects_duplicate_forum_binding(
 ) -> None:
     """A forum channel already bound to one local community cannot be reused."""
     database = build_database(tmp_path, "local-community-registration-duplicate.db")
-    service = LocalCommunityService(database=database, base_url="https://bridge.example")
+    service = LocalCommunityService(
+        database=database, base_url="https://bridge.example"
+    )
     service.create_local_community(
         discord_guild_id=10,
         discord_forum_channel_id=100,
@@ -120,12 +122,13 @@ def test_service_rejects_duplicate_forum_binding(
         raise AssertionError("Expected duplicate forum binding to fail")
 
 
-
 def test_duplicate_slug_does_not_modify_existing_owner_or_create_new_row(
     tmp_path: Path,
 ) -> None:
     """A duplicate slug failure must not overwrite the existing community owner."""
-    database = build_database(tmp_path, "local-community-registration-duplicate-slug.db")
+    database = build_database(
+        tmp_path, "local-community-registration-duplicate-slug.db"
+    )
     first = create_community_operation(
         CreateCommunityInput(
             database=database,
@@ -156,7 +159,9 @@ def test_duplicate_slug_does_not_modify_existing_owner_or_create_new_row(
     assert second.applied is False
     assert second.reason == "validation_failed"
     assert created.created_by_discord_user_id == "123"
-    assert database.local_communities.get_local_community_by_forum_channel_id(200) is None
+    assert (
+        database.local_communities.get_local_community_by_forum_channel_id(200) is None
+    )
 
 
 def test_invalid_slug_does_not_create_partial_owned_row(tmp_path: Path) -> None:
@@ -201,7 +206,9 @@ def test_blank_name_does_not_create_partial_owned_row(tmp_path: Path) -> None:
     assert database.local_communities.list_local_communities() == []
 
 
-def test_create_local_community_allows_missing_or_blank_description(tmp_path: Path) -> None:
+def test_create_local_community_allows_missing_or_blank_description(
+    tmp_path: Path,
+) -> None:
     """Create-community now treats omitted and blank descriptions as NULL."""
     database = build_database(tmp_path, "local-community-registration-null-summary.db")
 
@@ -232,8 +239,12 @@ def test_create_local_community_allows_missing_or_blank_description(tmp_path: Pa
 
     assert omitted.applied is True
     assert blank.applied is True
-    assert database.local_communities.get_local_community_by_slug("cats").summary is None
-    assert database.local_communities.get_local_community_by_slug("dogs").summary is None
+    assert (
+        database.local_communities.get_local_community_by_slug("cats").summary is None
+    )
+    assert (
+        database.local_communities.get_local_community_by_slug("dogs").summary is None
+    )
 
 
 def test_create_local_community_rejects_too_long_description(tmp_path: Path) -> None:
@@ -263,7 +274,6 @@ def test_existing_database_migration_adds_nullable_owner_column(tmp_path: Path) 
     db_path = tmp_path / "legacy-local-communities.db"
     engine = create_engine(f"sqlite:///{db_path}", future=True)
     with engine.begin() as conn:
-
         conn.execute(
             text(
                 """
@@ -308,8 +318,16 @@ def test_existing_database_migration_adds_nullable_owner_column(tmp_path: Path) 
             )
         )
 
-        conn.execute(text("CREATE TABLE local_community_threads (id INTEGER PRIMARY KEY AUTOINCREMENT)"))
-        conn.execute(text("CREATE TABLE local_community_messages (id INTEGER PRIMARY KEY AUTOINCREMENT)"))
+        conn.execute(
+            text(
+                "CREATE TABLE local_community_threads (id INTEGER PRIMARY KEY AUTOINCREMENT)"
+            )
+        )
+        conn.execute(
+            text(
+                "CREATE TABLE local_community_messages (id INTEGER PRIMARY KEY AUTOINCREMENT)"
+            )
+        )
         conn.execute(
             text(
                 """
@@ -357,7 +375,13 @@ def test_existing_database_migration_adds_nullable_owner_column(tmp_path: Path) 
     assert migrated.created_by_discord_user_id is None
     assert migrated.display_name == "Cats"
     with database.engine.connect() as conn:
-        summary_column = [row for row in conn.execute(text("PRAGMA table_info(local_communities)")).fetchall() if row[1] == "summary"][0]
+        summary_column = [
+            row
+            for row in conn.execute(
+                text("PRAGMA table_info(local_communities)")
+            ).fetchall()
+            if row[1] == "summary"
+        ][0]
     assert summary_column[3] == 0
 
 
@@ -376,13 +400,23 @@ def test_owner_column_migration_is_idempotent(tmp_path: Path) -> None:
     assert len(owner_columns) == 1
 
 
-def test_summary_nullable_migration_preserves_unique_constraints(tmp_path: Path) -> None:
+def test_summary_nullable_migration_preserves_unique_constraints(
+    tmp_path: Path,
+) -> None:
     """Rebuilt local_communities table must keep identity uniqueness constraints."""
     db_path = tmp_path / "summary-nullable-constraints.db"
     engine = create_engine(f"sqlite:///{db_path}", future=True)
     with engine.begin() as conn:
-        conn.execute(text("CREATE TABLE local_community_threads (id INTEGER PRIMARY KEY AUTOINCREMENT)"))
-        conn.execute(text("CREATE TABLE local_community_messages (id INTEGER PRIMARY KEY AUTOINCREMENT)"))
+        conn.execute(
+            text(
+                "CREATE TABLE local_community_threads (id INTEGER PRIMARY KEY AUTOINCREMENT)"
+            )
+        )
+        conn.execute(
+            text(
+                "CREATE TABLE local_community_messages (id INTEGER PRIMARY KEY AUTOINCREMENT)"
+            )
+        )
         conn.execute(
             text(
                 """
@@ -444,7 +478,13 @@ def test_summary_nullable_migration_preserves_unique_constraints(tmp_path: Path)
     database.migrate()
 
     with database.engine.begin() as conn:
-        summary_column = [row for row in conn.execute(text("PRAGMA table_info(local_communities)")).fetchall() if row[1] == "summary"][0]
+        summary_column = [
+            row
+            for row in conn.execute(
+                text("PRAGMA table_info(local_communities)")
+            ).fetchall()
+            if row[1] == "summary"
+        ][0]
         assert summary_column[3] == 0
         for duplicate_sql in (
             """
@@ -477,7 +517,9 @@ def test_summary_nullable_migration_preserves_unique_constraints(tmp_path: Path)
             except Exception as exc:
                 assert "UNIQUE" in str(exc).upper()
             else:
-                raise AssertionError("Expected migrated unique constraint to reject duplicate identity")
+                raise AssertionError(
+                    "Expected migrated unique constraint to reject duplicate identity"
+                )
 
 
 def test_fresh_database_local_community_summary_is_nullable(tmp_path: Path) -> None:
@@ -485,6 +527,12 @@ def test_fresh_database_local_community_summary_is_nullable(tmp_path: Path) -> N
     database = build_database(tmp_path, "fresh-null-summary.db")
 
     with database.engine.connect() as conn:
-        summary_column = [row for row in conn.execute(text("PRAGMA table_info(local_communities)")).fetchall() if row[1] == "summary"][0]
+        summary_column = [
+            row
+            for row in conn.execute(
+                text("PRAGMA table_info(local_communities)")
+            ).fetchall()
+            if row[1] == "summary"
+        ][0]
 
     assert summary_column[3] == 0

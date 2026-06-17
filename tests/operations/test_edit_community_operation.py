@@ -41,7 +41,17 @@ def _community(
     return database.local_communities.get_local_community_by_slug(slug)
 
 
-def _edit(database: object, *, user_id: str = "111", guild_id: int | None = 10, slug: str = "cats", display_name: str = "New Cats", summary: str | None = "New summary", status: str = "active", settings: SimpleNamespace | None = None):
+def _edit(
+    database: object,
+    *,
+    user_id: str = "111",
+    guild_id: int | None = 10,
+    slug: str = "cats",
+    display_name: str = "New Cats",
+    summary: str | None = "New summary",
+    status: str = "active",
+    settings: SimpleNamespace | None = None,
+):
     """Execute the edit operation with default owner/current-guild inputs."""
     return edit_community_operation(
         EditCommunityInput(
@@ -53,8 +63,11 @@ def _edit(database: object, *, user_id: str = "111", guild_id: int | None = 10, 
             display_name=display_name,
             summary=summary,
             status=status,
-
-            policy_service=BridgePolicyService(settings=settings or _settings(), repository=database.bridge_policy_entries),)
+            policy_service=BridgePolicyService(
+                settings=settings or _settings(),
+                repository=database.bridge_policy_entries,
+            ),
+        )
     )
 
 
@@ -118,7 +131,9 @@ def test_owner_disables_and_reenables_community(tmp_path: Path) -> None:
 
     disabled = _edit(database, status="disabled")
     after_disabled = database.local_communities.get_local_community_by_slug("cats")
-    enabled = _edit(database, status="active", display_name="New Cats", summary="New summary")
+    enabled = _edit(
+        database, status="active", display_name="New Cats", summary="New summary"
+    )
     after_enabled = database.local_communities.get_local_community_by_slug("cats")
 
     assert disabled.applied is True
@@ -160,7 +175,9 @@ def test_display_name_and_summary_validation_do_not_mutate_db(tmp_path: Path) ->
     unchanged = database.local_communities.get_local_community_by_slug("cats")
 
     assert empty_name.message == "Community display name is required."
-    assert long_name.message == "Community display name must be 100 characters or fewer."
+    assert (
+        long_name.message == "Community display name must be 100 characters or fewer."
+    )
     assert long_summary.message == "Community summary must be 1000 characters or fewer."
     assert unchanged.display_name == "Cats"
     assert unchanged.summary == "Old summary"

@@ -150,7 +150,9 @@ class SubscribeCommunityCommandHandler:
         try:
             resolved = await self._resolve_selected(request)
         except CommunityResolutionError as error:
-            logger.warning("Failed to resolve subscribe target %s: %s", request.community, error)
+            logger.warning(
+                "Failed to resolve subscribe target %s: %s", request.community, error
+            )
             await request.interaction.response.send_message(str(error), ephemeral=True)
             return None
 
@@ -179,14 +181,20 @@ class SubscribeCommunityCommandHandler:
 
         raw_instance = (request.instance_domain or "").strip()
         try:
-            selected_origin = normalize_instance_domain(raw_instance) if raw_instance else None
+            selected_origin = (
+                normalize_instance_domain(raw_instance) if raw_instance else None
+            )
         except CommunityResolutionError as error:
             await request.interaction.response.send_message(str(error), ephemeral=True)
             return None
 
         # Encoded direct-mode payloads stay scoped to the selected instance.
         # Plain Lemmyverse actor URLs infer their candidate origin from the URL.
-        candidate_origin = selected_origin if ("|" in request.community and selected_origin is not None) else inferred_origin
+        candidate_origin = (
+            selected_origin
+            if ("|" in request.community and selected_origin is not None)
+            else inferred_origin
+        )
         return selected_origin, candidate_origin
 
     async def _ensure_origin_allowed(
@@ -209,7 +217,9 @@ class SubscribeCommunityCommandHandler:
         await request.interaction.response.send_message(message, ephemeral=True)
         return False
 
-    async def _resolve_selected(self, request: SubscribeCommunityRequest) -> ResolvedCommunity:
+    async def _resolve_selected(
+        self, request: SubscribeCommunityRequest
+    ) -> ResolvedCommunity:
         """Resolve the selected community through the existing discovery path."""
         resolver = self._resolve_selected_community_getter()
         return await resolver(
@@ -238,7 +248,9 @@ class SubscribeCommunityCommandHandler:
 
         client = self._lemmy_client_cls_getter()(target.resolved_origin)
         try:
-            numeric_id = await client.resolve_community_id(name=resolved.name or resolved.actor_id)
+            numeric_id = await client.resolve_community_id(
+                name=resolved.name or resolved.actor_id
+            )
         except Exception:
             logger.exception("Failed to resolve community ID for %s", resolved.actor_id)
             await request.interaction.response.send_message(
@@ -287,7 +299,9 @@ class SubscribeCommunityCommandHandler:
                 remote_subscription_blocking_statuses={"pending", "accepted"},
             )
         except ForumPlacementError as error:
-            await request.interaction.response.send_message(error.message, ephemeral=True)
+            await request.interaction.response.send_message(
+                error.message, ephemeral=True
+            )
             return None
 
     async def _run_with_placement_cleanup(
@@ -314,7 +328,9 @@ class SubscribeCommunityCommandHandler:
             raise
 
         if getattr(result, "reason", None) == "follow_dispatch_failed":
-            logger.error("Failed to send follow for community %s", target.resolved.actor_id)
+            logger.error(
+                "Failed to send follow for community %s", target.resolved.actor_id
+            )
         if not result.applied:
             await cleanup_created_forum_channel(
                 placement,
@@ -332,7 +348,11 @@ class SubscribeCommunityCommandHandler:
                 guild=request.interaction.guild,
                 channel=placement.channel,
             )
-            logger.info("Subscribed channel %s to community %s", placement.channel.id, target.resolved.actor_id)
+            logger.info(
+                "Subscribed channel %s to community %s",
+                placement.channel.id,
+                target.resolved.actor_id,
+            )
 
         await self._send_operation_response(request, target, placement, result)
 
@@ -410,7 +430,8 @@ class SubscribeCommunityCommandHandler:
                 actor_id=target.resolved.actor_id,
                 name=target.resolved.name,
                 handle=target.resolved.handle,
-                waiting_for_accept="Waiting for federation acceptance." in result.message,
+                waiting_for_accept="Waiting for federation acceptance."
+                in result.message,
             )
             send_kwargs["allowed_mentions"] = _no_ping_allowed_mentions()
         await request.interaction.response.send_message(message, **send_kwargs)

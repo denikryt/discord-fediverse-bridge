@@ -36,8 +36,12 @@ def record_discord_placement_snapshot(
         discord_guild_id = getattr(guild, "id", None)
     database.discord_directory.upsert_channel_snapshot(
         discord_channel_id=int(channel.id),
-        discord_guild_id=int(discord_guild_id) if discord_guild_id is not None else None,
-        channel_name=str(getattr(channel, "name", "Unknown forum channel") or "Unknown forum channel"),
+        discord_guild_id=int(discord_guild_id)
+        if discord_guild_id is not None
+        else None,
+        channel_name=str(
+            getattr(channel, "name", "Unknown forum channel") or "Unknown forum channel"
+        ),
         channel_type=_channel_type_label(channel),
     )
 

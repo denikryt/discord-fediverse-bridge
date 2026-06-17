@@ -36,7 +36,9 @@ class CreateCommunityResult:
     reason: str
 
 
-def create_community_operation(operation_input: CreateCommunityInput) -> CreateCommunityResult:
+def create_community_operation(
+    operation_input: CreateCommunityInput,
+) -> CreateCommunityResult:
     """Validate one local-community creation request and persist the result."""
     # Local-community creation is available to registered users after the
     # command-layer onboarding guard. The historical operator allowlist remains

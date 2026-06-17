@@ -8,7 +8,6 @@ import json
 import os
 from dataclasses import dataclass
 
-import httpx
 import pytest
 
 from src.bridge_policy import BridgePolicySnapshot, EffectivePolicyEntry, PolicyType
@@ -149,7 +148,9 @@ def test_parse_lemmyverse_communities_supports_lemmyverse_summary_wrapper() -> N
         {
             "crawled_communities": 1,
             "subscribers": 10,
-            "community_details": [_row("technology", "lemmy.world", title="Technology")],
+            "community_details": [
+                _row("technology", "lemmy.world", title="Technology")
+            ],
         }
     )
 
@@ -224,7 +225,9 @@ async def test_autocomplete_ranking_limit_and_allowlist(tmp_path) -> None:
             _row("mytechnology", "lemmy.world", title="My Technology"),
         )
     )
-    cache = LemmyverseCommunityCache(http_client_factory=factory, cache_path=tmp_path / "lemmyverse.json")
+    cache = LemmyverseCommunityCache(
+        http_client_factory=factory, cache_path=tmp_path / "lemmyverse.json"
+    )
 
     await cache.get_entries()
 
@@ -234,17 +237,19 @@ async def test_autocomplete_ranking_limit_and_allowlist(tmp_path) -> None:
         policy_snapshot=_policy_snapshot("lemmy.world"),
     )
 
-    assert choices[0] == ("Technology (technology@lemmy.world)", "https://lemmy.world/c/technology")
+    assert choices[0] == (
+        "Technology (technology@lemmy.world)",
+        "https://lemmy.world/c/technology",
+    )
     assert all("blocked.example" not in choice[1] for choice in choices)
 
 
 @pytest.mark.asyncio
-async def test_autocomplete_empty_query_orders_by_monthly_active_users_and_caps_choices(tmp_path) -> None:
+async def test_autocomplete_empty_query_orders_by_monthly_active_users_and_caps_choices(
+    tmp_path,
+) -> None:
     """Empty global query returns the most active communities before quieter rows."""
-    rows = [
-        _row(f"community{i}", "lemmy.world", active_month=i)
-        for i in range(30)
-    ]
+    rows = [_row(f"community{i}", "lemmy.world", active_month=i) for i in range(30)]
     cache = LemmyverseCommunityCache(
         http_client_factory=_FakeClientFactory(_payload(*rows)),
         cache_path=tmp_path / "lemmyverse.json",
@@ -252,7 +257,9 @@ async def test_autocomplete_empty_query_orders_by_monthly_active_users_and_caps_
 
     await cache.get_entries()
 
-    choices = await autocomplete_lemmyverse_communities(cache, current="", policy_snapshot=_policy_snapshot())
+    choices = await autocomplete_lemmyverse_communities(
+        cache, current="", policy_snapshot=_policy_snapshot()
+    )
 
     assert len(choices) == 25
     assert choices[0][1] == "https://lemmy.world/c/community29"
@@ -260,7 +267,9 @@ async def test_autocomplete_empty_query_orders_by_monthly_active_users_and_caps_
 
 
 @pytest.mark.asyncio
-async def test_autocomplete_filtered_query_orders_matches_by_monthly_active_users(tmp_path) -> None:
+async def test_autocomplete_filtered_query_orders_matches_by_monthly_active_users(
+    tmp_path,
+) -> None:
     """Filtered global results still sort by monthly-active users descending."""
     cache = LemmyverseCommunityCache(
         http_client_factory=_FakeClientFactory(
@@ -275,7 +284,9 @@ async def test_autocomplete_filtered_query_orders_matches_by_monthly_active_user
 
     await cache.get_entries()
 
-    choices = await autocomplete_lemmyverse_communities(cache, current="python", policy_snapshot=_policy_snapshot())
+    choices = await autocomplete_lemmyverse_communities(
+        cache, current="python", policy_snapshot=_policy_snapshot()
+    )
 
     assert [choice[1] for choice in choices] == [
         "https://lemmy.world/c/python-large",
@@ -324,11 +335,19 @@ async def test_cache_ttl_stale_failure_and_cold_failure(tmp_path) -> None:
 async def test_cache_coalesces_concurrent_refreshes(tmp_path) -> None:
     """Concurrent cold autocomplete requests share one feed download."""
     factory = _FakeClientFactory(_payload(_row("one", "lemmy.world")))
-    cache = LemmyverseCommunityCache(http_client_factory=factory, cache_path=tmp_path / "lemmyverse.json")
+    cache = LemmyverseCommunityCache(
+        http_client_factory=factory, cache_path=tmp_path / "lemmyverse.json"
+    )
 
-    results = await asyncio.gather(cache.get_entries(), cache.get_entries(), cache.get_entries())
+    results = await asyncio.gather(
+        cache.get_entries(), cache.get_entries(), cache.get_entries()
+    )
 
-    assert [[entry.name for entry in result] for result in results] == [["one"], ["one"], ["one"]]
+    assert [[entry.name for entry in result] for result in results] == [
+        ["one"],
+        ["one"],
+        ["one"],
+    ]
     assert factory.calls == 1
 
 
@@ -374,9 +393,13 @@ class _BlockingClientFactory:
 async def test_autocomplete_does_not_wait_for_cold_cache_refresh(tmp_path) -> None:
     """Cold global autocomplete returns quickly and refreshes for later calls."""
     factory = _BlockingClientFactory(_payload(_row("one", "lemmy.world")))
-    cache = LemmyverseCommunityCache(http_client_factory=factory, cache_path=tmp_path / "lemmyverse.json")
+    cache = LemmyverseCommunityCache(
+        http_client_factory=factory, cache_path=tmp_path / "lemmyverse.json"
+    )
 
-    choices = await autocomplete_lemmyverse_communities(cache, current="one", policy_snapshot=_policy_snapshot())
+    choices = await autocomplete_lemmyverse_communities(
+        cache, current="one", policy_snapshot=_policy_snapshot()
+    )
 
     assert choices == []
     await asyncio.wait_for(factory.started.wait(), timeout=1)
@@ -385,7 +408,9 @@ async def test_autocomplete_does_not_wait_for_cold_cache_refresh(tmp_path) -> No
     # A second autocomplete while refresh is still in flight must not start a
     # second full-feed download. It remains empty until the background task has
     # parsed the first response.
-    choices = await autocomplete_lemmyverse_communities(cache, current="one", policy_snapshot=_policy_snapshot())
+    choices = await autocomplete_lemmyverse_communities(
+        cache, current="one", policy_snapshot=_policy_snapshot()
+    )
     assert choices == []
     assert factory.calls == 1
 
@@ -393,7 +418,9 @@ async def test_autocomplete_does_not_wait_for_cold_cache_refresh(tmp_path) -> No
     assert cache._refresh_task is not None
     await asyncio.wait_for(cache._refresh_task, timeout=1)
 
-    choices = await autocomplete_lemmyverse_communities(cache, current="one", policy_snapshot=_policy_snapshot())
+    choices = await autocomplete_lemmyverse_communities(
+        cache, current="one", policy_snapshot=_policy_snapshot()
+    )
     assert choices == [("One (one@lemmy.world)", "https://lemmy.world/c/one")]
 
 
@@ -447,11 +474,15 @@ class _SleepRecorder:
 
 
 @pytest.mark.asyncio
-async def test_cold_cache_retries_one_two_three_then_writes_plain_json(tmp_path) -> None:
+async def test_cold_cache_retries_one_two_three_then_writes_plain_json(
+    tmp_path,
+) -> None:
     """Cold empty cache retries 1/2/3 seconds and persists decoded JSON."""
     cache_path = tmp_path / "community.full.json"
     sleeper = _SleepRecorder()
-    factory = _RetryClientFactory(gzip.compress(_payload(_row("one", "lemmy.world"))), failures=3)
+    factory = _RetryClientFactory(
+        gzip.compress(_payload(_row("one", "lemmy.world"))), failures=3
+    )
     cache = LemmyverseCommunityCache(
         http_client_factory=factory,
         cache_path=cache_path,
@@ -466,7 +497,10 @@ async def test_cold_cache_retries_one_two_three_then_writes_plain_json(tmp_path)
     assert sleeper.delays == [1, 2, 3]
     assert cache_path.read_bytes().startswith(b"[")
     assert not cache_path.read_bytes().startswith(b"\x1f\x8b")
-    assert json.loads(cache_path.read_text(encoding="utf-8"))[0]["community"]["name"] == "one"
+    assert (
+        json.loads(cache_path.read_text(encoding="utf-8"))[0]["community"]["name"]
+        == "one"
+    )
 
 
 @pytest.mark.asyncio
@@ -477,7 +511,9 @@ async def test_fresh_disk_cache_loads_without_network(tmp_path) -> None:
     factory = _FakeClientFactory(_payload(_row("network", "lemmy.world")))
     cache = LemmyverseCommunityCache(http_client_factory=factory, cache_path=cache_path)
 
-    choices = await autocomplete_lemmyverse_communities(cache, current="disk", policy_snapshot=_policy_snapshot())
+    choices = await autocomplete_lemmyverse_communities(
+        cache, current="disk", policy_snapshot=_policy_snapshot()
+    )
 
     assert choices == [("Disk (disk@lemmy.world)", "https://lemmy.world/c/disk")]
     assert factory.calls == 0

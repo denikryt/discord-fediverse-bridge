@@ -20,7 +20,10 @@ from ..discord_forum_placement import (
     resolve_optional_forum_channel,
 )
 from ..operations import CreateCommunityInput, create_community_operation
-from .guild_guard import REGISTERED_GUILD_COMMAND_ACCESS, reject_if_command_access_denied
+from .guild_guard import (
+    REGISTERED_GUILD_COMMAND_ACCESS,
+    reject_if_command_access_denied,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -31,29 +34,45 @@ CHANNEL_DESCRIPTION = "Choose a free forum channel, or leave empty to create one
 
 def _text_input_value(input_item: Any) -> str:
     """Return a modal text-input value from real discord.py objects or tests."""
-    return str(getattr(input_item, "value", None) or getattr(input_item, "_value", None) or "")
+    return str(
+        getattr(input_item, "value", None) or getattr(input_item, "_value", None) or ""
+    )
 
 
 def _selected_channel_or_none(select_item: Any) -> Any | None:
     """Return the optional channel selected in the create-community modal."""
-    values = getattr(select_item, "values", None) or getattr(select_item, "_values", None) or []
+    values = (
+        getattr(select_item, "values", None)
+        or getattr(select_item, "_values", None)
+        or []
+    )
     return values[0] if values else None
 
 
-def _add_labeled_item(modal: discord.ui.Modal, *, text: str, description: str | None, component: Any) -> None:
+def _add_labeled_item(
+    modal: discord.ui.Modal, *, text: str, description: str | None, component: Any
+) -> None:
     """Add a modal component using the Discord Components v2 label wrapper.
 
     discord.py 2.6 requires modal inputs and selects to be children of
     ``discord.ui.Label``. Keeping the wrapper in one helper makes tests and the
     modal structure easier to scan while preserving the project's SDK contract.
     """
-    modal.add_item(discord.ui.Label(text=text, description=description, component=component))
+    modal.add_item(
+        discord.ui.Label(text=text, description=description, component=component)
+    )
 
 
 class CreateCommunityModal(discord.ui.Modal):
     """Collect local-community creation fields and submit the operation."""
 
-    def __init__(self, *, database: Database, settings: Settings, policy_service: BridgePolicyService) -> None:
+    def __init__(
+        self,
+        *,
+        database: Database,
+        settings: Settings,
+        policy_service: BridgePolicyService,
+    ) -> None:
         """Build an empty creation modal that defers authorization until submit."""
         super().__init__(title="Create local community")
         self.database = database
@@ -90,13 +109,31 @@ class CreateCommunityModal(discord.ui.Modal):
             description="Use lowercase English letters only. Use _ between words. No digits, spaces, hyphens, or symbols.",
             component=self.slug_input,
         )
-        _add_labeled_item(self, text="Display name", description=None, component=self.display_name_input)
-        _add_labeled_item(self, text="Summary", description=None, component=self.summary_input)
-        _add_labeled_item(self, text="Forum channel", description=CHANNEL_DESCRIPTION, component=self.channel_select)
+        _add_labeled_item(
+            self,
+            text="Display name",
+            description=None,
+            component=self.display_name_input,
+        )
+        _add_labeled_item(
+            self, text="Summary", description=None, component=self.summary_input
+        )
+        _add_labeled_item(
+            self,
+            text="Forum channel",
+            description=CHANNEL_DESCRIPTION,
+            component=self.channel_select,
+        )
 
     async def on_submit(self, interaction: discord.Interaction) -> None:
         """Validate modal input, resolve channel placement, and create the community."""
-        if await reject_if_command_access_denied(interaction, definition=REGISTERED_GUILD_COMMAND_ACCESS, settings=self.settings, database=self.database, policy_service=self.policy_service):
+        if await reject_if_command_access_denied(
+            interaction,
+            definition=REGISTERED_GUILD_COMMAND_ACCESS,
+            settings=self.settings,
+            database=self.database,
+            policy_service=self.policy_service,
+        ):
             return
 
         guild_id = interaction.guild_id
@@ -170,7 +207,9 @@ class CreateCommunityModal(discord.ui.Modal):
                 guild=interaction.guild,
                 channel=placement.channel,
             )
-        await interaction.response.send_message(result.message, ephemeral=not result.applied)
+        await interaction.response.send_message(
+            result.message, ephemeral=not result.applied
+        )
 
 
 def register(
@@ -187,6 +226,16 @@ def register(
     )
     async def create_community(interaction: discord.Interaction) -> None:
         """Open the local-community creation modal for registered guild users."""
-        if await reject_if_command_access_denied(interaction, definition=REGISTERED_GUILD_COMMAND_ACCESS, settings=settings, database=database, policy_service=policy_service):
+        if await reject_if_command_access_denied(
+            interaction,
+            definition=REGISTERED_GUILD_COMMAND_ACCESS,
+            settings=settings,
+            database=database,
+            policy_service=policy_service,
+        ):
             return
-        await interaction.response.send_modal(CreateCommunityModal(database=database, settings=settings, policy_service=policy_service))
+        await interaction.response.send_modal(
+            CreateCommunityModal(
+                database=database, settings=settings, policy_service=policy_service
+            )
+        )

@@ -65,7 +65,9 @@ class FileLock:
             except BlockingIOError:
                 if time.monotonic() >= deadline:
                     handle.close()
-                    raise TimeoutError(f"timed out acquiring deployment lock: {self.path.name}")
+                    raise TimeoutError(
+                        f"timed out acquiring deployment lock: {self.path.name}"
+                    )
                 time.sleep(0.05)
 
     def close(self) -> None:
@@ -102,18 +104,24 @@ class ProfileMediaStore:
         # pre-created volume cannot redirect durable writes through a symlink.
         for path in (self.root, self.staging_root, self.objects_root):
             if path.exists() and path.is_symlink():
-                raise RuntimeError("profile media storage directories must not be symlinks")
+                raise RuntimeError(
+                    "profile media storage directories must not be symlinks"
+                )
         self.root.mkdir(parents=True, exist_ok=True, mode=0o700)
         self.staging_root.mkdir(exist_ok=True, mode=0o700)
         self.objects_root.mkdir(exist_ok=True, mode=0o700)
         for path in (self.root, self.staging_root, self.objects_root):
             stat = path.stat(follow_symlinks=False)
             if stat.st_uid != os.geteuid():
-                raise RuntimeError("profile media storage must be owned by the bridge user")
+                raise RuntimeError(
+                    "profile media storage must be owned by the bridge user"
+                )
             if not os.access(path, os.W_OK | os.X_OK):
                 raise RuntimeError("profile media storage is not writable")
 
-    def stage_and_publish(self, kind: MediaKind, source_stream: BinaryIO) -> PublishedMediaObject:
+    def stage_and_publish(
+        self, kind: MediaKind, source_stream: BinaryIO
+    ) -> PublishedMediaObject:
         """Publish canonical still-image bytes before any database reference commits."""
         if kind not in ("avatar", "header"):
             raise ProfileMediaError("unsupported profile media kind")
@@ -126,7 +134,9 @@ class ProfileMediaStore:
                 while chunk := source_stream.read(64 * 1024):
                     total += len(chunk)
                     if total > self.max_upload_bytes:
-                        raise ProfileMediaError("profile image exceeds compressed byte limit")
+                        raise ProfileMediaError(
+                            "profile image exceeds compressed byte limit"
+                        )
                     destination.write(chunk)
                 destination.flush()
                 os.fsync(destination.fileno())
@@ -140,10 +150,18 @@ class ProfileMediaStore:
                         if image.format not in {"JPEG", "PNG", "WEBP"}:
                             raise ProfileMediaError("unsupported profile image format")
                         if getattr(image, "n_frames", 1) != 1:
-                            raise ProfileMediaError("animated profile images are not supported")
+                            raise ProfileMediaError(
+                                "animated profile images are not supported"
+                            )
                         width, height = image.size
-                        if width <= 0 or height <= 0 or width * height > self.max_pixels:
-                            raise ProfileMediaError("profile image exceeds decoded pixel limit")
+                        if (
+                            width <= 0
+                            or height <= 0
+                            or width * height > self.max_pixels
+                        ):
+                            raise ProfileMediaError(
+                                "profile image exceeds decoded pixel limit"
+                            )
                         image.seek(0)
                         image.load()
                         normalized = ImageOps.exif_transpose(image)
@@ -161,7 +179,12 @@ class ProfileMediaStore:
                             output.save(canonical, format=output_format, **save_options)
                             canonical.flush()
                             os.fsync(canonical.fileno())
-            except (UnidentifiedImageError, OSError, Image.DecompressionBombError, Image.DecompressionBombWarning) as exc:
+            except (
+                UnidentifiedImageError,
+                OSError,
+                Image.DecompressionBombError,
+                Image.DecompressionBombWarning,
+            ) as exc:
                 raise ProfileMediaError("invalid profile image") from exc
 
             canonical_bytes = canonical_path.read_bytes()
@@ -188,11 +211,16 @@ class ProfileMediaStore:
             source_path.unlink(missing_ok=True)
             canonical_path.unlink(missing_ok=True)
 
-    def resolve_storage_key(self, storage_key: str, *, require_exists: bool = True) -> Path:
+    def resolve_storage_key(
+        self, storage_key: str, *, require_exists: bool = True
+    ) -> Path:
         """Resolve a generated relative key while preventing traversal and symlink escape."""
         candidate = self.objects_root / storage_key
         resolved_parent = candidate.parent.resolve()
-        if self.objects_root.resolve() not in (resolved_parent, *resolved_parent.parents):
+        if self.objects_root.resolve() not in (
+            resolved_parent,
+            *resolved_parent.parents,
+        ):
             raise ProfileMediaError("invalid profile media storage key")
         if any(part in {"", ".", ".."} for part in Path(storage_key).parts):
             raise ProfileMediaError("invalid profile media storage key")

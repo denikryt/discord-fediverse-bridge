@@ -8,7 +8,6 @@ from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import AsyncMock
 
-import discord
 import pytest
 
 from src.activitypub_handlers import dispatch_activitypub_event
@@ -64,7 +63,13 @@ async def test_no_subscription_subscribe_command_sends_follow_and_marks_pending(
         follow_activity_id=f"https://{BRIDGE_EXAMPLE_DOMAIN}/activities/follow/1",
     )
 
-    subscribe.register(command_tree, database, fedify_gateway, SimpleNamespace(discord_guild_allowlist=[], federation_allowlist=[]), policy_service=build_test_policy_service(database))
+    subscribe.register(
+        command_tree,
+        database,
+        fedify_gateway,
+        SimpleNamespace(discord_guild_allowlist=[], federation_allowlist=[]),
+        policy_service=build_test_policy_service(database),
+    )
 
     command = command_tree.commands["subscribe-community"]
     await command.callback(
@@ -73,8 +78,12 @@ async def test_no_subscription_subscribe_command_sends_follow_and_marks_pending(
         channel=forum_channel,
         instance_domain=f"https://{LEMMY_EXAMPLE_DOMAIN}",
     )
-    subscription = database.remote_subscriptions.get_subscription_by_channel(forum_channel.id)
-    bridge_follow = database.bridge_actor_follows.get_bridge_actor_follow(community_actor_url)
+    subscription = database.remote_subscriptions.get_subscription_by_channel(
+        forum_channel.id
+    )
+    bridge_follow = database.bridge_actor_follows.get_bridge_actor_follow(
+        community_actor_url
+    )
 
     assert subscription is not None
     assert subscription.status == "pending"
@@ -84,7 +93,9 @@ async def test_no_subscription_subscribe_command_sends_follow_and_marks_pending(
     assert bridge_follow.community_actor_id == community_actor_url
     fedify_gateway.follow_community.assert_awaited_once_with(community_actor_url)
     send_call = interaction.response.send_message.await_args
-    assert send_call.args == ("<@1234567890> subscribed <#12345> to **hackers@lemmy.example**. Waiting for federation acceptance.",)
+    assert send_call.args == (
+        "<@1234567890> subscribed <#12345> to **hackers@lemmy.example**. Waiting for federation acceptance.",
+    )
     assert send_call.kwargs.get("ephemeral", False) is False
     assert send_call.kwargs["allowed_mentions"].users is False
 
@@ -123,7 +134,13 @@ async def test_second_channel_reuses_existing_accepted_bridge_follow(
         status="accepted",
     )
 
-    subscribe.register(command_tree, database, fedify_gateway, SimpleNamespace(discord_guild_allowlist=[], federation_allowlist=[]), policy_service=build_test_policy_service(database))
+    subscribe.register(
+        command_tree,
+        database,
+        fedify_gateway,
+        SimpleNamespace(discord_guild_allowlist=[], federation_allowlist=[]),
+        policy_service=build_test_policy_service(database),
+    )
 
     command = command_tree.commands["subscribe-community"]
     await command.callback(
@@ -132,7 +149,9 @@ async def test_second_channel_reuses_existing_accepted_bridge_follow(
         channel=forum_channel,
         instance_domain=f"https://{LEMMY_EXAMPLE_DOMAIN}",
     )
-    new_subscription = database.remote_subscriptions.get_subscription_by_channel(forum_channel.id)
+    new_subscription = database.remote_subscriptions.get_subscription_by_channel(
+        forum_channel.id
+    )
 
     # No new Follow sent — bridge actor already federated.
     fedify_gateway.follow_community.assert_not_awaited()
@@ -140,7 +159,9 @@ async def test_second_channel_reuses_existing_accepted_bridge_follow(
     # Second channel is immediately accepted — no need to wait.
     assert new_subscription.status == "accepted"
     # Still only one bridge_actor_follows row.
-    bridge_follow = database.bridge_actor_follows.get_bridge_actor_follow(community_actor_url)
+    bridge_follow = database.bridge_actor_follows.get_bridge_actor_follow(
+        community_actor_url
+    )
     assert bridge_follow is not None
     assert bridge_follow.status == "accepted"
 
@@ -166,7 +187,13 @@ async def test_pending_subscription_second_subscribe_does_not_send_follow(
         status="pending",
     )
 
-    subscribe.register(command_tree, database, fedify_gateway, SimpleNamespace(discord_guild_allowlist=[], federation_allowlist=[]), policy_service=build_test_policy_service(database))
+    subscribe.register(
+        command_tree,
+        database,
+        fedify_gateway,
+        SimpleNamespace(discord_guild_allowlist=[], federation_allowlist=[]),
+        policy_service=build_test_policy_service(database),
+    )
 
     command = command_tree.commands["subscribe-community"]
     await command.callback(
@@ -204,7 +231,13 @@ async def test_accepted_subscription_second_subscribe_does_not_send_follow(
         status="accepted",
     )
 
-    subscribe.register(command_tree, database, fedify_gateway, SimpleNamespace(discord_guild_allowlist=[], federation_allowlist=[]), policy_service=build_test_policy_service(database))
+    subscribe.register(
+        command_tree,
+        database,
+        fedify_gateway,
+        SimpleNamespace(discord_guild_allowlist=[], federation_allowlist=[]),
+        policy_service=build_test_policy_service(database),
+    )
 
     command = command_tree.commands["subscribe-community"]
     await command.callback(
@@ -236,7 +269,13 @@ async def test_follow_dispatch_failure_marks_subscription_failed(
     _register_user(database)
     fedify_gateway.follow_community.side_effect = RuntimeError("boom")
 
-    subscribe.register(command_tree, database, fedify_gateway, SimpleNamespace(discord_guild_allowlist=[], federation_allowlist=[]), policy_service=build_test_policy_service(database))
+    subscribe.register(
+        command_tree,
+        database,
+        fedify_gateway,
+        SimpleNamespace(discord_guild_allowlist=[], federation_allowlist=[]),
+        policy_service=build_test_policy_service(database),
+    )
 
     command = command_tree.commands["subscribe-community"]
     await command.callback(
@@ -245,8 +284,12 @@ async def test_follow_dispatch_failure_marks_subscription_failed(
         channel=forum_channel,
         instance_domain=f"https://{LEMMY_EXAMPLE_DOMAIN}",
     )
-    subscription = database.remote_subscriptions.get_subscription_by_channel(forum_channel.id)
-    bridge_follow = database.bridge_actor_follows.get_bridge_actor_follow(_community_actor_url())
+    subscription = database.remote_subscriptions.get_subscription_by_channel(
+        forum_channel.id
+    )
+    bridge_follow = database.bridge_actor_follows.get_bridge_actor_follow(
+        _community_actor_url()
+    )
 
     assert subscription is not None
     assert subscription.status == "failed"
@@ -301,8 +344,8 @@ async def test_follow_accepted_event_promotes_all_pending_subscriptions(
         bot=SimpleNamespace(
             fetch_user=AsyncMock(return_value=dm_user),
         ),
-            bridge_policy_service=build_test_policy_service(database),
-)
+        bridge_policy_service=build_test_policy_service(database),
+    )
     event = FollowLifecycleEvent(
         event_type="follow.accepted",
         delivery_id=f"https://{LEMMY_EXAMPLE_DOMAIN}/activities/accept/1",
@@ -321,7 +364,9 @@ async def test_follow_accepted_event_promotes_all_pending_subscriptions(
     assert sub1.status == "accepted"
     assert sub2.status == "accepted"
     # The bridge-actor follow row must be accepted.
-    bridge_follow = database.bridge_actor_follows.get_bridge_actor_follow(community_actor_url)
+    bridge_follow = database.bridge_actor_follows.get_bridge_actor_follow(
+        community_actor_url
+    )
     assert bridge_follow.status == "accepted"
     # Both initiating users should receive a DM.
     assert runtime.bot.fetch_user.await_count == 2
@@ -359,19 +404,31 @@ async def test_unsubscribe_last_channel_sends_undo_follow(
         status="accepted",
     )
 
-    unsubscribe.register(command_tree, database, fedify_gateway, SimpleNamespace(discord_guild_allowlist=[], federation_allowlist=[]), policy_service=build_test_policy_service(database))
+    unsubscribe.register(
+        command_tree,
+        database,
+        fedify_gateway,
+        SimpleNamespace(discord_guild_allowlist=[], federation_allowlist=[]),
+        policy_service=build_test_policy_service(database),
+    )
 
     command = command_tree.commands["unsubscribe-channel"]
     await command.callback(interaction, forum_channel)
 
     # Channel subscription must be gone.
-    assert database.remote_subscriptions.get_subscription_by_channel(forum_channel.id) is None
+    assert (
+        database.remote_subscriptions.get_subscription_by_channel(forum_channel.id)
+        is None
+    )
     # Undo(Follow) must be dispatched.
     fedify_gateway.unfollow_community.assert_awaited_once_with(
         community_actor_url, follow_activity_id
     )
     # Bridge follow row must be cleaned up.
-    assert database.bridge_actor_follows.get_bridge_actor_follow(community_actor_url) is None
+    assert (
+        database.bridge_actor_follows.get_bridge_actor_follow(community_actor_url)
+        is None
+    )
 
 
 @pytest.mark.asyncio
@@ -417,15 +474,27 @@ async def test_unsubscribe_one_of_two_channels_keeps_bridge_follow(
         status="accepted",
     )
 
-    unsubscribe.register(command_tree, database, fedify_gateway, SimpleNamespace(discord_guild_allowlist=[], federation_allowlist=[]), policy_service=build_test_policy_service(database))
+    unsubscribe.register(
+        command_tree,
+        database,
+        fedify_gateway,
+        SimpleNamespace(discord_guild_allowlist=[], federation_allowlist=[]),
+        policy_service=build_test_policy_service(database),
+    )
 
     command = command_tree.commands["unsubscribe-channel"]
     await command.callback(interaction, forum_channel)
 
     # Only the target channel subscription is removed.
-    assert database.remote_subscriptions.get_subscription_by_channel(forum_channel.id) is None
+    assert (
+        database.remote_subscriptions.get_subscription_by_channel(forum_channel.id)
+        is None
+    )
     assert database.remote_subscriptions.get_subscription_by_channel(99999) is not None
     # No Undo dispatched — the other channel still subscribes.
     fedify_gateway.unfollow_community.assert_not_awaited()
     # Bridge follow row is preserved.
-    assert database.bridge_actor_follows.get_bridge_actor_follow(community_actor_url) is not None
+    assert (
+        database.bridge_actor_follows.get_bridge_actor_follow(community_actor_url)
+        is not None
+    )

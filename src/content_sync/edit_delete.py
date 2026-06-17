@@ -19,7 +19,9 @@ def resolve_published_object_for_discord_message(
     propagation can recover AP ownership without peeking into mode-specific
     tables first.
     """
-    return database.activitypub_objects.get_published_activity_object_by_discord_message_id(discord_message_id)
+    return database.activitypub_objects.get_published_activity_object_by_discord_message_id(
+        discord_message_id
+    )
 
 
 async def edit_discord_message(

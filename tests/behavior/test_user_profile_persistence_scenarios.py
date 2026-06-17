@@ -16,19 +16,25 @@ def _system(tmp_path: Path) -> tuple[Database, UserProfileService, int]:
     database.create_all()
     database.migrate()
     user = database.users.create_user(
-        discord_user_id="1", activitypub_username="alice",
+        discord_user_id="1",
+        activitypub_username="alice",
         actor_url="https://example.test/actors/alice",
         inbox_url="https://example.test/actors/alice/inbox",
         outbox_url="https://example.test/actors/alice/outbox",
         followers_url="https://example.test/actors/alice/followers",
-        public_key_pem="public", private_key_pem="private",
+        public_key_pem="public",
+        private_key_pem="private",
     )
-    store = ProfileMediaStore(tmp_path / "media", max_upload_bytes=10_485_760, max_pixels=20_000_000)
+    store = ProfileMediaStore(
+        tmp_path / "media", max_upload_bytes=10_485_760, max_pixels=20_000_000
+    )
     store.initialize()
     return database, UserProfileService(database, store), user.id
 
 
-def test_existing_user_has_username_fallback_and_atomic_profile_update(tmp_path: Path) -> None:
+def test_existing_user_has_username_fallback_and_atomic_profile_update(
+    tmp_path: Path,
+) -> None:
     """A migrated user gets fallback display name and one atomic ordered update."""
     database, service, user_id = _system(tmp_path)
     before = service.get_profile(user_id)
@@ -36,7 +42,12 @@ def test_existing_user_has_username_fallback_and_atomic_profile_update(tmp_path:
     assert before.display_name == "alice"
     assert before.stored_display_name is None
 
-    updated = service.update_profile(user_id, "  Alice É  ", " hello ", [("Site", "https://example.test"), ("Role", "Admin")])
+    updated = service.update_profile(
+        user_id,
+        "  Alice É  ",
+        " hello ",
+        [("Site", "https://example.test"), ("Role", "Admin")],
+    )
     assert updated.stored_display_name == "Alice É"
     assert updated.summary == "hello"
     assert updated.fields == (("Site", "https://example.test"), ("Role", "Admin"))
@@ -51,10 +62,16 @@ def test_invalid_fifth_field_rejects_entire_profile_mutation(tmp_path: Path) -> 
     _database, service, user_id = _system(tmp_path)
     service.update_profile(user_id, "Alice", "before", [("A", "1")])
     with pytest.raises(UserProfileValidationError):
-        service.update_profile(user_id, "Changed", "after", [(str(i), "x") for i in range(5)])
+        service.update_profile(
+            user_id, "Changed", "after", [(str(i), "x") for i in range(5)]
+        )
     profile = service.get_profile(user_id)
     assert profile is not None
-    assert (profile.stored_display_name, profile.summary, profile.fields) == ("Alice", "before", (("A", "1"),))
+    assert (profile.stored_display_name, profile.summary, profile.fields) == (
+        "Alice",
+        "before",
+        (("A", "1"),),
+    )
 
 
 def test_sqlite_enforces_foreign_keys_and_slot_kind(tmp_path: Path) -> None:
@@ -64,14 +81,21 @@ def test_sqlite_enforces_foreign_keys_and_slot_kind(tmp_path: Path) -> None:
         assert connection.execute(text("PRAGMA foreign_keys")).scalar_one() == 1
     with pytest.raises(Exception):
         with database.session() as session:
-            session.execute(text("UPDATE users SET avatar_media_id=999999 WHERE id=:id"), {"id": user_id})
+            session.execute(
+                text("UPDATE users SET avatar_media_id=999999 WHERE id=:id"),
+                {"id": user_id},
+            )
 
 
-def test_profile_field_name_accepts_255_code_points_and_rejects_256(tmp_path: Path) -> None:
+def test_profile_field_name_accepts_255_code_points_and_rejects_256(
+    tmp_path: Path,
+) -> None:
     """The persisted Stage 1 metadata-name boundary is exactly 255 code points."""
     _database, service, user_id = _system(tmp_path)
     accepted = "é" * 255
-    assert service.update_profile(user_id, None, None, [(accepted, "value")]).fields == ((accepted, "value"),)
+    assert service.update_profile(
+        user_id, None, None, [(accepted, "value")]
+    ).fields == ((accepted, "value"),)
     with pytest.raises(UserProfileValidationError):
         service.update_profile(user_id, None, None, [("x" * 256, "value")])
 
@@ -86,7 +110,9 @@ def test_migration_rebuilds_legacy_profile_field_name_width(tmp_path: Path) -> N
     database.migrate()
     database.close()
     with sqlite3.connect(path) as connection:
-        connection.execute("ALTER TABLE user_profile_fields RENAME TO user_profile_fields_current")
+        connection.execute(
+            "ALTER TABLE user_profile_fields RENAME TO user_profile_fields_current"
+        )
         connection.execute("""
             CREATE TABLE user_profile_fields (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -104,9 +130,10 @@ def test_migration_rebuilds_legacy_profile_field_name_width(tmp_path: Path) -> N
     migrated = Database(f"sqlite:///{path}")
     migrated.migrate()
     with migrated.engine.connect() as connection:
-        rows = connection.execute(text("PRAGMA table_info(user_profile_fields)")).fetchall()
+        rows = connection.execute(
+            text("PRAGMA table_info(user_profile_fields)")
+        ).fetchall()
     assert next(row[2] for row in rows if row[1] == "name") == "VARCHAR(255)"
-
 
 
 def test_independent_profile_forms_do_not_overwrite_each_other(tmp_path: Path) -> None:

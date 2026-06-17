@@ -68,8 +68,8 @@ def _runtime(tmp_path: Path) -> SimpleNamespace:
         discord_oauth_client=FakeDiscordOAuthClient(),
         fedify_gateway=SimpleNamespace(),
         bot=SimpleNamespace(),
-            bridge_policy_service=build_test_policy_service(database, settings),
-)
+        bridge_policy_service=build_test_policy_service(database, settings),
+    )
 
 
 def _client(tmp_path: Path) -> tuple[TestClient, Database]:
@@ -86,7 +86,7 @@ def test_register_page_returns_simple_html(tmp_path: Path) -> None:
 
     assert response.status_code == 200
     assert "Continue with Discord" in response.text
-    assert '/dashboard/static/dashboard.css?v=' in response.text
+    assert "/dashboard/static/dashboard.css?v=" in response.text
     assert 'class="hero"' in response.text
     assert 'class="panel registration-panel"' in response.text
 
@@ -99,7 +99,9 @@ def test_auth_start_creates_session_and_redirects_to_discord(tmp_path: Path) -> 
     response = client.get("/auth/discord/start", follow_redirects=False)
 
     session_token = client.cookies.get("bridge_registration_session")
-    session = database.registration_sessions.get_registration_session_by_token(session_token)
+    session = database.registration_sessions.get_registration_session_by_token(
+        session_token
+    )
 
     assert response.status_code == 307
     assert response.headers["location"].startswith("https://discord.example/oauth")
@@ -129,14 +131,18 @@ def test_callback_success_stores_discord_identity_in_session(tmp_path: Path) -> 
     client.get("/register")
     client.get("/auth/discord/start", follow_redirects=False)
     session_token = client.cookies.get("bridge_registration_session")
-    session = database.registration_sessions.get_registration_session_by_token(session_token)
+    session = database.registration_sessions.get_registration_session_by_token(
+        session_token
+    )
     assert session is not None
 
     response = client.get(
         f"/auth/discord/callback?code=oauth-code&state={session.oauth_state}",
         follow_redirects=False,
     )
-    updated = database.registration_sessions.get_registration_session_by_token(session_token)
+    updated = database.registration_sessions.get_registration_session_by_token(
+        session_token
+    )
 
     assert response.status_code == 307
     assert response.headers["location"] == "/register"
@@ -152,7 +158,9 @@ def test_register_complete_creates_user_with_urls_and_keys(tmp_path: Path) -> No
     client.get("/register")
     client.get("/auth/discord/start", follow_redirects=False)
     session_token = client.cookies.get("bridge_registration_session")
-    session = database.registration_sessions.get_registration_session_by_token(session_token)
+    session = database.registration_sessions.get_registration_session_by_token(
+        session_token
+    )
     assert session is not None
     client.get(
         f"/auth/discord/callback?code=oauth-code&state={session.oauth_state}",
@@ -186,7 +194,9 @@ def test_register_complete_rejects_reserved_username(tmp_path: Path) -> None:
     client.get("/register")
     client.get("/auth/discord/start", follow_redirects=False)
     session_token = client.cookies.get("bridge_registration_session")
-    session = database.registration_sessions.get_registration_session_by_token(session_token)
+    session = database.registration_sessions.get_registration_session_by_token(
+        session_token
+    )
     assert session is not None
     client.get(
         f"/auth/discord/callback?code=oauth-code&state={session.oauth_state}",
@@ -211,7 +221,9 @@ def test_register_complete_rejects_invalid_username_syntax(tmp_path: Path) -> No
     client.get("/register")
     client.get("/auth/discord/start", follow_redirects=False)
     session_token = client.cookies.get("bridge_registration_session")
-    session = database.registration_sessions.get_registration_session_by_token(session_token)
+    session = database.registration_sessions.get_registration_session_by_token(
+        session_token
+    )
     assert session is not None
     client.get(
         f"/auth/discord/callback?code=oauth-code&state={session.oauth_state}",
@@ -245,7 +257,9 @@ def test_register_complete_rejects_duplicate_username(tmp_path: Path) -> None:
     client.get("/register")
     client.get("/auth/discord/start", follow_redirects=False)
     session_token = client.cookies.get("bridge_registration_session")
-    session = database.registration_sessions.get_registration_session_by_token(session_token)
+    session = database.registration_sessions.get_registration_session_by_token(
+        session_token
+    )
     assert session is not None
     client.get(
         f"/auth/discord/callback?code=oauth-code&state={session.oauth_state}",
@@ -281,7 +295,9 @@ def test_register_complete_returns_existing_user_for_duplicate_discord_id(
     client.get("/register")
     client.get("/auth/discord/start", follow_redirects=False)
     session_token = client.cookies.get("bridge_registration_session")
-    session = database.registration_sessions.get_registration_session_by_token(session_token)
+    session = database.registration_sessions.get_registration_session_by_token(
+        session_token
+    )
     assert session is not None
     client.get(
         f"/auth/discord/callback?code=oauth-code&state={session.oauth_state}",
@@ -299,7 +315,9 @@ def test_register_complete_returns_existing_user_for_duplicate_discord_id(
     assert database.users.get_user_by_activitypub_username("other-name") is None
 
 
-def test_register_page_shows_existing_registration_for_repeat_user(tmp_path: Path) -> None:
+def test_register_page_shows_existing_registration_for_repeat_user(
+    tmp_path: Path,
+) -> None:
     """A repeat registration should show the existing actor instead of duplicating it."""
     client, database = _client(tmp_path)
     database.users.create_user(
@@ -316,7 +334,9 @@ def test_register_page_shows_existing_registration_for_repeat_user(tmp_path: Pat
     client.get("/register")
     client.get("/auth/discord/start", follow_redirects=False)
     session_token = client.cookies.get("bridge_registration_session")
-    session = database.registration_sessions.get_registration_session_by_token(session_token)
+    session = database.registration_sessions.get_registration_session_by_token(
+        session_token
+    )
     assert session is not None
     client.get(
         f"/auth/discord/callback?code=oauth-code&state={session.oauth_state}",
@@ -338,7 +358,9 @@ def test_register_success_page_shows_created_handle(tmp_path: Path) -> None:
     client.get("/register")
     client.get("/auth/discord/start", follow_redirects=False)
     session_token = client.cookies.get("bridge_registration_session")
-    session = database.registration_sessions.get_registration_session_by_token(session_token)
+    session = database.registration_sessions.get_registration_session_by_token(
+        session_token
+    )
     assert session is not None
     client.get(
         f"/auth/discord/callback?code=oauth-code&state={session.oauth_state}",

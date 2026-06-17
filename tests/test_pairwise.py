@@ -19,8 +19,8 @@ def test_pairwise_selection_respects_constraints_and_covers_all_valid_pairs() ->
     }
     candidates = enumerate_valid_cases(
         factors,
-        is_valid=lambda case: not (
-            case["scope"] == "global" and case["state"] == "present"
+        is_valid=lambda case: (
+            not (case["scope"] == "global" and case["state"] == "present")
         ),
     )
     must = {"role": "admin", "scope": "global", "state": "missing"}
@@ -32,8 +32,7 @@ def test_pairwise_selection_respects_constraints_and_covers_all_valid_pairs() ->
     assert first == second
     assert must in first
     assert all(
-        not (case["scope"] == "global" and case["state"] == "present")
-        for case in first
+        not (case["scope"] == "global" and case["state"] == "present") for case in first
     )
     assert summary["missing_pairs"] == []
     assert summary["covered_pairs"] == summary["required_pairs"]

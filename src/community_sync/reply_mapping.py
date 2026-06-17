@@ -55,10 +55,14 @@ def resolve_reply_context(
     if referenced_id is None:
         return ReplyContext(
             parent_message_group_id=None,
-            per_thread_references={d.discord_thread_id: None for d in sibling_deliveries},
+            per_thread_references={
+                d.discord_thread_id: None for d in sibling_deliveries
+            },
         )
 
-    thread_deliveries = database.discord_fanout_groups.get_thread_deliveries(thread_group.id)
+    thread_deliveries = database.discord_fanout_groups.get_thread_deliveries(
+        thread_group.id
+    )
     for delivery in thread_deliveries:
         if referenced_id == delivery.discord_starter_message_id:
             return ReplyContext(
@@ -69,11 +73,17 @@ def resolve_reply_context(
                 },
             )
 
-    parent_group = database.discord_fanout_groups.get_message_group_by_delivered_message(referenced_id)
+    parent_group = (
+        database.discord_fanout_groups.get_message_group_by_delivered_message(
+            referenced_id
+        )
+    )
     if parent_group is None:
         return ReplyContext(
             parent_message_group_id=None,
-            per_thread_references={d.discord_thread_id: None for d in sibling_deliveries},
+            per_thread_references={
+                d.discord_thread_id: None for d in sibling_deliveries
+            },
         )
 
     per_thread: dict[int, int | None] = {}

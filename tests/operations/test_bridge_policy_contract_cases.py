@@ -33,10 +33,28 @@ _POLICY_ALIASES = {
 def _settings(case: BridgePolicyContractCase) -> SimpleNamespace:
     """Build the effective bootstrap policy declared by one case."""
 
-    federation_allow = case.bootstrap_allow if case.action == "federation_decision" or case.policy_type.startswith("federation") else ()
-    federation_block = case.bootstrap_block if case.action == "federation_decision" or case.policy_type.startswith("federation") else ()
-    guild_allow = case.bootstrap_allow if case.action == "guild_decision" or case.policy_type.startswith("guild") else ()
-    guild_block = case.bootstrap_block if case.action == "guild_decision" or case.policy_type.startswith("guild") else ()
+    federation_allow = (
+        case.bootstrap_allow
+        if case.action == "federation_decision"
+        or case.policy_type.startswith("federation")
+        else ()
+    )
+    federation_block = (
+        case.bootstrap_block
+        if case.action == "federation_decision"
+        or case.policy_type.startswith("federation")
+        else ()
+    )
+    guild_allow = (
+        case.bootstrap_allow
+        if case.action == "guild_decision" or case.policy_type.startswith("guild")
+        else ()
+    )
+    guild_block = (
+        case.bootstrap_block
+        if case.action == "guild_decision" or case.policy_type.startswith("guild")
+        else ()
+    )
     if case.guild_context == "blocked":
         guild_block = tuple(sorted(set(guild_block) | {"200"}))
     return SimpleNamespace(
@@ -44,7 +62,9 @@ def _settings(case: BridgePolicyContractCase) -> SimpleNamespace:
         federation_blocklist=list(federation_block),
         discord_guild_allowlist=list(guild_allow),
         discord_guild_blocklist=list(guild_block),
-        bridge_super_admin_user_ids=["100"] if case.caller_role == "super_admin" else [],
+        bridge_super_admin_user_ids=["100"]
+        if case.caller_role == "super_admin"
+        else [],
     )
 
 
@@ -87,11 +107,16 @@ def test_bridge_policy_contract(case: BridgePolicyContractCase, tmp_path: Path) 
     if case.action == "federation_decision":
         if case.existing_dynamic_state == "active":
             policy_type = _POLICY_ALIASES[case.policy_type]
-            normalized = BridgePolicyService.normalize_subject(policy_type, case.subject)
-            if database.bridge_policy_entries.get_by_type_and_subject(
-                policy_type=policy_type.value,
-                normalized_subject=normalized,
-            ) is None:
+            normalized = BridgePolicyService.normalize_subject(
+                policy_type, case.subject
+            )
+            if (
+                database.bridge_policy_entries.get_by_type_and_subject(
+                    policy_type=policy_type.value,
+                    normalized_subject=normalized,
+                )
+                is None
+            ):
                 database.bridge_policy_entries.create_active(
                     policy_type=policy_type.value,
                     normalized_subject=normalized,

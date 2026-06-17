@@ -17,9 +17,20 @@ def _settings(*, super_admins: list[str] | None = None) -> SimpleNamespace:
     return SimpleNamespace(bridge_super_admin_user_ids=super_admins or [])
 
 
-def _community(database: object, *, slug: str = "cats", guild_id: int = 10, owner_id: str = "111", forum_channel_id: int = 100) -> object:
+def _community(
+    database: object,
+    *,
+    slug: str = "cats",
+    guild_id: int = 10,
+    owner_id: str = "111",
+    forum_channel_id: int = 100,
+) -> object:
     """Create one active local community for list scenarios."""
-    LocalCommunityService(database=database, base_url="https://bridge.example", keypair_generator=lambda: ("public-key", "private-key")).create_local_community(
+    LocalCommunityService(
+        database=database,
+        base_url="https://bridge.example",
+        keypair_generator=lambda: ("public-key", "private-key"),
+    ).create_local_community(
         discord_guild_id=guild_id,
         discord_forum_channel_id=forum_channel_id,
         slug=slug,
@@ -30,7 +41,14 @@ def _community(database: object, *, slug: str = "cats", guild_id: int = 10, owne
     return database.local_communities.get_local_community_by_slug(slug)
 
 
-def _ban(database: object, community: object, *, handle: str, reason: str | None, created_at: datetime | None = None) -> object:
+def _ban(
+    database: object,
+    community: object,
+    *,
+    handle: str,
+    reason: str | None,
+    created_at: datetime | None = None,
+) -> object:
     """Create one active ban and optionally force its timestamp."""
     ban = database.community_actor_bans.create_active_ban(
         local_community_id=community.id,
@@ -44,11 +62,15 @@ def _ban(database: object, community: object, *, handle: str, reason: str | None
             persisted = session.merge(ban)
             persisted.created_at = created_at
             persisted.updated_at = created_at
-        ban = database.community_actor_bans.get_active_ban_by_handle(local_community_id=community.id, actor_handle=handle)
+        ban = database.community_actor_bans.get_active_ban_by_handle(
+            local_community_id=community.id, actor_handle=handle
+        )
     return ban
 
 
-def test_public_caller_lists_current_guild_active_bans_with_reasons(tmp_path: Path) -> None:
+def test_public_caller_lists_current_guild_active_bans_with_reasons(
+    tmp_path: Path,
+) -> None:
     """Any user can list active bans for a current-guild community privately."""
     database = build_database(tmp_path, "list-bans.db")
     community = _community(database)
@@ -56,7 +78,16 @@ def test_public_caller_lists_current_guild_active_bans_with_reasons(tmp_path: Pa
     _ban(database, community, handle="bob@example.org", reason=None)
 
     result = list_banned_users_operation(
-        ListBannedUsersInput(database, _settings(), "ordinary", 10, "cats", BridgePolicyService(settings=_settings(), repository=database.bridge_policy_entries))
+        ListBannedUsersInput(
+            database,
+            _settings(),
+            "ordinary",
+            10,
+            "cats",
+            BridgePolicyService(
+                settings=_settings(), repository=database.bridge_policy_entries
+            ),
+        )
     )
 
     assert result.applied is True
@@ -73,7 +104,16 @@ def test_empty_active_list_returns_empty_message(tmp_path: Path) -> None:
     _community(database)
 
     result = list_banned_users_operation(
-        ListBannedUsersInput(database, _settings(), "ordinary", 10, "cats", BridgePolicyService(settings=_settings(), repository=database.bridge_policy_entries))
+        ListBannedUsersInput(
+            database,
+            _settings(),
+            "ordinary",
+            10,
+            "cats",
+            BridgePolicyService(
+                settings=_settings(), repository=database.bridge_policy_entries
+            ),
+        )
     )
 
     assert result.applied is True
@@ -87,16 +127,41 @@ def test_inactive_rows_are_excluded_and_rows_are_newest_first(tmp_path: Path) ->
     community = _community(database)
     base = datetime(2026, 5, 30, tzinfo=timezone.utc)
     _ban(database, community, handle="old@example.com", reason="old", created_at=base)
-    inactive = _ban(database, community, handle="gone@example.com", reason="gone", created_at=base + timedelta(days=1))
-    _ban(database, community, handle="new@example.com", reason="new", created_at=base + timedelta(days=2))
-    database.community_actor_bans.deactivate_active_ban_by_handle(local_community_id=community.id, actor_handle=inactive.actor_handle)
+    inactive = _ban(
+        database,
+        community,
+        handle="gone@example.com",
+        reason="gone",
+        created_at=base + timedelta(days=1),
+    )
+    _ban(
+        database,
+        community,
+        handle="new@example.com",
+        reason="new",
+        created_at=base + timedelta(days=2),
+    )
+    database.community_actor_bans.deactivate_active_ban_by_handle(
+        local_community_id=community.id, actor_handle=inactive.actor_handle
+    )
 
     result = list_banned_users_operation(
-        ListBannedUsersInput(database, _settings(), "ordinary", 10, "cats", BridgePolicyService(settings=_settings(), repository=database.bridge_policy_entries))
+        ListBannedUsersInput(
+            database,
+            _settings(),
+            "ordinary",
+            10,
+            "cats",
+            BridgePolicyService(
+                settings=_settings(), repository=database.bridge_policy_entries
+            ),
+        )
     )
 
     assert "gone@example.com" not in result.message
-    assert result.message.index("new@example.com") < result.message.index("old@example.com")
+    assert result.message.index("new@example.com") < result.message.index(
+        "old@example.com"
+    )
 
 
 def test_more_than_twenty_bans_are_truncated(tmp_path: Path) -> None:
@@ -107,24 +172,54 @@ def test_more_than_twenty_bans_are_truncated(tmp_path: Path) -> None:
         _ban(database, community, handle=f"user{index:02d}@example.com", reason="spam")
 
     result = list_banned_users_operation(
-        ListBannedUsersInput(database, _settings(), "ordinary", 10, "cats", BridgePolicyService(settings=_settings(), repository=database.bridge_policy_entries))
+        ListBannedUsersInput(
+            database,
+            _settings(),
+            "ordinary",
+            10,
+            "cats",
+            BridgePolicyService(
+                settings=_settings(), repository=database.bridge_policy_entries
+            ),
+        )
     )
 
     assert result.message.count("- user") == 20
     assert "Showing 20 of 25 active bans." in result.message
 
 
-def test_cross_guild_rejected_for_ordinary_user_but_allowed_for_super_admin(tmp_path: Path) -> None:
+def test_cross_guild_rejected_for_ordinary_user_but_allowed_for_super_admin(
+    tmp_path: Path,
+) -> None:
     """Normal users are guild-scoped while super-admins can manually list slugs."""
     database = build_database(tmp_path, "list-cross-guild.db")
     community = _community(database, guild_id=20)
     _ban(database, community, handle="alice@example.com", reason="spam")
 
     ordinary = list_banned_users_operation(
-        ListBannedUsersInput(database, _settings(), "ordinary", 10, "cats", BridgePolicyService(settings=_settings(), repository=database.bridge_policy_entries))
+        ListBannedUsersInput(
+            database,
+            _settings(),
+            "ordinary",
+            10,
+            "cats",
+            BridgePolicyService(
+                settings=_settings(), repository=database.bridge_policy_entries
+            ),
+        )
     )
     admin = list_banned_users_operation(
-        ListBannedUsersInput(database, _settings(super_admins=["999"]), "999", 10, "cats", BridgePolicyService(settings=_settings(super_admins=["999"]), repository=database.bridge_policy_entries))
+        ListBannedUsersInput(
+            database,
+            _settings(super_admins=["999"]),
+            "999",
+            10,
+            "cats",
+            BridgePolicyService(
+                settings=_settings(super_admins=["999"]),
+                repository=database.bridge_policy_entries,
+            ),
+        )
     )
 
     assert ordinary.reason == "unknown_or_inaccessible_community"
@@ -139,10 +234,28 @@ def test_unknown_slug_and_no_guild_are_rejected(tmp_path: Path) -> None:
     _community(database)
 
     unknown = list_banned_users_operation(
-        ListBannedUsersInput(database, _settings(), "ordinary", 10, "missing", BridgePolicyService(settings=_settings(), repository=database.bridge_policy_entries))
+        ListBannedUsersInput(
+            database,
+            _settings(),
+            "ordinary",
+            10,
+            "missing",
+            BridgePolicyService(
+                settings=_settings(), repository=database.bridge_policy_entries
+            ),
+        )
     )
     no_guild = list_banned_users_operation(
-        ListBannedUsersInput(database, _settings(), "ordinary", None, "cats", BridgePolicyService(settings=_settings(), repository=database.bridge_policy_entries))
+        ListBannedUsersInput(
+            database,
+            _settings(),
+            "ordinary",
+            None,
+            "cats",
+            BridgePolicyService(
+                settings=_settings(), repository=database.bridge_policy_entries
+            ),
+        )
     )
 
     assert unknown.message == "Unknown or inaccessible local community: missing"
@@ -159,7 +272,16 @@ def test_inactive_community_is_inaccessible_for_list(tmp_path: Path) -> None:
         persisted.status = "inactive"
 
     result = list_banned_users_operation(
-        ListBannedUsersInput(database, _settings(), "ordinary", 10, "cats", BridgePolicyService(settings=_settings(), repository=database.bridge_policy_entries))
+        ListBannedUsersInput(
+            database,
+            _settings(),
+            "ordinary",
+            10,
+            "cats",
+            BridgePolicyService(
+                settings=_settings(), repository=database.bridge_policy_entries
+            ),
+        )
     )
 
     assert result.reason == "unknown_or_inaccessible_community"
@@ -176,16 +298,30 @@ def test_disabled_community_rejects_list_banned_users(tmp_path: Path) -> None:
         persisted.status = "disabled"
 
     result = list_banned_users_operation(
-        ListBannedUsersInput(database, _settings(), "ordinary", 10, "cats", BridgePolicyService(settings=_settings(), repository=database.bridge_policy_entries))
+        ListBannedUsersInput(
+            database,
+            _settings(),
+            "ordinary",
+            10,
+            "cats",
+            BridgePolicyService(
+                settings=_settings(), repository=database.bridge_policy_entries
+            ),
+        )
     )
 
     assert result.applied is False
     assert result.reason == "community_disabled"
-    assert result.message == "Community cats is disabled. Use /edit-community to re-enable it first."
+    assert (
+        result.message
+        == "Community cats is disabled. Use /edit-community to re-enable it first."
+    )
     assert "alice@example.com" not in result.message
 
 
-def test_global_list_skips_local_community_repository(tmp_path: Path, monkeypatch) -> None:
+def test_global_list_skips_local_community_repository(
+    tmp_path: Path, monkeypatch
+) -> None:
     """A global list reads global bans without resolving any local community."""
     database = build_database(tmp_path, "list-global-no-community-read.db")
     database.community_actor_bans.create_active_ban(
@@ -212,7 +348,11 @@ def test_global_list_skips_local_community_repository(tmp_path: Path, monkeypatc
             _settings(super_admins=["999"]),
             "999",
             None,
-            None, BridgePolicyService(settings=_settings(super_admins=["999"]), repository=database.bridge_policy_entries),
+            None,
+            BridgePolicyService(
+                settings=_settings(super_admins=["999"]),
+                repository=database.bridge_policy_entries,
+            ),
         )
     )
 

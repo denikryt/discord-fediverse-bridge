@@ -31,7 +31,9 @@ async def resolve_registered_user(
     return None
 
 
-def build_discord_comment_body(*, author_name: str, content: str, bridge_prefix: str) -> str:
+def build_discord_comment_body(
+    *, author_name: str, content: str, bridge_prefix: str
+) -> str:
     """Format one Discord-authored body for ActivityPub publish.
 
     The actual text shaping still lives in `src.formatting`; this helper keeps

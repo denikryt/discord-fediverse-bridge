@@ -74,7 +74,9 @@ def database() -> Mock:
     # Set explicit defaults so optional placement checks do not interpret an
     # auto-created child Mock as an occupied channel.
     database = Mock()
-    database.local_communities.get_local_community_by_forum_channel_id.return_value = None
+    database.local_communities.get_local_community_by_forum_channel_id.return_value = (
+        None
+    )
     database.remote_subscriptions.get_subscription_by_channel.return_value = None
     database.local_subscribers.get_local_subscriber_by_channel.return_value = None
     database.community_actor_bans.get_active_global_ban_by_discord_user_id.return_value = None

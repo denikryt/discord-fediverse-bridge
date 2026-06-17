@@ -33,15 +33,15 @@ def _runtime(tmp_path: Path) -> tuple[object, LocalCommunityRuntime]:
         database=database,
         fedify_gateway=gateway,
         bridge_prefix="[bridge]",
-            bridge_policy_service=build_test_policy_service(database),
-)
+        bridge_policy_service=build_test_policy_service(database),
+    )
     runtime = LocalCommunityRuntime(
         database=database,
         fedify_gateway=gateway,
         content_publish_service=publish_service,
         bridge_prefix="[bridge]",
-            bridge_policy_service=build_test_policy_service(database),
-)
+        bridge_policy_service=build_test_policy_service(database),
+    )
     return database, runtime
 
 
@@ -115,7 +115,9 @@ def _local_comment_event(*, event_type: str) -> ActivityPubEvent:
 
 
 @pytest.mark.asyncio
-async def test_local_community_thread_starter_edit_updates_ap_post(tmp_path: Path) -> None:
+async def test_local_community_thread_starter_edit_updates_ap_post(
+    tmp_path: Path,
+) -> None:
     """Editing a Discord-backed local-community post should send one AP Update."""
     database, local_runtime = _runtime(tmp_path)
     local_community = _local_community(database)
@@ -227,7 +229,9 @@ async def test_local_community_comment_delete_sends_ap_delete(tmp_path: Path) ->
 
 
 @pytest.mark.asyncio
-async def test_inbound_local_community_post_update_edits_discord_starter(tmp_path: Path) -> None:
+async def test_inbound_local_community_post_update_edits_discord_starter(
+    tmp_path: Path,
+) -> None:
     """A remote post update for a local community should edit the starter message."""
     database, local_runtime = _runtime(tmp_path)
     local_community = _local_community(database)
@@ -250,10 +254,15 @@ async def test_inbound_local_community_post_update_edits_discord_starter(tmp_pat
         local_community_runtime=local_runtime,
         community_runtime=SimpleNamespace(),
         bot=bot,
-            bridge_policy_service=build_test_policy_service(database, SimpleNamespace(discord_guild_allowlist=[], federation_allowlist=[])),
-)
+        bridge_policy_service=build_test_policy_service(
+            database,
+            SimpleNamespace(discord_guild_allowlist=[], federation_allowlist=[]),
+        ),
+    )
 
-    result = await dispatch_activitypub_event(_local_post_event(event_type="post.updated"), runtime)
+    result = await dispatch_activitypub_event(
+        _local_post_event(event_type="post.updated"), runtime
+    )
 
     assert result.status == "processed"
     starter_message.edit.assert_awaited_once_with(
@@ -287,10 +296,15 @@ async def test_inbound_local_community_post_delete_marks_discord_starter_deleted
         local_community_runtime=local_runtime,
         community_runtime=SimpleNamespace(),
         bot=bot,
-            bridge_policy_service=build_test_policy_service(database, SimpleNamespace(discord_guild_allowlist=[], federation_allowlist=[])),
-)
+        bridge_policy_service=build_test_policy_service(
+            database,
+            SimpleNamespace(discord_guild_allowlist=[], federation_allowlist=[]),
+        ),
+    )
 
-    result = await dispatch_activitypub_event(_local_post_event(event_type="post.deleted"), runtime)
+    result = await dispatch_activitypub_event(
+        _local_post_event(event_type="post.deleted"), runtime
+    )
 
     assert result.status == "processed"
     starter_message.edit.assert_awaited_once_with(content="*deleted by creator*")
@@ -331,8 +345,11 @@ async def test_inbound_local_community_comment_update_edits_discord_message(
         local_community_runtime=local_runtime,
         community_runtime=SimpleNamespace(),
         bot=bot,
-            bridge_policy_service=build_test_policy_service(database, SimpleNamespace(discord_guild_allowlist=[], federation_allowlist=[])),
-)
+        bridge_policy_service=build_test_policy_service(
+            database,
+            SimpleNamespace(discord_guild_allowlist=[], federation_allowlist=[]),
+        ),
+    )
 
     result = await dispatch_activitypub_event(
         _local_comment_event(event_type="comment.updated"),
@@ -380,8 +397,11 @@ async def test_inbound_local_community_comment_delete_marks_discord_message_dele
         local_community_runtime=local_runtime,
         community_runtime=SimpleNamespace(),
         bot=bot,
-            bridge_policy_service=build_test_policy_service(database, SimpleNamespace(discord_guild_allowlist=[], federation_allowlist=[])),
-)
+        bridge_policy_service=build_test_policy_service(
+            database,
+            SimpleNamespace(discord_guild_allowlist=[], federation_allowlist=[]),
+        ),
+    )
 
     result = await dispatch_activitypub_event(
         _local_comment_event(event_type="comment.deleted"),

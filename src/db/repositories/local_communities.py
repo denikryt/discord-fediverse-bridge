@@ -111,7 +111,9 @@ class LocalCommunityRepository(BaseRepository):
         session.flush()
         return community
 
-    def get_local_community_by_forum_channel_id(self, discord_forum_channel_id: int) -> LocalCommunity | None:
+    def get_local_community_by_forum_channel_id(
+        self, discord_forum_channel_id: int
+    ) -> LocalCommunity | None:
         """Load the local community bound to one Discord forum channel."""
         with self.session() as session:
             return session.scalar(
@@ -123,14 +125,20 @@ class LocalCommunityRepository(BaseRepository):
     def get_local_community_by_actor_url(self, actor_url: str) -> LocalCommunity | None:
         """Load the local community that owns one actor URL."""
         with self.session() as session:
-            return session.scalar(select(LocalCommunity).where(LocalCommunity.actor_url == actor_url))
+            return session.scalar(
+                select(LocalCommunity).where(LocalCommunity.actor_url == actor_url)
+            )
 
     def get_local_community_by_slug(self, slug: str) -> LocalCommunity | None:
         """Load the local community for one stable slug."""
         with self.session() as session:
-            return session.scalar(select(LocalCommunity).where(LocalCommunity.slug == slug))
+            return session.scalar(
+                select(LocalCommunity).where(LocalCommunity.slug == slug)
+            )
 
-    def get_local_community_by_id(self, local_community_id: int) -> LocalCommunity | None:
+    def get_local_community_by_id(
+        self, local_community_id: int
+    ) -> LocalCommunity | None:
         """Load one local community by its primary key."""
         with self.session() as session:
             return session.get(LocalCommunity, local_community_id)
@@ -139,10 +147,16 @@ class LocalCommunityRepository(BaseRepository):
         """Return all local communities in stable creation order."""
         with self.session() as session:
             return list(
-                session.scalars(select(LocalCommunity).order_by(LocalCommunity.created_at, LocalCommunity.id))
+                session.scalars(
+                    select(LocalCommunity).order_by(
+                        LocalCommunity.created_at, LocalCommunity.id
+                    )
+                )
             )
 
-    def list_active_local_communities_by_guild(self, *, discord_guild_id: int) -> list[LocalCommunity]:
+    def list_active_local_communities_by_guild(
+        self, *, discord_guild_id: int
+    ) -> list[LocalCommunity]:
         """Return active local communities for one Discord guild by slug."""
         with self.session() as session:
             return list(
@@ -169,7 +183,8 @@ class LocalCommunityRepository(BaseRepository):
                     select(LocalCommunity)
                     .where(
                         LocalCommunity.discord_guild_id == discord_guild_id,
-                        LocalCommunity.created_by_discord_user_id == created_by_discord_user_id,
+                        LocalCommunity.created_by_discord_user_id
+                        == created_by_discord_user_id,
                         LocalCommunity.status == "active",
                     )
                     .order_by(LocalCommunity.slug, LocalCommunity.id)
@@ -187,7 +202,9 @@ class LocalCommunityRepository(BaseRepository):
                 )
             )
 
-    def list_manageable_local_communities_by_guild(self, *, discord_guild_id: int) -> list[LocalCommunity]:
+    def list_manageable_local_communities_by_guild(
+        self, *, discord_guild_id: int
+    ) -> list[LocalCommunity]:
         """Return active and disabled local communities for one guild by slug."""
         with self.session() as session:
             return list(
@@ -214,7 +231,8 @@ class LocalCommunityRepository(BaseRepository):
                     select(LocalCommunity)
                     .where(
                         LocalCommunity.discord_guild_id == discord_guild_id,
-                        LocalCommunity.created_by_discord_user_id == created_by_discord_user_id,
+                        LocalCommunity.created_by_discord_user_id
+                        == created_by_discord_user_id,
                         LocalCommunity.status.in_(["active", "disabled"]),
                     )
                     .order_by(LocalCommunity.slug, LocalCommunity.id)

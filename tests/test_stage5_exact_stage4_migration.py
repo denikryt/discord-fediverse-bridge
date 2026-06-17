@@ -29,9 +29,12 @@ def _normalize_sql(value: str | None) -> str | None:
 
 
 def _schema_signature(connection: Any, table: str) -> dict[str, Any]:
-    columns = [tuple(row) for row in connection.execute(text(f'PRAGMA table_info("{table}")'))]
+    columns = [
+        tuple(row) for row in connection.execute(text(f'PRAGMA table_info("{table}")'))
+    ]
     foreign_keys = [
-        tuple(row) for row in connection.execute(text(f'PRAGMA foreign_key_list("{table}")'))
+        tuple(row)
+        for row in connection.execute(text(f'PRAGMA foreign_key_list("{table}")'))
     ]
     indexes: list[tuple[Any, ...]] = []
     for row in connection.execute(text(f'PRAGMA index_list("{table}")')):
@@ -160,34 +163,58 @@ def test_exact_stage4_delivery_graph_survives_complete_stage5_upgrade(tmp_path) 
     before = sqlite3.connect(path)
     try:
         published_columns = {
-            row[1] for row in before.execute("PRAGMA table_info(published_activity_objects)")
+            row[1]
+            for row in before.execute("PRAGMA table_info(published_activity_objects)")
         }
         assert "desired_kind" not in published_columns
         assert "discord_reconciliation_needed" not in published_columns
-        assert before.execute(
-            "SELECT 1 FROM sqlite_master WHERE type='table' AND name='user_actor_content_mutations'"
-        ).fetchone() is None
+        assert (
+            before.execute(
+                "SELECT 1 FROM sqlite_master WHERE type='table' AND name='user_actor_content_mutations'"
+            ).fetchone()
+            is None
+        )
     finally:
         before.close()
 
     upgraded = Database(f"sqlite:///{path}")
     upgraded.migrate()
     with upgraded.engine.connect() as connection:
-        source = connection.execute(
-            text("SELECT * FROM user_actor_outbound_sources WHERE id=61")
-        ).mappings().one()
-        delivery = connection.execute(
-            text("SELECT * FROM user_actor_outbound_deliveries WHERE id=71")
-        ).mappings().one()
-        evidence = connection.execute(
-            text("SELECT * FROM user_actor_outbound_delivery_followers WHERE id=81")
-        ).mappings().one()
-        hold = connection.execute(
-            text("SELECT * FROM user_actor_outbound_source_media WHERE id=101")
-        ).mappings().one()
-        published = connection.execute(
-            text("SELECT * FROM published_activity_objects WHERE id=31")
-        ).mappings().one()
+        source = (
+            connection.execute(
+                text("SELECT * FROM user_actor_outbound_sources WHERE id=61")
+            )
+            .mappings()
+            .one()
+        )
+        delivery = (
+            connection.execute(
+                text("SELECT * FROM user_actor_outbound_deliveries WHERE id=71")
+            )
+            .mappings()
+            .one()
+        )
+        evidence = (
+            connection.execute(
+                text("SELECT * FROM user_actor_outbound_delivery_followers WHERE id=81")
+            )
+            .mappings()
+            .one()
+        )
+        hold = (
+            connection.execute(
+                text("SELECT * FROM user_actor_outbound_source_media WHERE id=101")
+            )
+            .mappings()
+            .one()
+        )
+        published = (
+            connection.execute(
+                text("SELECT * FROM published_activity_objects WHERE id=31")
+            )
+            .mappings()
+            .one()
+        )
 
         assert source["id"] == 61
         assert source["ordering_key"] == "profile:41"

@@ -26,15 +26,15 @@ def _runtime(tmp_path: Path) -> tuple[object, LocalCommunityRuntime]:
         database=database,
         fedify_gateway=gateway,
         bridge_prefix="[bridge]",
-            bridge_policy_service=build_test_policy_service(database),
-)
+        bridge_policy_service=build_test_policy_service(database),
+    )
     runtime = LocalCommunityRuntime(
         database=database,
         fedify_gateway=gateway,
         content_publish_service=publish_service,
         bridge_prefix="[bridge]",
-            bridge_policy_service=build_test_policy_service(database),
-)
+        bridge_policy_service=build_test_policy_service(database),
+    )
     return database, runtime
 
 
@@ -67,11 +67,11 @@ async def test_registered_user_thread_starter_in_local_community_publishes_post(
     )
     runtime.fedify_gateway.publish_local_community_content.return_value = (
         PublishLocalCommunityContentResult(
-        activity_id="https://bridge.example/users/alice/activities/create/post/1",
-        object_id="https://bridge.example/users/alice/post/1",
-        community_actor_url="https://bridge.example/communities/hackers",
-        delivered_follower_count=1,
-        failed_follower_count=0,
+            activity_id="https://bridge.example/users/alice/activities/create/post/1",
+            object_id="https://bridge.example/users/alice/post/1",
+            community_actor_url="https://bridge.example/communities/hackers",
+            delivered_follower_count=1,
+            failed_follower_count=0,
         )
     )
 
@@ -79,9 +79,13 @@ async def test_registered_user_thread_starter_in_local_community_publishes_post(
         thread=build_thread(),
         starter_message=build_starter_message(),
     )
-    thread_surface = database.local_community_surfaces.get_local_community_thread_surface_by_discord_thread_id(200)
+    thread_surface = database.local_community_surfaces.get_local_community_thread_surface_by_discord_thread_id(
+        200
+    )
     assert thread_surface is not None
-    created = database.local_community_surfaces.get_local_community_thread_for_surface(thread_surface.id)
+    created = database.local_community_surfaces.get_local_community_thread_for_surface(
+        thread_surface.id
+    )
 
     assert result.status == "published"
     assert created is not None
@@ -89,7 +93,10 @@ async def test_registered_user_thread_starter_in_local_community_publishes_post(
     runtime.fedify_gateway.publish_local_community_content.assert_awaited_once()
     with database.session() as session:
         assert session.scalar(select(func.count()).select_from(MessageMapping)) == 1
-        assert session.scalar(select(func.count()).select_from(PublishedActivityObject)) == 1
+        assert (
+            session.scalar(select(func.count()).select_from(PublishedActivityObject))
+            == 1
+        )
 
 
 @pytest.mark.asyncio
@@ -107,7 +114,12 @@ async def test_unregistered_user_thread_starter_in_local_community_is_rejected(
     )
 
     assert result.reason == "unregistered_user"
-    assert database.local_community_surfaces.get_local_community_thread_surface_by_discord_thread_id(200) is None
+    assert (
+        database.local_community_surfaces.get_local_community_thread_surface_by_discord_thread_id(
+            200
+        )
+        is None
+    )
     starter_message.reply.assert_awaited_once()
 
 
@@ -145,9 +157,13 @@ async def test_discord_reply_in_local_community_thread_publishes_comment_with_pa
     result = await runtime.handle_discord_message(
         message=build_thread_message(),
     )
-    message_surface = database.local_community_surfaces.get_local_community_message_surface_by_discord_message_id(301)
+    message_surface = database.local_community_surfaces.get_local_community_message_surface_by_discord_message_id(
+        301
+    )
     assert message_surface is not None
-    created = database.local_community_surfaces.get_local_community_message_for_surface(message_surface.id)
+    created = database.local_community_surfaces.get_local_community_message_for_surface(
+        message_surface.id
+    )
 
     assert result.status == "published"
     assert created is not None
@@ -207,10 +223,25 @@ async def test_local_community_reply_semantics_preserve_nested_and_unknown_fallb
 
     assert nested_result.status == "published"
     assert unknown_result.status == "published"
-    nested_request = runtime.fedify_gateway.publish_local_community_content.await_args_list[2].args[0]
-    unknown_request = runtime.fedify_gateway.publish_local_community_content.await_args_list[3].args[0]
-    assert nested_request.in_reply_to_object_id == "https://bridge.example/users/alice/comment/0"
-    assert unknown_request.in_reply_to_object_id == "https://bridge.example/users/alice/post/1"
+    nested_request = (
+        runtime.fedify_gateway.publish_local_community_content.await_args_list[2].args[
+            0
+        ]
+    )
+    unknown_request = (
+        runtime.fedify_gateway.publish_local_community_content.await_args_list[3].args[
+            0
+        ]
+    )
+    assert (
+        nested_request.in_reply_to_object_id
+        == "https://bridge.example/users/alice/comment/0"
+    )
+    assert (
+        unknown_request.in_reply_to_object_id
+        == "https://bridge.example/users/alice/post/1"
+    )
+
 
 @pytest.mark.asyncio
 async def test_local_community_create_preserves_canonical_create_for_direct_follower_fanout(
@@ -238,7 +269,10 @@ async def test_local_community_create_preserves_canonical_create_for_direct_foll
         "id": "https://bridge.example/users/alice/activities/create/post/1",
         "type": "Create",
         "actor": user.actor_url,
-        "to": ["https://www.w3.org/ns/activitystreams#Public", "https://bridge.example/communities/hackers"],
+        "to": [
+            "https://www.w3.org/ns/activitystreams#Public",
+            "https://bridge.example/communities/hackers",
+        ],
         "cc": [user.followers_url],
         "object": {
             "id": "https://bridge.example/users/alice/post/1",

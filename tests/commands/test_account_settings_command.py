@@ -15,7 +15,9 @@ from src.commands.account_settings import (
 from src.user_profiles import UserProfileValidationError
 
 
-def test_metadata_row_parser_supports_multiline_values_and_rejects_partial_rows() -> None:
+def test_metadata_row_parser_supports_multiline_values_and_rejects_partial_rows() -> (
+    None
+):
     """Each modal position uses first-line name and remaining-line value semantics."""
     assert _parse_metadata_row("") is None
     assert _parse_metadata_row("About\nFirst line\nSecond line") == (
@@ -80,8 +82,11 @@ async def _set_event(event: asyncio.Event) -> None:
     """Set an asyncio event from the worker thread via the owning loop."""
     event.set()
 
+
 @pytest.mark.asyncio
-async def test_media_modal_defers_before_download_and_worker_submission(monkeypatch) -> None:
+async def test_media_modal_defers_before_download_and_worker_submission(
+    monkeypatch,
+) -> None:
     """A media submission acknowledges Discord before any slow operation starts."""
     from src.commands import account_settings
 
@@ -116,7 +121,9 @@ async def test_media_modal_defers_before_download_and_worker_submission(monkeypa
         return SimpleNamespace(render_pending=False, outstanding=0)
 
     service = SimpleNamespace(
-        replace_media=lambda *_args: events.append("mutation") or SimpleNamespace(source_id=1),
+        replace_media=lambda *_args: (
+            events.append("mutation") or SimpleNamespace(source_id=1)
+        ),
         fanout=fanout,
     )
     settings = SimpleNamespace(profile_media_max_upload_bytes=100)
@@ -249,6 +256,7 @@ async def test_metadata_modal_partial_row_rejects_whole_replacement(
     assert service.get_profile(user.id).fields == (("Existing", "Preserved"),)
     interaction.edit_original_response.assert_awaited_once()
 
+
 @pytest.mark.asyncio
 async def test_profile_modal_policy_change_prevents_mutation(monkeypatch) -> None:
     """A user who loses access after opening the modal cannot mutate profile state."""
@@ -277,16 +285,16 @@ async def test_profile_modal_policy_change_prevents_mutation(monkeypatch) -> Non
 
 
 @pytest.mark.asyncio
-async def test_media_modal_rejects_oversize_before_defer_or_download(monkeypatch) -> None:
+async def test_media_modal_rejects_oversize_before_defer_or_download(
+    monkeypatch,
+) -> None:
     """Declared-size preflight rejects an upload without network or durable work."""
     from unittest.mock import AsyncMock, Mock
 
     from src.commands import account_settings
 
     attachment = SimpleNamespace(size=101, read=AsyncMock())
-    response = SimpleNamespace(
-        send_message=AsyncMock(), defer=AsyncMock()
-    )
+    response = SimpleNamespace(send_message=AsyncMock(), defer=AsyncMock())
     interaction = SimpleNamespace(user=SimpleNamespace(id=7), response=response)
     service = Mock()
     modal = account_settings.ProfileMediaModal(
@@ -319,7 +327,9 @@ async def test_media_modal_download_failure_preserves_slot_and_returns_bounded_e
 
     from src.commands import account_settings
 
-    attachment = SimpleNamespace(size=10, read=AsyncMock(side_effect=OSError("cdn secret")))
+    attachment = SimpleNamespace(
+        size=10, read=AsyncMock(side_effect=OSError("cdn secret"))
+    )
     response = SimpleNamespace(defer=AsyncMock())
     interaction = SimpleNamespace(
         user=SimpleNamespace(id=7),
@@ -348,6 +358,7 @@ async def test_media_modal_download_failure_preserves_slot_and_returns_bounded_e
     interaction.edit_original_response.assert_awaited_once_with(
         content="The image could not be processed."
     )
+
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
@@ -409,7 +420,9 @@ def _registered_account_settings_group(database, personal_feed_service):
 
 
 @pytest.mark.asyncio
-async def test_feed_view_callback_reports_unbound_and_bound_state(tmp_path, monkeypatch) -> None:
+async def test_feed_view_callback_reports_unbound_and_bound_state(
+    tmp_path, monkeypatch
+) -> None:
     """The real feed-view callback reads an existing two-entity binding row."""
     from unittest.mock import AsyncMock
 
@@ -466,9 +479,7 @@ def test_feed_bind_registration_allows_only_guild_text_channels() -> None:
     """The real application-command option excludes announcement channels."""
     import discord
 
-    group = _registered_account_settings_group(
-        SimpleNamespace(), SimpleNamespace()
-    )
+    group = _registered_account_settings_group(SimpleNamespace(), SimpleNamespace())
     command = group.get_command("feed-bind")
     parameter = command.parameters[0]
 

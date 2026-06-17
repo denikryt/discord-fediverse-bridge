@@ -266,6 +266,7 @@ class UserProfileService:
         header: ProfileMediaAsset | None,
     ) -> dict:
         """Build versioned non-secret canonical render input from committed rows."""
+
         def media(asset: ProfileMediaAsset | None) -> dict | None:
             if asset is None:
                 return None
@@ -340,9 +341,7 @@ class UserProfileService:
             if deployment_lock is not None:
                 deployment_lock.close()
 
-    def _normalize_fields(
-        self, fields: list[tuple[str, str]]
-    ) -> list[tuple[str, str]]:
+    def _normalize_fields(self, fields: list[tuple[str, str]]) -> list[tuple[str, str]]:
         """Validate the four-row plain-text metadata contract."""
         if len(fields) > 4:
             raise UserProfileValidationError("at most four profile fields are allowed")
@@ -360,9 +359,7 @@ class UserProfileService:
         return unicodedata.normalize("NFC", value).strip()
 
     @classmethod
-    def _optional_text(
-        cls, value: str | None, limit: int, label: str
-    ) -> str | None:
+    def _optional_text(cls, value: str | None, limit: int, label: str) -> str | None:
         """Normalize optional text and convert empty content to NULL."""
         if value is None:
             return None

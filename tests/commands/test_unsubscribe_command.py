@@ -1,28 +1,33 @@
 from __future__ import annotations
 
 from types import SimpleNamespace
-from unittest.mock import AsyncMock
 
 import pytest
 
 from src.commands import unsubscribe
 from src.bridge_policy import BridgePolicyService
-from tests_constants import BRIDGE_EXAMPLE_DOMAIN, LEMMY_EXAMPLE_DOMAIN
-
+from tests_constants import LEMMY_EXAMPLE_DOMAIN
 
 
 def _policy_service(database, settings):
     """Build the explicit policy dependency used by production composition."""
-    return BridgePolicyService(settings=settings, repository=database.bridge_policy_entries)
+    return BridgePolicyService(
+        settings=settings, repository=database.bridge_policy_entries
+    )
+
 
 @pytest.mark.asyncio
-async def test_unsubscribe_channel_success(command_tree, interaction, forum_channel, database, fedify_gateway):
+async def test_unsubscribe_channel_success(
+    command_tree, interaction, forum_channel, database, fedify_gateway
+):
     # The command shows the existing community label in the success message and
     # only deletes after confirming the mapping exists.
     community_actor_url = f"https://{LEMMY_EXAMPLE_DOMAIN}/c/hackers"
-    database.remote_subscriptions.get_subscription_by_channel.return_value = SimpleNamespace(
-        lemmy_community_name="hackers",
-        lemmy_community_actor_id=community_actor_url,
+    database.remote_subscriptions.get_subscription_by_channel.return_value = (
+        SimpleNamespace(
+            lemmy_community_name="hackers",
+            lemmy_community_actor_id=community_actor_url,
+        )
     )
     database.remote_subscriptions.delete_subscription.return_value = True
     # The operation reads the count before deletion, so two rows means one
@@ -31,28 +36,46 @@ async def test_unsubscribe_channel_success(command_tree, interaction, forum_chan
 
     settings = SimpleNamespace(discord_guild_allowlist=[], federation_allowlist=[])
 
-    unsubscribe.register(command_tree, database, fedify_gateway, settings, _policy_service(database, settings))
+    unsubscribe.register(
+        command_tree,
+        database,
+        fedify_gateway,
+        settings,
+        _policy_service(database, settings),
+    )
 
     command = command_tree.commands["unsubscribe-channel"]
     await command.callback(interaction, forum_channel)
 
     assert database.remote_subscriptions.get_subscription_by_channel.call_count >= 1
-    database.remote_subscriptions.delete_subscription.assert_called_once_with(forum_channel.id)
+    database.remote_subscriptions.delete_subscription.assert_called_once_with(
+        forum_channel.id
+    )
     send_call = interaction.response.send_message.await_args
-    assert send_call.args == ("<@1234567890> unsubscribed <#12345> from **hackers@lemmy.example**.",)
+    assert send_call.args == (
+        "<@1234567890> unsubscribed <#12345> from **hackers@lemmy.example**.",
+    )
     assert send_call.kwargs["allowed_mentions"].users is False
     assert send_call.kwargs.get("ephemeral", False) is False
 
 
 @pytest.mark.asyncio
-async def test_unsubscribe_channel_rejects_missing_subscription(command_tree, interaction, forum_channel, database, fedify_gateway):
+async def test_unsubscribe_channel_rejects_missing_subscription(
+    command_tree, interaction, forum_channel, database, fedify_gateway
+):
     # Missing mappings are reported ephemerally and must not trigger a delete call.
     database.remote_subscriptions.get_subscription_by_channel.return_value = None
     database.local_subscribers.get_local_subscriber_by_channel.return_value = None
 
     settings = SimpleNamespace(discord_guild_allowlist=[], federation_allowlist=[])
 
-    unsubscribe.register(command_tree, database, fedify_gateway, settings, _policy_service(database, settings))
+    unsubscribe.register(
+        command_tree,
+        database,
+        fedify_gateway,
+        settings,
+        _policy_service(database, settings),
+    )
 
     command = command_tree.commands["unsubscribe-channel"]
     await command.callback(interaction, forum_channel)

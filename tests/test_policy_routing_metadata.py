@@ -39,7 +39,9 @@ class _Forum:
 
     async def create_thread(self, **_: object) -> tuple[object, object]:
         self.calls.append(self.channel_id)
-        return SimpleNamespace(id=self.channel_id + 1000), SimpleNamespace(id=self.channel_id + 2000)
+        return SimpleNamespace(id=self.channel_id + 1000), SimpleNamespace(
+            id=self.channel_id + 2000
+        )
 
 
 class _RemoteBot:
@@ -63,7 +65,9 @@ class _Tracker:
 
 
 class _RemoteSubscriptions:
-    def __init__(self, rows: dict[int, object], failing: set[int] | None = None) -> None:
+    def __init__(
+        self, rows: dict[int, object], failing: set[int] | None = None
+    ) -> None:
         self.rows = rows
         self.failing = failing or set()
 
@@ -74,7 +78,9 @@ class _RemoteSubscriptions:
 
 
 @pytest.mark.asyncio
-async def test_remote_thread_fanout_isolates_missing_and_malformed_targets(caplog: pytest.LogCaptureFixture) -> None:
+async def test_remote_thread_fanout_isolates_missing_and_malformed_targets(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
     bot = _RemoteBot()
     database = SimpleNamespace(
         remote_subscriptions=_RemoteSubscriptions(
@@ -95,13 +101,18 @@ async def test_remote_thread_fanout_isolates_missing_and_malformed_targets(caplo
 
     results = await fanout.mirror_thread_to_siblings(
         source_thread=SimpleNamespace(id=1, name="topic"),
-        source_starter_message=SimpleNamespace(content="body", author=SimpleNamespace(display_name="author")),
+        source_starter_message=SimpleNamespace(
+            content="body", author=SimpleNamespace(display_name="author")
+        ),
         sibling_channel_ids=[10, 20, 25, 30, 40],
     )
 
     assert [result.channel_id for result in results] == [30]
     assert bot.calls == [30]
-    assert "Failed to validate Discord fanout routing metadata channel_id=10" in caplog.text
+    assert (
+        "Failed to validate Discord fanout routing metadata channel_id=10"
+        in caplog.text
+    )
     assert "missing subscription channel_id=25" in caplog.text
     assert "invalid guild metadata channel_id=20" in caplog.text
 
@@ -109,7 +120,9 @@ async def test_remote_thread_fanout_isolates_missing_and_malformed_targets(caplo
 @pytest.mark.parametrize("guild_id", [None, 0, -1, True, "123"])
 def test_remote_target_rejects_invalid_guild_ids(guild_id: object) -> None:
     database = SimpleNamespace(
-        remote_subscriptions=_RemoteSubscriptions({1: SimpleNamespace(discord_guild_id=guild_id)})
+        remote_subscriptions=_RemoteSubscriptions(
+            {1: SimpleNamespace(discord_guild_id=guild_id)}
+        )
     )
     fanout = DiscordFanout(
         bot=_RemoteBot(),
@@ -123,7 +136,9 @@ def test_remote_target_rejects_invalid_guild_ids(guild_id: object) -> None:
 
 def test_remote_policy_failure_is_fail_closed() -> None:
     database = SimpleNamespace(
-        remote_subscriptions=_RemoteSubscriptions({1: SimpleNamespace(discord_guild_id=100)})
+        remote_subscriptions=_RemoteSubscriptions(
+            {1: SimpleNamespace(discord_guild_id=100)}
+        )
     )
     fanout = DiscordFanout(
         bot=_RemoteBot(),
@@ -136,7 +151,9 @@ def test_remote_policy_failure_is_fail_closed() -> None:
 
 
 class _LocalSubscribers:
-    def __init__(self, rows: list[object], by_channel: dict[int, object] | None = None) -> None:
+    def __init__(
+        self, rows: list[object], by_channel: dict[int, object] | None = None
+    ) -> None:
         self.rows = rows
         self.by_channel = by_channel or {}
 
@@ -168,23 +185,33 @@ class _LocalSurfaces:
 
 
 @pytest.mark.asyncio
-async def test_local_thread_fanout_skips_invalid_target_and_continues_healthy_target() -> None:
+async def test_local_thread_fanout_skips_invalid_target_and_continues_healthy_target() -> (
+    None
+):
     bot = _RemoteBot()
     surfaces = _LocalSurfaces()
     database = SimpleNamespace(
         local_subscribers=_LocalSubscribers(
             [
-                SimpleNamespace(id=1, status="active", discord_channel_id=20, discord_guild_id=None),
-                SimpleNamespace(id=2, status="active", discord_channel_id=30, discord_guild_id=300),
+                SimpleNamespace(
+                    id=1, status="active", discord_channel_id=20, discord_guild_id=None
+                ),
+                SimpleNamespace(
+                    id=2, status="active", discord_channel_id=30, discord_guild_id=300
+                ),
             ]
         ),
         local_communities=_LocalCommunities(),
         local_community_surfaces=surfaces,
     )
-    fanout = LocalCommunityDiscordFanout(database=database, bot=bot, policy_service=_Policy())
+    fanout = LocalCommunityDiscordFanout(
+        database=database, bot=bot, policy_service=_Policy()
+    )
 
     summary = await fanout.fanout_thread_to_local_subscribers(
-        local_community=SimpleNamespace(id=7, discord_forum_channel_id=10, discord_guild_id=100),
+        local_community=SimpleNamespace(
+            id=7, discord_forum_channel_id=10, discord_guild_id=100
+        ),
         thread_row=SimpleNamespace(id=8),
         title="topic",
         content="body",
@@ -206,7 +233,9 @@ def test_local_surface_missing_or_malformed_metadata_is_fail_closed() -> None:
         ),
         local_communities=_LocalCommunities(),
     )
-    fanout = LocalCommunityDiscordFanout(database=database, bot=object(), policy_service=_Policy())
+    fanout = LocalCommunityDiscordFanout(
+        database=database, bot=object(), policy_service=_Policy()
+    )
 
     assert fanout._surface_is_allowed(20) is False
     assert fanout._surface_is_allowed(30) is False
@@ -221,13 +250,17 @@ def test_local_surface_repository_failure_is_fail_closed() -> None:
         local_subscribers=_FailingSubscribers(),
         local_communities=_LocalCommunities(),
     )
-    fanout = LocalCommunityDiscordFanout(database=database, bot=object(), policy_service=_Policy())
+    fanout = LocalCommunityDiscordFanout(
+        database=database, bot=object(), policy_service=_Policy()
+    )
 
     assert fanout._surface_is_allowed(20) is False
 
 
 @pytest.mark.asyncio
-async def test_local_subscriber_listing_failure_propagates_before_discord_side_effects() -> None:
+async def test_local_subscriber_listing_failure_propagates_before_discord_side_effects() -> (
+    None
+):
     class _FailingSubscribers:
         def list_local_subscribers(self, _: int) -> list[object]:
             raise RuntimeError("repository unavailable")
@@ -238,11 +271,15 @@ async def test_local_subscriber_listing_failure_propagates_before_discord_side_e
         local_communities=_LocalCommunities(),
         local_community_surfaces=_LocalSurfaces(),
     )
-    fanout = LocalCommunityDiscordFanout(database=database, bot=bot, policy_service=_Policy())
+    fanout = LocalCommunityDiscordFanout(
+        database=database, bot=bot, policy_service=_Policy()
+    )
 
     with pytest.raises(RuntimeError, match="repository unavailable"):
         await fanout.fanout_thread_to_local_subscribers(
-            local_community=SimpleNamespace(id=7, discord_forum_channel_id=10, discord_guild_id=100),
+            local_community=SimpleNamespace(
+                id=7, discord_forum_channel_id=10, discord_guild_id=100
+            ),
             thread_row=SimpleNamespace(id=8),
             title="topic",
             content="body",

@@ -28,7 +28,9 @@ def normalize_display_name(value: str) -> str:
     if not normalized:
         raise LocalCommunityError("Community display name is required.")
     if len(normalized) > 100:
-        raise LocalCommunityError("Community display name must be 100 characters or fewer.")
+        raise LocalCommunityError(
+            "Community display name must be 100 characters or fewer."
+        )
     return normalized
 
 
@@ -103,15 +105,24 @@ class LocalCommunityService:
         self.validate_slug(normalized_slug)
         normalized_name = normalize_display_name(name)
         normalized_description = normalize_summary(description)
-        if self.database.local_communities.get_local_community_by_slug(normalized_slug) is not None:
-            raise LocalCommunityError("That community slug is already taken.")
         if (
-            self.database.local_communities.get_local_community_by_forum_channel_id(discord_forum_channel_id)
+            self.database.local_communities.get_local_community_by_slug(normalized_slug)
             is not None
         ):
-            raise LocalCommunityError("That forum channel is already bound to a local community.")
+            raise LocalCommunityError("That community slug is already taken.")
+        if (
+            self.database.local_communities.get_local_community_by_forum_channel_id(
+                discord_forum_channel_id
+            )
+            is not None
+        ):
+            raise LocalCommunityError(
+                "That forum channel is already bound to a local community."
+            )
 
-        actor_url, inbox_url, outbox_url, followers_url = self.build_actor_urls(normalized_slug)
+        actor_url, inbox_url, outbox_url, followers_url = self.build_actor_urls(
+            normalized_slug
+        )
         public_key_pem, private_key_pem = self.keypair_generator()
         created = self.database.management_actions.create_local_community(
             discord_guild_id=discord_guild_id,

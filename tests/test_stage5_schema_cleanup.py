@@ -60,14 +60,18 @@ def _columns(database: Database, table: str) -> set[str]:
     with database.engine.connect() as connection:
         return {
             str(row[1])
-            for row in connection.execute(text(f"PRAGMA table_info({table})")).fetchall()
+            for row in connection.execute(
+                text(f"PRAGMA table_info({table})")
+            ).fetchall()
         }
 
 
 def _count(database: Database, table: str) -> int:
     """Return a row count for one table in the test database."""
     with database.engine.connect() as connection:
-        return int(connection.execute(text(f"SELECT COUNT(*) FROM {table}")).scalar_one())
+        return int(
+            connection.execute(text(f"SELECT COUNT(*) FROM {table}")).scalar_one()
+        )
 
 
 def test_stage5_current_schema_migrate_remains_idempotent(tmp_path: Path) -> None:
@@ -96,17 +100,22 @@ def test_stage5_current_schema_migrate_remains_idempotent(tmp_path: Path) -> Non
     database.migrate()
     database.migrate()
 
-    after_counts = {
-        table: _count(database, table)
-        for table in before_counts
-    }
+    after_counts = {table: _count(database, table) for table in before_counts}
     assert after_counts == before_counts
-    assert "local_subscriber_id" in _columns(database, "local_community_thread_surfaces")
-    assert "local_subscriber_id" in _columns(database, "local_community_message_surfaces")
+    assert "local_subscriber_id" in _columns(
+        database, "local_community_thread_surfaces"
+    )
+    assert "local_subscriber_id" in _columns(
+        database, "local_community_message_surfaces"
+    )
     assert "discord_thread_id" not in _columns(database, "local_community_threads")
-    assert "discord_starter_message_id" not in _columns(database, "local_community_threads")
+    assert "discord_starter_message_id" not in _columns(
+        database, "local_community_threads"
+    )
     assert "discord_message_id" not in _columns(database, "local_community_messages")
-    assert "parent_discord_message_id" not in _columns(database, "local_community_messages")
+    assert "parent_discord_message_id" not in _columns(
+        database, "local_community_messages"
+    )
 
 
 def test_stage5_removes_obsolete_stage1_table_upgrade_source() -> None:

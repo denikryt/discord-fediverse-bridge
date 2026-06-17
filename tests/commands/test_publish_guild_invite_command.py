@@ -10,10 +10,12 @@ from src.db import Database
 from src.bridge_policy import BridgePolicyService
 
 
-
 def _policy_service(database, settings):
     """Build the explicit policy dependency used by production composition."""
-    return BridgePolicyService(settings=settings, repository=database.bridge_policy_entries)
+    return BridgePolicyService(
+        settings=settings, repository=database.bridge_policy_entries
+    )
+
 
 def test_publish_command_declares_manage_guild_default_permissions() -> None:
     """Discord normally hides the command from members without Manage Guild."""
@@ -21,7 +23,9 @@ def test_publish_command_declares_manage_guild_default_permissions() -> None:
     tree = app_commands.CommandTree(client)
     database = Database("sqlite:///:memory:")
     settings = object()
-    publish_guild_invite.register(tree, database, settings, _policy_service(database, settings))
+    publish_guild_invite.register(
+        tree, database, settings, _policy_service(database, settings)
+    )
     command = tree.get_command("publish-guild-invite")
     assert command is not None
     assert command.default_permissions.manage_guild is True

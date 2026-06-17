@@ -16,7 +16,10 @@ from ..config import Settings
 from ..bridge_policy import BridgePolicyService, BridgePolicySnapshot
 from ..user_bans import BanDecision, UserBanService, render_ban_message
 from ..db import Database
-from ..local_community_lifecycle import disabled_moderation_message, is_local_community_disabled
+from ..local_community_lifecycle import (
+    disabled_moderation_message,
+    is_local_community_disabled,
+)
 from ..local_community_permissions import (
     can_access_local_community_from_guild,
     can_manage_local_community,
@@ -54,9 +57,11 @@ class OptionalCommunityScopeInput(Protocol):
 
     settings: Settings
     discord_user_id: str
+
     def get_policy_snapshot(self) -> BridgePolicySnapshot:
         """Return one memoized effective policy snapshot."""
         ...
+
     discord_guild_id: int | None
 
     @property
@@ -79,9 +84,11 @@ class RequiredLocalCommunityInput(Protocol):
 
     settings: Settings
     discord_user_id: str
+
     def get_policy_snapshot(self) -> BridgePolicySnapshot:
         """Return one memoized effective policy snapshot."""
         ...
+
     discord_guild_id: int | None
 
     @property
@@ -181,10 +188,7 @@ def inaccessible_community_message(
     value: OptionalCommunityScopeInput | RequiredLocalCommunityInput,
 ) -> str:
     """Build the stable inaccessible-community rejection text."""
-    return (
-        "Unknown or inaccessible local community: "
-        f"{value.normalized_community_slug}"
-    )
+    return f"Unknown or inaccessible local community: {value.normalized_community_slug}"
 
 
 def disabled_scoped_community_message(value: OptionalCommunityScopeInput) -> str:
@@ -261,9 +265,13 @@ class CommandAccessInput:
     policy_service: BridgePolicyService
     member_can_manage_guild: bool = False
     ban_service: UserBanService | None = None
-    _policy_snapshot: BridgePolicySnapshot | None = field(default=None, init=False, repr=False)
+    _policy_snapshot: BridgePolicySnapshot | None = field(
+        default=None, init=False, repr=False
+    )
     _policy_snapshot_loaded: bool = field(default=False, init=False, repr=False)
-    _global_ban_decision: BanDecision | None = field(default=None, init=False, repr=False)
+    _global_ban_decision: BanDecision | None = field(
+        default=None, init=False, repr=False
+    )
     _bridge_user: object | None = field(default=None, init=False, repr=False)
     _bridge_user_loaded: bool = field(default=False, init=False, repr=False)
 
@@ -295,7 +303,9 @@ class CommandAccessInput:
         if not self._bridge_user_loaded:
             if self.database is None:
                 raise RuntimeError("Registered command access requires a database.")
-            self._bridge_user = self.database.users.get_user_by_discord_user_id(self.discord_user_id)
+            self._bridge_user = self.database.users.get_user_by_discord_user_id(
+                self.discord_user_id
+            )
             self._bridge_user_loaded = True
         return self._bridge_user
 
@@ -364,15 +374,29 @@ DISCORD_USER_REGISTERED = Precondition(
 # source of truth for atomic preconditions and their short-circuit order.
 GUILD_COMMAND_ACCESS = PolicyDefinition(
     name="guild_command_access",
-    preconditions=(GLOBAL_USER_NOT_BANNED, GUILD_CONTEXT_REQUIRED, GUILD_POLICY_ALLOWS_COMMAND),
+    preconditions=(
+        GLOBAL_USER_NOT_BANNED,
+        GUILD_CONTEXT_REQUIRED,
+        GUILD_POLICY_ALLOWS_COMMAND,
+    ),
 )
 
 REGISTERED_GUILD_COMMAND_ACCESS = PolicyDefinition(
     name="registered_guild_command_access",
-    preconditions=(GLOBAL_USER_NOT_BANNED, GUILD_CONTEXT_REQUIRED, GUILD_POLICY_ALLOWS_COMMAND, DISCORD_USER_REGISTERED),
+    preconditions=(
+        GLOBAL_USER_NOT_BANNED,
+        GUILD_CONTEXT_REQUIRED,
+        GUILD_POLICY_ALLOWS_COMMAND,
+        DISCORD_USER_REGISTERED,
+    ),
 )
 
 MANAGE_GUILD_COMMAND_ACCESS = PolicyDefinition(
     name="manage_guild_command_access",
-    preconditions=(GLOBAL_USER_NOT_BANNED, GUILD_CONTEXT_REQUIRED, GUILD_POLICY_ALLOWS_COMMAND, MANAGE_GUILD_REQUIRED),
+    preconditions=(
+        GLOBAL_USER_NOT_BANNED,
+        GUILD_CONTEXT_REQUIRED,
+        GUILD_POLICY_ALLOWS_COMMAND,
+        MANAGE_GUILD_REQUIRED,
+    ),
 )

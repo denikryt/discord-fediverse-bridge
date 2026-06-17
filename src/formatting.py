@@ -61,7 +61,9 @@ def format_lemmy_post_for_discord(
     return truncate("\n\n".join(parts), DISCORD_MESSAGE_LIMIT)
 
 
-def format_lemmy_comment_for_discord(author: str, body: str, url: str, actor_id: str = "") -> str:
+def format_lemmy_comment_for_discord(
+    author: str, body: str, url: str, actor_id: str = ""
+) -> str:
     """Render one remote Lemmy comment for Discord message content."""
     # Show full fediverse handle when we can derive the instance domain from actor_id.
     # Falls back to plain username when actor_id is absent (e.g. synthetic events).
@@ -121,4 +123,6 @@ def format_discord_body_for_lemmy(author: str, content: str, prefix: str) -> str
 
 
 def format_thread_title_for_discord(title: str) -> str:
-    return truncate(normalize_text(title) or "Untitled Lemmy Post", DISCORD_THREAD_NAME_LIMIT)
+    return truncate(
+        normalize_text(title) or "Untitled Lemmy Post", DISCORD_THREAD_NAME_LIMIT
+    )

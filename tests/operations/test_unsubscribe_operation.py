@@ -30,8 +30,10 @@ async def test_unsubscribe_operation_rejects_missing_subscription() -> None:
             fedify_gateway=fedify_gateway,
             channel_id=123,
             channel_mention="<#123>",
-
-            policy_service=BridgePolicyService(settings=SimpleNamespace(), repository=database.bridge_policy_entries),),
+            policy_service=BridgePolicyService(
+                settings=SimpleNamespace(), repository=database.bridge_policy_entries
+            ),
+        ),
     )
 
     assert result.applied is False
@@ -46,9 +48,11 @@ async def test_unsubscribe_skips_unfollow_when_other_channels_remain() -> None:
     community_actor_url = f"https://{LEMMY_EXAMPLE_DOMAIN}/c/hackers"
     database = Mock()
     database.bridge_policy_entries.list_all_active.return_value = []
-    database.remote_subscriptions.get_subscription_by_channel.return_value = SimpleNamespace(
-        lemmy_community_name="hackers",
-        lemmy_community_actor_id=community_actor_url,
+    database.remote_subscriptions.get_subscription_by_channel.return_value = (
+        SimpleNamespace(
+            lemmy_community_name="hackers",
+            lemmy_community_actor_id=community_actor_url,
+        )
     )
     database.remote_subscriptions.delete_subscription.return_value = True
     # The count is read before deletion, so two rows means one other channel
@@ -63,8 +67,10 @@ async def test_unsubscribe_skips_unfollow_when_other_channels_remain() -> None:
             fedify_gateway=fedify_gateway,
             channel_id=123,
             channel_mention="<#123>",
-
-            policy_service=BridgePolicyService(settings=SimpleNamespace(), repository=database.bridge_policy_entries),),
+            policy_service=BridgePolicyService(
+                settings=SimpleNamespace(), repository=database.bridge_policy_entries
+            ),
+        ),
     )
 
     assert result.applied is True
@@ -82,20 +88,26 @@ async def test_unsubscribe_sends_unfollow_when_last_channel() -> None:
     follow_activity_id = f"https://{BRIDGE_EXAMPLE_DOMAIN}/activities/follow/1"
     database = Mock()
     database.bridge_policy_entries.list_all_active.return_value = []
-    database.remote_subscriptions.get_subscription_by_channel.return_value = SimpleNamespace(
-        lemmy_community_name="hackers",
-        lemmy_community_actor_id=community_actor_url,
+    database.remote_subscriptions.get_subscription_by_channel.return_value = (
+        SimpleNamespace(
+            lemmy_community_name="hackers",
+            lemmy_community_actor_id=community_actor_url,
+        )
     )
     database.remote_subscriptions.delete_subscription.return_value = True
     # One row exists before deletion, so this unsubscribe is the last channel.
     database.remote_subscriptions.count_subscriptions_for_community.return_value = 1
-    database.bridge_actor_follows.get_bridge_actor_follow.return_value = SimpleNamespace(
-        community_actor_id=community_actor_url,
-        follow_activity_id=follow_activity_id,
-        status="accepted",
+    database.bridge_actor_follows.get_bridge_actor_follow.return_value = (
+        SimpleNamespace(
+            community_actor_id=community_actor_url,
+            follow_activity_id=follow_activity_id,
+            status="accepted",
+        )
     )
     fedify_gateway = AsyncMock()
-    fedify_gateway.unfollow_community.return_value = UnfollowCommunityResult(accepted=True)
+    fedify_gateway.unfollow_community.return_value = UnfollowCommunityResult(
+        accepted=True
+    )
 
     result = await run_operation_definition_async(
         unsubscribe_operation,
@@ -104,8 +116,10 @@ async def test_unsubscribe_sends_unfollow_when_last_channel() -> None:
             fedify_gateway=fedify_gateway,
             channel_id=123,
             channel_mention="<#123>",
-
-            policy_service=BridgePolicyService(settings=SimpleNamespace(), repository=database.bridge_policy_entries),),
+            policy_service=BridgePolicyService(
+                settings=SimpleNamespace(), repository=database.bridge_policy_entries
+            ),
+        ),
     )
 
     assert result.applied is True
@@ -115,7 +129,9 @@ async def test_unsubscribe_sends_unfollow_when_last_channel() -> None:
     fedify_gateway.unfollow_community.assert_awaited_once_with(
         community_actor_url, follow_activity_id
     )
-    database.bridge_actor_follows.delete_bridge_actor_follow.assert_called_once_with(community_actor_url)
+    database.bridge_actor_follows.delete_bridge_actor_follow.assert_called_once_with(
+        community_actor_url
+    )
 
 
 @pytest.mark.asyncio
@@ -125,16 +141,20 @@ async def test_unsubscribe_last_channel_undo_failure_keeps_follow_row() -> None:
     follow_activity_id = f"https://{BRIDGE_EXAMPLE_DOMAIN}/activities/follow/1"
     database = Mock()
     database.bridge_policy_entries.list_all_active.return_value = []
-    database.remote_subscriptions.get_subscription_by_channel.return_value = SimpleNamespace(
-        lemmy_community_name="hackers",
-        lemmy_community_actor_id=community_actor_url,
+    database.remote_subscriptions.get_subscription_by_channel.return_value = (
+        SimpleNamespace(
+            lemmy_community_name="hackers",
+            lemmy_community_actor_id=community_actor_url,
+        )
     )
     database.remote_subscriptions.delete_subscription.return_value = True
     database.remote_subscriptions.count_subscriptions_for_community.return_value = 1
-    database.bridge_actor_follows.get_bridge_actor_follow.return_value = SimpleNamespace(
-        community_actor_id=community_actor_url,
-        follow_activity_id=follow_activity_id,
-        status="accepted",
+    database.bridge_actor_follows.get_bridge_actor_follow.return_value = (
+        SimpleNamespace(
+            community_actor_id=community_actor_url,
+            follow_activity_id=follow_activity_id,
+            status="accepted",
+        )
     )
     fedify_gateway = AsyncMock()
     fedify_gateway.unfollow_community.return_value = UnfollowCommunityResult(
@@ -149,8 +169,10 @@ async def test_unsubscribe_last_channel_undo_failure_keeps_follow_row() -> None:
             fedify_gateway=fedify_gateway,
             channel_id=123,
             channel_mention="<#123>",
-
-            policy_service=BridgePolicyService(settings=SimpleNamespace(), repository=database.bridge_policy_entries),),
+            policy_service=BridgePolicyService(
+                settings=SimpleNamespace(), repository=database.bridge_policy_entries
+            ),
+        ),
     )
 
     # The local channel row may be removed, but the overall unsubscribe is not
@@ -162,20 +184,26 @@ async def test_unsubscribe_last_channel_undo_failure_keeps_follow_row() -> None:
 
 
 @pytest.mark.asyncio
-async def test_unsubscribe_last_channel_with_missing_follow_id_keeps_local_state() -> None:
+async def test_unsubscribe_last_channel_with_missing_follow_id_keeps_local_state() -> (
+    None
+):
     """Missing follow state must block last-channel cleanup before deletion."""
     community_actor_url = f"https://{LEMMY_EXAMPLE_DOMAIN}/c/hackers"
     database = Mock()
     database.bridge_policy_entries.list_all_active.return_value = []
-    database.remote_subscriptions.get_subscription_by_channel.return_value = SimpleNamespace(
-        lemmy_community_name="hackers",
-        lemmy_community_actor_id=community_actor_url,
+    database.remote_subscriptions.get_subscription_by_channel.return_value = (
+        SimpleNamespace(
+            lemmy_community_name="hackers",
+            lemmy_community_actor_id=community_actor_url,
+        )
     )
     database.remote_subscriptions.count_subscriptions_for_community.return_value = 1
-    database.bridge_actor_follows.get_bridge_actor_follow.return_value = SimpleNamespace(
-        community_actor_id=community_actor_url,
-        follow_activity_id=None,
-        status="accepted",
+    database.bridge_actor_follows.get_bridge_actor_follow.return_value = (
+        SimpleNamespace(
+            community_actor_id=community_actor_url,
+            follow_activity_id=None,
+            status="accepted",
+        )
     )
     fedify_gateway = AsyncMock()
 
@@ -186,8 +214,10 @@ async def test_unsubscribe_last_channel_with_missing_follow_id_keeps_local_state
             fedify_gateway=fedify_gateway,
             channel_id=123,
             channel_mention="<#123>",
-
-            policy_service=BridgePolicyService(settings=SimpleNamespace(), repository=database.bridge_policy_entries),),
+            policy_service=BridgePolicyService(
+                settings=SimpleNamespace(), repository=database.bridge_policy_entries
+            ),
+        ),
     )
 
     assert result.applied is False

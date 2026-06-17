@@ -55,7 +55,9 @@ class SubscribeInput:
         # Registration is checked before any follow attempt so moderation flows
         # never create anonymous bridge subscriptions.
         if not self._bridge_user_loaded:
-            self._bridge_user = self.database.users.get_user_by_discord_user_id(self.discord_user_id)
+            self._bridge_user = self.database.users.get_user_by_discord_user_id(
+                self.discord_user_id
+            )
             self._bridge_user_loaded = True
         return self._bridge_user
 
@@ -64,7 +66,11 @@ class SubscribeInput:
         # Multiple preconditions and the body inspect the same row, so the
         # input keeps one DB lookup per operation execution.
         if not self._existing_subscription_loaded:
-            self._existing_subscription = self.database.remote_subscriptions.get_subscription_by_channel(self.channel_id)
+            self._existing_subscription = (
+                self.database.remote_subscriptions.get_subscription_by_channel(
+                    self.channel_id
+                )
+            )
             self._existing_subscription_loaded = True
         return self._existing_subscription
 
@@ -73,7 +79,11 @@ class SubscribeInput:
         # Preconditions and the body both consult the AP-level follow state.
         # Memoizing avoids a second DB round-trip for the same community.
         if not self._bridge_actor_follow_loaded:
-            self._bridge_actor_follow = self.database.bridge_actor_follows.get_bridge_actor_follow(self.actor_id)
+            self._bridge_actor_follow = (
+                self.database.bridge_actor_follows.get_bridge_actor_follow(
+                    self.actor_id
+                )
+            )
             self._bridge_actor_follow_loaded = True
         return self._bridge_actor_follow
 
@@ -159,7 +169,9 @@ async def _body(operation_input: SubscribeInput) -> OperationResult:
     if existing_channel_sub is not None and existing_channel_sub.status == "failed":
         # Failed rows are retriable. Delete the stale channel row first so the
         # UNIQUE constraint on discord_channel_id allows the replacement insert.
-        operation_input.database.remote_subscriptions.delete_subscription(operation_input.channel_id)
+        operation_input.database.remote_subscriptions.delete_subscription(
+            operation_input.channel_id
+        )
 
     existing_follow = operation_input.get_bridge_actor_follow()
 
@@ -212,7 +224,9 @@ async def _body(operation_input: SubscribeInput) -> OperationResult:
     # No existing bridge follow (or failed) — send a fresh Follow.
     if existing_follow is not None and existing_follow.status == "failed":
         # Remove the stale failed bridge follow row before creating a fresh one.
-        operation_input.database.bridge_actor_follows.delete_bridge_actor_follow(operation_input.actor_id)
+        operation_input.database.bridge_actor_follows.delete_bridge_actor_follow(
+            operation_input.actor_id
+        )
 
     decision = operation_input.policy_service.federation_decision(
         operation_input.actor_id
@@ -228,7 +242,9 @@ async def _body(operation_input: SubscribeInput) -> OperationResult:
         )
 
     try:
-        follow_result = await operation_input.fedify_gateway.follow_community(operation_input.actor_id)
+        follow_result = await operation_input.fedify_gateway.follow_community(
+            operation_input.actor_id
+        )
     except Exception:
         # Follow dispatch failures must be durable local state so moderators can
         # see an explicit failed attempt instead of a fake pending row.

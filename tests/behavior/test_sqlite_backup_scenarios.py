@@ -7,7 +7,12 @@ from datetime import datetime, timezone
 
 import pytest
 
-from src.db.backup import apply_retention, create_backup, restore_backup, validate_snapshot
+from src.db.backup import (
+    apply_retention,
+    create_backup,
+    restore_backup,
+    validate_snapshot,
+)
 
 
 def test_live_database_backup_contains_committed_actor_keys(tmp_path) -> None:
@@ -29,9 +34,15 @@ def test_live_database_backup_contains_committed_actor_keys(tmp_path) -> None:
     )
     validate_snapshot(backup)
     with sqlite3.connect(backup) as connection:
-        assert connection.execute("SELECT private_key_data FROM bridge_actor_keys").fetchone() == ("bridge-secret",)
-        assert connection.execute("SELECT private_key_pem FROM users").fetchone() == ("user-secret",)
-        assert connection.execute("SELECT private_key_pem FROM local_communities").fetchone() == ("community-secret",)
+        assert connection.execute(
+            "SELECT private_key_data FROM bridge_actor_keys"
+        ).fetchone() == ("bridge-secret",)
+        assert connection.execute("SELECT private_key_pem FROM users").fetchone() == (
+            "user-secret",
+        )
+        assert connection.execute(
+            "SELECT private_key_pem FROM local_communities"
+        ).fetchone() == ("community-secret",)
     assert oct(backup.stat().st_mode & 0o777) == "0o600"
 
 
@@ -45,7 +56,11 @@ def test_retention_is_scoped_and_restore_preserves_live_on_corruption(tmp_path) 
         with sqlite3.connect(source) as connection:
             connection.execute("CREATE TABLE value (data TEXT)")
             connection.execute("INSERT INTO value VALUES (?)", (str(day),))
-        snapshots.append(create_backup(source, output, now=datetime(2026, 6, day, tzinfo=timezone.utc)))
+        snapshots.append(
+            create_backup(
+                source, output, now=datetime(2026, 6, day, tzinfo=timezone.utc)
+            )
+        )
     unrelated = output / "notes.txt"
     unrelated.write_text("keep")
     removed = apply_retention(output, 2)

@@ -22,7 +22,9 @@ def _database(tmp_path: Path) -> Database:
     return database
 
 
-def _runtime(database: Database, *, allowlist: list[str] | None = None) -> SimpleNamespace:
+def _runtime(
+    database: Database, *, allowlist: list[str] | None = None
+) -> SimpleNamespace:
     """Build a minimal runtime carrying dashboard-owned dependencies."""
     settings = SimpleNamespace(
         fedify_origin="https://discrod-bridge.example.com",
@@ -42,7 +44,7 @@ def _runtime(database: Database, *, allowlist: list[str] | None = None) -> Simpl
         fedify_gateway=SimpleNamespace(),
         bot=SimpleNamespace(),
         bridge_policy_service=build_test_policy_service(database, settings),
-)
+    )
 
 
 def _client(database: Database, *, allowlist: list[str] | None = None) -> TestClient:
@@ -77,7 +79,10 @@ def test_empty_dashboard_state_renders_open_federation(tmp_path: Path) -> None:
     assert payload["instance"]["title"] == DEFAULT_DASHBOARD_PAGE_TITLE
     assert payload["instance"]["origin"] == "https://discrod-bridge.example.com"
     assert payload["instance"]["version"] == "0.1.0"
-    assert payload["instance"]["bridgeActorUrl"] == "https://discrod-bridge.example.com/actors/bridge"
+    assert (
+        payload["instance"]["bridgeActorUrl"]
+        == "https://discrod-bridge.example.com/actors/bridge"
+    )
     assert payload["instance"]["registeredUserCount"] == 0
     assert payload["localCommunities"] == []
     assert payload["bridgeActorFollows"] == []
@@ -138,12 +143,19 @@ def test_local_communities_show_safe_public_metadata_and_counts(tmp_path: Path) 
     assert community_payload["name"] == "Hackers"
     assert community_payload["description"] == "A local hackerspace forum."
     assert community_payload["relayHandle"] == "!hackers@discrod-bridge.example.com"
-    assert community_payload["actorUrl"] == "https://discrod-bridge.example.com/communities/hackers"
-    assert community_payload["aliasUrl"] == "https://discrod-bridge.example.com/c/hackers"
+    assert (
+        community_payload["actorUrl"]
+        == "https://discrod-bridge.example.com/communities/hackers"
+    )
+    assert (
+        community_payload["aliasUrl"] == "https://discrod-bridge.example.com/c/hackers"
+    )
     assert community_payload["remoteSubscriberCount"] == 2
     assert community_payload["localSubscriberCount"] == 0
     assert len(community_payload["followers"]) == 2
-    assert sorted(follower["actorUrl"] for follower in community_payload["followers"]) == [
+    assert sorted(
+        follower["actorUrl"] for follower in community_payload["followers"]
+    ) == [
         "https://beehaw.org/u/bob",
         "https://lemmy.world/u/alice",
     ]
@@ -153,7 +165,9 @@ def test_local_communities_show_safe_public_metadata_and_counts(tmp_path: Path) 
     assert "test-secret" not in serialized
 
 
-def test_bridge_actor_follows_do_not_change_federation_policy_payload(tmp_path: Path) -> None:
+def test_bridge_actor_follows_do_not_change_federation_policy_payload(
+    tmp_path: Path,
+) -> None:
     """Outbound bridge follows stay separate from the public federation policy block."""
     database = _database(tmp_path)
     community = _create_local_community(database)
@@ -181,7 +195,10 @@ def test_bridge_actor_follows_do_not_change_federation_policy_payload(tmp_path: 
 
     payload = _client(database).get("/dashboard/data").json()
 
-    assert payload["bridgeActorFollows"][0]["communityActorUrl"] == "https://lemmy.world/c/news"
+    assert (
+        payload["bridgeActorFollows"][0]["communityActorUrl"]
+        == "https://lemmy.world/c/news"
+    )
     assert payload["bridgeActorFollows"][0]["communityName"] == "news"
     assert payload["bridgeActorFollows"][0]["communityHandle"] == "!news@lemmy.world"
     assert payload["federation"]["mode"] == "open"
@@ -192,7 +209,11 @@ def test_bridge_actor_follows_do_not_change_federation_policy_payload(tmp_path: 
 def test_allowlist_mode_is_explicit_and_normalized(tmp_path: Path) -> None:
     """Allowlist entries are normalized as sorted hostnames."""
     database = _database(tmp_path)
-    payload = _client(database, allowlist=["lemmy.world", "https://Beehaw.org"]).get("/dashboard/data").json()
+    payload = (
+        _client(database, allowlist=["lemmy.world", "https://Beehaw.org"])
+        .get("/dashboard/data")
+        .json()
+    )
 
     assert payload["federation"]["mode"] == "restricted_allowlist"
     assert payload["federation"]["allowlist"] == ["beehaw.org", "lemmy.world"]
@@ -216,7 +237,7 @@ def test_dashboard_html_loads_and_includes_credits(tmp_path: Path) -> None:
     assert response.status_code == 200
     assert DEFAULT_DASHBOARD_PAGE_TITLE in response.text
     assert "/dashboard/data" in response.text
-    assert '/dashboard/static/icon.png?v=' in response.text
+    assert "/dashboard/static/icon.png?v=" in response.text
     assert "/dashboard/static/dashboard.css?v=" in response.text
     assert "/dashboard/static/dashboard.js?v=" in response.text
     assert 'data-dashboard-endpoint="/dashboard/data"' in response.text
@@ -258,7 +279,9 @@ def test_dashboard_path_redirects_to_root(tmp_path: Path) -> None:
     assert response.headers["location"] == "/"
 
 
-def test_dashboard_static_assets_are_served_under_dashboard_prefix(tmp_path: Path) -> None:
+def test_dashboard_static_assets_are_served_under_dashboard_prefix(
+    tmp_path: Path,
+) -> None:
     """Dashboard assets are grouped under the dashboard static namespace."""
     database = _database(tmp_path)
     client = _client(database)
@@ -273,9 +296,9 @@ def test_dashboard_static_assets_are_served_under_dashboard_prefix(tmp_path: Pat
     assert icon.status_code == 200
     assert icon.headers["content-type"].startswith("image/png")
     assert script.status_code == 200
-    assert script.headers["content-type"].startswith("text/javascript") or script.headers[
-        "content-type"
-    ].startswith("application/javascript")
+    assert script.headers["content-type"].startswith(
+        "text/javascript"
+    ) or script.headers["content-type"].startswith("application/javascript")
     assert "data-dashboard-endpoint" in script.text
     assert "activeCommunityFilter" in script.text
     assert 'let activeCommunityFilter = "local"' in script.text
@@ -294,7 +317,9 @@ def test_dashboard_static_assets_are_served_under_dashboard_prefix(tmp_path: Pat
     assert "[hidden]" in css.text
 
 
-def test_local_community_host_discord_names_appear_in_dashboard_payload(tmp_path: Path) -> None:
+def test_local_community_host_discord_names_appear_in_dashboard_payload(
+    tmp_path: Path,
+) -> None:
     """A hosted local community shows last-known guild and forum names."""
     database = _database(tmp_path)
     _create_local_community(database)
@@ -317,7 +342,9 @@ def test_local_community_host_discord_names_appear_in_dashboard_payload(tmp_path
     }
 
 
-def test_published_guild_invites_appear_on_guild_and_local_community_cards(tmp_path: Path) -> None:
+def test_published_guild_invites_appear_on_guild_and_local_community_cards(
+    tmp_path: Path,
+) -> None:
     """One published guild invite is exposed on both related public dashboard surfaces."""
     database = _database(tmp_path)
     _create_local_community(database)
@@ -347,10 +374,14 @@ def test_published_guild_invites_appear_on_guild_and_local_community_cards(tmp_p
     assert payload["discordGuilds"][0]["inviteUrl"] == "https://discord.gg/test"
 
 
-def test_accepted_remote_subscriptions_are_grouped_by_discord_guild(tmp_path: Path) -> None:
+def test_accepted_remote_subscriptions_are_grouped_by_discord_guild(
+    tmp_path: Path,
+) -> None:
     """Only accepted remote subscriptions appear in the guild placement section."""
     database = _database(tmp_path)
-    database.discord_directory.upsert_guild_snapshot(discord_guild_id=55, guild_name="Guild 1")
+    database.discord_directory.upsert_guild_snapshot(
+        discord_guild_id=55, guild_name="Guild 1"
+    )
     database.discord_directory.upsert_channel_snapshot(
         discord_channel_id=501,
         discord_guild_id=55,
@@ -406,7 +437,9 @@ def test_active_local_subscribers_are_grouped_by_discord_guild(tmp_path: Path) -
     """Only active local subscribers appear with bridge-facing community handles."""
     database = _database(tmp_path)
     community = _create_local_community(database)
-    database.discord_directory.upsert_guild_snapshot(discord_guild_id=77, guild_name="Guild 2")
+    database.discord_directory.upsert_guild_snapshot(
+        discord_guild_id=77, guild_name="Guild 2"
+    )
     database.discord_directory.upsert_channel_snapshot(
         discord_channel_id=701,
         discord_guild_id=77,
@@ -436,7 +469,9 @@ def test_active_local_subscribers_are_grouped_by_discord_guild(tmp_path: Path) -
 
     payload = _client(database).get("/dashboard/data").json()
 
-    guild = next(row for row in payload["discordGuilds"] if row["guildName"] == "Guild 2")
+    guild = next(
+        row for row in payload["discordGuilds"] if row["guildName"] == "Guild 2"
+    )
     assert guild["localSubscriptions"] == [
         {
             "forumChannelName": "mirror-forum",
@@ -449,7 +484,9 @@ def test_dashboard_guild_visibility_redacts_numeric_discord_ids(tmp_path: Path) 
     """Guild visibility exposes names but not raw Discord identifiers."""
     database = _database(tmp_path)
     _create_local_community(database)
-    database.discord_directory.upsert_guild_snapshot(discord_guild_id=10, guild_name="Guild 1")
+    database.discord_directory.upsert_guild_snapshot(
+        discord_guild_id=10, guild_name="Guild 1"
+    )
     database.discord_directory.upsert_channel_snapshot(
         discord_channel_id=100,
         discord_guild_id=10,
@@ -472,7 +509,9 @@ def test_disabled_local_communities_are_hidden_from_dashboard(tmp_path: Path) ->
     database = _database(tmp_path)
     community = _create_local_community(database)
     with database.session() as session:
-        persisted = session.merge(database.local_communities.get_local_community_by_slug("hackers"))
+        persisted = session.merge(
+            database.local_communities.get_local_community_by_slug("hackers")
+        )
         persisted.status = "disabled"
 
     database.local_subscribers.create_local_subscriber(

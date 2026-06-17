@@ -60,8 +60,16 @@ def test_migration_adds_outcome_without_backfilling_legacy_rows(tmp_path: Path) 
                 """
             )
         )
-        connection.execute(text("CREATE TABLE local_community_threads (id INTEGER PRIMARY KEY AUTOINCREMENT)"))
-        connection.execute(text("CREATE TABLE local_community_messages (id INTEGER PRIMARY KEY AUTOINCREMENT)"))
+        connection.execute(
+            text(
+                "CREATE TABLE local_community_threads (id INTEGER PRIMARY KEY AUTOINCREMENT)"
+            )
+        )
+        connection.execute(
+            text(
+                "CREATE TABLE local_community_messages (id INTEGER PRIMARY KEY AUTOINCREMENT)"
+            )
+        )
         connection.execute(
             text(
                 """
@@ -143,7 +151,9 @@ def test_retry_start_clears_stale_terminal_outcome(tmp_path: Path) -> None:
     assert receipt.detail == "retrying deferred delivery"
 
 
-def test_duplicate_legacy_receipt_returns_null_outcome_without_inference(tmp_path: Path) -> None:
+def test_duplicate_legacy_receipt_returns_null_outcome_without_inference(
+    tmp_path: Path,
+) -> None:
     """Duplicate responses must not derive missing outcomes from legacy detail."""
     database = Database(f"sqlite:///{tmp_path / 'legacy-duplicate.db'}")
     database.create_all()
@@ -155,7 +165,9 @@ def test_duplicate_legacy_receipt_returns_null_outcome_without_inference(tmp_pat
         outcome=None,
         detail="no subscriptions for this community",
     )
-    runtime = SimpleNamespace(database=database, bridge_policy_service=build_test_policy_service(database))
+    runtime = SimpleNamespace(
+        database=database, bridge_policy_service=build_test_policy_service(database)
+    )
     event = SimpleNamespace(delivery_id="delivery-1")
 
     response = _begin_event_processing(runtime, event)

@@ -15,7 +15,7 @@ from urllib.parse import urlparse
 from sqlalchemy import create_engine, select
 from sqlalchemy.orm import Session, sessionmaker
 
-from .models import Base, User
+from .models import User
 
 DEFAULT_DATABASE_URL = "sqlite:///./bridge.db"
 DEFAULT_OUTPUT_PATH = Path("dev/users.db.backup")
@@ -38,9 +38,7 @@ def write_user_identity_backup(
 
     source_path = resolve_sqlite_path(source_database_url)
     if not source_path.exists():
-        raise UserIdentityBackupError(
-            f"Source database does not exist: {source_path}"
-        )
+        raise UserIdentityBackupError(f"Source database does not exist: {source_path}")
 
     output_path.parent.mkdir(parents=True, exist_ok=True)
     if output_path.exists():
@@ -63,7 +61,9 @@ def write_user_identity_backup(
     try:
         create_users_table(backup_connection)
         with session_factory() as session:
-            users = list(session.scalars(select(User).order_by(User.created_at, User.id)))
+            users = list(
+                session.scalars(select(User).order_by(User.created_at, User.id))
+            )
         insert_users(backup_connection, users)
         backup_connection.commit()
     finally:

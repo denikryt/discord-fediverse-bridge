@@ -6,9 +6,13 @@ from datetime import datetime, timezone
 import aiohttp
 import discord
 
-from .activitypub_models import ActivityPubEvent, ActivityPubObject
-from .db import Database
-from .formatting import format_lemmy_comment_for_discord, format_lemmy_post_for_discord, format_thread_title_for_discord, normalize_text
+from .activitypub_models import ActivityPubEvent
+from .formatting import (
+    format_lemmy_comment_for_discord,
+    format_lemmy_post_for_discord,
+    format_thread_title_for_discord,
+    normalize_text,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -22,7 +26,9 @@ async def _fetch_ap_object(url: str) -> dict:
     """
     headers = {"Accept": "application/activity+json"}
     async with aiohttp.ClientSession() as session:
-        async with session.get(url, headers=headers, timeout=aiohttp.ClientTimeout(total=10)) as resp:
+        async with session.get(
+            url, headers=headers, timeout=aiohttp.ClientTimeout(total=10)
+        ) as resp:
             if resp.status >= 400:
                 raise RuntimeError(f"HTTP {resp.status} fetching AP object {url}")
             return await resp.json(content_type=None)
@@ -139,9 +145,15 @@ async def _create_inbound_discord_thread(
         try:
             message = await thread.fetch_message(thread.id)
         except discord.HTTPException as exc:
-            raise RuntimeError("Discord create_thread did not return a starter message") from exc
+            raise RuntimeError(
+                "Discord create_thread did not return a starter message"
+            ) from exc
 
-    logger.info("Created Discord forum thread %s from ActivityPub post %s", thread.id, post.ap_id)
+    logger.info(
+        "Created Discord forum thread %s from ActivityPub post %s",
+        thread.id,
+        post.ap_id,
+    )
     return thread.id, message.id
 
 
@@ -165,5 +177,9 @@ async def _send_inbound_comment(
         actor_id=event.actor_id,
     )
     message = await thread.send(body, reference=reference)
-    logger.info("Created Discord message %s from ActivityPub comment %s", message.id, comment.ap_id)
+    logger.info(
+        "Created Discord message %s from ActivityPub comment %s",
+        message.id,
+        comment.ap_id,
+    )
     return message

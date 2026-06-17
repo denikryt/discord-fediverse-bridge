@@ -44,8 +44,12 @@ def collect_bridge_policy_effects(
                 )
             )
         )
-    active = tuple((kind, subject) for kind, subject, status in rows if status == "active")
-    inactive = tuple((kind, subject) for kind, subject, status in rows if status == "inactive")
+    active = tuple(
+        (kind, subject) for kind, subject, status in rows if status == "active"
+    )
+    inactive = tuple(
+        (kind, subject) for kind, subject, status in rows if status == "inactive"
+    )
     audits = tuple(
         (event.action, event.result)
         for event in database.management_audit_events.list_oldest_first()[audit_offset:]
@@ -70,7 +74,11 @@ def assert_bridge_policy_effects(
     assert observed.applied is expected.applied, "operation applied outcome"
     assert observed.reason == expected.reason, "operation/evaluation reason"
     assert observed.decision_allowed is expected.decision_allowed, "policy decision"
-    assert observed.decision_reason == expected.decision_reason, "policy decision reason"
+    assert observed.decision_reason == expected.decision_reason, (
+        "policy decision reason"
+    )
     assert observed.active_entries == expected.active_entries, "active policy rows"
-    assert observed.inactive_entries == expected.inactive_entries, "inactive policy rows"
+    assert observed.inactive_entries == expected.inactive_entries, (
+        "inactive policy rows"
+    )
     assert observed.audit_events == expected.audit_events, "management audit effects"

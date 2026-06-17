@@ -28,7 +28,9 @@ def _model_outcomes(
     }
 
 
-def _assert_alignment(model: RelayModel, harness: LocalCommunityRelayHarness, event: object) -> None:
+def _assert_alignment(
+    model: RelayModel, harness: LocalCommunityRelayHarness, event: object
+) -> None:
     """Compare each durable and transport field with readable diagnostics."""
     observed = harness.observe(event)
     assert observed.source_count == int(model.source_exists)
@@ -128,7 +130,9 @@ async def test_duplicate_successful_call_creates_no_new_attempt(tmp_path: Path) 
 
 
 @pytest.mark.asyncio
-async def test_policy_denied_target_is_absent_from_model_and_sut(tmp_path: Path) -> None:
+async def test_policy_denied_target_is_absent_from_model_and_sut(
+    tmp_path: Path,
+) -> None:
     """Only independently allowed targets receive durable delivery rows."""
     harness = LocalCommunityRelayHarness(tmp_path)
     harness.add_default_subscribers()
@@ -147,7 +151,9 @@ async def test_policy_denied_target_is_absent_from_model_and_sut(tmp_path: Path)
 
 
 @pytest.mark.asyncio
-async def test_missing_source_json_creates_no_state_or_transport(tmp_path: Path) -> None:
+async def test_missing_source_json_creates_no_state_or_transport(
+    tmp_path: Path,
+) -> None:
     """Model and SUT both remain empty when no safe source activity exists."""
     harness = LocalCommunityRelayHarness(tmp_path)
     harness.add_default_subscribers()

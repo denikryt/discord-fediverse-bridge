@@ -11,7 +11,11 @@ from ..config import Settings
 from ..bridge_policy import BridgePolicyService
 from ..db import Database
 from ..local_community_permissions import can_manage_local_community, is_super_admin
-from .guild_guard import GUILD_COMMAND_ACCESS, command_access_allows_autocomplete, reject_if_command_access_denied
+from .guild_guard import (
+    GUILD_COMMAND_ACCESS,
+    command_access_allows_autocomplete,
+    reject_if_command_access_denied,
+)
 from ..operations import UnbanUserInput, unban_user_operation
 
 logger = logging.getLogger(__name__)
@@ -39,7 +43,9 @@ def _matches_current(value: str, current: str) -> bool:
     return current.casefold() in value.casefold()
 
 
-def _unban_community_autocomplete(database: Database, settings: Settings, policy_service: BridgePolicyService):
+def _unban_community_autocomplete(
+    database: Database, settings: Settings, policy_service: BridgePolicyService
+):
     """Build autocomplete for `/unban-user community` with owner/admin scope."""
 
     async def autocomplete(
@@ -48,10 +54,19 @@ def _unban_community_autocomplete(database: Database, settings: Settings, policy
     ) -> list[app_commands.Choice[str]]:
         """Return manageable active communities for the invoking user."""
         try:
-            if not await command_access_allows_autocomplete(interaction, definition=GUILD_COMMAND_ACCESS, settings=settings, database=database, policy_service=policy_service):
+            if not await command_access_allows_autocomplete(
+                interaction,
+                definition=GUILD_COMMAND_ACCESS,
+                settings=settings,
+                database=database,
+                policy_service=policy_service,
+            ):
                 return []
             discord_user_id = str(interaction.user.id)
-            if is_super_admin(policy_snapshot=policy_service.snapshot(), discord_user_id=discord_user_id):
+            if is_super_admin(
+                policy_snapshot=policy_service.snapshot(),
+                discord_user_id=discord_user_id,
+            ):
                 communities = database.local_communities.list_active_local_communities()
                 include_guild = True
             elif interaction.guild_id is not None:
@@ -80,7 +95,9 @@ def _unban_community_autocomplete(database: Database, settings: Settings, policy
     return autocomplete
 
 
-def _unban_user_autocomplete(database: Database, settings: Settings, policy_service: BridgePolicyService):
+def _unban_user_autocomplete(
+    database: Database, settings: Settings, policy_service: BridgePolicyService
+):
     """Build autocomplete for `/unban-user user` from selected community bans."""
 
     async def autocomplete(
@@ -89,19 +106,34 @@ def _unban_user_autocomplete(database: Database, settings: Settings, policy_serv
     ) -> list[app_commands.Choice[str]]:
         """Return active banned handles for a manageable selected community."""
         try:
-            if not await command_access_allows_autocomplete(interaction, definition=GUILD_COMMAND_ACCESS, settings=settings, database=database, policy_service=policy_service):
+            if not await command_access_allows_autocomplete(
+                interaction,
+                definition=GUILD_COMMAND_ACCESS,
+                settings=settings,
+                database=database,
+                policy_service=policy_service,
+            ):
                 return []
             namespace = getattr(interaction, "namespace", None)
-            community_slug = getattr(namespace, "community", None) if namespace is not None else None
+            community_slug = (
+                getattr(namespace, "community", None) if namespace is not None else None
+            )
             if not community_slug:
                 return []
-            community = database.local_communities.get_local_community_by_slug(str(community_slug).strip())
+            community = database.local_communities.get_local_community_by_slug(
+                str(community_slug).strip()
+            )
             if community is None:
                 return []
             discord_user_id = str(interaction.user.id)
-            if interaction.guild_id is None and not is_super_admin(policy_snapshot=policy_service.snapshot(), discord_user_id=discord_user_id):
+            if interaction.guild_id is None and not is_super_admin(
+                policy_snapshot=policy_service.snapshot(),
+                discord_user_id=discord_user_id,
+            ):
                 return []
-            if getattr(community, "discord_guild_id", None) != interaction.guild_id and not is_super_admin(
+            if getattr(
+                community, "discord_guild_id", None
+            ) != interaction.guild_id and not is_super_admin(
                 policy_snapshot=policy_service.snapshot(),
                 discord_user_id=discord_user_id,
             ):
@@ -165,7 +197,13 @@ def register(
         # Preserve the previous direct-callback positional order used by tests.
         if community and "@" in community and "@" not in user:
             user, community = community, user
-        if await reject_if_command_access_denied(interaction, definition=GUILD_COMMAND_ACCESS, settings=settings, database=database, policy_service=policy_service):
+        if await reject_if_command_access_denied(
+            interaction,
+            definition=GUILD_COMMAND_ACCESS,
+            settings=settings,
+            database=database,
+            policy_service=policy_service,
+        ):
             return
         result = unban_user_operation(
             UnbanUserInput(

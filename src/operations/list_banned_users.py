@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 
-from discordops import Operation, Precondition
+from discordops import Operation
 
 from ..config import Settings
 from ..bridge_policy import BridgePolicyService, BridgePolicySnapshot
@@ -29,7 +29,9 @@ class ListBannedUsersInput:
     community_slug: str | None
     policy_service: BridgePolicyService
     limit: int = 20
-    _policy_snapshot: BridgePolicySnapshot | None = field(default=None, init=False, repr=False)
+    _policy_snapshot: BridgePolicySnapshot | None = field(
+        default=None, init=False, repr=False
+    )
     _community: LocalCommunity | None = field(default=None, init=False, repr=False)
     _loaded: bool = field(default=False, init=False, repr=False)
 
@@ -54,7 +56,11 @@ class ListBannedUsersInput:
         """Load selected community only when present."""
         if not self._loaded:
             slug = self.normalized_community_slug
-            self._community = None if slug is None else self.database.local_communities.get_local_community_by_slug(slug)
+            self._community = (
+                None
+                if slug is None
+                else self.database.local_communities.get_local_community_by_slug(slug)
+            )
             self._loaded = True
         return self._community
 
@@ -75,7 +81,6 @@ def _format_reason(reason: str | None) -> str:
     return reason if len(reason) <= 160 else f"{reason[:157]}..."
 
 
-
 class ListBannedUsersOperation(Operation):
     """Authorize and render active bans for one explicit scope."""
 
@@ -89,7 +94,14 @@ class ListBannedUsersOperation(Operation):
         SCOPED_LOCAL_COMMUNITY_MODERATION_ENABLED,
     )
 
-    def reject(self, operation_input: ListBannedUsersInput, *, reason: str, message: str, **_: object) -> ListBannedUsersResult:
+    def reject(
+        self,
+        operation_input: ListBannedUsersInput,
+        *,
+        reason: str,
+        message: str,
+        **_: object,
+    ) -> ListBannedUsersResult:
         """Return the first authorization or lifecycle rejection."""
         return ListBannedUsersResult(False, message, reason)
 
@@ -97,24 +109,39 @@ class ListBannedUsersOperation(Operation):
         """Render active rows for global or selected community scope."""
         limit = max(1, operation_input.limit)
         if operation_input.is_global:
-            total = operation_input.database.community_actor_bans.count_active_global_bans()
-            rows = operation_input.database.community_actor_bans.list_active_global_bans(limit=limit)
+            total = (
+                operation_input.database.community_actor_bans.count_active_global_bans()
+            )
+            rows = (
+                operation_input.database.community_actor_bans.list_active_global_bans(
+                    limit=limit
+                )
+            )
             heading = "Globally banned users:"
             empty = "This bridge instance has no active global bans."
         else:
             community = operation_input.get_local_community()
-            total = operation_input.database.community_actor_bans.count_active_bans_for_community(local_community_id=community.id)
-            rows = operation_input.database.community_actor_bans.list_active_bans_for_community(local_community_id=community.id, limit=limit)
+            total = operation_input.database.community_actor_bans.count_active_bans_for_community(
+                local_community_id=community.id
+            )
+            rows = operation_input.database.community_actor_bans.list_active_bans_for_community(
+                local_community_id=community.id, limit=limit
+            )
             heading = f"Banned users in community {operation_input.normalized_community_slug}:"
             empty = f"Community {operation_input.normalized_community_slug} has no active bans."
         if total == 0:
             return ListBannedUsersResult(True, empty, "empty")
-        lines = [heading, *(f"- {row.actor_handle} — {_format_reason(row.reason)}" for row in rows)]
+        lines = [
+            heading,
+            *(f"- {row.actor_handle} — {_format_reason(row.reason)}" for row in rows),
+        ]
         if total > limit:
             lines.append(f"Showing {limit} of {total} active bans.")
         return ListBannedUsersResult(True, "\n".join(lines), "listed")
 
 
-def list_banned_users_operation(operation_input: ListBannedUsersInput) -> ListBannedUsersResult:
+def list_banned_users_operation(
+    operation_input: ListBannedUsersInput,
+) -> ListBannedUsersResult:
     """Execute `/list-banned-users` through ordered preconditions."""
     return ListBannedUsersOperation().execute(operation_input)

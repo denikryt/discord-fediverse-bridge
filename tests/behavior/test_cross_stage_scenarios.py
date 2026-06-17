@@ -79,8 +79,8 @@ def _registration_runtime(database: Database) -> SimpleNamespace:
         database=database,
         fedify_gateway=AsyncMock(),
         bridge_prefix="[bridge]",
-            bridge_policy_service=build_test_policy_service(database),
-)
+        bridge_policy_service=build_test_policy_service(database),
+    )
     community_runtime = CommunityRuntime(
         database=database,
         content_publish_service=publish_service,
@@ -93,8 +93,8 @@ def _registration_runtime(database: Database) -> SimpleNamespace:
         fedify_gateway=SimpleNamespace(),
         bot=SimpleNamespace(),
         community_runtime=community_runtime,
-            bridge_policy_service=build_test_policy_service(database, settings),
-)
+        bridge_policy_service=build_test_policy_service(database, settings),
+    )
 
 
 def _register_user(client: TestClient, database: Database, *, username: str) -> None:
@@ -102,7 +102,9 @@ def _register_user(client: TestClient, database: Database, *, username: str) -> 
     client.get("/register")
     client.get("/auth/discord/start", follow_redirects=False)
     session_token = client.cookies.get("bridge_registration_session")
-    session = database.registration_sessions.get_registration_session_by_token(session_token)
+    session = database.registration_sessions.get_registration_session_by_token(
+        session_token
+    )
     assert session is not None
     client.get(
         f"/auth/discord/callback?code=oauth-code&state={session.oauth_state}",
@@ -192,7 +194,13 @@ async def test_register_subscribe_accept_publish_then_echo_is_suppressed(
         community_inbox_url=f"{community_actor_url}/inbox",
         follow_activity_id=follow_activity_id,
     )
-    subscribe.register(command_tree, database, fedify_gateway, SimpleNamespace(discord_guild_allowlist=[], federation_allowlist=[]), policy_service=build_test_policy_service(database))
+    subscribe.register(
+        command_tree,
+        database,
+        fedify_gateway,
+        SimpleNamespace(discord_guild_allowlist=[], federation_allowlist=[]),
+        policy_service=build_test_policy_service(database),
+    )
     subscribe_command = command_tree.commands["subscribe-community"]
     await subscribe_command.callback(
         interaction,
@@ -200,7 +208,9 @@ async def test_register_subscribe_accept_publish_then_echo_is_suppressed(
         channel=forum_channel,
         instance_domain=f"https://{LEMMY_EXAMPLE_DOMAIN}",
     )
-    pending_subscription = database.remote_subscriptions.get_subscription_by_channel(forum_channel.id)
+    pending_subscription = database.remote_subscriptions.get_subscription_by_channel(
+        forum_channel.id
+    )
     assert pending_subscription is not None
     assert pending_subscription.status == "pending"
 
@@ -209,14 +219,14 @@ async def test_register_subscribe_accept_publish_then_echo_is_suppressed(
         SimpleNamespace(
             database=database,
             bot=SimpleNamespace(
-                fetch_user=AsyncMock(
-                    return_value=SimpleNamespace(send=AsyncMock())
-                )
+                fetch_user=AsyncMock(return_value=SimpleNamespace(send=AsyncMock()))
             ),
-                    bridge_policy_service=build_test_policy_service(database),
-),
+            bridge_policy_service=build_test_policy_service(database),
+        ),
     )
-    accepted_subscription = database.remote_subscriptions.get_subscription_by_channel(forum_channel.id)
+    accepted_subscription = database.remote_subscriptions.get_subscription_by_channel(
+        forum_channel.id
+    )
     assert follow_result.status == "processed"
     assert accepted_subscription is not None
     assert accepted_subscription.status == "accepted"
@@ -231,8 +241,8 @@ async def test_register_subscribe_accept_publish_then_echo_is_suppressed(
         database=database,
         fedify_gateway=publish_gateway,
         bridge_prefix="[bridge]",
-            bridge_policy_service=build_test_policy_service(database),
-)
+        bridge_policy_service=build_test_policy_service(database),
+    )
     publish_result = await publish_service.publish_thread_starter(
         thread=_thread(),
         starter_message=_starter_message(),
@@ -242,8 +252,8 @@ async def test_register_subscribe_accept_publish_then_echo_is_suppressed(
         database=database,
         fedify_gateway=AsyncMock(),
         bridge_prefix="[bridge]",
-            bridge_policy_service=build_test_policy_service(database),
-)
+        bridge_policy_service=build_test_policy_service(database),
+    )
     echo_runtime = SimpleNamespace(
         database=database,
         bot=SimpleNamespace(
@@ -254,8 +264,8 @@ async def test_register_subscribe_accept_publish_then_echo_is_suppressed(
             database=database,
             content_publish_service=echo_publish_service,
         ),
-            bridge_policy_service=build_test_policy_service(database),
-)
+        bridge_policy_service=build_test_policy_service(database),
+    )
     echo_result = await dispatch_activitypub_event(
         _echo_post_event(
             object_id=publish_result.object_id or "",
@@ -317,8 +327,8 @@ async def test_lemmy_announce_of_local_post_is_suppressed_via_actor_check(
         database=database,
         fedify_gateway=AsyncMock(),
         bridge_prefix="[bridge]",
-            bridge_policy_service=build_test_policy_service(database),
-)
+        bridge_policy_service=build_test_policy_service(database),
+    )
     runtime = SimpleNamespace(
         database=database,
         bot=SimpleNamespace(
@@ -329,8 +339,8 @@ async def test_lemmy_announce_of_local_post_is_suppressed_via_actor_check(
             database=database,
             content_publish_service=announce_publish_service,
         ),
-            bridge_policy_service=build_test_policy_service(database),
-)
+        bridge_policy_service=build_test_policy_service(database),
+    )
     result = await dispatch_activitypub_event(lemmy_rewritten_event, runtime)
 
     assert result.status == "skipped"
@@ -361,7 +371,13 @@ async def test_failed_subscribe_retry_then_accept_allows_publish(
     )
 
     community_actor_url = f"https://{LEMMY_EXAMPLE_DOMAIN}/c/hackers"
-    subscribe.register(command_tree, database, fedify_gateway, SimpleNamespace(discord_guild_allowlist=[], federation_allowlist=[]), policy_service=build_test_policy_service(database))
+    subscribe.register(
+        command_tree,
+        database,
+        fedify_gateway,
+        SimpleNamespace(discord_guild_allowlist=[], federation_allowlist=[]),
+        policy_service=build_test_policy_service(database),
+    )
     subscribe_command = command_tree.commands["subscribe-community"]
 
     fedify_gateway.follow_community.side_effect = RuntimeError("boom")
@@ -371,7 +387,9 @@ async def test_failed_subscribe_retry_then_accept_allows_publish(
         channel=forum_channel,
         instance_domain=f"https://{LEMMY_EXAMPLE_DOMAIN}",
     )
-    failed_subscription = database.remote_subscriptions.get_subscription_by_channel(forum_channel.id)
+    failed_subscription = database.remote_subscriptions.get_subscription_by_channel(
+        forum_channel.id
+    )
     assert failed_subscription is not None
     assert failed_subscription.status == "failed"
 
@@ -389,7 +407,9 @@ async def test_failed_subscribe_retry_then_accept_allows_publish(
         channel=forum_channel,
         instance_domain=f"https://{LEMMY_EXAMPLE_DOMAIN}",
     )
-    pending_subscription = database.remote_subscriptions.get_subscription_by_channel(forum_channel.id)
+    pending_subscription = database.remote_subscriptions.get_subscription_by_channel(
+        forum_channel.id
+    )
     assert pending_subscription is not None
     assert pending_subscription.status == "pending"
 
@@ -398,14 +418,14 @@ async def test_failed_subscribe_retry_then_accept_allows_publish(
         SimpleNamespace(
             database=database,
             bot=SimpleNamespace(
-                fetch_user=AsyncMock(
-                    return_value=SimpleNamespace(send=AsyncMock())
-                )
+                fetch_user=AsyncMock(return_value=SimpleNamespace(send=AsyncMock()))
             ),
-                    bridge_policy_service=build_test_policy_service(database),
-),
+            bridge_policy_service=build_test_policy_service(database),
+        ),
     )
-    accepted_subscription = database.remote_subscriptions.get_subscription_by_channel(forum_channel.id)
+    accepted_subscription = database.remote_subscriptions.get_subscription_by_channel(
+        forum_channel.id
+    )
     assert accepted_subscription is not None
     assert accepted_subscription.status == "accepted"
 
@@ -419,8 +439,8 @@ async def test_failed_subscribe_retry_then_accept_allows_publish(
         database=database,
         fedify_gateway=publish_gateway,
         bridge_prefix="[bridge]",
-            bridge_policy_service=build_test_policy_service(database),
-)
+        bridge_policy_service=build_test_policy_service(database),
+    )
 
     publish_result = await publish_service.publish_thread_starter(
         thread=_thread(),

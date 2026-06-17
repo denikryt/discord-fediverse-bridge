@@ -84,7 +84,9 @@ class DiscordDirectoryRepository(BaseRepository):
                 )
             )
 
-    def get_channel_snapshot(self, discord_channel_id: int) -> DiscordChannelSnapshot | None:
+    def get_channel_snapshot(
+        self, discord_channel_id: int
+    ) -> DiscordChannelSnapshot | None:
         """Load one channel snapshot by Discord channel id."""
         with self.session() as session:
             return session.scalar(
@@ -93,7 +95,9 @@ class DiscordDirectoryRepository(BaseRepository):
                 )
             )
 
-    def list_guild_snapshots(self, discord_guild_ids: list[int]) -> list[DiscordGuildSnapshot]:
+    def list_guild_snapshots(
+        self, discord_guild_ids: list[int]
+    ) -> list[DiscordGuildSnapshot]:
         """Load guild snapshots for a bounded set of Discord guild ids."""
         if not discord_guild_ids:
             return []
@@ -101,12 +105,16 @@ class DiscordDirectoryRepository(BaseRepository):
             return list(
                 session.scalars(
                     select(DiscordGuildSnapshot).where(
-                        DiscordGuildSnapshot.discord_guild_id.in_(set(discord_guild_ids))
+                        DiscordGuildSnapshot.discord_guild_id.in_(
+                            set(discord_guild_ids)
+                        )
                     )
                 )
             )
 
-    def list_channel_snapshots(self, discord_channel_ids: list[int]) -> list[DiscordChannelSnapshot]:
+    def list_channel_snapshots(
+        self, discord_channel_ids: list[int]
+    ) -> list[DiscordChannelSnapshot]:
         """Load channel snapshots for a bounded set of Discord channel ids."""
         if not discord_channel_ids:
             return []
@@ -114,7 +122,9 @@ class DiscordDirectoryRepository(BaseRepository):
             return list(
                 session.scalars(
                     select(DiscordChannelSnapshot).where(
-                        DiscordChannelSnapshot.discord_channel_id.in_(set(discord_channel_ids))
+                        DiscordChannelSnapshot.discord_channel_id.in_(
+                            set(discord_channel_ids)
+                        )
                     )
                 )
             )

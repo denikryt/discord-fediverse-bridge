@@ -9,7 +9,7 @@ from sqlalchemy import inspect
 
 from src.db import Database
 from src.discord_channel_types import is_normal_guild_text_channel
-from src.models import ChannelCommunitySubscription, LocalCommunity, LocalSubscriber, User
+from src.models import ChannelCommunitySubscription, User
 from src.personal_feeds import PersonalFeedService
 
 
@@ -27,7 +27,9 @@ def _user(discord_id: str, username: str) -> User:
     )
 
 
-def test_migration_creates_personal_feed_table_and_restart_restores_binding(tmp_path) -> None:
+def test_migration_creates_personal_feed_table_and_restart_restores_binding(
+    tmp_path,
+) -> None:
     """An additive migration must persist the current binding across DB reopen."""
     path = tmp_path / "bridge.sqlite3"
     database = Database(f"sqlite:///{path}")
@@ -98,10 +100,15 @@ def test_announcement_text_channel_is_not_normal_guild_text() -> None:
 
     assert is_normal_guild_text_channel(ordinary) is True
     assert is_normal_guild_text_channel(announcement) is False
-    assert is_normal_guild_text_channel(SimpleNamespace(type=discord.ChannelType.text)) is False
+    assert (
+        is_normal_guild_text_channel(SimpleNamespace(type=discord.ChannelType.text))
+        is False
+    )
 
 
-def test_repository_lookups_and_active_binding_survive_move_unbind_and_reopen(tmp_path) -> None:
+def test_repository_lookups_and_active_binding_survive_move_unbind_and_reopen(
+    tmp_path,
+) -> None:
     """Every Stage 6 lookup works through the repository API and current-state lifecycle."""
     from src.discord_event_router import DiscordEventRouter
 
@@ -118,7 +125,9 @@ def test_repository_lookups_and_active_binding_survive_move_unbind_and_reopen(tm
         database=database,
         community_runtime=SimpleNamespace(),
         local_community_runtime=SimpleNamespace(),
-        bridge_policy_service=SimpleNamespace(is_discord_guild_allowed=lambda _guild_id: True),
+        bridge_policy_service=SimpleNamespace(
+            is_discord_guild_allowed=lambda _guild_id: True
+        ),
         personal_feed_service=service,
     )
 
@@ -126,22 +135,32 @@ def test_repository_lookups_and_active_binding_survive_move_unbind_and_reopen(tm
     assert database.personal_feed_bindings.get_by_discord_user_id("10") is None
     assert database.personal_feed_bindings.get_by_channel_id(200) is None
     assert database.personal_feed_bindings.get_by_guild_id(100) is None
-    assert database.personal_feed_bindings.is_current_channel_for_user(user.id, 200) is False
+    assert (
+        database.personal_feed_bindings.is_current_channel_for_user(user.id, 200)
+        is False
+    )
     assert router.is_active_personal_feed_channel(user.id, 200) is False
 
     created = service.bind_or_move("10", 100, 200)
     assert created.status == "bound"
     assert created.binding is not None
-    assert database.personal_feed_bindings.get_by_user_id(user.id).discord_channel_id == 200
-    assert database.personal_feed_bindings.get_by_discord_user_id("10").discord_channel_id == 200
+    assert (
+        database.personal_feed_bindings.get_by_user_id(user.id).discord_channel_id
+        == 200
+    )
+    assert (
+        database.personal_feed_bindings.get_by_discord_user_id("10").discord_channel_id
+        == 200
+    )
     assert database.personal_feed_bindings.get_by_channel_id(200).user_id == user.id
     assert database.personal_feed_bindings.get_by_guild_id(100).user_id == user.id
-    assert database.personal_feed_bindings.is_current_channel_for_user(user.id, 200) is True
+    assert (
+        database.personal_feed_bindings.is_current_channel_for_user(user.id, 200)
+        is True
+    )
     assert router.is_active_personal_feed_channel(user.id, 200) is True
 
-    moved = service.bind_or_move(
-        "10", 101, 201, expected_binding_id=created.binding.id
-    )
+    moved = service.bind_or_move("10", 101, 201, expected_binding_id=created.binding.id)
     assert moved.status == "moved"
     assert router.is_active_personal_feed_channel(user.id, 200) is False
     assert router.is_active_personal_feed_channel(user.id, 201) is True
@@ -154,7 +173,9 @@ def test_repository_lookups_and_active_binding_survive_move_unbind_and_reopen(tm
         database=reopened,
         community_runtime=SimpleNamespace(),
         local_community_runtime=SimpleNamespace(),
-        bridge_policy_service=SimpleNamespace(is_discord_guild_allowed=lambda _guild_id: True),
+        bridge_policy_service=SimpleNamespace(
+            is_discord_guild_allowed=lambda _guild_id: True
+        ),
         personal_feed_service=reopened_service,
     )
     assert reopened_router.is_active_personal_feed_channel(user.id, 201) is True
@@ -189,7 +210,9 @@ def _run_concurrent_binds(path, requests):
         return list(pool.map(invoke, requests))
 
 
-def test_concurrent_first_binds_one_user_two_guilds_report_one_success(tmp_path) -> None:
+def test_concurrent_first_binds_one_user_two_guilds_report_one_success(
+    tmp_path,
+) -> None:
     """A stale concurrent first-bind cannot silently become an intentional move."""
     path = tmp_path / "bridge.sqlite3"
     database = Database(f"sqlite:///{path}")
@@ -205,7 +228,9 @@ def test_concurrent_first_binds_one_user_two_guilds_report_one_success(tmp_path)
     assert statuses.count("binding_changed") == 1
 
 
-def test_concurrent_first_binds_two_users_same_guild_report_one_success(tmp_path) -> None:
+def test_concurrent_first_binds_two_users_same_guild_report_one_success(
+    tmp_path,
+) -> None:
     """The DB-backed guild invariant gives one winner across service instances."""
     path = tmp_path / "bridge.sqlite3"
     database = Database(f"sqlite:///{path}")
@@ -218,10 +243,21 @@ def test_concurrent_first_binds_two_users_same_guild_report_one_success(tmp_path
     statuses = _run_concurrent_binds(path, [("10", 100, 200), ("20", 100, 201)])
 
     assert statuses.count("bound") == 1
-    assert len([status for status in statuses if status in {"guild_conflict", "channel_conflict"}]) == 1
+    assert (
+        len(
+            [
+                status
+                for status in statuses
+                if status in {"guild_conflict", "channel_conflict"}
+            ]
+        )
+        == 1
+    )
 
 
-def test_concurrent_first_binds_two_users_same_channel_report_one_success(tmp_path) -> None:
+def test_concurrent_first_binds_two_users_same_channel_report_one_success(
+    tmp_path,
+) -> None:
     """The DB-backed channel invariant gives one winner across service instances."""
     path = tmp_path / "bridge.sqlite3"
     database = Database(f"sqlite:///{path}")
@@ -234,4 +270,13 @@ def test_concurrent_first_binds_two_users_same_channel_report_one_success(tmp_pa
     statuses = _run_concurrent_binds(path, [("10", 100, 200), ("20", 101, 200)])
 
     assert statuses.count("bound") == 1
-    assert len([status for status in statuses if status in {"guild_conflict", "channel_conflict"}]) == 1
+    assert (
+        len(
+            [
+                status
+                for status in statuses
+                if status in {"guild_conflict", "channel_conflict"}
+            ]
+        )
+        == 1
+    )

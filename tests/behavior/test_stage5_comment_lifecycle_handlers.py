@@ -220,28 +220,66 @@ async def test_local_comment_create_update_delete_preserves_user_create_and_comm
         "id": "https://bridge.example/users/alice/activities/create/post/1",
         "type": "Create",
         "actor": user.actor_url,
-        "object": {"id": "https://bridge.example/users/alice/post/1", "type": "Page", "attributedTo": user.actor_url, "audience": community},
+        "object": {
+            "id": "https://bridge.example/users/alice/post/1",
+            "type": "Page",
+            "attributedTo": user.actor_url,
+            "audience": community,
+        },
     }
     comment_create = {
         "id": "https://bridge.example/users/alice/activities/create/comment/1",
         "type": "Create",
         "actor": user.actor_url,
-        "object": {"id": "https://bridge.example/users/alice/comment/1", "type": "Note", "attributedTo": user.actor_url, "audience": community, "inReplyTo": root_create["object"]["id"]},
+        "object": {
+            "id": "https://bridge.example/users/alice/comment/1",
+            "type": "Note",
+            "attributedTo": user.actor_url,
+            "audience": community,
+            "inReplyTo": root_create["object"]["id"],
+        },
     }
     gateway = _MutationGateway(
         [
-            PublishLocalCommunityContentResult(root_create["id"], root_create["object"]["id"], community, 1, 0, root_create),
-            PublishLocalCommunityContentResult(comment_create["id"], comment_create["object"]["id"], community, 1, 0, comment_create),
+            PublishLocalCommunityContentResult(
+                root_create["id"],
+                root_create["object"]["id"],
+                community,
+                1,
+                0,
+                root_create,
+            ),
+            PublishLocalCommunityContentResult(
+                comment_create["id"],
+                comment_create["object"]["id"],
+                community,
+                1,
+                0,
+                comment_create,
+            ),
         ],
         user.actor_url,
     )
     policy = build_test_policy_service(database)
-    publish_service = ContentPublishService(database=database, fedify_gateway=gateway, bridge_prefix="[bridge]", bridge_policy_service=policy)
-    local_runtime = LocalCommunityRuntime(database=database, fedify_gateway=gateway, content_publish_service=publish_service, bridge_prefix="[bridge]", bridge_policy_service=policy)
+    publish_service = ContentPublishService(
+        database=database,
+        fedify_gateway=gateway,
+        bridge_prefix="[bridge]",
+        bridge_policy_service=policy,
+    )
+    local_runtime = LocalCommunityRuntime(
+        database=database,
+        fedify_gateway=gateway,
+        content_publish_service=publish_service,
+        bridge_prefix="[bridge]",
+        bridge_policy_service=policy,
+    )
     service = UserActorDeliveryService(database, gateway, policy)
     runtime_ns = _runtime_namespace(policy, service)
 
-    await local_runtime.handle_discord_thread_create(thread=build_thread(), starter_message=build_starter_message())
+    await local_runtime.handle_discord_thread_create(
+        thread=build_thread(), starter_message=build_starter_message()
+    )
     result = await local_runtime.handle_discord_message(message=build_thread_message())
     assert result.status == "published"
     await local_runtime.handle_discord_message_edit(
@@ -250,12 +288,28 @@ async def test_local_comment_create_update_delete_preserves_user_create_and_comm
         runtime=runtime_ns,
         edited_timestamp=datetime(2026, 6, 16, 12, 0, tzinfo=timezone.utc),
     )
-    await local_runtime.handle_discord_message_delete(message_id=301, runtime=runtime_ns)
+    await local_runtime.handle_discord_message_delete(
+        message_id=301, runtime=runtime_ns
+    )
 
     with database.session() as session:
-        published = session.scalar(select(PublishedActivityObject).where(PublishedActivityObject.object_id == comment_create["object"]["id"]))
-        sources = list(session.scalars(select(UserActorOutboundSource).where(UserActorOutboundSource.published_object_id == published.id).order_by(UserActorOutboundSource.logical_version)))
-        assert [source.source_kind for source in sources] == ["content_create", "content_update", "content_delete"]
+        published = session.scalar(
+            select(PublishedActivityObject).where(
+                PublishedActivityObject.object_id == comment_create["object"]["id"]
+            )
+        )
+        sources = list(
+            session.scalars(
+                select(UserActorOutboundSource)
+                .where(UserActorOutboundSource.published_object_id == published.id)
+                .order_by(UserActorOutboundSource.logical_version)
+            )
+        )
+        assert [source.source_kind for source in sources] == [
+            "content_create",
+            "content_update",
+            "content_delete",
+        ]
         assert json.loads(sources[0].activity_json) == comment_create
         update = json.loads(sources[1].activity_json)
         assert update["object"]["audience"] == community

@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import pytest
 
 from src.federation_policy import is_instance_allowed
 
@@ -25,12 +24,18 @@ def test_allowlist_rejects_unlisted_hostname():
 
 def test_allowlist_handles_url_with_path():
     # Full community actor URLs (with path segments) must be parsed correctly.
-    assert is_instance_allowed(
-        "https://lemmy.world/c/technology", ["lemmy.world", "beehaw.org"]
-    ) is True
-    assert is_instance_allowed(
-        "https://other.example/c/news", ["lemmy.world", "beehaw.org"]
-    ) is False
+    assert (
+        is_instance_allowed(
+            "https://lemmy.world/c/technology", ["lemmy.world", "beehaw.org"]
+        )
+        is True
+    )
+    assert (
+        is_instance_allowed(
+            "https://other.example/c/news", ["lemmy.world", "beehaw.org"]
+        )
+        is False
+    )
 
 
 def test_allowlist_check_is_case_insensitive():

@@ -86,11 +86,7 @@ def expected_ban_interaction(case: dict[str, str]) -> BanExpected:
     inactive_rows = 1 if existing == "removed" else 0
 
     if scope == "global" and role != "super_admin":
-        audits = (
-            (("ban.create_forbidden", "forbidden"),)
-            if action == "ban"
-            else ()
-        )
+        audits = (("ban.create_forbidden", "forbidden"),) if action == "ban" else ()
         return BanExpected(
             False,
             "global_scope_requires_super_admin",
@@ -101,7 +97,9 @@ def expected_ban_interaction(case: dict[str, str]) -> BanExpected:
     if scope == "community" and community_state == "missing":
         return BanExpected(False, "unknown_or_inaccessible_community", 0)
     if scope == "community" and role == "unauthorized":
-        audit_action = "ban.create_forbidden" if action == "ban" else "ban.remove_forbidden"
+        audit_action = (
+            "ban.create_forbidden" if action == "ban" else "ban.remove_forbidden"
+        )
         return BanExpected(
             False,
             "cannot_manage_community",
@@ -110,7 +108,9 @@ def expected_ban_interaction(case: dict[str, str]) -> BanExpected:
             audit_events=((audit_action, "forbidden"),),
         )
     if scope == "community" and community_state == "disabled":
-        audit_action = "ban.create_forbidden" if action == "ban" else "ban.remove_forbidden"
+        audit_action = (
+            "ban.create_forbidden" if action == "ban" else "ban.remove_forbidden"
+        )
         return BanExpected(
             False,
             "community_disabled",

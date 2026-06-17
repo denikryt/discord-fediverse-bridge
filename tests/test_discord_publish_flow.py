@@ -21,8 +21,8 @@ def _service(database, fedify_gateway: AsyncMock) -> ContentPublishService:
         database=database,
         fedify_gateway=fedify_gateway,
         bridge_prefix="[bridge]",
-            bridge_policy_service=build_test_policy_service(database),
-)
+        bridge_policy_service=build_test_policy_service(database),
+    )
 
 
 @pytest.mark.asyncio
@@ -50,9 +50,13 @@ async def test_thread_starter_from_registered_user_publishes_and_persists_mappin
         starter_message=starter_message,
     )
 
-    mapping = database.message_mappings.get_message_mapping_by_discord_message_id(starter_message.id)
-    stored_object = database.activitypub_objects.get_published_activity_object_by_object_id(
-        post_object_url
+    mapping = database.message_mappings.get_message_mapping_by_discord_message_id(
+        starter_message.id
+    )
+    stored_object = (
+        database.activitypub_objects.get_published_activity_object_by_object_id(
+            post_object_url
+        )
     )
 
     assert result.status == "published"
@@ -127,9 +131,13 @@ async def test_thread_message_from_registered_user_publishes_as_comment(
 
     result = await service.publish_thread_message(message=message)
 
-    mapping = database.message_mappings.get_message_mapping_by_discord_message_id(message.id)
-    stored_object = database.activitypub_objects.get_published_activity_object_by_object_id(
-        comment_object_url
+    mapping = database.message_mappings.get_message_mapping_by_discord_message_id(
+        message.id
+    )
+    stored_object = (
+        database.activitypub_objects.get_published_activity_object_by_object_id(
+            comment_object_url
+        )
     )
 
     assert result.status == "published"
@@ -203,8 +211,10 @@ async def test_thread_reply_uses_parent_comment_object_id_when_available(
     await service.publish_thread_message(message=message)
 
     request = fedify_gateway.publish_content.await_args.args[0]
-    stored_object = database.activitypub_objects.get_published_activity_object_by_object_id(
-        f"https://{BRIDGE_HOST_DOMAIN}/users/alice/objects/comment/2"
+    stored_object = (
+        database.activitypub_objects.get_published_activity_object_by_object_id(
+            f"https://{BRIDGE_HOST_DOMAIN}/users/alice/objects/comment/2"
+        )
     )
     assert request.in_reply_to_object_id == parent_comment_object_url
     assert stored_object is not None
@@ -280,6 +290,8 @@ async def test_gateway_publish_failure_does_not_store_false_success_mapping(
         )
 
     assert (
-        database.message_mappings.get_message_mapping_by_discord_message_id(starter_message.id)
+        database.message_mappings.get_message_mapping_by_discord_message_id(
+            starter_message.id
+        )
         is None
     )

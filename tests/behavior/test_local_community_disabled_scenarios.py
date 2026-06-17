@@ -17,12 +17,17 @@ from src.content_publish_service import ContentPublishService
 from src.local_communities.runtime import LocalCommunityRuntime
 from src.local_communities.service import LocalCommunityService
 from src.models import LocalCommunityThread, LocalSubscriber, RemoteSubscriber
-from src.operations import SubscribeLocalCommunityInput, subscribe_local_community_operation
+from src.operations import (
+    SubscribeLocalCommunityInput,
+    subscribe_local_community_operation,
+)
 from support.db import add_registered_user, build_database
 from support.discord import build_starter_message, build_thread
 
 
-def _runtime(tmp_path: Path, name: str = "disabled-community.db") -> tuple[object, LocalCommunityRuntime]:
+def _runtime(
+    tmp_path: Path, name: str = "disabled-community.db"
+) -> tuple[object, LocalCommunityRuntime]:
     """Build one local-community runtime with mocked Discord/Fedify edges."""
     database = build_database(tmp_path, name)
     gateway = AsyncMock()
@@ -33,11 +38,11 @@ def _runtime(tmp_path: Path, name: str = "disabled-community.db") -> tuple[objec
             database=database,
             fedify_gateway=gateway,
             bridge_prefix="[bridge]",
-                    bridge_policy_service=build_test_policy_service(database),
-),
-        bridge_prefix="[bridge]",
             bridge_policy_service=build_test_policy_service(database),
-)
+        ),
+        bridge_prefix="[bridge]",
+        bridge_policy_service=build_test_policy_service(database),
+    )
     return database, runtime
 
 
@@ -56,7 +61,9 @@ def _local_community(database: object, *, status: str = "disabled") -> object:
         created_by_discord_user_id="123",
     )
     with database.session() as session:
-        community = session.merge(database.local_communities.get_local_community_by_slug("cats"))
+        community = session.merge(
+            database.local_communities.get_local_community_by_slug("cats")
+        )
         community.status = status
     return database.local_communities.get_local_community_by_slug("cats")
 
@@ -106,7 +113,9 @@ def _follow_event() -> LocalFollowRequestEvent:
 
 
 @pytest.mark.asyncio
-async def test_disabled_community_skips_inbound_post_without_side_effects(tmp_path: Path) -> None:
+async def test_disabled_community_skips_inbound_post_without_side_effects(
+    tmp_path: Path,
+) -> None:
     """Inbound ActivityPub content for disabled communities is ACKed and skipped."""
     database, local_runtime = _runtime(tmp_path, "disabled-inbound.db")
     _local_community(database, status="disabled")
@@ -115,20 +124,30 @@ async def test_disabled_community_skips_inbound_post_without_side_effects(tmp_pa
         local_community_runtime=local_runtime,
         community_runtime=SimpleNamespace(),
         settings=SimpleNamespace(discord_guild_allowlist=[], federation_allowlist=[]),
-            bridge_policy_service=build_test_policy_service(database, SimpleNamespace(discord_guild_allowlist=[], federation_allowlist=[])),
-)
+        bridge_policy_service=build_test_policy_service(
+            database,
+            SimpleNamespace(discord_guild_allowlist=[], federation_allowlist=[]),
+        ),
+    )
 
     result = await dispatch_activitypub_event(_post_event(), runtime)
 
     assert result.status == "skipped"
     assert result.detail == "community is disabled"
     assert result.outcome.value == "ignored_by_disabled_community"
-    assert database.local_community_content.get_local_community_thread_by_ap_object_id("https://remote.example/post/1") is None
+    assert (
+        database.local_community_content.get_local_community_thread_by_ap_object_id(
+            "https://remote.example/post/1"
+        )
+        is None
+    )
     local_runtime.fedify_gateway.send_local_community_relay.assert_not_awaited()
 
 
 @pytest.mark.asyncio
-async def test_disabled_community_skips_remote_follow_without_accept(tmp_path: Path) -> None:
+async def test_disabled_community_skips_remote_follow_without_accept(
+    tmp_path: Path,
+) -> None:
     """Remote Follow to a disabled community is acknowledged without subscriber state."""
     database, local_runtime = _runtime(tmp_path, "disabled-follow.db")
     _local_community(database, status="disabled")
@@ -137,8 +156,11 @@ async def test_disabled_community_skips_remote_follow_without_accept(tmp_path: P
         local_community_runtime=local_runtime,
         community_runtime=SimpleNamespace(),
         settings=SimpleNamespace(discord_guild_allowlist=[], federation_allowlist=[]),
-            bridge_policy_service=build_test_policy_service(database, SimpleNamespace(discord_guild_allowlist=[], federation_allowlist=[])),
-)
+        bridge_policy_service=build_test_policy_service(
+            database,
+            SimpleNamespace(discord_guild_allowlist=[], federation_allowlist=[]),
+        ),
+    )
 
     result = await dispatch_activitypub_event(_follow_event(), runtime)
 
@@ -166,10 +188,14 @@ async def test_disabled_community_blocks_discord_thread_starter(tmp_path: Path) 
     assert result.reason == "community_disabled"
     runtime.fedify_gateway.publish_local_community_content.assert_not_awaited()
     with database.session() as session:
-        assert session.scalar(select(func.count()).select_from(LocalCommunityThread)) == 0
+        assert (
+            session.scalar(select(func.count()).select_from(LocalCommunityThread)) == 0
+        )
 
 
-def test_disabled_community_blocks_local_subscriber_subscription(tmp_path: Path) -> None:
+def test_disabled_community_blocks_local_subscriber_subscription(
+    tmp_path: Path,
+) -> None:
     """Local subscriber rows are not created for disabled target communities."""
     database, _runtime_obj = _runtime(tmp_path, "disabled-local-subscribe.db")
     community = _local_community(database, status="disabled")

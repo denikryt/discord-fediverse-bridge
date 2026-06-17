@@ -27,7 +27,9 @@ UNKNOWN_FORUM_CHANNEL = "Unknown forum channel"
 def build_dashboard_payload(runtime: Any) -> dict[str, object]:
     """Build the public dashboard payload from safe runtime state."""
     settings = runtime.settings
-    origin = str(getattr(settings, "normalized_fedify_origin", settings.fedify_origin)).rstrip("/")
+    origin = str(
+        getattr(settings, "normalized_fedify_origin", settings.fedify_origin)
+    ).rstrip("/")
     origin_host = _hostname_from_url(origin) or ""
     actor_identifier = getattr(settings, "fedify_actor_identifier", "bridge")
     database = runtime.database
@@ -37,26 +39,39 @@ def build_dashboard_payload(runtime: Any) -> dict[str, object]:
         for row in database.local_communities.list_local_communities()
         if _is_visible_local_community(row, snapshot)
     ]
-    visible_local_community_ids = {getattr(community, "id") for community in local_communities}
+    visible_local_community_ids = {
+        getattr(community, "id") for community in local_communities
+    }
     registered_users = database.users.list_users()
     remote_subscribers = [
-        row for row in database.remote_subscribers.list_remote_subscribers_for_all(status="accepted")
+        row
+        for row in database.remote_subscribers.list_remote_subscribers_for_all(
+            status="accepted"
+        )
         if snapshot.federation_decision(
-            getattr(row, "remote_actor_id", None) or getattr(row, "remote_inbox_url", "")
+            getattr(row, "remote_actor_id", None)
+            or getattr(row, "remote_inbox_url", "")
         ).allowed
         and getattr(row, "local_community_id", None) in visible_local_community_ids
     ]
     bridge_follows = [
-        row for row in database.bridge_actor_follows.list_bridge_actor_follows()
+        row
+        for row in database.bridge_actor_follows.list_bridge_actor_follows()
         if snapshot.federation_decision(getattr(row, "community_actor_id", "")).allowed
     ]
     accepted_remote_subscriptions = [
-        row for row in database.remote_subscriptions.list_subscriptions(status="accepted")
+        row
+        for row in database.remote_subscriptions.list_subscriptions(status="accepted")
         if snapshot.is_discord_guild_allowed(getattr(row, "discord_guild_id", None))
-        and snapshot.federation_decision(getattr(row, "lemmy_community_actor_id", "")).allowed
+        and snapshot.federation_decision(
+            getattr(row, "lemmy_community_actor_id", "")
+        ).allowed
     ]
     active_local_subscribers = [
-        row for row in database.local_subscribers.list_all_local_subscribers(status="active")
+        row
+        for row in database.local_subscribers.list_all_local_subscribers(
+            status="active"
+        )
         if snapshot.is_discord_guild_allowed(getattr(row, "discord_guild_id", None))
         and _is_visible_local_community(
             database.local_communities.get_local_community_by_id(
@@ -66,7 +81,8 @@ def build_dashboard_payload(runtime: Any) -> dict[str, object]:
         )
     ]
     invite_publications = [
-        row for row in database.guild_invite_publications.list_publications()
+        row
+        for row in database.guild_invite_publications.list_publications()
         if snapshot.is_discord_guild_allowed(getattr(row, "discord_guild_id", None))
     ]
 
@@ -77,10 +93,14 @@ def build_dashboard_payload(runtime: Any) -> dict[str, object]:
         local_subscribers=active_local_subscribers,
     )
 
-    publications_by_guild = {int(row.discord_guild_id): row for row in invite_publications}
+    publications_by_guild = {
+        int(row.discord_guild_id): row for row in invite_publications
+    }
     remote_subscribers_by_community: dict[int, list[object]] = defaultdict(list)
     for remote_subscriber in remote_subscribers:
-        remote_subscribers_by_community[getattr(remote_subscriber, "local_community_id")].append(remote_subscriber)
+        remote_subscribers_by_community[
+            getattr(remote_subscriber, "local_community_id")
+        ].append(remote_subscriber)
     remote_subscription_names_by_actor: dict[str, str] = {}
     remote_subscription_handles_by_actor: dict[str, str] = {}
     for subscription in accepted_remote_subscriptions:
@@ -89,9 +109,13 @@ def build_dashboard_payload(runtime: Any) -> dict[str, object]:
         if actor_url and display_name:
             remote_subscription_names_by_actor.setdefault(actor_url, display_name)
         if actor_url:
-            remote_subscription_handles_by_actor.setdefault(actor_url, _remote_subscription_label(subscription))
+            remote_subscription_handles_by_actor.setdefault(
+                actor_url, _remote_subscription_label(subscription)
+            )
 
-    local_community_by_id = {getattr(community, "id"): community for community in local_communities}
+    local_community_by_id = {
+        getattr(community, "id"): community for community in local_communities
+    }
     community_payloads = []
     guild_buckets: dict[int | None, dict[str, object]] = {}
 
@@ -102,7 +126,9 @@ def build_dashboard_payload(runtime: Any) -> dict[str, object]:
             str(getattr(row, "slug", "")).lower(),
         ),
     ):
-        community_remote_subscribers = remote_subscribers_by_community.get(getattr(community, "id"), [])
+        community_remote_subscribers = remote_subscribers_by_community.get(
+            getattr(community, "id"), []
+        )
         remote_subscriber_payloads = []
         for remote_subscriber in sorted(
             community_remote_subscribers,
@@ -113,10 +139,14 @@ def build_dashboard_payload(runtime: Any) -> dict[str, object]:
                 {
                     "actorUrl": actor_url,
                     "instanceHost": _hostname_from_url(actor_url)
-                    or _hostname_from_url(getattr(remote_subscriber, "remote_inbox_url", "")),
+                    or _hostname_from_url(
+                        getattr(remote_subscriber, "remote_inbox_url", "")
+                    ),
                 }
             )
-        local_subscriber_count = database.local_subscribers.count_local_subscribers(getattr(community, "id"))
+        local_subscriber_count = database.local_subscribers.count_local_subscribers(
+            getattr(community, "id")
+        )
         host_discord = _discord_labels_for_row(
             guild_id=getattr(community, "discord_guild_id", None),
             channel_id=getattr(community, "discord_forum_channel_id", None),
@@ -147,9 +177,14 @@ def build_dashboard_payload(runtime: Any) -> dict[str, object]:
                 # hosted local community so operators can discover it from both
                 # navigation paths without exposing Discord ids.
                 "inviteUrl": (
-                    str(publications_by_guild[int(getattr(community, "discord_guild_id"))].invite_url)
+                    str(
+                        publications_by_guild[
+                            int(getattr(community, "discord_guild_id"))
+                        ].invite_url
+                    )
                     if getattr(community, "discord_guild_id", None) is not None
-                    and int(getattr(community, "discord_guild_id")) in publications_by_guild
+                    and int(getattr(community, "discord_guild_id"))
+                    in publications_by_guild
                     else None
                 ),
             }
@@ -176,7 +211,9 @@ def build_dashboard_payload(runtime: Any) -> dict[str, object]:
             guild_snapshots=guild_snapshots,
             channel_snapshots=channel_snapshots,
         )
-        channel_snapshot = channel_snapshots.get(getattr(subscription, "discord_channel_id", None))
+        channel_snapshot = channel_snapshots.get(
+            getattr(subscription, "discord_channel_id", None)
+        )
         bucket["remoteSubscriptions"].append(
             {
                 "forumChannelName": _channel_name(channel_snapshot),
@@ -185,7 +222,9 @@ def build_dashboard_payload(runtime: Any) -> dict[str, object]:
         )
 
     for subscriber in active_local_subscribers:
-        community = local_community_by_id.get(getattr(subscriber, "local_community_id", None))
+        community = local_community_by_id.get(
+            getattr(subscriber, "local_community_id", None)
+        )
         bucket = _guild_bucket(
             guild_buckets,
             guild_id=getattr(subscriber, "discord_guild_id", None),
@@ -193,7 +232,9 @@ def build_dashboard_payload(runtime: Any) -> dict[str, object]:
             guild_snapshots=guild_snapshots,
             channel_snapshots=channel_snapshots,
         )
-        channel_snapshot = channel_snapshots.get(getattr(subscriber, "discord_channel_id", None))
+        channel_snapshot = channel_snapshots.get(
+            getattr(subscriber, "discord_channel_id", None)
+        )
         bucket["localSubscriptions"].append(
             {
                 "forumChannelName": _channel_name(channel_snapshot),
@@ -237,7 +278,9 @@ def build_dashboard_payload(runtime: Any) -> dict[str, object]:
             "communityHandle": remote_subscription_handles_by_actor.get(
                 getattr(follow, "community_actor_id", ""),
             ),
-            "instanceHost": _hostname_from_url(getattr(follow, "community_actor_id", "")),
+            "instanceHost": _hostname_from_url(
+                getattr(follow, "community_actor_id", "")
+            ),
             "status": getattr(follow, "status"),
             "technicalDetails": {
                 "communityInboxUrl": getattr(follow, "community_inbox_url"),
@@ -247,12 +290,18 @@ def build_dashboard_payload(runtime: Any) -> dict[str, object]:
     ]
 
     for guild_id, bucket in guild_buckets.items():
-        publication = publications_by_guild.get(guild_id) if guild_id is not None else None
-        bucket["inviteUrl"] = str(publication.invite_url) if publication is not None else None
+        publication = (
+            publications_by_guild.get(guild_id) if guild_id is not None else None
+        )
+        bucket["inviteUrl"] = (
+            str(publication.invite_url) if publication is not None else None
+        )
 
     return {
         "instance": {
-            "title": getattr(settings, "dashboard_page_title", DEFAULT_DASHBOARD_PAGE_TITLE),
+            "title": getattr(
+                settings, "dashboard_page_title", DEFAULT_DASHBOARD_PAGE_TITLE
+            ),
             "version": APP_VERSION,
             "origin": origin,
             "bridgeActorUrl": f"{origin}/actors/{actor_identifier}",
@@ -290,11 +339,17 @@ def render_dashboard_html(
     # The dashboard JSON route remains configurable from Python so tests can
     # exercise alternate route wiring without editing the static asset.
     return (
-        template.replace("__DASHBOARD_DATA_ENDPOINT__", escape(payload_endpoint, quote=True))
+        template.replace(
+            "__DASHBOARD_DATA_ENDPOINT__", escape(payload_endpoint, quote=True)
+        )
         .replace("__DASHBOARD_PAGE_TITLE__", escape(page_title, quote=True))
         .replace("__DASHBOARD_ICON_VERSION__", _asset_cache_token(WEB_DIR / "icon.png"))
-        .replace("__DASHBOARD_CSS_VERSION__", _asset_cache_token(WEB_DIR / "dashboard.css"))
-        .replace("__DASHBOARD_JS_VERSION__", _asset_cache_token(WEB_DIR / "dashboard.js"))
+        .replace(
+            "__DASHBOARD_CSS_VERSION__", _asset_cache_token(WEB_DIR / "dashboard.css")
+        )
+        .replace(
+            "__DASHBOARD_JS_VERSION__", _asset_cache_token(WEB_DIR / "dashboard.js")
+        )
     )
 
 
@@ -320,8 +375,14 @@ def _load_discord_snapshots(
     guild_ids: set[int] = set()
     channel_ids: set[int] = set()
     for row, guild_attr, channel_attr in (
-        *((row, "discord_guild_id", "discord_forum_channel_id") for row in local_communities),
-        *((row, "discord_guild_id", "discord_channel_id") for row in remote_subscriptions),
+        *(
+            (row, "discord_guild_id", "discord_forum_channel_id")
+            for row in local_communities
+        ),
+        *(
+            (row, "discord_guild_id", "discord_channel_id")
+            for row in remote_subscriptions
+        ),
         *((row, "discord_guild_id", "discord_channel_id") for row in local_subscribers),
     ):
         guild_id = getattr(row, guild_attr, None)
@@ -331,7 +392,9 @@ def _load_discord_snapshots(
         if channel_id is not None:
             channel_ids.add(int(channel_id))
 
-    channel_rows = database.discord_directory.list_channel_snapshots(sorted(channel_ids))
+    channel_rows = database.discord_directory.list_channel_snapshots(
+        sorted(channel_ids)
+    )
     for snapshot in channel_rows:
         # Older subscription rows may have NULL guild ids. Channel snapshots can
         # still recover the guild grouping without exposing the numeric id.
@@ -354,7 +417,9 @@ def _guild_bucket(
 ) -> dict[str, object]:
     """Return the public bucket for one Discord guild placement."""
     key = guild_id
-    channel_snapshot = channel_snapshots.get(channel_id) if channel_id is not None else None
+    channel_snapshot = (
+        channel_snapshots.get(channel_id) if channel_id is not None else None
+    )
     if key is None and channel_snapshot is not None:
         key = getattr(channel_snapshot, "discord_guild_id", None)
     key = int(key) if key is not None else None
@@ -371,7 +436,9 @@ def _guild_bucket(
     return buckets[key]
 
 
-def _finalize_guild_buckets(buckets: dict[int | None, dict[str, object]]) -> list[dict[str, object]]:
+def _finalize_guild_buckets(
+    buckets: dict[int | None, dict[str, object]],
+) -> list[dict[str, object]]:
     """Sort and strip private bucket metadata before serialization."""
     sorted_buckets = sorted(
         buckets.values(),
@@ -384,17 +451,28 @@ def _finalize_guild_buckets(buckets: dict[int | None, dict[str, object]]) -> lis
     for bucket in sorted_buckets:
         bucket["hostedCommunities"] = sorted(
             bucket["hostedCommunities"],
-            key=lambda row: (str(row["relayHandle"]).lower(), str(row["forumChannelName"]).lower()),
+            key=lambda row: (
+                str(row["relayHandle"]).lower(),
+                str(row["forumChannelName"]).lower(),
+            ),
         )
         bucket["remoteSubscriptions"] = sorted(
             bucket["remoteSubscriptions"],
-            key=lambda row: (str(row["communityHandle"]).lower(), str(row["forumChannelName"]).lower()),
+            key=lambda row: (
+                str(row["communityHandle"]).lower(),
+                str(row["forumChannelName"]).lower(),
+            ),
         )
         bucket["localSubscriptions"] = sorted(
             bucket["localSubscriptions"],
-            key=lambda row: (str(row["communityHandle"]).lower(), str(row["forumChannelName"]).lower()),
+            key=lambda row: (
+                str(row["communityHandle"]).lower(),
+                str(row["forumChannelName"]).lower(),
+            ),
         )
-        result.append({key: value for key, value in bucket.items() if key != "_sortKey"})
+        result.append(
+            {key: value for key, value in bucket.items() if key != "_sortKey"}
+        )
     return result
 
 
@@ -407,10 +485,16 @@ def _discord_labels_for_row(
 ) -> dict[str, str]:
     """Return public Discord labels for one hosted community row."""
     guild_snapshot = guild_snapshots.get(guild_id) if guild_id is not None else None
-    channel_snapshot = channel_snapshots.get(channel_id) if channel_id is not None else None
+    channel_snapshot = (
+        channel_snapshots.get(channel_id) if channel_id is not None else None
+    )
     if guild_snapshot is None and channel_snapshot is not None:
         snapshot_guild_id = getattr(channel_snapshot, "discord_guild_id", None)
-        guild_snapshot = guild_snapshots.get(snapshot_guild_id) if snapshot_guild_id is not None else None
+        guild_snapshot = (
+            guild_snapshots.get(snapshot_guild_id)
+            if snapshot_guild_id is not None
+            else None
+        )
     return {
         "guildName": _guild_name(guild_snapshot),
         "forumChannelName": _channel_name(channel_snapshot),
@@ -461,8 +545,6 @@ def _hostname_from_url(value: str | None) -> str | None:
     return parsed.hostname.lower() if parsed.hostname else None
 
 
-
-
 def _normalize_host_list(values: list[str]) -> list[str]:
     """Normalize allowlist entries as sorted lowercase hostnames."""
     hosts = {_hostname_from_url(value.strip()) for value in values if value.strip()}
@@ -490,4 +572,6 @@ def _is_visible_local_community(community: object | None, snapshot: object) -> b
         return False
     if getattr(community, "status", "active") == "disabled":
         return False
-    return snapshot.is_discord_guild_allowed(getattr(community, "discord_guild_id", None))
+    return snapshot.is_discord_guild_allowed(
+        getattr(community, "discord_guild_id", None)
+    )

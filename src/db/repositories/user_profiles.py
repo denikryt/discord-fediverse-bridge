@@ -191,8 +191,7 @@ class ProfileMediaRepository(BaseRepository):
             select(UserActorOutboundSourceMedia.id)
             .join(
                 UserActorOutboundSource,
-                UserActorOutboundSource.id
-                == UserActorOutboundSourceMedia.source_id,
+                UserActorOutboundSource.id == UserActorOutboundSourceMedia.source_id,
             )
             .where(
                 UserActorOutboundSourceMedia.media_asset_id == asset_id,
@@ -200,10 +199,11 @@ class ProfileMediaRepository(BaseRepository):
                     UserActorOutboundSource.state != "ready",
                     select(UserActorOutboundDelivery.id)
                     .where(
-                        UserActorOutboundDelivery.source_id == UserActorOutboundSource.id,
+                        UserActorOutboundDelivery.source_id
+                        == UserActorOutboundSource.id,
                         UserActorOutboundDelivery.status.in_(
-                        ("pending", "sending", "failed")
-                    ),
+                            ("pending", "sending", "failed")
+                        ),
                     )
                     .exists(),
                 ),

@@ -18,16 +18,28 @@ class Settings(BaseSettings):
 
     database_url: str = Field(default="sqlite:///./bridge.db", alias="DATABASE_URL")
     public_base_url: HttpUrl = Field(alias="PUBLIC_BASE_URL")
-    fedify_gateway_url: HttpUrl = Field(default="http://127.0.0.1:3000", alias="BRIDGE_GATEWAY_URL")
+    fedify_gateway_url: HttpUrl = Field(
+        default="http://127.0.0.1:3000", alias="BRIDGE_GATEWAY_URL"
+    )
     internal_http_host: str = Field(default="127.0.0.1", alias="BRIDGE_BIND_HOST")
     internal_http_port: int = Field(default=8080, alias="BRIDGE_BIND_PORT")
     discord_oauth_client_id: str = Field(default="", alias="DISCORD_OAUTH_CLIENT_ID")
-    discord_oauth_client_secret: str = Field(default="", alias="DISCORD_OAUTH_CLIENT_SECRET")
-    discord_oauth_redirect_uri: HttpUrl | None = Field(default=None, alias="DISCORD_OAUTH_REDIRECT_URI")
-    registration_session_cookie_name: str = Field(default="bridge_registration_session", alias="REGISTRATION_SESSION_COOKIE_NAME")
-    registration_session_ttl_seconds: int = Field(default=3600, alias="REGISTRATION_SESSION_TTL_SECONDS")
+    discord_oauth_client_secret: str = Field(
+        default="", alias="DISCORD_OAUTH_CLIENT_SECRET"
+    )
+    discord_oauth_redirect_uri: HttpUrl | None = Field(
+        default=None, alias="DISCORD_OAUTH_REDIRECT_URI"
+    )
+    registration_session_cookie_name: str = Field(
+        default="bridge_registration_session", alias="REGISTRATION_SESSION_COOKIE_NAME"
+    )
+    registration_session_ttl_seconds: int = Field(
+        default=3600, alias="REGISTRATION_SESSION_TTL_SECONDS"
+    )
     fedify_shared_secret: str = Field(alias="FEDIFY_SHARED_SECRET")
-    fedify_actor_identifier: str = Field(default="bridge", alias="FEDIFY_ACTOR_IDENTIFIER")
+    fedify_actor_identifier: str = Field(
+        default="bridge", alias="FEDIFY_ACTOR_IDENTIFIER"
+    )
     # Legacy bridge JWK values are accepted only for one-time database import.
     fedify_bridge_private_key_jwk_json: str | None = Field(
         default=None, alias="FEDIFY_BRIDGE_PRIVATE_KEY_JWK_JSON", repr=False
@@ -35,7 +47,9 @@ class Settings(BaseSettings):
     fedify_bridge_public_key_jwk_json: str | None = Field(
         default=None, alias="FEDIFY_BRIDGE_PUBLIC_KEY_JWK_JSON"
     )
-    bridge_display_prefix: str = Field(default="[bridge]", alias="BRIDGE_DISPLAY_PREFIX")
+    bridge_display_prefix: str = Field(
+        default="[bridge]", alias="BRIDGE_DISPLAY_PREFIX"
+    )
     dashboard_page_title: str = Field(
         default="Discord/Fediverse Bridge Instance",
         alias="DASHBOARD_PAGE_TITLE",
@@ -43,18 +57,46 @@ class Settings(BaseSettings):
     log_level: str = Field(default="INFO", alias="LOG_LEVEL")
     # Bootstrap policy remains immutable for the process lifetime. Dynamic
     # entries are persisted separately and merged by BridgePolicyService.
-    federation_allowlist: list[str] = Field(default_factory=list, alias="FEDERATION_ALLOWLIST")
-    federation_blocklist: list[str] = Field(default_factory=list, alias="FEDERATION_BLOCKLIST")
-    discord_guild_allowlist: list[str] = Field(default_factory=list, alias="DISCORD_GUILD_ALLOWLIST")
-    discord_guild_blocklist: list[str] = Field(default_factory=list, alias="DISCORD_GUILD_BLOCKLIST")
+    federation_allowlist: list[str] = Field(
+        default_factory=list, alias="FEDERATION_ALLOWLIST"
+    )
+    federation_blocklist: list[str] = Field(
+        default_factory=list, alias="FEDERATION_BLOCKLIST"
+    )
+    discord_guild_allowlist: list[str] = Field(
+        default_factory=list, alias="DISCORD_GUILD_ALLOWLIST"
+    )
+    discord_guild_blocklist: list[str] = Field(
+        default_factory=list, alias="DISCORD_GUILD_BLOCKLIST"
+    )
     bridge_super_admin_user_ids: list[str] = Field(alias="BRIDGE_SUPER_ADMIN_USER_IDS")
-    profile_media_root: str = Field(default="/data/profile-media", alias="PROFILE_MEDIA_ROOT")
-    deployment_state_lock_path: str = Field(default="/data/deployment-state.lock", alias="DEPLOYMENT_STATE_LOCK_PATH")
-    profile_media_lock_path: str = Field(default="/data/profile-media.lock", alias="PROFILE_MEDIA_LOCK_PATH")
-    profile_media_max_upload_bytes: int = Field(default=10_485_760, ge=1_048_576, le=26_214_400, alias="PROFILE_MEDIA_MAX_UPLOAD_BYTES")
-    profile_media_max_pixels: int = Field(default=20_000_000, ge=1_000_000, le=40_000_000, alias="PROFILE_MEDIA_MAX_PIXELS")
-    profile_media_orphan_grace_seconds: int = Field(default=86_400, ge=300, le=604_800, alias="PROFILE_MEDIA_ORPHAN_GRACE_SECONDS")
-    profile_media_lock_timeout_seconds: int = Field(default=30, ge=1, le=300, alias="PROFILE_MEDIA_LOCK_TIMEOUT_SECONDS")
+    profile_media_root: str = Field(
+        default="/data/profile-media", alias="PROFILE_MEDIA_ROOT"
+    )
+    deployment_state_lock_path: str = Field(
+        default="/data/deployment-state.lock", alias="DEPLOYMENT_STATE_LOCK_PATH"
+    )
+    profile_media_lock_path: str = Field(
+        default="/data/profile-media.lock", alias="PROFILE_MEDIA_LOCK_PATH"
+    )
+    profile_media_max_upload_bytes: int = Field(
+        default=10_485_760,
+        ge=1_048_576,
+        le=26_214_400,
+        alias="PROFILE_MEDIA_MAX_UPLOAD_BYTES",
+    )
+    profile_media_max_pixels: int = Field(
+        default=20_000_000,
+        ge=1_000_000,
+        le=40_000_000,
+        alias="PROFILE_MEDIA_MAX_PIXELS",
+    )
+    profile_media_orphan_grace_seconds: int = Field(
+        default=86_400, ge=300, le=604_800, alias="PROFILE_MEDIA_ORPHAN_GRACE_SECONDS"
+    )
+    profile_media_lock_timeout_seconds: int = Field(
+        default=30, ge=1, le=300, alias="PROFILE_MEDIA_LOCK_TIMEOUT_SECONDS"
+    )
 
     @field_validator("federation_allowlist", "federation_blocklist", mode="before")
     @classmethod
@@ -73,8 +115,12 @@ class Settings(BaseSettings):
 
         return [str(entry).strip() for entry in v if str(entry).strip()]
 
-
-    @field_validator("discord_guild_allowlist", "discord_guild_blocklist", "bridge_super_admin_user_ids", mode="before")
+    @field_validator(
+        "discord_guild_allowlist",
+        "discord_guild_blocklist",
+        "bridge_super_admin_user_ids",
+        mode="before",
+    )
     @classmethod
     def _split_discord_guild_allowlist(cls, v: object) -> list[str]:
         """Parse and validate comma-separated Discord guild IDs.
@@ -104,7 +150,9 @@ class Settings(BaseSettings):
     def _require_bootstrap_super_admin(self) -> "Settings":
         """Fail startup when no immutable bridge administrator is configured."""
         if not self.bridge_super_admin_user_ids:
-            raise ValueError("BRIDGE_SUPER_ADMIN_USER_IDS must contain at least one Discord user ID")
+            raise ValueError(
+                "BRIDGE_SUPER_ADMIN_USER_IDS must contain at least one Discord user ID"
+            )
         return self
 
     @model_validator(mode="after")
@@ -115,7 +163,11 @@ class Settings(BaseSettings):
         media_root = Path(self.profile_media_root)
         deployment_lock = Path(self.deployment_state_lock_path)
         media_lock = Path(self.profile_media_lock_path)
-        if not media_root.is_absolute() or not deployment_lock.is_absolute() or not media_lock.is_absolute():
+        if (
+            not media_root.is_absolute()
+            or not deployment_lock.is_absolute()
+            or not media_lock.is_absolute()
+        ):
             raise ValueError("profile media and lock paths must be absolute")
         data_root = Path("/data").resolve()
         media_root = media_root.resolve(strict=False)
@@ -123,10 +175,17 @@ class Settings(BaseSettings):
         media_lock = media_lock.resolve(strict=False)
         for path in (media_root, deployment_lock, media_lock):
             if data_root not in (path, *path.parents):
-                raise ValueError("profile media and lock paths must be contained beneath /data")
+                raise ValueError(
+                    "profile media and lock paths must be contained beneath /data"
+                )
         if deployment_lock == media_lock:
-            raise ValueError("deployment and media lifecycle lock paths must be distinct")
-        if media_root in (deployment_lock, *deployment_lock.parents) or media_root in (media_lock, *media_lock.parents):
+            raise ValueError(
+                "deployment and media lifecycle lock paths must be distinct"
+            )
+        if media_root in (deployment_lock, *deployment_lock.parents) or media_root in (
+            media_lock,
+            *media_lock.parents,
+        ):
             raise ValueError("lock paths must not be inside the profile media root")
         return self
 

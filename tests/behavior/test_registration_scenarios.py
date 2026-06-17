@@ -74,8 +74,8 @@ def _runtime(tmp_path: Path) -> SimpleNamespace:
         discord_oauth_client=FakeDiscordOAuthClient(),
         fedify_gateway=SimpleNamespace(),
         bot=SimpleNamespace(),
-            bridge_policy_service=build_test_policy_service(database, settings),
-)
+        bridge_policy_service=build_test_policy_service(database, settings),
+    )
 
 
 def _client(tmp_path: Path) -> tuple[TestClient, Database]:
@@ -96,7 +96,12 @@ async def test_unregistered_user_register_command_returns_ephemeral_link(
         discord_guild_allowlist=[],
     )
 
-    register_command.register(command_tree, database, settings, policy_service=build_test_policy_service(database))
+    register_command.register(
+        command_tree,
+        database,
+        settings,
+        policy_service=build_test_policy_service(database),
+    )
 
     command = command_tree.commands["register"]
     await command.callback(interaction)
@@ -121,7 +126,9 @@ def test_oauth_success_then_registration_complete_creates_user_actor(
     client.get("/register")
     client.get("/auth/discord/start", follow_redirects=False)
     session_token = client.cookies.get("bridge_registration_session")
-    session = database.registration_sessions.get_registration_session_by_token(session_token)
+    session = database.registration_sessions.get_registration_session_by_token(
+        session_token
+    )
     assert session is not None
     client.get(
         f"/auth/discord/callback?code=oauth-code&state={session.oauth_state}",
@@ -170,7 +177,9 @@ def test_duplicate_discord_user_repeat_registration_shows_existing_actor(
     client.get("/register")
     client.get("/auth/discord/start", follow_redirects=False)
     session_token = client.cookies.get("bridge_registration_session")
-    session = database.registration_sessions.get_registration_session_by_token(session_token)
+    session = database.registration_sessions.get_registration_session_by_token(
+        session_token
+    )
     assert session is not None
     client.get(
         f"/auth/discord/callback?code=oauth-code&state={session.oauth_state}",

@@ -7,7 +7,6 @@ from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, patch
 
-import discord
 import pytest
 
 from src.commands import subscribe
@@ -23,7 +22,9 @@ def _database(tmp_path: Path) -> Database:
     return database
 
 
-def _settings(*, allowlist: list[str], public_bridge_base_url: str, fedify_origin: str) -> SimpleNamespace:
+def _settings(
+    *, allowlist: list[str], public_bridge_base_url: str, fedify_origin: str
+) -> SimpleNamespace:
     """Build the minimum settings surface used by community discovery."""
     # These fields mirror the public bridge URLs the command compares against
     # when deciding whether a selected instance belongs to this deployment.
@@ -96,9 +97,17 @@ async def test_same_instance_autocomplete_uses_bridge_discovery(
     interaction.user.id = "1234567890"
     interaction.guild_id = 99999
     interaction.namespace = SimpleNamespace(instance_domain="https://bot.example.com")
-    subscribe.register(command_tree, database, fedify_gateway, settings, policy_service=build_test_policy_service(database))
+    subscribe.register(
+        command_tree,
+        database,
+        fedify_gateway,
+        settings,
+        policy_service=build_test_policy_service(database),
+    )
 
-    with patch("src.commands.subscribe.fetch_bridge_community_summaries", new=AsyncMock()) as fetch_mock:
+    with patch(
+        "src.commands.subscribe.fetch_bridge_community_summaries", new=AsyncMock()
+    ) as fetch_mock:
         with patch("src.commands.subscribe.LemmyClient") as lemmy_client_mock:
             fetch_mock.return_value = [
                 SimpleNamespace(
@@ -113,14 +122,21 @@ async def test_same_instance_autocomplete_uses_bridge_discovery(
                 )
             ]
 
-            policy_service = BridgePolicyService(settings=settings, repository=database.bridge_policy_entries)
-            choices = await subscribe._community_autocomplete(settings, database, policy_service)(interaction, "news")
+            policy_service = BridgePolicyService(
+                settings=settings, repository=database.bridge_policy_entries
+            )
+            choices = await subscribe._community_autocomplete(
+                settings, database, policy_service
+            )(interaction, "news")
 
     lemmy_client_mock.assert_not_called()
     fetch_mock.assert_awaited_once_with("https://bot.example.com")
     assert len(choices) == 1
     assert choices[0].name == "Local News (local-news@bot.example.com)"
-    assert choices[0].value == "bridge-local:https://bot.example.com/communities/local-news|local-news|1"
+    assert (
+        choices[0].value
+        == "bridge-local:https://bot.example.com/communities/local-news|local-news|1"
+    )
 
 
 @pytest.mark.asyncio
@@ -145,9 +161,17 @@ async def test_remote_bridge_handle_uses_remote_follow_path_without_numeric_id(
         community_inbox_url=f"{remote_actor_id}/inbox",
         follow_activity_id="https://bot.example.com/activities/follow/1",
     )
-    subscribe.register(command_tree, database, fedify_gateway, settings, policy_service=build_test_policy_service(database))
+    subscribe.register(
+        command_tree,
+        database,
+        fedify_gateway,
+        settings,
+        policy_service=build_test_policy_service(database),
+    )
 
-    with patch("src.commands.subscribe.fetch_bridge_community_summaries", new=AsyncMock()) as fetch_mock:
+    with patch(
+        "src.commands.subscribe.fetch_bridge_community_summaries", new=AsyncMock()
+    ) as fetch_mock:
         with patch("src.commands.subscribe.LemmyClient") as lemmy_client_mock:
             fetch_mock.return_value = [
                 SimpleNamespace(
@@ -172,14 +196,18 @@ async def test_remote_bridge_handle_uses_remote_follow_path_without_numeric_id(
 
     lemmy_client_mock.assert_not_called()
     fetch_mock.assert_awaited_once_with("https://remote.bridge.example")
-    subscription = database.remote_subscriptions.get_subscription_by_channel(forum_channel.id)
+    subscription = database.remote_subscriptions.get_subscription_by_channel(
+        forum_channel.id
+    )
     assert subscription is not None
     assert subscription.lemmy_community_actor_id == remote_actor_id
     assert subscription.lemmy_community_id is None
     assert subscription.community_handle == "!local-news@remote.bridge.example"
     fedify_gateway.follow_community.assert_awaited_once_with(remote_actor_id)
     send_call = interaction.response.send_message.await_args
-    assert send_call.args == ("<@1234567890> subscribed <#12345> to **local-news@remote.bridge.example**. Waiting for federation acceptance.",)
+    assert send_call.args == (
+        "<@1234567890> subscribed <#12345> to **local-news@remote.bridge.example**. Waiting for federation acceptance.",
+    )
     assert send_call.kwargs.get("ephemeral", False) is False
     assert send_call.kwargs["allowed_mentions"].users is False
 
@@ -201,9 +229,17 @@ async def test_same_instance_local_actor_url_creates_local_subscriber_state(
         public_bridge_base_url="https://bot.example.com",
         fedify_origin="https://bot.example.com",
     )
-    subscribe.register(command_tree, database, fedify_gateway, settings, policy_service=build_test_policy_service(database))
+    subscribe.register(
+        command_tree,
+        database,
+        fedify_gateway,
+        settings,
+        policy_service=build_test_policy_service(database),
+    )
 
-    with patch("src.commands.subscribe.fetch_bridge_community_summaries", new=AsyncMock()) as fetch_mock:
+    with patch(
+        "src.commands.subscribe.fetch_bridge_community_summaries", new=AsyncMock()
+    ) as fetch_mock:
         fetch_mock.return_value = [
             SimpleNamespace(
                 id=1,
@@ -225,8 +261,16 @@ async def test_same_instance_local_actor_url_creates_local_subscriber_state(
             instance_domain="bot.example.com",
         )
 
-    assert database.remote_subscriptions.get_subscription_by_channel(forum_channel.id) is None
-    assert database.bridge_actor_follows.get_bridge_actor_follow("https://bot.example.com/communities/local-news") is None
+    assert (
+        database.remote_subscriptions.get_subscription_by_channel(forum_channel.id)
+        is None
+    )
+    assert (
+        database.bridge_actor_follows.get_bridge_actor_follow(
+            "https://bot.example.com/communities/local-news"
+        )
+        is None
+    )
     local_subscriber = database.local_subscribers.get_local_subscriber(
         local_community_id=community.id,
         discord_channel_id=forum_channel.id,
@@ -237,6 +281,8 @@ async def test_same_instance_local_actor_url_creates_local_subscriber_state(
     assert local_subscriber.status == "active"
     fedify_gateway.follow_community.assert_not_awaited()
     send_call = interaction.response.send_message.await_args
-    assert send_call.args == ("<@1234567890> subscribed <#12345> to **local-news@bot.example.com**.",)
+    assert send_call.args == (
+        "<@1234567890> subscribed <#12345> to **local-news@bot.example.com**.",
+    )
     assert send_call.kwargs.get("ephemeral", False) is False
     assert send_call.kwargs["allowed_mentions"].users is False

@@ -27,7 +27,9 @@ from support.runtime import build_runtime_namespace
 class EditableMessage:
     """Fake Discord message that records edit attempts and can fail on demand."""
 
-    def __init__(self, *, message_id: int, content: str = "old", fail: bool = False) -> None:
+    def __init__(
+        self, *, message_id: int, content: str = "old", fail: bool = False
+    ) -> None:
         """Create one editable fake message for thread fetch scenarios."""
         self.id = message_id
         self.content = content
@@ -69,15 +71,15 @@ def scenario(tmp_path: Path) -> SimpleNamespace:
         database=database,
         fedify_gateway=gateway,
         bridge_prefix="[bridge]",
-            bridge_policy_service=build_test_policy_service(database),
-)
+        bridge_policy_service=build_test_policy_service(database),
+    )
     runtime = LocalCommunityRuntime(
         database=database,
         fedify_gateway=gateway,
         content_publish_service=publish_service,
         bridge_prefix="[bridge]",
-            bridge_policy_service=build_test_policy_service(database),
-)
+        bridge_policy_service=build_test_policy_service(database),
+    )
     LocalCommunityService(
         database=database,
         base_url="https://bridge.example",
@@ -113,8 +115,8 @@ def scenario(tmp_path: Path) -> SimpleNamespace:
         community=community,
         source=source,
         sibling=sibling,
-            bridge_policy_service=build_test_policy_service(database),
-)
+        bridge_policy_service=build_test_policy_service(database),
+    )
 
 
 def _thread_with_surfaces(scenario: SimpleNamespace) -> object:
@@ -168,17 +170,23 @@ def _thread_with_surfaces(scenario: SimpleNamespace) -> object:
 
 def _comment_with_surfaces(scenario: SimpleNamespace, thread_row: object) -> object:
     """Create one canonical comment with host/source/sibling Discord surfaces."""
-    host_thread = scenario.database.local_community_surfaces.get_local_community_thread_surface(
-        local_community_thread_id=thread_row.id,
-        discord_forum_channel_id=100,
+    host_thread = (
+        scenario.database.local_community_surfaces.get_local_community_thread_surface(
+            local_community_thread_id=thread_row.id,
+            discord_forum_channel_id=100,
+        )
     )
-    source_thread = scenario.database.local_community_surfaces.get_local_community_thread_surface(
-        local_community_thread_id=thread_row.id,
-        discord_forum_channel_id=200,
+    source_thread = (
+        scenario.database.local_community_surfaces.get_local_community_thread_surface(
+            local_community_thread_id=thread_row.id,
+            discord_forum_channel_id=200,
+        )
     )
-    sibling_thread = scenario.database.local_community_surfaces.get_local_community_thread_surface(
-        local_community_thread_id=thread_row.id,
-        discord_forum_channel_id=300,
+    sibling_thread = (
+        scenario.database.local_community_surfaces.get_local_community_thread_surface(
+            local_community_thread_id=thread_row.id,
+            discord_forum_channel_id=300,
+        )
     )
     message_row = scenario.database.local_community_content.create_local_community_message_canonical(
         local_community_thread_id=thread_row.id,
@@ -230,11 +238,15 @@ def _comment_with_surfaces(scenario: SimpleNamespace, thread_row: object) -> obj
     return message_row
 
 
-def _bot_for_surfaces(*, failing_message_ids: set[int] | None = None) -> tuple[EditableBot, dict[int, EditableMessage]]:
+def _bot_for_surfaces(
+    *, failing_message_ids: set[int] | None = None
+) -> tuple[EditableBot, dict[int, EditableMessage]]:
     """Create an editable bot covering all host/source/sibling message ids."""
     failing_message_ids = failing_message_ids or set()
     messages = {
-        message_id: EditableMessage(message_id=message_id, fail=message_id in failing_message_ids)
+        message_id: EditableMessage(
+            message_id=message_id, fail=message_id in failing_message_ids
+        )
         for message_id in (1200, 1300, 2300, 2400, 3400, 3500)
     }
     bot = EditableBot(
@@ -255,8 +267,8 @@ def _runtime_namespace(scenario: SimpleNamespace, bot: EditableBot) -> SimpleNam
         local_community_runtime=scenario.runtime,
         community_runtime=SimpleNamespace(),
         bot=bot,
-            bridge_policy_service=build_test_policy_service(scenario.database),
-)
+        bridge_policy_service=build_test_policy_service(scenario.database),
+    )
 
 
 def _remote_post_event(event_type: str) -> ActivityPubEvent:
@@ -312,7 +324,9 @@ def _remote_comment_event(event_type: str) -> ActivityPubEvent:
 
 
 @pytest.mark.asyncio
-async def test_host_starter_edit_updates_subscriber_starter_surfaces(scenario: SimpleNamespace) -> None:
+async def test_host_starter_edit_updates_subscriber_starter_surfaces(
+    scenario: SimpleNamespace,
+) -> None:
     """Host starter edits should AP-update once and edit subscriber copies."""
     _thread_with_surfaces(scenario)
     bot, messages = _bot_for_surfaces()
@@ -325,14 +339,19 @@ async def test_host_starter_edit_updates_subscriber_starter_surfaces(scenario: S
     )
 
     scenario.gateway.update_content.assert_awaited_once()
-    assert scenario.gateway.update_content.await_args.args[0].ap_object_id == "https://bridge.example/post/1"
+    assert (
+        scenario.gateway.update_content.await_args.args[0].ap_object_id
+        == "https://bridge.example/post/1"
+    )
     messages[2300].edit.assert_awaited_once_with(content="host edit")
     messages[3400].edit.assert_awaited_once_with(content="host edit")
     messages[1200].edit.assert_not_awaited()
 
 
 @pytest.mark.asyncio
-async def test_local_subscriber_starter_edit_updates_host_and_sibling_surfaces(scenario: SimpleNamespace) -> None:
+async def test_local_subscriber_starter_edit_updates_host_and_sibling_surfaces(
+    scenario: SimpleNamespace,
+) -> None:
     """Local-subscriber starter edits should become canonical AP updates."""
     _thread_with_surfaces(scenario)
     bot, messages = _bot_for_surfaces()
@@ -345,14 +364,19 @@ async def test_local_subscriber_starter_edit_updates_host_and_sibling_surfaces(s
     )
 
     scenario.gateway.update_content.assert_awaited_once()
-    assert scenario.gateway.update_content.await_args.args[0].ap_object_id == "https://bridge.example/post/1"
+    assert (
+        scenario.gateway.update_content.await_args.args[0].ap_object_id
+        == "https://bridge.example/post/1"
+    )
     messages[1200].edit.assert_awaited_once_with(content="subscriber edit")
     messages[3400].edit.assert_awaited_once_with(content="subscriber edit")
     messages[2300].edit.assert_not_awaited()
 
 
 @pytest.mark.asyncio
-async def test_host_and_local_subscriber_comment_edits_update_other_surfaces(scenario: SimpleNamespace) -> None:
+async def test_host_and_local_subscriber_comment_edits_update_other_surfaces(
+    scenario: SimpleNamespace,
+) -> None:
     """Comment edits should fan out by canonical message surface mapping."""
     thread_row = _thread_with_surfaces(scenario)
     _comment_with_surfaces(scenario, thread_row)
@@ -378,14 +402,19 @@ async def test_host_and_local_subscriber_comment_edits_update_other_surfaces(sce
     )
 
     scenario.gateway.update_content.assert_awaited_once()
-    assert scenario.gateway.update_content.await_args.args[0].ap_object_id == "https://bridge.example/comment/1"
+    assert (
+        scenario.gateway.update_content.await_args.args[0].ap_object_id
+        == "https://bridge.example/comment/1"
+    )
     messages[1300].edit.assert_awaited_once_with(content="subscriber comment edit")
     messages[3500].edit.assert_awaited_once_with(content="subscriber comment edit")
     messages[2400].edit.assert_not_awaited()
 
 
 @pytest.mark.asyncio
-async def test_local_discord_deletes_mark_non_source_surfaces(scenario: SimpleNamespace) -> None:
+async def test_local_discord_deletes_mark_non_source_surfaces(
+    scenario: SimpleNamespace,
+) -> None:
     """Host and local-subscriber deletes should mark every non-source copy."""
     thread_row = _thread_with_surfaces(scenario)
     _comment_with_surfaces(scenario, thread_row)
@@ -410,14 +439,19 @@ async def test_local_discord_deletes_mark_non_source_surfaces(scenario: SimpleNa
     )
 
     scenario.gateway.delete_content.assert_awaited_once()
-    assert scenario.gateway.delete_content.await_args.args[0].ap_object_id == "https://bridge.example/comment/1"
+    assert (
+        scenario.gateway.delete_content.await_args.args[0].ap_object_id
+        == "https://bridge.example/comment/1"
+    )
     messages[1300].edit.assert_awaited_once_with(content="*deleted by creator*")
     messages[3500].edit.assert_awaited_once_with(content="*deleted by creator*")
     messages[2400].edit.assert_not_awaited()
 
 
 @pytest.mark.asyncio
-async def test_inbound_remote_updates_edit_all_local_surfaces(scenario: SimpleNamespace) -> None:
+async def test_inbound_remote_updates_edit_all_local_surfaces(
+    scenario: SimpleNamespace,
+) -> None:
     """Remote post/comment updates should edit host and local subscriber copies."""
     thread_row = _thread_with_surfaces(scenario)
     _comment_with_surfaces(scenario, thread_row)
@@ -425,8 +459,12 @@ async def test_inbound_remote_updates_edit_all_local_surfaces(scenario: SimpleNa
     scenario.runtime.bot = bot
     runtime = _runtime_namespace(scenario, bot)
 
-    post_result = await dispatch_activitypub_event(_remote_post_event("post.updated"), runtime)
-    comment_result = await dispatch_activitypub_event(_remote_comment_event("comment.updated"), runtime)
+    post_result = await dispatch_activitypub_event(
+        _remote_post_event("post.updated"), runtime
+    )
+    comment_result = await dispatch_activitypub_event(
+        _remote_comment_event("comment.updated"), runtime
+    )
 
     assert post_result.status == "processed"
     assert comment_result.status == "processed"
@@ -435,11 +473,15 @@ async def test_inbound_remote_updates_edit_all_local_surfaces(scenario: SimpleNa
             content="**Remote title**\n\nAuthor: `bob@remote.example`\n\nremote body\n\nhttps://remote.example/post/1"
         )
     for message_id in (1300, 2400, 3500):
-        messages[message_id].edit.assert_any_await(content="`bob@remote.example`\n\nremote comment")
+        messages[message_id].edit.assert_any_await(
+            content="`bob@remote.example`\n\nremote comment"
+        )
 
 
 @pytest.mark.asyncio
-async def test_inbound_remote_deletes_mark_all_local_surfaces(scenario: SimpleNamespace) -> None:
+async def test_inbound_remote_deletes_mark_all_local_surfaces(
+    scenario: SimpleNamespace,
+) -> None:
     """Remote deletes should mark every persisted local Discord surface."""
     thread_row = _thread_with_surfaces(scenario)
     _comment_with_surfaces(scenario, thread_row)
@@ -455,7 +497,9 @@ async def test_inbound_remote_deletes_mark_all_local_surfaces(scenario: SimpleNa
 
 
 @pytest.mark.asyncio
-async def test_partial_local_discord_failure_does_not_block_healthy_targets(scenario: SimpleNamespace) -> None:
+async def test_partial_local_discord_failure_does_not_block_healthy_targets(
+    scenario: SimpleNamespace,
+) -> None:
     """A failed Discord target should not block AP update or other surfaces."""
     _thread_with_surfaces(scenario)
     bot, messages = _bot_for_surfaces(failing_message_ids={1200})
@@ -469,11 +513,15 @@ async def test_partial_local_discord_failure_does_not_block_healthy_targets(scen
 
     scenario.gateway.update_content.assert_awaited_once()
     messages[1200].edit.assert_awaited_once()
-    messages[3400].edit.assert_awaited_once_with(content="subscriber edit with one broken target")
+    messages[3400].edit.assert_awaited_once_with(
+        content="subscriber edit with one broken target"
+    )
 
 
 @pytest.mark.asyncio
-async def test_inactive_local_subscriber_source_mutation_is_contained(scenario: SimpleNamespace) -> None:
+async def test_inactive_local_subscriber_source_mutation_is_contained(
+    scenario: SimpleNamespace,
+) -> None:
     """Surfaces from inactive local subscribers must not author mutations."""
     _thread_with_surfaces(scenario)
     bot, messages = _bot_for_surfaces()

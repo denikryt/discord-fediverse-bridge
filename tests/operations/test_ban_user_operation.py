@@ -80,8 +80,11 @@ def test_owner_bans_remote_handle_in_own_community(tmp_path: Path) -> None:
             community_slug="cats",
             actor_handle="Alice@Example.COM",
             reason="spam",
-
-            policy_service=BridgePolicyService(settings=_settings(super_admins=[]), repository=database.bridge_policy_entries),)
+            policy_service=BridgePolicyService(
+                settings=_settings(super_admins=[]),
+                repository=database.bridge_policy_entries,
+            ),
+        )
     )
     ban = database.community_actor_bans.get_active_ban_by_handle(
         local_community_id=community.id,
@@ -90,7 +93,9 @@ def test_owner_bans_remote_handle_in_own_community(tmp_path: Path) -> None:
 
     assert result.applied is True
     assert result.reason == "created"
-    assert result.message == "Banned Alice@example.com from community cats.\nReason: spam"
+    assert (
+        result.message == "Banned Alice@example.com from community cats.\nReason: spam"
+    )
     assert ban is not None
     assert ban.actor_handle == "Alice@example.com"
     assert ban.reason == "spam"
@@ -111,8 +116,11 @@ def test_super_admin_bans_in_someone_elses_community(tmp_path: Path) -> None:
             community_slug="cats",
             actor_handle="alice@example.com",
             reason="spam",
-
-            policy_service=BridgePolicyService(settings=_settings(super_admins=["999"]), repository=database.bridge_policy_entries),)
+            policy_service=BridgePolicyService(
+                settings=_settings(super_admins=["999"]),
+                repository=database.bridge_policy_entries,
+            ),
+        )
     )
     ban = database.community_actor_bans.get_active_ban_by_handle(
         local_community_id=community.id,
@@ -138,8 +146,11 @@ def test_owner_cannot_ban_in_own_community_from_another_guild(tmp_path: Path) ->
             community_slug="cats",
             actor_handle="alice@example.com",
             reason="spam",
-
-            policy_service=BridgePolicyService(settings=_settings(super_admins=[]), repository=database.bridge_policy_entries),)
+            policy_service=BridgePolicyService(
+                settings=_settings(super_admins=[]),
+                repository=database.bridge_policy_entries,
+            ),
+        )
     )
 
     assert result.applied is False
@@ -162,8 +173,11 @@ def test_super_admin_can_ban_cross_guild_by_manual_slug(tmp_path: Path) -> None:
             community_slug="cats",
             actor_handle="alice@example.com",
             reason="spam",
-
-            policy_service=BridgePolicyService(settings=_settings(super_admins=["999"]), repository=database.bridge_policy_entries),)
+            policy_service=BridgePolicyService(
+                settings=_settings(super_admins=["999"]),
+                repository=database.bridge_policy_entries,
+            ),
+        )
     )
     ban = database.community_actor_bans.get_active_ban_by_handle(
         local_community_id=community.id,
@@ -175,7 +189,9 @@ def test_super_admin_can_ban_cross_guild_by_manual_slug(tmp_path: Path) -> None:
     assert ban.created_by_discord_user_id == "999"
 
 
-def test_inactive_community_is_inaccessible_for_owner_and_super_admin(tmp_path: Path) -> None:
+def test_inactive_community_is_inaccessible_for_owner_and_super_admin(
+    tmp_path: Path,
+) -> None:
     """This stage treats inactive communities as unavailable to moderation."""
     database = build_database(tmp_path, "ban-user-inactive.db")
     _local_community(database, owner_id="111", status="inactive")
@@ -189,8 +205,11 @@ def test_inactive_community_is_inaccessible_for_owner_and_super_admin(tmp_path: 
             community_slug="cats",
             actor_handle="alice@example.com",
             reason=None,
-
-            policy_service=BridgePolicyService(settings=_settings(super_admins=[]), repository=database.bridge_policy_entries),)
+            policy_service=BridgePolicyService(
+                settings=_settings(super_admins=[]),
+                repository=database.bridge_policy_entries,
+            ),
+        )
     )
     admin_result = ban_user_operation(
         BanUserInput(
@@ -201,8 +220,11 @@ def test_inactive_community_is_inaccessible_for_owner_and_super_admin(tmp_path: 
             community_slug="cats",
             actor_handle="alice@example.com",
             reason=None,
-
-            policy_service=BridgePolicyService(settings=_settings(super_admins=["999"]), repository=database.bridge_policy_entries),)
+            policy_service=BridgePolicyService(
+                settings=_settings(super_admins=["999"]),
+                repository=database.bridge_policy_entries,
+            ),
+        )
     )
 
     assert owner_result.reason == "unknown_or_inaccessible_community"
@@ -210,7 +232,9 @@ def test_inactive_community_is_inaccessible_for_owner_and_super_admin(tmp_path: 
     assert _ban_count(database) == 0
 
 
-def test_inaccessible_community_rejects_before_invalid_handle_validation(tmp_path: Path) -> None:
+def test_inaccessible_community_rejects_before_invalid_handle_validation(
+    tmp_path: Path,
+) -> None:
     """Guild-scope failure must not reveal handle-validation results."""
     database = build_database(tmp_path, "ban-user-cross-guild-invalid.db")
     _local_community(database, owner_id="111", discord_guild_id=111)
@@ -224,8 +248,11 @@ def test_inaccessible_community_rejects_before_invalid_handle_validation(tmp_pat
             community_slug="cats",
             actor_handle="https://example.com/u/alice",
             reason=None,
-
-            policy_service=BridgePolicyService(settings=_settings(super_admins=[]), repository=database.bridge_policy_entries),)
+            policy_service=BridgePolicyService(
+                settings=_settings(super_admins=[]),
+                repository=database.bridge_policy_entries,
+            ),
+        )
     )
 
     assert result.applied is False
@@ -248,8 +275,11 @@ def test_guildless_owner_call_is_rejected_before_authorization(tmp_path: Path) -
             community_slug="cats",
             actor_handle="alice@example.com",
             reason=None,
-
-            policy_service=BridgePolicyService(settings=_settings(super_admins=[]), repository=database.bridge_policy_entries),)
+            policy_service=BridgePolicyService(
+                settings=_settings(super_admins=[]),
+                repository=database.bridge_policy_entries,
+            ),
+        )
     )
 
     assert result.applied is False
@@ -258,7 +288,9 @@ def test_guildless_owner_call_is_rejected_before_authorization(tmp_path: Path) -
     assert _ban_count(database) == 0
 
 
-def test_guildless_super_admin_call_is_rejected_before_authorization(tmp_path: Path) -> None:
+def test_guildless_super_admin_call_is_rejected_before_authorization(
+    tmp_path: Path,
+) -> None:
     """Super-admins also need guild context for state-changing moderation."""
     database = build_database(tmp_path, "ban-user-guildless-admin.db")
     _local_community(database, owner_id="111", discord_guild_id=10)
@@ -272,8 +304,11 @@ def test_guildless_super_admin_call_is_rejected_before_authorization(tmp_path: P
             community_slug="cats",
             actor_handle="alice@example.com",
             reason=None,
-
-            policy_service=BridgePolicyService(settings=_settings(super_admins=["999"]), repository=database.bridge_policy_entries),)
+            policy_service=BridgePolicyService(
+                settings=_settings(super_admins=["999"]),
+                repository=database.bridge_policy_entries,
+            ),
+        )
     )
 
     assert result.applied is False
@@ -295,8 +330,11 @@ def test_non_owner_non_admin_cannot_ban_in_owned_community(tmp_path: Path) -> No
             community_slug="cats",
             actor_handle="alice@example.com",
             reason="spam",
-
-            policy_service=BridgePolicyService(settings=_settings(super_admins=[]), repository=database.bridge_policy_entries),)
+            policy_service=BridgePolicyService(
+                settings=_settings(super_admins=[]),
+                repository=database.bridge_policy_entries,
+            ),
+        )
     )
 
     assert result.applied is False
@@ -319,8 +357,11 @@ def test_owner_can_manage_without_super_admin_status(tmp_path: Path) -> None:
             community_slug="cats",
             actor_handle="alice@example.com",
             reason=None,
-
-            policy_service=BridgePolicyService(settings=_settings(super_admins=["999"]), repository=database.bridge_policy_entries),)
+            policy_service=BridgePolicyService(
+                settings=_settings(super_admins=["999"]),
+                repository=database.bridge_policy_entries,
+            ),
+        )
     )
 
     assert result.applied is True
@@ -342,15 +383,20 @@ def test_super_admin_can_manage_without_being_owner(tmp_path: Path) -> None:
             community_slug="cats",
             actor_handle="alice@example.com",
             reason=None,
-
-            policy_service=BridgePolicyService(settings=_settings(super_admins=["999"]), repository=database.bridge_policy_entries),)
+            policy_service=BridgePolicyService(
+                settings=_settings(super_admins=["999"]),
+                repository=database.bridge_policy_entries,
+            ),
+        )
     )
 
     assert result.applied is True
     assert result.reason == "created"
 
 
-def test_legacy_null_owned_community_can_be_managed_by_super_admin(tmp_path: Path) -> None:
+def test_legacy_null_owned_community_can_be_managed_by_super_admin(
+    tmp_path: Path,
+) -> None:
     """Legacy NULL-owned communities remain manageable by super-admins only."""
     database = build_database(tmp_path, "ban-user-legacy-admin.db")
     _local_community(database, owner_id=None)
@@ -364,8 +410,11 @@ def test_legacy_null_owned_community_can_be_managed_by_super_admin(tmp_path: Pat
             community_slug="cats",
             actor_handle="alice@example.com",
             reason=None,
-
-            policy_service=BridgePolicyService(settings=_settings(super_admins=["999"]), repository=database.bridge_policy_entries),)
+            policy_service=BridgePolicyService(
+                settings=_settings(super_admins=["999"]),
+                repository=database.bridge_policy_entries,
+            ),
+        )
     )
 
     assert result.applied is True
@@ -386,8 +435,11 @@ def test_legacy_null_owned_community_rejects_ordinary_user(tmp_path: Path) -> No
             community_slug="cats",
             actor_handle="alice@example.com",
             reason=None,
-
-            policy_service=BridgePolicyService(settings=_settings(super_admins=[]), repository=database.bridge_policy_entries),)
+            policy_service=BridgePolicyService(
+                settings=_settings(super_admins=[]),
+                repository=database.bridge_policy_entries,
+            ),
+        )
     )
 
     assert result.applied is False
@@ -408,8 +460,11 @@ def test_unknown_community_slug_is_rejected_before_other_checks(tmp_path: Path) 
             community_slug="missing",
             actor_handle="not-a-handle",
             reason=None,
-
-            policy_service=BridgePolicyService(settings=_settings(super_admins=["123"]), repository=database.bridge_policy_entries),)
+            policy_service=BridgePolicyService(
+                settings=_settings(super_admins=["123"]),
+                repository=database.bridge_policy_entries,
+            ),
+        )
     )
 
     assert result.applied is False
@@ -418,7 +473,9 @@ def test_unknown_community_slug_is_rejected_before_other_checks(tmp_path: Path) 
     assert _ban_count(database) == 0
 
 
-def test_unauthorized_caller_is_rejected_before_invalid_handle_validation(tmp_path: Path) -> None:
+def test_unauthorized_caller_is_rejected_before_invalid_handle_validation(
+    tmp_path: Path,
+) -> None:
     """Authorization failure must not leak handle-validation feedback."""
     database = build_database(tmp_path, "ban-user-denied-invalid.db")
     _local_community(database, owner_id="111")
@@ -432,8 +489,11 @@ def test_unauthorized_caller_is_rejected_before_invalid_handle_validation(tmp_pa
             community_slug="cats",
             actor_handle="https://example.com/u/alice",
             reason=None,
-
-            policy_service=BridgePolicyService(settings=_settings(super_admins=[]), repository=database.bridge_policy_entries),)
+            policy_service=BridgePolicyService(
+                settings=_settings(super_admins=[]),
+                repository=database.bridge_policy_entries,
+            ),
+        )
     )
 
     assert result.applied is False
@@ -456,8 +516,11 @@ def test_authorized_caller_with_invalid_handle_is_rejected(tmp_path: Path) -> No
             community_slug="cats",
             actor_handle="https://example.com/u/alice",
             reason=None,
-
-            policy_service=BridgePolicyService(settings=_settings(super_admins=[]), repository=database.bridge_policy_entries),)
+            policy_service=BridgePolicyService(
+                settings=_settings(super_admins=[]),
+                repository=database.bridge_policy_entries,
+            ),
+        )
     )
 
     assert result.applied is False
@@ -466,7 +529,9 @@ def test_authorized_caller_with_invalid_handle_is_rejected(tmp_path: Path) -> No
     assert _ban_count(database) == 0
 
 
-def test_authorized_duplicate_active_ban_reports_existing_reason(tmp_path: Path) -> None:
+def test_authorized_duplicate_active_ban_reports_existing_reason(
+    tmp_path: Path,
+) -> None:
     """Duplicate active bans are rejected without editing the old reason."""
     database = build_database(tmp_path, "ban-user-duplicate.db")
     community = _local_community(database, owner_id="111")
@@ -487,8 +552,11 @@ def test_authorized_duplicate_active_ban_reports_existing_reason(tmp_path: Path)
             community_slug="cats",
             actor_handle="alice@example.com",
             reason="new reason",
-
-            policy_service=BridgePolicyService(settings=_settings(super_admins=[]), repository=database.bridge_policy_entries),)
+            policy_service=BridgePolicyService(
+                settings=_settings(super_admins=[]),
+                repository=database.bridge_policy_entries,
+            ),
+        )
     )
     existing = database.community_actor_bans.get_active_ban_by_handle(
         local_community_id=community.id,
@@ -497,13 +565,18 @@ def test_authorized_duplicate_active_ban_reports_existing_reason(tmp_path: Path)
 
     assert result.applied is False
     assert result.reason == "duplicate_active_ban"
-    assert result.message == "User alice@example.com is already banned in community cats.\nReason: spam"
+    assert (
+        result.message
+        == "User alice@example.com is already banned in community cats.\nReason: spam"
+    )
     assert _ban_count(database) == 1
     assert existing.reason == "spam"
     assert existing.created_by_discord_user_id == "111"
 
 
-def test_duplicate_active_ban_without_reason_reports_not_specified(tmp_path: Path) -> None:
+def test_duplicate_active_ban_without_reason_reports_not_specified(
+    tmp_path: Path,
+) -> None:
     """Duplicate rejection text stays explicit when the stored reason is empty."""
     database = build_database(tmp_path, "ban-user-duplicate-empty.db")
     community = _local_community(database, owner_id="111")
@@ -524,12 +597,18 @@ def test_duplicate_active_ban_without_reason_reports_not_specified(tmp_path: Pat
             community_slug="cats",
             actor_handle="alice@example.com",
             reason="new reason",
-
-            policy_service=BridgePolicyService(settings=_settings(super_admins=[]), repository=database.bridge_policy_entries),)
+            policy_service=BridgePolicyService(
+                settings=_settings(super_admins=[]),
+                repository=database.bridge_policy_entries,
+            ),
+        )
     )
 
     assert result.applied is False
-    assert result.message == "User alice@example.com is already banned in community cats.\nReason: not specified"
+    assert (
+        result.message
+        == "User alice@example.com is already banned in community cats.\nReason: not specified"
+    )
     assert _ban_count(database) == 1
 
 
@@ -547,8 +626,11 @@ def test_discord_user_id_comparison_is_string_exact(tmp_path: Path) -> None:
             community_slug="cats",
             actor_handle="alice@example.com",
             reason=None,
-
-            policy_service=BridgePolicyService(settings=_settings(super_admins=[]), repository=database.bridge_policy_entries),)
+            policy_service=BridgePolicyService(
+                settings=_settings(super_admins=[]),
+                repository=database.bridge_policy_entries,
+            ),
+        )
     )
 
     assert result.applied is False
@@ -585,8 +667,11 @@ def test_ban_user_reactivates_inactive_row_after_unban(tmp_path: Path) -> None:
             community_slug="cats",
             actor_handle="alice@example.com",
             reason="new reason",
-
-            policy_service=BridgePolicyService(settings=_settings(super_admins=[]), repository=database.bridge_policy_entries),)
+            policy_service=BridgePolicyService(
+                settings=_settings(super_admins=[]),
+                repository=database.bridge_policy_entries,
+            ),
+        )
     )
     active = database.community_actor_bans.get_active_ban_by_handle(
         local_community_id=community.id,
@@ -600,7 +685,9 @@ def test_ban_user_reactivates_inactive_row_after_unban(tmp_path: Path) -> None:
     assert inactive.id == original.id
 
 
-def test_owner_reban_reactivates_inactive_row_and_updates_active_fields(tmp_path: Path) -> None:
+def test_owner_reban_reactivates_inactive_row_and_updates_active_fields(
+    tmp_path: Path,
+) -> None:
     """Owner re-ban after unban reuses row and updates current active metadata."""
     database = build_database(tmp_path, "ban-user-owner-reactivate.db")
     community = _local_community(database, owner_id="111")
@@ -626,8 +713,11 @@ def test_owner_reban_reactivates_inactive_row_and_updates_active_fields(tmp_path
             community_slug="cats",
             actor_handle="alice@example.com",
             reason="new reason",
-
-            policy_service=BridgePolicyService(settings=_settings(super_admins=[]), repository=database.bridge_policy_entries),)
+            policy_service=BridgePolicyService(
+                settings=_settings(super_admins=[]),
+                repository=database.bridge_policy_entries,
+            ),
+        )
     )
     active = database.community_actor_bans.get_active_ban_by_handle(
         local_community_id=community.id,
@@ -640,7 +730,9 @@ def test_owner_reban_reactivates_inactive_row_and_updates_active_fields(tmp_path
     assert active.status == "active"
     assert active.reason == "new reason"
     assert active.created_by_discord_user_id == "111"
-    assert active.created_at.replace(tzinfo=None) == original_created_at.replace(tzinfo=None)
+    assert active.created_at.replace(tzinfo=None) == original_created_at.replace(
+        tzinfo=None
+    )
     assert _ban_count(database) == 1
 
 
@@ -658,17 +750,24 @@ def test_disabled_community_rejects_ban_with_reenable_hint(tmp_path: Path) -> No
             community_slug="cats",
             actor_handle="alice@example.com",
             reason="spam",
-
-            policy_service=BridgePolicyService(settings=_settings(), repository=database.bridge_policy_entries),)
+            policy_service=BridgePolicyService(
+                settings=_settings(), repository=database.bridge_policy_entries
+            ),
+        )
     )
 
     assert result.applied is False
     assert result.reason == "community_disabled"
-    assert result.message == "Community cats is disabled. Use /edit-community to re-enable it first."
+    assert (
+        result.message
+        == "Community cats is disabled. Use /edit-community to re-enable it first."
+    )
     assert _ban_count(database) == 0
 
 
-def test_global_ban_skips_local_community_repository(tmp_path: Path, monkeypatch) -> None:
+def test_global_ban_skips_local_community_repository(
+    tmp_path: Path, monkeypatch
+) -> None:
     """A global ban reaches target mutation without any community lookup."""
     database = build_database(tmp_path, "ban-user-global-no-community-read.db")
 
@@ -691,8 +790,11 @@ def test_global_ban_skips_local_community_repository(tmp_path: Path, monkeypatch
             community_slug=None,
             actor_handle="alice@example.com",
             reason="spam",
-
-            policy_service=BridgePolicyService(settings=_settings(super_admins=["999"]), repository=database.bridge_policy_entries),)
+            policy_service=BridgePolicyService(
+                settings=_settings(super_admins=["999"]),
+                repository=database.bridge_policy_entries,
+            ),
+        )
     )
 
     assert result.applied is True
@@ -700,7 +802,9 @@ def test_global_ban_skips_local_community_repository(tmp_path: Path, monkeypatch
     assert _ban_count(database) == 1
 
 
-def test_scoped_ban_reuses_one_memoized_community_lookup(tmp_path: Path, monkeypatch) -> None:
+def test_scoped_ban_reuses_one_memoized_community_lookup(
+    tmp_path: Path, monkeypatch
+) -> None:
     """One scoped action reuses its community across all shared checks and body."""
     database = build_database(tmp_path, "ban-user-one-community-read.db")
     _local_community(database, owner_id="111")
@@ -728,8 +832,10 @@ def test_scoped_ban_reuses_one_memoized_community_lookup(tmp_path: Path, monkeyp
             community_slug="cats",
             actor_handle="alice@example.com",
             reason="spam",
-
-            policy_service=BridgePolicyService(settings=_settings(), repository=database.bridge_policy_entries),)
+            policy_service=BridgePolicyService(
+                settings=_settings(), repository=database.bridge_policy_entries
+            ),
+        )
     )
 
     assert result.applied is True

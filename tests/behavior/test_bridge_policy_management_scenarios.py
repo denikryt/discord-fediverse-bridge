@@ -1,7 +1,6 @@
 """Behavior scenarios for private bridge-policy management commands."""
 
 from __future__ import annotations
-from support.runtime import build_test_policy_service
 
 from pathlib import Path
 from types import SimpleNamespace
@@ -205,9 +204,9 @@ async def test_blocking_current_guild_denies_later_policy_commands_there(
         "This Discord server is not allowed to use this bridge bot.",
         ephemeral=True,
     )
-    assert [event.action for event in database.management_audit_events.list_oldest_first()] == [
-        "bridge_policy.added"
-    ]
+    assert [
+        event.action for event in database.management_audit_events.list_oldest_first()
+    ] == ["bridge_policy.added"]
 
 
 @pytest.mark.asyncio
@@ -239,7 +238,9 @@ async def test_super_admin_repairs_blocked_guild_from_dm(
     )
     assert entry is not None and entry.status == "inactive"
     assert policy_service.snapshot().is_discord_guild_allowed(200) is True
-    assert [event.action for event in database.management_audit_events.list_oldest_first()] == [
+    assert [
+        event.action for event in database.management_audit_events.list_oldest_first()
+    ] == [
         "bridge_policy.added",
         "bridge_policy.removed",
     ]
@@ -283,7 +284,9 @@ async def test_removed_entry_reactivates_without_duplicate_row(
     assert entry is not None
     assert entry.status == "active"
     assert entry.reason == "restored"
-    assert [event.action for event in database.management_audit_events.list_oldest_first()] == [
+    assert [
+        event.action for event in database.management_audit_events.list_oldest_first()
+    ] == [
         "bridge_policy.added",
         "bridge_policy.removed",
         "bridge_policy.reactivated",

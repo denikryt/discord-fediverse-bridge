@@ -1,7 +1,6 @@
 """Regression contracts for explicit runtime policy-service ownership."""
 
 from __future__ import annotations
-from support.runtime import build_test_policy_service
 
 from pathlib import Path
 from types import SimpleNamespace

@@ -76,15 +76,27 @@ async def test_last_channel_remote_unfollow_failure_keeps_bridge_follow_for_retr
         error="network error",
     )
 
-    unsubscribe.register(command_tree, database, fedify_gateway, SimpleNamespace(discord_guild_allowlist=[], federation_allowlist=[]), policy_service=build_test_policy_service(database))
+    unsubscribe.register(
+        command_tree,
+        database,
+        fedify_gateway,
+        SimpleNamespace(discord_guild_allowlist=[], federation_allowlist=[]),
+        policy_service=build_test_policy_service(database),
+    )
 
     command = command_tree.commands["unsubscribe-channel"]
     await command.callback(interaction, forum_channel)
 
     # Local channel cleanup still applies, but the shared follow row remains so
     # operators can retry the remote Undo(Follow) later.
-    assert database.remote_subscriptions.get_subscription_by_channel(forum_channel.id) is None
-    assert database.bridge_actor_follows.get_bridge_actor_follow(community_actor_url) is not None
+    assert (
+        database.remote_subscriptions.get_subscription_by_channel(forum_channel.id)
+        is None
+    )
+    assert (
+        database.bridge_actor_follows.get_bridge_actor_follow(community_actor_url)
+        is not None
+    )
     interaction.response.send_message.assert_awaited_once()
     send_call = interaction.response.send_message.await_args
     assert "remote Undo(Follow) failed" in send_call.args[0]
@@ -121,15 +133,27 @@ async def test_last_channel_missing_follow_activity_id_blocks_local_cleanup(
         status="accepted",
     )
 
-    unsubscribe.register(command_tree, database, fedify_gateway, SimpleNamespace(discord_guild_allowlist=[], federation_allowlist=[]), policy_service=build_test_policy_service(database))
+    unsubscribe.register(
+        command_tree,
+        database,
+        fedify_gateway,
+        SimpleNamespace(discord_guild_allowlist=[], federation_allowlist=[]),
+        policy_service=build_test_policy_service(database),
+    )
 
     command = command_tree.commands["unsubscribe-channel"]
     await command.callback(interaction, forum_channel)
 
     # Without a follow activity id the bridge cannot perform safe remote
     # cleanup, so the local subscription must remain visible to operators.
-    assert database.remote_subscriptions.get_subscription_by_channel(forum_channel.id) is not None
-    assert database.bridge_actor_follows.get_bridge_actor_follow(community_actor_url) is not None
+    assert (
+        database.remote_subscriptions.get_subscription_by_channel(forum_channel.id)
+        is not None
+    )
+    assert (
+        database.bridge_actor_follows.get_bridge_actor_follow(community_actor_url)
+        is not None
+    )
     fedify_gateway.unfollow_community.assert_not_awaited()
     interaction.response.send_message.assert_awaited_once()
     send_call = interaction.response.send_message.await_args

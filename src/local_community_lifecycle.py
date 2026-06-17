@@ -15,7 +15,9 @@ ACTIVE_STATUS = "active"
 DISABLED_STATUS = "disabled"
 VALID_LOCAL_COMMUNITY_STATUSES = {ACTIVE_STATUS, DISABLED_STATUS}
 DISABLED_DETAIL = "community is disabled"
-DISABLED_MODERATION_MESSAGE = "Community {slug} is disabled. Use /edit-community to re-enable it first."
+DISABLED_MODERATION_MESSAGE = (
+    "Community {slug} is disabled. Use /edit-community to re-enable it first."
+)
 
 
 @dataclass(frozen=True, slots=True)
@@ -44,7 +46,9 @@ def is_local_community_disabled(local_community: object) -> bool:
     return getattr(local_community, "status", ACTIVE_STATUS) == DISABLED_STATUS
 
 
-def evaluate_local_community_lifecycle(local_community: object) -> LocalCommunityLifecycleDecision:
+def evaluate_local_community_lifecycle(
+    local_community: object,
+) -> LocalCommunityLifecycleDecision:
     """Return the local lifecycle decision for a community row.
 
     Unknown legacy status values remain allowed here so the new disabled gate

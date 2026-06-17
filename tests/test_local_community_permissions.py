@@ -37,49 +37,67 @@ def test_permission_helper_rejects_removed_settings_keyword() -> None:
 
 def test_owner_is_allowed_without_super_admin_status() -> None:
     """The stored creator may manage their own local community."""
-    assert can_manage_local_community(
-        policy_snapshot=_policy_snapshot(super_admins=[]),
-        discord_user_id="111",
-        local_community=_community("111"),
-    ) is True
+    assert (
+        can_manage_local_community(
+            policy_snapshot=_policy_snapshot(super_admins=[]),
+            discord_user_id="111",
+            local_community=_community("111"),
+        )
+        is True
+    )
 
 
 def test_super_admin_is_allowed_without_being_owner() -> None:
     """The configured super-admin override may manage any community."""
-    assert can_manage_local_community(
-        policy_snapshot=_policy_snapshot(super_admins=["999"]),
-        discord_user_id="999",
-        local_community=_community("111"),
-    ) is True
+    assert (
+        can_manage_local_community(
+            policy_snapshot=_policy_snapshot(super_admins=["999"]),
+            discord_user_id="999",
+            local_community=_community("111"),
+        )
+        is True
+    )
 
 
 def test_non_owner_is_rejected() -> None:
     """An unrelated user must not manage an owned community."""
-    assert can_manage_local_community(
-        policy_snapshot=_policy_snapshot(super_admins=[]),
-        discord_user_id="222",
-        local_community=_community("111"),
-    ) is False
+    assert (
+        can_manage_local_community(
+            policy_snapshot=_policy_snapshot(super_admins=[]),
+            discord_user_id="222",
+            local_community=_community("111"),
+        )
+        is False
+    )
 
 
 def test_null_owner_is_allowed_only_for_super_admin() -> None:
     """Legacy NULL-owned communities remain protected by super-admin policy."""
-    assert can_manage_local_community(
-        policy_snapshot=_policy_snapshot(super_admins=[]),
-        discord_user_id="111",
-        local_community=_community(None),
-    ) is False
-    assert can_manage_local_community(
-        policy_snapshot=_policy_snapshot(super_admins=["999"]),
-        discord_user_id="999",
-        local_community=_community(None),
-    ) is True
+    assert (
+        can_manage_local_community(
+            policy_snapshot=_policy_snapshot(super_admins=[]),
+            discord_user_id="111",
+            local_community=_community(None),
+        )
+        is False
+    )
+    assert (
+        can_manage_local_community(
+            policy_snapshot=_policy_snapshot(super_admins=["999"]),
+            discord_user_id="999",
+            local_community=_community(None),
+        )
+        is True
+    )
 
 
 def test_owner_id_comparison_is_string_exact() -> None:
     """Numeric-looking Discord ids are compared as opaque strings."""
-    assert can_manage_local_community(
-        policy_snapshot=_policy_snapshot(super_admins=[]),
-        discord_user_id="0123",
-        local_community=_community("123"),
-    ) is False
+    assert (
+        can_manage_local_community(
+            policy_snapshot=_policy_snapshot(super_admins=[]),
+            discord_user_id="0123",
+            local_community=_community("123"),
+        )
+        is False
+    )

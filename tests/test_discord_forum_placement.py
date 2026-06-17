@@ -19,7 +19,9 @@ from src.discord_forum_placement import (
 def _database() -> Mock:
     """Build a repository container fake with free-channel defaults."""
     database = Mock()
-    database.local_communities.get_local_community_by_forum_channel_id.return_value = None
+    database.local_communities.get_local_community_by_forum_channel_id.return_value = (
+        None
+    )
     database.remote_subscriptions.get_subscription_by_channel.return_value = None
     database.local_subscribers.get_local_subscriber_by_channel.return_value = None
     return database
@@ -38,7 +40,9 @@ def test_channel_availability_checks_all_bridge_binding_tables() -> None:
     database = _database()
     assert is_forum_channel_available(database, 12345)
 
-    database.remote_subscriptions.get_subscription_by_channel.return_value = SimpleNamespace(status="failed")
+    database.remote_subscriptions.get_subscription_by_channel.return_value = (
+        SimpleNamespace(status="failed")
+    )
     assert not is_forum_channel_available(database, 12345)
 
 
@@ -46,7 +50,9 @@ def test_channel_availability_checks_all_bridge_binding_tables() -> None:
 async def test_selected_channel_rejects_when_already_bound() -> None:
     """Selected channels are rejected before command operations can mutate state."""
     database = _database()
-    database.local_subscribers.get_local_subscriber_by_channel.return_value = SimpleNamespace(id=1)
+    database.local_subscribers.get_local_subscriber_by_channel.return_value = (
+        SimpleNamespace(id=1)
+    )
     guild = SimpleNamespace(id=99999)
     channel = SimpleNamespace(id=12345, mention="<#12345>")
 
@@ -66,10 +72,15 @@ async def test_selected_channel_rejects_when_already_bound() -> None:
 async def test_auto_create_generates_unique_forum_name() -> None:
     """Auto-create appends bounded suffixes when the guild already has a name."""
     database = _database()
-    created_channel = SimpleNamespace(id=777, name="technology-3", mention="<#777>", delete=AsyncMock())
+    created_channel = SimpleNamespace(
+        id=777, name="technology-3", mention="<#777>", delete=AsyncMock()
+    )
     guild = SimpleNamespace(
         id=99999,
-        channels=[SimpleNamespace(name="technology"), SimpleNamespace(name="technology-2")],
+        channels=[
+            SimpleNamespace(name="technology"),
+            SimpleNamespace(name="technology-2"),
+        ],
         me=SimpleNamespace(guild_permissions=SimpleNamespace(manage_channels=True)),
         create_forum=AsyncMock(return_value=created_channel),
     )
@@ -118,7 +129,9 @@ async def test_missing_manage_channels_preflight_rejects_before_create() -> None
 async def test_cleanup_skips_when_persisted_row_owns_created_channel() -> None:
     """Cleanup must not delete a channel that later became owned by a bridge row."""
     database = _database()
-    database.remote_subscriptions.get_subscription_by_channel.return_value = SimpleNamespace(status="failed")
+    database.remote_subscriptions.get_subscription_by_channel.return_value = (
+        SimpleNamespace(status="failed")
+    )
     channel = SimpleNamespace(id=12345, delete=AsyncMock())
     logger = Mock()
 

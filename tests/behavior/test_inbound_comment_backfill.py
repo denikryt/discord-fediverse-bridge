@@ -14,7 +14,6 @@ from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, patch
 
-import pytest
 from fastapi.testclient import TestClient
 
 from src.activitypub_models import ActivityPubEvent
@@ -83,9 +82,11 @@ def _community_runtime(database: Database, *, bot: object) -> CommunityRuntime:
         database=database,
         fedify_gateway=AsyncMock(),
         bridge_prefix="[bridge]",
-            bridge_policy_service=build_test_policy_service(database),
-)
-    return CommunityRuntime(database=database, content_publish_service=publish_service, bot=bot)
+        bridge_policy_service=build_test_policy_service(database),
+    )
+    return CommunityRuntime(
+        database=database, content_publish_service=publish_service, bot=bot
+    )
 
 
 def _accepted_subscription(database: Database, *, channel_id: int = 100) -> None:
@@ -187,8 +188,10 @@ def test_inbound_comment_creates_post_thread_when_post_not_yet_mapped(
         database=database,
         bot=bot,
         community_runtime=_community_runtime(database, bot=bot),
-            bridge_policy_service=build_test_policy_service(database, SimpleNamespace(fedify_shared_secret="secret")),
-)
+        bridge_policy_service=build_test_policy_service(
+            database, SimpleNamespace(fedify_shared_secret="secret")
+        ),
+    )
     client = TestClient(create_http_app(runtime), raise_server_exceptions=False)
     event = _comment_event()
 
@@ -206,19 +209,29 @@ def test_inbound_comment_creates_post_thread_when_post_not_yet_mapped(
     assert response.json()["status"] == "processed"
 
     # Thread group must be created for the post that was fetched.
-    thread_group = database.discord_fanout_groups.get_thread_group_by_ap_object(_POST_AP_ID)
-    assert thread_group is not None, "CommunityThreadGroup should have been created by backfill"
+    thread_group = database.discord_fanout_groups.get_thread_group_by_ap_object(
+        _POST_AP_ID
+    )
+    assert thread_group is not None, (
+        "CommunityThreadGroup should have been created by backfill"
+    )
     assert thread_group.ap_object_id == _POST_AP_ID
 
-    thread_deliveries = database.discord_fanout_groups.get_thread_deliveries(thread_group.id)
+    thread_deliveries = database.discord_fanout_groups.get_thread_deliveries(
+        thread_group.id
+    )
     assert len(thread_deliveries) == 1
     assert thread_deliveries[0].discord_thread_id == 200
     assert thread_deliveries[0].discord_channel_id == 100
 
     # Comment must be mapped in CommunityMessageGroup.
-    message_group = database.discord_fanout_groups.get_message_group_by_ap_object(_COMMENT_AP_ID)
+    message_group = database.discord_fanout_groups.get_message_group_by_ap_object(
+        _COMMENT_AP_ID
+    )
     assert message_group is not None, "CommunityMessageGroup should have been written"
-    msg_deliveries = database.discord_fanout_groups.get_message_deliveries(message_group.id)
+    msg_deliveries = database.discord_fanout_groups.get_message_deliveries(
+        message_group.id
+    )
     assert len(msg_deliveries) == 1
     assert msg_deliveries[0].discord_thread_id == 200
     assert msg_deliveries[0].discord_message_id == 900
@@ -295,8 +308,10 @@ def test_inbound_comment_only_backfills_channels_without_existing_delivery(
         database=database,
         bot=bot,
         community_runtime=_community_runtime(database, bot=bot),
-            bridge_policy_service=build_test_policy_service(database, SimpleNamespace(fedify_shared_secret="secret")),
-)
+        bridge_policy_service=build_test_policy_service(
+            database, SimpleNamespace(fedify_shared_secret="secret")
+        ),
+    )
     client = TestClient(create_http_app(runtime), raise_server_exceptions=False)
     event = _comment_event()
 
@@ -314,11 +329,15 @@ def test_inbound_comment_only_backfills_channels_without_existing_delivery(
     assert response.json()["status"] == "processed"
 
     # Thread group is the existing one — not duplicated.
-    refreshed_tg = database.discord_fanout_groups.get_thread_group_by_ap_object(_POST_AP_ID)
+    refreshed_tg = database.discord_fanout_groups.get_thread_group_by_ap_object(
+        _POST_AP_ID
+    )
     assert refreshed_tg is not None
     assert refreshed_tg.id == thread_group.id
 
-    thread_deliveries = database.discord_fanout_groups.get_thread_deliveries(thread_group.id)
+    thread_deliveries = database.discord_fanout_groups.get_thread_deliveries(
+        thread_group.id
+    )
     thread_ids = {d.discord_thread_id for d in thread_deliveries}
     # Channel 100 already had thread 200; channel 101 should now have thread 201.
     assert thread_ids == {200, 201}
@@ -329,9 +348,13 @@ def test_inbound_comment_only_backfills_channels_without_existing_delivery(
     assert ch100_delivery.discord_starter_message_id == 300
 
     # Comment delivered into both threads.
-    message_group = database.discord_fanout_groups.get_message_group_by_ap_object(_COMMENT_AP_ID)
+    message_group = database.discord_fanout_groups.get_message_group_by_ap_object(
+        _COMMENT_AP_ID
+    )
     assert message_group is not None
-    msg_deliveries = database.discord_fanout_groups.get_message_deliveries(message_group.id)
+    msg_deliveries = database.discord_fanout_groups.get_message_deliveries(
+        message_group.id
+    )
     assert {d.discord_thread_id for d in msg_deliveries} == {200, 201}
 
 
@@ -357,8 +380,10 @@ def test_inbound_comment_deferred_when_post_fetch_fails(
         database=database,
         bot=bot,
         community_runtime=_community_runtime(database, bot=bot),
-            bridge_policy_service=build_test_policy_service(database, SimpleNamespace(fedify_shared_secret="secret")),
-)
+        bridge_policy_service=build_test_policy_service(
+            database, SimpleNamespace(fedify_shared_secret="secret")
+        ),
+    )
     client = TestClient(create_http_app(runtime), raise_server_exceptions=False)
     event = _comment_event()
 
@@ -376,8 +401,12 @@ def test_inbound_comment_deferred_when_post_fetch_fails(
     assert response.json()["status"] == "deferred"
 
     # No thread group must have been created.
-    thread_group = database.discord_fanout_groups.get_thread_group_by_ap_object(_POST_AP_ID)
-    assert thread_group is None, "No CommunityThreadGroup should be created on fetch failure"
+    thread_group = database.discord_fanout_groups.get_thread_group_by_ap_object(
+        _POST_AP_ID
+    )
+    assert thread_group is None, (
+        "No CommunityThreadGroup should be created on fetch failure"
+    )
 
     # No comment delivery attempted.
     bot.fetch_forum_channel.assert_not_awaited()

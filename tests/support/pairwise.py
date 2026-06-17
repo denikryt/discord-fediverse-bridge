@@ -30,8 +30,7 @@ def case_pairs(case: Mapping[str, str]) -> frozenset[Pair]:
     """Return all canonical 2-way factor/value pairs in one case."""
 
     return frozenset(
-        (left, case[left], right, case[right])
-        for left, right in combinations(case, 2)
+        (left, case[left], right, case[right]) for left, right in combinations(case, 2)
     )
 
 
@@ -68,12 +67,18 @@ def select_pairwise_cases(
 
     while uncovered:
         scored = [
-            (len(case_pairs(candidate).intersection(uncovered)), tuple(candidate.items()), candidate)
+            (
+                len(case_pairs(candidate).intersection(uncovered)),
+                tuple(candidate.items()),
+                candidate,
+            )
             for candidate in remaining
         ]
         if not scored:
             raise AssertionError("valid pairs remain uncovered without candidates")
-        gain, _, best = max(scored, key=lambda item: (item[0], tuple(reversed(item[1]))))
+        gain, _, best = max(
+            scored, key=lambda item: (item[0], tuple(reversed(item[1])))
+        )
         if gain == 0:
             raise AssertionError("pairwise selection made no progress")
         selected.append(best)

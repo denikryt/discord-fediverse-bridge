@@ -45,9 +45,13 @@ class ActorKeyService:
             raise LookupError("registered user does not exist")
         return _user_material(user)
 
-    def get_local_community_actor_keys(self, local_community_id: int) -> ActorKeyMaterial:
+    def get_local_community_actor_keys(
+        self, local_community_id: int
+    ) -> ActorKeyMaterial:
         """Return the PEM keypair owned by one local-community row."""
-        community = self.database.local_communities.get_local_community_by_id(local_community_id)
+        community = self.database.local_communities.get_local_community_by_id(
+            local_community_id
+        )
         if community is None:
             raise LookupError("local community does not exist")
         return _community_material(community)
@@ -119,7 +123,9 @@ def _validate_jwk_json(value: str, label: str) -> None:
 
 def _bridge_material(row: BridgeActorKey) -> ActorKeyMaterial:
     """Map one bridge-key row to the shared application-level shape."""
-    return ActorKeyMaterial(row.key_format, row.algorithm, row.public_key_data, row.private_key_data)
+    return ActorKeyMaterial(
+        row.key_format, row.algorithm, row.public_key_data, row.private_key_data
+    )
 
 
 def _user_material(user: User) -> ActorKeyMaterial:
@@ -129,4 +135,6 @@ def _user_material(user: User) -> ActorKeyMaterial:
 
 def _community_material(community: LocalCommunity) -> ActorKeyMaterial:
     """Map one local-community row to the shared application-level shape."""
-    return ActorKeyMaterial("pem", ALGORITHM, community.public_key_pem, community.private_key_pem)
+    return ActorKeyMaterial(
+        "pem", ALGORITHM, community.public_key_pem, community.private_key_pem
+    )

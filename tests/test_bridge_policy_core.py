@@ -43,15 +43,21 @@ def test_dynamic_blocklist_overrides_bootstrap_allowlist(tmp_path: Path) -> None
         reason="blocked",
     )
 
-    decision = BridgePolicyService(settings=settings, repository=database.bridge_policy_entries).snapshot().federation_decision(
-        "https://remote.example/c/test"
+    decision = (
+        BridgePolicyService(
+            settings=settings, repository=database.bridge_policy_entries
+        )
+        .snapshot()
+        .federation_decision("https://remote.example/c/test")
     )
 
     assert decision.allowed is False
     assert decision.reason is FederationPolicyReason.BLOCKLISTED
 
 
-def test_empty_allowlists_are_unrestricted_but_blocklists_still_deny(tmp_path: Path) -> None:
+def test_empty_allowlists_are_unrestricted_but_blocklists_still_deny(
+    tmp_path: Path,
+) -> None:
     """Empty allowlists preserve open mode while explicit blocks remain effective."""
     database = Database(f"sqlite:///{tmp_path / 'bridge.db'}")
     database.create_all()
@@ -62,7 +68,9 @@ def test_empty_allowlists_are_unrestricted_but_blocklists_still_deny(tmp_path: P
         actor_discord_user_id="100",
         reason=None,
     )
-    snapshot = BridgePolicyService(settings=settings, repository=database.bridge_policy_entries).snapshot()
+    snapshot = BridgePolicyService(
+        settings=settings, repository=database.bridge_policy_entries
+    ).snapshot()
 
     assert snapshot.is_discord_guild_allowed("199") is True
     assert snapshot.is_discord_guild_allowed("200") is False
@@ -71,6 +79,7 @@ def test_empty_allowlists_are_unrestricted_but_blocklists_still_deny(tmp_path: P
 
 def test_narrow_evaluators_each_perform_one_effective_policy_read() -> None:
     """Each service evaluator preserves one snapshot read per narrow question."""
+
     class _Repository:
         def __init__(self) -> None:
             self.reads = 0
@@ -99,5 +108,8 @@ def test_narrow_evaluators_each_perform_one_effective_policy_read() -> None:
     assert repository.reads == 2
     assert service.is_super_admin("100") is True
     assert repository.reads == 3
-    assert service.list_effective_entries(PolicyType.BRIDGE_SUPER_ADMIN)[0].subject == "100"
+    assert (
+        service.list_effective_entries(PolicyType.BRIDGE_SUPER_ADMIN)[0].subject
+        == "100"
+    )
     assert repository.reads == 4

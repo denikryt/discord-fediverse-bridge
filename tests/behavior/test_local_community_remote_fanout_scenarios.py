@@ -3,7 +3,6 @@
 from __future__ import annotations
 from support.runtime import build_test_policy_service
 
-import asyncio
 from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import AsyncMock
@@ -15,7 +14,6 @@ from src.fedify_gateway_client import (
     SendLocalCommunityRelayResult,
     SendLocalCommunityRelayOutcome,
 )
-from src.bridge_policy import PolicyType
 from src.content_publish_service import ContentPublishService
 from src.local_communities.runtime import LocalCommunityRuntime
 from src.local_communities.service import LocalCommunityService

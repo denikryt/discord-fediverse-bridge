@@ -5,7 +5,9 @@ from __future__ import annotations
 import discord
 
 
-def build_message_reference(*, discord_thread: object, message_id: int) -> discord.MessageReference:
+def build_message_reference(
+    *, discord_thread: object, message_id: int
+) -> discord.MessageReference:
     """Build one discord.py-compatible reference for a mirrored reply.
 
     Both bridge modes only need the parent message id plus the thread channel

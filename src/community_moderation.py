@@ -36,7 +36,9 @@ def find_local_community_actor_ban_for_event(
     actor_url = getattr(event, "actor_id", None)
     if not community_actor_id or not actor_url:
         return None
-    local_community = resolve_local_community_by_actor_url(runtime.database, community_actor_id)
+    local_community = resolve_local_community_by_actor_url(
+        runtime.database, community_actor_id
+    )
     if local_community is None:
         return None
     actor_handle = extract_remote_actor_handle_from_actor_url(actor_url)

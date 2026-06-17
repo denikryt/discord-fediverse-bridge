@@ -15,7 +15,9 @@ from src.fedify_gateway_client import (
 
 
 @pytest.mark.asyncio
-async def test_update_and_delete_endpoints_return_exact_canonical_activity_json() -> None:
+async def test_update_and_delete_endpoints_return_exact_canonical_activity_json() -> (
+    None
+):
     requests: list[dict] = []
 
     async def handler(request: httpx.Request) -> httpx.Response:
@@ -83,7 +85,9 @@ async def test_update_and_delete_endpoints_return_exact_canonical_activity_json(
         await client.close()
 
     assert update.activity_json["type"] == "Update"
-    assert update.activity_json["object"]["inReplyTo"] == "https://remote.example/post/1"
+    assert (
+        update.activity_json["object"]["inReplyTo"] == "https://remote.example/post/1"
+    )
     assert delete.activity_json == {
         "id": "https://bridge.example/users/alice/activities/delete/operation-delete",
         "type": "Delete",

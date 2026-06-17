@@ -22,15 +22,19 @@ def test_primary_compose_has_two_versioned_services_and_shared_state() -> None:
     assert compose.count("${BRIDGE_VERSION:?") == 3
     assert compose.count("DATABASE_URL: sqlite:////data/bridge.db") == 1
     assert compose.count("- bridge-data:/data") == 2
-    assert '127.0.0.1:${BRIDGE_PUBLISHED_PORT:-8080}:8080' in compose
-    assert '127.0.0.1:${GATEWAY_PUBLISHED_PORT:-3000}:3000' in compose
+    assert "127.0.0.1:${BRIDGE_PUBLISHED_PORT:-8080}:8080" in compose
+    assert "127.0.0.1:${GATEWAY_PUBLISHED_PORT:-3000}:3000" in compose
     assert "condition: service_healthy" in compose
     assert "BRIDGE_GATEWAY_URL: http://fedify-gateway:3000" in compose
-    assert "BRIDGE_EVENTS_URL: http://bridge:8080/internal/activitypub/events" in compose
+    assert (
+        "BRIDGE_EVENTS_URL: http://bridge:8080/internal/activitypub/events" in compose
+    )
     gateway_block = compose.split("  fedify-gateway:", 1)[1].split("\n  backup:", 1)[0]
     assert "DATABASE_URL" not in gateway_block
     assert "bridge-data:/data" not in gateway_block
-    assert "BRIDGE_EVENTS_URL: http://bridge:8080/internal/activitypub/events" in compose
+    assert (
+        "BRIDGE_EVENTS_URL: http://bridge:8080/internal/activitypub/events" in compose
+    )
     assert "fedify-gateway/.env" not in compose
     assert "  backup:" in compose
     assert "python\n      - -m\n      - src.db.backup\n      - serve" in compose
@@ -88,7 +92,10 @@ def test_dockerfiles_use_non_root_users_version_and_exec_commands() -> None:
     assert "RUN npm ci" in gateway_dockerfile
     assert "RUN npm run check" in gateway_dockerfile
     assert "USER bridge" in gateway_dockerfile
-    assert 'CMD ["node", "./node_modules/tsx/dist/cli.mjs", "src/server.ts"]' in gateway_dockerfile
+    assert (
+        'CMD ["node", "./node_modules/tsx/dist/cli.mjs", "src/server.ts"]'
+        in gateway_dockerfile
+    )
     assert "EXPOSE 3000" in gateway_dockerfile
 
 
@@ -116,7 +123,7 @@ def test_deployment_uses_one_root_env_file() -> None:
     assert "--env-file=../.env --env-file=.env" not in package
     assert "--env-file=../.env" in package
     assert 'BRIDGE_ENV_FILE="${BRIDGE_ENV_FILE:-$PROJECT_DIR/.env}"' in systemd
-    assert systemd.count('EnvironmentFile=$BRIDGE_ENV_FILE') == 2
+    assert systemd.count("EnvironmentFile=$BRIDGE_ENV_FILE") == 2
     assert "# Docker Compose settings." in env_example
     assert "FEDIFY_BRIDGE_PRIVATE_KEY_JWK_JSON=" not in env_example
     assert "BACKUP_HOST_DIR=./backups" in env_example
@@ -195,4 +202,4 @@ def test_nginx_setup_accepts_env_file_and_instance_name_flags() -> None:
 
     assert "--env-file" in script
     assert "--name" in script
-    assert 'discord-fediverse-bridge-${INSTANCE_NAME}' in script
+    assert "discord-fediverse-bridge-${INSTANCE_NAME}" in script

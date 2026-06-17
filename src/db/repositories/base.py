@@ -11,7 +11,9 @@ from sqlalchemy.orm import Session
 class BaseRepository:
     """Use the Database-owned session provider for repository operations."""
 
-    def __init__(self, session_provider: Callable[[], AbstractContextManager[Session]]) -> None:
+    def __init__(
+        self, session_provider: Callable[[], AbstractContextManager[Session]]
+    ) -> None:
         self._session_provider = session_provider
 
     def session(self) -> AbstractContextManager[Session]:

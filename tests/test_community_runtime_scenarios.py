@@ -38,7 +38,9 @@ async def test_community_runtime_thread_create_publishes_and_persists(
     add_accepted_subscription(database)
     add_registered_user(database)
     post_object_url = f"https://{BRIDGE_HOST_DOMAIN}/users/alice/objects/post/1"
-    post_activity_url = f"https://{BRIDGE_HOST_DOMAIN}/users/alice/activities/create/post/1"
+    post_activity_url = (
+        f"https://{BRIDGE_HOST_DOMAIN}/users/alice/activities/create/post/1"
+    )
     fedify_gateway = AsyncMock()
     fedify_gateway.publish_content.return_value = PublishContentResult(
         activity_id=post_activity_url,
@@ -49,11 +51,21 @@ async def test_community_runtime_thread_create_publishes_and_persists(
     thread = build_thread()
     starter_message = build_starter_message()
 
-    result = await runtime.handle_discord_thread_create(thread=thread, starter_message=starter_message)
+    result = await runtime.handle_discord_thread_create(
+        thread=thread, starter_message=starter_message
+    )
 
-    mapping = database.message_mappings.get_message_mapping_by_discord_message_id(starter_message.id)
-    stored_object = database.activitypub_objects.get_published_activity_object_by_object_id(post_object_url)
-    thread_group = database.discord_fanout_groups.get_thread_group_by_source_thread(thread.id)
+    mapping = database.message_mappings.get_message_mapping_by_discord_message_id(
+        starter_message.id
+    )
+    stored_object = (
+        database.activitypub_objects.get_published_activity_object_by_object_id(
+            post_object_url
+        )
+    )
+    thread_group = database.discord_fanout_groups.get_thread_group_by_source_thread(
+        thread.id
+    )
 
     assert result.status == "published"
     # CommunityThreadGroup must exist with the AP object id for reply resolution.
@@ -87,7 +99,9 @@ async def test_community_runtime_thread_message_publishes_as_comment(
     thread = build_thread()
     post_object_url = f"https://{BRIDGE_HOST_DOMAIN}/users/alice/objects/post/1"
     comment_object_url = f"https://{BRIDGE_HOST_DOMAIN}/users/alice/objects/comment/1"
-    comment_activity_url = f"https://{BRIDGE_HOST_DOMAIN}/users/alice/activities/create/comment/1"
+    comment_activity_url = (
+        f"https://{BRIDGE_HOST_DOMAIN}/users/alice/activities/create/comment/1"
+    )
     # CommunityThreadGroup lets publish_thread_message resolve the post context.
     thread_group = database.discord_fanout_groups.create_thread_group(
         community_actor_id=f"https://{LEMMY_EXAMPLE_DOMAIN}/c/hackers",
@@ -117,9 +131,17 @@ async def test_community_runtime_thread_message_publishes_as_comment(
 
     result = await runtime.handle_discord_message(message=message)
 
-    mapping = database.message_mappings.get_message_mapping_by_discord_message_id(message.id)
-    stored_object = database.activitypub_objects.get_published_activity_object_by_object_id(comment_object_url)
-    message_group = database.discord_fanout_groups.get_message_group_by_source_message(message.id)
+    mapping = database.message_mappings.get_message_mapping_by_discord_message_id(
+        message.id
+    )
+    stored_object = (
+        database.activitypub_objects.get_published_activity_object_by_object_id(
+            comment_object_url
+        )
+    )
+    message_group = database.discord_fanout_groups.get_message_group_by_source_message(
+        message.id
+    )
 
     assert result.status == "published"
     # CommunityMessageGroup must exist for reply chain resolution.
@@ -171,13 +193,15 @@ async def test_community_runtime_inbound_post_creates_discord_thread(
         database=database,
         bot=fake_bot,
         community_runtime=community_rt,
-            bridge_policy_service=build_test_policy_service(database),
-)
+        bridge_policy_service=build_test_policy_service(database),
+    )
     event = build_post_created_event(object_id=post_ap_id)
 
     result = await community_rt.handle_inbound_post(event, runtime_obj)
 
-    thread_group = database.discord_fanout_groups.get_thread_group_by_ap_object(post_ap_id)
+    thread_group = database.discord_fanout_groups.get_thread_group_by_ap_object(
+        post_ap_id
+    )
 
     assert result.status == "processed"
     # CommunityThreadGroup must exist so later inbound comments can resolve the thread.
@@ -233,13 +257,15 @@ async def test_community_runtime_inbound_comment_creates_discord_message(
         database=database,
         bot=fake_bot,
         community_runtime=community_rt,
-            bridge_policy_service=build_test_policy_service(database),
-)
+        bridge_policy_service=build_test_policy_service(database),
+    )
     event = build_comment_created_event(object_id=comment_ap_id, post_ap_id=post_ap_id)
 
     result = await community_rt.handle_inbound_comment(event, runtime_obj)
 
-    message_group = database.discord_fanout_groups.get_message_group_by_ap_object(comment_ap_id)
+    message_group = database.discord_fanout_groups.get_message_group_by_ap_object(
+        comment_ap_id
+    )
 
     assert result.status == "processed"
     # CommunityMessageGroup must exist so future reply lookups resolve the correct parent.

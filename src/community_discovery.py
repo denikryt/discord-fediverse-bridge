@@ -149,7 +149,9 @@ def parse_actor_url(value: str) -> ParsedCommunityUrl | None:
         path_kind = "lemmy_alias"
     else:
         path_kind = "other"
-    return ParsedCommunityUrl(origin=origin, slug=slug, actor_url=raw, path_kind=path_kind)
+    return ParsedCommunityUrl(
+        origin=origin, slug=slug, actor_url=raw, path_kind=path_kind
+    )
 
 
 def infer_reference_origin(value: str) -> str | None:
@@ -184,7 +186,9 @@ async def fetch_bridge_community_summaries(origin: str) -> list[BridgeCommunityS
     timeout = httpx.Timeout(connect=5.0, read=5.0, write=5.0, pool=5.0)
     async with httpx.AsyncClient(timeout=timeout) as client:
         try:
-            response = await client.get(discovery_url, headers={"Accept": "application/json"})
+            response = await client.get(
+                discovery_url, headers={"Accept": "application/json"}
+            )
         except httpx.HTTPError as error:
             raise CommunityResolutionError(
                 f"Could not reach the bridge discovery endpoint at {normalize_instance_domain(origin)}."
@@ -200,7 +204,9 @@ async def fetch_bridge_community_summaries(origin: str) -> list[BridgeCommunityS
         raise BridgeDiscoveryUnavailable(discovery_url)
     communities = payload.get("communities")
     if not isinstance(communities, list):
-        raise CommunityResolutionError("Bridge discovery returned an invalid community list payload.")
+        raise CommunityResolutionError(
+            "Bridge discovery returned an invalid community list payload."
+        )
 
     summaries: list[BridgeCommunitySummary] = []
     for item in communities:
@@ -212,7 +218,9 @@ async def fetch_bridge_community_summaries(origin: str) -> list[BridgeCommunityS
                 slug=str(item["slug"]),
                 name=str(item.get("name") or item["slug"]),
                 title=str(item.get("title") or item.get("name") or item["slug"]),
-                description=str(item["description"]) if item.get("description") is not None else None,
+                description=str(item["description"])
+                if item.get("description") is not None
+                else None,
                 actor_id=str(item["actor_id"]),
                 alternate_actor_id=str(item["alternate_actor_id"]),
                 handle=str(item["handle"]),
@@ -239,7 +247,9 @@ async def autocomplete_communities(
         except Exception:
             logger.exception("Failed same-instance bridge discovery for %s", origin)
             return []
-        return _build_bridge_autocomplete_choices(summaries, query=query, source="local_bridge")
+        return _build_bridge_autocomplete_choices(
+            summaries, query=query, source="local_bridge"
+        )
 
     try:
         summaries = await fetch_bridge_communities(origin)
@@ -250,7 +260,9 @@ async def autocomplete_communities(
         summaries = None
 
     if summaries is not None:
-        return _build_bridge_autocomplete_choices(summaries, query=query, source="remote_bridge")
+        return _build_bridge_autocomplete_choices(
+            summaries, query=query, source="remote_bridge"
+        )
 
     remote_client = lemmy_client_cls(origin)
     try:
@@ -271,23 +283,27 @@ async def autocomplete_communities(
         counts = item.get("counts") if isinstance(item.get("counts"), dict) else {}
         if query and query not in name.lower() and query not in title.lower():
             continue
-        active_month = _autocomplete_active_month_sort_value(counts.get("users_active_month"))
+        active_month = _autocomplete_active_month_sort_value(
+            counts.get("users_active_month")
+        )
         # Direct-instance autocomplete only receives a small remote page, but it
         # should still show the most active matching communities before quieter
         # rows so its ordering matches global Lemmyverse discovery.
-        choices.append((
-            active_month,
-            feed_order,
+        choices.append(
             (
-                _build_lemmy_autocomplete_choice_name(
-                    title=title,
-                    name=name,
-                    actor_id=actor_id,
-                    users_active_month=counts.get("users_active_month"),
+                active_month,
+                feed_order,
+                (
+                    _build_lemmy_autocomplete_choice_name(
+                        title=title,
+                        name=name,
+                        actor_id=actor_id,
+                        users_active_month=counts.get("users_active_month"),
+                    ),
+                    f"lemmy:{actor_id}|{name}|{numeric_id or ''}",
                 ),
-                f"lemmy:{actor_id}|{name}|{numeric_id or ''}",
-            ),
-        ))
+            )
+        )
     choices.sort(key=lambda item: (item[0], item[1]))
     return [choice for _, _, choice in choices[:25]]
 
@@ -316,7 +332,11 @@ async def resolve_selected_community(
     instance_origin = normalize_instance_domain(raw_instance) if raw_instance else None
     parsed_url = parse_actor_url(community_value)
     parsed_handle = parse_community_handle(community_value)
-    local_origin = is_bridge_origin(instance_origin, settings) if instance_origin is not None else False
+    local_origin = (
+        is_bridge_origin(instance_origin, settings)
+        if instance_origin is not None
+        else False
+    )
 
     if parsed_url is not None:
         if is_bridge_origin(parsed_url.origin, settings):
@@ -419,15 +439,15 @@ def _build_bridge_autocomplete_choices(
         if query and not any(query in candidate for candidate in haystacks):
             continue
         hidden_id = str(summary.id) if source == "local_bridge" else ""
-        choices.append((
-            _build_bridge_autocomplete_choice_name(summary),
-            f"{prefix}:{summary.actor_id}|{summary.name}|{hidden_id}",
-        ))
+        choices.append(
+            (
+                _build_bridge_autocomplete_choice_name(summary),
+                f"{prefix}:{summary.actor_id}|{summary.name}|{hidden_id}",
+            )
+        )
         if len(choices) >= 25:
             break
     return choices
-
-
 
 
 def _autocomplete_active_month_sort_value(value: Any) -> int:
@@ -439,6 +459,7 @@ def _autocomplete_active_month_sort_value(value: Any) -> int:
     if parsed < 0:
         return 0
     return -parsed
+
 
 def _format_autocomplete_active_month(value: Any) -> str | None:
     """Format one optional monthly-active counter for choice labels."""
@@ -485,10 +506,13 @@ def _build_bridge_autocomplete_choice_name(summary: BridgeCommunitySummary) -> s
     suffix = f" ({handle or summary.name})"
     return _truncate_choice_label(summary.title, suffix)
 
+
 def _parse_encoded_community_value(value: str) -> ResolvedCommunity | None:
     """Decode one autocomplete payload into a typed community result."""
 
-    if "|" in value and not value.startswith(("lemmy:", "bridge-remote:", "bridge-local:")):
+    if "|" in value and not value.startswith(
+        ("lemmy:", "bridge-remote:", "bridge-local:")
+    ):
         # Legacy autocomplete payloads omitted the source prefix and always
         # meant "remote Lemmy". Keeping this compatibility path avoids
         # breaking existing command tests and stale Discord command caches.
@@ -597,10 +621,14 @@ async def _resolve_from_bridge_summaries(
             f"Could not load bridge community discovery from {normalize_instance_domain(origin)}."
         ) from error
 
-    match = _match_bridge_summary(summaries, actor_url=actor_url, slug=slug, handle=handle)
+    match = _match_bridge_summary(
+        summaries, actor_url=actor_url, slug=slug, handle=handle
+    )
     if match is None:
         if strict:
-            raise CommunityResolutionError("That bridge-owned community could not be found on the selected instance.")
+            raise CommunityResolutionError(
+                "That bridge-owned community could not be found on the selected instance."
+            )
         raise BridgeDiscoveryUnavailable(origin)
 
     return ResolvedCommunity(
@@ -664,7 +692,9 @@ async def _resolve_remote_lemmy(
 
     actor_id = str(community.get("actor_id") or actor_id_hint or "")
     if not actor_id:
-        raise CommunityResolutionError("The remote Lemmy API did not return a community actor URL.")
+        raise CommunityResolutionError(
+            "The remote Lemmy API did not return a community actor URL."
+        )
     community_name = str(community.get("name") or slug_or_name)
     hostname = urlparse(actor_id).hostname
     handle = f"!{community_name}@{hostname}" if hostname else actor_id

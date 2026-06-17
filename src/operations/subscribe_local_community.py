@@ -31,36 +31,58 @@ class SubscribeLocalCommunityInput:
     _bridge_user_loaded: bool = field(default=False, init=False, repr=False)
     _local_community: object | None = field(default=None, init=False, repr=False)
     _local_community_loaded: bool = field(default=False, init=False, repr=False)
-    _existing_local_subscriber: object | None = field(default=None, init=False, repr=False)
-    _existing_local_subscriber_loaded: bool = field(default=False, init=False, repr=False)
-    _existing_remote_subscription: object | None = field(default=None, init=False, repr=False)
-    _existing_remote_subscription_loaded: bool = field(default=False, init=False, repr=False)
+    _existing_local_subscriber: object | None = field(
+        default=None, init=False, repr=False
+    )
+    _existing_local_subscriber_loaded: bool = field(
+        default=False, init=False, repr=False
+    )
+    _existing_remote_subscription: object | None = field(
+        default=None, init=False, repr=False
+    )
+    _existing_remote_subscription_loaded: bool = field(
+        default=False, init=False, repr=False
+    )
 
     def get_bridge_user(self) -> object | None:
         """Load the registered bridge user initiating the subscription."""
         if not self._bridge_user_loaded:
-            self._bridge_user = self.database.users.get_user_by_discord_user_id(self.discord_user_id)
+            self._bridge_user = self.database.users.get_user_by_discord_user_id(
+                self.discord_user_id
+            )
             self._bridge_user_loaded = True
         return self._bridge_user
 
     def get_local_community(self) -> object | None:
         """Load the local community row targeted by this subscription."""
         if not self._local_community_loaded:
-            self._local_community = self.database.local_communities.get_local_community_by_id(self.local_community_id)
+            self._local_community = (
+                self.database.local_communities.get_local_community_by_id(
+                    self.local_community_id
+                )
+            )
             self._local_community_loaded = True
         return self._local_community
 
     def get_existing_local_subscriber(self) -> object | None:
         """Load any existing local-subscriber row for the target channel."""
         if not self._existing_local_subscriber_loaded:
-            self._existing_local_subscriber = self.database.local_subscribers.get_local_subscriber_by_channel(self.channel_id)
+            self._existing_local_subscriber = (
+                self.database.local_subscribers.get_local_subscriber_by_channel(
+                    self.channel_id
+                )
+            )
             self._existing_local_subscriber_loaded = True
         return self._existing_local_subscriber
 
     def get_existing_remote_subscription(self) -> object | None:
         """Load any existing remote-subscription row for the target channel."""
         if not self._existing_remote_subscription_loaded:
-            self._existing_remote_subscription = self.database.remote_subscriptions.get_subscription_by_channel(self.channel_id)
+            self._existing_remote_subscription = (
+                self.database.remote_subscriptions.get_subscription_by_channel(
+                    self.channel_id
+                )
+            )
             self._existing_remote_subscription_loaded = True
         return self._existing_remote_subscription
 
@@ -105,7 +127,10 @@ def _is_target_channel_not_host_forum(
 ) -> bool:
     """Return whether the target channel is not the selected community host forum."""
     community = operation_input.get_local_community()
-    return getattr(community, "discord_forum_channel_id", None) != operation_input.channel_id
+    return (
+        getattr(community, "discord_forum_channel_id", None)
+        != operation_input.channel_id
+    )
 
 
 def _has_no_remote_subscription(operation_input: SubscribeLocalCommunityInput) -> bool:
@@ -145,9 +170,17 @@ def _already_local_message(operation_input: SubscribeLocalCommunityInput) -> str
 
 def _already_local_host_message(operation_input: SubscribeLocalCommunityInput) -> str:
     """Explain that the target channel already hosts another local community."""
-    existing = operation_input.database.local_communities.get_local_community_by_forum_channel_id(operation_input.channel_id)
-    display_name = getattr(existing, "display_name", "another local community") if existing is not None else "another local community"
-    return f"Channel {operation_input.channel_mention} already hosts **{display_name}**."
+    existing = operation_input.database.local_communities.get_local_community_by_forum_channel_id(
+        operation_input.channel_id
+    )
+    display_name = (
+        getattr(existing, "display_name", "another local community")
+        if existing is not None
+        else "another local community"
+    )
+    return (
+        f"Channel {operation_input.channel_mention} already hosts **{display_name}**."
+    )
 
 
 def _body(operation_input: SubscribeLocalCommunityInput) -> OperationResult:
@@ -206,4 +239,3 @@ subscribe_local_community_operation = OperationDefinition(
     reject=_reject,
     body=_body,
 )
-

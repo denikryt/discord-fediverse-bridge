@@ -12,7 +12,7 @@ from support.runtime import build_test_policy_service
 from datetime import datetime, timezone
 from pathlib import Path
 from types import SimpleNamespace
-from unittest.mock import AsyncMock, MagicMock
+from unittest.mock import AsyncMock
 
 import pytest
 
@@ -87,11 +87,13 @@ def _publish_service(database: Database, gateway: AsyncMock) -> ContentPublishSe
         database=database,
         fedify_gateway=gateway,
         bridge_prefix="[bridge]",
-            bridge_policy_service=build_test_policy_service(database),
-)
+        bridge_policy_service=build_test_policy_service(database),
+    )
 
 
-def _community_runtime(database: Database, gateway: AsyncMock, *, bot: object) -> CommunityRuntime:
+def _community_runtime(
+    database: Database, gateway: AsyncMock, *, bot: object
+) -> CommunityRuntime:
     """Build a real CommunityRuntime with a fake bot."""
     return CommunityRuntime(
         database=database,
@@ -107,23 +109,25 @@ def _fake_post_event(
     community_actor_id: str = COMMUNITY_ACTOR_URL,
 ) -> ActivityPubEvent:
     """Build a fake inbound AP post event."""
-    return ActivityPubEvent.model_validate({
-        "event_type": "post.created",
-        "delivery_id": "delivery-post-1",
-        "occurred_at": datetime.now(timezone.utc).isoformat(),
-        "community_actor_id": community_actor_id,
-        "actor_id": f"https://{LEMMY_EXAMPLE_DOMAIN}/u/bob",
-        "object": {
-            "ap_id": ap_id,
-            "kind": "post",
-            "lemmy_id": 1,
-            "title": "Test Post",
-            "body_markdown": "Post body",
-            "url": ap_id,
-            "published_at": datetime.now(timezone.utc).isoformat(),
-            "author_name": "bob",
-        },
-    })
+    return ActivityPubEvent.model_validate(
+        {
+            "event_type": "post.created",
+            "delivery_id": "delivery-post-1",
+            "occurred_at": datetime.now(timezone.utc).isoformat(),
+            "community_actor_id": community_actor_id,
+            "actor_id": f"https://{LEMMY_EXAMPLE_DOMAIN}/u/bob",
+            "object": {
+                "ap_id": ap_id,
+                "kind": "post",
+                "lemmy_id": 1,
+                "title": "Test Post",
+                "body_markdown": "Post body",
+                "url": ap_id,
+                "published_at": datetime.now(timezone.utc).isoformat(),
+                "author_name": "bob",
+            },
+        }
+    )
 
 
 def _fake_comment_event(
@@ -134,25 +138,27 @@ def _fake_comment_event(
     community_actor_id: str = COMMUNITY_ACTOR_URL,
 ) -> ActivityPubEvent:
     """Build a fake inbound AP comment event."""
-    return ActivityPubEvent.model_validate({
-        "event_type": "comment.created",
-        "delivery_id": f"delivery-comment-{ap_id}",
-        "occurred_at": datetime.now(timezone.utc).isoformat(),
-        "community_actor_id": community_actor_id,
-        "actor_id": f"https://{LEMMY_EXAMPLE_DOMAIN}/u/bob",
-        "object": {
-            "ap_id": ap_id,
-            "kind": "comment",
-            "lemmy_id": 10,
-            "post_ap_id": post_ap_id,
-            "post_lemmy_id": 1,
-            "parent_ap_id": parent_ap_id,
-            "body_markdown": "Comment body",
-            "url": ap_id,
-            "published_at": datetime.now(timezone.utc).isoformat(),
-            "author_name": "bob",
-        },
-    })
+    return ActivityPubEvent.model_validate(
+        {
+            "event_type": "comment.created",
+            "delivery_id": f"delivery-comment-{ap_id}",
+            "occurred_at": datetime.now(timezone.utc).isoformat(),
+            "community_actor_id": community_actor_id,
+            "actor_id": f"https://{LEMMY_EXAMPLE_DOMAIN}/u/bob",
+            "object": {
+                "ap_id": ap_id,
+                "kind": "comment",
+                "lemmy_id": 10,
+                "post_ap_id": post_ap_id,
+                "post_lemmy_id": 1,
+                "parent_ap_id": parent_ap_id,
+                "body_markdown": "Comment body",
+                "url": ap_id,
+                "published_at": datetime.now(timezone.utc).isoformat(),
+                "author_name": "bob",
+            },
+        }
+    )
 
 
 def _fake_bot(
@@ -255,25 +261,30 @@ async def test_phase5_inbound_post_creates_thread_group_and_deliveries(
     _accepted_subscription(database, channel_id=100)
     _accepted_subscription(database, channel_id=101)
 
-    forum_ch_100 = _fake_forum_channel(channel_id=100, thread_id=200, starter_message_id=300)
-    forum_ch_101 = _fake_forum_channel(channel_id=101, thread_id=500, starter_message_id=501)
+    forum_ch_100 = _fake_forum_channel(
+        channel_id=100, thread_id=200, starter_message_id=300
+    )
+    forum_ch_101 = _fake_forum_channel(
+        channel_id=101, thread_id=500, starter_message_id=501
+    )
     bot = _fake_bot(forum_channels={100: forum_ch_100, 101: forum_ch_101})
 
     runtime = _community_runtime(database, _publish_gateway(), bot=bot)
     event = _fake_post_event()
 
-    from src.runtime import Runtime
     fake_runtime = SimpleNamespace(
         database=database,
         bot=bot,
         community_runtime=runtime,
-            bridge_policy_service=build_test_policy_service(database),
-)
+        bridge_policy_service=build_test_policy_service(database),
+    )
 
     result = await runtime.handle_inbound_post(event, fake_runtime)
 
     assert result.status == "processed"
-    thread_group = database.discord_fanout_groups.get_thread_group_by_ap_object(POST_AP_ID)
+    thread_group = database.discord_fanout_groups.get_thread_group_by_ap_object(
+        POST_AP_ID
+    )
     assert thread_group is not None
     assert thread_group.ap_object_id == POST_AP_ID
     assert thread_group.source_thread_id is None
@@ -291,12 +302,17 @@ async def test_phase5_inbound_post_creates_thread_group_and_deliveries(
         "Post body\n\n"
         f"https://{LEMMY_EXAMPLE_DOMAIN}/post/1"
     )
-    forum_ch_100.create_thread.assert_any_await(name="Test Post", content=expected_content)
-    forum_ch_101.create_thread.assert_any_await(name="Test Post", content=expected_content)
+    forum_ch_100.create_thread.assert_any_await(
+        name="Test Post", content=expected_content
+    )
+    forum_ch_101.create_thread.assert_any_await(
+        name="Test Post", content=expected_content
+    )
 
     # No PostLink rows must have been written.
     from src.models import PostLink
     from sqlalchemy import select
+
     with database.session() as session:
         post_links = list(session.scalars(select(PostLink)))
     assert len(post_links) == 0
@@ -320,17 +336,26 @@ async def test_phase5_inbound_post_dedup_skips_on_existing_thread_group(
     # Pre-insert thread group for this AP object.
     _create_thread_group_for_inbound(database, ap_object_id=POST_AP_ID)
 
-    forum_ch = _fake_forum_channel(channel_id=100, thread_id=999, starter_message_id=998)
+    forum_ch = _fake_forum_channel(
+        channel_id=100, thread_id=999, starter_message_id=998
+    )
     bot = _fake_bot(forum_channels={100: forum_ch})
     runtime = _community_runtime(database, _publish_gateway(), bot=bot)
-    fake_runtime = SimpleNamespace(database=database, bot=bot, community_runtime=runtime, bridge_policy_service=build_test_policy_service(database))
+    fake_runtime = SimpleNamespace(
+        database=database,
+        bot=bot,
+        community_runtime=runtime,
+        bridge_policy_service=build_test_policy_service(database),
+    )
 
     event = _fake_post_event()
     result = await runtime.handle_inbound_post(event, fake_runtime)
 
     assert result.status == "skipped"
     # Only the pre-existing delivery row — no new rows.
-    thread_group = database.discord_fanout_groups.get_thread_group_by_ap_object(POST_AP_ID)
+    thread_group = database.discord_fanout_groups.get_thread_group_by_ap_object(
+        POST_AP_ID
+    )
     deliveries = database.discord_fanout_groups.get_thread_deliveries(thread_group.id)
     assert len(deliveries) == 1
     forum_ch.create_thread.assert_not_awaited()
@@ -352,20 +377,30 @@ async def test_phase5_inbound_comment_root_creates_message_group_flat(
     database = _database(tmp_path)
     _accepted_subscription(database, channel_id=100)
     _create_thread_group_for_inbound(
-        database, ap_object_id=POST_AP_ID, channel_id=100, thread_id=200,
+        database,
+        ap_object_id=POST_AP_ID,
+        channel_id=100,
+        thread_id=200,
     )
 
     fake_thread = _fake_thread(thread_id=200, sent_message_id=400)
     bot = _fake_bot(threads={200: fake_thread})
     runtime = _community_runtime(database, _publish_gateway(), bot=bot)
-    fake_runtime = SimpleNamespace(database=database, bot=bot, community_runtime=runtime, bridge_policy_service=build_test_policy_service(database))
+    fake_runtime = SimpleNamespace(
+        database=database,
+        bot=bot,
+        community_runtime=runtime,
+        bridge_policy_service=build_test_policy_service(database),
+    )
 
     # parent_ap_id=None → root comment, should send flat.
     event = _fake_comment_event(parent_ap_id=None)
     result = await runtime.handle_inbound_comment(event, fake_runtime)
 
     assert result.status == "processed"
-    message_group = database.discord_fanout_groups.get_message_group_by_ap_object(COMMENT_AP_ID)
+    message_group = database.discord_fanout_groups.get_message_group_by_ap_object(
+        COMMENT_AP_ID
+    )
     assert message_group is not None
     assert message_group.parent_message_group_id is None
 
@@ -382,6 +417,7 @@ async def test_phase5_inbound_comment_root_creates_message_group_flat(
     # No CommentLink rows written.
     from src.models import CommentLink
     from sqlalchemy import select
+
     with database.session() as session:
         comment_links = list(session.scalars(select(CommentLink)))
     assert len(comment_links) == 0
@@ -456,14 +492,21 @@ async def test_phase5_inbound_comment_reply_chain_resolves_to_prior_delivery(
     fake_thread_500 = _fake_thread(thread_id=500, sent_message_id=800)
     bot = _fake_bot(threads={200: fake_thread_200, 500: fake_thread_500})
     runtime = _community_runtime(database, _publish_gateway(), bot=bot)
-    fake_runtime = SimpleNamespace(database=database, bot=bot, community_runtime=runtime, bridge_policy_service=build_test_policy_service(database))
+    fake_runtime = SimpleNamespace(
+        database=database,
+        bot=bot,
+        community_runtime=runtime,
+        bridge_policy_service=build_test_policy_service(database),
+    )
 
     # Reply to prior comment M.
     event = _fake_comment_event(ap_id=COMMENT2_AP_ID, parent_ap_id=COMMENT_AP_ID)
     result = await runtime.handle_inbound_comment(event, fake_runtime)
 
     assert result.status == "processed"
-    new_group = database.discord_fanout_groups.get_message_group_by_ap_object(COMMENT2_AP_ID)
+    new_group = database.discord_fanout_groups.get_message_group_by_ap_object(
+        COMMENT2_AP_ID
+    )
     assert new_group is not None
     assert new_group.parent_message_group_id == prior_group.id
 
@@ -493,7 +536,10 @@ async def test_phase5_inbound_comment_dedup_skips_on_existing_message_group(
     _accepted_subscription(database, channel_id=100)
 
     thread_group = _create_thread_group_for_inbound(
-        database, ap_object_id=POST_AP_ID, channel_id=100, thread_id=200,
+        database,
+        ap_object_id=POST_AP_ID,
+        channel_id=100,
+        thread_id=200,
     )
 
     # Pre-insert message group for this comment AP ID.
@@ -509,7 +555,12 @@ async def test_phase5_inbound_comment_dedup_skips_on_existing_message_group(
     fake_thread = _fake_thread(thread_id=200, sent_message_id=999)
     bot = _fake_bot(threads={200: fake_thread})
     runtime = _community_runtime(database, _publish_gateway(), bot=bot)
-    fake_runtime = SimpleNamespace(database=database, bot=bot, community_runtime=runtime, bridge_policy_service=build_test_policy_service(database))
+    fake_runtime = SimpleNamespace(
+        database=database,
+        bot=bot,
+        community_runtime=runtime,
+        bridge_policy_service=build_test_policy_service(database),
+    )
 
     event = _fake_comment_event()
     result = await runtime.handle_inbound_comment(event, fake_runtime)
@@ -557,6 +608,7 @@ async def test_phase5_outbound_publish_does_not_create_post_link(
     runtime = _community_runtime(database, gateway, bot=bot)
 
     from types import SimpleNamespace as NS
+
     channel = NS(id=200, parent_id=100)
     author = NS(id=123, display_name="Alice", name="alice")
     message = NS(
@@ -570,13 +622,16 @@ async def test_phase5_outbound_publish_does_not_create_post_link(
     result = await runtime.handle_discord_message(message=message)
 
     assert result.status == "published"
-    message_group = database.discord_fanout_groups.get_message_group_by_source_message(400)
+    message_group = database.discord_fanout_groups.get_message_group_by_source_message(
+        400
+    )
     assert message_group is not None
     gateway.publish_content.assert_awaited_once()
 
     # No PostLink or CommentLink rows must exist.
     from src.models import PostLink, CommentLink
     from sqlalchemy import select
+
     with database.session() as session:
         post_links = list(session.scalars(select(PostLink)))
         comment_links = list(session.scalars(select(CommentLink)))

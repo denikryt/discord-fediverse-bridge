@@ -45,9 +45,17 @@ class PersonalFeedService:
     @staticmethod
     def _view(binding: PersonalFeedBinding, user: User) -> PersonalFeedBindingView:
         """Convert ORM state into a detached immutable routing view."""
-        return PersonalFeedBindingView(binding.id, binding.user_id, user.discord_user_id, binding.discord_guild_id, binding.discord_channel_id)
+        return PersonalFeedBindingView(
+            binding.id,
+            binding.user_id,
+            user.discord_user_id,
+            binding.discord_guild_id,
+            binding.discord_channel_id,
+        )
 
-    def get_by_discord_user_id(self, discord_user_id: str) -> PersonalFeedBindingView | None:
+    def get_by_discord_user_id(
+        self, discord_user_id: str
+    ) -> PersonalFeedBindingView | None:
         """Return one caller's current binding for account-settings display."""
         with self.database.session() as session:
             row = session.execute(
@@ -57,13 +65,17 @@ class PersonalFeedService:
             ).first()
             return None if row is None else self._view(row[0], row[1])
 
-    def resolve_root_binding(self, guild_id: int, channel_id: int) -> PersonalFeedBindingView | None:
+    def resolve_root_binding(
+        self, guild_id: int, channel_id: int
+    ) -> PersonalFeedBindingView | None:
         """Resolve exact durable root ownership by positive guild and channel IDs."""
         if guild_id <= 0 or channel_id <= 0:
             return None
         with self.database.session() as session:
             row = session.execute(
-                select(PersonalFeedBinding, User).join(User).where(
+                select(PersonalFeedBinding, User)
+                .join(User)
+                .where(
                     PersonalFeedBinding.discord_guild_id == guild_id,
                     PersonalFeedBinding.discord_channel_id == channel_id,
                 )
@@ -95,25 +107,55 @@ class PersonalFeedService:
             return PersonalFeedMutationResult("invalid_target")
         try:
             with self.database.immediate_session() as session:
-                user = session.scalar(select(User).where(User.discord_user_id == str(discord_user_id)))
+                user = session.scalar(
+                    select(User).where(User.discord_user_id == str(discord_user_id))
+                )
                 if user is None:
                     return PersonalFeedMutationResult("not_registered")
-                current = session.scalar(select(PersonalFeedBinding).where(PersonalFeedBinding.user_id == user.id))
+                current = session.scalar(
+                    select(PersonalFeedBinding).where(
+                        PersonalFeedBinding.user_id == user.id
+                    )
+                )
                 if expected_binding_id is not _EXPECTED_BINDING_UNSPECIFIED:
                     current_id = None if current is None else current.id
                     if current_id != expected_binding_id:
                         return PersonalFeedMutationResult("binding_changed")
-                if current is not None and current.discord_guild_id == guild_id and current.discord_channel_id == channel_id:
-                    return PersonalFeedMutationResult("already_bound", self._view(current, user))
-                guild_owner = session.scalar(select(PersonalFeedBinding).where(PersonalFeedBinding.discord_guild_id == guild_id))
-                if guild_owner is not None and (current is None or guild_owner.id != current.id):
-                    return PersonalFeedMutationResult("guild_conflict", conflict_kind="personal_feed")
+                if (
+                    current is not None
+                    and current.discord_guild_id == guild_id
+                    and current.discord_channel_id == channel_id
+                ):
+                    return PersonalFeedMutationResult(
+                        "already_bound", self._view(current, user)
+                    )
+                guild_owner = session.scalar(
+                    select(PersonalFeedBinding).where(
+                        PersonalFeedBinding.discord_guild_id == guild_id
+                    )
+                )
+                if guild_owner is not None and (
+                    current is None or guild_owner.id != current.id
+                ):
+                    return PersonalFeedMutationResult(
+                        "guild_conflict", conflict_kind="personal_feed"
+                    )
                 owner = resolve_channel_owner(session, channel_id)
-                if owner is not None and (current is None or owner.kind != "personal_feed" or owner.row_id != current.id):
-                    return PersonalFeedMutationResult("channel_conflict", conflict_kind=owner.kind)
+                if owner is not None and (
+                    current is None
+                    or owner.kind != "personal_feed"
+                    or owner.row_id != current.id
+                ):
+                    return PersonalFeedMutationResult(
+                        "channel_conflict", conflict_kind=owner.kind
+                    )
                 status = "bound" if current is None else "moved"
                 if current is None:
-                    current = PersonalFeedBinding(user_id=user.id, discord_guild_id=guild_id, discord_channel_id=channel_id)
+                    current = PersonalFeedBinding(
+                        user_id=user.id,
+                        discord_guild_id=guild_id,
+                        discord_channel_id=channel_id,
+                    )
                     session.add(current)
                 else:
                     current.discord_guild_id = guild_id
@@ -126,10 +168,16 @@ class PersonalFeedService:
     def unbind(self, discord_user_id: str) -> PersonalFeedMutationResult:
         """Delete only the caller's current binding and remain idempotent."""
         with self.database.immediate_session() as session:
-            user = session.scalar(select(User).where(User.discord_user_id == str(discord_user_id)))
+            user = session.scalar(
+                select(User).where(User.discord_user_id == str(discord_user_id))
+            )
             if user is None:
                 return PersonalFeedMutationResult("not_registered")
-            current = session.scalar(select(PersonalFeedBinding).where(PersonalFeedBinding.user_id == user.id))
+            current = session.scalar(
+                select(PersonalFeedBinding).where(
+                    PersonalFeedBinding.user_id == user.id
+                )
+            )
             if current is None:
                 return PersonalFeedMutationResult("not_bound")
             view = self._view(current, user)

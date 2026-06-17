@@ -10,7 +10,9 @@ from types import SimpleNamespace
 from unittest.mock import AsyncMock
 
 
-def build_thread(*, thread_id: int = 200, channel_id: int = 100, name: str = "Thread title") -> SimpleNamespace:
+def build_thread(
+    *, thread_id: int = 200, channel_id: int = 100, name: str = "Thread title"
+) -> SimpleNamespace:
     """Build a fake Discord forum thread with the minimal shape used by tests."""
     return SimpleNamespace(id=thread_id, parent_id=channel_id, name=name)
 
@@ -148,4 +150,3 @@ def build_bot(
 def build_dm_user() -> SimpleNamespace:
     """Build a fake Discord user with an async DM boundary."""
     return SimpleNamespace(send=AsyncMock())
-

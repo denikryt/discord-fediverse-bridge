@@ -25,7 +25,12 @@ from ..lemmyverse_communities import (
     LemmyverseCommunityCache,
     autocomplete_lemmyverse_communities,
 )
-from .guild_guard import GUILD_COMMAND_ACCESS, REGISTERED_GUILD_COMMAND_ACCESS, command_access_allows_autocomplete, reject_if_command_access_denied
+from .guild_guard import (
+    GUILD_COMMAND_ACCESS,
+    REGISTERED_GUILD_COMMAND_ACCESS,
+    command_access_allows_autocomplete,
+    reject_if_command_access_denied,
+)
 from .subscribe_community_handler import SubscribeCommunityCommandHandler
 
 logger = logging.getLogger(__name__)
@@ -57,7 +62,9 @@ def register(
         fetch_bridge_communities_getter=lambda: fetch_bridge_community_summaries,
     )
 
-    @tree.command(name="subscribe-community", description="Subscribe to a federated community")
+    @tree.command(
+        name="subscribe-community", description="Subscribe to a federated community"
+    )
     @app_commands.describe(
         instance_domain="Instance domain or URL (e.g. lemmy.world)",
         community="Community handle, URL, or autocomplete choice",
@@ -65,7 +72,9 @@ def register(
     )
     @app_commands.autocomplete(
         instance_domain=_instance_autocomplete(settings, database, policy_service),
-        community=_community_autocomplete(settings, database, policy_service, lemmyverse_cache=cache),
+        community=_community_autocomplete(
+            settings, database, policy_service, lemmyverse_cache=cache
+        ),
     )
     async def subscribe_community(
         interaction: discord.Interaction,
@@ -74,7 +83,13 @@ def register(
         instance_domain: str | None = None,
     ) -> None:
         """Delegate /subscribe-community submit handling to the command handler."""
-        if await reject_if_command_access_denied(interaction, definition=REGISTERED_GUILD_COMMAND_ACCESS, settings=settings, database=database, policy_service=policy_service):
+        if await reject_if_command_access_denied(
+            interaction,
+            definition=REGISTERED_GUILD_COMMAND_ACCESS,
+            settings=settings,
+            database=database,
+            policy_service=policy_service,
+        ):
             return
         await handler.handle(
             interaction=interaction,
@@ -84,7 +99,9 @@ def register(
         )
 
 
-def _extract_instance_domain_for_autocomplete(interaction: discord.Interaction) -> str | None:
+def _extract_instance_domain_for_autocomplete(
+    interaction: discord.Interaction,
+) -> str | None:
     """Read ``instance_domain`` from Discord autocomplete state as defensively as possible.
 
     discord.py usually exposes sibling option values through
@@ -94,7 +111,9 @@ def _extract_instance_domain_for_autocomplete(interaction: discord.Interaction) 
     option tree lets the community autocomplete keep using direct-instance mode
     whenever the moderator has already filled ``instance_domain``.
     """
-    namespace_value = getattr(getattr(interaction, "namespace", None), "instance_domain", None)
+    namespace_value = getattr(
+        getattr(interaction, "namespace", None), "instance_domain", None
+    )
     if isinstance(namespace_value, str) and namespace_value.strip():
         return namespace_value
 
@@ -121,6 +140,7 @@ def _iter_option_values_by_name(payload: object, name: str):
         if option.get("name") == name and "value" in option:
             yield option.get("value")
         yield from _iter_option_values_by_name(option, name)
+
 
 def _instance_autocomplete(
     settings: Settings,
@@ -152,7 +172,9 @@ def _instance_autocomplete(
         local_hostname = urlparse(local_origin).hostname
         if local_hostname and current.casefold() in local_hostname.casefold():
             if all(choice.name != local_hostname for choice in choices):
-                choices.append(app_commands.Choice(name=local_hostname, value=local_origin))
+                choices.append(
+                    app_commands.Choice(name=local_hostname, value=local_origin)
+                )
         return choices[:25]
 
     return autocomplete
@@ -177,7 +199,13 @@ def _community_autocomplete(
         interaction: discord.Interaction,
         current: str,
     ) -> list[app_commands.Choice[str]]:
-        if not await command_access_allows_autocomplete(interaction, definition=GUILD_COMMAND_ACCESS, settings=settings, database=database, policy_service=policy_service):
+        if not await command_access_allows_autocomplete(
+            interaction,
+            definition=GUILD_COMMAND_ACCESS,
+            settings=settings,
+            database=database,
+            policy_service=policy_service,
+        ):
             return []
         instance_url = _extract_instance_domain_for_autocomplete(interaction)
 
@@ -191,7 +219,10 @@ def _community_autocomplete(
             except Exception:
                 logger.exception("Failed to autocomplete communities from Lemmyverse")
                 return []
-            return [app_commands.Choice(name=name, value=value) for name, value in raw_choices]
+            return [
+                app_commands.Choice(name=name, value=value)
+                for name, value in raw_choices
+            ]
 
         try:
             normalized_origin = normalize_instance_domain(instance_url)
@@ -211,8 +242,12 @@ def _community_autocomplete(
                 lemmy_client_cls=LemmyClient,
             )
         except Exception:
-            logger.exception("Failed to autocomplete communities from %s", normalized_origin)
+            logger.exception(
+                "Failed to autocomplete communities from %s", normalized_origin
+            )
             return []
-        return [app_commands.Choice(name=name, value=value) for name, value in raw_choices]
+        return [
+            app_commands.Choice(name=name, value=value) for name, value in raw_choices
+        ]
 
     return autocomplete

@@ -65,8 +65,6 @@ class UserActorDeliveryWorker:
             except Exception:
                 logger.exception("User Actor delivery recovery pass failed")
             try:
-                await asyncio.wait_for(
-                    self._wake.wait(), timeout=self.INTERVAL_SECONDS
-                )
+                await asyncio.wait_for(self._wake.wait(), timeout=self.INTERVAL_SECONDS)
             except TimeoutError:
                 pass

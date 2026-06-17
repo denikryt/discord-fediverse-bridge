@@ -21,7 +21,9 @@ def build_test_policy_service(
     )
 
 
-def build_publish_service(database: Database, fedify_gateway: object | None = None) -> ContentPublishService:
+def build_publish_service(
+    database: Database, fedify_gateway: object | None = None
+) -> ContentPublishService:
     """Build a publish service with a stable fake gateway by default."""
     return ContentPublishService(
         database=database,

@@ -13,7 +13,9 @@ from support.runtime import build_test_policy_service
 
 def _settings(*, super_admins: list[str] | None = None) -> SimpleNamespace:
     """Build settings with only the fields metadata edit behavior uses."""
-    return SimpleNamespace(discord_guild_allowlist=[], bridge_super_admin_user_ids=super_admins or [])
+    return SimpleNamespace(
+        discord_guild_allowlist=[], bridge_super_admin_user_ids=super_admins or []
+    )
 
 
 def test_user_action_edits_local_community_metadata_end_to_end(tmp_path: Path) -> None:
@@ -54,7 +56,9 @@ def test_user_action_edits_local_community_metadata_end_to_end(tmp_path: Path) -
     assert reloaded.actor_url == "https://bridge.example/communities/cats"
 
 
-def test_local_only_metadata_edit_does_not_touch_moderation_or_identity(tmp_path: Path) -> None:
+def test_local_only_metadata_edit_does_not_touch_moderation_or_identity(
+    tmp_path: Path,
+) -> None:
     """Editing metadata must not mutate unrelated community identity or bans."""
     database = build_database(tmp_path, "edit-metadata-local-only.db")
     LocalCommunityService(

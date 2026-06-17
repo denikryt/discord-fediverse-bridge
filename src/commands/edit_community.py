@@ -15,7 +15,11 @@ from ..local_community_permissions import (
     can_manage_local_community,
     is_super_admin,
 )
-from .guild_guard import GUILD_COMMAND_ACCESS, command_access_allows_autocomplete, reject_if_command_access_denied
+from .guild_guard import (
+    GUILD_COMMAND_ACCESS,
+    command_access_allows_autocomplete,
+    reject_if_command_access_denied,
+)
 from ..operations import EditCommunityInput, edit_community_operation
 
 logger = logging.getLogger(__name__)
@@ -26,7 +30,9 @@ def _choice_label(label: str) -> str:
     return label if len(label) <= 100 else f"{label[:97]}..."
 
 
-def _community_label(community: object, *, include_guild: bool, include_status: bool = False) -> str:
+def _community_label(
+    community: object, *, include_guild: bool, include_status: bool = False
+) -> str:
     """Build the display label for one community autocomplete choice."""
     slug = getattr(community, "slug")
     display_name = getattr(community, "display_name", None)
@@ -45,7 +51,9 @@ def _matches_current(value: str, current: str) -> bool:
     return current.casefold() in value.casefold()
 
 
-def _edit_community_autocomplete(database: Database, settings: Settings, policy_service: BridgePolicyService):
+def _edit_community_autocomplete(
+    database: Database, settings: Settings, policy_service: BridgePolicyService
+):
     """Build `/edit-community community` autocomplete with management scope."""
 
     async def autocomplete(
@@ -54,11 +62,22 @@ def _edit_community_autocomplete(database: Database, settings: Settings, policy_
     ) -> list[app_commands.Choice[str]]:
         """Return editable active communities for this Discord caller."""
         try:
-            if not await command_access_allows_autocomplete(interaction, definition=GUILD_COMMAND_ACCESS, settings=settings, database=database, policy_service=policy_service):
+            if not await command_access_allows_autocomplete(
+                interaction,
+                definition=GUILD_COMMAND_ACCESS,
+                settings=settings,
+                database=database,
+                policy_service=policy_service,
+            ):
                 return []
             discord_user_id = str(interaction.user.id)
-            if is_super_admin(policy_snapshot=policy_service.snapshot(), discord_user_id=discord_user_id):
-                communities = database.local_communities.list_manageable_local_communities()
+            if is_super_admin(
+                policy_snapshot=policy_service.snapshot(),
+                discord_user_id=discord_user_id,
+            ):
+                communities = (
+                    database.local_communities.list_manageable_local_communities()
+                )
                 include_guild = True
             elif interaction.guild_id is not None:
                 communities = database.local_communities.list_manageable_local_communities_owned_by_user_in_guild(
@@ -74,13 +93,18 @@ def _edit_community_autocomplete(database: Database, settings: Settings, policy_
             for community in communities:
                 slug = getattr(community, "slug")
                 display_name = getattr(community, "display_name", "") or ""
-                if not (_matches_current(slug, current) or _matches_current(display_name, current)):
+                if not (
+                    _matches_current(slug, current)
+                    or _matches_current(display_name, current)
+                ):
                     continue
                 # Slug remains the submitted value because the data model keeps
                 # local_communities.slug globally unique across all guilds.
                 choices.append(
                     app_commands.Choice(
-                        name=_community_label(community, include_guild=include_guild, include_status=True),
+                        name=_community_label(
+                            community, include_guild=include_guild, include_status=True
+                        ),
                         value=slug,
                     )
                 )
@@ -135,20 +159,32 @@ class EditCommunityModal(discord.ui.Modal):
             min_values=1,
             max_values=1,
             options=[
-                discord.SelectOption(label="Active", value="active", default=active_default),
-                discord.SelectOption(label="Disabled", value="disabled", default=not active_default),
+                discord.SelectOption(
+                    label="Active", value="active", default=active_default
+                ),
+                discord.SelectOption(
+                    label="Disabled", value="disabled", default=not active_default
+                ),
             ],
         )
         self.add_item(self.display_name_input)
         self.add_item(self.summary_input)
         # New Discord modal select components are wrapped in Label components.
         # Keep the raw UI concern here so the operation layer stays SDK-free.
-        self.status_label = discord.ui.Label(text="Status", component=self.status_select)
+        self.status_label = discord.ui.Label(
+            text="Status", component=self.status_select
+        )
         self.add_item(self.status_label)
 
     async def on_submit(self, interaction: discord.Interaction) -> None:
         """Re-run runtime authorization and persist the submitted metadata."""
-        if await reject_if_command_access_denied(interaction, definition=GUILD_COMMAND_ACCESS, settings=self.settings, database=self.database, policy_service=self.policy_service):
+        if await reject_if_command_access_denied(
+            interaction,
+            definition=GUILD_COMMAND_ACCESS,
+            settings=self.settings,
+            database=self.database,
+            policy_service=self.policy_service,
+        ):
             return
         result = edit_community_operation(
             EditCommunityInput(
@@ -239,7 +275,13 @@ def register(
         community: str,
     ) -> None:
         """Open a prefilled edit modal or return a private rejection message."""
-        if await reject_if_command_access_denied(interaction, definition=GUILD_COMMAND_ACCESS, settings=settings, database=database, policy_service=policy_service):
+        if await reject_if_command_access_denied(
+            interaction,
+            definition=GUILD_COMMAND_ACCESS,
+            settings=settings,
+            database=database,
+            policy_service=policy_service,
+        ):
             return
         community_row, error = _can_open_edit_modal(
             database=database,
@@ -250,7 +292,9 @@ def register(
             community_slug=community,
         )
         if error is not None or community_row is None:
-            await interaction.response.send_message(error or "Unable to edit community.", ephemeral=True)
+            await interaction.response.send_message(
+                error or "Unable to edit community.", ephemeral=True
+            )
             return
 
         modal = EditCommunityModal(

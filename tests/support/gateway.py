@@ -43,4 +43,3 @@ def build_gateway_mock(
         community_actor_url=community_actor_url,
     )
     return gateway
-

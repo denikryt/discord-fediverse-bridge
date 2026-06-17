@@ -100,10 +100,11 @@ def build_follow_accepted_event(
     )
 
 
-def build_internal_event_headers(delivery_id: str, *, secret: str = "secret") -> dict[str, str]:
+def build_internal_event_headers(
+    delivery_id: str, *, secret: str = "secret"
+) -> dict[str, str]:
     """Build the trusted internal-auth headers used by the HTTP bridge endpoint."""
     return {
         "Authorization": f"Bearer {secret}",
         "X-Bridge-Delivery-Id": delivery_id,
     }
-

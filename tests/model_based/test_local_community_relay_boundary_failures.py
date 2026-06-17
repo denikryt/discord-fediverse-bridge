@@ -110,7 +110,9 @@ async def test_second_outcome_persistence_failure_keeps_first_commit(
             object_kind="post",
         )
 
-    rows = sorted(harness.observe(event).deliveries, key=lambda row: row.target_actor_id)
+    rows = sorted(
+        harness.observe(event).deliveries, key=lambda row: row.target_actor_id
+    )
     assert [(row.status, row.attempt_count) for row in rows] == [
         ("delivered", 1),
         ("pending", 0),
@@ -141,8 +143,8 @@ def test_defined_pre_result_failures_preserve_retryable_rows(
                     lambda **_: (_ for _ in ()).throw(RuntimeError("render failed")),
                 )
             else:
-                harness.gateway_boundary.send_local_community_relay.side_effect = RuntimeError(
-                    "gateway unavailable"
+                harness.gateway_boundary.send_local_community_relay.side_effect = (
+                    RuntimeError("gateway unavailable")
                 )
 
             with pytest.raises(RuntimeError):

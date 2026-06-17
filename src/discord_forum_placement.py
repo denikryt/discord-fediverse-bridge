@@ -59,7 +59,9 @@ def normalize_forum_channel_name(value: str) -> str:
     return normalized[:DISCORD_CHANNEL_NAME_LIMIT].strip("-_") or "community"
 
 
-def derive_channel_name_from_community(*, name: str | None, handle: str | None, actor_id: str | None) -> str:
+def derive_channel_name_from_community(
+    *, name: str | None, handle: str | None, actor_id: str | None
+) -> str:
     """Choose the best display-derived channel base name for a resolved community."""
     if name:
         return normalize_forum_channel_name(name)
@@ -75,7 +77,7 @@ def derive_channel_name_from_community(*, name: str | None, handle: str | None, 
 
 
 def is_forum_channel_available(
-    database: 'Database',
+    database: "Database",
     channel_id: int,
     *,
     remote_subscription_blocking_statuses: set[str] | None = None,
@@ -88,21 +90,26 @@ def is_forum_channel_available(
     subscribe commands preserve failed-subscription retry behavior by treating
     only pending/accepted remote rows as occupied before the operation layer runs.
     """
-    return _channel_binding_owner(
-        database,
-        channel_id,
-        remote_subscription_blocking_statuses=remote_subscription_blocking_statuses,
-    ) is None
+    return (
+        _channel_binding_owner(
+            database,
+            channel_id,
+            remote_subscription_blocking_statuses=remote_subscription_blocking_statuses,
+        )
+        is None
+    )
 
 
 def _channel_binding_owner(
-    database: 'Database',
+    database: "Database",
     channel_id: int,
     *,
     remote_subscription_blocking_statuses: set[str] | None = None,
 ) -> str | None:
     """Return the binding table that owns a channel, or ``None`` when free."""
-    local = database.local_communities.get_local_community_by_forum_channel_id(channel_id)
+    local = database.local_communities.get_local_community_by_forum_channel_id(
+        channel_id
+    )
     if local is not None:
         return "local_community"
     remote = database.remote_subscriptions.get_subscription_by_channel(channel_id)
@@ -111,7 +118,9 @@ def _channel_binding_owner(
             return "remote_subscription"
         if getattr(remote, "status", None) in remote_subscription_blocking_statuses:
             return "remote_subscription"
-    local_subscriber = database.local_subscribers.get_local_subscriber_by_channel(channel_id)
+    local_subscriber = database.local_subscribers.get_local_subscriber_by_channel(
+        channel_id
+    )
     if local_subscriber is not None:
         return "local_subscriber"
     return None
@@ -119,7 +128,7 @@ def _channel_binding_owner(
 
 def _channel_mention(channel: Any) -> str:
     """Return a readable mention-like label for real and fake channel objects."""
-    return str(getattr(channel, "mention", f"<#{getattr(channel, 'id', 'unknown')}>") )
+    return str(getattr(channel, "mention", f"<#{getattr(channel, 'id', 'unknown')}>"))
 
 
 def _is_forum_channel(channel: Any) -> bool:
@@ -139,12 +148,17 @@ def _belongs_to_guild(guild: Any, channel: Any) -> bool:
     """Return whether a selected channel is still part of the current guild."""
     guild_id = getattr(guild, "id", None)
     channel_guild = getattr(channel, "guild", None)
-    channel_guild_id = getattr(channel, "guild_id", None) or getattr(channel_guild, "id", None)
+    channel_guild_id = getattr(channel, "guild_id", None) or getattr(
+        channel_guild, "id", None
+    )
     if guild_id is not None and channel_guild_id is not None:
         return int(guild_id) == int(channel_guild_id)
     channels = getattr(guild, "channels", None)
     if channels is not None:
-        return any(getattr(candidate, "id", None) == getattr(channel, "id", None) for candidate in channels)
+        return any(
+            getattr(candidate, "id", None) == getattr(channel, "id", None)
+            for candidate in channels
+        )
     # If Discord supplied the typed channel object and no guild metadata is
     # exposed, do not reject based only on missing fake attributes.
     return True
@@ -177,7 +191,10 @@ def _unique_forum_channel_name(guild: Any, desired_name: str) -> str:
         return base
     for suffix in range(2, MAX_UNIQUE_SUFFIX + 1):
         suffix_text = f"-{suffix}"
-        trimmed = base[: DISCORD_CHANNEL_NAME_LIMIT - len(suffix_text)].rstrip("-_") or "community"
+        trimmed = (
+            base[: DISCORD_CHANNEL_NAME_LIMIT - len(suffix_text)].rstrip("-_")
+            or "community"
+        )
         candidate = f"{trimmed}{suffix_text}"
         if candidate.lower() not in existing:
             return candidate
@@ -189,7 +206,7 @@ def _unique_forum_channel_name(guild: Any, desired_name: str) -> str:
 
 async def resolve_optional_forum_channel(
     *,
-    database: 'Database',
+    database: "Database",
     guild: Any,
     selected_channel: Any | None,
     desired_name: str,
@@ -226,7 +243,9 @@ async def resolve_optional_forum_channel(
             remote_subscription_blocking_statuses=remote_subscription_blocking_statuses,
         ):
             raise ForumPlacementError(
-                message=CHANNEL_UNAVAILABLE_MESSAGE.format(mention=_channel_mention(selected_channel)),
+                message=CHANNEL_UNAVAILABLE_MESSAGE.format(
+                    mention=_channel_mention(selected_channel)
+                ),
                 reason="channel_unavailable",
             )
         return ForumPlacement(channel=selected_channel, created_by_bot=False)
@@ -262,7 +281,7 @@ async def resolve_optional_forum_channel(
 async def cleanup_created_forum_channel(
     placement: ForumPlacement | None,
     *,
-    database: 'Database',
+    database: "Database",
     logger: logging.Logger,
     guild_id: int | None,
     command_name: str,

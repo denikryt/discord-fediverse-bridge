@@ -11,7 +11,10 @@ from ..db import Database
 from ..bridge_policy import BridgePolicyService
 from ..config import Settings
 from ..fedify_gateway_client import FedifyGatewayClient
-from .guild_guard import REGISTERED_GUILD_COMMAND_ACCESS, reject_if_command_access_denied
+from .guild_guard import (
+    REGISTERED_GUILD_COMMAND_ACCESS,
+    reject_if_command_access_denied,
+)
 from ..operations import UnsubscribeInput, unsubscribe_operation
 from ..operations.unsubscribe_local_community import (
     UnsubscribeLocalCommunityInput,
@@ -53,7 +56,9 @@ def _local_subscriber_label(database: Database, local_subscriber: object) -> str
     )
 
 
-def _unsubscribe_success_message(*, user_id: object, channel_mention: str, community_label: str) -> str:
+def _unsubscribe_success_message(
+    *, user_id: object, channel_mention: str, community_label: str
+) -> str:
     """Build the public success message for /unsubscribe-channel."""
     return f"{_user_mention(user_id)} unsubscribed {channel_mention} from **{community_label}**."
 
@@ -84,9 +89,13 @@ def register(
     policy_service: BridgePolicyService,
 ) -> None:
     """Register the unsubscribe-channel slash command on the given command tree."""
-        # The registered slash command adapts Discord input into the operation
+
+    # The registered slash command adapts Discord input into the operation
     # contract and leaves policy decisions to the framework-backed layer.
-    @tree.command(name="unsubscribe-channel", description="Remove a forum channel's Lemmy subscription")
+    @tree.command(
+        name="unsubscribe-channel",
+        description="Remove a forum channel's Lemmy subscription",
+    )
     @app_commands.describe(channel="Forum channel to unsubscribe")
     @app_commands.default_permissions(manage_channels=True)
     async def unsubscribe_channel(
@@ -94,12 +103,22 @@ def register(
         channel: discord.ForumChannel,
     ) -> None:
         """Handle the /unsubscribe-channel slash command."""
-        if await reject_if_command_access_denied(interaction, definition=REGISTERED_GUILD_COMMAND_ACCESS, settings=settings, database=database, policy_service=policy_service):
+        if await reject_if_command_access_denied(
+            interaction,
+            definition=REGISTERED_GUILD_COMMAND_ACCESS,
+            settings=settings,
+            database=database,
+            policy_service=policy_service,
+        ):
             return
         # The command adapter only supplies Discord-facing context; the
         # operation decides whether deletion is allowed and what result to show.
-        remote_subscription = database.remote_subscriptions.get_subscription_by_channel(channel.id)
-        local_subscriber = database.local_subscribers.get_local_subscriber_by_channel(channel.id)
+        remote_subscription = database.remote_subscriptions.get_subscription_by_channel(
+            channel.id
+        )
+        local_subscriber = database.local_subscribers.get_local_subscriber_by_channel(
+            channel.id
+        )
         community_label: str | None = None
         if remote_subscription is not None:
             community_label = _remote_subscription_label(remote_subscription)
@@ -138,7 +157,10 @@ def register(
                 community_label=community_label,
             )
             send_kwargs["allowed_mentions"] = _no_ping_allowed_mentions()
-        elif getattr(result, "reason", None) == "remote_unfollow_failed" and community_label is not None:
+        elif (
+            getattr(result, "reason", None) == "remote_unfollow_failed"
+            and community_label is not None
+        ):
             message = _remote_unfollow_failure_message(
                 user_id=interaction.user.id,
                 channel_mention=channel.mention,

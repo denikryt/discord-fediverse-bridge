@@ -33,8 +33,8 @@ def _runtime(tmp_path: Path) -> tuple[SimpleNamespace, Database]:
         discord_oauth_client=SimpleNamespace(),
         fedify_gateway=SimpleNamespace(),
         bot=SimpleNamespace(),
-            bridge_policy_service=build_test_policy_service(database, settings),
-)
+        bridge_policy_service=build_test_policy_service(database, settings),
+    )
     return runtime, database
 
 
@@ -83,7 +83,9 @@ def test_internal_fedify_reads_are_authenticated_and_no_store(tmp_path: Path) ->
     assert missing.status_code == 404
 
 
-def test_internal_fedify_resolves_community_subscribers_objects_and_mappings(tmp_path: Path) -> None:
+def test_internal_fedify_resolves_community_subscribers_objects_and_mappings(
+    tmp_path: Path,
+) -> None:
     """The API exposes every persistence read required by Gateway behavior."""
     runtime, database = _runtime(tmp_path)
     community = database.local_communities.create_local_community(
@@ -183,7 +185,6 @@ def test_internal_fedify_resolves_community_subscribers_objects_and_mappings(tmp
     assert ambiguous.status_code == 422
 
 
-
 def test_internal_user_actor_profile_dto_exposes_public_fields_without_storage_details(
     tmp_path: Path,
 ) -> None:
@@ -232,9 +233,7 @@ def test_internal_user_actor_profile_dto_exposes_public_fields_without_storage_d
         {"name": "Research & Development", "value": "First\nSecond"},
         {"name": "Site", "value": "https://example.com"},
     ]
-    assert payload["avatar"]["url"].startswith(
-        "https://bridge.example/media/profile/"
-    )
+    assert payload["avatar"]["url"].startswith("https://bridge.example/media/profile/")
     assert set(payload["avatar"]) == {"url", "content_type", "width", "height"}
     serialized = response.text
     assert "storage_key" not in serialized
@@ -269,7 +268,9 @@ def test_internal_user_actor_profile_defaults_and_cleared_media_are_omitted(
     assert response.json()["header"] is None
 
 
-def test_internal_user_followers_are_newest_first_and_fixed_to_forty(tmp_path: Path) -> None:
+def test_internal_user_followers_are_newest_first_and_fixed_to_forty(
+    tmp_path: Path,
+) -> None:
     """Gateway reads receive deterministic newest-first pages with the fixed contract size."""
     runtime, database = _runtime(tmp_path)
     user = database.users.create_user(

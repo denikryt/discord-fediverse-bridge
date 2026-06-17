@@ -68,7 +68,10 @@ class LemmyverseCommunityCache:
         cache_path: str | Path = LEMMYVERSE_CACHE_FILE,
         ttl_seconds: int = LEMMYVERSE_CACHE_TTL_SECONDS,
         retry_delays_seconds: Iterable[float] = LEMMYVERSE_RETRY_DELAYS_SECONDS,
-        http_client_factory: Callable[[], AbstractAsyncContextManager[httpx.AsyncClient]] | None = None,
+        http_client_factory: Callable[
+            [], AbstractAsyncContextManager[httpx.AsyncClient]
+        ]
+        | None = None,
         monotonic: Callable[[], float] = time.monotonic,
         wall_time: Callable[[], float] = time.time,
         sleep: Callable[[float], Awaitable[object]] = asyncio.sleep,
@@ -78,7 +81,9 @@ class LemmyverseCommunityCache:
         self.cache_path = Path(cache_path)
         self.ttl_seconds = ttl_seconds
         self.retry_delays_seconds = tuple(retry_delays_seconds)
-        self._http_client_factory = http_client_factory or self._default_http_client_factory
+        self._http_client_factory = (
+            http_client_factory or self._default_http_client_factory
+        )
         self._monotonic = monotonic
         self._wall_time = wall_time
         self._sleep = sleep
@@ -162,7 +167,9 @@ class LemmyverseCommunityCache:
                     )
                     return
                 delay = delays[attempt - 1]
-                logger.info("Retrying Lemmyverse community cache refresh in %.1fs", delay)
+                logger.info(
+                    "Retrying Lemmyverse community cache refresh in %.1fs", delay
+                )
                 await self._sleep(delay)
 
     def _ensure_background_refresh(self) -> None:
@@ -194,7 +201,9 @@ class LemmyverseCommunityCache:
             )
             return True
         except Exception:
-            logger.exception("Failed to load Lemmyverse community cache file %s", self.cache_path)
+            logger.exception(
+                "Failed to load Lemmyverse community cache file %s", self.cache_path
+            )
             self._entries = []
             self._loaded_mtime = None
             return False
@@ -214,7 +223,9 @@ class LemmyverseCommunityCache:
     async def _fetch_entries_to_disk(self) -> list[LemmyverseCommunityEntry]:
         """Download the feed, save plain JSON to disk, then parse that file."""
         async with self._http_client_factory() as client:
-            response = await client.get(self.feed_url, headers={"Accept": "application/json"})
+            response = await client.get(
+                self.feed_url, headers={"Accept": "application/json"}
+            )
             response.raise_for_status()
             payload = _load_feed_payload(response.content)
         self._write_json_cache_file(payload)
@@ -234,7 +245,9 @@ class LemmyverseCommunityCache:
         return httpx.AsyncClient(timeout=timeout)
 
 
-def parse_lemmyverse_communities(raw: bytes | str | Any) -> list[LemmyverseCommunityEntry]:
+def parse_lemmyverse_communities(
+    raw: bytes | str | Any,
+) -> list[LemmyverseCommunityEntry]:
     """Parse a Lemmyverse feed payload into compact autocomplete entries.
 
     The parser accepts raw plain JSON bytes, gzip-compressed JSON bytes, an
@@ -267,11 +280,15 @@ async def autocomplete_lemmyverse_communities(
     else:
         entries = await cache.get_entries()
     allowed_entries = [
-        entry for entry in entries
+        entry
+        for entry in entries
         if policy_snapshot.federation_decision(entry.actor_id).allowed
     ]
     ranked_entries = _rank_entries(allowed_entries, query=current)
-    return [(_choice_name(entry), entry.actor_id) for entry in ranked_entries[:DISCORD_AUTOCOMPLETE_LIMIT]]
+    return [
+        (_choice_name(entry), entry.actor_id)
+        for entry in ranked_entries[:DISCORD_AUTOCOMPLETE_LIMIT]
+    ]
 
 
 def _load_feed_payload(raw: bytes | str | Any) -> Any:
@@ -336,7 +353,9 @@ def _parse_lemmy_api_entry(
     )
 
 
-def _parse_lemmyverse_flat_entry(item: dict[str, Any], *, feed_order: int) -> LemmyverseCommunityEntry | None:
+def _parse_lemmyverse_flat_entry(
+    item: dict[str, Any], *, feed_order: int
+) -> LemmyverseCommunityEntry | None:
     """Parse the public Lemmyverse ``community.full.json`` flat row shape."""
     if item.get("isSuspicious") is True:
         return None
@@ -395,7 +414,9 @@ def _build_entry(
     )
 
 
-def _rank_entries(entries: list[LemmyverseCommunityEntry], *, query: str) -> list[LemmyverseCommunityEntry]:
+def _rank_entries(
+    entries: list[LemmyverseCommunityEntry], *, query: str
+) -> list[LemmyverseCommunityEntry]:
     """Return matching entries with the most active communities first.
 
     Lemmyverse autocomplete is primarily a discovery surface, so monthly-active
@@ -411,7 +432,16 @@ def _rank_entries(entries: list[LemmyverseCommunityEntry], *, query: str) -> lis
     for entry in entries:
         score = _match_score(entry, normalized)
         if score is not None:
-            scored.append(((_activity_sort_value(entry.active_users_month), score, entry.feed_order), entry))
+            scored.append(
+                (
+                    (
+                        _activity_sort_value(entry.active_users_month),
+                        score,
+                        entry.feed_order,
+                    ),
+                    entry,
+                )
+            )
     return [entry for _, entry in sorted(scored, key=lambda item: item[0])]
 
 
@@ -443,7 +473,17 @@ def _match_score(entry: LemmyverseCommunityEntry, query: str) -> int | None:
         return 3
     if title.startswith(query):
         return 4
-    if any(query in candidate for candidate in (name, handle_without_bang, handle_with_bang, title, host, actor_id)):
+    if any(
+        query in candidate
+        for candidate in (
+            name,
+            handle_without_bang,
+            handle_with_bang,
+            title,
+            host,
+            actor_id,
+        )
+    ):
         return 5
     return None
 

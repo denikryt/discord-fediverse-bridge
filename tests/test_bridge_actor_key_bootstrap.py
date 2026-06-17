@@ -114,4 +114,7 @@ def test_actor_key_service_preserves_owner_specific_storage(tmp_path) -> None:
     service = ActorKeyService(database)
     assert service.get_bridge_actor_keys().key_format == "pem"
     assert service.get_user_actor_keys(user.id).private_key_data == "user-private"
-    assert service.get_local_community_actor_keys(community.id).private_key_data == "community-private"
+    assert (
+        service.get_local_community_actor_keys(community.id).private_key_data
+        == "community-private"
+    )

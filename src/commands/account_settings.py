@@ -13,11 +13,17 @@ from discord import app_commands
 from ..bridge_policy import BridgePolicyService
 from ..config import Settings
 from ..db import Database
-from ..user_actor_delivery import ProfileFanoutSummary
-from ..user_profiles import ProfileMutationResult, UserProfileService, UserProfileValidationError
+from ..user_profiles import (
+    ProfileMutationResult,
+    UserProfileService,
+    UserProfileValidationError,
+)
 from ..personal_feeds import PersonalFeedService
 from ..discord_channel_types import is_normal_guild_text_channel
-from .guild_guard import REGISTERED_GUILD_COMMAND_ACCESS, reject_if_command_access_denied
+from .guild_guard import (
+    REGISTERED_GUILD_COMMAND_ACCESS,
+    reject_if_command_access_denied,
+)
 
 logger = logging.getLogger(__name__)
 T = TypeVar("T")
@@ -59,7 +65,6 @@ async def _run_owned_sync_mutation(operation: Callable[[], T]) -> T:
             await worker
         finally:
             raise
-
 
 
 async def _finish_profile_mutation(
@@ -137,7 +142,16 @@ class ProfileTextModal(discord.ui.Modal, title="Edit account profile"):
         style=discord.TextStyle.paragraph,
     )
 
-    def __init__(self, database: Database, settings: Settings, policy_service: BridgePolicyService, service: UserProfileService, *, display_name: str = "", summary: str = "") -> None:
+    def __init__(
+        self,
+        database: Database,
+        settings: Settings,
+        policy_service: BridgePolicyService,
+        service: UserProfileService,
+        *,
+        display_name: str = "",
+        summary: str = "",
+    ) -> None:
         """Bind the interaction-scoped modal to shared profile dependencies."""
         super().__init__()
         self.database = database
@@ -149,7 +163,12 @@ class ProfileTextModal(discord.ui.Modal, title="Edit account profile"):
 
     async def on_submit(self, interaction: discord.Interaction) -> None:
         """Persist scalar text after repeating the command access policy."""
-        user = await _resolve_authorized_user(interaction, database=self.database, settings=self.settings, policy_service=self.policy_service)
+        user = await _resolve_authorized_user(
+            interaction,
+            database=self.database,
+            settings=self.settings,
+            policy_service=self.policy_service,
+        )
         if user is None:
             return
         await interaction.response.defer(ephemeral=True, thinking=True)
@@ -208,7 +227,12 @@ class ProfileMetadataModal(discord.ui.Modal, title="Edit profile metadata"):
 
     async def on_submit(self, interaction: discord.Interaction) -> None:
         """Parse all four positions before one atomic metadata replacement."""
-        user = await _resolve_authorized_user(interaction, database=self.database, settings=self.settings, policy_service=self.policy_service)
+        user = await _resolve_authorized_user(
+            interaction,
+            database=self.database,
+            settings=self.settings,
+            policy_service=self.policy_service,
+        )
         if user is None:
             return
         await interaction.response.defer(ephemeral=True, thinking=True)
@@ -222,14 +246,24 @@ class ProfileMetadataModal(discord.ui.Modal, title="Edit profile metadata"):
             await interaction.edit_original_response(content=str(exc))
             return
         await _finish_profile_mutation(
-            interaction, self.service, result, success_message="Profile metadata updated."
+            interaction,
+            self.service,
+            result,
+            success_message="Profile metadata updated.",
         )
 
 
 class ProfileMediaModal(discord.ui.Modal):
     """Replace one profile-media slot through Discord's modal file upload."""
 
-    def __init__(self, database: Database, settings: Settings, policy_service: BridgePolicyService, service: UserProfileService, slot: str) -> None:
+    def __init__(
+        self,
+        database: Database,
+        settings: Settings,
+        policy_service: BridgePolicyService,
+        service: UserProfileService,
+        slot: str,
+    ) -> None:
         """Create one typed avatar or header upload modal."""
         if slot not in {"avatar", "header"}:
             raise ValueError("invalid profile media slot")
@@ -240,20 +274,31 @@ class ProfileMediaModal(discord.ui.Modal):
         self.service = service
         self.slot = slot
         self.upload = discord.ui.FileUpload(required=True, min_values=1, max_values=1)
-        self.add_item(discord.ui.Label(text=f"{slot.title()} image", component=self.upload))
+        self.add_item(
+            discord.ui.Label(text=f"{slot.title()} image", component=self.upload)
+        )
 
     async def on_submit(self, interaction: discord.Interaction) -> None:
         """Acknowledge, download once, and offload the complete sync mutation."""
-        user = await _resolve_authorized_user(interaction, database=self.database, settings=self.settings, policy_service=self.policy_service)
+        user = await _resolve_authorized_user(
+            interaction,
+            database=self.database,
+            settings=self.settings,
+            policy_service=self.policy_service,
+        )
         if user is None:
             return
         attachments = list(self.upload.values)
         if len(attachments) != 1:
-            await interaction.response.send_message("Upload exactly one image.", ephemeral=True)
+            await interaction.response.send_message(
+                "Upload exactly one image.", ephemeral=True
+            )
             return
         attachment = attachments[0]
         if attachment.size > self.settings.profile_media_max_upload_bytes:
-            await interaction.response.send_message("Image exceeds the configured upload limit.", ephemeral=True)
+            await interaction.response.send_message(
+                "Image exceeds the configured upload limit.", ephemeral=True
+            )
             return
 
         # Discord requires an initial response quickly; defer before network or
@@ -268,31 +313,58 @@ class ProfileMediaModal(discord.ui.Modal):
             await interaction.edit_original_response(content=str(exc))
             return
         except Exception:
-            logger.exception("Profile media replacement failed user=%s slot=%s", interaction.user.id, self.slot)
-            await interaction.edit_original_response(content="The image could not be processed.")
+            logger.exception(
+                "Profile media replacement failed user=%s slot=%s",
+                interaction.user.id,
+                self.slot,
+            )
+            await interaction.edit_original_response(
+                content="The image could not be processed."
+            )
             return
         await _finish_profile_mutation(
-            interaction, self.service, result, success_message=f"{self.slot.title()} updated."
+            interaction,
+            self.service,
+            result,
+            success_message=f"{self.slot.title()} updated.",
         )
 
 
-def register(tree: app_commands.CommandTree, database: Database, settings: Settings, policy_service: BridgePolicyService, service: UserProfileService, personal_feed_service: PersonalFeedService | None = None) -> None:
+def register(
+    tree: app_commands.CommandTree,
+    database: Database,
+    settings: Settings,
+    policy_service: BridgePolicyService,
+    service: UserProfileService,
+    personal_feed_service: PersonalFeedService | None = None,
+) -> None:
     """Register the registered-user-only ``/account-settings`` command family."""
-    group = app_commands.Group(name="account-settings", description="Manage your ActivityPub profile")
+    group = app_commands.Group(
+        name="account-settings", description="Manage your ActivityPub profile"
+    )
 
     async def authorized_profile(interaction: discord.Interaction):
         """Resolve current access and profile for one command invocation."""
-        user = await _resolve_authorized_user(interaction, database=database, settings=settings, policy_service=policy_service)
+        user = await _resolve_authorized_user(
+            interaction,
+            database=database,
+            settings=settings,
+            policy_service=policy_service,
+        )
         if user is None:
             return None, None
         return user, service.get_profile(user.id)
 
-    @group.command(name="view", description="View your current ActivityPub profile settings")
+    @group.command(
+        name="view", description="View your current ActivityPub profile settings"
+    )
     async def view(interaction: discord.Interaction) -> None:
         user, profile = await authorized_profile(interaction)
         if user is None or profile is None:
             return
-        fields = "\n".join(f"• {name}: {value}" for name, value in profile.fields) or "None"
+        fields = (
+            "\n".join(f"• {name}: {value}" for name, value in profile.fields) or "None"
+        )
         await interaction.response.send_message(
             f"Handle: @{user.activitypub_username} (immutable)\nDisplay name: {profile.display_name}\nBio: {profile.summary or 'None'}\nMetadata:\n{fields}\nAvatar: {'set' if profile.avatar else 'not set'}\nHeader: {'set' if profile.header else 'not set'}",
             ephemeral=True,
@@ -303,7 +375,16 @@ def register(tree: app_commands.CommandTree, database: Database, settings: Setti
         user, current = await authorized_profile(interaction)
         if user is None or current is None:
             return
-        await interaction.response.send_modal(ProfileTextModal(database, settings, policy_service, service, display_name=current.stored_display_name or "", summary=current.summary or ""))
+        await interaction.response.send_modal(
+            ProfileTextModal(
+                database,
+                settings,
+                policy_service,
+                service,
+                display_name=current.stored_display_name or "",
+                summary=current.summary or "",
+            )
+        )
 
     @group.command(name="metadata", description="Edit up to four profile metadata rows")
     async def metadata(interaction: discord.Interaction) -> None:
@@ -320,13 +401,17 @@ def register(tree: app_commands.CommandTree, database: Database, settings: Setti
     async def avatar(interaction: discord.Interaction) -> None:
         if (await authorized_profile(interaction))[0] is None:
             return
-        await interaction.response.send_modal(ProfileMediaModal(database, settings, policy_service, service, "avatar"))
+        await interaction.response.send_modal(
+            ProfileMediaModal(database, settings, policy_service, service, "avatar")
+        )
 
     @group.command(name="header", description="Upload a new profile header")
     async def header(interaction: discord.Interaction) -> None:
         if (await authorized_profile(interaction))[0] is None:
             return
-        await interaction.response.send_modal(ProfileMediaModal(database, settings, policy_service, service, "header"))
+        await interaction.response.send_modal(
+            ProfileMediaModal(database, settings, policy_service, service, "header")
+        )
 
     async def clear_slot(interaction: discord.Interaction, slot: str) -> None:
         """Clear one slot while preserving all other profile state."""
@@ -334,7 +419,9 @@ def register(tree: app_commands.CommandTree, database: Database, settings: Setti
         if user is None:
             return
         await interaction.response.defer(ephemeral=True, thinking=True)
-        result = await _run_owned_sync_mutation(lambda: service.clear_media(user.id, slot))
+        result = await _run_owned_sync_mutation(
+            lambda: service.clear_media(user.id, slot)
+        )
         await _finish_profile_mutation(
             interaction, service, result, success_message=f"{slot.title()} cleared."
         )
@@ -347,38 +434,68 @@ def register(tree: app_commands.CommandTree, database: Database, settings: Setti
     async def clear_header(interaction: discord.Interaction) -> None:
         await clear_slot(interaction, "header")
 
-    @group.command(name="feed-view", description="View your personal-feed channel binding")
+    @group.command(
+        name="feed-view", description="View your personal-feed channel binding"
+    )
     async def feed_view(interaction: discord.Interaction) -> None:
         """Show the caller's current binding using durable IDs when cache data is absent."""
-        user = await _resolve_authorized_user(interaction, database=database, settings=settings, policy_service=policy_service)
+        user = await _resolve_authorized_user(
+            interaction,
+            database=database,
+            settings=settings,
+            policy_service=policy_service,
+        )
         if user is None or personal_feed_service is None:
             return
         binding = personal_feed_service.get_by_discord_user_id(str(interaction.user.id))
-        content = "No personal-feed channel is bound." if binding is None else f"Personal feed: <#{binding.discord_channel_id}> (guild `{binding.discord_guild_id}`)."
+        content = (
+            "No personal-feed channel is bound."
+            if binding is None
+            else f"Personal feed: <#{binding.discord_channel_id}> (guild `{binding.discord_guild_id}`)."
+        )
         await interaction.response.send_message(content, ephemeral=True)
 
-    @group.command(name="feed-bind", description="Bind or move your personal-feed channel")
+    @group.command(
+        name="feed-bind", description="Bind or move your personal-feed channel"
+    )
     @app_commands.describe(channel="An ordinary guild text channel")
     async def feed_bind(
         interaction: discord.Interaction,
-        channel: app_commands.Transform[discord.TextChannel, GuildTextChannelTransformer],
+        channel: app_commands.Transform[
+            discord.TextChannel, GuildTextChannelTransformer
+        ],
     ) -> None:
         """Validate Discord authority and atomically bind one ordinary text channel."""
-        user = await _resolve_authorized_user(interaction, database=database, settings=settings, policy_service=policy_service)
+        user = await _resolve_authorized_user(
+            interaction,
+            database=database,
+            settings=settings,
+            policy_service=policy_service,
+        )
         if user is None or personal_feed_service is None:
             return
         guild = interaction.guild
         member = interaction.user
-        if guild is None or not getattr(getattr(member, "guild_permissions", None), "manage_guild", False):
-            await interaction.response.send_message("You must have Manage Server permission to bind a personal feed.", ephemeral=True)
+        if guild is None or not getattr(
+            getattr(member, "guild_permissions", None), "manage_guild", False
+        ):
+            await interaction.response.send_message(
+                "You must have Manage Server permission to bind a personal feed.",
+                ephemeral=True,
+            )
             return
         if not is_normal_guild_text_channel(channel) or channel.guild.id != guild.id:
-            await interaction.response.send_message("Choose an ordinary text channel in this server; announcement channels are not supported.", ephemeral=True)
+            await interaction.response.send_message(
+                "Choose an ordinary text channel in this server; announcement channels are not supported.",
+                ephemeral=True,
+            )
             return
         # Snapshot the current row before worker submission. The service uses
         # this compare-and-set token so a delayed first-bind cannot overwrite
         # another request that acquired SQLite's writer reservation first.
-        expected = personal_feed_service.get_by_discord_user_id(str(interaction.user.id))
+        expected = personal_feed_service.get_by_discord_user_id(
+            str(interaction.user.id)
+        )
         await interaction.response.defer(ephemeral=True, thinking=True)
         result = await _run_owned_sync_mutation(
             lambda: personal_feed_service.bind_or_move(
@@ -396,17 +513,34 @@ def register(tree: app_commands.CommandTree, database: Database, settings: Setti
             "channel_conflict": "That channel is already owned by another bridge mode.",
             "binding_changed": "Your personal-feed binding changed while this request was running. Try again.",
         }
-        await interaction.edit_original_response(content=messages.get(result.status, "The personal-feed binding could not be changed."))
+        await interaction.edit_original_response(
+            content=messages.get(
+                result.status, "The personal-feed binding could not be changed."
+            )
+        )
 
-    @group.command(name="feed-unbind", description="Remove your current personal-feed binding")
+    @group.command(
+        name="feed-unbind", description="Remove your current personal-feed binding"
+    )
     async def feed_unbind(interaction: discord.Interaction) -> None:
         """Remove only the caller's current binding through the owned sync worker."""
-        user = await _resolve_authorized_user(interaction, database=database, settings=settings, policy_service=policy_service)
+        user = await _resolve_authorized_user(
+            interaction,
+            database=database,
+            settings=settings,
+            policy_service=policy_service,
+        )
         if user is None or personal_feed_service is None:
             return
         await interaction.response.defer(ephemeral=True, thinking=True)
-        result = await _run_owned_sync_mutation(lambda: personal_feed_service.unbind(str(interaction.user.id)))
-        content = "Personal-feed binding removed." if result.status == "unbound" else "No personal-feed channel is bound."
+        result = await _run_owned_sync_mutation(
+            lambda: personal_feed_service.unbind(str(interaction.user.id))
+        )
+        content = (
+            "Personal-feed binding removed."
+            if result.status == "unbound"
+            else "No personal-feed channel is bound."
+        )
         await interaction.edit_original_response(content=content)
 
     tree.add_command(group)

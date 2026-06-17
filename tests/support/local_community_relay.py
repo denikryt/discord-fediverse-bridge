@@ -95,7 +95,9 @@ class DeterministicRelayGateway:
 class LocalCommunityRelayHarness:
     """Build and observe one real local-community relay test environment."""
 
-    def __init__(self, tmp_path: Path, *, database_name: str = "relay-harness.db") -> None:
+    def __init__(
+        self, tmp_path: Path, *, database_name: str = "relay-harness.db"
+    ) -> None:
         """Create real persistence, policy, runtime, and deterministic gateway boundaries."""
         self.database = build_database(tmp_path, database_name)
         self.gateway = DeterministicRelayGateway()
@@ -152,7 +154,6 @@ class LocalCommunityRelayHarness:
         for name in ("bob", "alice", "carol"):
             self.add_subscriber(name)
 
-
     def ensure_subscriber(self, name: str, *, host: str) -> str:
         """Ensure one accepted subscriber exists without duplicating actor rows."""
         actor_id = f"https://{host}/u/{name}"
@@ -202,7 +203,9 @@ class LocalCommunityRelayHarness:
             remote_actor_id=actor_id,
         )
 
-    def post_event(self, *, suffix: str = "1", source_json: bool = True) -> ActivityPubEvent:
+    def post_event(
+        self, *, suffix: str = "1", source_json: bool = True
+    ) -> ActivityPubEvent:
         """Build one inbound post event with a stable relay identity."""
         source = {
             "type": "Create",
@@ -252,9 +255,7 @@ class LocalCommunityRelayHarness:
         if operation not in {"update", "delete"}:
             raise ValueError(f"unsupported mutation operation: {operation}")
         activity_type = operation.capitalize()
-        source_id = (
-            f"https://lemmy.example/activities/{operation}/post/{object_suffix}"
-        )
+        source_id = f"https://lemmy.example/activities/{operation}/post/{object_suffix}"
         object_id = f"https://lemmy.example/post/{object_suffix}"
         source = {
             "type": activity_type,
@@ -276,9 +277,7 @@ class LocalCommunityRelayHarness:
                 "source_activity_id": source_id,
                 "source_announce_id": None,
                 "occurred_at": "2026-05-19T10:10:00Z",
-                "community_actor_id": (
-                    "https://bridge.example/communities/hackers"
-                ),
+                "community_actor_id": ("https://bridge.example/communities/hackers"),
                 "actor_id": "https://lemmy.example/u/bob",
                 "object": {
                     "ap_id": object_id,
@@ -296,7 +295,9 @@ class LocalCommunityRelayHarness:
             }
         )
 
-    def observe(self, event: ActivityPubEvent, *, operation: str = "create") -> RelayObservedState:
+    def observe(
+        self, event: ActivityPubEvent, *, operation: str = "create"
+    ) -> RelayObservedState:
         """Collect durable relay state and recorded gateway target batches."""
         source = self.database.local_community_relay.get_local_community_relay_source_activity(
             local_community_id=self.local_community.id,

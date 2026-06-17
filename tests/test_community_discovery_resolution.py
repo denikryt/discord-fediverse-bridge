@@ -92,6 +92,7 @@ async def test_encoded_value_resolves_without_instance_domain() -> None:
     assert resolved.actor_id == "https://lemmy.world/c/technology"
     assert resolved.numeric_id == 42
 
+
 class FakeAutocompleteLemmyClient:
     """Lemmy client fake returning community-view rows for autocomplete tests."""
 
@@ -100,7 +101,9 @@ class FakeAutocompleteLemmyClient:
         self.origin = origin
         self.closed = False
 
-    async def list_communities(self, *, limit: int, type_: str) -> list[dict[str, object]]:
+    async def list_communities(
+        self, *, limit: int, type_: str
+    ) -> list[dict[str, object]]:
         """Return one direct-instance community with monthly activity counts."""
         assert limit == 50
         assert type_ == "Local"
@@ -131,7 +134,9 @@ class FakeAutocompleteLemmyClient:
 
 
 @pytest.mark.asyncio
-async def test_direct_instance_autocomplete_labels_include_handle_and_monthly_activity() -> None:
+async def test_direct_instance_autocomplete_labels_include_handle_and_monthly_activity() -> (
+    None
+):
     """Direct-instance autocomplete labels should match global handle context."""
     from src.community_discovery import autocomplete_communities
 

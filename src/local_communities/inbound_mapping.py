@@ -10,6 +10,8 @@ from __future__ import annotations
 from ..db import Database
 
 
-def resolve_local_community_by_actor_url(database: Database, actor_url: str) -> object | None:
+def resolve_local_community_by_actor_url(
+    database: Database, actor_url: str
+) -> object | None:
     """Return the owned local community for one actor URL, if the bridge owns it."""
     return database.local_communities.get_local_community_by_actor_url(actor_url)

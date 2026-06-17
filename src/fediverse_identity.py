@@ -33,7 +33,9 @@ def normalize_remote_actor_handle(value: str) -> str:
 
     username, domain = raw.split("@", 1)
     if not username or not domain:
-        raise InvalidRemoteActorHandle("remote actor handle must include username and domain")
+        raise InvalidRemoteActorHandle(
+            "remote actor handle must include username and domain"
+        )
 
     # Domain names are case-insensitive. Preserve username casing because the
     # current Discord-facing formatting shows preferred usernames as supplied by

@@ -106,7 +106,9 @@ def test_failed_collection_writes_partial_summary_and_returns_nonzero(
         """Return a deterministic collection failure for the first command."""
 
         calls.append(command)
-        return CommandResult(exit_code=3, stdout="collection failed", elapsed_seconds=0.2)
+        return CommandResult(
+            exit_code=3, stdout="collection failed", elapsed_seconds=0.2
+        )
 
     exit_code = run_baseline(
         output_dir=tmp_path,

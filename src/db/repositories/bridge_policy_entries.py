@@ -24,7 +24,9 @@ class PolicyActivationResult:
 class BridgePolicyEntryRepository(BaseRepository):
     """Read and mutate dynamic policy rows without applying policy precedence."""
 
-    def get_by_type_and_subject(self, *, policy_type: str, normalized_subject: str) -> BridgePolicyEntry | None:
+    def get_by_type_and_subject(
+        self, *, policy_type: str, normalized_subject: str
+    ) -> BridgePolicyEntry | None:
         """Return one dynamic row regardless of active status."""
         with self.session() as session:
             return session.scalar(
@@ -37,19 +39,39 @@ class BridgePolicyEntryRepository(BaseRepository):
     def list_active_by_type(self, *, policy_type: str) -> list[BridgePolicyEntry]:
         """Return active rows for one policy type in stable subject order."""
         with self.session() as session:
-            return list(session.scalars(select(BridgePolicyEntry).where(
-                BridgePolicyEntry.policy_type == policy_type,
-                BridgePolicyEntry.status == "active",
-            ).order_by(BridgePolicyEntry.normalized_subject)))
+            return list(
+                session.scalars(
+                    select(BridgePolicyEntry)
+                    .where(
+                        BridgePolicyEntry.policy_type == policy_type,
+                        BridgePolicyEntry.status == "active",
+                    )
+                    .order_by(BridgePolicyEntry.normalized_subject)
+                )
+            )
 
     def list_all_active(self) -> list[BridgePolicyEntry]:
         """Return all active rows for one request-scoped policy snapshot."""
         with self.session() as session:
-            return list(session.scalars(select(BridgePolicyEntry).where(
-                BridgePolicyEntry.status == "active"
-            ).order_by(BridgePolicyEntry.policy_type, BridgePolicyEntry.normalized_subject)))
+            return list(
+                session.scalars(
+                    select(BridgePolicyEntry)
+                    .where(BridgePolicyEntry.status == "active")
+                    .order_by(
+                        BridgePolicyEntry.policy_type,
+                        BridgePolicyEntry.normalized_subject,
+                    )
+                )
+            )
 
-    def create_active(self, *, policy_type: str, normalized_subject: str, actor_discord_user_id: str, reason: str | None) -> BridgePolicyEntry:
+    def create_active(
+        self,
+        *,
+        policy_type: str,
+        normalized_subject: str,
+        actor_discord_user_id: str,
+        reason: str | None,
+    ) -> BridgePolicyEntry:
         """Create one active row in its own repository transaction for tests/tools."""
         with self.session() as session:
             result = self.create_active_in_session(
@@ -61,7 +83,15 @@ class BridgePolicyEntryRepository(BaseRepository):
             )
             return result.entry
 
-    def create_active_in_session(self, session: Session, *, policy_type: str, normalized_subject: str, actor_discord_user_id: str, reason: str | None) -> PolicyActivationResult:
+    def create_active_in_session(
+        self,
+        session: Session,
+        *,
+        policy_type: str,
+        normalized_subject: str,
+        actor_discord_user_id: str,
+        reason: str | None,
+    ) -> PolicyActivationResult:
         """Create an active row inside a caller-owned transaction."""
         entry = BridgePolicyEntry(
             policy_type=policy_type,
@@ -76,7 +106,14 @@ class BridgePolicyEntryRepository(BaseRepository):
         after = {"status": "active", "reason": reason}
         return PolicyActivationResult(entry, "created", None, after)
 
-    def reactivate_in_session(self, session: Session, *, entry_id: int, actor_discord_user_id: str, reason: str | None) -> PolicyActivationResult:
+    def reactivate_in_session(
+        self,
+        session: Session,
+        *,
+        entry_id: int,
+        actor_discord_user_id: str,
+        reason: str | None,
+    ) -> PolicyActivationResult:
         """Reactivate one inactive row and update activation metadata."""
         entry = session.get(BridgePolicyEntry, entry_id)
         if entry is None:
@@ -86,9 +123,13 @@ class BridgePolicyEntryRepository(BaseRepository):
         entry.reason = reason
         entry.updated_by_discord_user_id = actor_discord_user_id
         session.flush()
-        return PolicyActivationResult(entry, "reactivated", before, {"status": "active", "reason": reason})
+        return PolicyActivationResult(
+            entry, "reactivated", before, {"status": "active", "reason": reason}
+        )
 
-    def deactivate_in_session(self, session: Session, *, entry_id: int, actor_discord_user_id: str) -> BridgePolicyEntry:
+    def deactivate_in_session(
+        self, session: Session, *, entry_id: int, actor_discord_user_id: str
+    ) -> BridgePolicyEntry:
         """Deactivate one active row without overwriting its activation reason."""
         entry = session.get(BridgePolicyEntry, entry_id)
         if entry is None:

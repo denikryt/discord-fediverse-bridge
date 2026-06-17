@@ -98,7 +98,6 @@ def _seed_existing_ban(
         assert row.id is not None
 
 
-
 @pytest.mark.parametrize("case", BAN_CONTRACT_CASES, ids=lambda case: case.id)
 def test_ban_operation_contract(case: BanContractCase, tmp_path: Path) -> None:
     """Run one declared ban contract and compare explicit operation/persistence effects."""

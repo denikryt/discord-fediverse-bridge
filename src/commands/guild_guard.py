@@ -37,7 +37,13 @@ async def evaluate_command_access(
         database=database,
         discord_guild_id=getattr(interaction, "guild_id", None),
         discord_user_id=str(interaction.user.id),
-        member_can_manage_guild=bool(getattr(getattr(interaction.user, "guild_permissions", None), "manage_guild", False)),
+        member_can_manage_guild=bool(
+            getattr(
+                getattr(interaction.user, "guild_permissions", None),
+                "manage_guild",
+                False,
+            )
+        ),
         policy_service=policy_service,
         ban_service=ban_service,
     )

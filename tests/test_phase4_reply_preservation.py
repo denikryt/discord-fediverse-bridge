@@ -14,7 +14,7 @@ from support.runtime import build_test_policy_service
 
 from pathlib import Path
 from types import SimpleNamespace
-from unittest.mock import AsyncMock, MagicMock, call
+from unittest.mock import AsyncMock
 
 import pytest
 
@@ -78,8 +78,10 @@ def _publish_gateway(
     """Build a mocked FedifyGatewayClient that returns a valid PublishContentResult."""
     gateway = AsyncMock()
     gateway.publish_content.return_value = PublishContentResult(
-        activity_id=activity_id or f"https://{BRIDGE_HOST_DOMAIN}/users/alice/activities/create/comment/1",
-        object_id=object_id or f"https://{BRIDGE_HOST_DOMAIN}/users/alice/objects/comment/1",
+        activity_id=activity_id
+        or f"https://{BRIDGE_HOST_DOMAIN}/users/alice/activities/create/comment/1",
+        object_id=object_id
+        or f"https://{BRIDGE_HOST_DOMAIN}/users/alice/objects/comment/1",
         community_actor_url=COMMUNITY_ACTOR_URL,
     )
     return gateway
@@ -91,8 +93,8 @@ def _publish_service(database: Database, gateway: AsyncMock) -> ContentPublishSe
         database=database,
         fedify_gateway=gateway,
         bridge_prefix="[bridge]",
-            bridge_policy_service=build_test_policy_service(database),
-)
+        bridge_policy_service=build_test_policy_service(database),
+    )
 
 
 def _community_runtime(
@@ -255,7 +257,9 @@ async def test_phase4_root_message_mirrored_flat(tmp_path: Path) -> None:
 
     result = await runtime.handle_discord_message(message=message)
 
-    message_group = database.discord_fanout_groups.get_message_group_by_source_message(400)
+    message_group = database.discord_fanout_groups.get_message_group_by_source_message(
+        400
+    )
     assert result.status == "published"
     assert message_group is not None
     # Root message: no parent message group.
@@ -267,7 +271,9 @@ async def test_phase4_root_message_mirrored_flat(tmp_path: Path) -> None:
 
 
 @pytest.mark.asyncio
-async def test_phase4_reply_to_starter_references_mirror_starter(tmp_path: Path) -> None:
+async def test_phase4_reply_to_starter_references_mirror_starter(
+    tmp_path: Path,
+) -> None:
     """Reply to the source thread starter uses the mirror thread's own starter as reference.
 
     System state: two subscriptions, thread group for thread 200 (starter 300),
@@ -285,8 +291,11 @@ async def test_phase4_reply_to_starter_references_mirror_starter(tmp_path: Path)
         database, channel_id=100, thread_id=200, starter_message_id=300
     )
     _add_mirror_delivery(
-        database, thread_group_id=thread_group.id,
-        channel_id=101, thread_id=500, starter_message_id=501,
+        database,
+        thread_group_id=thread_group.id,
+        channel_id=101,
+        thread_id=500,
+        starter_message_id=501,
     )
     gateway = _publish_gateway()
 
@@ -307,7 +316,9 @@ async def test_phase4_reply_to_starter_references_mirror_starter(tmp_path: Path)
 
     result = await runtime.handle_discord_message(message=message)
 
-    message_group = database.discord_fanout_groups.get_message_group_by_source_message(400)
+    message_group = database.discord_fanout_groups.get_message_group_by_source_message(
+        400
+    )
     assert result.status == "published"
     assert message_group is not None
     # Starter reply: parent_message_group_id is None (starter is not a message group).
@@ -321,7 +332,9 @@ async def test_phase4_reply_to_starter_references_mirror_starter(tmp_path: Path)
 
 
 @pytest.mark.asyncio
-async def test_phase4_reply_to_mirrored_message_references_mirror_delivery(tmp_path: Path) -> None:
+async def test_phase4_reply_to_mirrored_message_references_mirror_delivery(
+    tmp_path: Path,
+) -> None:
     """Reply to a previously mirrored message uses the mirror delivery message as reference.
 
     System state: two subscriptions, thread group for thread 200 / mirror thread 500.
@@ -339,8 +352,11 @@ async def test_phase4_reply_to_mirrored_message_references_mirror_delivery(tmp_p
         database, channel_id=100, thread_id=200, starter_message_id=300
     )
     _add_mirror_delivery(
-        database, thread_group_id=thread_group.id,
-        channel_id=101, thread_id=500, starter_message_id=501,
+        database,
+        thread_group_id=thread_group.id,
+        channel_id=101,
+        thread_id=500,
+        starter_message_id=501,
     )
 
     # Insert prior message group M (message 400 was already mirrored as 600 in thread 500).
@@ -438,7 +454,9 @@ async def test_phase4_reply_to_unknown_message_mirrored_flat(tmp_path: Path) -> 
 
     result = await runtime.handle_discord_message(message=message)
 
-    message_group = database.discord_fanout_groups.get_message_group_by_source_message(400)
+    message_group = database.discord_fanout_groups.get_message_group_by_source_message(
+        400
+    )
     assert result.status == "published"
     assert message_group is not None
     # Unknown reference: parent_message_group_id stays None.
@@ -450,7 +468,9 @@ async def test_phase4_reply_to_unknown_message_mirrored_flat(tmp_path: Path) -> 
 
 
 @pytest.mark.asyncio
-async def test_phase4_reply_db_consistency_mirror_delivery_recorded(tmp_path: Path) -> None:
+async def test_phase4_reply_db_consistency_mirror_delivery_recorded(
+    tmp_path: Path,
+) -> None:
     """Reply to a mirrored message: mirror delivery row recorded with correct message id.
 
     System state: two subscriptions, thread group for thread 200 / mirror thread 500.
@@ -469,8 +489,11 @@ async def test_phase4_reply_db_consistency_mirror_delivery_recorded(tmp_path: Pa
         database, channel_id=100, thread_id=200, starter_message_id=300
     )
     _add_mirror_delivery(
-        database, thread_group_id=thread_group.id,
-        channel_id=101, thread_id=500, starter_message_id=501,
+        database,
+        thread_group_id=thread_group.id,
+        channel_id=101,
+        thread_id=500,
+        starter_message_id=501,
     )
 
     # Insert prior message group M.

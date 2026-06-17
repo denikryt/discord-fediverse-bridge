@@ -91,7 +91,9 @@ class BridgePolicySnapshot:
     entries: tuple[EffectivePolicyEntry, ...]
 
     def _subjects(self, policy_type: PolicyType) -> frozenset[str]:
-        return frozenset(entry.subject for entry in self.entries if entry.policy_type is policy_type)
+        return frozenset(
+            entry.subject for entry in self.entries if entry.policy_type is policy_type
+        )
 
     def is_super_admin(self, discord_user_id: str) -> bool:
         """Return whether one Discord user is an effective bridge administrator."""
@@ -120,16 +122,24 @@ class BridgePolicySnapshot:
         try:
             host = normalize_instance_subject(url_or_host)
         except ValueError:
-            return FederationPolicyDecision(False, FederationPolicyReason.INVALID_HOST, None)
+            return FederationPolicyDecision(
+                False, FederationPolicyReason.INVALID_HOST, None
+            )
         blocked = self._subjects(PolicyType.FEDERATION_BLOCK)
         allowed = self._subjects(PolicyType.FEDERATION_ALLOW)
         if host in blocked:
-            return FederationPolicyDecision(False, FederationPolicyReason.BLOCKLISTED, host)
+            return FederationPolicyDecision(
+                False, FederationPolicyReason.BLOCKLISTED, host
+            )
         if allowed and host not in allowed:
-            return FederationPolicyDecision(False, FederationPolicyReason.NOT_ALLOWLISTED, host)
+            return FederationPolicyDecision(
+                False, FederationPolicyReason.NOT_ALLOWLISTED, host
+            )
         return FederationPolicyDecision(True, FederationPolicyReason.ALLOWED, host)
 
-    def list_effective_entries(self, policy_type: PolicyType) -> list[EffectivePolicyEntry]:
+    def list_effective_entries(
+        self, policy_type: PolicyType
+    ) -> list[EffectivePolicyEntry]:
         """Return deterministic effective entries for private management output."""
         return sorted(
             (entry for entry in self.entries if entry.policy_type is policy_type),
@@ -156,29 +166,50 @@ class BridgePolicyService:
         """Evaluate one administrator subject through a fresh policy read."""
         return self.snapshot().is_super_admin(discord_user_id)
 
-    def list_effective_entries(self, policy_type: PolicyType) -> list[EffectivePolicyEntry]:
+    def list_effective_entries(
+        self, policy_type: PolicyType
+    ) -> list[EffectivePolicyEntry]:
         """List one policy category through a fresh effective-policy read."""
         return self.snapshot().list_effective_entries(policy_type)
 
     def snapshot(self) -> BridgePolicySnapshot:
         """Read active rows once and merge them with normalized bootstrap policy."""
         bootstrap_values = {
-            PolicyType.FEDERATION_ALLOW: getattr(self.settings, "federation_allowlist", []),
-            PolicyType.FEDERATION_BLOCK: getattr(self.settings, "federation_blocklist", []),
-            PolicyType.DISCORD_GUILD_ALLOW: getattr(self.settings, "discord_guild_allowlist", []),
-            PolicyType.DISCORD_GUILD_BLOCK: getattr(self.settings, "discord_guild_blocklist", []),
-            PolicyType.BRIDGE_SUPER_ADMIN: getattr(self.settings, "bridge_super_admin_user_ids", []),
+            PolicyType.FEDERATION_ALLOW: getattr(
+                self.settings, "federation_allowlist", []
+            ),
+            PolicyType.FEDERATION_BLOCK: getattr(
+                self.settings, "federation_blocklist", []
+            ),
+            PolicyType.DISCORD_GUILD_ALLOW: getattr(
+                self.settings, "discord_guild_allowlist", []
+            ),
+            PolicyType.DISCORD_GUILD_BLOCK: getattr(
+                self.settings, "discord_guild_blocklist", []
+            ),
+            PolicyType.BRIDGE_SUPER_ADMIN: getattr(
+                self.settings, "bridge_super_admin_user_ids", []
+            ),
         }
         merged: dict[tuple[PolicyType, str], EffectivePolicyEntry] = {}
         for policy_type, values in bootstrap_values.items():
             for raw in values:
                 subject = self.normalize_subject(policy_type, str(raw))
-                merged[(policy_type, subject)] = EffectivePolicyEntry(policy_type, subject, "bootstrap")
+                merged[(policy_type, subject)] = EffectivePolicyEntry(
+                    policy_type, subject, "bootstrap"
+                )
         for row in self.repository.list_all_active():
             policy_type = PolicyType(str(row.policy_type))
             key = (policy_type, str(row.normalized_subject))
             merged.setdefault(key, EffectivePolicyEntry(policy_type, key[1], "dynamic"))
-        return BridgePolicySnapshot(tuple(sorted(merged.values(), key=lambda item: (item.policy_type.value, item.subject))))
+        return BridgePolicySnapshot(
+            tuple(
+                sorted(
+                    merged.values(),
+                    key=lambda item: (item.policy_type.value, item.subject),
+                )
+            )
+        )
 
     @staticmethod
     def normalize_subject(policy_type: PolicyType, subject: str) -> str:

@@ -32,7 +32,9 @@ class BanUserInput:
     actor_handle: str
     policy_service: BridgePolicyService
     reason: str | None = None
-    _policy_snapshot: BridgePolicySnapshot | None = field(default=None, init=False, repr=False)
+    _policy_snapshot: BridgePolicySnapshot | None = field(
+        default=None, init=False, repr=False
+    )
     _community: LocalCommunity | None = field(default=None, init=False, repr=False)
     _community_loaded: bool = field(default=False, init=False, repr=False)
     _target: ResolvedBanTarget | None = field(default=None, init=False, repr=False)
@@ -62,7 +64,11 @@ class BanUserInput:
         """Load the selected local community only for scoped requests."""
         if not self._community_loaded:
             slug = self.normalized_community_slug
-            self._community = None if slug is None else self.database.local_communities.get_local_community_by_slug(slug)
+            self._community = (
+                None
+                if slug is None
+                else self.database.local_communities.get_local_community_by_slug(slug)
+            )
             self._community_loaded = True
         return self._community
 
@@ -70,7 +76,11 @@ class BanUserInput:
         """Resolve local/remote target after authorization has allowed validation."""
         if not self._target_loaded:
             try:
-                self._target = resolve_ban_target(database=self.database, settings=self.settings, value=self.actor_handle)
+                self._target = resolve_ban_target(
+                    database=self.database,
+                    settings=self.settings,
+                    value=self.actor_handle,
+                )
             except Exception as exc:
                 self._target_error = exc
                 self._target = None
@@ -82,9 +92,15 @@ class BanUserInput:
         if not self._existing_loaded:
             target = self.get_target()
             community = self.get_local_community()
-            self._existing = None if target is None else self.database.community_actor_bans.get_active_ban_by_handle(
-                local_community_id=None if self.is_global else getattr(community, "id", None),
-                actor_handle=target.actor_handle,
+            self._existing = (
+                None
+                if target is None
+                else self.database.community_actor_bans.get_active_ban_by_handle(
+                    local_community_id=None
+                    if self.is_global
+                    else getattr(community, "id", None),
+                    actor_handle=target.actor_handle,
+                )
             )
             self._existing_loaded = True
         return self._existing
@@ -102,7 +118,6 @@ class BanUserResult:
     scope: str | None = None
     community_slug: str | None = None
     stored_reason: str | None = None
-
 
 
 def _is_ban_target_valid(value: BanUserInput) -> bool:
@@ -155,7 +170,9 @@ class BanUserOperation(Operation):
         ),
     )
 
-    def reject(self, operation_input: BanUserInput, *, reason: str, message: str, **_: object) -> BanUserResult:
+    def reject(
+        self, operation_input: BanUserInput, *, reason: str, message: str, **_: object
+    ) -> BanUserResult:
         """Return first failure and audit only defined authorization denials."""
         if reason == "global_scope_requires_super_admin":
             operation_input.database.management_audit.ban_create_global_forbidden(
@@ -166,7 +183,8 @@ class BanUserOperation(Operation):
             if community is not None:
                 operation_input.database.management_audit.ban_create_forbidden(
                     actor_discord_user_id=operation_input.discord_user_id,
-                    community=community, failed_precondition=reason,
+                    community=community,
+                    failed_precondition=reason,
                 )
         return BanUserResult(False, message, reason)
 
@@ -175,8 +193,16 @@ class BanUserOperation(Operation):
         target = operation_input.get_target()
         community = operation_input.get_local_community()
         if target is None or (not operation_input.is_global and community is None):
-            return BanUserResult(False, "Unable to create ban because the command state is invalid.", "invalid_operation_state")
-        stored_reason = operation_input.reason.strip() if operation_input.reason and operation_input.reason.strip() else None
+            return BanUserResult(
+                False,
+                "Unable to create ban because the command state is invalid.",
+                "invalid_operation_state",
+            )
+        stored_reason = (
+            operation_input.reason.strip()
+            if operation_input.reason and operation_input.reason.strip()
+            else None
+        )
         mutation_kwargs = {
             "actor_discord_user_id": operation_input.discord_user_id,
             "local_community_id": None if operation_input.is_global else community.id,
@@ -188,11 +214,21 @@ class BanUserOperation(Operation):
         # remote ActivityPub targets do not have a Discord account identifier.
         if target.discord_user_id is not None:
             mutation_kwargs["target_discord_user_id"] = target.discord_user_id
-        activation = operation_input.database.management_actions.create_or_reactivate_ban(**mutation_kwargs)
-        scope_text = "this bridge instance" if operation_input.is_global else f"community {operation_input.normalized_community_slug}"
+        activation = (
+            operation_input.database.management_actions.create_or_reactivate_ban(
+                **mutation_kwargs
+            )
+        )
+        scope_text = (
+            "this bridge instance"
+            if operation_input.is_global
+            else f"community {operation_input.normalized_community_slug}"
+        )
         return BanUserResult(
-            True, f"Banned {target.actor_handle} from {scope_text}.\nReason: {stored_reason or 'not specified'}",
-            activation.kind, activation_kind=activation.kind,
+            True,
+            f"Banned {target.actor_handle} from {scope_text}.\nReason: {stored_reason or 'not specified'}",
+            activation.kind,
+            activation_kind=activation.kind,
             target_discord_user_id=target.discord_user_id,
             scope="global" if operation_input.is_global else "community",
             community_slug=operation_input.normalized_community_slug,

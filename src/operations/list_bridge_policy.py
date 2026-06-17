@@ -94,7 +94,9 @@ class ListBridgePolicyOperation(Operation):
     def body(self, operation_input: ListBridgePolicyInput) -> ListBridgePolicyResult:
         policy_type = operation_input.policy_type
         assert policy_type is not None
-        entries = operation_input.get_policy_snapshot().list_effective_entries(policy_type)
+        entries = operation_input.get_policy_snapshot().list_effective_entries(
+            policy_type
+        )
         if not entries:
             return ListBridgePolicyResult(
                 True,
@@ -105,6 +107,8 @@ class ListBridgePolicyOperation(Operation):
         return ListBridgePolicyResult(True, "\n".join(lines), "listed")
 
 
-def list_bridge_policy_operation(value: ListBridgePolicyInput) -> ListBridgePolicyResult:
+def list_bridge_policy_operation(
+    value: ListBridgePolicyInput,
+) -> ListBridgePolicyResult:
     """Execute one private bridge-policy list request."""
     return ListBridgePolicyOperation().execute(value)

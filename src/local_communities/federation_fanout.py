@@ -31,13 +31,21 @@ class RelayFanoutSummary:
 class LocalCommunityFederationFanout:
     """Coordinate durable federation relay for local-community inbound events."""
 
-    def __init__(self, *, database: Database, fedify_gateway: object, policy_service: BridgePolicyService) -> None:
+    def __init__(
+        self,
+        *,
+        database: Database,
+        fedify_gateway: object,
+        policy_service: BridgePolicyService,
+    ) -> None:
         """Initialize the fanout helper with persistence and gateway boundaries."""
         self.database = database
         self.fedify_gateway = fedify_gateway
         self.policy_service = policy_service
 
-    async def relay_create(self, *, event: object, local_community: object, object_kind: str) -> RelayFanoutSummary:
+    async def relay_create(
+        self, *, event: object, local_community: object, object_kind: str
+    ) -> RelayFanoutSummary:
         """Relay one inbound remote create to other accepted remote subscribers."""
         return await self._relay_to_accepted_remote_subscribers(
             event=event,
@@ -46,7 +54,14 @@ class LocalCommunityFederationFanout:
             operation="create",
         )
 
-    async def relay_update_or_delete(self, *, event: object, local_community: object, object_kind: str, operation: str) -> RelayFanoutSummary:
+    async def relay_update_or_delete(
+        self,
+        *,
+        event: object,
+        local_community: object,
+        object_kind: str,
+        operation: str,
+    ) -> RelayFanoutSummary:
         """Relay update/delete only to targets that received the original create."""
         delivered_create_targets = self.database.local_community_relay.list_delivered_local_community_create_relay_targets(
             local_community_id=getattr(local_community, "id"),
@@ -66,11 +81,15 @@ class LocalCommunityFederationFanout:
             current = accepted_remote_subscribers.get(row.target_remote_actor_id)
             if current is None:
                 continue
-            targets.append({
-                "remote_actor_id": row.target_remote_actor_id,
-                "remote_inbox_url": current.remote_inbox_url,
-                "delivery_profile": getattr(current, "delivery_profile", "threadiverse_group"),
-            })
+            targets.append(
+                {
+                    "remote_actor_id": row.target_remote_actor_id,
+                    "remote_inbox_url": current.remote_inbox_url,
+                    "delivery_profile": getattr(
+                        current, "delivery_profile", "threadiverse_group"
+                    ),
+                }
+            )
         return await self._relay_to_targets(
             event=event,
             local_community=local_community,
@@ -79,7 +98,14 @@ class LocalCommunityFederationFanout:
             targets=targets,
         )
 
-    async def _relay_to_accepted_remote_subscribers(self, *, event: object, local_community: object, object_kind: str, operation: str) -> RelayFanoutSummary:
+    async def _relay_to_accepted_remote_subscribers(
+        self,
+        *,
+        event: object,
+        local_community: object,
+        object_kind: str,
+        operation: str,
+    ) -> RelayFanoutSummary:
         """Select accepted remote-subscriber targets excluding the origin actor, then relay."""
         remote_subscribers = self.database.remote_subscribers.list_remote_subscribers(
             getattr(local_community, "id"), status="accepted"
@@ -94,7 +120,9 @@ class LocalCommunityFederationFanout:
                 {
                     "remote_actor_id": remote_subscriber.remote_actor_id,
                     "remote_inbox_url": remote_subscriber.remote_inbox_url,
-                    "delivery_profile": getattr(remote_subscriber, "delivery_profile", "threadiverse_group"),
+                    "delivery_profile": getattr(
+                        remote_subscriber, "delivery_profile", "threadiverse_group"
+                    ),
                 }
             )
         return await self._relay_to_targets(
@@ -105,11 +133,20 @@ class LocalCommunityFederationFanout:
             targets=targets,
         )
 
-    async def _relay_to_targets(self, *, event: object, local_community: object, object_kind: str, operation: str, targets: list[dict[str, str]]) -> RelayFanoutSummary:
+    async def _relay_to_targets(
+        self,
+        *,
+        event: object,
+        local_community: object,
+        object_kind: str,
+        operation: str,
+        targets: list[dict[str, str]],
+    ) -> RelayFanoutSummary:
         """Persist source/target rows, render payloads, and call the gateway."""
         snapshot = self.policy_service.snapshot()
         targets = [
-            target for target in targets
+            target
+            for target in targets
             if snapshot.federation_decision(
                 target.get("remote_inbox_url") or target.get("remote_actor_id") or ""
             ).allowed
@@ -120,7 +157,9 @@ class LocalCommunityFederationFanout:
             # relay contract requires it, so there is nothing safe to federate.
             return RelayFanoutSummary(attempted=0, delivered=0, failed=0)
 
-        source_activity_id = getattr(event, "source_activity_id", None) or getattr(event, "delivery_id")
+        source_activity_id = getattr(event, "source_activity_id", None) or getattr(
+            event, "delivery_id"
+        )
         source = self.database.local_community_relay.get_or_create_local_community_relay_source_activity(
             local_community_id=getattr(local_community, "id"),
             object_kind=object_kind,
@@ -188,4 +227,6 @@ class LocalCommunityFederationFanout:
                     relay_activity_id=outcome.activity_id,
                     error=outcome.error,
                 )
-        return RelayFanoutSummary(attempted=len(outbound), delivered=delivered, failed=failed)
+        return RelayFanoutSummary(
+            attempted=len(outbound), delivered=delivered, failed=failed
+        )

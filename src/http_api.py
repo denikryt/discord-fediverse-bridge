@@ -19,7 +19,11 @@ from .dashboard import (
     render_dashboard_html,
 )
 from .activitypub_models import BridgeGatewayEvent
-from .registration_service import RegistrationError, generate_oauth_state, generate_session_token
+from .registration_service import (
+    RegistrationError,
+    generate_oauth_state,
+    generate_session_token,
+)
 from .runtime import Runtime
 from .models import RegistrationSession, utcnow
 from .project_version import APP_VERSION
@@ -88,7 +92,7 @@ def create_http_app(runtime: Runtime) -> FastAPI:
                 subtitle="This Discord account already owns one local ActivityPub identity.",
                 body=(
                     f"<p>Your ActivityPub identity already exists as <strong>{_actor_handle(runtime, existing_user.activitypub_username)}</strong>.</p>"
-                    f"<p><a href=\"{existing_user.actor_url}\">{existing_user.actor_url}</a></p>"
+                    f'<p><a href="{existing_user.actor_url}">{existing_user.actor_url}</a></p>'
                 ),
             )
             _apply_session_cookie(runtime, response, session.session_token)
@@ -101,11 +105,11 @@ def create_http_app(runtime: Runtime) -> FastAPI:
                 subtitle="Finish registration by choosing the public username that this bridge will expose to the Fediverse.",
                 body=(
                     f"<p>Signed in as Discord user <strong>{session.discord_username or session.discord_user_id}</strong>.</p>"
-                    "<form class=\"registration-form\" method=\"post\" action=\"/register/complete\">"
-                    "<label for=\"username\">Username</label>"
-                    "<p class=\"muted registration-form-help\">Use a stable lowercase name you want to keep as your local actor handle.</p>"
-                    "<input id=\"username\" name=\"username\" type=\"text\" required />"
-                    "<button class=\"registration-submit\" type=\"submit\">Create identity</button>"
+                    '<form class="registration-form" method="post" action="/register/complete">'
+                    '<label for="username">Username</label>'
+                    '<p class="muted registration-form-help">Use a stable lowercase name you want to keep as your local actor handle.</p>'
+                    '<input id="username" name="username" type="text" required />'
+                    '<button class="registration-submit" type="submit">Create identity</button>'
                     "</form>"
                 ),
             )
@@ -118,7 +122,7 @@ def create_http_app(runtime: Runtime) -> FastAPI:
             subtitle="Use Discord OAuth to verify account ownership before choosing a local ActivityPub username.",
             body=(
                 "<p>This flow creates one local Fediverse identity linked to your Discord account.</p>"
-                "<div class=\"registration-actions\"><a class=\"button-link\" href=\"/auth/discord/start\">Continue with Discord</a></div>"
+                '<div class="registration-actions"><a class="button-link" href="/auth/discord/start">Continue with Discord</a></div>'
             ),
         )
         _apply_session_cookie(runtime, response, session.session_token)
@@ -157,8 +161,8 @@ def create_http_app(runtime: Runtime) -> FastAPI:
                 detail="Invalid OAuth state",
             )
 
-        access_token = await runtime.discord_oauth_client.exchange_code_for_access_token(
-            code
+        access_token = (
+            await runtime.discord_oauth_client.exchange_code_for_access_token(code)
         )
         profile = await runtime.discord_oauth_client.fetch_user_profile(access_token)
         runtime.database.registration_sessions.update_registration_session_discord_identity(
@@ -207,7 +211,7 @@ def create_http_app(runtime: Runtime) -> FastAPI:
                 subtitle="This Discord account already owns one local ActivityPub identity.",
                 body=(
                     f"<p>Your ActivityPub identity already exists as <strong>{_actor_handle(runtime, actor.activitypub_username)}</strong>.</p>"
-                    f"<p><a href=\"{actor.actor_url}\">{actor.actor_url}</a></p>"
+                    f'<p><a href="{actor.actor_url}">{actor.actor_url}</a></p>'
                 ),
             )
 
@@ -246,7 +250,7 @@ def create_http_app(runtime: Runtime) -> FastAPI:
             subtitle="Your local ActivityPub identity is ready to use.",
             body=(
                 f"<p>Your ActivityPub handle is <strong>{_actor_handle(runtime, user.activitypub_username)}</strong>.</p>"
-                f"<p>Your actor URL is <a href=\"{user.actor_url}\">{user.actor_url}</a>.</p>"
+                f'<p>Your actor URL is <a href="{user.actor_url}">{user.actor_url}</a>.</p>'
             ),
         )
 
@@ -275,7 +279,10 @@ def create_http_app(runtime: Runtime) -> FastAPI:
     ) -> dict[str, str | None]:
         # Authenticate and deduplicate before touching Discord so gateway
         # retries remain safe.
-        validate_internal_bearer(authorization=authorization, shared_secret=runtime.settings.fedify_shared_secret)
+        validate_internal_bearer(
+            authorization=authorization,
+            shared_secret=runtime.settings.fedify_shared_secret,
+        )
         _validate_delivery_header(x_bridge_delivery_id, event.delivery_id)
 
         duplicate_response = _begin_event_processing(runtime, event)
@@ -286,7 +293,9 @@ def create_http_app(runtime: Runtime) -> FastAPI:
             result = await dispatch_activitypub_event(event, runtime)
         except Exception as exc:
             _mark_event_failed(runtime, event.delivery_id, str(exc))
-            logger.exception("ActivityPub event handling failed for delivery %s", event.delivery_id)
+            logger.exception(
+                "ActivityPub event handling failed for delivery %s", event.delivery_id
+            )
             raise
 
         _finish_event_processing(
@@ -307,7 +316,9 @@ def _load_or_create_registration_session(
     """Load the current session cookie or create a fresh registration session."""
     session_cookie_name = runtime.settings.registration_session_cookie_name
     session_token = request.cookies.get(session_cookie_name)
-    session = runtime.database.registration_sessions.get_registration_session_by_token(session_token)
+    session = runtime.database.registration_sessions.get_registration_session_by_token(
+        session_token
+    )
     if session is None or _registration_session_is_expired(session):
         session_token = generate_session_token()
         session = runtime.database.registration_sessions.create_registration_session(
@@ -318,7 +329,9 @@ def _load_or_create_registration_session(
     return session
 
 
-def _require_registration_session(runtime: Runtime, request: Request) -> RegistrationSession:
+def _require_registration_session(
+    runtime: Runtime, request: Request
+) -> RegistrationSession:
     """Load the active registration session or reject the request."""
     session = runtime.database.registration_sessions.get_registration_session_by_token(
         request.cookies.get(runtime.settings.registration_session_cookie_name)
@@ -333,7 +346,9 @@ def _require_registration_session(runtime: Runtime, request: Request) -> Registr
 
 def _registration_session_expiry(runtime: Runtime):
     """Compute the expiry timestamp for a freshly touched registration session."""
-    return utcnow() + timedelta(seconds=runtime.settings.registration_session_ttl_seconds)
+    return utcnow() + timedelta(
+        seconds=runtime.settings.registration_session_ttl_seconds
+    )
 
 
 def _registration_session_is_expired(session: RegistrationSession) -> bool:
@@ -346,7 +361,9 @@ def _registration_session_is_expired(session: RegistrationSession) -> bool:
     return expires_at <= utcnow()
 
 
-def _apply_session_cookie(runtime: Runtime, response: Response, session_token: str) -> None:
+def _apply_session_cookie(
+    runtime: Runtime, response: Response, session_token: str
+) -> None:
     """Write the browser session cookie used by the registration flow."""
     response.set_cookie(
         key=runtime.settings.registration_session_cookie_name,
@@ -395,8 +412,14 @@ def _html_response(
         .replace("__REGISTRATION_HEADING__", escape(heading))
         .replace("__REGISTRATION_SUBTITLE__", escape(subtitle))
         .replace("__REGISTRATION_BODY__", body)
-        .replace("__REGISTRATION_ICON_VERSION__", _registration_asset_cache_token(WEB_DIR / "icon.png"))
-        .replace("__REGISTRATION_CSS_VERSION__", _registration_asset_cache_token(WEB_DIR / "dashboard.css"))
+        .replace(
+            "__REGISTRATION_ICON_VERSION__",
+            _registration_asset_cache_token(WEB_DIR / "icon.png"),
+        )
+        .replace(
+            "__REGISTRATION_CSS_VERSION__",
+            _registration_asset_cache_token(WEB_DIR / "dashboard.css"),
+        )
     )
     return HTMLResponse(
         rendered,
@@ -409,11 +432,19 @@ def _registration_asset_cache_token(path) -> str:
     return str(path.stat().st_mtime_ns)
 
 
-def _validate_delivery_header(x_bridge_delivery_id: str | None, delivery_id: str) -> None:
+def _validate_delivery_header(
+    x_bridge_delivery_id: str | None, delivery_id: str
+) -> None:
     if x_bridge_delivery_id is None:
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Missing X-Bridge-Delivery-Id header")
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Missing X-Bridge-Delivery-Id header",
+        )
     if x_bridge_delivery_id != delivery_id:
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Delivery ID header does not match payload")
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Delivery ID header does not match payload",
+        )
 
 
 def _begin_event_processing(
@@ -433,7 +464,10 @@ def _begin_event_processing(
         return None
 
     if existing.status == "in_progress":
-        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="Delivery is already in progress")
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="Delivery is already in progress",
+        )
     if existing.status in {"processed", "skipped"}:
         return {
             "status": "duplicate",

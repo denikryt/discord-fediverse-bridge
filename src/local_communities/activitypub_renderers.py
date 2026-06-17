@@ -49,9 +49,13 @@ def render_local_community_relay_activity(
         )
 
     if delivery_profile == "threadiverse_group":
-        return _render_announce(source_activity_json, community_actor_url, community_slug)
+        return _render_announce(
+            source_activity_json, community_actor_url, community_slug
+        )
     if delivery_profile == "mastodon_compat":
-        return _render_announce(source_activity_json, community_actor_url, community_slug)
+        return _render_announce(
+            source_activity_json, community_actor_url, community_slug
+        )
     return _render_announce(source_activity_json, community_actor_url, community_slug)
 
 
@@ -97,7 +101,9 @@ def _is_threadiverse_compatible_create_note(activity: dict) -> bool:
     return not any(key in note for key in mastodon_only_note_keys)
 
 
-def _needs_threadiverse_note_projection(activity: dict, normalized_event: object) -> bool:
+def _needs_threadiverse_note_projection(
+    activity: dict, normalized_event: object
+) -> bool:
     """Return whether a threadiverse target needs a normalized Note projection."""
     event_type = getattr(normalized_event, "event_type", None)
     event_object = getattr(normalized_event, "object", None)
@@ -121,7 +127,9 @@ def _render_threadiverse_note_announce(
     event_object = getattr(normalized_event, "object")
     actor_id = getattr(normalized_event, "actor_id")
     body = getattr(event_object, "body_markdown", None) or ""
-    parent_id = getattr(event_object, "parent_ap_id", None) or getattr(event_object, "post_ap_id", None)
+    parent_id = getattr(event_object, "parent_ap_id", None) or getattr(
+        event_object, "post_ap_id", None
+    )
 
     note = {
         "@context": "https://www.w3.org/ns/activitystreams",
@@ -184,7 +192,9 @@ def _isoformat_activitypub(value: object) -> str:
     return str(value)
 
 
-def _render_announce(source_activity_json: dict, community_actor_url: str, community_slug: str) -> dict:
+def _render_announce(
+    source_activity_json: dict, community_actor_url: str, community_slug: str
+) -> dict:
     """Build a community-owned Announce without mutating the source activity."""
     # Deep-copying protects the persisted source JSON from accidental renderer
     # mutation while preserving the original actor and object attribution.

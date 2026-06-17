@@ -98,7 +98,9 @@ async def test_partial_raw_update_fetch_failure_is_durable_before_handler_return
 
 
 @pytest.mark.asyncio
-async def test_raw_delete_has_no_timestamp_dependency_and_routes_terminal_intent(tmp_path) -> None:
+async def test_raw_delete_has_no_timestamp_dependency_and_routes_terminal_intent(
+    tmp_path,
+) -> None:
     """The actual raw delete callback forwards a timestamp-less terminal mutation."""
     database = build_database(tmp_path, "raw-delete.db")
     add_registered_user(database)

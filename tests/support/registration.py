@@ -80,8 +80,8 @@ def build_registration_runtime(
         discord_oauth_client=FakeDiscordOAuthClient(),
         fedify_gateway=SimpleNamespace(),
         bot=SimpleNamespace(),
-            bridge_policy_service=build_test_policy_service(database, settings),
-)
+        bridge_policy_service=build_test_policy_service(database, settings),
+    )
 
 
 def build_registration_client(

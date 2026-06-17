@@ -154,4 +154,3 @@ def create_inbound_thread_group(
         role="inbound",
     )
     return thread_group
-

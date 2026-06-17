@@ -11,7 +11,6 @@ import pytest
 
 from src.commands import create_community, subscribe
 from src.db import Database
-from src.discord_bot import BridgeBot
 from src.discord_directory import refresh_discord_directory_from_bot
 from src.local_communities.service import LocalCommunityService
 from tests_constants import BRIDGE_EXAMPLE_DOMAIN, LEMMY_EXAMPLE_DOMAIN
@@ -43,11 +42,15 @@ def _interaction() -> AsyncMock:
     interaction.guild_id = 99999
     interaction.guild = SimpleNamespace(id=99999, name="Guild Before")
     interaction.response.send_message = AsyncMock()
-    interaction.namespace = SimpleNamespace(instance_domain=f"https://{LEMMY_EXAMPLE_DOMAIN}")
+    interaction.namespace = SimpleNamespace(
+        instance_domain=f"https://{LEMMY_EXAMPLE_DOMAIN}"
+    )
     return interaction
 
 
-def _forum_channel(channel_id: int = 12345, name: str = "forum-before") -> SimpleNamespace:
+def _forum_channel(
+    channel_id: int = 12345, name: str = "forum-before"
+) -> SimpleNamespace:
     """Build a forum-channel fake with the attributes command adapters use."""
     return SimpleNamespace(id=channel_id, name=name, mention=f"<#{channel_id}>")
 
@@ -76,7 +79,12 @@ async def test_create_community_command_stores_guild_and_forum_snapshots(
     _create_bridge_user(database)
     interaction = _interaction()
     forum = _forum_channel(name="community-host")
-    create_community.register(command_tree, database, _settings(), policy_service=build_test_policy_service(database))
+    create_community.register(
+        command_tree,
+        database,
+        _settings(),
+        policy_service=build_test_policy_service(database),
+    )
 
     command = command_tree.commands["create_community"]
     interaction.response.send_modal = AsyncMock()
@@ -112,7 +120,13 @@ async def test_subscribe_community_stores_snapshots_for_remote_subscription(
         community_inbox_url=f"{community_actor_url}/inbox",
         follow_activity_id=f"https://{BRIDGE_EXAMPLE_DOMAIN}/activities/follow/news",
     )
-    subscribe.register(command_tree, database, fedify_gateway, _settings(), policy_service=build_test_policy_service(database))
+    subscribe.register(
+        command_tree,
+        database,
+        fedify_gateway,
+        _settings(),
+        policy_service=build_test_policy_service(database),
+    )
 
     command = command_tree.commands["subscribe-community"]
     await command.callback(
@@ -122,8 +136,14 @@ async def test_subscribe_community_stores_snapshots_for_remote_subscription(
         instance_domain=f"https://{LEMMY_EXAMPLE_DOMAIN}",
     )
 
-    assert database.discord_directory.get_guild_snapshot(99999).guild_name == "Guild Before"
-    assert database.discord_directory.get_channel_snapshot(forum.id).channel_name == "lemmy-news"
+    assert (
+        database.discord_directory.get_guild_snapshot(99999).guild_name
+        == "Guild Before"
+    )
+    assert (
+        database.discord_directory.get_channel_snapshot(forum.id).channel_name
+        == "lemmy-news"
+    )
 
 
 @pytest.mark.asyncio
@@ -159,10 +179,19 @@ async def test_subscribe_community_stores_snapshots_for_local_subscription(
         local_community_id=community.id,
         remote_software="bridge",
     )
-    subscribe.register(command_tree, database, fedify_gateway, _settings(), policy_service=build_test_policy_service(database))
+    subscribe.register(
+        command_tree,
+        database,
+        fedify_gateway,
+        _settings(),
+        policy_service=build_test_policy_service(database),
+    )
 
     command = command_tree.commands["subscribe-community"]
-    with patch("src.commands.subscribe.resolve_selected_community", new=AsyncMock(return_value=resolved)):
+    with patch(
+        "src.commands.subscribe.resolve_selected_community",
+        new=AsyncMock(return_value=resolved),
+    ):
         await command.callback(
             interaction,
             community=f"!hackers@{BRIDGE_EXAMPLE_DOMAIN}",
@@ -170,8 +199,13 @@ async def test_subscribe_community_stores_snapshots_for_local_subscription(
             instance_domain=f"https://{BRIDGE_EXAMPLE_DOMAIN}",
         )
 
-    assert database.discord_directory.get_channel_snapshot(forum.id).channel_name == "mirror-forum"
-    assert database.local_subscribers.get_local_subscriber_by_channel(forum.id) is not None
+    assert (
+        database.discord_directory.get_channel_snapshot(forum.id).channel_name
+        == "mirror-forum"
+    )
+    assert (
+        database.local_subscribers.get_local_subscriber_by_channel(forum.id) is not None
+    )
 
 
 @pytest.mark.asyncio
@@ -180,7 +214,9 @@ async def test_bridge_bot_on_ready_refreshes_renamed_guild_and_forum_snapshots(
 ) -> None:
     """Bot startup refresh updates existing snapshot rows instead of duplicating them."""
     database = _database(tmp_path)
-    database.discord_directory.upsert_guild_snapshot(discord_guild_id=42, guild_name="Old Guild")
+    database.discord_directory.upsert_guild_snapshot(
+        discord_guild_id=42, guild_name="Old Guild"
+    )
     database.discord_directory.upsert_channel_snapshot(
         discord_channel_id=420,
         discord_guild_id=42,
@@ -194,6 +230,8 @@ async def test_bridge_bot_on_ready_refreshes_renamed_guild_and_forum_snapshots(
     refresh_discord_directory_from_bot(database, bot)
 
     assert database.discord_directory.get_guild_snapshot(42).guild_name == "New Guild"
-    assert database.discord_directory.get_channel_snapshot(420).channel_name == "new-forum"
+    assert (
+        database.discord_directory.get_channel_snapshot(420).channel_name == "new-forum"
+    )
     assert len(database.discord_directory.list_guild_snapshots([42])) == 1
     assert len(database.discord_directory.list_channel_snapshots([420])) == 1

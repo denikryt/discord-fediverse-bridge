@@ -2,7 +2,9 @@ import logging
 from typing import Optional, Iterable
 
 
-def configure_logging(level: str, noisy_loggers: Optional[Iterable[str]] = None) -> None:
+def configure_logging(
+    level: str, noisy_loggers: Optional[Iterable[str]] = None
+) -> None:
     """Configure root logging and silence noisy third-party loggers.
 
     :param level: logging level name for the root logger (e.g. 'INFO', 'DEBUG')
@@ -22,5 +24,5 @@ def configure_logging(level: str, noisy_loggers: Optional[Iterable[str]] = None)
         "discord.gateway",
     ]
 
-    for name in (noisy_loggers or default_noisy):
+    for name in noisy_loggers or default_noisy:
         logging.getLogger(name).setLevel(logging.WARNING)

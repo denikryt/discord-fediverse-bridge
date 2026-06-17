@@ -73,8 +73,8 @@ async def test_follow_accept_event_marks_bridge_follow_and_channel_accepted(
         bot=SimpleNamespace(
             fetch_user=AsyncMock(return_value=dm_user),
         ),
-            bridge_policy_service=build_test_policy_service(database),
-)
+        bridge_policy_service=build_test_policy_service(database),
+    )
     event = FollowLifecycleEvent(
         event_type="follow.accepted",
         delivery_id=f"https://{LEMMY_EXAMPLE_DOMAIN}/activities/accept/1",
@@ -86,7 +86,9 @@ async def test_follow_accept_event_marks_bridge_follow_and_channel_accepted(
 
     result = await dispatch_activitypub_event(event, runtime)
     subscription = database.remote_subscriptions.get_subscription_by_channel(123)
-    bridge_follow = database.bridge_actor_follows.get_bridge_actor_follow(lemmy_actor_url)
+    bridge_follow = database.bridge_actor_follows.get_bridge_actor_follow(
+        lemmy_actor_url
+    )
 
     assert result.status == "processed"
     assert subscription is not None
@@ -125,8 +127,8 @@ async def test_follow_accept_without_bridge_follow_does_not_accept_channel_subsc
         bot=SimpleNamespace(
             fetch_user=AsyncMock(return_value=dm_user),
         ),
-            bridge_policy_service=build_test_policy_service(database),
-)
+        bridge_policy_service=build_test_policy_service(database),
+    )
     event = FollowLifecycleEvent(
         event_type="follow.accepted",
         delivery_id=f"https://{LEMMY_EXAMPLE_DOMAIN}/activities/accept/legacy",
@@ -176,7 +178,9 @@ def test_only_accepted_subscriptions_are_routed_for_inbound_community_events(
         status="accepted",
     )
 
-    accepted = database.remote_subscriptions.get_subscriptions_by_community(lemmy_actor_url)
+    accepted = database.remote_subscriptions.get_subscriptions_by_community(
+        lemmy_actor_url
+    )
 
     assert len(accepted) == 1
     assert accepted[0].discord_channel_id == 3

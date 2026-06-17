@@ -77,14 +77,18 @@ def follow_runtime(tmp_path):
         database=database,
         user_actor_follow_service=service,
         bridge_policy_service=SimpleNamespace(
-            federation_decision=lambda _subject: SimpleNamespace(allowed=True, reason=SimpleNamespace(value="allowed"))
+            federation_decision=lambda _subject: SimpleNamespace(
+                allowed=True, reason=SimpleNamespace(value="allowed")
+            )
         ),
     )
     yield runtime, user, gateway, bot
     database.close()
 
 
-def _follow(*, follow_id: str, actor_id: str = "https://remote.example/users/bob") -> LocalFollowRequestEvent:
+def _follow(
+    *, follow_id: str, actor_id: str = "https://remote.example/users/bob"
+) -> LocalFollowRequestEvent:
     """Build one strict internal event matching gateway normalization."""
     return LocalFollowRequestEvent(
         event_type="local.follow_requested",
@@ -102,12 +106,18 @@ def _follow(*, follow_id: str, actor_id: str = "https://remote.example/users/bob
 
 
 @pytest.mark.asyncio
-async def test_follow_duplicate_refreshes_one_relationship_and_notifies_once(follow_runtime):
+async def test_follow_duplicate_refreshes_one_relationship_and_notifies_once(
+    follow_runtime,
+):
     """A duplicate Follow re-sends Accept without duplicating relationship or DM."""
     runtime, user, gateway, bot = follow_runtime
 
-    first = await dispatch_activitypub_event(_follow(follow_id="https://remote.example/follows/1"), runtime)
-    second = await dispatch_activitypub_event(_follow(follow_id="https://remote.example/follows/2"), runtime)
+    first = await dispatch_activitypub_event(
+        _follow(follow_id="https://remote.example/follows/1"), runtime
+    )
+    second = await dispatch_activitypub_event(
+        _follow(follow_id="https://remote.example/follows/2"), runtime
+    )
 
     row = runtime.database.user_actor_followers.get_relationship(
         user_id=user.id, remote_actor_id="https://remote.example/users/bob"
@@ -120,19 +130,25 @@ async def test_follow_duplicate_refreshes_one_relationship_and_notifies_once(fol
 
 
 @pytest.mark.asyncio
-async def test_failed_accept_keeps_notification_pending_until_duplicate_succeeds(follow_runtime):
+async def test_failed_accept_keeps_notification_pending_until_duplicate_succeeds(
+    follow_runtime,
+):
     """A duplicate Follow recovers Accept and notification after a transient failure."""
     runtime, user, gateway, bot = follow_runtime
     gateway.fail_next = True
 
     with pytest.raises(RuntimeError, match="accept failed"):
-        await dispatch_activitypub_event(_follow(follow_id="https://remote.example/follows/1"), runtime)
+        await dispatch_activitypub_event(
+            _follow(follow_id="https://remote.example/follows/1"), runtime
+        )
     pending = runtime.database.user_actor_followers.get_relationship(
         user_id=user.id, remote_actor_id="https://remote.example/users/bob"
     )
     assert pending is not None and pending.owner_notification_state == "pending"
 
-    await dispatch_activitypub_event(_follow(follow_id="https://remote.example/follows/1"), runtime)
+    await dispatch_activitypub_event(
+        _follow(follow_id="https://remote.example/follows/1"), runtime
+    )
     recovered = runtime.database.user_actor_followers.get_relationship(
         user_id=user.id, remote_actor_id="https://remote.example/users/bob"
     )
@@ -147,16 +163,21 @@ async def test_historical_follow_id_cannot_be_reused_by_another_actor(follow_run
     runtime, user, gateway, _bot = follow_runtime
     f1 = "https://remote.example/follows/1"
     await dispatch_activitypub_event(_follow(follow_id=f1), runtime)
-    await dispatch_activitypub_event(_follow(follow_id="https://remote.example/follows/2"), runtime)
+    await dispatch_activitypub_event(
+        _follow(follow_id="https://remote.example/follows/2"), runtime
+    )
 
     collision = await dispatch_activitypub_event(
         _follow(follow_id=f1, actor_id="https://remote.example/users/mallory"), runtime
     )
 
     assert collision.status == "skipped"
-    assert runtime.database.user_actor_followers.get_relationship(
-        user_id=user.id, remote_actor_id="https://remote.example/users/mallory"
-    ) is None
+    assert (
+        runtime.database.user_actor_followers.get_relationship(
+            user_id=user.id, remote_actor_id="https://remote.example/users/mallory"
+        )
+        is None
+    )
     assert len(gateway.accepts) == 2
 
 
@@ -164,7 +185,9 @@ async def test_historical_follow_id_cannot_be_reused_by_another_actor(follow_run
 async def test_undo_and_refollow_create_a_new_relationship_incarnation(follow_runtime):
     """Undo deletes the current row while a later Follow earns a fresh notification."""
     runtime, user, _gateway, bot = follow_runtime
-    await dispatch_activitypub_event(_follow(follow_id="https://remote.example/follows/1"), runtime)
+    await dispatch_activitypub_event(
+        _follow(follow_id="https://remote.example/follows/1"), runtime
+    )
     first = runtime.database.user_actor_followers.get_relationship(
         user_id=user.id, remote_actor_id="https://remote.example/users/bob"
     )
@@ -178,7 +201,9 @@ async def test_undo_and_refollow_create_a_new_relationship_incarnation(follow_ru
         object={"follow_activity_id": "https://remote.example/follows/1"},
     )
     await dispatch_activitypub_event(undo, runtime)
-    await dispatch_activitypub_event(_follow(follow_id="https://remote.example/follows/2"), runtime)
+    await dispatch_activitypub_event(
+        _follow(follow_id="https://remote.example/follows/2"), runtime
+    )
     second = runtime.database.user_actor_followers.get_relationship(
         user_id=user.id, remote_actor_id="https://remote.example/users/bob"
     )

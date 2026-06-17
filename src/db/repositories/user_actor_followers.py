@@ -81,7 +81,9 @@ class UserActorFollowerRepository(BaseRepository):
             row.status = "accepted"
             session.flush()
             transition = "refreshed"
-        return UserActorFollowerTransition(row.id, transition, row.owner_notification_state)
+        return UserActorFollowerTransition(
+            row.id, transition, row.owner_notification_state
+        )
 
     def delete_relationship(
         self, session: Session, *, user_id: int, remote_actor_id: str
@@ -95,7 +97,9 @@ class UserActorFollowerRepository(BaseRepository):
         )
         return bool(result.rowcount)
 
-    def claim_notification_attempt(self, relationship_id: int) -> UserActorFollower | None:
+    def claim_notification_attempt(
+        self, relationship_id: int
+    ) -> UserActorFollower | None:
         """Claim one pending notification only for the exact relationship incarnation."""
         now = datetime.now(timezone.utc)
         with self.session() as session:
@@ -115,10 +119,17 @@ class UserActorFollowerRepository(BaseRepository):
                 return None
             return session.get(UserActorFollower, relationship_id)
 
-    def get_relationship(self, *, user_id: int, remote_actor_id: str) -> UserActorFollower | None:
+    def get_relationship(
+        self, *, user_id: int, remote_actor_id: str
+    ) -> UserActorFollower | None:
         """Load the current relationship for one local-user/remote-actor pair."""
         with self.session() as session:
-            return session.scalar(select(UserActorFollower).where(UserActorFollower.user_id == user_id, UserActorFollower.remote_actor_id == remote_actor_id))
+            return session.scalar(
+                select(UserActorFollower).where(
+                    UserActorFollower.user_id == user_id,
+                    UserActorFollower.remote_actor_id == remote_actor_id,
+                )
+            )
 
     @staticmethod
     def list_accepted_for_snapshot(
@@ -139,9 +150,21 @@ class UserActorFollowerRepository(BaseRepository):
     def count_accepted(self, *, user_id: int) -> int:
         """Count accepted followers for one local user."""
         with self.session() as session:
-            return int(session.scalar(select(func.count()).select_from(UserActorFollower).where(UserActorFollower.user_id == user_id, UserActorFollower.status == "accepted")) or 0)
+            return int(
+                session.scalar(
+                    select(func.count())
+                    .select_from(UserActorFollower)
+                    .where(
+                        UserActorFollower.user_id == user_id,
+                        UserActorFollower.status == "accepted",
+                    )
+                )
+                or 0
+            )
 
-    def list_accepted_actor_ids(self, *, user_id: int, offset: int, limit: int) -> list[str]:
+    def list_accepted_actor_ids(
+        self, *, user_id: int, offset: int, limit: int
+    ) -> list[str]:
         """Return one deterministic bounded page of public follower actor IDs."""
         with self.session() as session:
             statement = (

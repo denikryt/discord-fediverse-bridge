@@ -7,7 +7,9 @@ of repeating raw repository calls inline.
 from __future__ import annotations
 
 
-def get_thread_group_for_source_thread(database: object, thread_id: int) -> object | None:
+def get_thread_group_for_source_thread(
+    database: object, thread_id: int
+) -> object | None:
     """Return the canonical thread group for one source Discord thread."""
     return database.discord_fanout_groups.get_thread_group_by_source_thread(thread_id)
 
@@ -17,24 +19,36 @@ def get_thread_group_for_any_thread(database: object, thread_id: int) -> object 
     return database.discord_fanout_groups.get_thread_group_by_any_thread(thread_id)
 
 
-def get_thread_group_for_ap_object(database: object, ap_object_id: str) -> object | None:
+def get_thread_group_for_ap_object(
+    database: object, ap_object_id: str
+) -> object | None:
     """Return the canonical thread group for one AP post object id."""
     return database.discord_fanout_groups.get_thread_group_by_ap_object(ap_object_id)
 
 
-def get_message_group_for_source_message(database: object, message_id: int) -> object | None:
+def get_message_group_for_source_message(
+    database: object, message_id: int
+) -> object | None:
     """Return the canonical message group for one source Discord message."""
-    return database.discord_fanout_groups.get_message_group_by_source_message(message_id)
+    return database.discord_fanout_groups.get_message_group_by_source_message(
+        message_id
+    )
 
 
-def get_message_group_for_ap_object(database: object, ap_object_id: str) -> object | None:
+def get_message_group_for_ap_object(
+    database: object, ap_object_id: str
+) -> object | None:
     """Return the canonical message group for one AP comment object id."""
     return database.discord_fanout_groups.get_message_group_by_ap_object(ap_object_id)
 
 
-def get_message_group_for_delivered_message(database: object, message_id: int) -> object | None:
+def get_message_group_for_delivered_message(
+    database: object, message_id: int
+) -> object | None:
     """Return the canonical message group for one delivered Discord message id."""
-    return database.discord_fanout_groups.get_message_group_by_delivered_message(message_id)
+    return database.discord_fanout_groups.get_message_group_by_delivered_message(
+        message_id
+    )
 
 
 def get_sibling_thread_deliveries(
@@ -46,7 +60,9 @@ def get_sibling_thread_deliveries(
     """Return every mapped thread delivery except the originating thread."""
     return [
         delivery
-        for delivery in database.discord_fanout_groups.get_thread_deliveries(thread_group_id)
+        for delivery in database.discord_fanout_groups.get_thread_deliveries(
+            thread_group_id
+        )
         if delivery.discord_thread_id != source_thread_id
     ]
 
@@ -58,5 +74,6 @@ def get_message_delivery_for_thread(
     thread_id: int,
 ) -> object | None:
     """Return the delivery row for one message group in one Discord thread."""
-    return database.discord_fanout_groups.get_message_delivery_in_thread(message_group_id, thread_id)
-
+    return database.discord_fanout_groups.get_message_delivery_in_thread(
+        message_group_id, thread_id
+    )

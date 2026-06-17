@@ -38,6 +38,7 @@ async def test_worker_drains_immediately_wakes_and_stops_without_orphan_task() -
     assert service.calls >= 2
     assert worker._task is None
 
+
 class RecoveringService:
     """Fail one startup pass, then expose successful later recovery."""
 
@@ -55,7 +56,9 @@ class RecoveringService:
 
 
 @pytest.mark.asyncio
-async def test_worker_isolates_unavailable_gateway_during_startup_and_recovers() -> None:
+async def test_worker_isolates_unavailable_gateway_during_startup_and_recovers() -> (
+    None
+):
     """A failed immediate drain does not block runtime ownership or later work."""
     service = RecoveringService()
     worker = UserActorDeliveryWorker(service)
@@ -67,6 +70,7 @@ async def test_worker_isolates_unavailable_gateway_during_startup_and_recovers()
     await worker.stop()
 
     assert service.calls >= 2
+
 
 class BlockingOutcomeService:
     """Model transport completion followed by a durable outcome boundary."""
@@ -89,7 +93,9 @@ class BlockingOutcomeService:
 
 
 @pytest.mark.asyncio
-async def test_stop_allows_inflight_transport_outcome_to_reach_durable_boundary() -> None:
+async def test_stop_allows_inflight_transport_outcome_to_reach_durable_boundary() -> (
+    None
+):
     service = BlockingOutcomeService()
     worker = UserActorDeliveryWorker(service)
     worker.start()

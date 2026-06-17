@@ -43,7 +43,11 @@ def _known_remote_hosts(database: Database) -> list[str]:
     """Collect canonical hosts already known through persisted federation state."""
     values: set[str] = set()
     for row in database.remote_subscriptions.list_subscriptions():
-        raw = str(getattr(row, "lemmy_community_actor_id", "") or getattr(row, "community_actor_id", "") or getattr(row, "community_url", ""))
+        raw = str(
+            getattr(row, "lemmy_community_actor_id", "")
+            or getattr(row, "community_actor_id", "")
+            or getattr(row, "community_url", "")
+        )
         host = urlsplit(raw).hostname
         if host:
             values.add(host.lower())
@@ -58,10 +62,19 @@ def _known_remote_hosts(database: Database) -> list[str]:
     return sorted(values)
 
 
-def _subject_autocomplete(database: Database, policy_service: BridgePolicyService, ban_service: UserBanService, bot: discord.Client, *, removing: bool):
+def _subject_autocomplete(
+    database: Database,
+    policy_service: BridgePolicyService,
+    ban_service: UserBanService,
+    bot: discord.Client,
+    *,
+    removing: bool,
+):
     """Build context-sensitive subject autocomplete with private authorization."""
 
-    async def autocomplete(interaction: discord.Interaction, current: str) -> list[app_commands.Choice[str]]:
+    async def autocomplete(
+        interaction: discord.Interaction, current: str
+    ) -> list[app_commands.Choice[str]]:
         """Return at most 25 choices after current policy authorization."""
         try:
             snapshot = policy_service.snapshot()
@@ -83,10 +96,21 @@ def _subject_autocomplete(database: Database, policy_service: BridgePolicyServic
             if policy_type is None:
                 return []
             if removing:
-                rows = database.bridge_policy_entries.list_active_by_type(policy_type=policy_type.value)
-                candidates = [(str(row.normalized_subject), str(row.normalized_subject)) for row in rows]
-            elif policy_type in {PolicyType.DISCORD_GUILD_ALLOW, PolicyType.DISCORD_GUILD_BLOCK}:
-                candidates = [(f"{guild.name} — {guild.id}", str(guild.id)) for guild in getattr(bot, "guilds", [])]
+                rows = database.bridge_policy_entries.list_active_by_type(
+                    policy_type=policy_type.value
+                )
+                candidates = [
+                    (str(row.normalized_subject), str(row.normalized_subject))
+                    for row in rows
+                ]
+            elif policy_type in {
+                PolicyType.DISCORD_GUILD_ALLOW,
+                PolicyType.DISCORD_GUILD_BLOCK,
+            }:
+                candidates = [
+                    (f"{guild.name} — {guild.id}", str(guild.id))
+                    for guild in getattr(bot, "guilds", [])
+                ]
             elif policy_type is PolicyType.BRIDGE_SUPER_ADMIN:
                 users = getattr(bot, "users", [])
                 candidates = [(f"{user} — {user.id}", str(user.id)) for user in users]
@@ -104,7 +128,12 @@ def _subject_autocomplete(database: Database, policy_service: BridgePolicyServic
     return autocomplete
 
 
-def register(tree: app_commands.CommandTree, database: Database, policy_service: BridgePolicyService, ban_service: UserBanService) -> None:
+def register(
+    tree: app_commands.CommandTree,
+    database: Database,
+    policy_service: BridgePolicyService,
+    ban_service: UserBanService,
+) -> None:
     """Register `/bridge-policy add|remove|list` on the application tree."""
     group = app_commands.Group(
         name="bridge-policy",
@@ -118,7 +147,11 @@ def register(tree: app_commands.CommandTree, database: Database, policy_service:
 
     @group.command(name="add", description="Add or reactivate one dynamic policy entry")
     @app_commands.choices(type=_POLICY_CHOICES)
-    @app_commands.autocomplete(subject=_subject_autocomplete(database, policy_service, ban_service, tree.client, removing=False))
+    @app_commands.autocomplete(
+        subject=_subject_autocomplete(
+            database, policy_service, ban_service, tree.client, removing=False
+        )
+    )
     async def add(
         interaction: discord.Interaction,
         type: app_commands.Choice[str],
@@ -126,22 +159,30 @@ def register(tree: app_commands.CommandTree, database: Database, policy_service:
         reason: app_commands.Range[str, 0, 500] | None = None,
     ) -> None:
         """Add one dynamic entry after DiscordOps operation preconditions."""
-        result = manage_bridge_policy_operation(ManageBridgePolicyInput(
-            database=database,
-            policy_service=policy_service,
-            ban_service=ban_service,
-            discord_user_id=str(interaction.user.id),
-            discord_guild_id=interaction.guild_id,
-            action="add",
-            policy_type_value=type.value,
-            subject=subject,
-            reason=reason,
-        ))
-        await interaction.response.send_message(result.message, **_private_kwargs(interaction))
+        result = manage_bridge_policy_operation(
+            ManageBridgePolicyInput(
+                database=database,
+                policy_service=policy_service,
+                ban_service=ban_service,
+                discord_user_id=str(interaction.user.id),
+                discord_guild_id=interaction.guild_id,
+                action="add",
+                policy_type_value=type.value,
+                subject=subject,
+                reason=reason,
+            )
+        )
+        await interaction.response.send_message(
+            result.message, **_private_kwargs(interaction)
+        )
 
     @group.command(name="remove", description="Deactivate one dynamic policy entry")
     @app_commands.choices(type=_POLICY_CHOICES)
-    @app_commands.autocomplete(subject=_subject_autocomplete(database, policy_service, ban_service, tree.client, removing=True))
+    @app_commands.autocomplete(
+        subject=_subject_autocomplete(
+            database, policy_service, ban_service, tree.client, removing=True
+        )
+    )
     async def remove(
         interaction: discord.Interaction,
         type: app_commands.Choice[str],
@@ -149,30 +190,40 @@ def register(tree: app_commands.CommandTree, database: Database, policy_service:
         reason: app_commands.Range[str, 0, 500] | None = None,
     ) -> None:
         """Remove one active dynamic entry after DiscordOps preconditions."""
-        result = manage_bridge_policy_operation(ManageBridgePolicyInput(
-            database=database,
-            policy_service=policy_service,
-            ban_service=ban_service,
-            discord_user_id=str(interaction.user.id),
-            discord_guild_id=interaction.guild_id,
-            action="remove",
-            policy_type_value=type.value,
-            subject=subject,
-            reason=reason,
-        ))
-        await interaction.response.send_message(result.message, **_private_kwargs(interaction))
+        result = manage_bridge_policy_operation(
+            ManageBridgePolicyInput(
+                database=database,
+                policy_service=policy_service,
+                ban_service=ban_service,
+                discord_user_id=str(interaction.user.id),
+                discord_guild_id=interaction.guild_id,
+                action="remove",
+                policy_type_value=type.value,
+                subject=subject,
+                reason=reason,
+            )
+        )
+        await interaction.response.send_message(
+            result.message, **_private_kwargs(interaction)
+        )
 
-    @group.command(name="list", description="List effective entries for one policy type")
+    @group.command(
+        name="list", description="List effective entries for one policy type"
+    )
     @app_commands.choices(type=_POLICY_CHOICES)
-    async def list_entries(interaction: discord.Interaction, type: app_commands.Choice[str]) -> None:
+    async def list_entries(
+        interaction: discord.Interaction, type: app_commands.Choice[str]
+    ) -> None:
         """Return private effective policy output and visible guild IDs."""
-        result = list_bridge_policy_operation(ListBridgePolicyInput(
-            policy_service=policy_service,
-            ban_service=ban_service,
-            discord_user_id=str(interaction.user.id),
-            discord_guild_id=interaction.guild_id,
-            policy_type_value=type.value,
-        ))
+        result = list_bridge_policy_operation(
+            ListBridgePolicyInput(
+                policy_service=policy_service,
+                ban_service=ban_service,
+                discord_user_id=str(interaction.user.id),
+                discord_guild_id=interaction.guild_id,
+                policy_type_value=type.value,
+            )
+        )
         message = result.message
         if result.allowed and type.value == "guild-allow":
             snapshot = policy_service.snapshot()
@@ -180,9 +231,15 @@ def register(tree: app_commands.CommandTree, database: Database, policy_service:
                 f"- {guild.name} — `{guild.id}` ({'allowed' if snapshot.is_discord_guild_allowed(guild.id) else 'denied'})"
                 for guild in getattr(tree.client, "guilds", [])
             ]
-            message += "\n\nGuilds visible to this bot:\n" + ("\n".join(visible) if visible else "- none")
-        chunks = [message[index:index + 1900] for index in range(0, len(message), 1900)] or [message]
-        await interaction.response.send_message(chunks[0], **_private_kwargs(interaction))
+            message += "\n\nGuilds visible to this bot:\n" + (
+                "\n".join(visible) if visible else "- none"
+            )
+        chunks = [
+            message[index : index + 1900] for index in range(0, len(message), 1900)
+        ] or [message]
+        await interaction.response.send_message(
+            chunks[0], **_private_kwargs(interaction)
+        )
         for chunk in chunks[1:]:
             await interaction.followup.send(chunk, **_private_kwargs(interaction))
 

@@ -40,12 +40,16 @@ async def backfill_post_as_thread_group(
         return None
 
     try:
-        post_event = _build_post_event_from_ap_doc(document, community_actor_id, delivery_id)
+        post_event = _build_post_event_from_ap_doc(
+            document, community_actor_id, delivery_id
+        )
     except Exception:
         logger.exception("Backfill parse failed for post %s", post_ap_id)
         return None
 
-    thread_group = database.discord_fanout_groups.get_thread_group_by_ap_object(post_ap_id)
+    thread_group = database.discord_fanout_groups.get_thread_group_by_ap_object(
+        post_ap_id
+    )
     if thread_group is None:
         thread_group = database.discord_fanout_groups.create_thread_group(
             community_actor_id=community_actor_id,
@@ -57,7 +61,10 @@ async def backfill_post_as_thread_group(
         )
 
     already_delivered_channels = {
-        delivery.discord_channel_id for delivery in database.discord_fanout_groups.get_thread_deliveries(thread_group.id)
+        delivery.discord_channel_id
+        for delivery in database.discord_fanout_groups.get_thread_deliveries(
+            thread_group.id
+        )
     }
     accepted = get_accepted_subscriptions(database, community_actor_id)
 
@@ -67,7 +74,9 @@ async def backfill_post_as_thread_group(
         if subscription.discord_channel_id in already_delivered_channels:
             continue
         try:
-            forum_channel = await bot.fetch_forum_channel(subscription.discord_channel_id)
+            forum_channel = await bot.fetch_forum_channel(
+                subscription.discord_channel_id
+            )
             thread_id, starter_message_id = await _create_inbound_discord_thread(
                 forum_channel=forum_channel,
                 event=post_event,
@@ -93,4 +102,3 @@ async def backfill_post_as_thread_group(
         len(accepted),
     )
     return thread_group
-

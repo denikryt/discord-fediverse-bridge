@@ -93,7 +93,9 @@ class LocalDiscordFanoutTarget:
 class LocalCommunityDiscordFanout:
     """Create Discord surfaces for canonical local-community activity."""
 
-    def __init__(self, *, database: Database, bot: object, policy_service: BridgePolicyService) -> None:
+    def __init__(
+        self, *, database: Database, bot: object, policy_service: BridgePolicyService
+    ) -> None:
         """Initialise the fanout helper with persistence and Discord boundaries."""
         self.database = database
         self.bot = bot
@@ -101,10 +103,18 @@ class LocalCommunityDiscordFanout:
 
     def _forum_guild_id(self, forum_channel_id: int) -> int | None:
         """Resolve a target forum's owning guild from persisted routing state."""
-        subscriber = self.database.local_subscribers.get_local_subscriber_by_channel(forum_channel_id)
+        subscriber = self.database.local_subscribers.get_local_subscriber_by_channel(
+            forum_channel_id
+        )
         if subscriber is not None:
-            return _valid_discord_guild_id(getattr(subscriber, "discord_guild_id", None))
-        community = self.database.local_communities.get_local_community_by_forum_channel_id(forum_channel_id)
+            return _valid_discord_guild_id(
+                getattr(subscriber, "discord_guild_id", None)
+            )
+        community = (
+            self.database.local_communities.get_local_community_by_forum_channel_id(
+                forum_channel_id
+            )
+        )
         if community is None:
             return None
         return _valid_discord_guild_id(getattr(community, "discord_guild_id", None))
@@ -204,7 +214,9 @@ class LocalCommunityDiscordFanout:
                 continue
             summary.attempted += 1
             try:
-                forum = await self.bot.fetch_forum_channel(target.discord_forum_channel_id)
+                forum = await self.bot.fetch_forum_channel(
+                    target.discord_forum_channel_id
+                )
                 created = await forum.create_thread(
                     name=title,
                     content=_format_local_mirror_body(
@@ -320,7 +332,9 @@ class LocalCommunityDiscordFanout:
                 )
                 self.database.local_community_surfaces.create_local_community_message_surface(
                     local_community_message_id=getattr(message_row, "id"),
-                    local_community_thread_surface_id=getattr(target_thread_surface, "id"),
+                    local_community_thread_surface_id=getattr(
+                        target_thread_surface, "id"
+                    ),
                     discord_forum_channel_id=target.discord_forum_channel_id,
                     discord_message_id=getattr(created_message, "id"),
                     parent_discord_message_id=parent_message_id,
@@ -352,10 +366,19 @@ class LocalCommunityDiscordFanout:
         prevent the remaining local surfaces from receiving the mutation.
         """
         summary = LocalDiscordMutationFanoutSummary()
-        for surface in self.database.local_community_surfaces.list_local_community_thread_surfaces(getattr(thread_row, "id")):
-            if not self._surface_is_allowed(getattr(surface, "discord_forum_channel_id")):
+        for surface in (
+            self.database.local_community_surfaces.list_local_community_thread_surfaces(
+                getattr(thread_row, "id")
+            )
+        ):
+            if not self._surface_is_allowed(
+                getattr(surface, "discord_forum_channel_id")
+            ):
                 continue
-            if source_surface_id is not None and getattr(surface, "id") == source_surface_id:
+            if (
+                source_surface_id is not None
+                and getattr(surface, "id") == source_surface_id
+            ):
                 summary.skipped_source += 1
                 continue
             summary.attempted += 1
@@ -386,14 +409,21 @@ class LocalCommunityDiscordFanout:
     ) -> LocalDiscordMutationFanoutSummary:
         """Edit message surfaces for all selected copies of one comment."""
         summary = LocalDiscordMutationFanoutSummary()
-        for surface in self.database.local_community_surfaces.list_local_community_message_surfaces(getattr(message_row, "id")):
+        for surface in self.database.local_community_surfaces.list_local_community_message_surfaces(
+            getattr(message_row, "id")
+        ):
             thread_surface = self.database.local_community_surfaces.get_local_community_thread_surface_by_id(
                 getattr(surface, "local_community_thread_surface_id")
             )
-            if thread_surface is None or not self._surface_is_allowed(getattr(thread_surface, "discord_forum_channel_id")):
+            if thread_surface is None or not self._surface_is_allowed(
+                getattr(thread_surface, "discord_forum_channel_id")
+            ):
                 summary.skipped_missing_thread += 1
                 continue
-            if source_surface_id is not None and getattr(surface, "id") == source_surface_id:
+            if (
+                source_surface_id is not None
+                and getattr(surface, "id") == source_surface_id
+            ):
                 summary.skipped_source += 1
                 continue
             summary.attempted += 1
@@ -423,10 +453,19 @@ class LocalCommunityDiscordFanout:
     ) -> LocalDiscordMutationFanoutSummary:
         """Mark starter messages deleted for all selected surfaces of one post."""
         summary = LocalDiscordMutationFanoutSummary()
-        for surface in self.database.local_community_surfaces.list_local_community_thread_surfaces(getattr(thread_row, "id")):
-            if not self._surface_is_allowed(getattr(surface, "discord_forum_channel_id")):
+        for surface in (
+            self.database.local_community_surfaces.list_local_community_thread_surfaces(
+                getattr(thread_row, "id")
+            )
+        ):
+            if not self._surface_is_allowed(
+                getattr(surface, "discord_forum_channel_id")
+            ):
                 continue
-            if source_surface_id is not None and getattr(surface, "id") == source_surface_id:
+            if (
+                source_surface_id is not None
+                and getattr(surface, "id") == source_surface_id
+            ):
                 summary.skipped_source += 1
                 continue
             summary.attempted += 1
@@ -454,14 +493,21 @@ class LocalCommunityDiscordFanout:
     ) -> LocalDiscordMutationFanoutSummary:
         """Mark message surfaces deleted for all selected copies of one comment."""
         summary = LocalDiscordMutationFanoutSummary()
-        for surface in self.database.local_community_surfaces.list_local_community_message_surfaces(getattr(message_row, "id")):
+        for surface in self.database.local_community_surfaces.list_local_community_message_surfaces(
+            getattr(message_row, "id")
+        ):
             thread_surface = self.database.local_community_surfaces.get_local_community_thread_surface_by_id(
                 getattr(surface, "local_community_thread_surface_id")
             )
-            if thread_surface is None or not self._surface_is_allowed(getattr(thread_surface, "discord_forum_channel_id")):
+            if thread_surface is None or not self._surface_is_allowed(
+                getattr(thread_surface, "discord_forum_channel_id")
+            ):
                 summary.skipped_missing_thread += 1
                 continue
-            if source_surface_id is not None and getattr(surface, "id") == source_surface_id:
+            if (
+                source_surface_id is not None
+                and getattr(surface, "id") == source_surface_id
+            ):
                 summary.skipped_source += 1
                 continue
             summary.attempted += 1
@@ -490,14 +536,20 @@ class LocalCommunityDiscordFanout:
     ) -> int | MissingParentSurface | None:
         """Resolve the parent Discord message id inside one target thread surface."""
         parent_ap_object_id = getattr(message_row, "parent_ap_object_id", None)
-        if parent_ap_object_id is None or parent_ap_object_id == getattr(thread_row, "ap_object_id"):
+        if parent_ap_object_id is None or parent_ap_object_id == getattr(
+            thread_row, "ap_object_id"
+        ):
             return getattr(target_thread_surface, "discord_starter_message_id")
-        parent_message = self.database.local_community_content.get_local_community_message_by_ap_object_id(parent_ap_object_id)
+        parent_message = self.database.local_community_content.get_local_community_message_by_ap_object_id(
+            parent_ap_object_id
+        )
         if parent_message is None:
             return MISSING_PARENT_SURFACE
-        parent_surface = self.database.local_community_surfaces.get_local_community_message_surface(
-            local_community_message_id=getattr(parent_message, "id"),
-            local_community_thread_surface_id=getattr(target_thread_surface, "id"),
+        parent_surface = (
+            self.database.local_community_surfaces.get_local_community_message_surface(
+                local_community_message_id=getattr(parent_message, "id"),
+                local_community_thread_surface_id=getattr(target_thread_surface, "id"),
+            )
         )
         if parent_surface is None:
             return MISSING_PARENT_SURFACE
@@ -522,7 +574,9 @@ class LocalCommunityDiscordFanout:
                     local_subscriber_id=None,
                 )
             )
-        for subscriber in self.database.local_subscribers.list_local_subscribers(getattr(local_community, "id")):
+        for subscriber in self.database.local_subscribers.list_local_subscribers(
+            getattr(local_community, "id")
+        ):
             if getattr(subscriber, "status", "active") != "active":
                 continue
             target_forum_id = getattr(subscriber, "discord_channel_id")

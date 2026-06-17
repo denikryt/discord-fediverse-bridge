@@ -13,7 +13,11 @@ from discordops import Operation, Precondition
 from ..config import Settings
 from ..bridge_policy import BridgePolicyService, BridgePolicySnapshot
 from ..db import Database
-from ..local_communities.service import LocalCommunityError, normalize_display_name, normalize_summary
+from ..local_communities.service import (
+    LocalCommunityError,
+    normalize_display_name,
+    normalize_summary,
+)
 from ..local_community_lifecycle import normalize_local_community_status
 from ..models import LocalCommunity
 from .common_preconditions import (
@@ -36,14 +40,20 @@ class EditCommunityInput:
     summary: str | None
     policy_service: BridgePolicyService
     status: str = "active"
-    _policy_snapshot: BridgePolicySnapshot | None = field(default=None, init=False, repr=False)
+    _policy_snapshot: BridgePolicySnapshot | None = field(
+        default=None, init=False, repr=False
+    )
     _community: LocalCommunity | None = field(default=None, init=False, repr=False)
     _community_loaded: bool = field(default=False, init=False, repr=False)
     _normalized_display_name: str | None = field(default=None, init=False, repr=False)
-    _display_name_error: LocalCommunityError | None = field(default=None, init=False, repr=False)
+    _display_name_error: LocalCommunityError | None = field(
+        default=None, init=False, repr=False
+    )
     _display_name_loaded: bool = field(default=False, init=False, repr=False)
     _normalized_summary: str | None = field(default=None, init=False, repr=False)
-    _summary_error: LocalCommunityError | None = field(default=None, init=False, repr=False)
+    _summary_error: LocalCommunityError | None = field(
+        default=None, init=False, repr=False
+    )
     _summary_loaded: bool = field(default=False, init=False, repr=False)
     _normalized_status: str | None = field(default=None, init=False, repr=False)
     _status_loaded: bool = field(default=False, init=False, repr=False)
@@ -62,8 +72,10 @@ class EditCommunityInput:
     def get_local_community(self) -> LocalCommunity | None:
         """Load and memoize the target local community by globally unique slug."""
         if not self._community_loaded:
-            self._community = self.database.local_communities.get_local_community_by_slug(
-                self.normalized_community_slug
+            self._community = (
+                self.database.local_communities.get_local_community_by_slug(
+                    self.normalized_community_slug
+                )
             )
             self._community_loaded = True
         return self._community
@@ -72,7 +84,9 @@ class EditCommunityInput:
         """Return validated display-name text or remember the validation error."""
         if not self._display_name_loaded:
             try:
-                self._normalized_display_name = normalize_display_name(self.display_name)
+                self._normalized_display_name = normalize_display_name(
+                    self.display_name
+                )
             except LocalCommunityError as exc:
                 self._display_name_error = exc
                 self._normalized_display_name = None
@@ -107,7 +121,6 @@ class EditCommunityResult:
     reason: str
 
 
-
 def _is_display_name_valid(operation_input: EditCommunityInput) -> bool:
     """Return whether display-name input satisfies shared metadata rules."""
     return operation_input.get_normalized_display_name() is not None
@@ -124,15 +137,19 @@ def _is_status_valid(operation_input: EditCommunityInput) -> bool:
     return operation_input.get_normalized_status() is not None
 
 
-
 def _display_name_error_message(operation_input: EditCommunityInput) -> str:
     """Return the stable display-name validation message."""
-    return str(operation_input._display_name_error or "Community display name is required.")
+    return str(
+        operation_input._display_name_error or "Community display name is required."
+    )
 
 
 def _summary_error_message(operation_input: EditCommunityInput) -> str:
     """Return the stable summary validation message."""
-    return str(operation_input._summary_error or "Community summary must be 1000 characters or fewer.")
+    return str(
+        operation_input._summary_error
+        or "Community summary must be 1000 characters or fewer."
+    )
 
 
 class EditCommunityOperation(Operation):
@@ -197,12 +214,14 @@ class EditCommunityOperation(Operation):
                 reason="invalid_operation_state",
             )
 
-        updated = operation_input.database.management_actions.update_local_community_settings(
-            actor_discord_user_id=operation_input.discord_user_id,
-            local_community_id=community.id,
-            display_name=display_name,
-            summary=summary,
-            status=status,
+        updated = (
+            operation_input.database.management_actions.update_local_community_settings(
+                actor_discord_user_id=operation_input.discord_user_id,
+                local_community_id=community.id,
+                display_name=display_name,
+                summary=summary,
+                status=status,
+            )
         )
         if updated is None:
             return EditCommunityResult(
@@ -230,6 +249,8 @@ class EditCommunityOperation(Operation):
         )
 
 
-def edit_community_operation(operation_input: EditCommunityInput) -> EditCommunityResult:
+def edit_community_operation(
+    operation_input: EditCommunityInput,
+) -> EditCommunityResult:
     """Execute `/edit-community` through ordered `discordops` preconditions."""
     return EditCommunityOperation().execute(operation_input)

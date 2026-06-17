@@ -214,16 +214,64 @@ class BridgePolicyRequiredRule:
 
 
 REQUIRED_BRIDGE_POLICY_RULES: tuple[BridgePolicyRequiredRule, ...] = (
-    BridgePolicyRequiredRule("federation_block_precedence", "Federation block overrides allow.", ("federation.block_overrides_allow",)),
-    BridgePolicyRequiredRule("empty_federation_allowlist_open", "Empty federation allowlist preserves open mode.", ("federation.empty_allowlist_open",)),
-    BridgePolicyRequiredRule("nonempty_federation_allowlist_restricts", "Non-empty federation allowlist denies unrelated hosts.", ("federation.nonempty_allowlist_restricts",)),
-    BridgePolicyRequiredRule("guild_block_precedence", "Guild block overrides guild allow.", ("guild.block_overrides_allow",)),
-    BridgePolicyRequiredRule("super_admin_add", "Effective super-admin can add dynamic policy.", ("manage.super_admin.add_created",)),
-    BridgePolicyRequiredRule("unauthorized_mutation_forbidden", "Non-super-admin mutation is forbidden and audited.", ("manage.unauthorized.forbidden",)),
-    BridgePolicyRequiredRule("bootstrap_immutable", "Bootstrap entries cannot be changed dynamically.", ("manage.bootstrap_immutable",)),
-    BridgePolicyRequiredRule("duplicate_active_rejected", "Duplicate active dynamic entry is rejected.", ("manage.duplicate_active_rejected",)),
-    BridgePolicyRequiredRule("inactive_reactivated", "Inactive dynamic entry is reactivated.", ("manage.inactive_reactivated",)),
-    BridgePolicyRequiredRule("active_removed", "Active dynamic entry can be removed.", ("manage.active_removed",)),
-    BridgePolicyRequiredRule("invalid_subject_rejected", "Invalid policy subjects do not mutate state.", ("manage.invalid_subject_rejected",)),
-    BridgePolicyRequiredRule("blocked_guild_rejected", "Blocked guild context cannot mutate policy.", ("manage.blocked_guild_rejected",)),
+    BridgePolicyRequiredRule(
+        "federation_block_precedence",
+        "Federation block overrides allow.",
+        ("federation.block_overrides_allow",),
+    ),
+    BridgePolicyRequiredRule(
+        "empty_federation_allowlist_open",
+        "Empty federation allowlist preserves open mode.",
+        ("federation.empty_allowlist_open",),
+    ),
+    BridgePolicyRequiredRule(
+        "nonempty_federation_allowlist_restricts",
+        "Non-empty federation allowlist denies unrelated hosts.",
+        ("federation.nonempty_allowlist_restricts",),
+    ),
+    BridgePolicyRequiredRule(
+        "guild_block_precedence",
+        "Guild block overrides guild allow.",
+        ("guild.block_overrides_allow",),
+    ),
+    BridgePolicyRequiredRule(
+        "super_admin_add",
+        "Effective super-admin can add dynamic policy.",
+        ("manage.super_admin.add_created",),
+    ),
+    BridgePolicyRequiredRule(
+        "unauthorized_mutation_forbidden",
+        "Non-super-admin mutation is forbidden and audited.",
+        ("manage.unauthorized.forbidden",),
+    ),
+    BridgePolicyRequiredRule(
+        "bootstrap_immutable",
+        "Bootstrap entries cannot be changed dynamically.",
+        ("manage.bootstrap_immutable",),
+    ),
+    BridgePolicyRequiredRule(
+        "duplicate_active_rejected",
+        "Duplicate active dynamic entry is rejected.",
+        ("manage.duplicate_active_rejected",),
+    ),
+    BridgePolicyRequiredRule(
+        "inactive_reactivated",
+        "Inactive dynamic entry is reactivated.",
+        ("manage.inactive_reactivated",),
+    ),
+    BridgePolicyRequiredRule(
+        "active_removed",
+        "Active dynamic entry can be removed.",
+        ("manage.active_removed",),
+    ),
+    BridgePolicyRequiredRule(
+        "invalid_subject_rejected",
+        "Invalid policy subjects do not mutate state.",
+        ("manage.invalid_subject_rejected",),
+    ),
+    BridgePolicyRequiredRule(
+        "blocked_guild_rejected",
+        "Blocked guild context cannot mutate policy.",
+        ("manage.blocked_guild_rejected",),
+    ),
 )

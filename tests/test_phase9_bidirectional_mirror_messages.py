@@ -22,13 +22,10 @@ Scenarios covered:
 from __future__ import annotations
 from support.runtime import build_test_policy_service
 
-import asyncio
-from datetime import datetime, timezone
 from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock
 
-import discord
 import pytest
 
 from src.community_sync.runtime import CommunityRuntime
@@ -73,8 +70,8 @@ def _community_runtime(
         database=database,
         fedify_gateway=AsyncMock(),
         bridge_prefix="[bridge]",
-            bridge_policy_service=build_test_policy_service(database),
-)
+        bridge_policy_service=build_test_policy_service(database),
+    )
     return CommunityRuntime(
         database=database,
         content_publish_service=publish_service,
@@ -95,13 +92,15 @@ def _fake_runtime(*, gateway: AsyncMock | None = None) -> SimpleNamespace:
         fedify_gateway=gateway,
         bot=SimpleNamespace(
             wait_until_bridge_ready=wait_until_bridge_ready,
-        track_message_edit=MagicMock(),
-        track_message_delete=MagicMock(),
+            track_message_edit=MagicMock(),
+            track_message_delete=MagicMock(),
         ),
     )
 
 
-def _fake_bot(*, threads: dict[int, object] | None = None, user_id: int = 999999) -> SimpleNamespace:
+def _fake_bot(
+    *, threads: dict[int, object] | None = None, user_id: int = 999999
+) -> SimpleNamespace:
     """Build a fake bot with configurable threads and bot user ID."""
 
     async def get_thread_by_id(thread_id: int) -> object:
@@ -314,7 +313,9 @@ def _setup_message_group_with_source_and_mirror(
 
 
 @pytest.mark.asyncio
-async def test_source_thread_message_publishes_to_ap_and_mirrors(tmp_path: Path) -> None:
+async def test_source_thread_message_publishes_to_ap_and_mirrors(
+    tmp_path: Path,
+) -> None:
     """Message in source thread publishes to AP and fans out to all mirrors."""
     database = _database(tmp_path)
     source_thread_id = 200
@@ -324,7 +325,6 @@ async def test_source_thread_message_publishes_to_ap_and_mirrors(tmp_path: Path)
     gateway.publish_content = AsyncMock(
         return_value=SimpleNamespace(activity_id="activity-1", object_id=COMMENT_AP_ID)
     )
-    runtime_obj = _fake_runtime(gateway=gateway)
 
     # Setup user
     _setup_user(database, discord_user_id="111", username="testuser")
@@ -333,12 +333,16 @@ async def test_source_thread_message_publishes_to_ap_and_mirrors(tmp_path: Path)
     fake_source_msg = SimpleNamespace(
         id=401,
         channel=SimpleNamespace(id=source_thread_id, parent_id=100),
-        author=SimpleNamespace(id=111, bot=False, display_name="testuser", name="testuser"),
+        author=SimpleNamespace(
+            id=111, bot=False, display_name="testuser", name="testuser"
+        ),
         content="Source message",
         reference=None,
         reply=AsyncMock(),
     )
-    fake_mirror_msg = SimpleNamespace(id=mirror_msg_id, edit=AsyncMock(), delete=AsyncMock())
+    fake_mirror_msg = SimpleNamespace(
+        id=mirror_msg_id, edit=AsyncMock(), delete=AsyncMock()
+    )
     fake_mirror_thread = SimpleNamespace(
         id=mirror_thread_id,
         parent_id=101,
@@ -385,7 +389,6 @@ async def test_mirror_thread_message_publishes_to_ap_and_fanout(tmp_path: Path) 
     gateway.publish_content = AsyncMock(
         return_value=SimpleNamespace(activity_id="activity-1", object_id=COMMENT_AP_ID)
     )
-    runtime_obj = _fake_runtime(gateway=gateway)
 
     # Setup user
     _setup_user(database, discord_user_id="111", username="testuser")
@@ -394,7 +397,9 @@ async def test_mirror_thread_message_publishes_to_ap_and_fanout(tmp_path: Path) 
     fake_mirror_msg = SimpleNamespace(
         id=mirror_msg_id,
         channel=SimpleNamespace(id=mirror_thread_id, parent_id=101),
-        author=SimpleNamespace(id=111, bot=False, display_name="testuser", name="testuser"),
+        author=SimpleNamespace(
+            id=111, bot=False, display_name="testuser", name="testuser"
+        ),
         content="Mirror message",
         reference=None,
         reply=AsyncMock(),
@@ -431,7 +436,9 @@ async def test_mirror_thread_message_publishes_to_ap_and_fanout(tmp_path: Path) 
 
 
 @pytest.mark.asyncio
-async def test_mirror_thread_message_fans_out_to_all_other_mirrors(tmp_path: Path) -> None:
+async def test_mirror_thread_message_fans_out_to_all_other_mirrors(
+    tmp_path: Path,
+) -> None:
     """Message in first mirror fans out to source and second mirror, not itself."""
     database = _database(tmp_path)
     source_thread_id = 200
@@ -442,7 +449,6 @@ async def test_mirror_thread_message_fans_out_to_all_other_mirrors(tmp_path: Pat
     gateway.publish_content = AsyncMock(
         return_value=SimpleNamespace(activity_id="activity-1", object_id=COMMENT_AP_ID)
     )
-    runtime_obj = _fake_runtime(gateway=gateway)
 
     # Setup user
     _setup_user(database, discord_user_id="111", username="testuser")
@@ -451,7 +457,9 @@ async def test_mirror_thread_message_fans_out_to_all_other_mirrors(tmp_path: Pat
     fake_mirror_msg = SimpleNamespace(
         id=mirror_msg_id,
         channel=SimpleNamespace(id=mirror1_thread_id, parent_id=101),
-        author=SimpleNamespace(id=111, bot=False, display_name="testuser", name="testuser"),
+        author=SimpleNamespace(
+            id=111, bot=False, display_name="testuser", name="testuser"
+        ),
         content="Mirror message",
         reference=None,
         reply=AsyncMock(),
@@ -473,10 +481,12 @@ async def test_mirror_thread_message_fans_out_to_all_other_mirrors(tmp_path: Pat
         send=AsyncMock(return_value=SimpleNamespace(id=1000 + 602)),
     )
 
-    bot = _fake_bot(threads={
-        source_thread_id: fake_source_thread,
-        mirror2_thread_id: fake_mirror2_thread,
-    })
+    bot = _fake_bot(
+        threads={
+            source_thread_id: fake_source_thread,
+            mirror2_thread_id: fake_mirror2_thread,
+        }
+    )
     fanout = _fake_fanout(bot=bot, database=database)
     community_runtime = _community_runtime(database, bot=bot, discord_fanout=fanout)
     # Set gateway on publish service
@@ -515,7 +525,9 @@ async def test_mirror_thread_message_fans_out_to_all_other_mirrors(tmp_path: Pat
 
 
 @pytest.mark.asyncio
-async def test_reply_to_message_in_mirror_thread_resolves_reference(tmp_path: Path) -> None:
+async def test_reply_to_message_in_mirror_thread_resolves_reference(
+    tmp_path: Path,
+) -> None:
     """Reply to a message in mirror thread resolves reference and publishes as comment."""
     database = _database(tmp_path)
     source_thread_id = 200
@@ -525,9 +537,10 @@ async def test_reply_to_message_in_mirror_thread_resolves_reference(tmp_path: Pa
     reply_msg_id = 602
     gateway = AsyncMock()
     gateway.publish_content = AsyncMock(
-        return_value=SimpleNamespace(activity_id="activity-1", object_id="comment-reply-1")
+        return_value=SimpleNamespace(
+            activity_id="activity-1", object_id="comment-reply-1"
+        )
     )
-    runtime_obj = _fake_runtime(gateway=gateway)
 
     # Setup user
     _setup_user(database, discord_user_id="111", username="testuser")
@@ -540,7 +553,7 @@ async def test_reply_to_message_in_mirror_thread_resolves_reference(tmp_path: Pa
         mirror_channel_id=101,
     )
 
-    msg_group = _setup_message_group_with_source_and_mirror(
+    _setup_message_group_with_source_and_mirror(
         database,
         thread_group,
         source_msg_id=source_msg_id,
@@ -551,7 +564,9 @@ async def test_reply_to_message_in_mirror_thread_resolves_reference(tmp_path: Pa
     fake_reply_msg = SimpleNamespace(
         id=reply_msg_id,
         channel=SimpleNamespace(id=mirror_thread_id, parent_id=101),
-        author=SimpleNamespace(id=111, bot=False, display_name="testuser", name="testuser"),
+        author=SimpleNamespace(
+            id=111, bot=False, display_name="testuser", name="testuser"
+        ),
         content="Reply to message",
         reference=SimpleNamespace(message_id=mirror_msg_id),
         reply=AsyncMock(),
@@ -593,7 +608,6 @@ async def test_reply_to_mirror_starter_is_treated_as_root_reply(tmp_path: Path) 
     gateway.publish_content = AsyncMock(
         return_value=SimpleNamespace(activity_id="activity-1", object_id="comment-1")
     )
-    runtime_obj = _fake_runtime(gateway=gateway)
 
     # Setup user
     _setup_user(database, discord_user_id="111", username="testuser")
@@ -611,7 +625,9 @@ async def test_reply_to_mirror_starter_is_treated_as_root_reply(tmp_path: Path) 
     fake_reply_msg = SimpleNamespace(
         id=reply_msg_id,
         channel=SimpleNamespace(id=mirror_thread_id, parent_id=101),
-        author=SimpleNamespace(id=111, bot=False, display_name="testuser", name="testuser"),
+        author=SimpleNamespace(
+            id=111, bot=False, display_name="testuser", name="testuser"
+        ),
         content="Reply to starter",
         reference=SimpleNamespace(message_id=mirror_starter_msg_id),
         reply=AsyncMock(),
@@ -649,35 +665,18 @@ async def test_bot_message_in_mirror_thread_is_not_re_published(tmp_path: Path) 
     """Bot's own message in mirror thread is blocked by bot author guard."""
     database = _database(tmp_path)
     mirror_thread_id = 500
-    bot_user_id = 999999
-    mirror_msg_id = 601
-    gateway = AsyncMock()
-    runtime_obj = _fake_runtime(gateway=gateway)
-
     thread_group, _ = _setup_thread_group_and_deliveries(
         database,
         mirror_thread_id=mirror_thread_id,
         mirror_channel_id=101,
     )
 
-    # Bot's message in mirror thread
-    fake_bot_msg = SimpleNamespace(
-        id=mirror_msg_id,
-        channel=SimpleNamespace(id=mirror_thread_id, parent_id=101),
-        author=SimpleNamespace(id=bot_user_id, bot=False, display_name="bridge", name="bridge"),
-        content="Bot fanout message",
-        reference=None,
-        reply=AsyncMock(),
-    )
-
-    bot = _fake_bot(user_id=bot_user_id)
-    fanout = _fake_fanout(bot=bot, database=database)
-    community_runtime = _community_runtime(database, bot=bot, discord_fanout=fanout)
-
     # Bot message should be ignored (author guard in on_message)
     # This test verifies that handle_discord_message is never called for bot messages
     # The guard is in discord_bot.py on_message, but we verify the effect here
-    delivery = database.discord_fanout_groups.get_thread_delivery_by_thread(mirror_thread_id)
+    delivery = database.discord_fanout_groups.get_thread_delivery_by_thread(
+        mirror_thread_id
+    )
     assert delivery is not None
     # The old guard was: if delivery.role == "mirror": return
     # The new behavior should allow mirror threads through
@@ -694,7 +693,6 @@ async def test_mirror_message_does_not_loop_back_via_fanout(tmp_path: Path) -> N
     gateway.publish_content = AsyncMock(
         return_value=SimpleNamespace(activity_id="activity-1", object_id=COMMENT_AP_ID)
     )
-    runtime_obj = _fake_runtime(gateway=gateway)
 
     # Setup user
     _setup_user(database, discord_user_id="111", username="testuser")
@@ -709,7 +707,9 @@ async def test_mirror_message_does_not_loop_back_via_fanout(tmp_path: Path) -> N
     fake_mirror_msg = SimpleNamespace(
         id=mirror_msg_id,
         channel=SimpleNamespace(id=mirror_thread_id, parent_id=101),
-        author=SimpleNamespace(id=111, bot=False, display_name="testuser", name="testuser"),
+        author=SimpleNamespace(
+            id=111, bot=False, display_name="testuser", name="testuser"
+        ),
         content="Mirror message",
         reference=None,
         reply=AsyncMock(),
@@ -752,7 +752,6 @@ async def test_mirror_message_dedup_on_reconnect(tmp_path: Path) -> None:
     gateway.publish_content = AsyncMock(
         return_value=SimpleNamespace(activity_id="activity-1", object_id=COMMENT_AP_ID)
     )
-    runtime_obj = _fake_runtime(gateway=gateway)
 
     # Setup user
     _setup_user(database, discord_user_id="111", username="testuser")
@@ -767,7 +766,9 @@ async def test_mirror_message_dedup_on_reconnect(tmp_path: Path) -> None:
     fake_mirror_msg = SimpleNamespace(
         id=mirror_msg_id,
         channel=SimpleNamespace(id=mirror_thread_id, parent_id=101),
-        author=SimpleNamespace(id=111, bot=False, display_name="testuser", name="testuser"),
+        author=SimpleNamespace(
+            id=111, bot=False, display_name="testuser", name="testuser"
+        ),
         content="Mirror message",
         reference=None,
         reply=AsyncMock(),
@@ -786,8 +787,6 @@ async def test_mirror_message_dedup_on_reconnect(tmp_path: Path) -> None:
 
     # Process message first time
     await community_runtime.handle_discord_message(fake_mirror_msg)
-    first_publish_count = gateway.publish_content.await_count
-
     # Reset mock and process same message again (reconnect)
     gateway.publish_content.reset_mock()
 

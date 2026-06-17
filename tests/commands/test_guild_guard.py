@@ -18,7 +18,9 @@ from src.commands.guild_guard import (
 
 def _policy_service(database, settings):
     """Build the explicit policy dependency used by production composition."""
-    return BridgePolicyService(settings=settings, repository=database.bridge_policy_entries)
+    return BridgePolicyService(
+        settings=settings, repository=database.bridge_policy_entries
+    )
 
 
 def _database() -> MagicMock:
@@ -31,7 +33,9 @@ def _database() -> MagicMock:
 
 def _interaction(*, guild_id: int | None = 123) -> SimpleNamespace:
     """Build a lightweight Discord interaction double for policy presentation."""
-    response = SimpleNamespace(send_message=AsyncMock(), is_done=MagicMock(return_value=False))
+    response = SimpleNamespace(
+        send_message=AsyncMock(), is_done=MagicMock(return_value=False)
+    )
     return SimpleNamespace(
         guild_id=guild_id,
         user=SimpleNamespace(id=999),

@@ -13,7 +13,9 @@ logger = logging.getLogger(__name__)
 class UserActorFollowService:
     """Own User Actor follower persistence, Accept delivery, and owner notification."""
 
-    def __init__(self, *, database: object, fedify_gateway: object, bot: object) -> None:
+    def __init__(
+        self, *, database: object, fedify_gateway: object, bot: object
+    ) -> None:
         """Bind persistence and outer delivery boundaries used by the lifecycle."""
         self.database = database
         self.fedify_gateway = fedify_gateway
@@ -33,7 +35,11 @@ class UserActorFollowService:
 
         user = self.database.users.get_user_by_actor_url(target_actor_id)
         if user is None:
-            return HandlerResult("skipped", InboundActivityOutcome.IGNORED_UNKNOWN_FOLLOW, "unknown local user actor")
+            return HandlerResult(
+                "skipped",
+                InboundActivityOutcome.IGNORED_UNKNOWN_FOLLOW,
+                "unknown local user actor",
+            )
         # The immediate transaction makes ledger ownership and relationship refresh
         # one atomic decision under concurrent duplicate deliveries.
         try:
@@ -50,8 +56,17 @@ class UserActorFollowService:
             from .db.repositories.user_actor_followers import FollowActivityIdCollision
 
             if isinstance(exc, FollowActivityIdCollision):
-                logger.warning("Rejected reused Follow ID id=%s actor=%s target=%s", follow_activity_id, remote_actor_id, target_actor_id)
-                return HandlerResult("skipped", InboundActivityOutcome.IGNORED_ALREADY_APPLIED, "Follow ID belongs to another relationship")
+                logger.warning(
+                    "Rejected reused Follow ID id=%s actor=%s target=%s",
+                    follow_activity_id,
+                    remote_actor_id,
+                    target_actor_id,
+                )
+                return HandlerResult(
+                    "skipped",
+                    InboundActivityOutcome.IGNORED_ALREADY_APPLIED,
+                    "Follow ID belongs to another relationship",
+                )
             raise
 
         # Accept is outside the database transaction. A failed delivery leaves a
@@ -68,10 +83,18 @@ class UserActorFollowService:
         )
         if claimed is not None:
             await self._notify_owner(user=user, remote_actor_id=remote_actor_id)
-        return HandlerResult("processed", InboundActivityOutcome.APPLIED, f"user actor follower {transition.transition}")
+        return HandlerResult(
+            "processed",
+            InboundActivityOutcome.APPLIED,
+            f"user actor follower {transition.transition}",
+        )
 
     async def handle_unfollow(
-        self, *, target_actor_id: str, remote_actor_id: str, follow_activity_id: str | None
+        self,
+        *,
+        target_actor_id: str,
+        remote_actor_id: str,
+        follow_activity_id: str | None,
     ) -> object:
         """Remove the current relationship owned by the exact remote actor."""
         from .activitypub_handlers import HandlerResult
@@ -79,14 +102,24 @@ class UserActorFollowService:
         del follow_activity_id
         user = self.database.users.get_user_by_actor_url(target_actor_id)
         if user is None:
-            return HandlerResult("skipped", InboundActivityOutcome.IGNORED_UNKNOWN_FOLLOW, "unknown local user actor")
+            return HandlerResult(
+                "skipped",
+                InboundActivityOutcome.IGNORED_UNKNOWN_FOLLOW,
+                "unknown local user actor",
+            )
         with self.database.immediate_session() as session:
             removed = self.database.user_actor_followers.delete_relationship(
                 session, user_id=user.id, remote_actor_id=remote_actor_id
             )
         if not removed:
-            return HandlerResult("skipped", InboundActivityOutcome.IGNORED_UNKNOWN_FOLLOW, "user actor follower not found")
-        return HandlerResult("processed", InboundActivityOutcome.APPLIED, "user actor follower removed")
+            return HandlerResult(
+                "skipped",
+                InboundActivityOutcome.IGNORED_UNKNOWN_FOLLOW,
+                "user actor follower not found",
+            )
+        return HandlerResult(
+            "processed", InboundActivityOutcome.APPLIED, "user actor follower removed"
+        )
 
     async def _notify_owner(self, *, user: object, remote_actor_id: str) -> None:
         """Attempt one non-retryable DM after the matching Accept succeeds."""
@@ -101,7 +134,11 @@ class UserActorFollowService:
         except Exception:
             # The durable claim deliberately precedes Discord I/O, providing an
             # at-most-once attempt and preventing duplicate-Follow notification spam.
-            logger.exception("Could not notify owner of User Actor follower user_id=%s actor=%s", user.id, remote_actor_id)
+            logger.exception(
+                "Could not notify owner of User Actor follower user_id=%s actor=%s",
+                user.id,
+                remote_actor_id,
+            )
 
     @staticmethod
     def _remote_label(actor_id: str) -> str:

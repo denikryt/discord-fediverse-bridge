@@ -8,10 +8,12 @@ from src.commands import register
 from src.bridge_policy import BridgePolicyService
 
 
-
 def _policy_service(database, settings):
     """Build the explicit policy dependency used by production composition."""
-    return BridgePolicyService(settings=settings, repository=database.bridge_policy_entries)
+    return BridgePolicyService(
+        settings=settings, repository=database.bridge_policy_entries
+    )
+
 
 @pytest.mark.asyncio
 async def test_register_command_returns_ephemeral_registration_link(
@@ -23,7 +25,9 @@ async def test_register_command_returns_ephemeral_registration_link(
         discord_guild_allowlist=[],
     )
 
-    register.register(command_tree, database, settings, _policy_service(database, settings))
+    register.register(
+        command_tree, database, settings, _policy_service(database, settings)
+    )
 
     command = command_tree.commands["register"]
     await command.callback(interaction)
@@ -40,7 +44,9 @@ async def test_register_command_returns_ephemeral_registration_link(
 
 
 @pytest.mark.asyncio
-async def test_register_command_rejects_dm_context(command_tree, interaction, database) -> None:
+async def test_register_command_rejects_dm_context(
+    command_tree, interaction, database
+) -> None:
     """Register is now a guild-only slash command, not a DM onboarding flow."""
     settings = SimpleNamespace(
         normalized_public_bridge_base_url="https://discord-bridge.example.com",
@@ -48,7 +54,9 @@ async def test_register_command_rejects_dm_context(command_tree, interaction, da
     )
     interaction.guild_id = None
 
-    register.register(command_tree, database, settings, _policy_service(database, settings))
+    register.register(
+        command_tree, database, settings, _policy_service(database, settings)
+    )
 
     command = command_tree.commands["register"]
     await command.callback(interaction)
@@ -62,7 +70,9 @@ async def test_register_command_rejects_dm_context(command_tree, interaction, da
 
 
 @pytest.mark.asyncio
-async def test_register_command_rejects_non_allowlisted_guild(command_tree, interaction, database) -> None:
+async def test_register_command_rejects_non_allowlisted_guild(
+    command_tree, interaction, database
+) -> None:
     """Register respects deployment allowlists before returning the web URL."""
     settings = SimpleNamespace(
         normalized_public_bridge_base_url="https://discord-bridge.example.com",
@@ -70,7 +80,9 @@ async def test_register_command_rejects_non_allowlisted_guild(command_tree, inte
     )
     interaction.guild_id = 99999
 
-    register.register(command_tree, database, settings, _policy_service(database, settings))
+    register.register(
+        command_tree, database, settings, _policy_service(database, settings)
+    )
 
     command = command_tree.commands["register"]
     await command.callback(interaction)

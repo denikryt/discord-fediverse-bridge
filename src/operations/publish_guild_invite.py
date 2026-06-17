@@ -11,7 +11,12 @@ import logging
 from dataclasses import dataclass, field
 
 import discord
-from discordops import OperationDefinition, OperationResult, Precondition, run_operation_definition_async
+from discordops import (
+    OperationDefinition,
+    OperationResult,
+    Precondition,
+    run_operation_definition_async,
+)
 
 from ..db import Database
 from ..models import LocalCommunity
@@ -83,7 +88,9 @@ def _has_active_local_community(operation_input: PublishGuildInviteInput) -> boo
     return bool(operation_input.get_active_communities())
 
 
-def _has_invitable_local_community_channel(operation_input: PublishGuildInviteInput) -> bool:
+def _has_invitable_local_community_channel(
+    operation_input: PublishGuildInviteInput,
+) -> bool:
     """Return whether one active host channel can create a Discord invite."""
     return operation_input.get_selected_channel() is not None
 
@@ -153,7 +160,9 @@ async def _body(operation_input: PublishGuildInviteInput) -> OperationResult:
         except discord.NotFound:
             old_invite = None
         except Exception:
-            logger.exception("Failed to fetch replaced Discord invite %s", previous.invite_code)
+            logger.exception(
+                "Failed to fetch replaced Discord invite %s", previous.invite_code
+            )
             old_invite = None
         if old_invite is not None:
             await _delete_invite_best_effort(
@@ -190,7 +199,11 @@ publish_guild_invite_operation = OperationDefinition(
 )
 
 
-async def run_publish_guild_invite(operation_input: PublishGuildInviteInput) -> OperationResult:
+async def run_publish_guild_invite(
+    operation_input: PublishGuildInviteInput,
+) -> OperationResult:
     """Serialize and execute one guild invite publication operation."""
     async with guild_invite_lock(operation_input.guild.id):
-        return await run_operation_definition_async(publish_guild_invite_operation, operation_input)
+        return await run_operation_definition_async(
+            publish_guild_invite_operation, operation_input
+        )

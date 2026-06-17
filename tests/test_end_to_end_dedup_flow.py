@@ -3,7 +3,6 @@
 from __future__ import annotations
 from support.runtime import build_test_policy_service
 
-from datetime import UTC, datetime
 from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import AsyncMock
@@ -36,8 +35,8 @@ def _community_runtime(database: Database) -> CommunityRuntime:
         database=database,
         fedify_gateway=AsyncMock(),
         bridge_prefix="[bridge]",
-            bridge_policy_service=build_test_policy_service(database),
-)
+        bridge_policy_service=build_test_policy_service(database),
+    )
     return CommunityRuntime(database=database, content_publish_service=publish_service)
 
 
@@ -138,8 +137,8 @@ async def test_inbound_post_with_discord_originated_mapping_is_skipped_as_echo(
             fetch_forum_channel=AsyncMock(),
         ),
         community_runtime=_community_runtime(database),
-            bridge_policy_service=build_test_policy_service(database),
-)
+        bridge_policy_service=build_test_policy_service(database),
+    )
 
     result = await dispatch_activitypub_event(
         _post_event(object_id=object_id),
@@ -176,8 +175,8 @@ async def test_inbound_comment_with_discord_originated_mapping_is_skipped_as_ech
             get_thread_by_id=AsyncMock(),
         ),
         community_runtime=_community_runtime(database),
-            bridge_policy_service=build_test_policy_service(database),
-)
+        bridge_policy_service=build_test_policy_service(database),
+    )
 
     result = await dispatch_activitypub_event(
         _comment_event(
@@ -212,8 +211,10 @@ def test_out_of_order_comment_receipt_becomes_deferred_and_retries_successfully(
             ),
         ),
         community_runtime=_community_runtime(database),
-            bridge_policy_service=build_test_policy_service(database, SimpleNamespace(fedify_shared_secret="secret")),
-)
+        bridge_policy_service=build_test_policy_service(
+            database, SimpleNamespace(fedify_shared_secret="secret")
+        ),
+    )
     client = TestClient(create_http_app(runtime), raise_server_exceptions=False)
     event = _comment_event(
         object_id=f"https://{LEMMY_EXAMPLE_DOMAIN}/comment/222",
@@ -262,7 +263,9 @@ def test_out_of_order_comment_receipt_becomes_deferred_and_retries_successfully(
     )
     receipt_after_second = database.event_receipts.get_event_receipt(event.delivery_id)
     comment_ap_id = f"https://{LEMMY_EXAMPLE_DOMAIN}/comment/222"
-    created_message_group = database.discord_fanout_groups.get_message_group_by_ap_object(comment_ap_id)
+    created_message_group = (
+        database.discord_fanout_groups.get_message_group_by_ap_object(comment_ap_id)
+    )
 
     assert second_response.status_code == 200
     assert second_response.json()["status"] == "processed"
@@ -285,13 +288,17 @@ def test_failed_inbound_discord_fanout_marks_receipt_failed(tmp_path: Path) -> N
             fetch_forum_channel=AsyncMock(
                 return_value=SimpleNamespace(
                     id=100,
-                    create_thread=AsyncMock(side_effect=RuntimeError("discord create failed"))
+                    create_thread=AsyncMock(
+                        side_effect=RuntimeError("discord create failed")
+                    ),
                 )
             ),
         ),
         community_runtime=_community_runtime(database),
-            bridge_policy_service=build_test_policy_service(database, SimpleNamespace(fedify_shared_secret="secret")),
-)
+        bridge_policy_service=build_test_policy_service(
+            database, SimpleNamespace(fedify_shared_secret="secret")
+        ),
+    )
     client = TestClient(create_http_app(runtime), raise_server_exceptions=False)
     event = _post_event(
         object_id=f"https://{LEMMY_EXAMPLE_DOMAIN}/post/111",
@@ -326,7 +333,7 @@ def test_duplicate_inbound_delivery_returns_duplicate_without_side_effects(
                 thread=SimpleNamespace(id=200),
                 message=SimpleNamespace(id=300),
             )
-        )
+        ),
     )
     runtime = SimpleNamespace(
         settings=SimpleNamespace(fedify_shared_secret="secret"),
@@ -336,8 +343,10 @@ def test_duplicate_inbound_delivery_returns_duplicate_without_side_effects(
             fetch_forum_channel=AsyncMock(return_value=forum_channel),
         ),
         community_runtime=_community_runtime(database),
-            bridge_policy_service=build_test_policy_service(database, SimpleNamespace(fedify_shared_secret="secret")),
-)
+        bridge_policy_service=build_test_policy_service(
+            database, SimpleNamespace(fedify_shared_secret="secret")
+        ),
+    )
     client = TestClient(create_http_app(runtime), raise_server_exceptions=False)
     event = _post_event(
         object_id=f"https://{LEMMY_EXAMPLE_DOMAIN}/post/333",

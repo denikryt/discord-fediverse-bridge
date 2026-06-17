@@ -26,7 +26,9 @@ MANIFEST_VERSION = 1
 RESTORE_MARKER = ".bridge-restore-state.json"
 
 
-def create_backup(database: Path, output_dir: Path, *, now: datetime | None = None) -> Path:
+def create_backup(
+    database: Path, output_dir: Path, *, now: datetime | None = None
+) -> Path:
     """Create and validate one legacy online SQLite snapshot before publishing it."""
     output_dir.mkdir(parents=True, exist_ok=True)
     timestamp = (now or datetime.now(timezone.utc)).strftime("%Y%m%dT%H%M%SZ")
@@ -34,7 +36,10 @@ def create_backup(database: Path, output_dir: Path, *, now: datetime | None = No
     temporary_path = output_dir / f".{final_path.name}{TEMP_SUFFIX}"
     temporary_path.unlink(missing_ok=True)
     try:
-        with sqlite3.connect(database) as source, sqlite3.connect(temporary_path) as destination:
+        with (
+            sqlite3.connect(database) as source,
+            sqlite3.connect(temporary_path) as destination,
+        ):
             source.backup(destination)
         validate_snapshot(temporary_path)
         os.chmod(temporary_path, 0o600)
@@ -61,12 +66,19 @@ def create_complete_backup(
     final = output_dir / f"{BACKUP_PREFIX}{timestamp}{COMPLETE_BACKUP_SUFFIX}"
     temporary = output_dir / f".{final.name}{TEMP_SUFFIX}"
     temporary.unlink(missing_ok=True)
-    with FileLock(deployment_lock_path).acquire(exclusive=False, timeout_seconds=lock_timeout_seconds):
-        with FileLock(media_lock_path).acquire(exclusive=False, timeout_seconds=lock_timeout_seconds):
+    with FileLock(deployment_lock_path).acquire(
+        exclusive=False, timeout_seconds=lock_timeout_seconds
+    ):
+        with FileLock(media_lock_path).acquire(
+            exclusive=False, timeout_seconds=lock_timeout_seconds
+        ):
             with tempfile.TemporaryDirectory(dir=output_dir) as work_dir_text:
                 work_dir = Path(work_dir_text)
                 snapshot = work_dir / "bridge.db"
-                with sqlite3.connect(database) as source, sqlite3.connect(snapshot) as destination:
+                with (
+                    sqlite3.connect(database) as source,
+                    sqlite3.connect(snapshot) as destination,
+                ):
                     source.backup(destination)
                 validate_snapshot(snapshot)
                 assets = _referenced_assets(snapshot)
@@ -89,10 +101,16 @@ def create_complete_backup(
                     destination.parent.mkdir(parents=True, exist_ok=True)
                     shutil.copy2(source_path, destination)
                     manifest["media"].append(asset)
-                (work_dir / "manifest.json").write_text(json.dumps(manifest, sort_keys=True), encoding="utf-8")
+                (work_dir / "manifest.json").write_text(
+                    json.dumps(manifest, sort_keys=True), encoding="utf-8"
+                )
                 with tarfile.open(temporary, "w:gz") as archive:
                     archive.add(snapshot, arcname="bridge.db", recursive=False)
-                    archive.add(work_dir / "manifest.json", arcname="manifest.json", recursive=False)
+                    archive.add(
+                        work_dir / "manifest.json",
+                        arcname="manifest.json",
+                        recursive=False,
+                    )
                     for asset in assets:
                         storage_key = str(asset["storage_key"])
                         archive.add(
@@ -120,7 +138,10 @@ def apply_retention(output_dir: Path, retention_count: int) -> list[Path]:
     if retention_count < 1:
         raise ValueError("backup retention count must be at least 1")
     snapshots = sorted(
-        [*output_dir.glob(f"{BACKUP_PREFIX}*{BACKUP_SUFFIX}"), *output_dir.glob(f"{BACKUP_PREFIX}*{COMPLETE_BACKUP_SUFFIX}")]
+        [
+            *output_dir.glob(f"{BACKUP_PREFIX}*{BACKUP_SUFFIX}"),
+            *output_dir.glob(f"{BACKUP_PREFIX}*{COMPLETE_BACKUP_SUFFIX}"),
+        ]
     )
     removed: list[Path] = []
     for path in snapshots[:-retention_count]:
@@ -133,8 +154,14 @@ def restore_backup(database: Path, source: Path) -> Path | None:
     """Restore only a confirmed pre-media SQLite snapshot."""
     validate_snapshot(source)
     if _snapshot_has_profile_media_references(source):
-        raise RuntimeError("legacy SQLite restore cannot restore profile media references")
-    warnings.warn("restoring confirmed pre-media SQLite snapshot without profile media", RuntimeWarning, stacklevel=2)
+        raise RuntimeError(
+            "legacy SQLite restore cannot restore profile media references"
+        )
+    warnings.warn(
+        "restoring confirmed pre-media SQLite snapshot without profile media",
+        RuntimeWarning,
+        stacklevel=2,
+    )
     database.parent.mkdir(parents=True, exist_ok=True)
     recovery: Path | None = None
     if database.exists():
@@ -167,7 +194,9 @@ def restore_complete_backup(
     lock_timeout_seconds: float = 30,
 ) -> None:
     """Install one complete archive through a per-component durable journal."""
-    with FileLock(deployment_lock_path).acquire(exclusive=True, timeout_seconds=lock_timeout_seconds):
+    with FileLock(deployment_lock_path).acquire(
+        exclusive=True, timeout_seconds=lock_timeout_seconds
+    ):
         recover_incomplete_restore(database, media_root)
         data_root = database.parent
         operation = f"restore-{datetime.now(timezone.utc).strftime('%Y%m%dT%H%M%S%fZ')}"
@@ -180,8 +209,18 @@ def restore_complete_backup(
         marker = data_root / RESTORE_MARKER
         components = [
             ("database", database, old / "bridge.db", staged / "bridge.db"),
-            ("wal", database.with_name(database.name + "-wal"), old / "bridge.db-wal", None),
-            ("shm", database.with_name(database.name + "-shm"), old / "bridge.db-shm", None),
+            (
+                "wal",
+                database.with_name(database.name + "-wal"),
+                old / "bridge.db-wal",
+                None,
+            ),
+            (
+                "shm",
+                database.with_name(database.name + "-shm"),
+                old / "bridge.db-shm",
+                None,
+            ),
             ("media", media_root, old / "profile-media", staged / "profile-media"),
         ]
         state: dict[str, object] = {
@@ -192,9 +231,13 @@ def restore_complete_backup(
             "old": old.name,
             "archive_sha256": _sha256(source),
             "expected_database_sha256": _sha256(staged / "bridge.db"),
-            "expected_media": json.loads((staged / "manifest.json").read_text(encoding="utf-8")).get("media", []),
+            "expected_media": json.loads(
+                (staged / "manifest.json").read_text(encoding="utf-8")
+            ).get("media", []),
             "live_paths": {name: str(live) for name, live, _old, _new in components},
-            "original_presence": {name: live.exists() for name, live, _old, _new in components},
+            "original_presence": {
+                name: live.exists() for name, live, _old, _new in components
+            },
             "moved_old": [],
             "installed_new": [],
         }
@@ -246,28 +289,56 @@ def recover_incomplete_restore(database: Path, media_root: Path) -> None:
     _fsync_directory(database.parent)
 
 
-def _restore_components(database: Path, media_root: Path) -> list[tuple[str, Path, Path, Path | None]]:
+def _restore_components(
+    database: Path, media_root: Path
+) -> list[tuple[str, Path, Path, Path | None]]:
     """Return stable live/old/new paths for every restore component."""
     data_root = database.parent
-    marker = json.loads((data_root / RESTORE_MARKER).read_text()) if (data_root / RESTORE_MARKER).exists() else None
+    marker = (
+        json.loads((data_root / RESTORE_MARKER).read_text())
+        if (data_root / RESTORE_MARKER).exists()
+        else None
+    )
     old = data_root / marker["old"] if marker else data_root
     staged = data_root / marker["staged"] if marker else data_root
     return [
         ("database", database, old / "bridge.db", staged / "bridge.db"),
-        ("wal", database.with_name(database.name + "-wal"), old / "bridge.db-wal", None),
-        ("shm", database.with_name(database.name + "-shm"), old / "bridge.db-shm", None),
+        (
+            "wal",
+            database.with_name(database.name + "-wal"),
+            old / "bridge.db-wal",
+            None,
+        ),
+        (
+            "shm",
+            database.with_name(database.name + "-shm"),
+            old / "bridge.db-shm",
+            None,
+        ),
         ("media", media_root, old / "profile-media", staged / "profile-media"),
     ]
 
 
-def _rollback_restore(database: Path, media_root: Path, old: Path, state: dict[str, object]) -> None:
+def _rollback_restore(
+    database: Path, media_root: Path, old: Path, state: dict[str, object]
+) -> None:
     """Restore the exact pre-restore component-presence set idempotently."""
     presence = dict(state.get("original_presence", {}))
     staged = database.parent / str(state["staged"])
     components = [
         ("database", database, old / "bridge.db", staged / "bridge.db"),
-        ("wal", database.with_name(database.name + "-wal"), old / "bridge.db-wal", None),
-        ("shm", database.with_name(database.name + "-shm"), old / "bridge.db-shm", None),
+        (
+            "wal",
+            database.with_name(database.name + "-wal"),
+            old / "bridge.db-wal",
+            None,
+        ),
+        (
+            "shm",
+            database.with_name(database.name + "-shm"),
+            old / "bridge.db-shm",
+            None,
+        ),
         ("media", media_root, old / "profile-media", staged / "profile-media"),
     ]
     for name, live, retained, _new in components:
@@ -304,29 +375,57 @@ def _remove_path(path: Path) -> None:
 def _snapshot_has_profile_media_references(snapshot: Path) -> bool:
     """Return whether a SQLite snapshot requires a matching media generation."""
     with sqlite3.connect(f"file:{snapshot}?mode=ro", uri=True) as connection:
-        tables = {row[0] for row in connection.execute("SELECT name FROM sqlite_master WHERE type='table'")}
+        tables = {
+            row[0]
+            for row in connection.execute(
+                "SELECT name FROM sqlite_master WHERE type='table'"
+            )
+        }
         if "users" not in tables:
             return False
         columns = {row[1] for row in connection.execute("PRAGMA table_info(users)")}
         if not {"avatar_media_id", "header_media_id"}.issubset(columns):
             return False
-        return connection.execute(
-            "SELECT 1 FROM users WHERE avatar_media_id IS NOT NULL OR header_media_id IS NOT NULL LIMIT 1"
-        ).fetchone() is not None
+        return (
+            connection.execute(
+                "SELECT 1 FROM users WHERE avatar_media_id IS NOT NULL OR header_media_id IS NOT NULL LIMIT 1"
+            ).fetchone()
+            is not None
+        )
 
-def serve(database: Path, output_dir: Path, interval_seconds: int, retention_count: int, *, media_root: Path | None = None, deployment_lock_path: Path | None = None, media_lock_path: Path | None = None, lock_timeout_seconds: float = 30) -> None:
+
+def serve(
+    database: Path,
+    output_dir: Path,
+    interval_seconds: int,
+    retention_count: int,
+    *,
+    media_root: Path | None = None,
+    deployment_lock_path: Path | None = None,
+    media_lock_path: Path | None = None,
+    lock_timeout_seconds: float = 30,
+) -> None:
     """Run immediate and periodic backups until SIGTERM or SIGINT."""
     if interval_seconds < 1:
         raise ValueError("backup interval must be at least 1 second")
     stop = threading.Event()
+
     def request_stop(_signum: int, _frame: object) -> None:
         stop.set()
+
     signal.signal(signal.SIGTERM, request_stop)
     signal.signal(signal.SIGINT, request_stop)
     while not stop.is_set():
         try:
             if media_root and deployment_lock_path and media_lock_path:
-                created = create_complete_backup(database, media_root, output_dir, deployment_lock_path=deployment_lock_path, media_lock_path=media_lock_path, lock_timeout_seconds=lock_timeout_seconds)
+                created = create_complete_backup(
+                    database,
+                    media_root,
+                    output_dir,
+                    deployment_lock_path=deployment_lock_path,
+                    media_lock_path=media_lock_path,
+                    lock_timeout_seconds=lock_timeout_seconds,
+                )
             else:
                 created = create_backup(database, output_dir)
             removed = apply_retention(output_dir, retention_count)
@@ -348,7 +447,16 @@ def _referenced_assets(snapshot: Path) -> list[dict[str, object]]:
             JOIN users u ON u.avatar_media_id = a.id OR u.header_media_id = a.id
             ORDER BY a.storage_key
         """).fetchall()
-    keys = ("storage_key", "sha256_hex", "public_id", "media_kind", "content_type", "byte_size", "width", "height")
+    keys = (
+        "storage_key",
+        "sha256_hex",
+        "public_id",
+        "media_kind",
+        "content_type",
+        "byte_size",
+        "width",
+        "height",
+    )
     return [dict(zip(keys, row, strict=True)) for row in rows]
 
 
@@ -393,9 +501,13 @@ def _safe_extract(source: Path, destination: Path) -> None:
         missing = permitted - actual
         additional = actual - permitted
         if missing:
-            raise RuntimeError(f"backup archive is missing declared entries: {sorted(missing)}")
+            raise RuntimeError(
+                f"backup archive is missing declared entries: {sorted(missing)}"
+            )
         if additional:
-            raise RuntimeError(f"backup archive contains unexpected entries: {sorted(additional)}")
+            raise RuntimeError(
+                f"backup archive contains unexpected entries: {sorted(additional)}"
+            )
 
         for name, member in by_name.items():
             target = destination / name
@@ -445,18 +557,30 @@ def _manifest_member_names(manifest: object) -> set[str]:
         public_id = record.get("public_id")
         sha256_hex = record.get("sha256_hex")
         byte_size = record.get("byte_size")
-        if not isinstance(storage_key, str) or _normalized_archive_name(storage_key) != storage_key:
+        if (
+            not isinstance(storage_key, str)
+            or _normalized_archive_name(storage_key) != storage_key
+        ):
             raise RuntimeError("backup manifest media storage key is invalid")
-        if storage_key in storage_keys or not isinstance(public_id, str) or public_id in public_ids:
+        if (
+            storage_key in storage_keys
+            or not isinstance(public_id, str)
+            or public_id in public_ids
+        ):
             raise RuntimeError("backup manifest contains duplicate media identity")
         if not isinstance(sha256_hex, str) or len(sha256_hex) != 64:
             raise RuntimeError("backup manifest media hash is invalid")
-        if not isinstance(byte_size, int) or isinstance(byte_size, bool) or byte_size < 0:
+        if (
+            not isinstance(byte_size, int)
+            or isinstance(byte_size, bool)
+            or byte_size < 0
+        ):
             raise RuntimeError("backup manifest media size is invalid")
         storage_keys.add(storage_key)
         public_ids.add(public_id)
         permitted.add(f"profile-media/objects/{storage_key}")
     return permitted
+
 
 def _validate_complete_tree(root: Path) -> None:
     """Validate the manifest against snapshot metadata and every extracted byte."""
@@ -467,13 +591,25 @@ def _validate_complete_tree(root: Path) -> None:
     if _sha256(database) != manifest.get("database_sha256"):
         raise RuntimeError("backup database hash mismatch")
 
-    snapshot_assets = {str(item["storage_key"]): item for item in _referenced_assets(database)}
+    snapshot_assets = {
+        str(item["storage_key"]): item for item in _referenced_assets(database)
+    }
     manifest_assets = {str(item["storage_key"]): item for item in manifest["media"]}
     if set(snapshot_assets) != set(manifest_assets):
-        raise RuntimeError("backup manifest media set does not match database references")
+        raise RuntimeError(
+            "backup manifest media set does not match database references"
+        )
     for storage_key, expected in snapshot_assets.items():
         declared = manifest_assets[storage_key]
-        for field in ("sha256_hex", "public_id", "media_kind", "content_type", "byte_size", "width", "height"):
+        for field in (
+            "sha256_hex",
+            "public_id",
+            "media_kind",
+            "content_type",
+            "byte_size",
+            "width",
+            "height",
+        ):
             if declared.get(field) != expected[field]:
                 raise RuntimeError(f"backup manifest media metadata mismatch: {field}")
         path = _safe_media_path(root / "profile-media", storage_key)
@@ -551,13 +687,41 @@ def main() -> None:
     args = _parser().parse_args()
     if args.command == "backup":
         if args.media_root and args.deployment_lock and args.media_lock:
-            print(create_complete_backup(args.database, args.media_root, args.output_dir, deployment_lock_path=args.deployment_lock, media_lock_path=args.media_lock, lock_timeout_seconds=args.lock_timeout_seconds))
+            print(
+                create_complete_backup(
+                    args.database,
+                    args.media_root,
+                    args.output_dir,
+                    deployment_lock_path=args.deployment_lock,
+                    media_lock_path=args.media_lock,
+                    lock_timeout_seconds=args.lock_timeout_seconds,
+                )
+            )
         else:
             print(create_backup(args.database, args.output_dir))
     elif args.command == "serve":
-        serve(args.database, args.output_dir, args.interval_seconds, args.retention_count, media_root=args.media_root, deployment_lock_path=args.deployment_lock, media_lock_path=args.media_lock, lock_timeout_seconds=args.lock_timeout_seconds)
-    elif args.media_root and args.deployment_lock and args.source.name.endswith(COMPLETE_BACKUP_SUFFIX):
-        restore_complete_backup(args.database, args.media_root, args.source, deployment_lock_path=args.deployment_lock, lock_timeout_seconds=args.lock_timeout_seconds)
+        serve(
+            args.database,
+            args.output_dir,
+            args.interval_seconds,
+            args.retention_count,
+            media_root=args.media_root,
+            deployment_lock_path=args.deployment_lock,
+            media_lock_path=args.media_lock,
+            lock_timeout_seconds=args.lock_timeout_seconds,
+        )
+    elif (
+        args.media_root
+        and args.deployment_lock
+        and args.source.name.endswith(COMPLETE_BACKUP_SUFFIX)
+    ):
+        restore_complete_backup(
+            args.database,
+            args.media_root,
+            args.source,
+            deployment_lock_path=args.deployment_lock,
+            lock_timeout_seconds=args.lock_timeout_seconds,
+        )
         print("complete backup restored")
     else:
         recovery = restore_backup(args.database, args.source)

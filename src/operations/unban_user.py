@@ -31,7 +31,9 @@ class UnbanUserInput:
     community_slug: str | None
     actor_handle: str
     policy_service: BridgePolicyService
-    _policy_snapshot: BridgePolicySnapshot | None = field(default=None, init=False, repr=False)
+    _policy_snapshot: BridgePolicySnapshot | None = field(
+        default=None, init=False, repr=False
+    )
     _community: LocalCommunity | None = field(default=None, init=False, repr=False)
     _community_loaded: bool = field(default=False, init=False, repr=False)
     _normalized_actor_handle: str | None = field(default=None, init=False, repr=False)
@@ -60,7 +62,11 @@ class UnbanUserInput:
         """Load selected community only for scoped requests."""
         if not self._community_loaded:
             slug = self.normalized_community_slug
-            self._community = None if slug is None else self.database.local_communities.get_local_community_by_slug(slug)
+            self._community = (
+                None
+                if slug is None
+                else self.database.local_communities.get_local_community_by_slug(slug)
+            )
             self._community_loaded = True
         return self._community
 
@@ -68,7 +74,9 @@ class UnbanUserInput:
         """Normalize the supplied local or remote handle without network I/O."""
         if not self._handle_loaded:
             try:
-                self._normalized_actor_handle = normalize_remote_actor_handle(self.actor_handle)
+                self._normalized_actor_handle = normalize_remote_actor_handle(
+                    self.actor_handle
+                )
             except InvalidRemoteActorHandle:
                 self._normalized_actor_handle = None
             self._handle_loaded = True
@@ -79,8 +87,15 @@ class UnbanUserInput:
         if not self._ban_loaded:
             handle = self.get_normalized_actor_handle()
             community = self.get_local_community()
-            self._active_ban = None if handle is None else self.database.community_actor_bans.get_active_ban_by_handle(
-                local_community_id=None if self.is_global else getattr(community, "id", None), actor_handle=handle
+            self._active_ban = (
+                None
+                if handle is None
+                else self.database.community_actor_bans.get_active_ban_by_handle(
+                    local_community_id=None
+                    if self.is_global
+                    else getattr(community, "id", None),
+                    actor_handle=handle,
+                )
             )
             self._ban_loaded = True
         return self._active_ban
@@ -93,7 +108,6 @@ class UnbanUserResult:
     applied: bool
     message: str
     reason: str
-
 
 
 def _is_actor_handle_valid(value: UnbanUserInput) -> bool:
@@ -138,14 +152,17 @@ class UnbanUserOperation(Operation):
         ),
     )
 
-    def reject(self, operation_input: UnbanUserInput, *, reason: str, message: str, **_: object) -> UnbanUserResult:
+    def reject(
+        self, operation_input: UnbanUserInput, *, reason: str, message: str, **_: object
+    ) -> UnbanUserResult:
         """Return first failed precondition and preserve existing scoped audits."""
         if reason in {"cannot_manage_community", "community_disabled"}:
             community = operation_input.get_local_community()
             if community is not None:
                 operation_input.database.management_audit.ban_remove_forbidden(
                     actor_discord_user_id=operation_input.discord_user_id,
-                    community=community, failed_precondition=reason,
+                    community=community,
+                    failed_precondition=reason,
                 )
         return UnbanUserResult(False, message, reason)
 
@@ -154,15 +171,22 @@ class UnbanUserOperation(Operation):
         handle = operation_input.get_normalized_actor_handle()
         community = operation_input.get_local_community()
         if handle is None or (not operation_input.is_global and community is None):
-            return UnbanUserResult(False, "Unable to unban because the command state is invalid.", "invalid_operation_state")
+            return UnbanUserResult(
+                False,
+                "Unable to unban because the command state is invalid.",
+                "invalid_operation_state",
+            )
         operation_input.database.management_actions.remove_ban(
             actor_discord_user_id=operation_input.discord_user_id,
             local_community_id=None if operation_input.is_global else community.id,
             actor_handle=handle,
         )
-        scope = "this bridge instance" if operation_input.is_global else f"community {operation_input.normalized_community_slug}"
+        scope = (
+            "this bridge instance"
+            if operation_input.is_global
+            else f"community {operation_input.normalized_community_slug}"
+        )
         return UnbanUserResult(True, f"Unbanned {handle} from {scope}.", "unbanned")
-
 
 
 def unban_user_operation(operation_input: UnbanUserInput) -> UnbanUserResult:

@@ -10,7 +10,7 @@ from __future__ import annotations
 
 from pathlib import Path
 from types import SimpleNamespace
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import AsyncMock
 
 import pytest
 
@@ -47,10 +47,16 @@ async def test_phase2_single_subscription_no_mirror_created(tmp_path: Path) -> N
     thread = build_thread(thread_id=200, channel_id=100)
     starter = build_starter_message(message_id=300)
 
-    result = await runtime.handle_discord_thread_create(thread=thread, starter_message=starter)
+    result = await runtime.handle_discord_thread_create(
+        thread=thread, starter_message=starter
+    )
 
     thread_group = database.discord_fanout_groups.get_thread_group_by_source_thread(200)
-    deliveries = database.discord_fanout_groups.get_thread_deliveries(thread_group.id) if thread_group else []
+    deliveries = (
+        database.discord_fanout_groups.get_thread_deliveries(thread_group.id)
+        if thread_group
+        else []
+    )
     mirror_deliveries = [d for d in deliveries if d.role == "mirror"]
 
     assert result.status == "published"
@@ -69,7 +75,9 @@ async def test_phase2_single_subscription_no_mirror_created(tmp_path: Path) -> N
 
 
 @pytest.mark.asyncio
-async def test_phase2_two_subscriptions_mirror_thread_created_in_sibling(tmp_path: Path) -> None:
+async def test_phase2_two_subscriptions_mirror_thread_created_in_sibling(
+    tmp_path: Path,
+) -> None:
     """With two subscriptions, a mirror thread is created in the sibling channel.
 
     System state: two accepted subscriptions for channels 100 and 101 (same community),
@@ -104,10 +112,16 @@ async def test_phase2_two_subscriptions_mirror_thread_created_in_sibling(tmp_pat
     thread = build_thread(thread_id=200, channel_id=100)
     starter = build_starter_message(message_id=300)
 
-    result = await runtime.handle_discord_thread_create(thread=thread, starter_message=starter)
+    result = await runtime.handle_discord_thread_create(
+        thread=thread, starter_message=starter
+    )
 
     thread_group = database.discord_fanout_groups.get_thread_group_by_source_thread(200)
-    deliveries = database.discord_fanout_groups.get_thread_deliveries(thread_group.id) if thread_group else []
+    deliveries = (
+        database.discord_fanout_groups.get_thread_deliveries(thread_group.id)
+        if thread_group
+        else []
+    )
     source_deliveries = [d for d in deliveries if d.role == "source"]
     mirror_deliveries = [d for d in deliveries if d.role == "mirror"]
 
@@ -154,11 +168,17 @@ async def test_phase2_duplicate_thread_create_is_ignored(tmp_path: Path) -> None
     thread = build_thread(thread_id=200, channel_id=100)
     starter = build_starter_message(message_id=300)
 
-    result = await runtime.handle_discord_thread_create(thread=thread, starter_message=starter)
+    result = await runtime.handle_discord_thread_create(
+        thread=thread, starter_message=starter
+    )
 
     thread_group = database.discord_fanout_groups.get_thread_group_by_source_thread(200)
     # No delivery rows should have been created by the duplicate call.
-    deliveries = database.discord_fanout_groups.get_thread_deliveries(thread_group.id) if thread_group else []
+    deliveries = (
+        database.discord_fanout_groups.get_thread_deliveries(thread_group.id)
+        if thread_group
+        else []
+    )
 
     assert result.status == "ignored"
     # Gateway must not have been called — AP was already done on the first event.
@@ -168,7 +188,9 @@ async def test_phase2_duplicate_thread_create_is_ignored(tmp_path: Path) -> None
 
 
 @pytest.mark.asyncio
-async def test_phase2_mirror_failure_does_not_block_source_publish(tmp_path: Path) -> None:
+async def test_phase2_mirror_failure_does_not_block_source_publish(
+    tmp_path: Path,
+) -> None:
     """A mirror delivery failure must not roll back the source AP publish.
 
     System state: two accepted subscriptions for channels 100 and 101,
@@ -199,10 +221,16 @@ async def test_phase2_mirror_failure_does_not_block_source_publish(tmp_path: Pat
     thread = build_thread(thread_id=200, channel_id=100)
     starter = build_starter_message(message_id=300)
 
-    result = await runtime.handle_discord_thread_create(thread=thread, starter_message=starter)
+    result = await runtime.handle_discord_thread_create(
+        thread=thread, starter_message=starter
+    )
 
     thread_group = database.discord_fanout_groups.get_thread_group_by_source_thread(200)
-    deliveries = database.discord_fanout_groups.get_thread_deliveries(thread_group.id) if thread_group else []
+    deliveries = (
+        database.discord_fanout_groups.get_thread_deliveries(thread_group.id)
+        if thread_group
+        else []
+    )
     source_deliveries = [d for d in deliveries if d.role == "source"]
     mirror_deliveries = [d for d in deliveries if d.role == "mirror"]
 

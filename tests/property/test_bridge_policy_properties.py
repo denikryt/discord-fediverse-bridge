@@ -56,9 +56,7 @@ def test_unrelated_block_entry_does_not_change_open_target_decision(
     """A distinct blocked host cannot affect an otherwise open target."""
 
     assume(target != unrelated)
-    snapshot = BridgePolicySnapshot(
-        (_entry(PolicyType.FEDERATION_BLOCK, unrelated),)
-    )
+    snapshot = BridgePolicySnapshot((_entry(PolicyType.FEDERATION_BLOCK, unrelated),))
 
     decision = snapshot.federation_decision(target)
 

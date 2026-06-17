@@ -11,10 +11,16 @@ from collections.abc import Callable, Iterator
 
 from sqlalchemy.orm import Session
 
-from .db.repositories.community_actor_bans import BanActivationResult, CommunityActorBanRepository
+from .db.repositories.community_actor_bans import (
+    BanActivationResult,
+    CommunityActorBanRepository,
+)
 from .db.repositories.local_communities import LocalCommunityRepository
 from .db.repositories.guild_invite_publications import GuildInvitePublicationRepository
-from .db.repositories.bridge_policy_entries import BridgePolicyEntryRepository, PolicyActivationResult
+from .db.repositories.bridge_policy_entries import (
+    BridgePolicyEntryRepository,
+    PolicyActivationResult,
+)
 from .management_audit_recorder import ManagementAuditRecorder
 from .models import CommunityActorBan, GuildInvitePublication, LocalCommunity
 
@@ -211,7 +217,15 @@ class ManagementActions:
             )
             return entry
 
-    def replace_guild_invite_publication(self, *, discord_guild_id: int, discord_channel_id: int, invite_code: str, invite_url: str, actor_discord_user_id: str) -> tuple[GuildInvitePublication | None, GuildInvitePublication]:
+    def replace_guild_invite_publication(
+        self,
+        *,
+        discord_guild_id: int,
+        discord_channel_id: int,
+        invite_code: str,
+        invite_url: str,
+        actor_discord_user_id: str,
+    ) -> tuple[GuildInvitePublication | None, GuildInvitePublication]:
         """Replace guild invite state and write its audit row atomically."""
         with self._session_factory() as session:
             before, after = self._guild_invite_publications.replace_in_session(
@@ -222,13 +236,26 @@ class ManagementActions:
                 invite_url=invite_url,
                 published_by_discord_user_id=actor_discord_user_id,
             )
-            self._audit.add_guild_invite_published(session, actor_discord_user_id=actor_discord_user_id, before=before, after=after)
+            self._audit.add_guild_invite_published(
+                session,
+                actor_discord_user_id=actor_discord_user_id,
+                before=before,
+                after=after,
+            )
             return before, after
 
-    def remove_guild_invite_publication(self, *, discord_guild_id: int, actor_discord_user_id: str) -> GuildInvitePublication | None:
+    def remove_guild_invite_publication(
+        self, *, discord_guild_id: int, actor_discord_user_id: str
+    ) -> GuildInvitePublication | None:
         """Delete guild invite state and write its audit row atomically."""
         with self._session_factory() as session:
-            publication = self._guild_invite_publications.delete_in_session(session, discord_guild_id=discord_guild_id)
+            publication = self._guild_invite_publications.delete_in_session(
+                session, discord_guild_id=discord_guild_id
+            )
             if publication is not None:
-                self._audit.add_guild_invite_removed(session, actor_discord_user_id=actor_discord_user_id, publication=publication)
+                self._audit.add_guild_invite_removed(
+                    session,
+                    actor_discord_user_id=actor_discord_user_id,
+                    publication=publication,
+                )
             return publication

@@ -78,7 +78,9 @@ def _make_discord_reference(
     )
 
 
-def _format_mirror_body(message: discord.Message | object, *, author_label: str | None = None) -> str:
+def _format_mirror_body(
+    message: discord.Message | object, *, author_label: str | None = None
+) -> str:
     """Build the mirror thread body from the source starter message.
 
     Format:
@@ -90,7 +92,11 @@ def _format_mirror_body(message: discord.Message | object, *, author_label: str 
     apply_edit_to_discord_message can preserve the attribution line on edits.
     """
     author = getattr(message, "author", None)
-    display_name = author_label or getattr(author, "display_name", None) or getattr(author, "name", "unknown")
+    display_name = (
+        author_label
+        or getattr(author, "display_name", None)
+        or getattr(author, "name", "unknown")
+    )
     content = getattr(message, "content", "") or ""
     return f"`{display_name}`\n\n{content}"
 
@@ -140,7 +146,11 @@ class DiscordFanout:
     def _channel_is_allowed(self, channel_id: int) -> bool:
         """Fail closed when a target channel cannot be tied to an allowed guild."""
         try:
-            subscription = self.database.remote_subscriptions.get_subscription_by_channel(channel_id)
+            subscription = (
+                self.database.remote_subscriptions.get_subscription_by_channel(
+                    channel_id
+                )
+            )
             if subscription is None:
                 logger.warning(
                     "Skipping Discord fanout target with missing subscription channel_id=%s",
@@ -176,7 +186,10 @@ class DiscordFanout:
         if user is None:
             return None
         from ..user_bans import canonical_local_user_handle
-        return canonical_local_user_handle(username=str(user.activitypub_username), settings=settings)
+
+        return canonical_local_user_handle(
+            username=str(user.activitypub_username), settings=settings
+        )
 
     async def mirror_thread_to_siblings(
         self,
@@ -194,7 +207,10 @@ class DiscordFanout:
         """
         results: list[MirrorResult] = []
         title = getattr(source_thread, "name", "Untitled")
-        body = _format_mirror_body(source_starter_message, author_label=self._author_label(source_starter_message))
+        body = _format_mirror_body(
+            source_starter_message,
+            author_label=self._author_label(source_starter_message),
+        )
 
         for channel_id in sibling_channel_ids:
             if not self._channel_is_allowed(channel_id):
@@ -203,19 +219,24 @@ class DiscordFanout:
                 forum_channel = await self.bot.fetch_forum_channel(channel_id)
                 result = await forum_channel.create_thread(name=title, content=body)
                 thread, message = _unpack_thread_result(result)
-                results.append(MirrorResult(
-                    channel_id=channel_id,
-                    thread_id=thread.id,
-                    starter_message_id=message.id,
-                ))
+                results.append(
+                    MirrorResult(
+                        channel_id=channel_id,
+                        thread_id=thread.id,
+                        starter_message_id=message.id,
+                    )
+                )
                 logger.info(
                     "Mirrored thread %s into channel %s as thread %s",
-                    getattr(source_thread, "id", "?"), channel_id, thread.id,
+                    getattr(source_thread, "id", "?"),
+                    channel_id,
+                    thread.id,
                 )
             except Exception:
                 logger.exception(
                     "Failed to mirror thread %s into channel %s",
-                    getattr(source_thread, "id", "?"), channel_id,
+                    getattr(source_thread, "id", "?"),
+                    channel_id,
                 )
 
         return results
@@ -243,7 +264,9 @@ class DiscordFanout:
         source AP publish is never rolled back.
         """
         results: list[MirrorMessageResult] = []
-        content = _format_mirror_body(source_message, author_label=self._author_label(source_message))
+        content = _format_mirror_body(
+            source_message, author_label=self._author_label(source_message)
+        )
         for delivery in sibling_thread_deliveries:
             if not self._channel_is_allowed(delivery.discord_channel_id):
                 continue
@@ -257,11 +280,13 @@ class DiscordFanout:
                     reply_context.get_reference_for_thread(delivery.discord_thread_id),
                 )
                 sent = await thread.send(content=content, reference=reference)
-                results.append(MirrorMessageResult(
-                    channel_id=delivery.discord_channel_id,
-                    thread_id=delivery.discord_thread_id,
-                    message_id=sent.id,
-                ))
+                results.append(
+                    MirrorMessageResult(
+                        channel_id=delivery.discord_channel_id,
+                        thread_id=delivery.discord_thread_id,
+                        message_id=sent.id,
+                    )
+                )
                 logger.info(
                     "Mirrored message %s into thread %s as message %s",
                     getattr(source_message, "id", "?"),
@@ -294,11 +319,13 @@ class DiscordFanout:
         has no existing backtick-quoted attribution line (e.g. messages created
         before the header format was introduced).
         """
+
         async def _edit_one(delivery: CommunityMessageGroupDelivery) -> None:
             if not self._channel_is_allowed(delivery.discord_channel_id):
                 return
             try:
                 from ..formatting import apply_edit_to_discord_message
+
                 thread = await self.bot.get_thread_by_id(delivery.discord_thread_id)
                 message = await thread.fetch_message(delivery.discord_message_id)
                 # Preserve the author header from the current message when present.
@@ -327,7 +354,9 @@ class DiscordFanout:
 
         # Run all mirror edits concurrently; return_exceptions=True ensures one
         # Discord API failure does not cancel remaining concurrent edits.
-        await asyncio.gather(*[_edit_one(d) for d in mirror_deliveries], return_exceptions=True)
+        await asyncio.gather(
+            *[_edit_one(d) for d in mirror_deliveries], return_exceptions=True
+        )
 
     async def propagate_delete(
         self,
@@ -341,6 +370,7 @@ class DiscordFanout:
         The caller is responsible for sending the AP Delete regardless of
         whether any individual mirror delete failed.
         """
+
         async def _delete_one(delivery: CommunityMessageGroupDelivery) -> None:
             if not self._channel_is_allowed(delivery.discord_channel_id):
                 return
@@ -364,4 +394,6 @@ class DiscordFanout:
 
         # Run all mirror deletes concurrently; return_exceptions=True ensures one
         # Discord API failure does not cancel remaining concurrent deletes.
-        await asyncio.gather(*[_delete_one(d) for d in mirror_deliveries], return_exceptions=True)
+        await asyncio.gather(
+            *[_delete_one(d) for d in mirror_deliveries], return_exceptions=True
+        )

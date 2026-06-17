@@ -36,7 +36,9 @@ class LemmyClient:
         community = await self.resolve_community(name=name)
         community_id = community.get("id")
         if community_id is None:
-            raise RuntimeError(f"Could not resolve Lemmy community ID for name '{name}'")
+            raise RuntimeError(
+                f"Could not resolve Lemmy community ID for name '{name}'"
+            )
         return int(community_id)
 
     async def resolve_community(self, *, name: str) -> dict[str, Any]:
@@ -85,7 +87,9 @@ class LemmyClient:
         payload = response.json()
         return payload.get("posts", [])
 
-    async def list_communities(self, *, limit: int = 50, type_: str = "All") -> list[dict[str, Any]]:
+    async def list_communities(
+        self, *, limit: int = 50, type_: str = "All"
+    ) -> list[dict[str, Any]]:
         # Returns public community_view dicts; each contains
         # community.actor_id, community.name, community.id, and community.title.
         response = await self._request_with_retry(
@@ -151,7 +155,9 @@ class LemmyClient:
             try:
                 self._raise_for_status_with_lemmy_error(response, error_message)
             except LemmyAPIError as exc:
-                if exc.error_code == "rate_limit_error" and attempt < len(backoff_seconds):
+                if exc.error_code == "rate_limit_error" and attempt < len(
+                    backoff_seconds
+                ):
                     logger.warning("%s rate-limited, will retry", operation_name)
                     continue
                 raise
@@ -161,7 +167,9 @@ class LemmyClient:
         raise RuntimeError(f"{operation_name} failed after retries")
 
     @staticmethod
-    def _raise_for_status_with_lemmy_error(response: httpx.Response, message: str) -> None:
+    def _raise_for_status_with_lemmy_error(
+        response: httpx.Response, message: str
+    ) -> None:
         # Lemmy reports many API failures as JSON error payloads with 4xx
         # status codes, so preserve that semantic error code for callers.
         if response.is_success:
@@ -171,5 +179,7 @@ class LemmyClient:
         except ValueError:
             payload = None
         if isinstance(payload, dict) and payload.get("error"):
-            raise LemmyAPIError(f"{message}: {payload['error']}", error_code=str(payload["error"]))
+            raise LemmyAPIError(
+                f"{message}: {payload['error']}", error_code=str(payload["error"])
+            )
         response.raise_for_status()

@@ -33,7 +33,10 @@ def test_discord_guild_allowlist_parses_comma_separated_ids() -> None:
         _settings_data(DISCORD_GUILD_ALLOWLIST="123456789012345678, 987654321098765432")
     )
 
-    assert settings.discord_guild_allowlist == ["123456789012345678", "987654321098765432"]
+    assert settings.discord_guild_allowlist == [
+        "123456789012345678",
+        "987654321098765432",
+    ]
 
 
 def test_discord_guild_allowlist_empty_string_means_unrestricted() -> None:
@@ -46,4 +49,6 @@ def test_discord_guild_allowlist_empty_string_means_unrestricted() -> None:
 def test_discord_guild_allowlist_rejects_non_decimal_entries() -> None:
     """Malformed guild ids fail settings construction at startup."""
     with pytest.raises(ValidationError):
-        Settings.model_validate(_settings_data(DISCORD_GUILD_ALLOWLIST="123,not-a-guild"))
+        Settings.model_validate(
+            _settings_data(DISCORD_GUILD_ALLOWLIST="123,not-a-guild")
+        )

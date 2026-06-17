@@ -32,15 +32,15 @@ def _runtime(tmp_path: Path) -> tuple[object, LocalCommunityRuntime]:
         database=database,
         fedify_gateway=gateway,
         bridge_prefix="[bridge]",
-            bridge_policy_service=build_test_policy_service(database),
-)
+        bridge_policy_service=build_test_policy_service(database),
+    )
     runtime = LocalCommunityRuntime(
         database=database,
         fedify_gateway=gateway,
         content_publish_service=publish_service,
         bridge_prefix="[bridge]",
-            bridge_policy_service=build_test_policy_service(database),
-)
+        bridge_policy_service=build_test_policy_service(database),
+    )
     return database, runtime
 
 
@@ -106,34 +106,52 @@ async def test_host_forum_create_paths_write_exactly_one_host_surface_per_canoni
     )
     await runtime.handle_discord_message(message=build_thread_message())
 
-    canonical_thread = database.local_community_content.get_local_community_thread_by_ap_object_id(
-        "https://bridge.example/users/alice/post/1"
+    canonical_thread = (
+        database.local_community_content.get_local_community_thread_by_ap_object_id(
+            "https://bridge.example/users/alice/post/1"
+        )
     )
     assert canonical_thread is not None
     assert not hasattr(canonical_thread, "discord_thread_id")
     assert not hasattr(canonical_thread, "discord_starter_message_id")
 
-    host_thread_surface = database.local_community_surfaces.get_local_community_thread_surface_by_discord_thread_id(200)
+    host_thread_surface = database.local_community_surfaces.get_local_community_thread_surface_by_discord_thread_id(
+        200
+    )
     assert host_thread_surface is not None
     assert host_thread_surface.role == "host"
     assert host_thread_surface.discord_forum_channel_id == 100
-    thread_surfaces = database.local_community_surfaces.list_local_community_thread_surfaces(canonical_thread.id)
+    thread_surfaces = (
+        database.local_community_surfaces.list_local_community_thread_surfaces(
+            canonical_thread.id
+        )
+    )
     assert len(thread_surfaces) == 1
 
-    canonical_message = database.local_community_content.get_local_community_message_by_ap_object_id(
-        "https://bridge.example/users/alice/comment/1"
+    canonical_message = (
+        database.local_community_content.get_local_community_message_by_ap_object_id(
+            "https://bridge.example/users/alice/comment/1"
+        )
     )
     assert canonical_message is not None
     assert not hasattr(canonical_message, "discord_message_id")
     assert not hasattr(canonical_message, "parent_discord_message_id")
 
-    host_message_surface = database.local_community_surfaces.get_local_community_message_surface_by_discord_message_id(301)
+    host_message_surface = database.local_community_surfaces.get_local_community_message_surface_by_discord_message_id(
+        301
+    )
     assert host_message_surface is not None
     assert host_message_surface.role == "host"
     assert host_message_surface.parent_discord_message_id == 300
-    message_surfaces = database.local_community_surfaces.list_local_community_message_surfaces(canonical_message.id)
+    message_surfaces = (
+        database.local_community_surfaces.list_local_community_message_surfaces(
+            canonical_message.id
+        )
+    )
     assert len(message_surfaces) == 1
-    assert message_surfaces[0].local_community_thread_surface_id == host_thread_surface.id
+    assert (
+        message_surfaces[0].local_community_thread_surface_id == host_thread_surface.id
+    )
 
 
 def test_stage2_current_schema_migrate_keeps_host_surfaces_idempotent(
@@ -177,14 +195,22 @@ def test_stage2_current_schema_migrate_keeps_host_surfaces_idempotent(
     migrated.migrate()
     migrated.migrate()
 
-    thread_surfaces = migrated.local_community_surfaces.list_local_community_thread_surfaces(canonical_thread.id)
+    thread_surfaces = (
+        migrated.local_community_surfaces.list_local_community_thread_surfaces(
+            canonical_thread.id
+        )
+    )
     assert len(thread_surfaces) == 1
     assert thread_surfaces[0].role == "host"
     assert thread_surfaces[0].discord_thread_id == 200
     assert thread_surfaces[0].discord_starter_message_id == 300
     assert thread_surfaces[0].local_subscriber_id is None
 
-    message_surfaces = migrated.local_community_surfaces.list_local_community_message_surfaces(canonical_message.id)
+    message_surfaces = (
+        migrated.local_community_surfaces.list_local_community_message_surfaces(
+            canonical_message.id
+        )
+    )
     assert len(message_surfaces) == 1
     assert message_surfaces[0].role == "host"
     assert message_surfaces[0].discord_message_id == 301
@@ -194,11 +220,15 @@ def test_stage2_current_schema_migrate_keeps_host_surfaces_idempotent(
     with migrated.engine.connect() as connection_sql:
         thread_columns = {
             row[1]
-            for row in connection_sql.execute(text("PRAGMA table_info(local_community_threads)")).fetchall()
+            for row in connection_sql.execute(
+                text("PRAGMA table_info(local_community_threads)")
+            ).fetchall()
         }
         message_columns = {
             row[1]
-            for row in connection_sql.execute(text("PRAGMA table_info(local_community_messages)")).fetchall()
+            for row in connection_sql.execute(
+                text("PRAGMA table_info(local_community_messages)")
+            ).fetchall()
         }
 
     assert "discord_thread_id" not in thread_columns
@@ -228,13 +258,15 @@ async def test_local_subscriber_forum_is_stage4_runtime_source(
     community_runtime = SimpleNamespace(
         handle_discord_thread_create=AsyncMock(return_value="community")
     )
-    local_runtime = SimpleNamespace(handle_discord_thread_create=AsyncMock(return_value="local"))
+    local_runtime = SimpleNamespace(
+        handle_discord_thread_create=AsyncMock(return_value="local")
+    )
     router = DiscordEventRouter(
         database=database,
         community_runtime=community_runtime,
         local_community_runtime=local_runtime,
-            bridge_policy_service=build_test_policy_service(database),
-)
+        bridge_policy_service=build_test_policy_service(database),
+    )
 
     result = await router.handle_thread_create(
         thread=build_thread(thread_id=501, channel_id=101),

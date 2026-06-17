@@ -25,7 +25,6 @@ Directions covered:
 from __future__ import annotations
 from support.runtime import build_test_policy_service
 
-import asyncio
 from datetime import datetime, timezone
 from pathlib import Path
 from types import SimpleNamespace
@@ -40,7 +39,7 @@ from src.db import Database
 from src.content_publish_service import ContentPublishService
 from src.activitypub_models import ActivityPubEvent
 from src.activitypub_handlers import dispatch_activitypub_event
-from tests_constants import BRIDGE_HOST_DOMAIN, LEMMY_EXAMPLE_DOMAIN
+from tests_constants import LEMMY_EXAMPLE_DOMAIN
 
 COMMUNITY_ACTOR_URL = f"https://{LEMMY_EXAMPLE_DOMAIN}/c/hackers"
 POST_AP_ID = f"https://{LEMMY_EXAMPLE_DOMAIN}/post/1"
@@ -79,8 +78,8 @@ def _community_runtime(
         database=database,
         fedify_gateway=AsyncMock(),
         bridge_prefix="[bridge]",
-            bridge_policy_service=build_test_policy_service(database),
-)
+        bridge_policy_service=build_test_policy_service(database),
+    )
     return CommunityRuntime(
         database=database,
         content_publish_service=publish_service,
@@ -89,7 +88,9 @@ def _community_runtime(
     )
 
 
-def _fake_runtime(*, database: Database, gateway: AsyncMock | None = None) -> SimpleNamespace:
+def _fake_runtime(
+    *, database: Database, gateway: AsyncMock | None = None
+) -> SimpleNamespace:
     """Build a minimal fake Runtime carrying a gateway and a noop bot."""
     if gateway is None:
         gateway = AsyncMock()
@@ -235,24 +236,26 @@ def _fake_update_event(
     post_lemmy_id: int | None = None,
 ) -> ActivityPubEvent:
     """Build a fake inbound AP update event."""
-    return ActivityPubEvent.model_validate({
-        "event_type": event_type,
-        "delivery_id": f"delivery-{event_type}-1",
-        "occurred_at": datetime.now(timezone.utc).isoformat(),
-        "community_actor_id": COMMUNITY_ACTOR_URL,
-        "actor_id": f"https://{LEMMY_EXAMPLE_DOMAIN}/u/bob",
-        "object": {
-            "ap_id": ap_id,
-            "kind": kind,
-            "lemmy_id": 1,
-            "post_ap_id": post_ap_id,
-            "post_lemmy_id": post_lemmy_id,
-            "body_markdown": body_markdown,
-            "url": ap_id,
-            "published_at": datetime.now(timezone.utc).isoformat(),
-            "author_name": "bob",
-        },
-    })
+    return ActivityPubEvent.model_validate(
+        {
+            "event_type": event_type,
+            "delivery_id": f"delivery-{event_type}-1",
+            "occurred_at": datetime.now(timezone.utc).isoformat(),
+            "community_actor_id": COMMUNITY_ACTOR_URL,
+            "actor_id": f"https://{LEMMY_EXAMPLE_DOMAIN}/u/bob",
+            "object": {
+                "ap_id": ap_id,
+                "kind": kind,
+                "lemmy_id": 1,
+                "post_ap_id": post_ap_id,
+                "post_lemmy_id": post_lemmy_id,
+                "body_markdown": body_markdown,
+                "url": ap_id,
+                "published_at": datetime.now(timezone.utc).isoformat(),
+                "author_name": "bob",
+            },
+        }
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -270,7 +273,9 @@ async def test_source_message_edit_propagates_to_mirrors_and_ap(tmp_path: Path) 
 
     # Mirror message has no bridge attribution header (plain content).
     # apply_edit_to_discord_message falls through to return new body as-is.
-    fake_mirror_message = SimpleNamespace(id=mirror_msg_id, content="Old body", edit=AsyncMock(), delete=AsyncMock())
+    fake_mirror_message = SimpleNamespace(
+        id=mirror_msg_id, content="Old body", edit=AsyncMock(), delete=AsyncMock()
+    )
     fake_mirror_thread = SimpleNamespace(
         id=mirror_thread_id,
         fetch_message=AsyncMock(return_value=fake_mirror_message),
@@ -339,15 +344,19 @@ async def test_mirror_edit_failure_does_not_block_ap_update(tmp_path: Path) -> N
         fetch_message=AsyncMock(side_effect=discord.NotFound(MagicMock(), "not found")),
     )
     # Second mirror thread succeeds — content has no header so body is returned as-is.
-    success_message = SimpleNamespace(id=mirror_msg_id_2, content="Old body", edit=AsyncMock(), delete=AsyncMock())
+    success_message = SimpleNamespace(
+        id=mirror_msg_id_2, content="Old body", edit=AsyncMock(), delete=AsyncMock()
+    )
     success_thread = SimpleNamespace(
         id=mirror_thread_id_2,
         fetch_message=AsyncMock(return_value=success_message),
     )
-    bot = _fake_bot(threads={
-        mirror_thread_id_1: fail_thread,
-        mirror_thread_id_2: success_thread,
-    })
+    bot = _fake_bot(
+        threads={
+            mirror_thread_id_1: fail_thread,
+            mirror_thread_id_2: success_thread,
+        }
+    )
     fanout = _fake_fanout(bot=bot, database=database)
     community_runtime = _community_runtime(database, bot=bot, discord_fanout=fanout)
 
@@ -362,8 +371,10 @@ async def test_mirror_edit_failure_does_not_block_ap_update(tmp_path: Path) -> N
     )
     database.discord_fanout_groups.add_thread_delivery(
         thread_group_id=thread_group.id,
-        discord_channel_id=100, discord_thread_id=200,
-        discord_starter_message_id=300, role="source",
+        discord_channel_id=100,
+        discord_thread_id=200,
+        discord_starter_message_id=300,
+        role="source",
     )
     message_group = database.discord_fanout_groups.create_message_group(
         community_actor_id=COMMUNITY_ACTOR_URL,
@@ -376,18 +387,24 @@ async def test_mirror_edit_failure_does_not_block_ap_update(tmp_path: Path) -> N
     )
     database.discord_fanout_groups.add_message_delivery(
         message_group_id=message_group.id,
-        discord_channel_id=100, discord_thread_id=200,
-        discord_message_id=source_msg_id, role="source",
+        discord_channel_id=100,
+        discord_thread_id=200,
+        discord_message_id=source_msg_id,
+        role="source",
     )
     database.discord_fanout_groups.add_message_delivery(
         message_group_id=message_group.id,
-        discord_channel_id=101, discord_thread_id=mirror_thread_id_1,
-        discord_message_id=mirror_msg_id_1, role="mirror",
+        discord_channel_id=101,
+        discord_thread_id=mirror_thread_id_1,
+        discord_message_id=mirror_msg_id_1,
+        role="mirror",
     )
     database.discord_fanout_groups.add_message_delivery(
         message_group_id=message_group.id,
-        discord_channel_id=102, discord_thread_id=mirror_thread_id_2,
-        discord_message_id=mirror_msg_id_2, role="mirror",
+        discord_channel_id=102,
+        discord_thread_id=mirror_thread_id_2,
+        discord_message_id=mirror_msg_id_2,
+        role="mirror",
     )
 
     runtime_obj = _fake_runtime(database=database)
@@ -409,14 +426,18 @@ async def test_mirror_edit_failure_does_not_block_ap_update(tmp_path: Path) -> N
 
 
 @pytest.mark.asyncio
-async def test_source_message_delete_removes_mirrors_and_sends_ap_delete(tmp_path: Path) -> None:
+async def test_source_message_delete_removes_mirrors_and_sends_ap_delete(
+    tmp_path: Path,
+) -> None:
     """Deleting a source message deletes the mirror message and sends one AP Delete."""
     database = _database(tmp_path)
     source_msg_id = 301
     mirror_msg_id = 600
     mirror_thread_id = 500
 
-    fake_mirror_message = SimpleNamespace(id=mirror_msg_id, edit=AsyncMock(), delete=AsyncMock())
+    fake_mirror_message = SimpleNamespace(
+        id=mirror_msg_id, edit=AsyncMock(), delete=AsyncMock()
+    )
     fake_mirror_thread = SimpleNamespace(
         id=mirror_thread_id,
         fetch_message=AsyncMock(return_value=fake_mirror_message),
@@ -458,50 +479,66 @@ async def test_mirror_delete_failure_does_not_block_ap_delete(tmp_path: Path) ->
         id=mirror_thread_id_1,
         fetch_message=AsyncMock(side_effect=discord.NotFound(MagicMock(), "not found")),
     )
-    success_message = SimpleNamespace(id=mirror_msg_id_2, edit=AsyncMock(), delete=AsyncMock())
+    success_message = SimpleNamespace(
+        id=mirror_msg_id_2, edit=AsyncMock(), delete=AsyncMock()
+    )
     success_thread = SimpleNamespace(
         id=mirror_thread_id_2,
         fetch_message=AsyncMock(return_value=success_message),
     )
-    bot = _fake_bot(threads={
-        mirror_thread_id_1: fail_thread,
-        mirror_thread_id_2: success_thread,
-    })
+    bot = _fake_bot(
+        threads={
+            mirror_thread_id_1: fail_thread,
+            mirror_thread_id_2: success_thread,
+        }
+    )
     fanout = _fake_fanout(bot=bot, database=database)
     community_runtime = _community_runtime(database, bot=bot, discord_fanout=fanout)
 
     thread_group = database.discord_fanout_groups.create_thread_group(
         community_actor_id=COMMUNITY_ACTOR_URL,
-        source_channel_id=100, source_thread_id=200,
+        source_channel_id=100,
+        source_thread_id=200,
         source_starter_message_id=300,
-        ap_activity_id="activity-thread-1", ap_object_id=POST_AP_ID,
+        ap_activity_id="activity-thread-1",
+        ap_object_id=POST_AP_ID,
     )
     database.discord_fanout_groups.add_thread_delivery(
         thread_group_id=thread_group.id,
-        discord_channel_id=100, discord_thread_id=200,
-        discord_starter_message_id=300, role="source",
+        discord_channel_id=100,
+        discord_thread_id=200,
+        discord_starter_message_id=300,
+        role="source",
     )
     message_group = database.discord_fanout_groups.create_message_group(
         community_actor_id=COMMUNITY_ACTOR_URL,
         thread_group_id=thread_group.id,
-        source_channel_id=100, source_thread_id=200,
+        source_channel_id=100,
+        source_thread_id=200,
         source_message_id=source_msg_id,
-        ap_activity_id="activity-msg-1", ap_object_id=COMMENT_AP_ID,
+        ap_activity_id="activity-msg-1",
+        ap_object_id=COMMENT_AP_ID,
     )
     database.discord_fanout_groups.add_message_delivery(
         message_group_id=message_group.id,
-        discord_channel_id=100, discord_thread_id=200,
-        discord_message_id=source_msg_id, role="source",
+        discord_channel_id=100,
+        discord_thread_id=200,
+        discord_message_id=source_msg_id,
+        role="source",
     )
     database.discord_fanout_groups.add_message_delivery(
         message_group_id=message_group.id,
-        discord_channel_id=101, discord_thread_id=mirror_thread_id_1,
-        discord_message_id=mirror_msg_id_1, role="mirror",
+        discord_channel_id=101,
+        discord_thread_id=mirror_thread_id_1,
+        discord_message_id=mirror_msg_id_1,
+        role="mirror",
     )
     database.discord_fanout_groups.add_message_delivery(
         message_group_id=message_group.id,
-        discord_channel_id=102, discord_thread_id=mirror_thread_id_2,
-        discord_message_id=mirror_msg_id_2, role="mirror",
+        discord_channel_id=102,
+        discord_thread_id=mirror_thread_id_2,
+        discord_message_id=mirror_msg_id_2,
+        role="mirror",
     )
 
     runtime_obj = _fake_runtime(database=database)
@@ -526,7 +563,9 @@ async def test_mirror_delete_failure_does_not_block_ap_delete(tmp_path: Path) ->
 
 
 @pytest.mark.asyncio
-async def test_inbound_comment_update_edits_all_discord_deliveries(tmp_path: Path) -> None:
+async def test_inbound_comment_update_edits_all_discord_deliveries(
+    tmp_path: Path,
+) -> None:
     """Inbound comment.updated edits all delivery messages in the message group."""
     database = _database(tmp_path)
     msg_id_1 = 300
@@ -535,10 +574,18 @@ async def test_inbound_comment_update_edits_all_discord_deliveries(tmp_path: Pat
     thread_id_2 = 500
 
     # Inbound messages have no bridge attribution header — apply_edit falls through to raw body.
-    msg1 = SimpleNamespace(id=msg_id_1, content="Old comment body", edit=AsyncMock(), delete=AsyncMock())
-    msg2 = SimpleNamespace(id=msg_id_2, content="Old comment body", edit=AsyncMock(), delete=AsyncMock())
-    thread1 = SimpleNamespace(id=thread_id_1, fetch_message=AsyncMock(return_value=msg1))
-    thread2 = SimpleNamespace(id=thread_id_2, fetch_message=AsyncMock(return_value=msg2))
+    msg1 = SimpleNamespace(
+        id=msg_id_1, content="Old comment body", edit=AsyncMock(), delete=AsyncMock()
+    )
+    msg2 = SimpleNamespace(
+        id=msg_id_2, content="Old comment body", edit=AsyncMock(), delete=AsyncMock()
+    )
+    thread1 = SimpleNamespace(
+        id=thread_id_1, fetch_message=AsyncMock(return_value=msg1)
+    )
+    thread2 = SimpleNamespace(
+        id=thread_id_2, fetch_message=AsyncMock(return_value=msg2)
+    )
     bot = _fake_bot(threads={thread_id_1: thread1, thread_id_2: thread2})
 
     community_runtime = _community_runtime(database, bot=bot)
@@ -546,35 +593,48 @@ async def test_inbound_comment_update_edits_all_discord_deliveries(tmp_path: Pat
     # Set up thread group with two inbound deliveries.
     thread_group = database.discord_fanout_groups.create_thread_group(
         community_actor_id=COMMUNITY_ACTOR_URL,
-        source_channel_id=None, source_thread_id=None,
+        source_channel_id=None,
+        source_thread_id=None,
         source_starter_message_id=None,
-        ap_activity_id="delivery-post-1", ap_object_id=POST_AP_ID,
+        ap_activity_id="delivery-post-1",
+        ap_object_id=POST_AP_ID,
     )
     database.discord_fanout_groups.add_thread_delivery(
         thread_group_id=thread_group.id,
-        discord_channel_id=100, discord_thread_id=thread_id_1,
-        discord_starter_message_id=999, role="inbound",
+        discord_channel_id=100,
+        discord_thread_id=thread_id_1,
+        discord_starter_message_id=999,
+        role="inbound",
     )
     database.discord_fanout_groups.add_thread_delivery(
         thread_group_id=thread_group.id,
-        discord_channel_id=101, discord_thread_id=thread_id_2,
-        discord_starter_message_id=998, role="inbound",
+        discord_channel_id=101,
+        discord_thread_id=thread_id_2,
+        discord_starter_message_id=998,
+        role="inbound",
     )
     message_group = database.discord_fanout_groups.create_message_group(
         community_actor_id=COMMUNITY_ACTOR_URL,
         thread_group_id=thread_group.id,
-        source_channel_id=None, source_thread_id=None, source_message_id=None,
-        ap_activity_id="delivery-comment-1", ap_object_id=COMMENT_AP_ID,
+        source_channel_id=None,
+        source_thread_id=None,
+        source_message_id=None,
+        ap_activity_id="delivery-comment-1",
+        ap_object_id=COMMENT_AP_ID,
     )
     database.discord_fanout_groups.add_message_delivery(
         message_group_id=message_group.id,
-        discord_channel_id=100, discord_thread_id=thread_id_1,
-        discord_message_id=msg_id_1, role="inbound",
+        discord_channel_id=100,
+        discord_thread_id=thread_id_1,
+        discord_message_id=msg_id_1,
+        role="inbound",
     )
     database.discord_fanout_groups.add_message_delivery(
         message_group_id=message_group.id,
-        discord_channel_id=101, discord_thread_id=thread_id_2,
-        discord_message_id=msg_id_2, role="inbound",
+        discord_channel_id=101,
+        discord_thread_id=thread_id_2,
+        discord_message_id=msg_id_2,
+        role="inbound",
     )
 
     event = _fake_update_event(
@@ -597,7 +657,9 @@ async def test_inbound_comment_update_edits_all_discord_deliveries(tmp_path: Pat
 
 
 @pytest.mark.asyncio
-async def test_inbound_comment_update_for_unknown_ap_id_returns_skipped(tmp_path: Path) -> None:
+async def test_inbound_comment_update_for_unknown_ap_id_returns_skipped(
+    tmp_path: Path,
+) -> None:
     """Inbound comment.updated for an unmapped comment returns skipped with no Discord calls."""
     database = _database(tmp_path)
     bot = _fake_bot(threads={})
@@ -623,7 +685,9 @@ async def test_inbound_comment_update_for_unknown_ap_id_returns_skipped(tmp_path
 
 
 @pytest.mark.asyncio
-async def test_inbound_comment_delete_marks_all_discord_deliveries_deleted(tmp_path: Path) -> None:
+async def test_inbound_comment_delete_marks_all_discord_deliveries_deleted(
+    tmp_path: Path,
+) -> None:
     """Inbound comment.deleted edits all delivery messages to '*deleted by creator*'."""
     database = _database(tmp_path)
     msg_id_1 = 300
@@ -631,45 +695,72 @@ async def test_inbound_comment_delete_marks_all_discord_deliveries_deleted(tmp_p
     thread_id_1 = 200
     thread_id_2 = 500
 
-    msg1 = SimpleNamespace(id=msg_id_1, content="`alice@lemmy.example`\n\nOriginal body", edit=AsyncMock(), delete=AsyncMock())
-    msg2 = SimpleNamespace(id=msg_id_2, content="`alice@lemmy.example`\n\nOriginal body", edit=AsyncMock(), delete=AsyncMock())
-    thread1 = SimpleNamespace(id=thread_id_1, fetch_message=AsyncMock(return_value=msg1))
-    thread2 = SimpleNamespace(id=thread_id_2, fetch_message=AsyncMock(return_value=msg2))
+    msg1 = SimpleNamespace(
+        id=msg_id_1,
+        content="`alice@lemmy.example`\n\nOriginal body",
+        edit=AsyncMock(),
+        delete=AsyncMock(),
+    )
+    msg2 = SimpleNamespace(
+        id=msg_id_2,
+        content="`alice@lemmy.example`\n\nOriginal body",
+        edit=AsyncMock(),
+        delete=AsyncMock(),
+    )
+    thread1 = SimpleNamespace(
+        id=thread_id_1, fetch_message=AsyncMock(return_value=msg1)
+    )
+    thread2 = SimpleNamespace(
+        id=thread_id_2, fetch_message=AsyncMock(return_value=msg2)
+    )
     bot = _fake_bot(threads={thread_id_1: thread1, thread_id_2: thread2})
 
     community_runtime = _community_runtime(database, bot=bot)
 
     thread_group = database.discord_fanout_groups.create_thread_group(
         community_actor_id=COMMUNITY_ACTOR_URL,
-        source_channel_id=None, source_thread_id=None,
+        source_channel_id=None,
+        source_thread_id=None,
         source_starter_message_id=None,
-        ap_activity_id="delivery-post-1", ap_object_id=POST_AP_ID,
+        ap_activity_id="delivery-post-1",
+        ap_object_id=POST_AP_ID,
     )
     database.discord_fanout_groups.add_thread_delivery(
         thread_group_id=thread_group.id,
-        discord_channel_id=100, discord_thread_id=thread_id_1,
-        discord_starter_message_id=999, role="inbound",
+        discord_channel_id=100,
+        discord_thread_id=thread_id_1,
+        discord_starter_message_id=999,
+        role="inbound",
     )
     database.discord_fanout_groups.add_thread_delivery(
         thread_group_id=thread_group.id,
-        discord_channel_id=101, discord_thread_id=thread_id_2,
-        discord_starter_message_id=998, role="inbound",
+        discord_channel_id=101,
+        discord_thread_id=thread_id_2,
+        discord_starter_message_id=998,
+        role="inbound",
     )
     message_group = database.discord_fanout_groups.create_message_group(
         community_actor_id=COMMUNITY_ACTOR_URL,
         thread_group_id=thread_group.id,
-        source_channel_id=None, source_thread_id=None, source_message_id=None,
-        ap_activity_id="delivery-comment-1", ap_object_id=COMMENT_AP_ID,
+        source_channel_id=None,
+        source_thread_id=None,
+        source_message_id=None,
+        ap_activity_id="delivery-comment-1",
+        ap_object_id=COMMENT_AP_ID,
     )
     database.discord_fanout_groups.add_message_delivery(
         message_group_id=message_group.id,
-        discord_channel_id=100, discord_thread_id=thread_id_1,
-        discord_message_id=msg_id_1, role="inbound",
+        discord_channel_id=100,
+        discord_thread_id=thread_id_1,
+        discord_message_id=msg_id_1,
+        role="inbound",
     )
     database.discord_fanout_groups.add_message_delivery(
         message_group_id=message_group.id,
-        discord_channel_id=101, discord_thread_id=thread_id_2,
-        discord_message_id=msg_id_2, role="inbound",
+        discord_channel_id=101,
+        discord_thread_id=thread_id_2,
+        discord_message_id=msg_id_2,
+        role="inbound",
     )
 
     event = _fake_update_event(
@@ -693,7 +784,9 @@ async def test_inbound_comment_delete_marks_all_discord_deliveries_deleted(tmp_p
 
 
 @pytest.mark.asyncio
-async def test_inbound_post_delete_marks_all_thread_starters_deleted(tmp_path: Path) -> None:
+async def test_inbound_post_delete_marks_all_thread_starters_deleted(
+    tmp_path: Path,
+) -> None:
     """Inbound post.deleted edits all thread starter messages to '*deleted by creator*'."""
     database = _database(tmp_path)
     thread_id_1 = 200
@@ -701,8 +794,12 @@ async def test_inbound_post_delete_marks_all_thread_starters_deleted(tmp_path: P
     starter_msg_id_1 = 999
     starter_msg_id_2 = 998
 
-    starter1 = SimpleNamespace(id=starter_msg_id_1, edit=AsyncMock(), delete=AsyncMock())
-    starter2 = SimpleNamespace(id=starter_msg_id_2, edit=AsyncMock(), delete=AsyncMock())
+    starter1 = SimpleNamespace(
+        id=starter_msg_id_1, edit=AsyncMock(), delete=AsyncMock()
+    )
+    starter2 = SimpleNamespace(
+        id=starter_msg_id_2, edit=AsyncMock(), delete=AsyncMock()
+    )
     thread1 = SimpleNamespace(
         id=thread_id_1,
         fetch_message=AsyncMock(return_value=starter1),
@@ -719,19 +816,25 @@ async def test_inbound_post_delete_marks_all_thread_starters_deleted(tmp_path: P
 
     thread_group = database.discord_fanout_groups.create_thread_group(
         community_actor_id=COMMUNITY_ACTOR_URL,
-        source_channel_id=None, source_thread_id=None,
+        source_channel_id=None,
+        source_thread_id=None,
         source_starter_message_id=None,
-        ap_activity_id="delivery-post-1", ap_object_id=POST_AP_ID,
+        ap_activity_id="delivery-post-1",
+        ap_object_id=POST_AP_ID,
     )
     database.discord_fanout_groups.add_thread_delivery(
         thread_group_id=thread_group.id,
-        discord_channel_id=100, discord_thread_id=thread_id_1,
-        discord_starter_message_id=starter_msg_id_1, role="inbound",
+        discord_channel_id=100,
+        discord_thread_id=thread_id_1,
+        discord_starter_message_id=starter_msg_id_1,
+        role="inbound",
     )
     database.discord_fanout_groups.add_thread_delivery(
         thread_group_id=thread_group.id,
-        discord_channel_id=101, discord_thread_id=thread_id_2,
-        discord_starter_message_id=starter_msg_id_2, role="inbound",
+        discord_channel_id=101,
+        discord_thread_id=thread_id_2,
+        discord_starter_message_id=starter_msg_id_2,
+        role="inbound",
     )
 
     event = _fake_update_event(
@@ -779,15 +882,17 @@ async def test_dispatch_routes_comment_updated_to_handler(tmp_path: Path) -> Non
         database=database,
         fedify_gateway=AsyncMock(),
         bot=SimpleNamespace(wait_until_bridge_ready=wait_until_bridge_ready),
-            bridge_policy_service=build_test_policy_service(database),
-)
+        bridge_policy_service=build_test_policy_service(database),
+    )
     # No message group exists → should return skipped, not raise.
     result = await dispatch_activitypub_event(event, runtime_obj)
     assert result.status == "skipped"
 
 
 @pytest.mark.asyncio
-async def test_dispatch_routes_post_deleted_with_existing_thread_group(tmp_path: Path) -> None:
+async def test_dispatch_routes_post_deleted_with_existing_thread_group(
+    tmp_path: Path,
+) -> None:
     """dispatch_activitypub_event routes post.deleted to handle_inbound_post_delete, deletes thread."""
     database = _database(tmp_path)
     thread_id = 200
@@ -799,14 +904,18 @@ async def test_dispatch_routes_post_deleted_with_existing_thread_group(tmp_path:
     # Seed a real thread group with one inbound delivery.
     thread_group = database.discord_fanout_groups.create_thread_group(
         community_actor_id=COMMUNITY_ACTOR_URL,
-        source_channel_id=None, source_thread_id=None,
+        source_channel_id=None,
+        source_thread_id=None,
         source_starter_message_id=None,
-        ap_activity_id="delivery-post-dispatch", ap_object_id=POST_AP_ID,
+        ap_activity_id="delivery-post-dispatch",
+        ap_object_id=POST_AP_ID,
     )
     database.discord_fanout_groups.add_thread_delivery(
         thread_group_id=thread_group.id,
-        discord_channel_id=100, discord_thread_id=thread_id,
-        discord_starter_message_id=999, role="inbound",
+        discord_channel_id=100,
+        discord_thread_id=thread_id,
+        discord_starter_message_id=999,
+        role="inbound",
     )
 
     event = _fake_update_event(
@@ -823,8 +932,8 @@ async def test_dispatch_routes_post_deleted_with_existing_thread_group(tmp_path:
         database=database,
         fedify_gateway=AsyncMock(),
         bot=SimpleNamespace(wait_until_bridge_ready=wait_until_bridge_ready),
-            bridge_policy_service=build_test_policy_service(database),
-)
+        bridge_policy_service=build_test_policy_service(database),
+    )
     result = await dispatch_activitypub_event(event, runtime_obj)
 
     assert result.status == "processed"
@@ -837,7 +946,9 @@ async def test_dispatch_routes_post_deleted_with_existing_thread_group(tmp_path:
 
 
 @pytest.mark.asyncio
-async def test_inbound_post_update_edits_discord_thread_starters(tmp_path: Path) -> None:
+async def test_inbound_post_update_edits_discord_thread_starters(
+    tmp_path: Path,
+) -> None:
     """Inbound post.updated edits the starter message in all thread deliveries."""
     database = _database(tmp_path)
     thread_id_1 = 200
@@ -846,8 +957,12 @@ async def test_inbound_post_update_edits_discord_thread_starters(tmp_path: Path)
     starter_msg_id_2 = 998
 
     # Each fake thread exposes fetch_message for the starter and an editable stub.
-    starter1 = SimpleNamespace(id=starter_msg_id_1, edit=AsyncMock(), delete=AsyncMock())
-    starter2 = SimpleNamespace(id=starter_msg_id_2, edit=AsyncMock(), delete=AsyncMock())
+    starter1 = SimpleNamespace(
+        id=starter_msg_id_1, edit=AsyncMock(), delete=AsyncMock()
+    )
+    starter2 = SimpleNamespace(
+        id=starter_msg_id_2, edit=AsyncMock(), delete=AsyncMock()
+    )
     thread1 = SimpleNamespace(
         id=thread_id_1,
         fetch_message=AsyncMock(return_value=starter1),
@@ -864,19 +979,25 @@ async def test_inbound_post_update_edits_discord_thread_starters(tmp_path: Path)
     # Seed thread group with two inbound deliveries, each having its own starter message.
     thread_group = database.discord_fanout_groups.create_thread_group(
         community_actor_id=COMMUNITY_ACTOR_URL,
-        source_channel_id=None, source_thread_id=None,
+        source_channel_id=None,
+        source_thread_id=None,
         source_starter_message_id=None,
-        ap_activity_id="delivery-post-update", ap_object_id=POST_AP_ID,
+        ap_activity_id="delivery-post-update",
+        ap_object_id=POST_AP_ID,
     )
     database.discord_fanout_groups.add_thread_delivery(
         thread_group_id=thread_group.id,
-        discord_channel_id=100, discord_thread_id=thread_id_1,
-        discord_starter_message_id=starter_msg_id_1, role="inbound",
+        discord_channel_id=100,
+        discord_thread_id=thread_id_1,
+        discord_starter_message_id=starter_msg_id_1,
+        role="inbound",
     )
     database.discord_fanout_groups.add_thread_delivery(
         thread_group_id=thread_group.id,
-        discord_channel_id=101, discord_thread_id=thread_id_2,
-        discord_starter_message_id=starter_msg_id_2, role="inbound",
+        discord_channel_id=101,
+        discord_thread_id=thread_id_2,
+        discord_starter_message_id=starter_msg_id_2,
+        role="inbound",
     )
 
     event = _fake_update_event(
@@ -897,7 +1018,9 @@ async def test_inbound_post_update_edits_discord_thread_starters(tmp_path: Path)
 
 
 @pytest.mark.asyncio
-async def test_inbound_post_update_for_unknown_ap_id_returns_skipped(tmp_path: Path) -> None:
+async def test_inbound_post_update_for_unknown_ap_id_returns_skipped(
+    tmp_path: Path,
+) -> None:
     """Inbound post.updated for an unmapped post returns skipped with no Discord calls."""
     database = _database(tmp_path)
     bot = _fake_bot(threads={})
@@ -935,8 +1058,8 @@ async def test_dispatch_routes_post_updated_to_handler(tmp_path: Path) -> None:
         database=database,
         fedify_gateway=AsyncMock(),
         bot=SimpleNamespace(wait_until_bridge_ready=wait_until_bridge_ready),
-            bridge_policy_service=build_test_policy_service(database),
-)
+        bridge_policy_service=build_test_policy_service(database),
+    )
     # No thread group for this AP ID → routes to handler, handler returns skipped.
     result = await dispatch_activitypub_event(event, runtime_obj)
     assert result.status == "skipped"
@@ -1014,32 +1137,43 @@ async def test_inbound_comment_update_preserves_username_header(tmp_path: Path) 
         edit=AsyncMock(),
         delete=AsyncMock(),
     )
-    thread = SimpleNamespace(id=thread_id, fetch_message=AsyncMock(return_value=message))
+    thread = SimpleNamespace(
+        id=thread_id, fetch_message=AsyncMock(return_value=message)
+    )
     bot = _fake_bot(threads={thread_id: thread})
     community_runtime = _community_runtime(database, bot=bot)
 
     # Set up one inbound thread group and message group.
     thread_group = database.discord_fanout_groups.create_thread_group(
         community_actor_id=COMMUNITY_ACTOR_URL,
-        source_channel_id=None, source_thread_id=None,
+        source_channel_id=None,
+        source_thread_id=None,
         source_starter_message_id=None,
-        ap_activity_id="delivery-post-hdr", ap_object_id=POST_AP_ID,
+        ap_activity_id="delivery-post-hdr",
+        ap_object_id=POST_AP_ID,
     )
     database.discord_fanout_groups.add_thread_delivery(
         thread_group_id=thread_group.id,
-        discord_channel_id=100, discord_thread_id=thread_id,
-        discord_starter_message_id=999, role="inbound",
+        discord_channel_id=100,
+        discord_thread_id=thread_id,
+        discord_starter_message_id=999,
+        role="inbound",
     )
     message_group = database.discord_fanout_groups.create_message_group(
         community_actor_id=COMMUNITY_ACTOR_URL,
         thread_group_id=thread_group.id,
-        source_channel_id=None, source_thread_id=None, source_message_id=None,
-        ap_activity_id="delivery-comment-hdr", ap_object_id=COMMENT_AP_ID,
+        source_channel_id=None,
+        source_thread_id=None,
+        source_message_id=None,
+        ap_activity_id="delivery-comment-hdr",
+        ap_object_id=COMMENT_AP_ID,
     )
     database.discord_fanout_groups.add_message_delivery(
         message_group_id=message_group.id,
-        discord_channel_id=100, discord_thread_id=thread_id,
-        discord_message_id=msg_id, role="inbound",
+        discord_channel_id=100,
+        discord_thread_id=thread_id,
+        discord_message_id=msg_id,
+        role="inbound",
     )
 
     event = _fake_update_event(

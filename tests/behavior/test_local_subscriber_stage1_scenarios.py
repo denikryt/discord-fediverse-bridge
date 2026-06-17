@@ -10,7 +10,7 @@ from support.runtime import build_test_policy_service
 
 from pathlib import Path
 from types import SimpleNamespace
-from unittest.mock import AsyncMock, patch
+from unittest.mock import patch
 
 import discord
 import pytest
@@ -58,7 +58,9 @@ def _register_user(database: Database, discord_user_id: str = "1234567890") -> N
     )
 
 
-def _create_local_community(database: Database, *, forum_channel_id: int = 100) -> object:
+def _create_local_community(
+    database: Database, *, forum_channel_id: int = 100
+) -> object:
     """Create one bridge-owned local community for local-subscriber tests."""
     LocalCommunityService(
         database=database,
@@ -72,7 +74,9 @@ def _create_local_community(database: Database, *, forum_channel_id: int = 100) 
         description="A bridge-owned local community.",
         created_by_discord_user_id="123",
     )
-    community = database.local_communities.get_local_community_by_slug("great_community")
+    community = database.local_communities.get_local_community_by_slug(
+        "great_community"
+    )
     assert community is not None
     return community
 
@@ -90,7 +94,13 @@ async def test_subscribe_community_persists_local_subscriber_without_remote_foll
     _register_user(database)
     community = _create_local_community(database, forum_channel_id=100)
 
-    subscribe.register(command_tree, database, fedify_gateway, _settings(), policy_service=build_test_policy_service(database))
+    subscribe.register(
+        command_tree,
+        database,
+        fedify_gateway,
+        _settings(),
+        policy_service=build_test_policy_service(database),
+    )
 
     command = command_tree.commands["subscribe-community"]
     with patch("src.commands.subscribe.resolve_selected_community") as resolve_selected:
@@ -110,18 +120,28 @@ async def test_subscribe_community_persists_local_subscriber_without_remote_foll
             instance_domain=f"https://{BRIDGE_EXAMPLE_DOMAIN}",
         )
 
-    local_subscriber = database.local_subscribers.get_local_subscriber_by_channel(forum_channel.id)
+    local_subscriber = database.local_subscribers.get_local_subscriber_by_channel(
+        forum_channel.id
+    )
     assert local_subscriber is not None
     assert local_subscriber.local_community_id == community.id
     assert local_subscriber.status == "active"
-    assert database.bridge_actor_follows.get_bridge_actor_follow(community.actor_url) is None
-    assert database.remote_subscribers.get_remote_subscriber(
-        local_community_id=community.id,
-        remote_actor_id=f"https://{BRIDGE_EXAMPLE_DOMAIN}/actors/bridge",
-    ) is None
+    assert (
+        database.bridge_actor_follows.get_bridge_actor_follow(community.actor_url)
+        is None
+    )
+    assert (
+        database.remote_subscribers.get_remote_subscriber(
+            local_community_id=community.id,
+            remote_actor_id=f"https://{BRIDGE_EXAMPLE_DOMAIN}/actors/bridge",
+        )
+        is None
+    )
     fedify_gateway.follow_community.assert_not_awaited()
     send_call = interaction.response.send_message.await_args
-    assert send_call.args == ("<@1234567890> subscribed <#12345> to **great_community@bridge.example**.",)
+    assert send_call.args == (
+        "<@1234567890> subscribed <#12345> to **great_community@bridge.example**.",
+    )
     assert send_call.kwargs.get("ephemeral", False) is False
     assert send_call.kwargs["allowed_mentions"].users is False
 
@@ -139,7 +159,13 @@ async def test_subscribe_community_rejects_host_forum_as_local_subscriber_target
     community = _create_local_community(database, forum_channel_id=12345)
     host_forum = SimpleNamespace(id=12345, mention="<#12345>")
 
-    subscribe.register(command_tree, database, fedify_gateway, _settings(), policy_service=build_test_policy_service(database))
+    subscribe.register(
+        command_tree,
+        database,
+        fedify_gateway,
+        _settings(),
+        policy_service=build_test_policy_service(database),
+    )
 
     command = command_tree.commands["subscribe-community"]
     with patch("src.commands.subscribe.resolve_selected_community") as resolve_selected:
@@ -159,7 +185,10 @@ async def test_subscribe_community_rejects_host_forum_as_local_subscriber_target
             instance_domain=f"https://{BRIDGE_EXAMPLE_DOMAIN}",
         )
 
-    assert database.local_subscribers.get_local_subscriber_by_channel(host_forum.id) is None
+    assert (
+        database.local_subscribers.get_local_subscriber_by_channel(host_forum.id)
+        is None
+    )
     fedify_gateway.follow_community.assert_not_awaited()
     interaction.response.send_message.assert_awaited_once_with(
         "Forum channel <#12345> is already used by another bridge community or subscription.",
@@ -187,15 +216,26 @@ async def test_unsubscribe_community_removes_only_local_subscriber_state(
         status="active",
     )
 
-    unsubscribe.register(command_tree, database, fedify_gateway, _settings(), policy_service=build_test_policy_service(database))
+    unsubscribe.register(
+        command_tree,
+        database,
+        fedify_gateway,
+        _settings(),
+        policy_service=build_test_policy_service(database),
+    )
 
     command = command_tree.commands["unsubscribe-channel"]
     await command.callback(interaction, forum_channel)
 
-    assert database.local_subscribers.get_local_subscriber_by_channel(forum_channel.id) is None
+    assert (
+        database.local_subscribers.get_local_subscriber_by_channel(forum_channel.id)
+        is None
+    )
     fedify_gateway.unfollow_community.assert_not_awaited()
     send_call = interaction.response.send_message.await_args
-    assert send_call.args == ("<@1234567890> unsubscribed <#12345> from **great_community@bridge.example**.",)
+    assert send_call.args == (
+        "<@1234567890> unsubscribed <#12345> from **great_community@bridge.example**.",
+    )
     assert send_call.kwargs.get("ephemeral", False) is False
     assert send_call.kwargs["allowed_mentions"].users is False
 
@@ -230,7 +270,12 @@ async def test_list_subscriptions_renders_remote_and_local_sections(
         status="active",
     )
 
-    list_subs.register(command_tree, database, SimpleNamespace(discord_guild_allowlist=[]), policy_service=build_test_policy_service(database))
+    list_subs.register(
+        command_tree,
+        database,
+        SimpleNamespace(discord_guild_allowlist=[]),
+        policy_service=build_test_policy_service(database),
+    )
 
     command = command_tree.commands["list-subscriptions"]
     await command.callback(interaction)

@@ -10,8 +10,14 @@ import pytest
 
 from src.db import Database
 from src.dashboard import build_dashboard_payload
-from src.operations.publish_guild_invite import PublishGuildInviteInput, run_publish_guild_invite
-from src.operations.remove_guild_invite import RemoveGuildInviteInput, run_remove_guild_invite
+from src.operations.publish_guild_invite import (
+    PublishGuildInviteInput,
+    run_publish_guild_invite,
+)
+from src.operations.remove_guild_invite import (
+    RemoveGuildInviteInput,
+    run_remove_guild_invite,
+)
 
 
 def _create_active_community(
@@ -99,7 +105,10 @@ async def test_publish_and_remove_guild_invite(tmp_path) -> None:
         )
     )
     assert published.reason == "published"
-    assert database.guild_invite_publications.get_by_guild_id(10).invite_url == "https://discord.gg/new"
+    assert (
+        database.guild_invite_publications.get_by_guild_id(10).invite_url
+        == "https://discord.gg/new"
+    )
     channel.create_invite.assert_awaited_once_with(
         max_age=0,
         max_uses=0,
@@ -142,7 +151,9 @@ async def test_publication_requires_active_local_community(tmp_path) -> None:
 
 
 @pytest.mark.asyncio
-async def test_publication_selects_first_invitable_active_host_channel(tmp_path) -> None:
+async def test_publication_selects_first_invitable_active_host_channel(
+    tmp_path,
+) -> None:
     """The operation skips unusable hosts and selects the first invitable one."""
     database = Database(f"sqlite:///{tmp_path / 'bridge.db'}")
     database.create_all()
@@ -164,11 +175,15 @@ async def test_publication_selects_first_invitable_active_host_channel(tmp_path)
     assert result.reason == "published"
     blocked.create_invite.assert_not_awaited()
     selected.create_invite.assert_awaited_once()
-    assert database.guild_invite_publications.get_by_guild_id(10).discord_channel_id == 21
+    assert (
+        database.guild_invite_publications.get_by_guild_id(10).discord_channel_id == 21
+    )
 
 
 @pytest.mark.asyncio
-async def test_publication_rejects_when_no_active_host_channel_can_create_invite(tmp_path) -> None:
+async def test_publication_rejects_when_no_active_host_channel_can_create_invite(
+    tmp_path,
+) -> None:
     """An active community is insufficient when none of its channels can invite."""
     database = Database(f"sqlite:///{tmp_path / 'bridge.db'}")
     database.create_all()
@@ -219,20 +234,25 @@ def test_dashboard_attaches_invite_only_to_existing_guild_bucket(tmp_path) -> No
             fedify_actor_identifier="bridge",
             federation_allowlist=[],
         ),
-            bridge_policy_service=build_test_policy_service(database, SimpleNamespace(
-            fedify_origin="https://bridge.example",
-            normalized_fedify_origin="https://bridge.example",
-            fedify_actor_identifier="bridge",
-            federation_allowlist=[],
-        )),
-)
+        bridge_policy_service=build_test_policy_service(
+            database,
+            SimpleNamespace(
+                fedify_origin="https://bridge.example",
+                normalized_fedify_origin="https://bridge.example",
+                fedify_actor_identifier="bridge",
+                federation_allowlist=[],
+            ),
+        ),
+    )
     payload = build_dashboard_payload(runtime)
     assert len(payload["discordGuilds"]) == 1
     assert payload["discordGuilds"][0]["inviteUrl"] == "https://discord.gg/abc"
 
 
 @pytest.mark.asyncio
-async def test_replacement_stays_published_when_old_invite_cleanup_fails(tmp_path) -> None:
+async def test_replacement_stays_published_when_old_invite_cleanup_fails(
+    tmp_path,
+) -> None:
     """Old-invite cleanup is best-effort after the new row commits."""
     database = Database(f"sqlite:///{tmp_path / 'bridge.db'}")
     database.create_all()
@@ -246,7 +266,9 @@ async def test_replacement_stays_published_when_old_invite_cleanup_fails(tmp_pat
             delete=AsyncMock(),
         ),
     )
-    client = SimpleNamespace(fetch_invite=AsyncMock(side_effect=RuntimeError("cleanup failed")))
+    client = SimpleNamespace(
+        fetch_invite=AsyncMock(side_effect=RuntimeError("cleanup failed"))
+    )
 
     await run_publish_guild_invite(
         PublishGuildInviteInput(
@@ -274,6 +296,10 @@ async def test_replacement_stays_published_when_old_invite_cleanup_fails(tmp_pat
     )
 
     assert result.reason == "replaced"
-    assert database.guild_invite_publications.get_by_guild_id(10).invite_code == "second"
-    actions = [row.action for row in database.management_audit_events.list_oldest_first()]
+    assert (
+        database.guild_invite_publications.get_by_guild_id(10).invite_code == "second"
+    )
+    actions = [
+        row.action for row in database.management_audit_events.list_oldest_first()
+    ]
     assert actions == ["guild_invite.published", "guild_invite.replaced"]

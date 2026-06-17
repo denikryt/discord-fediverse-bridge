@@ -59,7 +59,9 @@ def _runtime(tmp_path) -> SimpleNamespace:
 
 
 @pytest.mark.asyncio
-async def test_global_ban_blocks_user_follow_before_actor_kind_service(tmp_path) -> None:
+async def test_global_ban_blocks_user_follow_before_actor_kind_service(
+    tmp_path,
+) -> None:
     """Global policy must run before User Actor lifecycle dispatch."""
     runtime = _runtime(tmp_path)
     try:
@@ -73,11 +75,15 @@ async def test_global_ban_blocks_user_follow_before_actor_kind_service(tmp_path)
 
 
 @pytest.mark.asyncio
-async def test_global_ban_blocks_community_follow_before_community_service(tmp_path) -> None:
+async def test_global_ban_blocks_community_follow_before_community_service(
+    tmp_path,
+) -> None:
     """The same global policy must block community targets before scoped checks."""
     runtime = _runtime(tmp_path)
     try:
-        result = await dispatch_activitypub_event(_event(target_kind="community"), runtime)
+        result = await dispatch_activitypub_event(
+            _event(target_kind="community"), runtime
+        )
 
         assert result.status == "skipped"
         assert result.outcome.value == "ignored_by_ban"
@@ -115,7 +121,9 @@ async def test_community_scoped_ban_does_not_block_user_actor_follow(tmp_path) -
     )
     follow_service = SimpleNamespace(
         handle_follow=AsyncMock(
-            return_value=SimpleNamespace(status="processed", outcome=SimpleNamespace(value="applied"))
+            return_value=SimpleNamespace(
+                status="processed", outcome=SimpleNamespace(value="applied")
+            )
         )
     )
     runtime = SimpleNamespace(

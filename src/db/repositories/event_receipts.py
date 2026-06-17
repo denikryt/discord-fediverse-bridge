@@ -73,4 +73,6 @@ def _canonical_outcome(outcome: InboundActivityOutcome | str | None) -> str | No
     """Return the persisted string representation of an optional outcome."""
     if outcome is None:
         return None
-    return outcome.value if isinstance(outcome, InboundActivityOutcome) else str(outcome)
+    return (
+        outcome.value if isinstance(outcome, InboundActivityOutcome) else str(outcome)
+    )

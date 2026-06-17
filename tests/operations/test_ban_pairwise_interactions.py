@@ -9,7 +9,12 @@ import pytest
 
 from src.bridge_policy import BridgePolicyService
 from src.local_communities.service import LocalCommunityService
-from src.operations import BanUserInput, UnbanUserInput, ban_user_operation, unban_user_operation
+from src.operations import (
+    BanUserInput,
+    UnbanUserInput,
+    ban_user_operation,
+    unban_user_operation,
+)
 from support.ban_effects import assert_ban_effects, collect_ban_effects
 from support.ban_interactions import BAN_INTERACTION_CASES, BanInteractionCase
 from support.db import build_database
@@ -19,7 +24,9 @@ def _settings(case: BanInteractionCase) -> SimpleNamespace:
     """Build explicit identity and super-admin settings."""
 
     return SimpleNamespace(
-        bridge_super_admin_user_ids=["999"] if case.caller_role == "super_admin" else [],
+        bridge_super_admin_user_ids=["999"]
+        if case.caller_role == "super_admin"
+        else [],
         public_base_url="https://bridge.example",
         normalized_public_base_url="https://bridge.example",
     )

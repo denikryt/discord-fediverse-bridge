@@ -18,7 +18,9 @@ from src.fediverse_identity import (
         (" Alice@Example.COM ", "Alice@example.com"),
     ],
 )
-def test_normalize_remote_actor_handle_accepts_displayed_handle_shape(raw: str, expected: str) -> None:
+def test_normalize_remote_actor_handle_accepts_displayed_handle_shape(
+    raw: str, expected: str
+) -> None:
     """Moderators can paste the handle shape shown in Discord command output."""
     assert normalize_remote_actor_handle(raw) == expected
 
@@ -50,12 +52,18 @@ def test_normalize_remote_actor_handle_rejects_non_v1_inputs(raw: str) -> None:
         ("https://Example.COM/users/Alice/", "Alice@example.com"),
     ],
 )
-def test_extract_remote_actor_handle_from_actor_url_uses_common_actor_paths(actor_url: str, expected: str) -> None:
+def test_extract_remote_actor_handle_from_actor_url_uses_common_actor_paths(
+    actor_url: str, expected: str
+) -> None:
     """Inbound hot-path matching may derive a best-effort handle without network calls."""
     assert extract_remote_actor_handle_from_actor_url(actor_url) == expected
 
 
-@pytest.mark.parametrize("actor_url", ["invalid-url", "https://example.com/", "https:///users/alice"])
-def test_extract_remote_actor_handle_from_actor_url_returns_none_for_unknown_shapes(actor_url: str) -> None:
+@pytest.mark.parametrize(
+    "actor_url", ["invalid-url", "https://example.com/", "https:///users/alice"]
+)
+def test_extract_remote_actor_handle_from_actor_url_returns_none_for_unknown_shapes(
+    actor_url: str,
+) -> None:
     """Unparseable actor URLs are not treated as global actor bans."""
     assert extract_remote_actor_handle_from_actor_url(actor_url) is None

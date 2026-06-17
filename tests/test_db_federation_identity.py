@@ -35,7 +35,9 @@ def test_create_all_builds_stage_2_federation_tables(tmp_path: Path) -> None:
     assert "comment_links" in table_names
 
 
-def test_registered_user_can_be_created_and_loaded_by_all_identity_keys(tmp_path: Path) -> None:
+def test_registered_user_can_be_created_and_loaded_by_all_identity_keys(
+    tmp_path: Path,
+) -> None:
     """User ownership records must resolve by Discord ID, username, and actor URL."""
     database = _database(tmp_path)
     actor_url = f"https://{BRIDGE_HOST_DOMAIN}/users/alice"
@@ -64,7 +66,9 @@ def test_registered_user_can_be_created_and_loaded_by_all_identity_keys(tmp_path
     assert by_actor_url.private_key_pem == "private-key"
 
 
-def test_subscription_follow_state_is_persisted_for_existing_subscription(tmp_path: Path) -> None:
+def test_subscription_follow_state_is_persisted_for_existing_subscription(
+    tmp_path: Path,
+) -> None:
     """Subscription rows must carry federation follow metadata for later stages."""
     database = _database(tmp_path)
     community_actor_url = f"https://{LEMMY_WORLD_DOMAIN}/c/hackers"
@@ -84,7 +88,10 @@ def test_subscription_follow_state_is_persisted_for_existing_subscription(tmp_pa
     assert subscription is not None
     assert subscription.community_handle == f"!hackers@{LEMMY_WORLD_DOMAIN}"
     assert subscription.community_inbox_url == f"{community_actor_url}/inbox"
-    assert subscription.follow_activity_id == f"https://{BRIDGE_HOST_DOMAIN}/activities/follow-1"
+    assert (
+        subscription.follow_activity_id
+        == f"https://{BRIDGE_HOST_DOMAIN}/activities/follow-1"
+    )
     assert subscription.status == "accepted"
 
     database.remote_subscriptions.update_subscription_follow_state(
@@ -98,11 +105,16 @@ def test_subscription_follow_state_is_persisted_for_existing_subscription(tmp_pa
 
     assert updated is not None
     assert updated.community_inbox_url == f"https://{LEMMY_WORLD_DOMAIN}/inbox/updated"
-    assert updated.follow_activity_id == f"https://{BRIDGE_HOST_DOMAIN}/activities/follow-2"
+    assert (
+        updated.follow_activity_id
+        == f"https://{BRIDGE_HOST_DOMAIN}/activities/follow-2"
+    )
     assert updated.status == "pending"
 
 
-def test_message_mapping_lookup_supports_dedup_keys_used_by_bridge(tmp_path: Path) -> None:
+def test_message_mapping_lookup_supports_dedup_keys_used_by_bridge(
+    tmp_path: Path,
+) -> None:
     """Generic message mappings must be queryable by both activity and object IDs."""
     database = _database(tmp_path)
     actor_url = f"https://{BRIDGE_HOST_DOMAIN}/users/alice"
@@ -120,9 +132,13 @@ def test_message_mapping_lookup_supports_dedup_keys_used_by_bridge(tmp_path: Pat
         discord_message_id=555,
     )
 
-    by_activity = database.message_mappings.get_message_mapping_by_activity_id(activity_id)
+    by_activity = database.message_mappings.get_message_mapping_by_activity_id(
+        activity_id
+    )
     by_object = database.message_mappings.get_message_mapping_by_object_id(object_id)
-    by_discord_message = database.message_mappings.get_message_mapping_by_discord_message_id(555)
+    by_discord_message = (
+        database.message_mappings.get_message_mapping_by_discord_message_id(555)
+    )
 
     assert created.source_platform == "discord"
     assert by_activity is not None
@@ -133,7 +149,9 @@ def test_message_mapping_lookup_supports_dedup_keys_used_by_bridge(tmp_path: Pat
     assert by_discord_message.source_id == "discord-message-555"
 
 
-def test_remote_actor_upsert_refreshes_existing_record_without_duplicates(tmp_path: Path) -> None:
+def test_remote_actor_upsert_refreshes_existing_record_without_duplicates(
+    tmp_path: Path,
+) -> None:
     """Remote actor cache rows should update in place when the actor is refetched."""
     database = _database(tmp_path)
     actor_url = f"https://{LEMMY_WORLD_DOMAIN}/u/alice"
@@ -185,7 +203,9 @@ def test_published_activity_objects_can_be_loaded_by_canonical_object_id(
         discord_message_id=555,
     )
 
-    loaded = database.activitypub_objects.get_published_activity_object_by_object_id(object_id)
+    loaded = database.activitypub_objects.get_published_activity_object_by_object_id(
+        object_id
+    )
 
     assert loaded is not None
     assert loaded.id == created.id

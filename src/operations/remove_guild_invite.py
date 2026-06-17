@@ -6,7 +6,12 @@ import logging
 from dataclasses import dataclass, field
 
 import discord
-from discordops import OperationDefinition, OperationResult, Precondition, run_operation_definition_async
+from discordops import (
+    OperationDefinition,
+    OperationResult,
+    Precondition,
+    run_operation_definition_async,
+)
 
 from ..db import Database
 from ..models import GuildInvitePublication
@@ -23,7 +28,9 @@ class RemoveGuildInviteInput:
     client: discord.Client
     guild: discord.Guild
     actor_discord_user_id: str
-    _current_publication: GuildInvitePublication | None = field(default=None, init=False, repr=False)
+    _current_publication: GuildInvitePublication | None = field(
+        default=None, init=False, repr=False
+    )
     _publication_loaded: bool = field(default=False, init=False, repr=False)
 
     def get_current_publication(self) -> GuildInvitePublication | None:
@@ -105,7 +112,11 @@ remove_guild_invite_operation = OperationDefinition(
 )
 
 
-async def run_remove_guild_invite(operation_input: RemoveGuildInviteInput) -> OperationResult:
+async def run_remove_guild_invite(
+    operation_input: RemoveGuildInviteInput,
+) -> OperationResult:
     """Serialize and execute one guild invite removal operation."""
     async with guild_invite_lock(operation_input.guild.id):
-        return await run_operation_definition_async(remove_guild_invite_operation, operation_input)
+        return await run_operation_definition_async(
+            remove_guild_invite_operation, operation_input
+        )

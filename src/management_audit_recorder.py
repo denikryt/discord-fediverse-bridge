@@ -46,7 +46,12 @@ from .management_audit import (
     TARGET_BRIDGE_POLICY_ENTRY,
     community_created_after,
 )
-from .models import CommunityActorBan, GuildInvitePublication, LocalCommunity, ManagementAuditEvent
+from .models import (
+    CommunityActorBan,
+    GuildInvitePublication,
+    LocalCommunity,
+    ManagementAuditEvent,
+)
 
 _FAILED_PRECONDITION_REASON_CODES = {
     "cannot_manage_community": REASON_NOT_OWNER_OR_SUPER_ADMIN,
@@ -222,7 +227,9 @@ class ManagementAuditRecorder:
         result: BanActivationResult,
     ) -> ManagementAuditEvent:
         """Add the success audit row for a ban creation or reactivation."""
-        action = ACTION_BAN_CREATED if result.kind == "created" else ACTION_BAN_REACTIVATED
+        action = (
+            ACTION_BAN_CREATED if result.kind == "created" else ACTION_BAN_REACTIVATED
+        )
         return self._events.add_event(
             session,
             action=action,
@@ -255,7 +262,9 @@ class ManagementAuditRecorder:
             after={"status": "inactive"},
         )
 
-    def bridge_policy_manage_forbidden(self, *, actor_discord_user_id: str) -> ManagementAuditEvent:
+    def bridge_policy_manage_forbidden(
+        self, *, actor_discord_user_id: str
+    ) -> ManagementAuditEvent:
         """Record a policy-management attempt by a non-super-admin."""
         return self._events.create_event(
             action=ACTION_BRIDGE_POLICY_MANAGE_FORBIDDEN,
@@ -266,9 +275,15 @@ class ManagementAuditRecorder:
             reason_code=REASON_NOT_EFFECTIVE_SUPER_ADMIN,
         )
 
-    def add_bridge_policy_activation(self, session: Session, *, actor_discord_user_id: str, result: object) -> ManagementAuditEvent:
+    def add_bridge_policy_activation(
+        self, session: Session, *, actor_discord_user_id: str, result: object
+    ) -> ManagementAuditEvent:
         """Audit creation or reactivation of one dynamic policy row."""
-        action = ACTION_BRIDGE_POLICY_ADDED if getattr(result, "kind") == "created" else ACTION_BRIDGE_POLICY_REACTIVATED
+        action = (
+            ACTION_BRIDGE_POLICY_ADDED
+            if getattr(result, "kind") == "created"
+            else ACTION_BRIDGE_POLICY_REACTIVATED
+        )
         entry = getattr(result, "entry")
         return self._events.add_event(
             session,
@@ -281,7 +296,14 @@ class ManagementAuditRecorder:
             after=getattr(result, "after"),
         )
 
-    def add_bridge_policy_removed(self, session: Session, *, actor_discord_user_id: str, entry: object, removal_reason: str | None) -> ManagementAuditEvent:
+    def add_bridge_policy_removed(
+        self,
+        session: Session,
+        *,
+        actor_discord_user_id: str,
+        entry: object,
+        removal_reason: str | None,
+    ) -> ManagementAuditEvent:
         """Audit deactivation without mutating the stored activation reason."""
         after: dict[str, object] = {"status": "inactive"}
         if removal_reason is not None:
@@ -297,10 +319,14 @@ class ManagementAuditRecorder:
             after=after,
         )
 
-    def guild_invite_forbidden(self, *, actor_discord_user_id: str, discord_guild_id: int, removing: bool) -> ManagementAuditEvent:
+    def guild_invite_forbidden(
+        self, *, actor_discord_user_id: str, discord_guild_id: int, removing: bool
+    ) -> ManagementAuditEvent:
         """Record a Manage Guild denial for invite publication or removal."""
         return self._events.create_event(
-            action=ACTION_GUILD_INVITE_REMOVE_FORBIDDEN if removing else ACTION_GUILD_INVITE_PUBLISH_FORBIDDEN,
+            action=ACTION_GUILD_INVITE_REMOVE_FORBIDDEN
+            if removing
+            else ACTION_GUILD_INVITE_PUBLISH_FORBIDDEN,
             result=RESULT_FORBIDDEN,
             actor_discord_user_id=actor_discord_user_id,
             target_type=TARGET_DISCORD_GUILD,
@@ -308,13 +334,31 @@ class ManagementAuditRecorder:
             reason_code=REASON_MISSING_MANAGE_GUILD,
         )
 
-    def add_guild_invite_published(self, session: Session, *, actor_discord_user_id: str, before: GuildInvitePublication | None, after: GuildInvitePublication) -> ManagementAuditEvent:
+    def add_guild_invite_published(
+        self,
+        session: Session,
+        *,
+        actor_discord_user_id: str,
+        before: GuildInvitePublication | None,
+        after: GuildInvitePublication,
+    ) -> ManagementAuditEvent:
         """Add first-publication or replacement audit in the caller transaction."""
+
         def snapshot(row: GuildInvitePublication | None) -> dict[str, object] | None:
-            return None if row is None else {"discord_channel_id": int(row.discord_channel_id), "invite_code": str(row.invite_code)}
+            return (
+                None
+                if row is None
+                else {
+                    "discord_channel_id": int(row.discord_channel_id),
+                    "invite_code": str(row.invite_code),
+                }
+            )
+
         return self._events.add_event(
             session,
-            action=ACTION_GUILD_INVITE_REPLACED if before is not None else ACTION_GUILD_INVITE_PUBLISHED,
+            action=ACTION_GUILD_INVITE_REPLACED
+            if before is not None
+            else ACTION_GUILD_INVITE_PUBLISHED,
             result=RESULT_SUCCESS,
             actor_discord_user_id=actor_discord_user_id,
             target_type=TARGET_DISCORD_GUILD,
@@ -323,7 +367,13 @@ class ManagementAuditRecorder:
             after=snapshot(after),
         )
 
-    def add_guild_invite_removed(self, session: Session, *, actor_discord_user_id: str, publication: GuildInvitePublication) -> ManagementAuditEvent:
+    def add_guild_invite_removed(
+        self,
+        session: Session,
+        *,
+        actor_discord_user_id: str,
+        publication: GuildInvitePublication,
+    ) -> ManagementAuditEvent:
         """Add successful removal audit in the caller transaction."""
         return self._events.add_event(
             session,
@@ -332,5 +382,8 @@ class ManagementAuditRecorder:
             actor_discord_user_id=actor_discord_user_id,
             target_type=TARGET_DISCORD_GUILD,
             target_id=str(publication.discord_guild_id),
-            before={"discord_channel_id": int(publication.discord_channel_id), "invite_code": str(publication.invite_code)},
+            before={
+                "discord_channel_id": int(publication.discord_channel_id),
+                "invite_code": str(publication.invite_code),
+            },
         )

@@ -90,9 +90,11 @@ class ManageBridgePolicyInput:
             if subject is None or self.policy_type is None:
                 self._existing = None
             else:
-                self._existing = self.database.bridge_policy_entries.get_by_type_and_subject(
-                    policy_type=self.policy_type.value,
-                    normalized_subject=subject,
+                self._existing = (
+                    self.database.bridge_policy_entries.get_by_type_and_subject(
+                        policy_type=self.policy_type.value,
+                        normalized_subject=subject,
+                    )
                 )
             self._existing_loaded = True
         return self._existing
@@ -213,21 +215,21 @@ class ManageBridgePolicyOperation(Operation):
             )
         return ManageBridgePolicyResult(False, message, reason)
 
-    def body(self, operation_input: ManageBridgePolicyInput) -> ManageBridgePolicyResult:
+    def body(
+        self, operation_input: ManageBridgePolicyInput
+    ) -> ManageBridgePolicyResult:
         """Commit one valid transition with its audit row."""
         policy_type = operation_input.policy_type
         subject = operation_input.get_normalized_subject()
         assert policy_type is not None and subject is not None
         existing = operation_input.get_existing_entry()
         if operation_input.normalized_action == "add":
-            activation = (
-                operation_input.database.management_actions.add_or_reactivate_bridge_policy_entry(
-                    actor_discord_user_id=operation_input.discord_user_id,
-                    policy_type=policy_type.value,
-                    normalized_subject=subject,
-                    reason=operation_input.normalized_reason,
-                    existing_entry_id=getattr(existing, "id", None),
-                )
+            activation = operation_input.database.management_actions.add_or_reactivate_bridge_policy_entry(
+                actor_discord_user_id=operation_input.discord_user_id,
+                policy_type=policy_type.value,
+                normalized_subject=subject,
+                reason=operation_input.normalized_reason,
+                existing_entry_id=getattr(existing, "id", None),
             )
             verb = "Added" if activation.kind == "created" else "Reactivated"
             return ManageBridgePolicyResult(
@@ -247,6 +249,8 @@ class ManageBridgePolicyOperation(Operation):
         )
 
 
-def manage_bridge_policy_operation(value: ManageBridgePolicyInput) -> ManageBridgePolicyResult:
+def manage_bridge_policy_operation(
+    value: ManageBridgePolicyInput,
+) -> ManageBridgePolicyResult:
     """Execute one bridge-policy mutation through DiscordOps."""
     return ManageBridgePolicyOperation().execute(value)

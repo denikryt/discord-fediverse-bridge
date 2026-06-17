@@ -17,7 +17,9 @@ def test_project_version_matches_package_metadata() -> None:
     """Bridge and gateway package metadata must mirror the canonical VERSION."""
     canonical = (ROOT / "VERSION").read_text(encoding="utf-8").strip()
     pyproject = tomllib.loads((ROOT / "pyproject.toml").read_text(encoding="utf-8"))
-    package = json.loads((ROOT / "fedify-gateway/package.json").read_text(encoding="utf-8"))
+    package = json.loads(
+        (ROOT / "fedify-gateway/package.json").read_text(encoding="utf-8")
+    )
 
     assert canonical == "0.1.0"
     assert APP_VERSION == canonical

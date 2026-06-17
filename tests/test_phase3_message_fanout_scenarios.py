@@ -11,7 +11,7 @@ from support.runtime import build_test_policy_service
 
 from pathlib import Path
 from types import SimpleNamespace
-from unittest.mock import AsyncMock, MagicMock
+from unittest.mock import AsyncMock
 
 import pytest
 
@@ -70,8 +70,10 @@ def _publish_gateway(
     """Build a mocked FedifyGatewayClient that returns a valid PublishContentResult."""
     gateway = AsyncMock()
     gateway.publish_content.return_value = PublishContentResult(
-        activity_id=activity_id or f"https://{BRIDGE_HOST_DOMAIN}/users/alice/activities/create/comment/1",
-        object_id=object_id or f"https://{BRIDGE_HOST_DOMAIN}/users/alice/objects/comment/1",
+        activity_id=activity_id
+        or f"https://{BRIDGE_HOST_DOMAIN}/users/alice/activities/create/comment/1",
+        object_id=object_id
+        or f"https://{BRIDGE_HOST_DOMAIN}/users/alice/objects/comment/1",
         community_actor_url=COMMUNITY_ACTOR_URL,
     )
     return gateway
@@ -83,8 +85,8 @@ def _publish_service(database: Database, gateway: AsyncMock) -> ContentPublishSe
         database=database,
         fedify_gateway=gateway,
         bridge_prefix="[bridge]",
-            bridge_policy_service=build_test_policy_service(database),
-)
+        bridge_policy_service=build_test_policy_service(database),
+    )
 
 
 def _community_runtime(
@@ -165,7 +167,9 @@ def _create_thread_group_with_source_delivery(
 
 
 @pytest.mark.asyncio
-async def test_phase3_single_subscription_message_published_no_mirror(tmp_path: Path) -> None:
+async def test_phase3_single_subscription_message_published_no_mirror(
+    tmp_path: Path,
+) -> None:
     """With one subscription, message is AP-published and one source delivery row is written.
 
     System state: one accepted subscription for channel 100, one registered user,
@@ -185,8 +189,14 @@ async def test_phase3_single_subscription_message_published_no_mirror(tmp_path: 
 
     result = await runtime.handle_discord_message(message=message)
 
-    message_group = database.discord_fanout_groups.get_message_group_by_source_message(400)
-    deliveries = database.discord_fanout_groups.get_message_deliveries(message_group.id) if message_group else []
+    message_group = database.discord_fanout_groups.get_message_group_by_source_message(
+        400
+    )
+    deliveries = (
+        database.discord_fanout_groups.get_message_deliveries(message_group.id)
+        if message_group
+        else []
+    )
     mirror_deliveries = [d for d in deliveries if d.role == "mirror"]
 
     assert result.status == "published"
@@ -204,7 +214,9 @@ async def test_phase3_single_subscription_message_published_no_mirror(tmp_path: 
 
 
 @pytest.mark.asyncio
-async def test_phase3_two_subscriptions_message_mirrored_to_sibling_thread(tmp_path: Path) -> None:
+async def test_phase3_two_subscriptions_message_mirrored_to_sibling_thread(
+    tmp_path: Path,
+) -> None:
     """With two subscriptions, a message is delivered into the sibling mirror thread.
 
     System state: two accepted subscriptions for channels 100 and 101, one registered
@@ -253,8 +265,14 @@ async def test_phase3_two_subscriptions_message_mirrored_to_sibling_thread(tmp_p
 
     result = await runtime.handle_discord_message(message=message)
 
-    message_group = database.discord_fanout_groups.get_message_group_by_source_message(400)
-    deliveries = database.discord_fanout_groups.get_message_deliveries(message_group.id) if message_group else []
+    message_group = database.discord_fanout_groups.get_message_group_by_source_message(
+        400
+    )
+    deliveries = (
+        database.discord_fanout_groups.get_message_deliveries(message_group.id)
+        if message_group
+        else []
+    )
     source_deliveries = [d for d in deliveries if d.role == "source"]
     mirror_deliveries = [d for d in deliveries if d.role == "mirror"]
 
@@ -306,8 +324,14 @@ async def test_phase3_duplicate_message_is_ignored(tmp_path: Path) -> None:
 
     result = await runtime.handle_discord_message(message=message)
 
-    message_group = database.discord_fanout_groups.get_message_group_by_source_message(400)
-    deliveries = database.discord_fanout_groups.get_message_deliveries(message_group.id) if message_group else []
+    message_group = database.discord_fanout_groups.get_message_group_by_source_message(
+        400
+    )
+    deliveries = (
+        database.discord_fanout_groups.get_message_deliveries(message_group.id)
+        if message_group
+        else []
+    )
 
     assert result.status == "ignored"
     # Gateway must not have been called — AP was already done on the first event.
@@ -317,7 +341,9 @@ async def test_phase3_duplicate_message_is_ignored(tmp_path: Path) -> None:
 
 
 @pytest.mark.asyncio
-async def test_phase3_message_in_legacy_thread_is_ignored_without_thread_group(tmp_path: Path) -> None:
+async def test_phase3_message_in_legacy_thread_is_ignored_without_thread_group(
+    tmp_path: Path,
+) -> None:
     """A message in a pre-Phase-2 thread (PostLink only) is ignored — no CommunityThreadGroup.
 
     System state: one accepted subscription for channel 100, one registered user,
@@ -346,7 +372,9 @@ async def test_phase3_message_in_legacy_thread_is_ignored_without_thread_group(t
 
     result = await runtime.handle_discord_message(message=message)
 
-    message_group = database.discord_fanout_groups.get_message_group_by_source_message(400)
+    message_group = database.discord_fanout_groups.get_message_group_by_source_message(
+        400
+    )
 
     assert result.status == "ignored"
     assert result.reason == "no_post_context"
@@ -357,7 +385,9 @@ async def test_phase3_message_in_legacy_thread_is_ignored_without_thread_group(t
 
 
 @pytest.mark.asyncio
-async def test_phase3_mirror_message_failure_does_not_block_source_publish(tmp_path: Path) -> None:
+async def test_phase3_mirror_message_failure_does_not_block_source_publish(
+    tmp_path: Path,
+) -> None:
     """A mirror message delivery failure must not roll back the source AP publish.
 
     System state: two accepted subscriptions for channels 100 and 101, one registered
@@ -399,8 +429,14 @@ async def test_phase3_mirror_message_failure_does_not_block_source_publish(tmp_p
 
     result = await runtime.handle_discord_message(message=message)
 
-    message_group = database.discord_fanout_groups.get_message_group_by_source_message(400)
-    deliveries = database.discord_fanout_groups.get_message_deliveries(message_group.id) if message_group else []
+    message_group = database.discord_fanout_groups.get_message_group_by_source_message(
+        400
+    )
+    deliveries = (
+        database.discord_fanout_groups.get_message_deliveries(message_group.id)
+        if message_group
+        else []
+    )
     source_deliveries = [d for d in deliveries if d.role == "source"]
     mirror_deliveries = [d for d in deliveries if d.role == "mirror"]
 

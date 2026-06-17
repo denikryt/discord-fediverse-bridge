@@ -60,8 +60,8 @@ def _service(database: Database, fedify_gateway: AsyncMock) -> ContentPublishSer
         database=database,
         fedify_gateway=fedify_gateway,
         bridge_prefix="[bridge]",
-            bridge_policy_service=build_test_policy_service(database),
-)
+        bridge_policy_service=build_test_policy_service(database),
+    )
 
 
 def _thread() -> SimpleNamespace:
@@ -123,18 +123,25 @@ async def test_registered_user_with_accepted_subscription_publishes_thread_start
         starter_message=_starter_message(),
     )
     mapping = database.message_mappings.get_message_mapping_by_discord_message_id(300)
-    stored_object = database.activitypub_objects.get_published_activity_object_by_object_id(
-        f"https://{BRIDGE_HOST_DOMAIN}/users/alice/objects/post/1"
+    stored_object = (
+        database.activitypub_objects.get_published_activity_object_by_object_id(
+            f"https://{BRIDGE_HOST_DOMAIN}/users/alice/objects/post/1"
+        )
     )
 
     assert result.status == "published"
     assert mapping is not None
-    assert mapping.object_id == f"https://{BRIDGE_HOST_DOMAIN}/users/alice/objects/post/1"
+    assert (
+        mapping.object_id == f"https://{BRIDGE_HOST_DOMAIN}/users/alice/objects/post/1"
+    )
     assert stored_object is not None
     assert stored_object.kind == "post"
     with database.session() as session:
         assert session.scalar(select(func.count()).select_from(MessageMapping)) == 1
-        assert session.scalar(select(func.count()).select_from(PublishedActivityObject)) == 1
+        assert (
+            session.scalar(select(func.count()).select_from(PublishedActivityObject))
+            == 1
+        )
 
 
 @pytest.mark.asyncio
@@ -173,13 +180,18 @@ async def test_registered_user_with_accepted_subscription_publishes_thread_reply
         message=_thread_message(thread=_thread()),
     )
     mapping = database.message_mappings.get_message_mapping_by_discord_message_id(301)
-    stored_object = database.activitypub_objects.get_published_activity_object_by_object_id(
-        f"https://{BRIDGE_HOST_DOMAIN}/users/alice/objects/comment/1"
+    stored_object = (
+        database.activitypub_objects.get_published_activity_object_by_object_id(
+            f"https://{BRIDGE_HOST_DOMAIN}/users/alice/objects/comment/1"
+        )
     )
 
     assert result.status == "published"
     assert mapping is not None
-    assert mapping.object_id == f"https://{BRIDGE_HOST_DOMAIN}/users/alice/objects/comment/1"
+    assert (
+        mapping.object_id
+        == f"https://{BRIDGE_HOST_DOMAIN}/users/alice/objects/comment/1"
+    )
     assert stored_object is not None
     assert stored_object.kind == "comment"
 
@@ -240,17 +252,24 @@ async def test_remote_subscription_reply_semantics_preserve_nested_and_unknown_f
     service = _service(database, fedify_gateway)
 
     nested_result = await service.publish_thread_message(
-        message=_thread_message(thread=_thread(), message_id=302, reference_message_id=301),
+        message=_thread_message(
+            thread=_thread(), message_id=302, reference_message_id=301
+        ),
     )
     unknown_result = await service.publish_thread_message(
-        message=_thread_message(thread=_thread(), message_id=303, reference_message_id=999),
+        message=_thread_message(
+            thread=_thread(), message_id=303, reference_message_id=999
+        ),
     )
 
     assert nested_result.status == "published"
     assert unknown_result.status == "published"
     nested_request = fedify_gateway.publish_content.await_args_list[0].args[0]
     unknown_request = fedify_gateway.publish_content.await_args_list[1].args[0]
-    assert nested_request.in_reply_to_object_id == f"https://{BRIDGE_HOST_DOMAIN}/users/alice/objects/comment/0"
+    assert (
+        nested_request.in_reply_to_object_id
+        == f"https://{BRIDGE_HOST_DOMAIN}/users/alice/objects/comment/0"
+    )
     assert unknown_request.in_reply_to_object_id == post_object_url
 
 
@@ -274,7 +293,9 @@ async def test_unregistered_user_message_is_not_federated_and_gets_register_repl
     assert result.reason == "unregistered_user"
     fedify_gateway.publish_content.assert_not_awaited()
     starter_message.reply.assert_awaited_once_with(UNREGISTERED_REPLY)
-    assert database.message_mappings.get_message_mapping_by_discord_message_id(300) is None
+    assert (
+        database.message_mappings.get_message_mapping_by_discord_message_id(300) is None
+    )
 
 
 @pytest.mark.asyncio
@@ -295,7 +316,9 @@ async def test_registered_user_without_accepted_subscription_does_not_publish(
     assert result.status == "ignored"
     assert result.reason == "no_subscription"
     fedify_gateway.publish_content.assert_not_awaited()
-    assert database.message_mappings.get_message_mapping_by_discord_message_id(300) is None
+    assert (
+        database.message_mappings.get_message_mapping_by_discord_message_id(300) is None
+    )
 
 
 @pytest.mark.asyncio
@@ -316,4 +339,6 @@ async def test_gateway_publish_failure_does_not_persist_false_success(
             starter_message=_starter_message(),
         )
 
-    assert database.message_mappings.get_message_mapping_by_discord_message_id(300) is None
+    assert (
+        database.message_mappings.get_message_mapping_by_discord_message_id(300) is None
+    )

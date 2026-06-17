@@ -9,7 +9,12 @@ from tempfile import TemporaryDirectory
 
 from hypothesis import HealthCheck, settings
 from hypothesis.strategies import sampled_from
-from hypothesis.stateful import RuleBasedStateMachine, invariant, rule, run_state_machine_as_test
+from hypothesis.stateful import (
+    RuleBasedStateMachine,
+    invariant,
+    rule,
+    run_state_machine_as_test,
+)
 
 from model_based.local_community_relay_model import RelayModel
 from support.local_community_relay import LocalCommunityRelayHarness, PlannedOutcome

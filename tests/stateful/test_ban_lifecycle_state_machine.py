@@ -9,13 +9,23 @@ from tempfile import TemporaryDirectory
 from types import SimpleNamespace
 
 from hypothesis import HealthCheck, settings
-from hypothesis.stateful import RuleBasedStateMachine, invariant, rule, run_state_machine_as_test
+from hypothesis.stateful import (
+    RuleBasedStateMachine,
+    invariant,
+    rule,
+    run_state_machine_as_test,
+)
 from sqlalchemy import select
 
 from src.bridge_policy import BridgePolicyService
 from src.local_communities.service import LocalCommunityService
 from src.models import CommunityActorBan
-from src.operations import BanUserInput, UnbanUserInput, ban_user_operation, unban_user_operation
+from src.operations import (
+    BanUserInput,
+    UnbanUserInput,
+    ban_user_operation,
+    unban_user_operation,
+)
 from src.user_bans import UserBanService
 from support.db import build_database
 
@@ -63,7 +73,9 @@ class BanLifecycleMachine(RuleBasedStateMachine):
             settings=self.settings,
             repository=self.database.bridge_policy_entries,
         )
-        self.ban_service = UserBanService(database=self.database, settings=self.settings)
+        self.ban_service = UserBanService(
+            database=self.database, settings=self.settings
+        )
         self.audit_offset = len(
             self.database.management_audit_events.list_oldest_first()
         )
@@ -174,7 +186,9 @@ class BanLifecycleMachine(RuleBasedStateMachine):
         events = self.database.management_audit_events.list_oldest_first()[
             self.audit_offset :
         ]
-        assert [(event.action, event.result) for event in events] == self.expected_audits
+        assert [
+            (event.action, event.result) for event in events
+        ] == self.expected_audits
 
         decision = self.ban_service.check_activitypub_actor(
             local_community_id=int(self.community.id),

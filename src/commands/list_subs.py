@@ -7,16 +7,33 @@ from ..community_labels import community_relay_label
 from ..config import Settings
 from ..bridge_policy import BridgePolicyService
 from ..db import Database
-from .guild_guard import REGISTERED_GUILD_COMMAND_ACCESS, reject_if_command_access_denied
+from .guild_guard import (
+    REGISTERED_GUILD_COMMAND_ACCESS,
+    reject_if_command_access_denied,
+)
 from ..operations import ListSubscriptionsInput, list_subscriptions_operation
 
 
-def register(tree: app_commands.CommandTree, database: Database, settings: Settings, policy_service: BridgePolicyService) -> None:
+def register(
+    tree: app_commands.CommandTree,
+    database: Database,
+    settings: Settings,
+    policy_service: BridgePolicyService,
+) -> None:
     # The registered slash command delegates empty-state policy to the
     # operation layer and keeps Discord embed rendering in the adapter.
-    @tree.command(name="list-subscriptions", description="List all active channel-community subscriptions")
+    @tree.command(
+        name="list-subscriptions",
+        description="List all active channel-community subscriptions",
+    )
     async def list_subscriptions(interaction: discord.Interaction) -> None:
-        if await reject_if_command_access_denied(interaction, definition=REGISTERED_GUILD_COMMAND_ACCESS, settings=settings, database=database, policy_service=policy_service):
+        if await reject_if_command_access_denied(
+            interaction,
+            definition=REGISTERED_GUILD_COMMAND_ACCESS,
+            settings=settings,
+            database=database,
+            policy_service=policy_service,
+        ):
             return
 
         # The operation determines whether the list is empty; the command keeps
@@ -29,8 +46,16 @@ def register(tree: app_commands.CommandTree, database: Database, settings: Setti
             await interaction.response.send_message(result.message, ephemeral=True)
             return
 
-        remote_subscriptions = result.extra_kwargs["remote_subscriptions"] if result.extra_kwargs is not None else []
-        local_subscribers = result.extra_kwargs["local_subscribers"] if result.extra_kwargs is not None else []
+        remote_subscriptions = (
+            result.extra_kwargs["remote_subscriptions"]
+            if result.extra_kwargs is not None
+            else []
+        )
+        local_subscribers = (
+            result.extra_kwargs["local_subscribers"]
+            if result.extra_kwargs is not None
+            else []
+        )
         lines: list[str] = []
         if remote_subscriptions:
             lines.append("Remote community subscriptions")
@@ -51,7 +76,9 @@ def register(tree: app_commands.CommandTree, database: Database, settings: Setti
                 # The list command can safely resolve the local community label
                 # server-side because it is a moderator-only surface.
                 channel_mention = f"<#{sub.discord_channel_id}>"
-                local_community = database.local_communities.get_local_community_by_id(sub.local_community_id)
+                local_community = database.local_communities.get_local_community_by_id(
+                    sub.local_community_id
+                )
                 if local_community is not None:
                     community_label = community_relay_label(
                         actor_id=getattr(local_community, "actor_url", None),
@@ -66,7 +93,9 @@ def register(tree: app_commands.CommandTree, database: Database, settings: Setti
             description="\n".join(lines),
             color=discord.Color.blurple(),
         )
-        embed.set_footer(text=f"{len(remote_subscriptions) + len(local_subscribers)} subscription(s)")
+        embed.set_footer(
+            text=f"{len(remote_subscriptions) + len(local_subscribers)} subscription(s)"
+        )
         # ephemeral=True keeps the output visible only to the invoking user to
         # avoid cluttering the channel with a potentially long list.
         await interaction.response.send_message(embed=embed, ephemeral=True)

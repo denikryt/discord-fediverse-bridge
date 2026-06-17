@@ -20,11 +20,10 @@ Dedup paths covered:
 from __future__ import annotations
 from support.runtime import build_test_policy_service
 
-import asyncio
 from datetime import datetime, timezone
 from pathlib import Path
 from types import SimpleNamespace
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import AsyncMock
 
 import pytest
 import sqlalchemy.exc
@@ -67,14 +66,16 @@ def _accepted_subscription(database: Database, *, channel_id: int = 100) -> None
     )
 
 
-def _community_runtime(database: Database, *, bot: object | None = None) -> CommunityRuntime:
+def _community_runtime(
+    database: Database, *, bot: object | None = None
+) -> CommunityRuntime:
     """Build a real CommunityRuntime with a stub publish service (inbound paths only)."""
     publish_service = ContentPublishService(
         database=database,
         fedify_gateway=AsyncMock(),
         bridge_prefix="[bridge]",
-            bridge_policy_service=build_test_policy_service(database),
-)
+        bridge_policy_service=build_test_policy_service(database),
+    )
     return CommunityRuntime(
         database=database,
         content_publish_service=publish_service,
@@ -127,23 +128,25 @@ def _fake_forum_channel(
 
 def _fake_post_event(*, ap_id: str = POST_AP_ID) -> ActivityPubEvent:
     """Build a minimal inbound AP post event for dedup scenario tests."""
-    return ActivityPubEvent.model_validate({
-        "event_type": "post.created",
-        "delivery_id": f"https://{LEMMY_EXAMPLE_DOMAIN}/activities/create/post/1",
-        "occurred_at": datetime.now(timezone.utc).isoformat(),
-        "community_actor_id": COMMUNITY_ACTOR_URL,
-        "actor_id": f"https://{LEMMY_EXAMPLE_DOMAIN}/u/bob",
-        "object": {
-            "ap_id": ap_id,
-            "kind": "post",
-            "lemmy_id": 1,
-            "title": "Test Post",
-            "body_markdown": "Post body",
-            "url": ap_id,
-            "published_at": datetime.now(timezone.utc).isoformat(),
-            "author_name": "bob",
-        },
-    })
+    return ActivityPubEvent.model_validate(
+        {
+            "event_type": "post.created",
+            "delivery_id": f"https://{LEMMY_EXAMPLE_DOMAIN}/activities/create/post/1",
+            "occurred_at": datetime.now(timezone.utc).isoformat(),
+            "community_actor_id": COMMUNITY_ACTOR_URL,
+            "actor_id": f"https://{LEMMY_EXAMPLE_DOMAIN}/u/bob",
+            "object": {
+                "ap_id": ap_id,
+                "kind": "post",
+                "lemmy_id": 1,
+                "title": "Test Post",
+                "body_markdown": "Post body",
+                "url": ap_id,
+                "published_at": datetime.now(timezone.utc).isoformat(),
+                "author_name": "bob",
+            },
+        }
+    )
 
 
 def _fake_comment_event(
@@ -152,25 +155,27 @@ def _fake_comment_event(
     post_ap_id: str = POST_AP_ID,
 ) -> ActivityPubEvent:
     """Build a minimal inbound AP comment event for dedup scenario tests."""
-    return ActivityPubEvent.model_validate({
-        "event_type": "comment.created",
-        "delivery_id": f"https://{LEMMY_EXAMPLE_DOMAIN}/activities/create/comment/1",
-        "occurred_at": datetime.now(timezone.utc).isoformat(),
-        "community_actor_id": COMMUNITY_ACTOR_URL,
-        "actor_id": f"https://{LEMMY_EXAMPLE_DOMAIN}/u/bob",
-        "object": {
-            "ap_id": ap_id,
-            "kind": "comment",
-            "lemmy_id": 10,
-            "post_ap_id": post_ap_id,
-            "post_lemmy_id": 1,
-            "parent_ap_id": None,
-            "body_markdown": "Comment body",
-            "url": ap_id,
-            "published_at": datetime.now(timezone.utc).isoformat(),
-            "author_name": "bob",
-        },
-    })
+    return ActivityPubEvent.model_validate(
+        {
+            "event_type": "comment.created",
+            "delivery_id": f"https://{LEMMY_EXAMPLE_DOMAIN}/activities/create/comment/1",
+            "occurred_at": datetime.now(timezone.utc).isoformat(),
+            "community_actor_id": COMMUNITY_ACTOR_URL,
+            "actor_id": f"https://{LEMMY_EXAMPLE_DOMAIN}/u/bob",
+            "object": {
+                "ap_id": ap_id,
+                "kind": "comment",
+                "lemmy_id": 10,
+                "post_ap_id": post_ap_id,
+                "post_lemmy_id": 1,
+                "parent_ap_id": None,
+                "body_markdown": "Comment body",
+                "url": ap_id,
+                "published_at": datetime.now(timezone.utc).isoformat(),
+                "author_name": "bob",
+            },
+        }
+    )
 
 
 def _insert_thread_group_with_delivery(
@@ -220,16 +225,25 @@ async def test_replayed_inbound_post_returns_skipped(tmp_path: Path) -> None:
     # Pre-existing thread group simulates a prior successful delivery.
     _insert_thread_group_with_delivery(database, ap_object_id=POST_AP_ID)
 
-    forum_channel = _fake_forum_channel(channel_id=100, thread_id=999, starter_message_id=998)
+    forum_channel = _fake_forum_channel(
+        channel_id=100, thread_id=999, starter_message_id=998
+    )
     bot = _fake_bot(forum_channels={100: forum_channel})
     runtime = _community_runtime(database, bot=bot)
-    fake_runtime = SimpleNamespace(database=database, bot=bot, community_runtime=runtime, bridge_policy_service=build_test_policy_service(database))
+    fake_runtime = SimpleNamespace(
+        database=database,
+        bot=bot,
+        community_runtime=runtime,
+        bridge_policy_service=build_test_policy_service(database),
+    )
 
     result = await runtime.handle_inbound_post(_fake_post_event(), fake_runtime)
 
     assert result.status == "skipped"
     # The pre-existing delivery must be the only one — no new rows written.
-    thread_group = database.discord_fanout_groups.get_thread_group_by_ap_object(POST_AP_ID)
+    thread_group = database.discord_fanout_groups.get_thread_group_by_ap_object(
+        POST_AP_ID
+    )
     deliveries = database.discord_fanout_groups.get_thread_deliveries(thread_group.id)
     assert len(deliveries) == 1
     # Discord API must not have been called — dedup fired before any network call.
@@ -237,7 +251,9 @@ async def test_replayed_inbound_post_returns_skipped(tmp_path: Path) -> None:
 
 
 @pytest.mark.asyncio
-async def test_partial_delivery_retry_returns_skipped_not_delivered(tmp_path: Path) -> None:
+async def test_partial_delivery_retry_returns_skipped_not_delivered(
+    tmp_path: Path,
+) -> None:
     """A retry after partial delivery must return skipped for Phase 6.
 
     System state: accepted subscriptions for channels 100 and 101.
@@ -254,21 +270,33 @@ async def test_partial_delivery_retry_returns_skipped_not_delivered(tmp_path: Pa
 
     # Thread group exists but only channel 100 has a delivery (101 failed).
     _insert_thread_group_with_delivery(
-        database, ap_object_id=POST_AP_ID, channel_id=100, thread_id=200,
+        database,
+        ap_object_id=POST_AP_ID,
+        channel_id=100,
+        thread_id=200,
     )
 
     forum_channel_101 = _fake_forum_channel(
-        channel_id=101, thread_id=501, starter_message_id=502,
+        channel_id=101,
+        thread_id=501,
+        starter_message_id=502,
     )
     bot = _fake_bot(forum_channels={101: forum_channel_101})
     runtime = _community_runtime(database, bot=bot)
-    fake_runtime = SimpleNamespace(database=database, bot=bot, community_runtime=runtime, bridge_policy_service=build_test_policy_service(database))
+    fake_runtime = SimpleNamespace(
+        database=database,
+        bot=bot,
+        community_runtime=runtime,
+        bridge_policy_service=build_test_policy_service(database),
+    )
 
     result = await runtime.handle_inbound_post(_fake_post_event(), fake_runtime)
 
     assert result.status == "skipped"
     # Still only one delivery — channel 101 must not have been reached.
-    thread_group = database.discord_fanout_groups.get_thread_group_by_ap_object(POST_AP_ID)
+    thread_group = database.discord_fanout_groups.get_thread_group_by_ap_object(
+        POST_AP_ID
+    )
     deliveries = database.discord_fanout_groups.get_thread_deliveries(thread_group.id)
     assert len(deliveries) == 1
     assert deliveries[0].discord_channel_id == 100
@@ -294,7 +322,10 @@ async def test_replayed_inbound_comment_returns_skipped(tmp_path: Path) -> None:
     _accepted_subscription(database, channel_id=100)
 
     thread_group = _insert_thread_group_with_delivery(
-        database, ap_object_id=POST_AP_ID, channel_id=100, thread_id=200,
+        database,
+        ap_object_id=POST_AP_ID,
+        channel_id=100,
+        thread_id=200,
     )
     # Pre-existing message group simulates a prior successful comment delivery.
     database.discord_fanout_groups.create_message_group(
@@ -309,7 +340,12 @@ async def test_replayed_inbound_comment_returns_skipped(tmp_path: Path) -> None:
     fake_thread = SimpleNamespace(id=200, send=AsyncMock())
     bot = _fake_bot(threads={200: fake_thread})
     runtime = _community_runtime(database, bot=bot)
-    fake_runtime = SimpleNamespace(database=database, bot=bot, community_runtime=runtime, bridge_policy_service=build_test_policy_service(database))
+    fake_runtime = SimpleNamespace(
+        database=database,
+        bot=bot,
+        community_runtime=runtime,
+        bridge_policy_service=build_test_policy_service(database),
+    )
 
     result = await runtime.handle_inbound_comment(_fake_comment_event(), fake_runtime)
 
@@ -579,32 +615,36 @@ async def test_inbound_post_from_own_actor_is_suppressed_before_handler(
         database=database,
         bot=fake_bot,
         community_runtime=community_rt,
-            bridge_policy_service=build_test_policy_service(database),
-)
+        bridge_policy_service=build_test_policy_service(database),
+    )
 
     # The echo arrives with the same object_id the bridge originally published.
-    event = ActivityPubEvent.model_validate({
-        "event_type": "post.created",
-        "delivery_id": f"https://{LEMMY_EXAMPLE_DOMAIN}/activities/announce/post/1",
-        "occurred_at": datetime.now(timezone.utc).isoformat(),
-        "community_actor_id": COMMUNITY_ACTOR_URL,
-        "actor_id": actor_url,
-        "object": {
-            "ap_id": object_id,
-            "kind": "post",
-            "lemmy_id": 1,
-            "title": "Echo post",
-            "body_markdown": "echoed",
-            "url": object_id,
-            "published_at": datetime.now(timezone.utc).isoformat(),
-            "author_name": "alice",
-        },
-    })
+    event = ActivityPubEvent.model_validate(
+        {
+            "event_type": "post.created",
+            "delivery_id": f"https://{LEMMY_EXAMPLE_DOMAIN}/activities/announce/post/1",
+            "occurred_at": datetime.now(timezone.utc).isoformat(),
+            "community_actor_id": COMMUNITY_ACTOR_URL,
+            "actor_id": actor_url,
+            "object": {
+                "ap_id": object_id,
+                "kind": "post",
+                "lemmy_id": 1,
+                "title": "Echo post",
+                "body_markdown": "echoed",
+                "url": object_id,
+                "published_at": datetime.now(timezone.utc).isoformat(),
+                "author_name": "alice",
+            },
+        }
+    )
 
     result = await dispatch_activitypub_event(event, runtime)
 
     assert result.status == "skipped"
     assert result.detail == "discord-originated echo"
     # No thread group must exist — handler was not reached.
-    assert database.discord_fanout_groups.get_thread_group_by_ap_object(object_id) is None
+    assert (
+        database.discord_fanout_groups.get_thread_group_by_ap_object(object_id) is None
+    )
     fake_bot.fetch_forum_channel.assert_not_awaited()

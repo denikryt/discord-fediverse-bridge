@@ -66,7 +66,8 @@ def test_write_user_identity_backup_creates_restore_usable_sqlite_db(
 
 
 def test_dump_local_users_cli_writes_users_db_backup(
-    tmp_path: Path, capsys,
+    tmp_path: Path,
+    capsys,
 ) -> None:
     """The CLI should write a standalone SQLite file with the users table only."""
 
