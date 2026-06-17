@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
 """Collect and classify every executable Python and gateway test."""
+
 from __future__ import annotations
 
 import json

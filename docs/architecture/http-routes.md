@@ -46,3 +46,7 @@ All `/internal/*` routes are authenticated with the shared gateway secret and mu
 ## Profile media
 
 `GET /media/profile/{public_id}` resolves an opaque persisted media ID through SQLite before opening canonical bytes beneath the configured media root. It does not mount or enumerate the media directory and returns immutable cache headers plus `nosniff`.
+
+### User Actor outbox
+
+`GET /actors/{username}/outbox` and compatibility alias `GET /users/{username}/outbox` return the same canonical collection identity. `?page=N` returns a fixed-size `OrderedCollectionPage`. The private gateway endpoint is `GET /internal/fedify/actors/users/{username}/outbox?page=N&page_size=40`.

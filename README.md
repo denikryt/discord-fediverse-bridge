@@ -264,3 +264,6 @@ npm test
 Test mechanisms and focused commands are documented in [docs/development/test-assurance.md](docs/development/test-assurance.md).
 
 Deployment instructions are in [docs/DEPLOY.md](docs/DEPLOY.md).
+## User Actor outbox and operations
+
+Registered User Actors expose a canonical paginated ActivityPub outbox of durable, undeleted bridge-authored posts and comments. Delivery diagnostics/retry and profile-media cleanup are local database-only commands; they are not dashboard or public HTTP features.

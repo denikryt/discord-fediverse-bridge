@@ -27,6 +27,7 @@ import {
 import {
   listLocalCommunities,
   loadUserFollowers,
+  loadUserOutbox,
   loadPublishedActivityObjectByActivityId,
   loadPublishedActivityObjectByObjectId,
 } from "./python-bridge-client.js";
@@ -48,6 +49,7 @@ import {
   buildPublishedActivityObjectJson,
   buildPublishedCreateActivityJson,
 } from "./published-objects.js";
+import { buildUserOutboxJson, validateCanonicalUserOutboxUrl } from "./user-outbox.js";
 import type {
   AcceptLocalCommunityFollowRequest,
   AcceptUserActorFollowRequest,
@@ -202,16 +204,37 @@ export function createGatewayApp(config: GatewayConfig): Hono {
     return activityJsonResponse(buildPublishedActivityObjectJson(object));
   });
 
-  app.get("/users/:username/outbox", async (context) => {
-    const username = context.req.param("username");
-    if ((await loadUserActorIdentity(config, username)) == null) {
-      return context.json({ error: "user actor not found" }, 404);
+
+  async function renderUserOutbox(context: any, username: string) {
+    const rawPage = context.req.query("page");
+    const page = rawPage == null ? 1 : Number(rawPage);
+    if (!Number.isInteger(page) || page < 1) {
+      return context.json({ error: "invalid page" }, 400);
     }
-    return activityJsonResponse(
-      await buildEmptyOrderedCollection(
-        new URL(`/users/${username}/outbox`, config.fedifyOrigin),
-      ).toJsonLd(),
-    );
+    let row;
+    try {
+      row = await loadUserOutbox(config, username, page, 40);
+    } catch {
+      return context.json({ error: "user outbox unavailable" }, 502);
+    }
+    if (row == null) return context.json({ error: "user actor not found" }, 404);
+    try {
+      row = {
+        ...row,
+        outboxUrl: validateCanonicalUserOutboxUrl(
+          row.outboxUrl,
+          config.fedifyOrigin,
+          username,
+        ),
+      };
+    } catch {
+      return context.json({ error: "inconsistent user outbox identity" }, 502);
+    }
+    return activityJsonResponse(buildUserOutboxJson(row, rawPage == null ? null : page));
+  }
+
+  app.get("/users/:username/outbox", async (context) => {
+    return await renderUserOutbox(context, context.req.param("username"));
   });
 
   app.get("/users/:username/followers", async (context) => {
@@ -263,6 +286,9 @@ export function createGatewayApp(config: GatewayConfig): Hono {
 
   app.get("/actors/:identifier/outbox", async (context) => {
     const identifier = context.req.param("identifier");
+    if ((await loadUserActorIdentity(config, identifier)) != null) {
+      return await renderUserOutbox(context, identifier);
+    }
     if (!(await hasLocalActor(config, identifier))) {
       return context.json({ error: "actor not found" }, 404);
     }

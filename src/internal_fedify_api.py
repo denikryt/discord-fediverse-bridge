@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from datetime import datetime
 
-from fastapi import APIRouter, Header, HTTPException, Response, status
+from fastapi import APIRouter, Header, HTTPException, Query, Response, status
 from pydantic import BaseModel, model_validator
 
 from .actor_key_service import ActorKeyService
@@ -149,6 +149,16 @@ class PublishedObjectResponse(BaseModel):
     discord_message_id: int | None
 
 
+class UserOutboxPageResponse(BaseModel):
+    """Expose one fixed-size canonical User Actor outbox slice."""
+
+    outbox_url: str
+    total_items: int
+    page: int
+    page_size: int
+    items: list[PublishedObjectResponse]
+
+
 class MessageMappingResponse(BaseModel):
     source_platform: str
     source_id: str
@@ -187,6 +197,25 @@ def create_internal_fedify_router(runtime: Runtime) -> APIRouter:
     def no_store(response: Response) -> None:
         """Prevent intermediaries from caching internal read responses."""
         response.headers["Cache-Control"] = "no-store"
+
+    def published_object_payload(row: object) -> PublishedObjectResponse:
+        """Map the durable public object contract without delivery metadata."""
+        return PublishedObjectResponse(
+            actor_username=row.actor_username,
+            actor_url=row.actor_url,
+            publication_context=row.publication_context,
+            community_actor_url=row.community_actor_url,
+            activity_id=row.activity_id,
+            object_id=row.object_id,
+            kind=row.kind,
+            title=row.title,
+            body_markdown=row.body_markdown,
+            in_reply_to_object_id=row.in_reply_to_object_id,
+            published_at=row.published_at.isoformat(),
+            discord_guild_id=row.discord_guild_id,
+            discord_channel_id=row.discord_channel_id,
+            discord_message_id=row.discord_message_id,
+        )
 
     @router.get("/actors/bridge/key", response_model=BridgeActorKeyResponse)
     def bridge_actor_key(
@@ -314,6 +343,35 @@ def create_internal_fedify_router(runtime: Runtime) -> APIRouter:
             summary=row.summary,
             public_key_pem=row.public_key_pem,
             private_key_pem=row.private_key_pem,
+        )
+
+    @router.get(
+        "/actors/users/{username}/outbox", response_model=UserOutboxPageResponse
+    )
+    def user_outbox(
+        username: str,
+        response: Response,
+        page: int = Query(default=1, ge=1),
+        page_size: int = Query(default=40),
+        authorization: str | None = Header(default=None),
+    ) -> UserOutboxPageResponse:
+        """Return one canonical public authored timeline page for a user."""
+        authorize(authorization)
+        no_store(response)
+        if page_size != 40:
+            raise HTTPException(status_code=422, detail="page_size must equal 40")
+        user = runtime.database.users.get_user_by_activitypub_username(username)
+        if user is None:
+            raise HTTPException(status_code=404, detail="User actor not found")
+        slice_ = runtime.database.activitypub_objects.load_user_outbox_slice(
+            user=user, offset=(page - 1) * page_size, limit=page_size
+        )
+        return UserOutboxPageResponse(
+            outbox_url=user.outbox_url,
+            total_items=slice_.total_items,
+            page=page,
+            page_size=page_size,
+            items=[published_object_payload(item) for item in slice_.items],
         )
 
     @router.get("/actors/communities/{slug}", response_model=CommunityActorResponse)

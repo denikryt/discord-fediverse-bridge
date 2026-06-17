@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
 """Aggregate generated domain assurance artifacts without rerunning tests."""
+
 from __future__ import annotations
 
 import argparse

@@ -28,6 +28,8 @@ dev = [
 
 [project.scripts]
 bridge-dump-users = "src.user_identity_dump:main"
+bridge-user-deliveries = "src.user_actor_delivery_admin:main"
+bridge-profile-media = "src.profile_media_admin:main"
 
 [tool.setuptools]
 py-modules = []

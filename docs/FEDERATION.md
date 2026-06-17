@@ -252,3 +252,7 @@ Profile delivery is partial-failure tolerant. A failed endpoint does not roll ba
 Public user-authored `Create`, `Update`, and `Delete` activities keep their existing canonical object and activity identities and existing community/conversation delivery. The same canonical activity JSON is also stored by Python and delivered asynchronously to the accepted followers of the author, grouped by exact inbox or shared-inbox endpoint. Local-community `Announce` remains a distinct community-owned envelope; it is not replaced by direct User Actor delivery.
 
 Create persistence snapshots the accepted follower relationships in the same database transaction as the published object and Discord mapping. Content mutations use durable desired state and a stable pre-gateway reservation so duplicate or concurrent Discord events cannot allocate a second logical mutation identity. The gateway remains the signing and canonical serialization boundary, while Python owns restart recovery, endpoint eligibility, policy checks, retry state, and partial-failure isolation. A delivered terminal `Delete` prevents later stale `Create` or `Update` delivery for the same object and endpoint.
+
+## User Actor outbox
+
+`/actors/{username}/outbox` is the canonical `OrderedCollection`; `/users/{username}/outbox` is an HTTP alias that emits canonical `/actors/...` identifiers. Fixed pages contain current `Create` activities for durable undeleted public posts and comments, ordered by publication time and durable row id. Separate page requests are not an immutable snapshot.

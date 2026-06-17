@@ -7,7 +7,6 @@ import argparse
 import json
 import sys
 from collections.abc import Mapping, Sequence
-from dataclasses import asdict
 from pathlib import Path
 from typing import Any
 
@@ -125,7 +124,9 @@ def write_report(path: Path, report: Mapping[str, Any]) -> None:
     """Write canonical sorted JSON to the generated artifact path."""
 
     path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(json.dumps(report, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+    path.write_text(
+        json.dumps(report, indent=2, sort_keys=True) + "\n", encoding="utf-8"
+    )
 
 
 def build_parser() -> argparse.ArgumentParser:

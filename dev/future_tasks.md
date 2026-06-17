@@ -18,3 +18,5 @@ Required work:
 * after verified cutover, remove or securely retire private-key material from Python-owned persistence.
 
 Until this work is completed, new features must not introduce additional private-key consumers or include private-key material in queues, delivery records, snapshots, logs, diagnostics, or request payloads unrelated to the existing gateway identity lookup.
+
+- Restore durable personal-feed publications and comments into Discord after channel loss or rebinding.

@@ -650,6 +650,14 @@ class PublishedActivityObject(Base):
             "AND discord_message_id IS NOT NULL)",
             name="ck_published_object_publication_context",
         ),
+        Index(
+            "ix_published_objects_user_outbox",
+            "actor_username",
+            "actor_url",
+            "deleted_at",
+            "published_at",
+            "id",
+        ),
     )
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)

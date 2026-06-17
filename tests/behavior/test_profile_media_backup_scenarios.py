@@ -8,6 +8,7 @@ from PIL import Image
 
 from src.db import Database
 from src.db.backup import create_complete_backup, restore_complete_backup
+from src.models import PublishedActivityObject
 from src.profile_media import ProfileMediaStore
 from src.user_profiles import UserProfileService
 
@@ -49,6 +50,54 @@ def test_complete_backup_restores_matching_database_and_media_generation(
         user.id, "avatar", _image()
     )
     original_digest = profile.avatar.sha256_hex
+    community = database.activitypub_objects.create_published_activity_object(
+        actor_username=user.activitypub_username,
+        actor_url=user.actor_url,
+        community_actor_url="https://x/communities/test",
+        activity_id="https://x/activities/community",
+        object_id="https://x/objects/community",
+        kind="post",
+        title=None,
+        body_markdown="community",
+        in_reply_to_object_id=None,
+        discord_channel_id=10,
+        discord_message_id=11,
+        published_at=datetime(2026, 1, 1, tzinfo=timezone.utc),
+    )
+    with database.session() as session:
+        personal = PublishedActivityObject(
+            actor_username=user.activitypub_username,
+            actor_url=user.actor_url,
+            publication_context="personal_feed",
+            community_actor_url=None,
+            activity_id="https://x/activities/personal",
+            object_id="https://x/objects/personal",
+            kind="comment",
+            title=None,
+            body_markdown="personal",
+            in_reply_to_object_id=community.object_id,
+            discord_guild_id=2,
+            discord_channel_id=20,
+            discord_message_id=21,
+            published_at=datetime(2026, 1, 2, tzinfo=timezone.utc),
+        )
+        deleted = PublishedActivityObject(
+            actor_username=user.activitypub_username,
+            actor_url=user.actor_url,
+            publication_context="personal_feed",
+            community_actor_url=None,
+            activity_id="https://x/activities/deleted",
+            object_id="https://x/objects/deleted",
+            kind="post",
+            title=None,
+            body_markdown="deleted",
+            discord_guild_id=2,
+            discord_channel_id=20,
+            discord_message_id=22,
+            published_at=datetime(2026, 1, 3, tzinfo=timezone.utc),
+            deleted_at=datetime(2026, 1, 4, tzinfo=timezone.utc),
+        )
+        session.add_all([personal, deleted])
     database.close()
 
     archive = create_complete_backup(
@@ -74,6 +123,22 @@ def test_complete_backup_restores_matching_database_and_media_generation(
     assert restored_profile is not None
     assert restored_profile.avatar.sha256_hex == original_digest
     assert (media_root / "objects" / restored_profile.avatar.storage_key).is_file()
+    restored_user = restored.users.get_user_by_activitypub_username("alice")
+    assert restored_user is not None
+    outbox = restored.activitypub_objects.load_user_outbox_slice(
+        user=restored_user, offset=0, limit=40
+    )
+    assert outbox.total_items == 2
+    assert [row.object_id for row in outbox.items] == [
+        "https://x/objects/personal",
+        "https://x/objects/community",
+    ]
+    deleted_row = (
+        restored.activitypub_objects.get_published_activity_object_by_object_id(
+            "https://x/objects/deleted"
+        )
+    )
+    assert deleted_row is not None and deleted_row.deleted_at is not None
 
 
 def test_backup_compose_process_has_no_application_secret_environment() -> None:

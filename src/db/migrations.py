@@ -219,6 +219,15 @@ def migrate(engine: Engine) -> None:
         _migrate_profile_field_name_width(conn)
         _migrate_user_actor_outbound_sources_stage5(conn)
         _install_profile_media_triggers(conn)
+        # Partial legacy fixtures may not contain authored-object storage yet.
+        if _table_columns(conn, "published_activity_objects"):
+            conn.execute(
+                text(
+                    "CREATE INDEX IF NOT EXISTS ix_published_objects_user_outbox "
+                    "ON published_activity_objects "
+                    "(actor_username, actor_url, deleted_at, published_at, id)"
+                )
+            )
         conn.commit()
 
 

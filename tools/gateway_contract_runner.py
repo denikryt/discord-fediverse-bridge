@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
 """Run native gateway checks in resumable chunks and record deterministic status."""
+
 from __future__ import annotations
 
 import argparse

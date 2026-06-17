@@ -1,17 +1,27 @@
 from __future__ import annotations
 
+from dataclasses import dataclass
 from datetime import datetime
 
-from sqlalchemy import select
+from sqlalchemy import func, select
 
 from ...models import (
     PublishedActivityObject,
+    User,
     utcnow,
 )
 from .base import BaseRepository
 
 
 """Persisted ActivityPub object JSON lookup persistence."""
+
+
+@dataclass(frozen=True)
+class UserOutboxSlice:
+    """Return one internally consistent public outbox response slice."""
+
+    total_items: int
+    items: tuple[PublishedActivityObject, ...]
 
 
 class ActivityPubObjectRepository(BaseRepository):
@@ -85,3 +95,40 @@ class ActivityPubObjectRepository(BaseRepository):
                     PublishedActivityObject.discord_message_id == discord_message_id
                 )
             )
+
+    def load_user_outbox_slice(
+        self, *, user: User, offset: int, limit: int
+    ) -> UserOutboxSlice:
+        """Load count and rows from one transaction-owned SQLite snapshot."""
+        if offset < 0 or limit <= 0:
+            raise ValueError("offset must be non-negative and limit must be positive")
+        predicate = (
+            PublishedActivityObject.actor_username == user.activitypub_username,
+            PublishedActivityObject.actor_url.in_(
+                (user.actor_url, user.actor_url.replace("/actors/", "/users/"))
+            ),
+            PublishedActivityObject.kind.in_(("post", "comment")),
+            PublishedActivityObject.deleted_at.is_(None),
+        )
+        with self.session() as session:
+            # The first SELECT establishes the read snapshot. Keeping the same
+            # transaction through the page query prevents count/list drift.
+            total_items = int(
+                session.scalar(
+                    select(func.count(PublishedActivityObject.id)).where(*predicate)
+                )
+                or 0
+            )
+            items = tuple(
+                session.scalars(
+                    select(PublishedActivityObject)
+                    .where(*predicate)
+                    .order_by(
+                        PublishedActivityObject.published_at.desc(),
+                        PublishedActivityObject.id.desc(),
+                    )
+                    .offset(offset)
+                    .limit(limit)
+                )
+            )
+            return UserOutboxSlice(total_items=total_items, items=items)

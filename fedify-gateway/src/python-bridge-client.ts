@@ -92,6 +92,15 @@ export interface PublishedActivityObjectRow {
   discordMessageId: number | null;
 }
 
+
+export interface UserOutboxPageRow {
+  outboxUrl: string;
+  totalItems: number;
+  page: number;
+  pageSize: number;
+  items: PublishedActivityObjectRow[];
+}
+
 export interface ChannelCommunitySubscriptionRow {
   communityActorUrl: string;
   followActivityId: string;
@@ -164,6 +173,22 @@ export class PythonBridgeClient implements PythonBridgeReadClient {
         if (typeof value !== "string") throw new Error("actor_ids must contain strings");
         return value;
       }),
+    };
+  }
+
+
+  async loadUserOutbox(username: string, page: number, pageSize: number): Promise<UserOutboxPageRow | null> {
+    const row = await this.fetchJson<Record<string, unknown>>(
+      `/internal/fedify/actors/users/${encodeURIComponent(username)}/outbox?page=${page}&page_size=${pageSize}`,
+      { notFound: true },
+    );
+    if (row == null) return null;
+    return {
+      outboxUrl: requiredString(row, "outbox_url"),
+      totalItems: requiredNumber(row, "total_items"),
+      page: requiredNumber(row, "page"),
+      pageSize: requiredNumber(row, "page_size"),
+      items: requiredArray(row, "items").map((value) => mapPublishedObject(requiredRecord(value))),
     };
   }
 
@@ -300,22 +325,7 @@ export class PythonBridgeClient implements PythonBridgeReadClient {
       "/internal/fedify/published-objects/resolve",
       { method: "POST", body, notFound: true },
     );
-    return row == null ? null : {
-      actorUsername: requiredString(row, "actor_username"),
-      actorUrl: requiredString(row, "actor_url"),
-      publicationContext: optionalPublicationContext(row, "publication_context"),
-      communityActorUrl: nullableString(row, "community_actor_url"),
-      activityId: requiredString(row, "activity_id"),
-      objectId: requiredString(row, "object_id"),
-      kind: requiredKind(row, "kind"),
-      title: nullableString(row, "title"),
-      bodyMarkdown: requiredString(row, "body_markdown"),
-      inReplyToObjectId: nullableString(row, "in_reply_to_object_id"),
-      publishedAt: requiredString(row, "published_at"),
-      discordGuildId: nullableNumber(row, "discord_guild_id"),
-      discordChannelId: nullableNumber(row, "discord_channel_id"),
-      discordMessageId: nullableNumber(row, "discord_message_id"),
-    };
+    return row == null ? null : mapPublishedObject(row);
   }
 
   private async fetchJson<T>(
@@ -380,11 +390,35 @@ export async function listLocalCommunities(config: GatewayConfig): Promise<Local
 export async function loadAcceptedRemoteSubscribersByActorUrl(config: GatewayConfig, actorUrl: string): Promise<RemoteSubscriberRow[]> {
   return await getPythonBridgeClient(config).loadAcceptedRemoteSubscribersByActorUrl(actorUrl);
 }
+
+export async function loadUserOutbox(config: GatewayConfig, username: string, page: number, pageSize: number): Promise<UserOutboxPageRow | null> {
+  return await getPythonBridgeClient(config).loadUserOutbox(username, page, pageSize);
+}
+
 export async function loadPublishedActivityObjectByObjectId(config: GatewayConfig, objectId: string): Promise<PublishedActivityObjectRow | null> {
   return await getPythonBridgeClient(config).loadPublishedActivityObjectByObjectId(objectId);
 }
 export async function loadPublishedActivityObjectByActivityId(config: GatewayConfig, activityId: string): Promise<PublishedActivityObjectRow | null> {
   return await getPythonBridgeClient(config).loadPublishedActivityObjectByActivityId(activityId);
+}
+
+function mapPublishedObject(row: Record<string, unknown>): PublishedActivityObjectRow {
+  return {
+    actorUsername: requiredString(row, "actor_username"),
+    actorUrl: requiredString(row, "actor_url"),
+    publicationContext: optionalPublicationContext(row, "publication_context"),
+    communityActorUrl: nullableString(row, "community_actor_url"),
+    activityId: requiredString(row, "activity_id"),
+    objectId: requiredString(row, "object_id"),
+    kind: requiredKind(row, "kind"),
+    title: nullableString(row, "title"),
+    bodyMarkdown: requiredString(row, "body_markdown"),
+    inReplyToObjectId: nullableString(row, "in_reply_to_object_id"),
+    publishedAt: requiredString(row, "published_at"),
+    discordGuildId: nullableNumber(row, "discord_guild_id"),
+    discordChannelId: nullableNumber(row, "discord_channel_id"),
+    discordMessageId: nullableNumber(row, "discord_message_id"),
+  };
 }
 
 function mapCommunity(row: Record<string, unknown>): LocalCommunityRow {

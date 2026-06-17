@@ -312,3 +312,87 @@ def test_internal_user_followers_are_newest_first_and_fixed_to_forty(
         headers=_headers(),
     )
     assert variable_page.status_code == 400
+
+
+def test_internal_user_outbox_is_canonical_ordered_and_filtered(tmp_path: Path) -> None:
+    """The gateway receives one canonical bounded authored-object timeline."""
+    runtime, database = _runtime(tmp_path)
+    user = database.users.create_user(
+        discord_user_id="900",
+        activitypub_username="alice",
+        actor_url="https://bridge.example/actors/alice",
+        inbox_url="https://bridge.example/actors/alice/inbox",
+        outbox_url="https://bridge.example/actors/alice/outbox",
+        followers_url="https://bridge.example/actors/alice/followers",
+        public_key_pem="public",
+        private_key_pem="private",
+    )
+    community = database.local_communities.create_local_community(
+        discord_guild_id=1,
+        discord_forum_channel_id=2,
+        slug="stage9",
+        display_name="Stage 9",
+        summary=None,
+        created_by_discord_user_id="900",
+        actor_url="https://bridge.example/communities/stage9",
+        inbox_url="https://bridge.example/communities/stage9/inbox",
+        outbox_url="https://bridge.example/communities/stage9/outbox",
+        followers_url="https://bridge.example/communities/stage9/followers",
+        public_key_pem="public",
+        private_key_pem="private",
+    )
+    first = database.activitypub_objects.create_published_activity_object(
+        actor_username="alice",
+        actor_url=user.actor_url,
+        community_actor_url=community.actor_url,
+        activity_id="https://bridge.example/activities/1",
+        object_id="https://bridge.example/objects/1",
+        kind="post",
+        title="One",
+        body_markdown="one",
+        in_reply_to_object_id=None,
+        discord_channel_id=2,
+        discord_message_id=10,
+    )
+    second = database.activitypub_objects.create_published_activity_object(
+        actor_username="alice",
+        actor_url=user.actor_url,
+        community_actor_url=community.actor_url,
+        activity_id="https://bridge.example/activities/2",
+        object_id="https://bridge.example/objects/2",
+        kind="comment",
+        title=None,
+        body_markdown="two",
+        in_reply_to_object_id=first.object_id,
+        discord_channel_id=2,
+        discord_message_id=11,
+    )
+    with database.session() as session:
+        from src.models import PublishedActivityObject, utcnow
+
+        session.get(PublishedActivityObject, first.id).deleted_at = utcnow()
+    client = TestClient(create_http_app(runtime))
+    response = client.get(
+        "/internal/fedify/actors/users/alice/outbox?page=1&page_size=40",
+        headers=_headers(),
+    )
+    assert response.status_code == 200
+    assert response.headers["cache-control"] == "no-store"
+    payload = response.json()
+    assert payload["outbox_url"] == "https://bridge.example/actors/alice/outbox"
+    assert payload["total_items"] == 1
+    assert [item["object_id"] for item in payload["items"]] == [second.object_id]
+    assert (
+        client.get(
+            "/internal/fedify/actors/users/alice/outbox?page=0&page_size=40",
+            headers=_headers(),
+        ).status_code
+        == 422
+    )
+    assert (
+        client.get(
+            "/internal/fedify/actors/users/alice/outbox?page=1&page_size=20",
+            headers=_headers(),
+        ).status_code
+        == 422
+    )

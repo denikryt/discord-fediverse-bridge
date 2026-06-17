@@ -85,3 +85,7 @@ The existing `UserActorDeliveryWorker` is the single process-owned recovery loop
 Stage 7 adds a dedicated `PersonalFeedPublisher` between Discord routing and the existing User Actor follower-delivery domain. The publisher reloads the active binding, validates exact owner identity and global ban state, derives deterministic object/activity IDs plus a Discord-derived publication timestamp, asks the gateway for render-only `Create(Note)` JSON, and commits mapping, canonical object, follower snapshot, source, and deliveries in one SQLite `BEGIN IMMEDIATE` transaction.
 
 `message_mappings` and `published_activity_objects` carry an explicit `community` or `personal_feed` context. Database checks require personal-feed rows to retain guild, channel, and message identity while forbidding a fabricated community URL. Gateway rendering occurs before the transaction because it has no delivery or signing side effect; the delivery worker is woken only after a newly created source commits. Existing community publication, reply routing, mutation handling, and the empty User Actor outbox remain separate contracts.
+
+### User Actor authored timeline
+
+The gateway renders User Actor outboxes from a fixed-size internal DTO. Python owns eligibility, count, ordering, and the single read transaction; the gateway owns ActivityStreams rendering and canonical navigation links. Operational delivery metadata remains local CLI-only.
