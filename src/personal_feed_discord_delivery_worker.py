@@ -7,6 +7,8 @@ import logging
 
 import discord
 
+from .runtime_ports import DiscordChannelLookupPort
+
 logger = logging.getLogger(__name__)
 
 
@@ -14,7 +16,7 @@ class PersonalFeedDiscordDeliveryWorker:
     """Own retry scheduling and Discord side effects for retained inbound comments."""
 
     def __init__(
-        self, *, database: object, bot: object, personal_feed_service: object
+        self, *, database: object, bot: DiscordChannelLookupPort, personal_feed_service: object
     ) -> None:
         """Bind durable state, Discord adapter, and active-binding resolver."""
         self.database = database

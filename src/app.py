@@ -3,7 +3,9 @@
 from __future__ import annotations
 
 import asyncio
+import inspect
 import logging
+import threading
 from pathlib import Path
 
 import uvicorn
@@ -26,6 +28,7 @@ from .logging_setup import configure_logging
 from .registration_service import RegistrationService
 from .project_version import APP_VERSION
 from .runtime import Runtime
+from .runtime_ports import DiscordMutationContext
 from .profile_media import FileLock, ProfileMediaStore
 from .user_profiles import UserProfileService
 from .user_actor_followers import UserActorFollowService
@@ -92,162 +95,228 @@ def build_runtime(settings: Settings) -> Runtime:
     deployment_lease = FileLock(deployment_lock_path).acquire(
         exclusive=False, timeout_seconds=settings.profile_media_lock_timeout_seconds
     )
-    try:
-        return _build_live_runtime(settings, deployment_lease)
-    except Exception:
-        # Failed startup must not leave restore blocked by a leaked descriptor.
-        deployment_lease.close()
-        raise
+    return _build_live_runtime(settings, deployment_lease)
 
 
 def _build_live_runtime(settings: Settings, deployment_lease: FileLock) -> Runtime:
-    """Open DB/media state only while the caller-owned shared lease is held."""
-    database = Database(settings.database_url)
-    media_store = ProfileMediaStore(
-        Path(settings.profile_media_root),
-        max_upload_bytes=settings.profile_media_max_upload_bytes,
-        max_pixels=settings.profile_media_max_pixels,
-    )
-    media_store.initialize()
-    database.create_all()
-    database.migrate()
-    BridgeActorKeyBootstrap(database=database, settings=settings).ensure()
+    """Open live runtime owners and clean them up on partial startup failure."""
+    closeables: list[object] = [deployment_lease]
+    runtime: Runtime | None = None
+    try:
+        database = Database(settings.database_url)
+        closeables.append(database)
+        media_store = ProfileMediaStore(
+            Path(settings.profile_media_root),
+            max_upload_bytes=settings.profile_media_max_upload_bytes,
+            max_pixels=settings.profile_media_max_pixels,
+        )
+        media_store.initialize()
+        database.create_all()
+        database.migrate()
+        BridgeActorKeyBootstrap(database=database, settings=settings).ensure()
 
-    bridge_policy_service = BridgePolicyService(
-        settings=settings, repository=database.bridge_policy_entries
-    )
-    fedify_gateway = FedifyGatewayClient(settings)
-    discord_oauth_client = DiscordOAuthClient(settings)
-    user_actor_delivery_service = UserActorDeliveryService(
-        database, fedify_gateway, bridge_policy_service
-    )
-    user_actor_delivery_worker = UserActorDeliveryWorker(user_actor_delivery_service)
-    content_publish_service = ContentPublishService(
-        database=database,
-        fedify_gateway=fedify_gateway,
-        bridge_prefix=settings.bridge_display_prefix,
-        settings=settings,
-        bridge_policy_service=bridge_policy_service,
-        delivery_worker=user_actor_delivery_worker,
-    )
-    user_profile_service = UserProfileService(
-        database,
-        media_store,
-        settings.normalized_fedify_origin,
-        delivery_service=user_actor_delivery_service,
-        delivery_worker=user_actor_delivery_worker,
-    )
-    registration_service = RegistrationService(
-        database=database,
-        base_url=settings.normalized_fedify_origin,
-    )
-    local_community_runtime = LocalCommunityRuntime(
-        database=database,
-        fedify_gateway=fedify_gateway,
-        content_publish_service=content_publish_service,
-        bridge_prefix=settings.bridge_display_prefix,
-        bridge_policy_service=bridge_policy_service,
-    )
+        bridge_policy_service = BridgePolicyService(
+            settings=settings, repository=database.bridge_policy_entries
+        )
+        fedify_gateway = FedifyGatewayClient(settings)
+        closeables.append(fedify_gateway)
+        discord_oauth_client = DiscordOAuthClient(settings)
+        closeables.append(discord_oauth_client)
+        user_actor_delivery_service = UserActorDeliveryService(
+            database, fedify_gateway, bridge_policy_service
+        )
+        user_actor_delivery_worker = UserActorDeliveryWorker(user_actor_delivery_service)
+        content_publish_service = ContentPublishService(
+            database=database,
+            fedify_gateway=fedify_gateway,
+            bridge_prefix=settings.bridge_display_prefix,
+            settings=settings,
+            bridge_policy_service=bridge_policy_service,
+            delivery_worker=user_actor_delivery_worker,
+        )
+        user_profile_service = UserProfileService(
+            database,
+            media_store,
+            settings.normalized_fedify_origin,
+            delivery_service=user_actor_delivery_service,
+            delivery_worker=user_actor_delivery_worker,
+        )
+        registration_service = RegistrationService(
+            database=database,
+            base_url=settings.normalized_fedify_origin,
+        )
+        local_community_runtime = LocalCommunityRuntime(
+            database=database,
+            fedify_gateway=fedify_gateway,
+            content_publish_service=content_publish_service,
+            bridge_prefix=settings.bridge_display_prefix,
+            bridge_policy_service=bridge_policy_service,
+        )
+        community_runtime = CommunityRuntime(
+            database=database,
+            content_publish_service=content_publish_service,
+        )
+        personal_feed_service = PersonalFeedService(database)
+        user_ban_service = UserBanService(database=database, settings=settings)
+        personal_feed_publisher = PersonalFeedPublisher(
+            database=database,
+            personal_feed_service=personal_feed_service,
+            fedify_gateway=fedify_gateway,
+            user_ban_service=user_ban_service,
+            bridge_policy_service=bridge_policy_service,
+            fedify_origin=settings.normalized_fedify_origin,
+            delivery_worker=user_actor_delivery_worker,
+        )
+        personal_feed_conversation_runtime = PersonalFeedConversationRuntime(
+            database=database,
+            personal_feed_service=personal_feed_service,
+            fedify_gateway=fedify_gateway,
+            user_ban_service=user_ban_service,
+            bridge_policy_service=bridge_policy_service,
+            fedify_origin=settings.normalized_fedify_origin,
+            delivery_worker=None,
+        )
+        event_router = DiscordEventRouter(
+            database=database,
+            community_runtime=community_runtime,
+            local_community_runtime=local_community_runtime,
+            bridge_policy_service=bridge_policy_service,
+            personal_feed_service=personal_feed_service,
+            personal_feed_publisher=personal_feed_publisher,
+            personal_feed_conversation_runtime=personal_feed_conversation_runtime,
+        )
+        bot = BridgeBot(
+            settings=settings,
+            database=database,
+            fedify_gateway=fedify_gateway,
+            event_router=event_router,
+            bridge_policy_service=bridge_policy_service,
+            user_profile_service=user_profile_service,
+            personal_feed_service=personal_feed_service,
+            user_ban_service=user_ban_service,
+        )
+        personal_feed_discord_delivery_worker = PersonalFeedDiscordDeliveryWorker(
+            database=database, bot=bot, personal_feed_service=personal_feed_service
+        )
+        personal_feed_conversation_runtime.bind_delivery_wake(
+            personal_feed_discord_delivery_worker
+        )
+        bot.bind_personal_feed_delivery_worker(personal_feed_discord_delivery_worker)
+        mutation_context = DiscordMutationContext(
+            bridge_policy_service=bridge_policy_service,
+            user_actor_delivery_service=user_actor_delivery_service,
+            user_actor_delivery_wake=user_actor_delivery_worker,
+            fedify_gateway=fedify_gateway,
+        )
+        message_mutation_handler = DiscordMessageMutationHandler(
+            database=database,
+            event_router=event_router,
+            discord_fetcher=bot,
+            mutation_context_provider=lambda: mutation_context,
+        )
+        bot.set_message_mutation_handler(message_mutation_handler)
+        discord_fanout = DiscordFanout(
+            bot=bot,
+            mutation_tracker=message_mutation_handler,
+            database=database,
+            policy_service=bridge_policy_service,
+        )
+        community_runtime.bind_discord_fanout(discord_fanout)
+        community_runtime.bind_discord_client(bot)
+        local_community_runtime.bind_discord_client(bot)
+        user_actor_follow_service = UserActorFollowService(
+            database=database, fedify_gateway=fedify_gateway, bot=bot
+        )
+        user_actor_delivery_service.bind_discord_message_reader(bot)
+        runtime = Runtime(
+            settings=settings,
+            database=database,
+            fedify_gateway=fedify_gateway,
+            discord_oauth_client=discord_oauth_client,
+            content_publish_service=content_publish_service,
+            registration_service=registration_service,
+            bridge_policy_service=bridge_policy_service,
+            bot=bot,
+            community_runtime=community_runtime,
+            local_community_runtime=local_community_runtime,
+            profile_media_store=media_store,
+            user_profile_service=user_profile_service,
+            user_actor_follow_service=user_actor_follow_service,
+            user_actor_delivery_service=user_actor_delivery_service,
+            user_actor_delivery_worker=user_actor_delivery_worker,
+            personal_feed_conversation_runtime=personal_feed_conversation_runtime,
+            personal_feed_discord_delivery_worker=personal_feed_discord_delivery_worker,
+            deployment_state_lease=deployment_lease,
+        )
+        _validate_runtime_graph(runtime)
+        return runtime
+    except Exception:
+        # Before Runtime exists, app.py owns every opened closeable.  Close in the
+        # reverse ownership order used by Runtime.close() so failed validation or
+        # bind errors do not leak the DB engine, HTTP clients, or deployment lease.
+        if runtime is not None:
+            _close_partial_resource(runtime)
+        else:
+            for resource in reversed(closeables):
+                _close_partial_resource(resource)
+        raise
 
-    # CommunityRuntime is constructed without discord_fanout first so it can be
-    # passed to BridgeBot. DiscordFanout needs a reference to bot (for
-    # fetch_forum_channel), which means bot must exist first. We inject the fanout
-    # after construction via attribute assignment to break the circular dependency:
-    # CommunityRuntime → DiscordFanout → BridgeBot → CommunityRuntime.
-    community_runtime = CommunityRuntime(
-        database=database,
-        content_publish_service=content_publish_service,
-    )
-    personal_feed_service = PersonalFeedService(database)
-    user_ban_service = UserBanService(database=database, settings=settings)
-    personal_feed_publisher = PersonalFeedPublisher(
-        database=database,
-        personal_feed_service=personal_feed_service,
-        fedify_gateway=fedify_gateway,
-        user_ban_service=user_ban_service,
-        bridge_policy_service=bridge_policy_service,
-        fedify_origin=settings.normalized_fedify_origin,
-        delivery_worker=user_actor_delivery_worker,
-    )
-    personal_feed_conversation_runtime = PersonalFeedConversationRuntime(
-        database=database,
-        personal_feed_service=personal_feed_service,
-        fedify_gateway=fedify_gateway,
-        user_ban_service=user_ban_service,
-        bridge_policy_service=bridge_policy_service,
-        fedify_origin=settings.normalized_fedify_origin,
-        delivery_worker=None,
-    )
-    event_router = DiscordEventRouter(
-        database=database,
-        community_runtime=community_runtime,
-        local_community_runtime=local_community_runtime,
-        bridge_policy_service=bridge_policy_service,
-        personal_feed_service=personal_feed_service,
-        personal_feed_publisher=personal_feed_publisher,
-        personal_feed_conversation_runtime=personal_feed_conversation_runtime,
-    )
-    bot = BridgeBot(
-        settings=settings,
-        database=database,
-        fedify_gateway=fedify_gateway,
-        event_router=event_router,
-        bridge_policy_service=bridge_policy_service,
-        user_profile_service=user_profile_service,
-        personal_feed_service=personal_feed_service,
-        user_ban_service=user_ban_service,
-    )
-    personal_feed_discord_delivery_worker = PersonalFeedDiscordDeliveryWorker(
-        database=database, bot=bot, personal_feed_service=personal_feed_service
-    )
-    personal_feed_conversation_runtime.delivery_worker = (
-        personal_feed_discord_delivery_worker
-    )
-    message_mutation_handler = DiscordMessageMutationHandler(
-        database=database,
-        event_router=event_router,
-        discord_fetcher=bot,
-        runtime_provider=bot._get_runtime,
-    )
-    bot.set_message_mutation_handler(message_mutation_handler)
-    discord_fanout = DiscordFanout(
-        bot=bot,
-        mutation_tracker=message_mutation_handler,
-        database=database,
-        policy_service=bridge_policy_service,
-    )
-    community_runtime.discord_fanout = discord_fanout
-    # Wire bot into CommunityRuntime after construction for the same reason
-    # discord_fanout is injected late — bot depends on community_runtime existing first.
-    community_runtime.bot = bot
-    local_community_runtime.bot = bot
-    user_actor_follow_service = UserActorFollowService(
-        database=database, fedify_gateway=fedify_gateway, bot=bot
-    )
-    runtime = Runtime(
-        settings=settings,
-        database=database,
-        fedify_gateway=fedify_gateway,
-        discord_oauth_client=discord_oauth_client,
-        content_publish_service=content_publish_service,
-        registration_service=registration_service,
-        bridge_policy_service=bridge_policy_service,
-        bot=bot,
-        community_runtime=community_runtime,
-        local_community_runtime=local_community_runtime,
-        profile_media_store=media_store,
-        user_profile_service=user_profile_service,
-        user_actor_follow_service=user_actor_follow_service,
-        user_actor_delivery_service=user_actor_delivery_service,
-        user_actor_delivery_worker=user_actor_delivery_worker,
-        personal_feed_conversation_runtime=personal_feed_conversation_runtime,
-        personal_feed_discord_delivery_worker=personal_feed_discord_delivery_worker,
-        deployment_state_lease=deployment_lease,
-    )
-    # Inject runtime into bot so edit/delete handlers can call AP gateway
-    bot.set_runtime(runtime)
-    user_actor_delivery_service.discord_message_reader = bot
-    return runtime
+
+def _validate_runtime_graph(runtime: Runtime) -> None:
+    """Fail startup before callbacks run if required production binds are missing."""
+    # These guards are local and non-I/O: they prove the remaining true cycles
+    # were completed by named bind methods rather than raw app-level mutation.
+    runtime.bot._require_message_mutation_handler()
+    runtime.bot._require_personal_feed_delivery_worker()
+    if runtime.community_runtime.discord_fanout is None:
+        raise RuntimeError("CommunityRuntime Discord fanout is not configured")
+    if runtime.community_runtime.bot is None:
+        raise RuntimeError("CommunityRuntime Discord client is not configured")
+    if runtime.local_community_runtime.bot is None:
+        raise RuntimeError("LocalCommunityRuntime Discord client is not configured")
+    if runtime.personal_feed_conversation_runtime.delivery_worker is None:
+        raise RuntimeError("Personal-feed conversation delivery wake is not configured")
+    if runtime.user_actor_delivery_service.discord_message_reader is None:
+        raise RuntimeError("User actor delivery Discord reader is not configured")
+
+
+def _close_partial_resource(resource: object) -> None:
+    """Close one partially constructed owner from synchronous startup failure code."""
+    close = getattr(resource, "close", None)
+    if close is None and hasattr(resource, "deployment_state_lease"):
+        # A complete Runtime reuses its normal close contract so worker and client
+        # ordering stays identical even if final validation fails after creation.
+        _run_coroutine_synchronously(resource.close())
+        return
+    if close is None:
+        return
+    result = close()
+    if inspect.isawaitable(result):
+        _run_coroutine_synchronously(result)
+
+
+def _run_coroutine_synchronously(awaitable: object) -> None:
+    """Await cleanup from sync startup code, including when an event loop exists."""
+    try:
+        asyncio.get_running_loop()
+    except RuntimeError:
+        asyncio.run(awaitable)
+        return
+
+    error: list[BaseException] = []
+
+    def runner() -> None:
+        """Run async cleanup in a temporary loop without blocking the active loop API."""
+        try:
+            asyncio.run(awaitable)
+        except BaseException as exc:  # pragma: no cover - re-raised in caller thread.
+            error.append(exc)
+
+    thread = threading.Thread(target=runner, name="partial-startup-cleanup")
+    thread.start()
+    thread.join()
+    if error:
+        raise error[0]
 
 
 if __name__ == "__main__":

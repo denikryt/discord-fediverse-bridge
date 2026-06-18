@@ -9,7 +9,38 @@ import pytest
 
 from src.discord_bot import BridgeBot
 from src.discord_message_mutations import DiscordMessageMutationHandler
+from src.runtime_ports import DiscordMutationContext
 from support.db import add_registered_user, build_database
+
+
+class _Policy:
+    """Allow all federation decisions at the raw Discord boundary."""
+
+    def federation_decision(self, _target: str) -> object:
+        """Return an allowed decision object."""
+        return SimpleNamespace(allowed=True)
+
+
+class _DeliveryService:
+    """Minimal mutation submitter for raw boundary tests."""
+
+    async def submit_update(self, **_kwargs: object) -> str:
+        """Accept one durable Update request."""
+        return "accepted"
+
+    async def submit_delete(self, **_kwargs: object) -> str:
+        """Accept one durable Delete request."""
+        return "accepted"
+
+
+def _mutation_context(wake: object) -> DiscordMutationContext:
+    """Build the Stage 4 narrow raw mutation context for bot callback tests."""
+    return DiscordMutationContext(
+        bridge_policy_service=_Policy(),
+        user_actor_delivery_service=_DeliveryService(),
+        user_actor_delivery_wake=wake,
+        fedify_gateway=SimpleNamespace(),
+    )
 
 
 def _published(database):
@@ -45,6 +76,7 @@ async def test_partial_raw_update_fetch_failure_is_durable_before_handler_return
     monkeypatch.setattr("src.discord_message_mutations.discord.HTTPException", FakeHTTPException)
     bot = object.__new__(BridgeBot)
     bot.database = database
+    bot._message_mutation_handler = None
     bot.event_router = SimpleNamespace(
         is_local_community_message=lambda _message_id: False,
     )
@@ -53,13 +85,12 @@ async def test_partial_raw_update_fetch_failure_is_durable_before_handler_return
     )
     bot.fetch_channel = AsyncMock()
     wake = SimpleNamespace(wake=__import__("unittest.mock").mock.Mock())
-    bot._runtime = SimpleNamespace(user_actor_delivery_worker=wake)
     bot.set_message_mutation_handler(
         DiscordMessageMutationHandler(
             database=database,
             event_router=bot.event_router,
             discord_fetcher=bot,
-            runtime_provider=bot._get_runtime,
+            mutation_context_provider=lambda: _mutation_context(wake),
         )
     )
 
@@ -120,20 +151,22 @@ async def test_raw_delete_has_no_timestamp_dependency_and_routes_terminal_intent
     )
     bot = object.__new__(BridgeBot)
     bot.database = database
+    bot._message_mutation_handler = None
     bot.event_router = router
-    bot._runtime = SimpleNamespace()
+    wake = SimpleNamespace(wake=lambda: None)
     bot.set_message_mutation_handler(
         DiscordMessageMutationHandler(
             database=database,
             event_router=router,
             discord_fetcher=bot,
-            runtime_provider=bot._get_runtime,
+            mutation_context_provider=lambda: _mutation_context(wake),
         )
     )
     payload = SimpleNamespace(message_id=11, channel_id=10, guild_id=1)
 
     await BridgeBot.on_raw_message_delete(bot, payload)
 
-    router.handle_message_delete.assert_awaited_once_with(
-        message_id=11, runtime=bot._runtime, guild_id=1
-    )
+    router.handle_message_delete.assert_awaited_once()
+    assert router.handle_message_delete.await_args.kwargs["message_id"] == 11
+    assert router.handle_message_delete.await_args.kwargs["guild_id"] == 1
+    assert "mutation_context" in router.handle_message_delete.await_args.kwargs

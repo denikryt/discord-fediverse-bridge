@@ -30,11 +30,12 @@ The Fedify gateway is the ActivityPub/WebFinger edge. It owns public actor/objec
 
 ## Main Python entry points
 
-- `src/app.py` — composes settings, database, Discord bot, FastAPI routes, runtime services, and process startup.
-- `src/runtime.py` — stores long-lived services that handlers share.
+- `src/app.py` — composes settings, database, Discord bot, FastAPI routes, runtime services, named runtime binds, and process startup/partial-failure cleanup.
+- `src/runtime.py` — stores long-lived services that handlers share after startup validation has completed.
+- `src/runtime_ports.py` — declares narrow process-local ports used where startup wiring still has real lifecycle cycles.
 - `src/http_api.py` — exposes public registration/OAuth routes and the private gateway-to-Python ActivityPub event route.
-- `src/discord_bot.py` — connects Discord callbacks to bridge code.
-- `src/discord_event_router.py` — chooses remote subscription mode or local community mode for Discord events.
+- `src/discord_bot.py` — connects Discord callbacks to bridge code and delegates raw mutation policy to a configured handler.
+- `src/discord_event_router.py` — chooses remote subscription mode or local community mode for Discord events using the narrow mutation context supplied by startup wiring.
 - `src/db/database.py` and `src/models.py` — persistence API and schema.
 
 ## Main gateway entry points
@@ -46,6 +47,11 @@ The Fedify gateway is the ActivityPub/WebFinger edge. It owns public actor/objec
 - `fedify-gateway/src/federation-outbound.ts` — compatibility export layer for older gateway imports.
 - `fedify-gateway/src/actor-store.ts`, `actors.ts`, and `webfinger.ts` — actor lookup, actor rendering, and discovery.
 - `fedify-gateway/src/normalize.ts` and `python-bridge.ts` — inbound ActivityPub normalization and delivery to Python.
+
+
+## Runtime composition and cleanup
+
+`src/app.py` is the only production composition root. It opens live owners in startup order, completes the remaining Discord/runtime cycles through named one-time bind methods, validates the graph before returning `Runtime`, and closes already-opened resources in reverse order if any later constructor, bind, or validation step fails. `Runtime.close()` remains the successful-startup shutdown owner. Raw Discord edit/delete paths receive `DiscordMutationContext` from `src/runtime_ports.py` rather than a broad `Runtime` or `BridgeBot` reference.
 
 ## Bridge modes
 

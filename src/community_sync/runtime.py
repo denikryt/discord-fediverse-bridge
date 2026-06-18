@@ -42,6 +42,7 @@ from .inbound_mapping import (
     needs_backfill,
 )
 from .reply_mapping import resolve_inbound_reference, resolve_reply_context
+from ..runtime_ports import DiscordDeliveryClientPort, DiscordMutationContext
 
 if TYPE_CHECKING:
     from ..activitypub_handlers import HandlerResult
@@ -52,6 +53,13 @@ if TYPE_CHECKING:
     from .discord_fanout import DiscordFanout
 
 logger = logging.getLogger(__name__)
+
+
+class _NoopWake:
+    """Ignore wake calls for legacy direct runtime tests without a worker."""
+
+    def wake(self) -> None:
+        """Preserve old direct-gateway test behavior."""
 
 
 class CommunityRuntime:
@@ -68,7 +76,7 @@ class CommunityRuntime:
         database: Database,
         content_publish_service: ContentPublishService | None = None,
         discord_fanout: DiscordFanout | None = None,
-        bot: object | None = None,
+        bot: DiscordDeliveryClientPort | None = None,
     ) -> None:
         """Initialise the runtime with the shared database, publish service, fanout, and bot.
 
@@ -85,6 +93,18 @@ class CommunityRuntime:
         if self.content_publish_service is None:
             raise ValueError("CommunityRuntime requires a content publish service")
         self.discord_fanout = discord_fanout
+        self.bot = bot
+
+    def bind_discord_fanout(self, discord_fanout: DiscordFanout) -> None:
+        """Attach the fanout adapter once after the bot/fanout cycle is complete."""
+        if self.discord_fanout is not None:
+            raise RuntimeError("CommunityRuntime Discord fanout is already configured")
+        self.discord_fanout = discord_fanout
+
+    def bind_discord_client(self, bot: DiscordDeliveryClientPort) -> None:
+        """Attach the Discord delivery client once for inbound AP delivery paths."""
+        if self.bot is not None:
+            raise RuntimeError("CommunityRuntime Discord client is already configured")
         self.bot = bot
 
     async def handle_discord_thread_create(
@@ -540,11 +560,32 @@ class CommunityRuntime:
             detail="comment created",
         )
 
+
+    def _require_mutation_context(
+        self, *, mutation_context: DiscordMutationContext | None, runtime: object | None
+    ) -> DiscordMutationContext:
+        """Return the narrow mutation context, adapting legacy direct tests."""
+        if mutation_context is not None:
+            return mutation_context
+        if runtime is None:
+            raise RuntimeError("Discord mutation context is not configured")
+        # Production passes DiscordMutationContext directly. This adapter keeps
+        # older runtime-path tests focused on behavior while call sites migrate.
+        return DiscordMutationContext(
+            bridge_policy_service=getattr(runtime, "bridge_policy_service"),
+            user_actor_delivery_service=getattr(runtime, "user_actor_delivery_service", None),
+            user_actor_delivery_wake=getattr(
+                runtime, "user_actor_delivery_worker", _NoopWake()
+            ),
+            fedify_gateway=getattr(runtime, "fedify_gateway", None),
+        )
+
     async def handle_discord_message_edit(
         self,
         message_id: int,
         new_content: str,
-        runtime: Runtime,
+        mutation_context: DiscordMutationContext | None = None,
+        runtime: object | None = None,
         author_display_name: str = "",
         edited_timestamp=None,
     ) -> None:
@@ -560,6 +601,10 @@ class CommunityRuntime:
         If a mirror edit fails, the error is logged and the AP Update is still sent —
         individual mirror failures do not abort the outbound AP propagation.
         """
+
+        mutation_context = self._require_mutation_context(
+            mutation_context=mutation_context, runtime=runtime
+        )
 
         # Reverse-lookup the message group by the Discord message ID.
         # Covers both source and mirror deliveries via the delivery table.
@@ -587,7 +632,7 @@ class CommunityRuntime:
         # Send the AP Update if the message group has an AP object and community actor.
         # These are set for all Discord-originated messages published via the bridge.
         if message_group.ap_object_id and message_group.community_actor_id:
-            decision = runtime.bridge_policy_service.federation_decision(
+            decision = mutation_context.bridge_policy_service.federation_decision(
                 message_group.community_actor_id
             )
             if not decision.allowed:
@@ -606,20 +651,22 @@ class CommunityRuntime:
                         or edited_timestamp is None
                     ):
                         return
-                    await runtime.user_actor_delivery_service.submit_update(
+                    outcome = await mutation_context.user_actor_delivery_service.submit_update(
                         object_id=published.object_id,
                         title=published.title,
                         body_markdown=new_content,
                         edited_timestamp=edited_timestamp,
                     )
-                    runtime.user_actor_delivery_worker.wake()
+                    if outcome == "accepted":
+                        mutation_context.user_actor_delivery_wake.wake()
                 except Exception:
                     logger.exception("Failed to send message edit to AP gateway")
 
     async def handle_discord_message_delete(
         self,
         message_id: int,
-        runtime: Runtime,
+        mutation_context: DiscordMutationContext | None = None,
+        runtime: object | None = None,
     ) -> None:
         """Propagate a Discord source-message delete to all mirror messages and to AP.
 
@@ -631,6 +678,9 @@ class CommunityRuntime:
         individual mirror failures do not abort the outbound AP propagation.
         """
 
+        mutation_context = self._require_mutation_context(
+            mutation_context=mutation_context, runtime=runtime
+        )
         message_group = get_message_group_for_delivered_message(
             self.database, message_id
         )
@@ -648,7 +698,7 @@ class CommunityRuntime:
             )
 
         if message_group.ap_object_id and message_group.community_actor_id:
-            decision = runtime.bridge_policy_service.federation_decision(
+            decision = mutation_context.bridge_policy_service.federation_decision(
                 message_group.community_actor_id
             )
             if not decision.allowed:
@@ -661,10 +711,11 @@ class CommunityRuntime:
                     )
                     if published is None or published.actor_username != actor_username:
                         return
-                    await runtime.user_actor_delivery_service.submit_delete(
+                    outcome = await mutation_context.user_actor_delivery_service.submit_delete(
                         object_id=published.object_id
                     )
-                    runtime.user_actor_delivery_worker.wake()
+                    if outcome == "accepted":
+                        mutation_context.user_actor_delivery_wake.wake()
                 except Exception:
                     logger.exception("Failed to send message delete to AP gateway")
 

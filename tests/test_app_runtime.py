@@ -44,7 +44,8 @@ async def test_build_runtime_wires_user_actor_follow_service_after_bot_and_close
     runtime = build_runtime(_settings(tmp_path))
 
     assert runtime.user_actor_follow_service.bot is runtime.bot
-    assert runtime.bot._runtime is runtime
+    assert not hasattr(runtime.bot, "_runtime")
+    assert runtime.bot._require_personal_feed_delivery_worker() is runtime.personal_feed_discord_delivery_worker
     assert isinstance(
         runtime.bot._require_message_mutation_handler(), DiscordMessageMutationHandler
     )
@@ -72,6 +73,20 @@ async def test_build_runtime_wires_user_actor_follow_service_after_bot_and_close
         runtime.personal_feed_conversation_runtime.delivery_worker
         is runtime.personal_feed_discord_delivery_worker
     )
+    with pytest.raises(RuntimeError):
+        runtime.bot.set_message_mutation_handler(runtime.bot._require_message_mutation_handler())
+    with pytest.raises(RuntimeError):
+        runtime.bot.bind_personal_feed_delivery_worker(runtime.personal_feed_discord_delivery_worker)
+    with pytest.raises(RuntimeError):
+        runtime.community_runtime.bind_discord_fanout(runtime.community_runtime.discord_fanout)
+    with pytest.raises(RuntimeError):
+        runtime.community_runtime.bind_discord_client(runtime.bot)
+    with pytest.raises(RuntimeError):
+        runtime.local_community_runtime.bind_discord_client(runtime.bot)
+    with pytest.raises(RuntimeError):
+        runtime.personal_feed_conversation_runtime.bind_delivery_wake(runtime.personal_feed_discord_delivery_worker)
+    with pytest.raises(RuntimeError):
+        runtime.user_actor_delivery_service.bind_discord_message_reader(runtime.bot)
 
     close_order: list[str] = []
 
@@ -231,3 +246,161 @@ async def test_runtime_close_cancels_inflight_personal_feed_delivery_before_depe
         delivery = session.get(InboundDiscordDelivery, admitted.delivery_id)
         assert delivery.state == "ready"
         assert delivery.attempt_count == 0
+
+
+def test_partial_startup_failure_after_database_closes_database_and_lease(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A migration-time startup failure closes only owners that already exist."""
+    from src import app
+
+    close_order: list[str] = []
+
+    class FakeLease:
+        """Track deployment lease closure for a failed startup."""
+
+        def close(self) -> None:
+            """Record release of the shared deployment lease."""
+            close_order.append("lease")
+
+    class FakeDatabase:
+        """Fail immediately after the database owner is constructed."""
+
+        def __init__(self, _url: str) -> None:
+            close_order.append("database-open")
+
+        def create_all(self) -> None:
+            """Preserve the schema creation milestone before migration."""
+
+        def migrate(self) -> None:
+            """Raise after DB construction so cleanup must dispose the engine."""
+            raise RuntimeError("migration failed")
+
+        def close(self) -> None:
+            """Record disposal of the partially opened database owner."""
+            close_order.append("database")
+
+    monkeypatch.setattr(app, "Database", FakeDatabase)
+
+    with pytest.raises(RuntimeError, match="migration failed"):
+        app._build_live_runtime(_settings(tmp_path), FakeLease())
+
+    assert close_order == ["database-open", "database", "lease"]
+
+
+def test_partial_startup_failure_after_gateway_closes_gateway_database_and_lease(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A failure after gateway construction closes gateway before database and lease."""
+    from src import app
+
+    close_order: list[str] = []
+
+    class FakeLease:
+        """Track deployment lease closure for gateway failure."""
+
+        def close(self) -> None:
+            """Record lease release."""
+            close_order.append("lease")
+
+    class FakeDatabase:
+        """Provide only the database surface needed before gateway construction."""
+
+        def __init__(self, _url: str) -> None:
+            close_order.append("database-open")
+            self.bridge_policy_entries = object()
+
+        def create_all(self) -> None:
+            """No-op schema setup for composition failure testing."""
+
+        def migrate(self) -> None:
+            """No-op migration setup for composition failure testing."""
+
+        def close(self) -> None:
+            """Record database disposal."""
+            close_order.append("database")
+
+    class FakeGateway:
+        """Represent a constructed gateway HTTP client."""
+
+        def __init__(self, _settings: object) -> None:
+            close_order.append("gateway-open")
+
+        async def close(self) -> None:
+            """Record asynchronous gateway cleanup."""
+            close_order.append("gateway")
+
+    class FailingOAuth:
+        """Fail immediately after the gateway has become a live owner."""
+
+        def __init__(self, _settings: object) -> None:
+            raise RuntimeError("oauth failed")
+
+    monkeypatch.setattr(app, "Database", FakeDatabase)
+    monkeypatch.setattr(app, "BridgeActorKeyBootstrap", lambda **_kwargs: Mock(ensure=Mock()))
+    monkeypatch.setattr(app, "FedifyGatewayClient", FakeGateway)
+    monkeypatch.setattr(app, "DiscordOAuthClient", FailingOAuth)
+
+    with pytest.raises(RuntimeError, match="oauth failed"):
+        app._build_live_runtime(_settings(tmp_path), FakeLease())
+
+    assert close_order == ["database-open", "gateway-open", "gateway", "database", "lease"]
+
+
+@pytest.mark.asyncio
+async def test_partial_startup_validation_failure_closes_complete_runtime_graph(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A final graph-validation failure uses Runtime.close() before returning."""
+    from src import app
+    from src.db import Database as RealDatabase
+    from src.discord_oauth_client import DiscordOAuthClient as RealOAuth
+    from src.fedify_gateway_client import FedifyGatewayClient as RealGateway
+
+    close_order: list[str] = []
+
+    class FakeLease:
+        """Track deployment lease closure after final graph validation fails."""
+
+        def close(self) -> None:
+            """Record release of the deployment lease."""
+            close_order.append("lease")
+
+    class TrackingDatabase(RealDatabase):
+        """Real database with observable close semantics."""
+
+        def close(self) -> None:
+            """Record database disposal without hiding real cleanup."""
+            close_order.append("database")
+            super().close()
+
+    class TrackingGateway(RealGateway):
+        """Real gateway client with observable async close semantics."""
+
+        async def close(self) -> None:
+            """Record gateway HTTP client cleanup."""
+            close_order.append("gateway")
+            await super().close()
+
+    class TrackingOAuth(RealOAuth):
+        """Real OAuth client with observable async close semantics."""
+
+        async def close(self) -> None:
+            """Record OAuth HTTP client cleanup."""
+            close_order.append("oauth")
+            await super().close()
+
+    monkeypatch.setattr(app, "Database", TrackingDatabase)
+    monkeypatch.setattr(app, "FedifyGatewayClient", TrackingGateway)
+    monkeypatch.setattr(app, "DiscordOAuthClient", TrackingOAuth)
+
+    def fail_validation(_runtime: object) -> None:
+        """Fail after all production bind methods have completed."""
+        raise RuntimeError("validation failed")
+
+    monkeypatch.setattr(app, "_validate_runtime_graph", fail_validation)
+
+    with pytest.raises(RuntimeError, match="validation failed"):
+        app._build_live_runtime(_settings(tmp_path), FakeLease())
+
+    assert close_order == ["oauth", "gateway", "database", "lease"]

@@ -6,9 +6,10 @@ For a feature-oriented index of existing tests, use `docs/development/test-cover
 For reproducible test groups, branch coverage, durations, and generated assurance artifacts, use `docs/development/test-assurance.md`.
 
 ## Startup wiring
-1. `src/app.py` — process composition.
-2. `src/runtime.py` — shared services.
-3. `src/config.py` — environment contract.
+1. `src/app.py` — process composition, named bind methods, graph validation, and partial-startup cleanup.
+2. `src/runtime.py` — shared services after successful startup.
+3. `src/runtime_ports.py` — narrow process-local protocols and `DiscordMutationContext` for unavoidable lifecycle cycles.
+4. `src/config.py` — environment contract.
 
 ## Registration
 1. `src/commands/register.py` — guild-only command entry after the guild allowlist guard.
@@ -100,9 +101,9 @@ Use `docs/architecture/database-map.md` for table ownership and invariants. Use 
 1. `src/http_api.py`; 2. `src/app.py`; 3. `docs/architecture/http-routes.md`.
 
 ## Local community participant edit/delete
-1. `src/discord_message_mutations.py` — raw Discord edit/delete admission, echo suppression, and partial edit reconciliation.
-2. `src/discord_event_router.py` — local-community ownership check and runtime dispatch.
-3. `src/local_communities/runtime.py` — canonical AP object resolution and gateway Update/Delete calls.
+1. `src/discord_message_mutations.py` — raw Discord edit/delete admission, echo suppression, partial edit reconciliation, and mutation-context handoff.
+2. `src/discord_event_router.py` — local-community ownership check and runtime dispatch without broad Runtime access.
+3. `src/local_communities/runtime.py` — canonical AP object resolution and gateway/User Actor delivery calls through `DiscordMutationContext`.
 4. `src/local_communities/discord_fanout.py` — per-surface local Discord edit/delete fanout.
 5. `src/local_communities/delivery_mapping.py` — surface/canonical lookup helpers.
 6. `src/content_sync/edit_delete.py` — shared Discord message edit/delete edge helpers.

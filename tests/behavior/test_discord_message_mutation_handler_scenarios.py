@@ -9,6 +9,7 @@ from unittest.mock import AsyncMock, Mock
 import pytest
 
 from src.discord_message_mutations import DiscordMessageMutationHandler
+from src.runtime_ports import DiscordMutationContext
 
 
 class _Clock:
@@ -109,6 +110,43 @@ class _Fetcher:
         return self.channel
 
 
+class _Policy:
+    """Allow every federation target in raw-boundary tests."""
+
+    def federation_decision(self, _target: str) -> object:
+        """Return an allowed decision object."""
+        return SimpleNamespace(allowed=True)
+
+
+class _DeliveryService:
+    """Record mutation submissions when router tests use the real context."""
+
+    def __init__(self) -> None:
+        """Create empty submission logs."""
+        self.updates: list[dict[str, object]] = []
+        self.deletes: list[dict[str, object]] = []
+
+    async def submit_update(self, **kwargs: object) -> str:
+        """Record one Update admission request."""
+        self.updates.append(kwargs)
+        return "accepted"
+
+    async def submit_delete(self, **kwargs: object) -> str:
+        """Record one Delete admission request."""
+        self.deletes.append(kwargs)
+        return "accepted"
+
+
+def _mutation_context(*, wake: object | None = None) -> DiscordMutationContext:
+    """Build the narrow mutation context used by the Stage 4 handler contract."""
+    return DiscordMutationContext(
+        bridge_policy_service=_Policy(),
+        user_actor_delivery_service=_DeliveryService(),
+        user_actor_delivery_wake=wake or SimpleNamespace(wake=Mock()),
+        fedify_gateway=SimpleNamespace(),
+    )
+
+
 def _edit_payload(
     *,
     message_id: int = 11,
@@ -133,7 +171,7 @@ def _handler(
     database: _Database,
     router: _Router,
     fetcher: _Fetcher | None = None,
-    runtime: object | None = None,
+    mutation_context: DiscordMutationContext | None = None,
     clock: _Clock | None = None,
 ) -> DiscordMessageMutationHandler:
     """Create the handler with deterministic outer-boundary collaborators."""
@@ -141,7 +179,7 @@ def _handler(
         database=database,
         event_router=router,
         discord_fetcher=fetcher or _Fetcher(),
-        runtime_provider=lambda: runtime,
+        mutation_context_provider=lambda: mutation_context,
         clock=clock or _Clock(100.0),
     )
 
@@ -152,7 +190,7 @@ async def test_echo_edit_suppression_expires_before_remote_routing() -> None:
     clock = _Clock(100.0)
     database = _Database(delivery=SimpleNamespace(role="source"))
     router = _Router()
-    handler = _handler(database=database, router=router, runtime=SimpleNamespace(), clock=clock)
+    handler = _handler(database=database, router=router, mutation_context=_mutation_context(), clock=clock)
 
     handler.track_message_edit(11)
     clock.now = 104.0
@@ -174,7 +212,7 @@ async def test_echo_delete_suppression_expires_before_remote_routing() -> None:
     clock = _Clock(100.0)
     database = _Database(delivery=SimpleNamespace(role="source"))
     router = _Router()
-    handler = _handler(database=database, router=router, runtime=SimpleNamespace(), clock=clock)
+    handler = _handler(database=database, router=router, mutation_context=_mutation_context(), clock=clock)
 
     handler.track_message_delete(11)
     clock.now = 104.0
@@ -196,7 +234,7 @@ async def test_remote_edit_role_guard_skips_non_source_deliveries(role: str) -> 
     """Remote-community raw edits are admitted only from source deliveries."""
     database = _Database(delivery=SimpleNamespace(role=role))
     router = _Router()
-    handler = _handler(database=database, router=router, runtime=SimpleNamespace())
+    handler = _handler(database=database, router=router, mutation_context=_mutation_context())
 
     await handler.handle_raw_message_edit(_edit_payload())
 
@@ -208,7 +246,7 @@ async def test_remote_delete_inbound_guard_skips_delivery() -> None:
     """Inbound AP mirror deletes remain owned by ActivityPub handling, not Discord raw events."""
     database = _Database(delivery=SimpleNamespace(role="inbound"))
     router = _Router()
-    handler = _handler(database=database, router=router, runtime=SimpleNamespace())
+    handler = _handler(database=database, router=router, mutation_context=_mutation_context())
 
     await handler.handle_raw_message_delete(_delete_payload())
 
@@ -230,7 +268,7 @@ async def test_partial_edit_fetch_success_uses_authoritative_message_state() -> 
         database=database,
         router=router,
         fetcher=_Fetcher(channel),
-        runtime=SimpleNamespace(),
+        mutation_context=_mutation_context(),
     )
 
     await handler.handle_raw_message_edit(_edit_payload(edited_timestamp=None))
@@ -257,7 +295,7 @@ async def test_partial_edit_fetch_failure_records_reconciliation_and_wakes_worke
         database=database,
         router=router,
         fetcher=_Fetcher(channel),
-        runtime=SimpleNamespace(user_actor_delivery_worker=SimpleNamespace(wake=wake)),
+        mutation_context=_mutation_context(wake=SimpleNamespace(wake=wake)),
     )
 
     await handler.handle_raw_message_edit(_edit_payload(edited_timestamp=None))
@@ -274,7 +312,7 @@ async def test_personal_feed_admission_bypasses_remote_delivery_lookup() -> None
     """Personal-feed mappings are admitted without requiring remote fanout delivery rows."""
     database = _Database(mapping=SimpleNamespace(publication_context="personal_feed"))
     router = _Router()
-    handler = _handler(database=database, router=router, runtime=SimpleNamespace())
+    handler = _handler(database=database, router=router, mutation_context=_mutation_context())
 
     await handler.handle_raw_message_edit(_edit_payload())
     await handler.handle_raw_message_delete(_delete_payload())
@@ -289,7 +327,7 @@ async def test_local_community_admission_bypasses_remote_delivery_lookup() -> No
     """Local-community surfaces are admitted without remote-community fanout rows."""
     database = _Database()
     router = _Router(local=True)
-    handler = _handler(database=database, router=router, runtime=SimpleNamespace())
+    handler = _handler(database=database, router=router, mutation_context=_mutation_context())
 
     await handler.handle_raw_message_edit(_edit_payload())
     await handler.handle_raw_message_delete(_delete_payload())
@@ -300,11 +338,11 @@ async def test_local_community_admission_bypasses_remote_delivery_lookup() -> No
 
 
 @pytest.mark.asyncio
-async def test_runtime_absence_skips_admitted_edit_and_delete() -> None:
-    """Admitted raw events still return when Stage 4 runtime wiring is unavailable."""
+async def test_context_absence_skips_admitted_edit_and_delete() -> None:
+    """Admitted raw events still return when Stage 4 mutation context wiring is unavailable."""
     database = _Database(delivery=SimpleNamespace(role="source"))
     router = _Router()
-    handler = _handler(database=database, router=router, runtime=None)
+    handler = _handler(database=database, router=router, mutation_context=None)
 
     await handler.handle_raw_message_edit(_edit_payload())
     await handler.handle_raw_message_delete(_delete_payload())
@@ -320,7 +358,7 @@ async def test_router_exceptions_do_not_escape_raw_callback_boundary() -> None:
     router = _Router()
     router.handle_message_edit.side_effect = RuntimeError("edit boom")
     router.handle_message_delete.side_effect = RuntimeError("delete boom")
-    handler = _handler(database=database, router=router, runtime=SimpleNamespace())
+    handler = _handler(database=database, router=router, mutation_context=_mutation_context())
 
     await handler.handle_raw_message_edit(_edit_payload())
     await handler.handle_raw_message_delete(_delete_payload())

@@ -52,8 +52,8 @@ This document explains the major runtime traces through the bridge: user/platfor
 ## Discord edit/delete -> ActivityPub update/delete flow
 
 1. Discord edit/delete enters `src/discord_bot.py`, which delegates raw admission, echo suppression, and partial edit reconciliation to `src/discord_message_mutations.py`.
-2. `src/discord_message_mutations.py` routes admitted mutations through `src/discord_event_router.py`.
-3. Runtime resolves persisted ActivityPub object ids through `src/db/database.py`.
+2. `src/discord_message_mutations.py` routes admitted mutations through `src/discord_event_router.py` with the startup-owned `DiscordMutationContext`; the raw path does not pull a broad `Runtime` out of the bot.
+3. The selected runtime resolves persisted ActivityPub object ids through `src/db/database.py` and uses the context's narrow delivery wake/gateway capabilities for outbound Update/Delete.
 4. `src/content_sync/edit_delete.py` prepares the request.
 5. Gateway `/update` or `/delete` signs and sends the ActivityPub operation.
 

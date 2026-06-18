@@ -38,6 +38,7 @@ from .delivery_mapping import (
     get_local_community_thread_surface_for_discord_thread,
 )
 from .participant_routing import resolve_local_community_source_for_forum
+from ..runtime_ports import DiscordDeliveryClientPort, DiscordMutationContext
 from .reply_mapping import (
     resolve_inbound_reply_target,
     resolve_outbound_reply_context,
@@ -66,6 +67,13 @@ class LocalCommunityRuntimeResult:
     object_id: str | None = None
 
 
+class _NoopWake:
+    """Ignore wake calls for legacy gateway-only test fallbacks."""
+
+    def wake(self) -> None:
+        """Preserve old direct-gateway tests that had no worker."""
+
+
 class LocalCommunityRuntime:
     """Own local-community Discord/AP orchestration around a narrow runtime API."""
 
@@ -77,7 +85,7 @@ class LocalCommunityRuntime:
         content_publish_service: ContentPublishService,
         bridge_prefix: str,
         bridge_policy_service: BridgePolicyService,
-        bot: object | None = None,
+        bot: DiscordDeliveryClientPort | None = None,
     ) -> None:
         """Initialise the local-community runtime with shared long-lived services."""
         self.database = database
@@ -91,6 +99,12 @@ class LocalCommunityRuntime:
             fedify_gateway=fedify_gateway,
             policy_service=bridge_policy_service,
         )
+
+    def bind_discord_client(self, bot: DiscordDeliveryClientPort) -> None:
+        """Attach the Discord delivery client once after the bot/router cycle exists."""
+        if self.bot is not None:
+            raise RuntimeError("LocalCommunityRuntime Discord client is already configured")
+        self.bot = bot
 
     def _disabled_result_if_needed(
         self, local_community: object
@@ -892,14 +906,17 @@ class LocalCommunityRuntime:
         )
 
     async def _send_update_request(
-        self, *, runtime: object, published: object, new_content: str, edited_timestamp
+        self,
+        *,
+        mutation_context: DiscordMutationContext,
+        published: object,
+        new_content: str,
+        edited_timestamp,
     ) -> None:
         """Durably admit one local-community edit before gateway I/O."""
-        service = getattr(runtime, "user_actor_delivery_service", None)
+        service = mutation_context.user_actor_delivery_service
         if service is None:
-            await getattr(
-                runtime, "fedify_gateway", self.fedify_gateway
-            ).update_content(
+            await mutation_context.fedify_gateway.update_content(
                 UpdateContentRequest(
                     actor_username=published.actor_username,
                     community_actor_url=published.community_actor_url,
@@ -921,7 +938,7 @@ class LocalCommunityRuntime:
             )
             return
         try:
-            await service.submit_update(
+            outcome = await service.submit_update(
                 object_id=published.object_id,
                 title=published.title,
                 body_markdown=new_content,
@@ -930,22 +947,21 @@ class LocalCommunityRuntime:
                     published.community_actor_url
                 ),
             )
-            worker = getattr(runtime, "user_actor_delivery_worker", None)
-            if worker is not None:
-                worker.wake()
+            if outcome == "accepted":
+                mutation_context.user_actor_delivery_wake.wake()
         except Exception:
             logger.exception(
                 "Failed to reserve local-community edit for AP object %s",
                 published.object_id,
             )
 
-    async def _send_delete_request(self, *, runtime: object, published: object) -> None:
+    async def _send_delete_request(
+        self, *, mutation_context: DiscordMutationContext, published: object
+    ) -> None:
         """Durably admit one terminal local-community delete."""
-        service = getattr(runtime, "user_actor_delivery_service", None)
+        service = mutation_context.user_actor_delivery_service
         if service is None:
-            await getattr(
-                runtime, "fedify_gateway", self.fedify_gateway
-            ).delete_content(
+            await mutation_context.fedify_gateway.delete_content(
                 DeleteContentRequest(
                     actor_username=published.actor_username,
                     community_actor_url=published.community_actor_url,
@@ -957,15 +973,14 @@ class LocalCommunityRuntime:
             )
             return
         try:
-            await service.submit_delete(
+            outcome = await service.submit_delete(
                 object_id=published.object_id,
                 target_inbox_urls=self._allowed_remote_inboxes(
                     published.community_actor_url
                 ),
             )
-            worker = getattr(runtime, "user_actor_delivery_worker", None)
-            if worker is not None:
-                worker.wake()
+            if outcome == "accepted":
+                mutation_context.user_actor_delivery_wake.wake()
         except Exception:
             logger.exception(
                 "Failed to reserve local-community delete for AP object %s",
@@ -993,13 +1008,12 @@ class LocalCommunityRuntime:
     async def _fanout_thread_edit(
         self,
         *,
-        runtime: object,
         thread_row: object,
         source_surface_id: int | None,
         new_content: str,
     ) -> None:
         """Best-effort edit fanout for starter surfaces of one canonical post."""
-        bot = self.bot or getattr(runtime, "bot", None)
+        bot = self.bot
         if bot is None:
             return
         fanout = LocalCommunityDiscordFanout(
@@ -1014,13 +1028,12 @@ class LocalCommunityRuntime:
     async def _fanout_message_edit(
         self,
         *,
-        runtime: object,
         message_row: object,
         source_surface_id: int | None,
         new_content: str,
     ) -> None:
         """Best-effort edit fanout for message surfaces of one canonical comment."""
-        bot = self.bot or getattr(runtime, "bot", None)
+        bot = self.bot
         if bot is None:
             return
         fanout = LocalCommunityDiscordFanout(
@@ -1033,10 +1046,10 @@ class LocalCommunityRuntime:
         )
 
     async def _fanout_thread_delete(
-        self, *, runtime: object, thread_row: object, source_surface_id: int | None
+        self, *, thread_row: object, source_surface_id: int | None
     ) -> None:
         """Best-effort delete marker fanout for starter surfaces."""
-        bot = self.bot or getattr(runtime, "bot", None)
+        bot = self.bot
         if bot is None:
             return
         fanout = LocalCommunityDiscordFanout(
@@ -1047,10 +1060,10 @@ class LocalCommunityRuntime:
         )
 
     async def _fanout_message_delete(
-        self, *, runtime: object, message_row: object, source_surface_id: int | None
+        self, *, message_row: object, source_surface_id: int | None
     ) -> None:
         """Best-effort delete marker fanout for message surfaces."""
-        bot = self.bot or getattr(runtime, "bot", None)
+        bot = self.bot
         if bot is None:
             return
         fanout = LocalCommunityDiscordFanout(
@@ -1106,12 +1119,33 @@ class LocalCommunityRuntime:
             discord_message_id=discord_message_id,
         )
 
+
+    def _require_mutation_context(
+        self, *, mutation_context: DiscordMutationContext | None, runtime: object | None
+    ) -> DiscordMutationContext:
+        """Return the narrow mutation context, adapting legacy tests when needed."""
+        if mutation_context is not None:
+            return mutation_context
+        if runtime is None:
+            raise RuntimeError("Discord mutation context is not configured")
+        # Compatibility is restricted to direct tests that still pass a runtime
+        # namespace. Production app.py passes DiscordMutationContext directly.
+        return DiscordMutationContext(
+            bridge_policy_service=getattr(runtime, "bridge_policy_service", self.bridge_policy_service),
+            user_actor_delivery_service=getattr(runtime, "user_actor_delivery_service", None),
+            user_actor_delivery_wake=getattr(
+                runtime, "user_actor_delivery_worker", _NoopWake()
+            ),
+            fedify_gateway=getattr(runtime, "fedify_gateway", self.fedify_gateway),
+        )
+
     async def handle_discord_message_edit(
         self,
         *,
         message_id: int,
         new_content: str,
-        runtime: object,
+        mutation_context: DiscordMutationContext | None = None,
+        runtime: object | None = None,
         author_display_name: str = "",
         edited_timestamp=None,
     ) -> None:
@@ -1123,6 +1157,9 @@ class LocalCommunityRuntime:
         from local Discord fanout.
         """
         del author_display_name
+        mutation_context = self._require_mutation_context(
+            mutation_context=mutation_context, runtime=runtime
+        )
 
         thread_surface = self.database.local_community_surfaces.get_local_community_thread_surface_by_starter_message_id(
             message_id
@@ -1145,13 +1182,12 @@ class LocalCommunityRuntime:
             if published is None:
                 return
             await self._send_update_request(
-                runtime=runtime,
+                mutation_context=mutation_context,
                 published=published,
                 new_content=new_content,
                 edited_timestamp=edited_timestamp,
             )
             await self._fanout_thread_edit(
-                runtime=runtime,
                 thread_row=thread_row,
                 source_surface_id=getattr(thread_surface, "id"),
                 new_content=new_content,
@@ -1187,13 +1223,12 @@ class LocalCommunityRuntime:
         if published is None:
             return
         await self._send_update_request(
-            runtime=runtime,
+            mutation_context=mutation_context,
             published=published,
             new_content=new_content,
             edited_timestamp=edited_timestamp,
         )
         await self._fanout_message_edit(
-            runtime=runtime,
             message_row=message_row,
             source_surface_id=getattr(message_surface, "id"),
             new_content=new_content,
@@ -1203,9 +1238,13 @@ class LocalCommunityRuntime:
         self,
         *,
         message_id: int,
-        runtime: object,
+        mutation_context: DiscordMutationContext | None = None,
+        runtime: object | None = None,
     ) -> None:
         """Propagate one Discord-authored local-community delete to participants."""
+        mutation_context = self._require_mutation_context(
+            mutation_context=mutation_context, runtime=runtime
+        )
         thread_surface = self.database.local_community_surfaces.get_local_community_thread_surface_by_starter_message_id(
             message_id
         )
@@ -1226,9 +1265,10 @@ class LocalCommunityRuntime:
             )
             if published is None:
                 return
-            await self._send_delete_request(runtime=runtime, published=published)
+            await self._send_delete_request(
+                mutation_context=mutation_context, published=published
+            )
             await self._fanout_thread_delete(
-                runtime=runtime,
                 thread_row=thread_row,
                 source_surface_id=getattr(thread_surface, "id"),
             )
@@ -1262,9 +1302,10 @@ class LocalCommunityRuntime:
         )
         if published is None:
             return
-        await self._send_delete_request(runtime=runtime, published=published)
+        await self._send_delete_request(
+            mutation_context=mutation_context, published=published
+        )
         await self._fanout_message_delete(
-            runtime=runtime,
             message_row=message_row,
             source_surface_id=getattr(message_surface, "id"),
         )
@@ -1290,7 +1331,6 @@ class LocalCommunityRuntime:
             )
         )
         await self._fanout_thread_edit(
-            runtime=runtime,
             thread_row=thread_row,
             source_surface_id=None,
             new_content=self._format_inbound_post_body(event),
@@ -1329,7 +1369,6 @@ class LocalCommunityRuntime:
             )
         )
         await self._fanout_thread_delete(
-            runtime=runtime,
             thread_row=thread_row,
             source_surface_id=None,
         )
@@ -1378,7 +1417,6 @@ class LocalCommunityRuntime:
             )
         )
         await self._fanout_message_edit(
-            runtime=runtime,
             message_row=message_row,
             source_surface_id=None,
             new_content=self._format_inbound_comment_body(event),
@@ -1428,7 +1466,6 @@ class LocalCommunityRuntime:
             )
         )
         await self._fanout_message_delete(
-            runtime=runtime,
             message_row=message_row,
             source_surface_id=None,
         )

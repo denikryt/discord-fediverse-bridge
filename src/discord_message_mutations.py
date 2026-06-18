@@ -17,6 +17,7 @@ import discord
 
 from .db import Database
 from .discord_event_router import DiscordEventRouter
+from .runtime_ports import DiscordMutationContext
 
 logger = logging.getLogger(__name__)
 
@@ -42,7 +43,7 @@ class DiscordMessageMutationHandler:
     """Handle raw Discord edit/delete events before domain mutation routing.
 
     The handler owns raw-event admission, process-local echo suppression,
-    partial edit reconciliation, runtime lookup, and exception containment. It
+    partial edit reconciliation, mutation-context lookup, and exception containment. It
     does not decide personal/local/remote mutation semantics; admitted events are
     delegated unchanged to DiscordEventRouter.
     """
@@ -53,19 +54,19 @@ class DiscordMessageMutationHandler:
         database: Database,
         event_router: DiscordEventRouter,
         discord_fetcher: DiscordMessageFetcher,
-        runtime_provider: Callable[[], object | None],
+        mutation_context_provider: Callable[[], DiscordMutationContext | None],
         clock: Callable[[], float] = time.time,
     ) -> None:
         """Initialise the handler with only raw-boundary collaborators.
 
-        No secret-bearing settings, gateway clients, signing material, or broad
-        Runtime object is accepted here; runtime is resolved lazily through the
-        narrow provider to preserve the current Stage 3 composition behavior.
+        No secret-bearing settings, signing material, BridgeBot, or broad Runtime
+        object is accepted here; the mutation context exposes only submit, wake,
+        policy, and gateway fallback capabilities used by downstream routing.
         """
         self.database = database
         self.event_router = event_router
         self.discord_fetcher = discord_fetcher
-        self._runtime_provider = runtime_provider
+        self._mutation_context_provider = mutation_context_provider
         self._clock = clock
         # Echo state is intentionally volatile and process-local. Durable
         # mutation idempotency remains in repositories and downstream services.
@@ -156,9 +157,9 @@ class DiscordMessageMutationHandler:
                     message_id=payload.message_id,
                     error=str(exc),
                 )
-                runtime = self._runtime_provider()
-                if runtime is not None:
-                    runtime.user_actor_delivery_worker.wake()
+                context = self._mutation_context_provider()
+                if context is not None:
+                    context.user_actor_delivery_wake.wake()
                 return
 
         # Author data is payload-local and used only for downstream mirror header
@@ -168,10 +169,10 @@ class DiscordMessageMutationHandler:
             author_data.get("global_name") or author_data.get("username") or ""
         )
 
-        runtime = self._runtime_provider()
-        if runtime is None:
+        context = self._mutation_context_provider()
+        if context is None:
             logger.warning(
-                "[on_raw_message_edit] no runtime available for msg=%s",
+                "[on_raw_message_edit] no mutation context available for msg=%s",
                 payload.message_id,
             )
             return
@@ -186,7 +187,7 @@ class DiscordMessageMutationHandler:
                 message_id=payload.message_id,
                 new_content=new_content,
                 author_display_name=author_display_name,
-                runtime=runtime,
+                mutation_context=context,
                 edited_timestamp=edited_timestamp,
                 guild_id=getattr(payload, "guild_id", None),
             )
@@ -233,10 +234,10 @@ class DiscordMessageMutationHandler:
             )
             return
 
-        runtime = self._runtime_provider()
-        if runtime is None:
+        context = self._mutation_context_provider()
+        if context is None:
             logger.warning(
-                "[on_raw_message_delete] no runtime available for msg=%s",
+                "[on_raw_message_delete] no mutation context available for msg=%s",
                 payload.message_id,
             )
             return
@@ -249,7 +250,7 @@ class DiscordMessageMutationHandler:
         try:
             await self.event_router.handle_message_delete(
                 message_id=payload.message_id,
-                runtime=runtime,
+                mutation_context=context,
                 guild_id=getattr(payload, "guild_id", None),
             )
         except Exception:

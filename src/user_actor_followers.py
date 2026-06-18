@@ -6,6 +6,7 @@ import logging
 from urllib.parse import urlparse
 
 from .inbound_activity_outcomes import InboundActivityOutcome
+from .runtime_ports import DiscordUserLookupPort
 
 logger = logging.getLogger(__name__)
 
@@ -14,7 +15,7 @@ class UserActorFollowService:
     """Own User Actor follower persistence, Accept delivery, and owner notification."""
 
     def __init__(
-        self, *, database: object, fedify_gateway: object, bot: object
+        self, *, database: object, fedify_gateway: object, bot: DiscordUserLookupPort
     ) -> None:
         """Bind persistence and outer delivery boundaries used by the lifecycle."""
         self.database = database

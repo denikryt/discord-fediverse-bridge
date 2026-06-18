@@ -64,6 +64,15 @@ class UserActorDeliveryService:
         self.policy_service = policy_service
         self.discord_message_reader = discord_message_reader
 
+
+    def bind_discord_message_reader(
+        self, discord_message_reader: DiscordMessageStateReader
+    ) -> None:
+        """Attach the Discord reconciliation reader once after the bot exists."""
+        if self.discord_message_reader is not None:
+            raise RuntimeError("Discord message state reader is already configured")
+        self.discord_message_reader = discord_message_reader
+
     async def process_source(self, source_id: int) -> ProfileFanoutSummary:
         """Make a bounded immediate attempt for one committed source."""
         source = self.database.user_actor_deliveries.get_source(source_id)

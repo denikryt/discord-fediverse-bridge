@@ -46,6 +46,13 @@ class PersonalFeedConversationRuntime:
         self.fedify_origin = fedify_origin.rstrip("/")
         self.delivery_worker = delivery_worker
 
+
+    def bind_delivery_wake(self, delivery_worker: object) -> None:
+        """Attach the wake-only Discord delivery edge once after worker creation."""
+        if self.delivery_worker is not None:
+            raise RuntimeError("Personal-feed conversation delivery wake is already configured")
+        self.delivery_worker = delivery_worker
+
     def adopt_manual_thread(self, *, thread: object) -> PersonalFeedConversationResult:
         """Adopt a Discord public thread only when its snowflake maps to a Stage 7 root."""
         thread_id = int(getattr(thread, "id"))

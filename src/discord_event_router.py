@@ -15,6 +15,7 @@ from .local_communities.participant_routing import (
     resolve_local_community_source_for_forum,
 )
 from .personal_feeds import PersonalFeedBindingView, PersonalFeedService
+from .runtime_ports import DiscordMutationContext
 
 
 class DiscordEventRouter:
@@ -184,7 +185,7 @@ class DiscordEventRouter:
         message_id: int,
         new_content: str,
         author_display_name: str,
-        runtime: object,
+        mutation_context: DiscordMutationContext,
         edited_timestamp=None,
         guild_id: int | None = None,
     ) -> None:
@@ -197,19 +198,21 @@ class DiscordEventRouter:
             )
         )
         if mapping is not None and mapping.publication_context == "personal_feed":
-            await runtime.user_actor_delivery_service.submit_update(
+            outcome = await mutation_context.user_actor_delivery_service.submit_update(
                 object_id=mapping.object_id,
                 title=None,
                 body_markdown=new_content,
                 edited_timestamp=edited_timestamp,
             )
+            if outcome == "accepted":
+                mutation_context.user_actor_delivery_wake.wake()
             return
         if self.is_local_community_message(message_id):
             await self.local_community_runtime.handle_discord_message_edit(
                 message_id=message_id,
                 new_content=new_content,
                 author_display_name=author_display_name,
-                runtime=runtime,
+                mutation_context=mutation_context,
                 edited_timestamp=edited_timestamp,
             )
             return
@@ -217,7 +220,7 @@ class DiscordEventRouter:
             message_id=message_id,
             new_content=new_content,
             author_display_name=author_display_name,
-            runtime=runtime,
+            mutation_context=mutation_context,
             edited_timestamp=edited_timestamp,
         )
 
@@ -225,7 +228,7 @@ class DiscordEventRouter:
         self,
         *,
         message_id: int,
-        runtime: object,
+        mutation_context: DiscordMutationContext,
         guild_id: int | None = None,
     ) -> None:
         """Route one raw Discord delete event into the owning bridge mode."""
@@ -237,17 +240,19 @@ class DiscordEventRouter:
             )
         )
         if mapping is not None and mapping.publication_context == "personal_feed":
-            await runtime.user_actor_delivery_service.submit_delete(
+            outcome = await mutation_context.user_actor_delivery_service.submit_delete(
                 object_id=mapping.object_id
             )
+            if outcome == "accepted":
+                mutation_context.user_actor_delivery_wake.wake()
             return
         if self.is_local_community_message(message_id):
             await self.local_community_runtime.handle_discord_message_delete(
                 message_id=message_id,
-                runtime=runtime,
+                mutation_context=mutation_context,
             )
             return
         await self.community_runtime.handle_discord_message_delete(
             message_id=message_id,
-            runtime=runtime,
+            mutation_context=mutation_context,
         )

@@ -70,10 +70,11 @@ class BridgeBot(discord.Client):
         # Tracks thread IDs that have already been processed this session so
         # a second on_thread_create after lock cleanup still exits cleanly.
         self._synced_threads: set[int] = set()
-        # Raw edit/delete mutation handling is attached after construction in
-        # app.build_runtime because the handler uses the bot only through the
-        # Discord fetch protocol. Stage 4 owns broader late-injection cleanup.
+        # Raw edit/delete mutation handling and ready-gated personal-feed
+        # delivery are true bot/router cycles, so they use guarded one-time
+        # binds instead of raw attribute writes from the composition root.
         self._message_mutation_handler: DiscordMessageMutationHandler | None = None
+        self._personal_feed_delivery_worker: object | None = None
 
     async def setup_hook(self) -> None:
         # setup_hook runs before the bot connects, making it the right place to
@@ -156,8 +157,7 @@ class BridgeBot(discord.Client):
         # Discord delivery recovery starts only after the client can resolve and
         # fetch channels. Starting earlier would consume retry attempts during
         # normal connection establishment rather than actual delivery failures.
-        runtime = self._get_runtime()
-        runtime.personal_feed_discord_delivery_worker.start()
+        self._require_personal_feed_delivery_worker().start()
         # Refresh last-known Discord labels at startup so old rows and renamed
         # guilds/forums converge without live lookups during dashboard requests.
         refresh_discord_directory_from_bot(self.database, self)
@@ -296,6 +296,8 @@ class BridgeBot(discord.Client):
         self, handler: DiscordMessageMutationHandler
     ) -> None:
         """Attach the raw Discord mutation handler after the bot exists."""
+        if self._message_mutation_handler is not None:
+            raise RuntimeError("Discord message mutation handler is already configured")
         self._message_mutation_handler = handler
 
     def _require_message_mutation_handler(self) -> DiscordMessageMutationHandler:
@@ -304,6 +306,20 @@ class BridgeBot(discord.Client):
         if handler is None:
             raise RuntimeError("Discord message mutation handler is not configured")
         return handler
+
+
+    def bind_personal_feed_delivery_worker(self, worker: object) -> None:
+        """Attach the ready-gated personal-feed Discord delivery worker once."""
+        if self._personal_feed_delivery_worker is not None:
+            raise RuntimeError("Personal-feed Discord delivery worker is already configured")
+        self._personal_feed_delivery_worker = worker
+
+    def _require_personal_feed_delivery_worker(self) -> object:
+        """Return the ready-gated delivery worker or fail during startup callbacks."""
+        worker = getattr(self, "_personal_feed_delivery_worker", None)
+        if worker is None:
+            raise RuntimeError("Personal-feed Discord delivery worker is not configured")
+        return worker
 
     async def fetch_message_state(
         self, channel_id: int, message_id: int
@@ -316,19 +332,6 @@ class BridgeBot(discord.Client):
             return "present", await channel.fetch_message(message_id)
         except discord.NotFound:
             return "missing", None
-
-    def _get_runtime(self) -> object | None:
-        """Return the bridge Runtime instance, if available.
-
-        The Runtime is injected after construction via set_runtime(); it must be
-        set before any outbound AP calls can be made. Returns None if not set,
-        which causes edit/delete propagation to be skipped for that event.
-        """
-        return getattr(self, "_runtime", None)
-
-    def set_runtime(self, runtime: object) -> None:
-        """Inject the bridge Runtime so edit/delete handlers can call the AP gateway."""
-        self._runtime = runtime
 
     async def _fetch_starter_message(
         self, thread: discord.Thread
