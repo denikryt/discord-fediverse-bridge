@@ -73,7 +73,10 @@ def _database(tmp_path):
             status="failed",
             attempt_count=2,
             last_attempted_at=datetime(2026, 6, 18, tzinfo=timezone.utc),
-            last_error="Bearer secret-token connection failed",
+            last_error=(
+                "-----BEGIN PRIVATE KEY-----abc-----END PRIVATE KEY----- "
+                "Bearer secret-token connection failed"
+            ),
         )
         delivered = UserActorOutboundDelivery(
             source_id=source.id,
@@ -129,7 +132,7 @@ def test_list_exposes_bounded_operator_diagnostics_and_redacts_errors(
             "attempt_count": 2,
             "delivery_id": failed_id,
             "last_attempted_at": "2026-06-18 00:00:00",
-            "last_error": "Bearer [redacted] connection failed",
+            "last_error": "[redacted private key] Bearer [redacted] connection failed",
             "logical_version": 1,
             "next_attempt_at": None,
             "represented_actor_ids": ["https://remote.test/users/follower"],
@@ -255,3 +258,33 @@ def test_worker_claim_and_operator_retry_are_serialized_by_compare_and_set(
         assert delivery.status == "sending"
         assert delivery.claim_token is not None
     assert len(claims) == 1
+
+
+def test_source_summary_counts_worker_outstanding_statuses_through_facade(
+    tmp_path,
+) -> None:
+    """The worker-visible facade keeps delivered/outstanding/total summary semantics."""
+    database, _path, _failed_id, _delivered_id, source_id = _database(tmp_path)
+    with database.session() as session:
+        session.add_all(
+            [
+                UserActorOutboundDelivery(
+                    source_id=source_id,
+                    target_endpoint_url="https://pending.test/inbox",
+                    status="pending",
+                ),
+                UserActorOutboundDelivery(
+                    source_id=source_id,
+                    target_endpoint_url="https://sending.test/inbox",
+                    status="sending",
+                    claim_token="worker-owned",
+                ),
+                UserActorOutboundDelivery(
+                    source_id=source_id,
+                    target_endpoint_url="https://ineligible.test/inbox",
+                    status="ineligible",
+                ),
+            ]
+        )
+
+    assert database.user_actor_deliveries.source_summary(source_id) == (1, 3, 5)
