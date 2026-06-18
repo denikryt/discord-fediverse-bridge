@@ -17,25 +17,25 @@ This document explains HTTP route ownership between the Python bridge and the Fe
 | `/dashboard/data` | GET | Python FastAPI | public | Public bridge dashboard JSON | `src/http_api.py` | Python |
 | `/internal/activitypub/events` | POST | Python FastAPI | private | Gateway-to-Python AP event intake | `src/http_api.py` | Not publicly routed |
 | `/internal/fedify/*` | GET/POST | Python FastAPI | private | Authenticated Gateway read models and signing keys | `src/internal_fedify_api.py` | Not publicly routed |
-| `/healthz` | GET | Fedify gateway | public | Gateway health | `fedify-gateway/src/server.ts` | Gateway |
-| `/.well-known/webfinger` | GET | Fedify gateway | public | Actor discovery | `fedify-gateway/src/server.ts` | Gateway |
-| `/.well-known/discord-fediverse-bridge/communities` | GET | Fedify gateway | public | Bridge-owned public local-community discovery | `fedify-gateway/src/server.ts` | Gateway |
-| `/inbox` | POST | Fedify gateway | public AP | Inbound ActivityPub | `fedify-gateway/src/federation.ts` | Gateway |
-| `/users/:username` | GET | Fedify gateway | public AP | Local user actor | `fedify-gateway/src/server.ts` | Gateway |
-| `/communities/:slug` | GET | Fedify gateway | public AP | Local community actor | `fedify-gateway/src/server.ts` | Gateway |
-| `/c/:slug` | GET | Fedify gateway | public AP | Lemmy-style community alias | `fedify-gateway/src/server.ts` | Gateway |
-| `/communities/:slug/outbox` | GET | Fedify gateway | public AP | Community outbox | `fedify-gateway/src/server.ts` | Gateway |
-| `/communities/:slug/followers` | GET | Fedify gateway | public AP | Community followers collection | `fedify-gateway/src/server.ts` | Gateway |
-| `/users/:username/outbox` | GET | Fedify gateway | public AP | User outbox | `fedify-gateway/src/server.ts` | Gateway |
-| `/users/:username/followers` | GET | Fedify gateway | public AP | User followers collection | `fedify-gateway/src/server.ts` | Gateway |
-| `/follow-community` | POST | Fedify gateway | internal | Send Follow | `fedify-gateway/src/server.ts` | Internal/gateway |
-| `/unfollow-community` | POST | Fedify gateway | internal | Send Undo(Follow) | `fedify-gateway/src/server.ts` | Internal/gateway |
-| `/publish` | POST | Fedify gateway | internal | Publish remote-community content | `fedify-gateway/src/server.ts` | Internal/gateway |
-| `/publish-local-community` | POST | Fedify gateway | internal | Publish local-community content | `fedify-gateway/src/server.ts` | Internal/gateway |
-| `/send-local-community-relay` | POST | Fedify gateway | internal | Deliver relay activities | `fedify-gateway/src/server.ts` | Internal/gateway |
-| `/accept-local-community-follow` | POST | Fedify gateway | internal | Send Accept(Follow) | `fedify-gateway/src/server.ts` | Internal/gateway |
-| `/update` | POST | Fedify gateway | internal | Send Update | `fedify-gateway/src/server.ts` | Internal/gateway |
-| `/delete` | POST | Fedify gateway | internal | Send Delete | `fedify-gateway/src/server.ts` | Internal/gateway |
+| `/healthz` | GET | Fedify gateway | public | Gateway health | `fedify-gateway/src/routes/health.ts` | Gateway |
+| `/.well-known/webfinger` | GET | Fedify gateway | public | Actor discovery | `fedify-gateway/src/routes/public-discovery.ts` | Gateway |
+| `/.well-known/discord-fediverse-bridge/communities` | GET | Fedify gateway | public | Bridge-owned public local-community discovery | `fedify-gateway/src/routes/public-discovery.ts` | Gateway |
+| `/inbox` | POST | Fedify gateway | public AP | Inbound ActivityPub with pre-Fedify request logging | `fedify-gateway/src/federation.ts`, `fedify-gateway/src/routes/inbox-logging.ts` | Gateway |
+| `/users/:username` | GET | Fedify gateway | public AP | Local user actor | `fedify-gateway/src/routes/public-activitypub.ts` | Gateway |
+| `/communities/:slug` | GET | Fedify gateway | public AP | Local community actor | `fedify-gateway/src/routes/public-activitypub.ts` | Gateway |
+| `/c/:slug` | GET | Fedify gateway | public AP | Lemmy-style community alias | `fedify-gateway/src/routes/public-activitypub.ts` | Gateway |
+| `/communities/:slug/outbox` | GET | Fedify gateway | public AP | Community outbox | `fedify-gateway/src/routes/public-activitypub.ts` | Gateway |
+| `/communities/:slug/followers` | GET | Fedify gateway | public AP | Community followers collection | `fedify-gateway/src/routes/public-activitypub.ts` | Gateway |
+| `/users/:username/outbox` | GET | Fedify gateway | public AP | User outbox | `fedify-gateway/src/routes/public-activitypub.ts` | Gateway |
+| `/users/:username/followers` | GET | Fedify gateway | public AP | User followers collection | `fedify-gateway/src/routes/public-activitypub.ts` | Gateway |
+| `/follow-community` | POST | Fedify gateway | internal | Send Follow | `fedify-gateway/src/routes/internal-follow.ts` | Internal/gateway |
+| `/unfollow-community` | POST | Fedify gateway | internal | Send Undo(Follow) | `fedify-gateway/src/routes/internal-follow.ts` | Internal/gateway |
+| `/publish` | POST | Fedify gateway | internal | Publish remote-community content | `fedify-gateway/src/routes/internal-publish.ts` | Internal/gateway |
+| `/publish-local-community` | POST | Fedify gateway | internal | Publish local-community content | `fedify-gateway/src/routes/internal-publish.ts` | Internal/gateway |
+| `/send-local-community-relay` | POST | Fedify gateway | internal | Deliver relay activities | `fedify-gateway/src/routes/internal-delivery.ts` | Internal/gateway |
+| `/accept-local-community-follow` | POST | Fedify gateway | internal | Send Accept(Follow) | `fedify-gateway/src/routes/internal-follow.ts` | Internal/gateway |
+| `/update` | POST | Fedify gateway | internal | Send Update | `fedify-gateway/src/routes/internal-publish.ts` | Internal/gateway |
+| `/delete` | POST | Fedify gateway | internal | Send Delete | `fedify-gateway/src/routes/internal-publish.ts` | Internal/gateway |
 
 `/healthz` exists in both processes. In the public-host deployment, public `/healthz` should stay gateway-owned unless an operator intentionally adds a Python health alias.
 

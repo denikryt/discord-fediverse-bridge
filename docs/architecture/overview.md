@@ -26,7 +26,7 @@ Remote ActivityPub server
 
 The Python bridge is the orchestration and persistence process. It starts the Discord bot, exposes registration and private gateway intake routes, owns SQLite state through SQLAlchemy, routes Discord events, and decides which runtime handles a bridge action.
 
-The Fedify gateway is the ActivityPub/WebFinger edge. It owns public actor/object routes, WebFinger discovery, inbound ActivityPub normalization, signed outbound delivery, and the internal HTTP actions that Python calls when it needs federation work performed.
+The Fedify gateway is the ActivityPub/WebFinger edge. It owns public actor/object routes, WebFinger discovery, inbound ActivityPub normalization, signed outbound delivery, and the internal HTTP actions that Python calls when it needs federation work performed. Route handler bodies live under `fedify-gateway/src/routes/*`, while `server.ts` remains the composition and route-registration root.
 
 ## Main Python entry points
 
@@ -39,7 +39,8 @@ The Fedify gateway is the ActivityPub/WebFinger edge. It owns public actor/objec
 
 ## Main gateway entry points
 
-- `fedify-gateway/src/server.ts` — Hono application and route registration.
+- `fedify-gateway/src/server.ts` — Hono application composition, trusted gateway dependency wiring, and route registration order.
+- `fedify-gateway/src/routes/*` — public discovery/ActivityPub routes, internal command route bodies, health, response helpers, and inbox logging middleware.
 - `fedify-gateway/src/federation.ts` — Fedify integration and inbound ActivityPub handling.
 - `fedify-gateway/src/outbound/*` — signed transport and outbound use-case modules for follow publication, content publication, local-community fanout, personal-feed rendering, content mutations, relay delivery, and User Actor delivery batches.
 - `fedify-gateway/src/federation-outbound.ts` — compatibility export layer for older gateway imports.

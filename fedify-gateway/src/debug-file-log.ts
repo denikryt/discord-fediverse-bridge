@@ -90,18 +90,39 @@ function summarizeFetchRequest(input: RequestInfo | URL, init?: RequestInit): Re
   };
 }
 
-function headersToRecord(headers: HeadersInit | Headers | undefined): Record<string, string> {
+export function headersToRecord(headers: HeadersInit | Headers | undefined): Record<string, string> {
   if (headers == null) {
     return {};
   }
   if (headers instanceof Headers) {
-    return Object.fromEntries(headers.entries());
+    return redactSensitiveHeaders(Object.fromEntries(headers.entries()));
   }
   if (Array.isArray(headers)) {
-    return Object.fromEntries(headers.map(([key, value]) => [key, value]));
+    return redactSensitiveHeaders(Object.fromEntries(headers.map(([key, value]) => [key, value])));
   }
+  return redactSensitiveHeaders(
+    Object.fromEntries(
+      Object.entries(headers).map(([key, value]) => [key, String(value)]),
+    ),
+  );
+}
+
+export function redactSensitiveHeaders(headers: Record<string, string>): Record<string, string> {
+  // Debug fetch logging may observe authenticated Python bridge traffic from
+  // public requests.  Redact credential-bearing headers before persistence.
   return Object.fromEntries(
-    Object.entries(headers).map(([key, value]) => [key, String(value)]),
+    Object.entries(headers).map(([key, value]) => {
+      const normalized = key.toLowerCase();
+      if (
+        normalized === "authorization" ||
+        normalized === "proxy-authorization" ||
+        normalized === "cookie" ||
+        normalized === "set-cookie"
+      ) {
+        return [key, "[redacted]"];
+      }
+      return [key, value];
+    }),
   );
 }
 
