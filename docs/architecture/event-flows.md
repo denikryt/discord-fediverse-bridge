@@ -51,10 +51,11 @@ This document explains the major runtime traces through the bridge: user/platfor
 
 ## Discord edit/delete -> ActivityPub update/delete flow
 
-1. Discord edit/delete enters `src/discord_bot.py` and routes through `src/discord_event_router.py`.
-2. Runtime resolves persisted ActivityPub object ids through `src/db/database.py`.
-3. `src/content_sync/edit_delete.py` prepares the request.
-4. Gateway `/update` or `/delete` signs and sends the ActivityPub operation.
+1. Discord edit/delete enters `src/discord_bot.py`, which delegates raw admission, echo suppression, and partial edit reconciliation to `src/discord_message_mutations.py`.
+2. `src/discord_message_mutations.py` routes admitted mutations through `src/discord_event_router.py`.
+3. Runtime resolves persisted ActivityPub object ids through `src/db/database.py`.
+4. `src/content_sync/edit_delete.py` prepares the request.
+5. Gateway `/update` or `/delete` signs and sends the ActivityPub operation.
 
 ## /create_community flow
 
@@ -90,7 +91,7 @@ This document explains the major runtime traces through the bridge: user/platfor
 
 ## Local community edit/delete flow
 
-1. Discord edit/delete enters through `src/discord_event_router.py` and resolves the starter/reply surface row for the raw message id.
+1. Discord edit/delete enters through `src/discord_message_mutations.py`, then `src/discord_event_router.py` resolves the starter/reply surface row for the raw message id.
 2. `src/local_communities/runtime.py` resolves the canonical post/comment and loads the `PublishedActivityObject` by canonical AP object id, not by the copied Discord message id.
 3. For host or active local-subscriber source surfaces, Python sends one gateway Update/Delete and `src/local_communities/discord_fanout.py` mutates every other persisted local Discord surface.
 4. For inbound remote update/delete, the runtime mutates every persisted local Discord surface, including host and local subscribers, then keeps the existing remote relay eligibility rule for remote subscribers.

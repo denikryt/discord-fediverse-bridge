@@ -291,13 +291,15 @@ Already removed by policy cleanup Stage 1.
 
 Mirror edit and delete fanout no longer probes the bot with `getattr()` before
 recording bridge-originated mutations. `DiscordFanout` now requires an explicit
-`DiscordMutationTracker`, and production composition supplies `BridgeBot`.
+`DiscordMutationTracker`, and production composition supplies
+`DiscordMessageMutationHandler`.
 
 **Why the cleanup was safe**
 
-The tracking calls protect raw Discord edit/delete handlers from echoing the
-bridge's own mutations. They are required behavior rather than optional SDK
-compatibility, so tests and production now implement the same direct contract.
+The tracking calls protect `DiscordMessageMutationHandler` from echoing the
+bridge's own mutations through raw Discord edit/delete callbacks. They are
+required behavior rather than optional SDK compatibility, so tests and production
+now implement the same direct contract.
 
 **Can it be removed?**
 

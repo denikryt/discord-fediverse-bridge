@@ -16,6 +16,7 @@ from .config import Settings
 from .db import Database
 from .discord_bot import BridgeBot
 from .discord_event_router import DiscordEventRouter
+from .discord_message_mutations import DiscordMessageMutationHandler
 from .discord_oauth_client import DiscordOAuthClient
 from .content_publish_service import ContentPublishService
 from .fedify_gateway_client import FedifyGatewayClient
@@ -202,9 +203,16 @@ def _build_live_runtime(settings: Settings, deployment_lease: FileLock) -> Runti
     personal_feed_conversation_runtime.delivery_worker = (
         personal_feed_discord_delivery_worker
     )
+    message_mutation_handler = DiscordMessageMutationHandler(
+        database=database,
+        event_router=event_router,
+        discord_fetcher=bot,
+        runtime_provider=bot._get_runtime,
+    )
+    bot.set_message_mutation_handler(message_mutation_handler)
     discord_fanout = DiscordFanout(
         bot=bot,
-        mutation_tracker=bot,
+        mutation_tracker=message_mutation_handler,
         database=database,
         policy_service=bridge_policy_service,
     )

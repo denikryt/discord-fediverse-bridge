@@ -12,6 +12,7 @@ from src.activitypub_handlers import dispatch_activitypub_event
 from src.db import Database
 from src.discord_bot import BridgeBot
 from src.discord_event_router import DiscordEventRouter
+from src.discord_message_mutations import DiscordMessageMutationHandler
 from src.fedify_gateway_client import RenderPersonalFeedResult
 from src.models import MessageMapping, PublishedActivityObject, User
 from src.personal_feed_conversations import PersonalFeedConversationRuntime
@@ -307,11 +308,17 @@ async def test_raw_personal_feed_edit_and_delete_route_to_user_actor_mutations(
     bot = object.__new__(BridgeBot)
     bot.database = database
     bot.event_router = router
-    bot._recent_edits = {}
-    bot._recent_deletes = {}
     bot._runtime = SimpleNamespace()
     bot.get_channel = lambda _id: None
     bot.fetch_channel = AsyncMock()
+    bot.set_message_mutation_handler(
+        DiscordMessageMutationHandler(
+            database=database,
+            event_router=router,
+            discord_fetcher=bot,
+            runtime_provider=bot._get_runtime,
+        )
+    )
     edited_at = "2026-06-17T12:00:00Z"
 
     await BridgeBot.on_raw_message_edit(

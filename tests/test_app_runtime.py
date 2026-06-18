@@ -9,6 +9,7 @@ import pytest
 
 from src.app import build_runtime
 from src.config import Settings
+from src.discord_message_mutations import DiscordMessageMutationHandler
 
 
 def _settings(state_root: Path) -> Settings:
@@ -44,6 +45,13 @@ async def test_build_runtime_wires_user_actor_follow_service_after_bot_and_close
 
     assert runtime.user_actor_follow_service.bot is runtime.bot
     assert runtime.bot._runtime is runtime
+    assert isinstance(
+        runtime.bot._require_message_mutation_handler(), DiscordMessageMutationHandler
+    )
+    assert (
+        runtime.community_runtime.discord_fanout.mutation_tracker
+        is runtime.bot._require_message_mutation_handler()
+    )
     assert (
         runtime.user_profile_service.delivery_service
         is runtime.user_actor_delivery_service

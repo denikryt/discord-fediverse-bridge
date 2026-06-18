@@ -12,6 +12,7 @@ from .config import Settings
 from .bridge_policy import BridgePolicyService
 from .db import Database
 from .discord_event_router import DiscordEventRouter
+from .discord_message_mutations import DiscordMessageMutationHandler
 from .fedify_gateway_client import FedifyGatewayClient
 from .discord_directory import refresh_discord_directory_from_bot
 from .command_tree import BridgeCommandTree
@@ -69,11 +70,10 @@ class BridgeBot(discord.Client):
         # Tracks thread IDs that have already been processed this session so
         # a second on_thread_create after lock cleanup still exits cleanly.
         self._synced_threads: set[int] = set()
-        # Dedup edit/delete events fired by mirror updates we just made.
-        # When we update a mirror message in Discord, Discord fires on_raw_message_edit.
-        # We track recently-edited message IDs to break the echo loop.
-        self._recent_edits: dict[int, float] = {}  # message_id -> timestamp
-        self._recent_deletes: dict[int, float] = {}  # message_id -> timestamp
+        # Raw edit/delete mutation handling is attached after construction in
+        # app.build_runtime because the handler uses the bot only through the
+        # Discord fetch protocol. Stage 4 owns broader late-injection cleanup.
+        self._message_mutation_handler: DiscordMessageMutationHandler | None = None
 
     async def setup_hook(self) -> None:
         # setup_hook runs before the bot connects, making it the right place to
@@ -283,237 +283,27 @@ class BridgeBot(discord.Client):
         )
 
     async def on_raw_message_edit(self, payload: discord.RawMessageUpdateEvent) -> None:
-        """Forward an edited Discord message to CommunityRuntime for propagation.
-
-        Uses the raw event so edits fire for all messages, not just cached ones.
-        Only processes Discord-originated messages (those in MessageMapping).
-        Inbound AP messages (starter threads from Lemmy) are handled via AP events,
-        not Discord edit events, so they're skipped here.
-
-        Dedup: when we edit a mirror message in Discord, Discord fires on_raw_message_edit.
-        We track recently-edited messages to avoid re-processing our own edits and
-        creating infinite loops (edit→fanout→edit→fanout...).
-        """
-        import time
-
-        logger.debug("[on_raw_message_edit] msg=%s", payload.message_id)
-
-        # Dedup: if we edited this message recently, skip to avoid loop.
-        now = time.time()
-        if payload.message_id in self._recent_edits:
-            edit_age = now - self._recent_edits[payload.message_id]
-            if edit_age < 5.0:  # Within 5 seconds of our edit
-                logger.debug(
-                    "[on_raw_message_edit] skipping recent edit (age=%.1fs)", edit_age
-                )
-                return
-
-        personal_mapping = (
-            self.database.message_mappings.get_message_mapping_by_discord_message_id(
-                payload.message_id
-            )
-        )
-        is_personal_message = (
-            personal_mapping is not None
-            and personal_mapping.publication_context == "personal_feed"
-        )
-        is_local_message = self.event_router.is_local_community_message(
-            payload.message_id
-        )
-        delivery = (
-            None
-            if is_local_message or is_personal_message
-            else self.database.discord_fanout_groups.get_message_delivery_by_message(
-                payload.message_id
-            )
-        )
-        if delivery is None and not is_local_message and not is_personal_message:
-            logger.debug(
-                "[on_raw_message_edit] no delivery found for msg=%s", payload.message_id
-            )
-            return
-
-        # Only propagate edits from source messages — those written by the user.
-        # Mirror messages are bot-owned copies; edits to them (including our own
-        # propagation writes) must not re-trigger fanout or an infinite loop results.
-        # Inbound AP messages are handled via AP Update events, not Discord events.
-        if delivery is not None and delivery.role != "source":
-            logger.debug(
-                "[on_raw_message_edit] role=%s — skipping (not source)", delivery.role
-            )
-            return
-
-        # Extract updated content from the raw payload data.
-        # Discord raw edit events include the full message data dict.
-        new_content = payload.data.get("content", "")
-        logger.debug(
-            "[on_raw_message_edit] extracted content from payload: len=%d",
-            len(new_content) if new_content else 0,
-        )
-        if not new_content:
-            logger.debug(
-                "[on_raw_message_edit] no content in payload for msg=%s",
-                payload.message_id,
-            )
-            return
-
-        # Discord provides edited_timestamp as the only durable external
-        # ordering evidence for content edits. Partial events without it are
-        # reconciled through the current message resource before admission.
-        from datetime import datetime
-
-        edited_timestamp_raw = payload.data.get("edited_timestamp")
-        edited_timestamp = None
-        if isinstance(edited_timestamp_raw, str):
-            edited_timestamp = datetime.fromisoformat(
-                edited_timestamp_raw.replace("Z", "+00:00")
-            )
-        if edited_timestamp is None:
-            try:
-                channel = self.get_channel(
-                    payload.channel_id
-                ) or await self.fetch_channel(payload.channel_id)
-                current_message = await channel.fetch_message(payload.message_id)
-                edited_timestamp = getattr(current_message, "edited_at", None)
-                if edited_timestamp is None:
-                    return
-                new_content = getattr(current_message, "content", new_content)
-            except discord.HTTPException as exc:
-                logger.exception(
-                    "[on_raw_message_edit] failed to reconcile partial edit msg=%s",
-                    payload.message_id,
-                )
-                self.database.content_mutations.request_discord_reconciliation(
-                    channel_id=payload.channel_id,
-                    message_id=payload.message_id,
-                    error=str(exc),
-                )
-                runtime = self._get_runtime()
-                if runtime is not None:
-                    runtime.user_actor_delivery_worker.wake()
-                return
-
-        # Extract author display name from payload for mirror header attribution.
-        # global_name is the Display Name set by the user; falls back to username.
-        author_data = payload.data.get("author") or {}
-        author_display_name = (
-            author_data.get("global_name") or author_data.get("username") or ""
-        )
-
-        runtime = self._get_runtime()
-        if runtime is None:
-            logger.warning(
-                "[on_raw_message_edit] no runtime available for msg=%s",
-                payload.message_id,
-            )
-            return
-
-        logger.info(
-            "Discord message edit msg=%s thread=%s",
-            payload.message_id,
-            payload.channel_id,
-        )
-        try:
-            await self.event_router.handle_message_edit(
-                message_id=payload.message_id,
-                new_content=new_content,
-                author_display_name=author_display_name,
-                runtime=runtime,
-                edited_timestamp=edited_timestamp,
-                guild_id=getattr(payload, "guild_id", None),
-            )
-        except Exception:
-            logger.exception(
-                "[on_raw_message_edit] exception in handle_discord_message_edit for msg=%s",
-                payload.message_id,
-            )
+        """Delegate raw Discord edit orchestration to the mutation handler."""
+        await self._require_message_mutation_handler().handle_raw_message_edit(payload)
 
     async def on_raw_message_delete(
         self, payload: discord.RawMessageDeleteEvent
     ) -> None:
-        """Forward a deleted Discord message to CommunityRuntime for propagation.
+        """Delegate raw Discord delete orchestration to the mutation handler."""
+        await self._require_message_mutation_handler().handle_raw_message_delete(payload)
 
-        Uses the raw event so deletes fire for all messages, not just cached ones.
-        Only processes Discord-originated messages (those in MessageMapping).
-        Inbound AP messages (starter threads from Lemmy) are handled via AP events,
-        not Discord delete events, so they're skipped here.
+    def set_message_mutation_handler(
+        self, handler: DiscordMessageMutationHandler
+    ) -> None:
+        """Attach the raw Discord mutation handler after the bot exists."""
+        self._message_mutation_handler = handler
 
-        Dedup: when we delete a mirror message in Discord, Discord fires on_raw_message_delete.
-        We track recently-deleted messages to avoid re-processing our own deletes.
-        """
-        import time
-
-        logger.debug("[on_raw_message_delete] msg=%s", payload.message_id)
-
-        # Dedup: if we deleted this message recently, skip to avoid loop.
-        now = time.time()
-        if payload.message_id in self._recent_deletes:
-            delete_age = now - self._recent_deletes[payload.message_id]
-            if delete_age < 5.0:  # Within 5 seconds of our delete
-                logger.debug(
-                    "[on_raw_message_delete] skipping recent delete (age=%.1fs)",
-                    delete_age,
-                )
-                return
-
-        personal_mapping = (
-            self.database.message_mappings.get_message_mapping_by_discord_message_id(
-                payload.message_id
-            )
-        )
-        is_personal_message = (
-            personal_mapping is not None
-            and personal_mapping.publication_context == "personal_feed"
-        )
-        is_local_message = self.event_router.is_local_community_message(
-            payload.message_id
-        )
-        delivery = (
-            None
-            if is_local_message or is_personal_message
-            else self.database.discord_fanout_groups.get_message_delivery_by_message(
-                payload.message_id
-            )
-        )
-        if delivery is None and not is_local_message and not is_personal_message:
-            logger.debug(
-                "[on_raw_message_delete] no delivery found for msg=%s",
-                payload.message_id,
-            )
-            return
-
-        # Only process Discord-originated messages (source or mirror role).
-        # Inbound AP messages should not be deleted via Discord events.
-        if delivery is not None and delivery.role == "inbound":
-            logger.debug(
-                "[on_raw_message_delete] inbound message — skipping (handled via AP events)"
-            )
-            return
-
-        runtime = self._get_runtime()
-        if runtime is None:
-            logger.warning(
-                "[on_raw_message_delete] no runtime available for msg=%s",
-                payload.message_id,
-            )
-            return
-
-        logger.info(
-            "Discord message delete msg=%s thread=%s",
-            payload.message_id,
-            payload.channel_id,
-        )
-        try:
-            await self.event_router.handle_message_delete(
-                message_id=payload.message_id,
-                runtime=runtime,
-                guild_id=getattr(payload, "guild_id", None),
-            )
-        except Exception:
-            logger.exception(
-                "[on_raw_message_delete] exception in handle_discord_message_delete for msg=%s",
-                payload.message_id,
-            )
+    def _require_message_mutation_handler(self) -> DiscordMessageMutationHandler:
+        """Return the configured raw mutation handler or fail loudly."""
+        handler = getattr(self, "_message_mutation_handler", None)
+        if handler is None:
+            raise RuntimeError("Discord message mutation handler is not configured")
+        return handler
 
     async def fetch_message_state(
         self, channel_id: int, message_id: int
@@ -539,18 +329,6 @@ class BridgeBot(discord.Client):
     def set_runtime(self, runtime: object) -> None:
         """Inject the bridge Runtime so edit/delete handlers can call the AP gateway."""
         self._runtime = runtime
-
-    def track_message_edit(self, message_id: int) -> None:
-        """Record that we just edited this message to dedup on_raw_message_edit."""
-        import time
-
-        self._recent_edits[message_id] = time.time()
-
-    def track_message_delete(self, message_id: int) -> None:
-        """Record that we just deleted this message to dedup on_raw_message_delete."""
-        import time
-
-        self._recent_deletes[message_id] = time.time()
 
     async def _fetch_starter_message(
         self, thread: discord.Thread

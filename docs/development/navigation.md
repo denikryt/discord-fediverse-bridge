@@ -100,11 +100,12 @@ Use `docs/architecture/database-map.md` for table ownership and invariants. Use 
 1. `src/http_api.py`; 2. `src/app.py`; 3. `docs/architecture/http-routes.md`.
 
 ## Local community participant edit/delete
-1. `src/discord_event_router.py` — raw Discord edit/delete ownership check.
-2. `src/local_communities/runtime.py` — canonical AP object resolution and gateway Update/Delete calls.
-3. `src/local_communities/discord_fanout.py` — per-surface local Discord edit/delete fanout.
-4. `src/local_communities/delivery_mapping.py` — surface/canonical lookup helpers.
-5. `src/content_sync/edit_delete.py` — shared Discord message edit/delete edge helpers.
+1. `src/discord_message_mutations.py` — raw Discord edit/delete admission, echo suppression, and partial edit reconciliation.
+2. `src/discord_event_router.py` — local-community ownership check and runtime dispatch.
+3. `src/local_communities/runtime.py` — canonical AP object resolution and gateway Update/Delete calls.
+4. `src/local_communities/discord_fanout.py` — per-surface local Discord edit/delete fanout.
+5. `src/local_communities/delivery_mapping.py` — surface/canonical lookup helpers.
+6. `src/content_sync/edit_delete.py` — shared Discord message edit/delete edge helpers.
 
 ### Guild invite publication
 

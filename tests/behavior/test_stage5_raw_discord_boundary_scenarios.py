@@ -8,6 +8,7 @@ from unittest.mock import AsyncMock
 import pytest
 
 from src.discord_bot import BridgeBot
+from src.discord_message_mutations import DiscordMessageMutationHandler
 from support.db import add_registered_user, build_database
 
 
@@ -41,10 +42,9 @@ async def test_partial_raw_update_fetch_failure_is_durable_before_handler_return
     class FakeHTTPException(Exception):
         pass
 
-    monkeypatch.setattr("src.discord_bot.discord.HTTPException", FakeHTTPException)
+    monkeypatch.setattr("src.discord_message_mutations.discord.HTTPException", FakeHTTPException)
     bot = object.__new__(BridgeBot)
     bot.database = database
-    bot._recent_edits = {}
     bot.event_router = SimpleNamespace(
         is_local_community_message=lambda _message_id: False,
     )
@@ -54,6 +54,14 @@ async def test_partial_raw_update_fetch_failure_is_durable_before_handler_return
     bot.fetch_channel = AsyncMock()
     wake = SimpleNamespace(wake=__import__("unittest.mock").mock.Mock())
     bot._runtime = SimpleNamespace(user_actor_delivery_worker=wake)
+    bot.set_message_mutation_handler(
+        DiscordMessageMutationHandler(
+            database=database,
+            event_router=bot.event_router,
+            discord_fetcher=bot,
+            runtime_provider=bot._get_runtime,
+        )
+    )
 
     payload = SimpleNamespace(
         message_id=11,
@@ -113,8 +121,15 @@ async def test_raw_delete_has_no_timestamp_dependency_and_routes_terminal_intent
     bot = object.__new__(BridgeBot)
     bot.database = database
     bot.event_router = router
-    bot._recent_deletes = {}
     bot._runtime = SimpleNamespace()
+    bot.set_message_mutation_handler(
+        DiscordMessageMutationHandler(
+            database=database,
+            event_router=router,
+            discord_fetcher=bot,
+            runtime_provider=bot._get_runtime,
+        )
+    )
     payload = SimpleNamespace(message_id=11, channel_id=10, guild_id=1)
 
     await BridgeBot.on_raw_message_delete(bot, payload)
