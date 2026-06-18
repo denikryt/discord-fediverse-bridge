@@ -14,7 +14,7 @@ Discord bot behavior, registration pages, moderator policy, or Python-owned pers
 
 ## Primary entry points
 
-`server.ts` registers routes, `federation.ts` handles inbound AP, `federation-outbound.ts` sends signed activities, `normalize.ts` builds Python events, `python-bridge-client.ts` provides the authenticated Python bridge client, `actor-store.ts` resolves actors through that client, `actors.ts` renders actors, and `webfinger.ts` handles discovery.
+`server.ts` registers routes, `federation.ts` handles inbound AP, `outbound/*` contains signed delivery and outbound use-case modules, `federation-outbound.ts` remains the compatibility export layer for those modules, `normalize.ts` builds Python events, `python-bridge-client.ts` provides the authenticated Python bridge client, `actor-store.ts` resolves actors through that client, `actors.ts` renders actors, and `webfinger.ts` handles discovery.
 
 ## Important tables or payloads
 

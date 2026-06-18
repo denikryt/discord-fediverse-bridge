@@ -41,7 +41,8 @@ The Fedify gateway is the ActivityPub/WebFinger edge. It owns public actor/objec
 
 - `fedify-gateway/src/server.ts` — Hono application and route registration.
 - `fedify-gateway/src/federation.ts` — Fedify integration and inbound ActivityPub handling.
-- `fedify-gateway/src/federation-outbound.ts` — signed outbound ActivityPub delivery.
+- `fedify-gateway/src/outbound/*` — signed transport and outbound use-case modules for follow publication, content publication, local-community fanout, personal-feed rendering, content mutations, relay delivery, and User Actor delivery batches.
+- `fedify-gateway/src/federation-outbound.ts` — compatibility export layer for older gateway imports.
 - `fedify-gateway/src/actor-store.ts`, `actors.ts`, and `webfinger.ts` — actor lookup, actor rendering, and discovery.
 - `fedify-gateway/src/normalize.ts` and `python-bridge.ts` — inbound ActivityPub normalization and delivery to Python.
 

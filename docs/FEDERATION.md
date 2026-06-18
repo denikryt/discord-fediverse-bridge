@@ -231,7 +231,8 @@ Relevant implementation areas:
 
 - `fedify-gateway/src/server.ts` — public gateway routes and internal gateway action routes.
 - `fedify-gateway/src/federation.ts` — Fedify integration and inbound activity handling.
-- `fedify-gateway/src/federation-outbound.ts` — outbound federation delivery and compatibility rendering.
+- `fedify-gateway/src/outbound/*` — outbound federation use-case modules for signed JSON transport, follow publication, content publication, local-community fanout, personal-feed rendering, content mutations, relay delivery, and User Actor delivery batches.
+- `fedify-gateway/src/federation-outbound.ts` — compatibility export layer for existing gateway imports.
 - `fedify-gateway/src/normalize.ts` — ActivityPub-to-Python normalized event conversion.
 - `fedify-gateway/src/actors.ts` and `fedify-gateway/src/webfinger.ts` — actor rendering and discovery.
 - `src/activitypub_models.py` — Python internal event models.
