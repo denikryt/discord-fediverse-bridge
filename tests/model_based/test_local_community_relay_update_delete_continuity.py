@@ -36,8 +36,9 @@ def _eligible_for_attempt(model: object, allowed: set[str]) -> set[str]:
         return set(allowed)
     return {
         actor_id
-        for actor_id, delivery in model.deliveries.items()
-        if delivery.status in {"pending", "failed"}
+        for actor_id in allowed
+        if actor_id not in model.deliveries
+        or model.deliveries[actor_id].status in {"pending", "failed"}
     }
 
 
@@ -86,7 +87,8 @@ def test_generated_update_delete_continuity(actions: list[ContinuityAction]) -> 
             )
             for actor_id in eligible
         }
-        harness.gateway.plan_next(plan)
+        if plan:
+            harness.gateway.plan_next(plan)
         operation_model.relay_create(
             source_json_present=True,
             allowed_targets=allowed,

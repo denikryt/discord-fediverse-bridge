@@ -72,15 +72,18 @@ def test_generated_subscriber_and_policy_churn(
             for actor_id in accepted
             if actor_id.split("/", 3)[2] not in blocked_hosts
         }
-        eligible = {
-            actor_id
-            for actor_id, delivery in model.deliveries.items()
-            if actor_id in allowed and delivery.status in {"pending", "failed"}
-        }
-        if not model.source_exists:
+        if model.source_exists:
+            eligible = {
+                actor_id
+                for actor_id in allowed
+                if actor_id not in model.deliveries
+                or model.deliveries[actor_id].status in {"pending", "failed"}
+            }
+        else:
             eligible = set(allowed)
         plan = {actor_id: PlannedOutcome(ok=True) for actor_id in eligible}
-        harness.gateway.plan_next(plan)
+        if plan:
+            harness.gateway.plan_next(plan)
         model.relay_create(
             source_json_present=True,
             allowed_targets=allowed,
