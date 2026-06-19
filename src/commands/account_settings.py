@@ -6,6 +6,7 @@ import asyncio
 import logging
 from io import BytesIO
 from typing import Callable, TypeVar
+from urllib.parse import urlsplit
 
 import discord
 from discord import app_commands
@@ -57,6 +58,21 @@ class GuildTextChannelTransformer(app_commands.Transformer):
                 value, discord.AppCommandOptionType.channel, self
             )
         return candidate
+
+
+def _local_actor_handle(user: object) -> str:
+    """Render one persisted local actor as a Fediverse handle for Discord UI."""
+    username = str(getattr(user, "activitypub_username", "")).strip()
+    actor_url = str(getattr(user, "actor_url", "")).strip()
+    parsed = urlsplit(actor_url)
+    # Human-facing account settings must show the full immutable Fediverse
+    # address, not only the local username, so users can copy the canonical
+    # handle from Discord without guessing the bridge domain.
+    if username and parsed.netloc:
+        return f"@{username}@{parsed.netloc}"
+    if username:
+        return f"@{username}"
+    return "unknown"
 
 
 async def _run_owned_sync_mutation(operation: Callable[[], T]) -> T:
@@ -375,7 +391,7 @@ def register(
             "\n".join(f"• {name}: {value}" for name, value in profile.fields) or "None"
         )
         await interaction.response.send_message(
-            f"Handle: @{user.activitypub_username} (immutable)\nDisplay name: {profile.display_name}\nBio: {profile.summary or 'None'}\nMetadata:\n{fields}\nAvatar: {'set' if profile.avatar else 'not set'}\nHeader: {'set' if profile.header else 'not set'}",
+            f"Handle: `{_local_actor_handle(user)}`\nDisplay name: {profile.display_name}\nBio: {profile.summary or 'None'}\nMetadata:\n{fields}\nAvatar: {'set' if profile.avatar else 'not set'}\nHeader: {'set' if profile.header else 'not set'}",
             ephemeral=True,
         )
 
