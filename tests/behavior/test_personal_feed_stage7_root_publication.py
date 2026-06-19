@@ -544,29 +544,62 @@ async def test_restart_replay_reuses_durable_publication_without_render(
 
 
 @pytest.mark.asyncio
-async def test_bridge_bot_on_message_routes_personal_feed_root_exclusively(
-    monkeypatch,
-) -> None:
+async def test_bridge_bot_on_message_routes_announcement_personal_feed_root() -> None:
+    """Announcement-channel bindings follow the real bot root-message path."""
+    import discord
+
     from src.discord_bot import BridgeBot
 
     binding = SimpleNamespace(id=1)
     calls = []
+    channel = object.__new__(discord.TextChannel)
+    # Discord API GUILD_ANNOUNCEMENT; discord.py exposes it as news.
+    channel._type = discord.ChannelType.news.value
+    channel.id = 200
+    message = SimpleNamespace(
+        id=300,
+        guild=SimpleNamespace(id=100),
+        channel=channel,
+        author=SimpleNamespace(id=10, bot=False),
+    )
     router = SimpleNamespace(
         resolve_personal_feed_root=lambda guild_id, channel_id: binding,
         handle_personal_feed_root=lambda **kwargs: _record_async(calls, kwargs),
     )
     bot = SimpleNamespace(user=None, event_router=router)
+
+    await BridgeBot.on_message(bot, message)
+
+    assert calls == [{"message": message, "binding": binding}]
+
+
+@pytest.mark.asyncio
+async def test_bridge_bot_on_message_ignores_unbound_announcement_root() -> None:
+    """Announcement classification still requires a durable personal-feed binding."""
+    import discord
+
+    from src.discord_bot import BridgeBot
+
+    calls = []
+    channel = object.__new__(discord.TextChannel)
+    # Discord API GUILD_ANNOUNCEMENT; discord.py exposes it as news.
+    channel._type = discord.ChannelType.news.value
+    channel.id = 200
     message = SimpleNamespace(
         id=300,
         guild=SimpleNamespace(id=100),
-        channel=SimpleNamespace(id=200),
+        channel=channel,
         author=SimpleNamespace(id=10, bot=False),
     )
-    monkeypatch.setattr(
-        "src.discord_channel_types.is_normal_guild_text_channel", lambda _channel: True
+    router = SimpleNamespace(
+        resolve_personal_feed_root=lambda guild_id, channel_id: None,
+        handle_personal_feed_root=lambda **kwargs: _record_async(calls, kwargs),
     )
+    bot = SimpleNamespace(user=None, event_router=router)
+
     await BridgeBot.on_message(bot, message)
-    assert calls == [{"message": message, "binding": binding}]
+
+    assert calls == []
 
 
 async def _record_async(calls, value):

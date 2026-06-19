@@ -8,7 +8,10 @@ import discord
 from sqlalchemy import inspect
 
 from src.db import Database
-from src.discord_channel_types import is_normal_guild_text_channel
+from src.discord_channel_types import (
+    is_normal_guild_text_channel,
+    is_personal_feed_root_channel,
+)
 from src.models import ChannelCommunitySubscription, User
 from src.personal_feeds import PersonalFeedService
 
@@ -91,19 +94,24 @@ def test_one_binding_per_guild_and_idempotent_unbind(tmp_path) -> None:
     assert service.unbind("10").status == "not_bound"
 
 
-def test_announcement_text_channel_is_not_normal_guild_text() -> None:
-    """Concrete TextChannel identity alone must not admit protocol announcement type."""
+def test_channel_predicates_keep_strict_and_personal_feed_boundaries() -> None:
+    """Personal feeds admit text-like roots while the legacy strict predicate remains narrow."""
     ordinary = object.__new__(discord.TextChannel)
     ordinary._type = discord.ChannelType.text.value
     announcement = object.__new__(discord.TextChannel)
+    # Discord API GUILD_ANNOUNCEMENT; discord.py exposes it as news.
     announcement._type = discord.ChannelType.news.value
+    forged_text = SimpleNamespace(type=discord.ChannelType.text)
+    # Discord API GUILD_ANNOUNCEMENT; discord.py exposes it as news.
+    forged_announcement = SimpleNamespace(type=discord.ChannelType.news)
 
     assert is_normal_guild_text_channel(ordinary) is True
     assert is_normal_guild_text_channel(announcement) is False
-    assert (
-        is_normal_guild_text_channel(SimpleNamespace(type=discord.ChannelType.text))
-        is False
-    )
+    assert is_normal_guild_text_channel(forged_text) is False
+    assert is_personal_feed_root_channel(ordinary) is True
+    assert is_personal_feed_root_channel(announcement) is True
+    assert is_personal_feed_root_channel(forged_text) is False
+    assert is_personal_feed_root_channel(forged_announcement) is False
 
 
 def test_repository_lookups_and_active_binding_survive_move_unbind_and_reopen(

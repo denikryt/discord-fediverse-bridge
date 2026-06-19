@@ -233,11 +233,11 @@ class BridgeBot(discord.Client):
             return
         if message.author.bot:
             return
-        # Stage 6 recognizes ordinary guild-text personal-feed roots before the
-        # existing thread-only return, but deliberately performs no publication.
-        from .discord_channel_types import is_normal_guild_text_channel
+        # Personal-feed roots are exclusive text-like surfaces. The durable
+        # binding lookup remains the second gate before publication.
+        from .discord_channel_types import is_personal_feed_root_channel
 
-        if is_normal_guild_text_channel(message.channel):
+        if is_personal_feed_root_channel(message.channel):
             guild_id = getattr(getattr(message, "guild", None), "id", None)
             binding = (
                 self.event_router.resolve_personal_feed_root(

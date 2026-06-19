@@ -8,6 +8,7 @@ from types import SimpleNamespace
 import pytest
 
 from src.commands.account_settings import (
+    GuildTextChannelTransformer,
     ProfileMetadataModal,
     _parse_metadata_row,
     _run_owned_sync_mutation,
@@ -475,8 +476,8 @@ async def test_feed_view_callback_reports_unbound_and_bound_state(
     database.close()
 
 
-def test_feed_bind_registration_allows_only_guild_text_channels() -> None:
-    """The real application-command option excludes announcement channels."""
+def test_feed_bind_registration_allows_text_and_announcement_channels() -> None:
+    """The command picker advertises every supported personal-feed root channel type."""
     import discord
 
     group = _registered_account_settings_group(SimpleNamespace(), SimpleNamespace())
@@ -485,15 +486,88 @@ def test_feed_bind_registration_allows_only_guild_text_channels() -> None:
 
     assert parameter.name == "channel"
     assert parameter.type is discord.AppCommandOptionType.channel
-    assert parameter.channel_types == [discord.ChannelType.text]
-    assert discord.ChannelType.news not in parameter.channel_types
+    assert set(parameter.channel_types) == {
+        discord.ChannelType.text,
+        discord.ChannelType.news,  # Discord API GUILD_ANNOUNCEMENT
+    }
 
 
 @pytest.mark.asyncio
-async def test_feed_bind_forged_announcement_channel_is_rejected_before_mutation(
+async def test_feed_bind_transformer_resolves_selected_announcement_channel() -> None:
+    """The live Discord picker path resolves selected wrappers before validation."""
+    import discord
+
+    announcement = object.__new__(discord.TextChannel)
+    # Discord API GUILD_ANNOUNCEMENT; discord.py exposes it as news.
+    announcement._type = discord.ChannelType.news.value
+    selected = SimpleNamespace(resolve=lambda: announcement)
+
+    result = await GuildTextChannelTransformer().transform(SimpleNamespace(), selected)
+
+    assert result is announcement
+
+
+@pytest.mark.asyncio
+async def test_feed_bind_transformer_rejects_unresolved_channel() -> None:
+    """Unresolved command-channel wrappers must fail before callback mutation."""
+    from discord import app_commands
+
+    selected = SimpleNamespace(resolve=lambda: None)
+
+    with pytest.raises(app_commands.TransformerError):
+        await GuildTextChannelTransformer().transform(SimpleNamespace(), selected)
+
+
+@pytest.mark.asyncio
+async def test_feed_bind_accepts_announcement_channel_before_mutation(
     monkeypatch,
 ) -> None:
-    """Runtime validation remains authoritative when Discord metadata is bypassed."""
+    """Runtime validation permits announcement channels and preserves owned mutation flow."""
+    import discord
+    from unittest.mock import AsyncMock, Mock
+
+    from src.commands import account_settings
+
+    service = Mock()
+    service.get_by_discord_user_id.return_value = None
+    service.bind_or_move.return_value = SimpleNamespace(status="bound")
+    group = _registered_account_settings_group(SimpleNamespace(), service)
+    command = group.get_command("feed-bind")
+    interaction = SimpleNamespace(
+        user=SimpleNamespace(
+            id=7,
+            guild_permissions=SimpleNamespace(manage_guild=True),
+        ),
+        guild=SimpleNamespace(id=100),
+        response=SimpleNamespace(send_message=AsyncMock(), defer=AsyncMock()),
+        edit_original_response=AsyncMock(),
+    )
+    announcement = object.__new__(discord.TextChannel)
+    # Discord API GUILD_ANNOUNCEMENT; discord.py exposes it as news.
+    announcement._type = discord.ChannelType.news.value
+    announcement.guild = SimpleNamespace(id=100)
+    announcement.id = 250
+
+    async def authorized(*_args, **_kwargs):
+        return SimpleNamespace(id=11)
+
+    monkeypatch.setattr(account_settings, "_resolve_authorized_user", authorized)
+
+    await command.callback(interaction, announcement)
+
+    interaction.response.send_message.assert_not_awaited()
+    interaction.response.defer.assert_awaited_once_with(ephemeral=True, thinking=True)
+    service.bind_or_move.assert_called_once_with("7", 100, 250, expected_binding_id=None)
+    interaction.edit_original_response.assert_awaited_once_with(
+        content="Personal-feed channel bound."
+    )
+
+
+@pytest.mark.asyncio
+async def test_feed_bind_rejects_cross_guild_announcement_before_mutation(
+    monkeypatch,
+) -> None:
+    """Same type support must not weaken same-guild authority checks."""
     import discord
     from unittest.mock import AsyncMock, Mock
 
@@ -512,7 +586,10 @@ async def test_feed_bind_forged_announcement_channel_is_rejected_before_mutation
         edit_original_response=AsyncMock(),
     )
     announcement = object.__new__(discord.TextChannel)
+    # Discord API GUILD_ANNOUNCEMENT; discord.py exposes it as news.
     announcement._type = discord.ChannelType.news.value
+    announcement.guild = SimpleNamespace(id=999)
+    announcement.id = 250
 
     async def authorized(*_args, **_kwargs):
         return SimpleNamespace(id=11)
@@ -522,7 +599,7 @@ async def test_feed_bind_forged_announcement_channel_is_rejected_before_mutation
     await command.callback(interaction, announcement)
 
     interaction.response.send_message.assert_awaited_once_with(
-        "Choose an ordinary text channel in this server; announcement channels are not supported.",
+        "Choose a text or announcement channel in this server.",
         ephemeral=True,
     )
     interaction.response.defer.assert_not_awaited()

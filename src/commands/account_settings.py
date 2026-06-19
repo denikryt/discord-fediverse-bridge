@@ -19,7 +19,7 @@ from ..user_profiles import (
     UserProfileValidationError,
 )
 from ..personal_feeds import PersonalFeedService
-from ..discord_channel_types import is_normal_guild_text_channel
+from ..discord_channel_types import is_personal_feed_root_channel
 from .guild_guard import (
     REGISTERED_GUILD_COMMAND_ACCESS,
     reject_if_command_access_denied,
@@ -30,7 +30,7 @@ T = TypeVar("T")
 
 
 class GuildTextChannelTransformer(app_commands.Transformer):
-    """Advertise and accept only Discord protocol GUILD_TEXT channels."""
+    """Advertise and accept personal-feed root text-like channels."""
 
     @property
     def type(self) -> discord.AppCommandOptionType:
@@ -38,16 +38,25 @@ class GuildTextChannelTransformer(app_commands.Transformer):
 
     @property
     def channel_types(self) -> list[discord.ChannelType]:
-        return [discord.ChannelType.text]
+        # Discord API: GUILD_TEXT + GUILD_ANNOUNCEMENT.
+        # discord.py exposes GUILD_ANNOUNCEMENT as ChannelType.news.
+        return [discord.ChannelType.text, discord.ChannelType.news]
 
     async def transform(
         self, interaction: discord.Interaction, value: object
     ) -> discord.TextChannel:
-        if not is_normal_guild_text_channel(value):
+        candidate = value
+        resolve = getattr(candidate, "resolve", None)
+        if callable(resolve):
+            # Discord.py can pass an app-command selected-channel wrapper whose
+            # string form is the visible channel name. Resolve it before applying
+            # the concrete TextChannel + protocol-type admission predicate.
+            candidate = resolve()
+        if not is_personal_feed_root_channel(candidate):
             raise app_commands.TransformerError(
                 value, discord.AppCommandOptionType.channel, self
             )
-        return value
+        return candidate
 
 
 async def _run_owned_sync_mutation(operation: Callable[[], T]) -> T:
@@ -458,14 +467,14 @@ def register(
     @group.command(
         name="feed-bind", description="Bind or move your personal-feed channel"
     )
-    @app_commands.describe(channel="An ordinary guild text channel")
+    @app_commands.describe(channel="A text or announcement channel")
     async def feed_bind(
         interaction: discord.Interaction,
         channel: app_commands.Transform[
             discord.TextChannel, GuildTextChannelTransformer
         ],
     ) -> None:
-        """Validate Discord authority and atomically bind one ordinary text channel."""
+        """Validate Discord authority and atomically bind one text-like root channel."""
         user = await _resolve_authorized_user(
             interaction,
             database=database,
@@ -484,9 +493,9 @@ def register(
                 ephemeral=True,
             )
             return
-        if not is_normal_guild_text_channel(channel) or channel.guild.id != guild.id:
+        if not is_personal_feed_root_channel(channel) or channel.guild.id != guild.id:
             await interaction.response.send_message(
-                "Choose an ordinary text channel in this server; announcement channels are not supported.",
+                "Choose a text or announcement channel in this server.",
                 ephemeral=True,
             )
             return
