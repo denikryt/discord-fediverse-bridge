@@ -14,7 +14,7 @@ Remote Lemmy subscription binding, gateway WebFinger routing, or generic content
 
 ## Primary entry points
 
-`service.py`, `runtime.py`, `discord_fanout.py`, `federation_fanout.py`, `activitypub_renderers.py`, `delivery_mapping.py`, `inbound_mapping.py`, `reply_mapping.py`.
+`service.py`, `runtime.py`, `results.py`, `discord_create.py`, `inbound_create.py`, `mutations.py`, `followers.py`, `discord_surface_fanout.py`, `discord_fanout.py`, `federation_fanout.py`, `rendering.py`, `activitypub_renderers.py`, `delivery_mapping.py`, `inbound_mapping.py`, and `reply_mapping.py`.
 
 ## Important tables or payloads
 

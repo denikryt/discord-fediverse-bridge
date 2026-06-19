@@ -21,7 +21,7 @@ Stage 1 of local-subscriber work adds a second participant type for this mode:
 
 Stage 5 makes `LocalSubscriber` forums full create/edit/delete local-community participants. Host forum posts/comments, inbound remote-subscriber posts/comments, and local-subscriber-originated posts/comments all create canonical local-community activity rows and concrete Discord surfaces; edits/deletes from any active participant propagate across the other local Discord surfaces and through the existing ActivityPub update/delete paths.
 
-Primary files: `src/commands/create_community.py`, `src/operations/create_community.py`, `src/local_communities/service.py`, `src/local_communities/runtime.py`, `src/local_communities/federation_fanout.py`, `src/local_communities/activitypub_renderers.py`, `fedify-gateway/src/actor-store.ts`, `fedify-gateway/src/server.ts`, and `fedify-gateway/src/federation-outbound.ts`.
+Primary files: `src/commands/create_community.py`, `src/operations/create_community.py`, `src/local_communities/service.py`, `src/local_communities/runtime.py`, `src/local_communities/discord_create.py`, `src/local_communities/inbound_create.py`, `src/local_communities/mutations.py`, `src/local_communities/followers.py`, `src/local_communities/discord_surface_fanout.py`, `src/local_communities/discord_fanout.py`, `src/local_communities/federation_fanout.py`, `src/local_communities/activitypub_renderers.py`, `fedify-gateway/src/actor-store.ts`, `fedify-gateway/src/server.ts`, and `fedify-gateway/src/federation-outbound.ts`.
 
 `src/local_communities/` implements Discord forum channels exposed as local ActivityPub Group actors. It does not implement remote Lemmy subscription binding.
 

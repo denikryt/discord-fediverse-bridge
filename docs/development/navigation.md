@@ -72,19 +72,19 @@ For inbound observability, start with `src/inbound_activity_outcomes.py` for the
 11. `tests/behavior/test_local_community_user_ban_scenarios.py`; 12. `tests/operations/test_ban_user_operation.py`; 13. `tests/operations/test_unban_user_operation.py`; 14. `tests/operations/test_list_banned_users_operation.py`; 15. `tests/operations/test_management_audit_events.py`; 16. `tests/commands/test_ban_user_command.py`; 17. `tests/commands/test_unban_user_command.py`; 18. `tests/commands/test_list_banned_users_command.py`; 19. `tests/test_local_community_permissions.py`; 20. `tests/test_fediverse_identity.py`.
 
 ## Remote Follow handling for local communities
-1. `fedify-gateway/src/federation.ts`; 2. `fedify-gateway/src/normalize.ts`; 3. `src/activitypub_handlers.py`; 4. `src/local_communities/runtime.py`; 5. `src/fedify_gateway_client.py`.
+1. `fedify-gateway/src/federation.ts`; 2. `fedify-gateway/src/normalize.ts`; 3. `src/activitypub_handlers.py`; 4. `src/local_communities/runtime.py` facade dispatch; 5. `src/local_communities/followers.py` follow/unfollow policy and persistence; 6. `src/fedify_gateway_client.py`.
 
 ## Local subscriber control-plane
 1. `src/commands/subscribe.py`; 2. `src/operations/subscribe_local_community.py`; 3. `src/commands/unsubscribe.py`; 4. `src/operations/unsubscribe_local_community.py`; 5. `src/db/database.py`; 6. `src/db/repositories/local_subscribers.py`.
 
 ## Local community relay fanout
-1. `src/local_communities/federation_fanout.py`; 2. `src/local_communities/runtime.py`; 3. `src/local_communities/delivery_mapping.py`; 4. `src/local_communities/reply_mapping.py`; 5. `src/db/repositories/local_community_relay.py`; 6. `src/db/database.py` repository container; 7. `fedify-gateway/src/federation-outbound.ts`.
+1. `src/local_communities/federation_fanout.py`; 2. `src/local_communities/inbound_create.py` and `src/local_communities/mutations.py` relay call sites; 3. `src/local_communities/runtime.py` facade dispatch; 4. `src/local_communities/delivery_mapping.py`; 5. `src/local_communities/reply_mapping.py`; 6. `src/db/repositories/local_community_relay.py`; 7. `src/db/database.py` repository container; 8. `fedify-gateway/src/federation-outbound.ts`.
 
 ## Local subscriber Discord fanout
-1. `src/local_communities/participant_routing.py`; 2. `src/local_communities/runtime.py`; 3. `src/local_communities/discord_fanout.py` for per-target fail-closed guild metadata and policy validation before surface mutation; 4. `src/local_communities/reply_mapping.py`; 5. `src/db/repositories/local_community_content.py`; 6. `src/db/repositories/local_community_surfaces.py`; 7. `src/db/repositories/local_subscribers.py`; 8. `src/db/database.py` repository container; 9. `tests/behavior/test_local_community_stage3_local_subscriber_sync_scenarios.py`; 10. `tests/behavior/test_local_community_stage4_local_subscriber_origin_scenarios.py`.
+1. `src/local_communities/participant_routing.py`; 2. `src/local_communities/runtime.py` facade dispatch; 3. `src/local_communities/discord_create.py` create-origin fanout decisions; 4. `src/local_communities/inbound_create.py` inbound mirror fanout decisions; 5. `src/local_communities/discord_surface_fanout.py` runtime-level no-client/source-skip fanout wrapper; 6. `src/local_communities/discord_fanout.py` for per-target fail-closed guild metadata and policy validation before surface mutation; 7. `src/local_communities/reply_mapping.py`; 8. `src/db/repositories/local_community_content.py`; 9. `src/db/repositories/local_community_surfaces.py`; 10. `src/db/repositories/local_subscribers.py`; 11. `src/db/database.py` repository container; 12. `tests/behavior/test_local_community_stage3_local_subscriber_sync_scenarios.py`; 13. `tests/behavior/test_local_community_stage4_local_subscriber_origin_scenarios.py`.
 
 ## Edit/delete propagation
-1. `src/discord_event_router.py`; 2. `src/content_sync/edit_delete.py`; 3. `src/community_sync/edit_delete.py`; 4. `src/local_communities/runtime.py`; 5. `src/local_communities/delivery_mapping.py`; 6. `src/db/database.py`; 7. `fedify-gateway/src/server.ts`.
+1. `src/discord_event_router.py`; 2. `src/content_sync/edit_delete.py`; 3. `src/community_sync/edit_delete.py`; 4. `src/local_communities/runtime.py` facade dispatch; 5. `src/local_communities/mutations.py` local-community edit/delete orchestration; 6. `src/local_communities/discord_surface_fanout.py`; 7. `src/local_communities/delivery_mapping.py`; 8. `src/db/database.py`; 9. `fedify-gateway/src/server.ts`.
 
 ## Deduplication and idempotency
 1. `src/activitypub_handlers.py`; 2. `src/content_sync/persistence.py`; 3. `src/db/repositories/event_receipts.py`; 4. `src/db/repositories/message_mappings.py`; 5. `src/db/repositories/activitypub_objects.py`; 6. `src/db/database.py` repository container; 7. `fedify-gateway/src/normalize.ts`.
@@ -103,10 +103,12 @@ Use `docs/architecture/database-map.md` for table ownership and invariants. Use 
 ## Local community participant edit/delete
 1. `src/discord_message_mutations.py` — raw Discord edit/delete admission, echo suppression, partial edit reconciliation, and mutation-context handoff.
 2. `src/discord_event_router.py` — local-community ownership check and runtime dispatch without broad Runtime access.
-3. `src/local_communities/runtime.py` — canonical AP object resolution and gateway/User Actor delivery calls through `DiscordMutationContext`.
-4. `src/local_communities/discord_fanout.py` — per-surface local Discord edit/delete fanout.
-5. `src/local_communities/delivery_mapping.py` — surface/canonical lookup helpers.
-6. `src/content_sync/edit_delete.py` — shared Discord message edit/delete edge helpers.
+3. `src/local_communities/runtime.py` — facade dispatch preserving the public local-community runtime API.
+4. `src/local_communities/mutations.py` — canonical AP object resolution and gateway/User Actor delivery calls through `DiscordMutationContext`.
+5. `src/local_communities/discord_surface_fanout.py` — runtime-level wrapper for best-effort local Discord mutation fanout.
+6. `src/local_communities/discord_fanout.py` — per-surface local Discord edit/delete fanout.
+7. `src/local_communities/delivery_mapping.py` — surface/canonical lookup helpers.
+8. `src/content_sync/edit_delete.py` — shared Discord message edit/delete edge helpers.
 
 ### Guild invite publication
 

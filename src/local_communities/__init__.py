@@ -6,10 +6,12 @@ separate from `community_sync`, which models the inverse subscription flow.
 """
 
 from .runtime import LocalCommunityRuntime
+from .results import LocalCommunityRuntimeResult
 from .service import LocalCommunityService, LocalCommunityError
 
 __all__ = [
     "LocalCommunityError",
     "LocalCommunityRuntime",
+    "LocalCommunityRuntimeResult",
     "LocalCommunityService",
 ]
