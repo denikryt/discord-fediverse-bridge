@@ -1,5 +1,7 @@
 """Environment-backed settings for the Python bridge process."""
 
+from urllib.parse import urlsplit
+
 from pydantic import Field, HttpUrl, field_validator, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
@@ -145,6 +147,23 @@ class Settings(BaseSettings):
                 "Discord guild and super-admin policy lists must contain comma-separated decimal Discord IDs"
             )
         return entries
+
+
+    @model_validator(mode="after")
+    def _validate_public_base_url_origin(self) -> "Settings":
+        """Reject PUBLIC_BASE_URL values that are not an ActivityPub origin."""
+        # Stage 2 treats PUBLIC_BASE_URL as the ActivityPub origin, not as a
+        # path prefix. Failing here prevents wrong durable actor ids later.
+        parsed = urlsplit(str(self.public_base_url))
+        if parsed.username is not None or parsed.password is not None:
+            raise ValueError("PUBLIC_BASE_URL must not contain userinfo")
+        if parsed.path not in {"", "/"}:
+            raise ValueError("PUBLIC_BASE_URL must not contain a non-root path")
+        if parsed.query or parsed.fragment:
+            raise ValueError(
+                "PUBLIC_BASE_URL must not contain query or fragment components"
+            )
+        return self
 
     @model_validator(mode="after")
     def _require_bootstrap_super_admin(self) -> "Settings":
