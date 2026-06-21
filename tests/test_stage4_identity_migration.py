@@ -77,3 +77,79 @@ def test_stage4_migration_requires_identity_config_for_populated_local_rows(tmp_
         raise AssertionError("missing Stage 4 identity config should fail")
     finally:
         database.close()
+
+
+def test_stage4_migration_rewrites_user_content_mutations_and_cached_json(tmp_path) -> None:
+    """Retained Update/Delete mutation recovery rows must survive the cutover typed."""
+    database = Database(f"sqlite:///{tmp_path / 'mutations.db'}")
+    database.create_all()
+    now = "2026-06-21T12:00:00Z"
+    old_object = "https://bridge.example/users/alice/objects/posts/post-1"
+    old_activity = "https://bridge.example/users/alice/activities/create/posts/create-1"
+    old_update = "https://bridge.example/users/alice/activities/update/posts/op-1"
+    request_json = {
+        "actorUsername": "alice",
+        "publicationContext": "personal_feed",
+        "communityActorUrl": None,
+        "conversationRootObjectId": old_object,
+        "apObjectId": old_object,
+        "kind": "post",
+        "title": "new",
+        "bodyMarkdown": "body",
+        "inReplyToObjectId": None,
+        "targetInboxUrls": ["https://remote.example/inbox"],
+        "mutationTimestamp": "2026-06-21T12:00:00+00:00",
+        "operationId": "op-1",
+        "activityId": old_update,
+    }
+    canonical_json = {
+        "id": old_update,
+        "type": "Update",
+        "actor": "https://bridge.example/actors/alice",
+        "object": {"id": old_object, "url": old_object},
+        "to": ["https://remote.example/users/bob"],
+    }
+    with database.engine.begin() as connection:
+        connection.execute(text("INSERT INTO users (id, discord_user_id, activitypub_username, actor_url, inbox_url, outbox_url, followers_url, public_key_pem, private_key_pem, profile_version, created_at, updated_at) VALUES (1, '1', 'alice', 'https://bridge.example/actors/alice', 'https://bridge.example/actors/alice/inbox', 'https://bridge.example/actors/alice/outbox', 'https://bridge.example/actors/alice/followers', 'public', 'private', 1, :now, :now)"), {"now": now})
+        connection.execute(text("INSERT INTO published_activity_objects (id, actor_username, actor_url, publication_context, community_actor_url, activity_id, object_id, kind, title, body_markdown, in_reply_to_object_id, conversation_root_object_id, discord_guild_id, discord_channel_id, discord_message_id, content_revision, desired_kind, discord_reconciliation_needed, discord_reconciliation_attempt_count, published_at, created_at) VALUES (1, 'alice', 'https://bridge.example/actors/alice', 'personal_feed', NULL, :activity, :object, 'post', 'old', 'body', NULL, :object, 10, 20, 30, 1, 'update', 0, 0, :now, :now)"), {"activity": old_activity, "object": old_object, "now": now})
+        connection.execute(text("INSERT INTO user_actor_content_mutations (id, published_object_id, user_id, kind, expected_revision, next_revision, operation_id, activity_id, request_json, request_fingerprint, state, canonical_activity_json, side_effect_classification, attempt_count, created_at, updated_at) VALUES (1, 1, 1, 'content_update', 1, 2, 'op-1', :activity_id, :request_json, 'fp', 'canonical_ready', :canonical_json, 'canonical_received', 0, :now, :now)"), {"activity_id": old_update, "request_json": __import__('json').dumps(request_json, separators=(',', ':'), sort_keys=True), "canonical_json": __import__('json').dumps(canonical_json, separators=(',', ':'), sort_keys=True), "now": now})
+
+    config = Stage4IdentityMigrationConfig(public_origin="https://bridge.example", service_actor_identifier="bridge")
+    database.migrate(config)
+    database.migrate(config)
+
+    with database.engine.connect() as connection:
+        row = connection.execute(text("SELECT activity_id, request_json, canonical_activity_json FROM user_actor_content_mutations WHERE id=1")).mappings().one()
+        assert row["activity_id"].startswith("https://bridge.example/actors/users/alice/activities/update/posts/")
+        assert not row["activity_id"].endswith("/op-1")
+        request = __import__('json').loads(row["request_json"])
+        assert request["activityId"] == row["activity_id"]
+        assert request["operationId"] == row["activity_id"].rsplit("/", 1)[-1]
+        assert request["apObjectId"] == "https://bridge.example/actors/users/alice/objects/posts/post-1"
+        assert request["conversationRootObjectId"] == request["apObjectId"]
+        canonical = __import__('json').loads(row["canonical_activity_json"])
+        assert canonical["id"] == row["activity_id"]
+        assert canonical["actor"] == "https://bridge.example/actors/users/alice"
+        assert canonical["object"]["id"] == request["apObjectId"]
+        assert canonical["to"] == ["https://remote.example/users/bob"]
+    database.close()
+
+
+def test_stage4_migration_rewrites_local_community_relay_announce_ids(tmp_path) -> None:
+    """Retained relay delivery rows use the canonical announce posts/comments grammar."""
+    database = Database(f"sqlite:///{tmp_path / 'relay.db'}")
+    database.create_all()
+    now = "2026-06-21T12:00:00Z"
+    with database.engine.begin() as connection:
+        connection.execute(text("INSERT INTO local_communities (id, discord_guild_id, discord_forum_channel_id, slug, display_name, actor_url, inbox_url, outbox_url, followers_url, public_key_pem, private_key_pem, status, created_at, updated_at) VALUES (2, 10, 20, 'python', 'Python', 'https://bridge.example/communities/python', 'https://bridge.example/communities/python/inbox', 'https://bridge.example/communities/python/outbox', 'https://bridge.example/communities/python/followers', 'public', 'private', 'active', :now, :now)"), {"now": now})
+        connection.execute(text("INSERT INTO local_community_relay_source_activities (id, local_community_id, object_kind, operation, source_object_ap_id, source_activity_id, source_announce_id, origin_remote_actor_id, source_activity_json, created_at) VALUES (1, 2, 'post', 'create', 'https://remote.example/post/1', 'https://remote.example/create/1', NULL, 'https://remote.example/u/bob', '{}', :now)"), {"now": now})
+        connection.execute(text("INSERT INTO local_community_relay_deliveries (id, source_activity_row_id, local_community_id, object_kind, operation, source_object_ap_id, source_activity_id, origin_remote_actor_id, target_remote_actor_id, target_inbox_url, delivery_profile, relay_activity_id, status, attempt_count, created_at, updated_at) VALUES (1, 1, 2, 'post', 'create', 'https://remote.example/post/1', 'https://remote.example/create/1', 'https://remote.example/u/bob', 'https://remote.example/u/alice', 'https://remote.example/inbox', 'threadiverse_group', 'https://bridge.example/communities/python/activities/announce/relay-1', 'delivered', 1, :now, :now)"), {"now": now})
+
+    config = Stage4IdentityMigrationConfig(public_origin="https://bridge.example", service_actor_identifier="bridge")
+    database.migrate(config)
+    database.migrate(config)
+
+    with database.engine.connect() as connection:
+        relay_id = connection.execute(text("SELECT relay_activity_id FROM local_community_relay_deliveries WHERE id=1")).scalar_one()
+        assert relay_id == "https://bridge.example/actors/communities/python/activities/announce/posts/relay-1"
+    database.close()

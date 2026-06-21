@@ -18,6 +18,38 @@ assert_contains() {
     fi
 }
 
+assert_location_has_proxy() {
+    local file="$1"
+    local location_decl="$2"
+    local expected_proxy="$3"
+    awk -v loc="$location_decl" -v proxy="$expected_proxy" '
+        index($0, loc) { in_block=1 }
+        in_block && index($0, proxy) { found=1 }
+        in_block && $0 ~ /^    }$/ { in_block=0 }
+        END { exit found ? 0 : 1 }
+    ' "$file" || {
+        echo "Expected location '$location_decl' to contain '$expected_proxy' in $file" >&2
+        cat "$file" >&2
+        exit 1
+    }
+}
+
+assert_location_not_gateway() {
+    local file="$1"
+    local location_decl="$2"
+    local gateway_proxy="$3"
+    if awk -v loc="$location_decl" -v proxy="$gateway_proxy" '
+        index($0, loc) { in_block=1 }
+        in_block && index($0, proxy) { found=1 }
+        in_block && $0 ~ /^    }$/ { in_block=0 }
+        END { exit found ? 0 : 1 }
+    ' "$file"; then
+        echo "Expected retired/product location '$location_decl' not to proxy to gateway in $file" >&2
+        cat "$file" >&2
+        exit 1
+    fi
+}
+
 single_env="$TMP_DIR/single.env"
 cat > "$single_env" <<'ENV'
 PUBLIC_BASE_URL=https://discord-bridge-dev.example.com
@@ -29,6 +61,12 @@ single_out="$TMP_DIR/single.conf"
 assert_contains "$single_out" "server_name discord-bridge-dev.example.com;"
 assert_contains "$single_out" "proxy_pass http://127.0.0.1:8181;"
 assert_contains "$single_out" "proxy_pass http://127.0.0.1:3100;"
+assert_location_has_proxy "$single_out" "location = /.well-known/webfinger" "proxy_pass http://127.0.0.1:3100;"
+assert_location_has_proxy "$single_out" "location ^~ /.well-known/discord-fediverse-bridge/" "proxy_pass http://127.0.0.1:3100;"
+assert_location_has_proxy "$single_out" "location ^~ /actors/" "proxy_pass http://127.0.0.1:3100;"
+assert_location_has_proxy "$single_out" "location ^~ /inbox" "proxy_pass http://127.0.0.1:3100;"
+assert_location_not_gateway "$single_out" "location /" "proxy_pass http://127.0.0.1:3100;"
+assert_contains "$single_out" "location ^~ /internal/ { return 404; }"
 
 legacy_env="$TMP_DIR/legacy.env"
 cat > "$legacy_env" <<'ENV'

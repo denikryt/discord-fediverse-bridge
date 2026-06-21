@@ -11,6 +11,12 @@ from copy import deepcopy
 from datetime import datetime, timezone
 from html import escape
 from uuid import uuid4
+from urllib.parse import urlsplit
+
+from src.activitypub_identity_urls import (
+    build_community_announce_comment_activity_id,
+    build_community_announce_post_activity_id,
+)
 
 PUBLIC_COLLECTION = "https://www.w3.org/ns/activitystreams#Public"
 SUPPORTED_DELIVERY_PROFILES = {
@@ -27,6 +33,7 @@ def render_local_community_relay_activity(
     community_actor_url: str,
     community_slug: str,
     delivery_profile: str,
+    object_kind: str | None = None,
 ) -> dict:
     """Render one outbound community Announce for a target delivery profile.
 
@@ -46,17 +53,18 @@ def render_local_community_relay_activity(
             normalized_event=normalized_event,
             community_actor_url=community_actor_url,
             community_slug=community_slug,
+            object_kind=object_kind or "comment",
         )
 
     if delivery_profile == "threadiverse_group":
         return _render_announce(
-            source_activity_json, community_actor_url, community_slug
+            source_activity_json, community_actor_url, community_slug, object_kind
         )
     if delivery_profile == "mastodon_compat":
         return _render_announce(
-            source_activity_json, community_actor_url, community_slug
+            source_activity_json, community_actor_url, community_slug, object_kind
         )
-    return _render_announce(source_activity_json, community_actor_url, community_slug)
+    return _render_announce(source_activity_json, community_actor_url, community_slug, object_kind)
 
 
 def _is_create_note(activity: dict) -> bool:
@@ -122,6 +130,7 @@ def _render_threadiverse_note_announce(
     normalized_event: object,
     community_actor_url: str,
     community_slug: str,
+    object_kind: str | None = None,
 ) -> dict:
     """Render a Lemmy-compatible community Announce for a non-threadiverse Create(Note)."""
     event_object = getattr(normalized_event, "object")
@@ -170,8 +179,20 @@ def _render_threadiverse_note_announce(
         "cc": [community_actor_url, actor_id],
         "object": note,
     }
-    return _render_announce(create, community_actor_url, community_slug)
+    return _render_announce(create, community_actor_url, community_slug, object_kind or "comment")
 
+
+
+def _infer_announce_object_kind(source_activity: dict) -> str:
+    """Infer post/comment only when the caller did not pass relay object_kind."""
+    obj = source_activity.get("object") if isinstance(source_activity, dict) else None
+    if isinstance(obj, dict):
+        obj_type = obj.get("type")
+        if obj_type == "Note" and obj.get("inReplyTo"):
+            return "comment"
+        if obj_type == "Note" and "/comments/" in str(obj.get("id", "")):
+            return "comment"
+    return "post"
 
 def _markdown_text_to_html_paragraphs(text: str) -> str:
     """Render normalized bridge text as conservative ActivityPub HTML."""
@@ -193,15 +214,27 @@ def _isoformat_activitypub(value: object) -> str:
 
 
 def _render_announce(
-    source_activity_json: dict, community_actor_url: str, community_slug: str
+    source_activity_json: dict,
+    community_actor_url: str,
+    community_slug: str,
+    object_kind: str | None = None,
 ) -> dict:
     """Build a community-owned Announce without mutating the source activity."""
     # Deep-copying protects the persisted source JSON from accidental renderer
     # mutation while preserving the original actor and object attribution.
     source_activity = deepcopy(source_activity_json)
+    operation_id = f"{datetime.now(timezone.utc).timestamp():.6f}-{uuid4().hex}"
+    origin_parts = urlsplit(community_actor_url)
+    origin = f"{origin_parts.scheme}://{origin_parts.netloc}"
+    resolved_kind = object_kind or _infer_announce_object_kind(source_activity)
     announce_id = (
-        f"{community_actor_url.rstrip('/')}/activities/announce/"
-        f"{datetime.now(timezone.utc).timestamp():.6f}-{uuid4().hex}"
+        build_community_announce_comment_activity_id(
+            origin=origin, slug=community_slug, activity_id=operation_id
+        )
+        if resolved_kind == "comment"
+        else build_community_announce_post_activity_id(
+            origin=origin, slug=community_slug, activity_id=operation_id
+        )
     )
     followers_url = f"{community_actor_url.rstrip('/')}/followers"
     return {

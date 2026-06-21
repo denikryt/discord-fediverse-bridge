@@ -195,6 +195,7 @@ class LocalCommunityFederationFanout:
                 community_actor_url=getattr(local_community, "actor_url"),
                 community_slug=getattr(local_community, "slug"),
                 delivery_profile=row.delivery_profile,
+                object_kind=row.object_kind,
             )
             outbound.append(
                 SendLocalCommunityRelayDelivery(

@@ -28,6 +28,31 @@ function requireEnv(name: string): string {
   return value;
 }
 
+function normalizePublicBaseUrl(value: string): string {
+  let parsed: URL;
+  try {
+    parsed = new URL(value);
+  } catch (error) {
+    throw new Error(`PUBLIC_BASE_URL must be an absolute http(s) origin: ${(error as Error).message}`);
+  }
+  if (parsed.protocol !== "https:" && parsed.protocol !== "http:") {
+    throw new Error("PUBLIC_BASE_URL must use http or https");
+  }
+  if (!parsed.hostname) {
+    throw new Error("PUBLIC_BASE_URL must include a host");
+  }
+  if (parsed.username || parsed.password) {
+    throw new Error("PUBLIC_BASE_URL must not contain username or password");
+  }
+  if (parsed.pathname !== "/") {
+    throw new Error("PUBLIC_BASE_URL must not contain a non-root path");
+  }
+  if (parsed.search || parsed.hash) {
+    throw new Error("PUBLIC_BASE_URL must not contain query or fragment components");
+  }
+  return parsed.origin;
+}
+
 function parsePort(value: string | undefined, fallback: number): number {
   if (!value) {
     return fallback;
@@ -66,7 +91,7 @@ export function loadConfig(): GatewayConfig {
     actorSummary:
       process.env.FEDIFY_ACTOR_SUMMARY ??
       "Receives ActivityPub activities from Lemmy and forwards normalized events to the Python bridge.",
-    fedifyOrigin: requireEnv("PUBLIC_BASE_URL"),
+    fedifyOrigin: normalizePublicBaseUrl(requireEnv("PUBLIC_BASE_URL")),
     port: parsePort(process.env.GATEWAY_BIND_PORT, 3000),
     pythonBridgeInternalUrl: derivePythonBridgeInternalUrl(),
     pythonBridgeSharedSecret: requireEnv("FEDIFY_SHARED_SECRET"),

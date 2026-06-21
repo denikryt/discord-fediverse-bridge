@@ -9,6 +9,8 @@ change, because SQLite cannot drop a NOT NULL constraint in place.
 from __future__ import annotations
 
 from dataclasses import dataclass
+import hashlib
+import json
 from urllib.parse import urlsplit
 
 from sqlalchemy import text
@@ -26,7 +28,11 @@ from ..activitypub_identity_urls import (
     build_user_comment_object_id,
     build_user_create_comment_activity_id,
     build_user_create_post_activity_id,
+    build_user_delete_comment_activity_id,
+    build_user_delete_post_activity_id,
     build_user_post_object_id,
+    build_user_update_comment_activity_id,
+    build_user_update_post_activity_id,
     build_user_profile_update_activity_id,
 )
 from ..models import (
@@ -782,10 +788,12 @@ def _migrate_stage4_typed_activitypub_identity(
             {"actor_url": service.actor_url, "key_id": service.public_key_url},
         )
 
-    _migrate_stage4_published_objects(conn, origin, user_actor_map, community_actor_map)
+    object_id_map = _migrate_stage4_published_objects(conn, origin, user_actor_map, community_actor_map)
     _migrate_stage4_message_mappings(conn, origin, user_actor_map, community_actor_map)
-    _migrate_stage4_local_community_content(conn, origin, community_slug_by_id)
+    object_id_map.update(_migrate_stage4_local_community_content(conn, origin, community_slug_by_id))
     _migrate_stage4_profile_update_sources(conn, origin)
+    _migrate_stage4_content_mutations(conn, origin, object_id_map, user_actor_map, community_actor_map)
+    _migrate_stage4_local_community_relay_deliveries(conn, origin, community_slug_by_id)
     _purge_stage4_remote_relationship_state(conn)
     _verify_stage4_identity_invariants(conn, origin)
 
@@ -844,10 +852,10 @@ def _migrate_stage4_published_objects(
     origin: str,
     user_actor_map: dict[str, str],
     community_actor_map: dict[str, str],
-) -> None:
+) -> dict[str, str]:
     """Rewrite retained published object rows to typed actor/object/activity IDs."""
     if not _table_columns(conn, "published_activity_objects"):
-        return
+        return {}
     rows = list(conn.execute(text("SELECT * FROM published_activity_objects")).mappings())
     object_id_map: dict[str, str] = {}
     updates: list[tuple[int, dict[str, object]]] = []
@@ -898,6 +906,7 @@ def _migrate_stage4_published_objects(
     for old, new in object_id_map.items():
         conn.execute(text("UPDATE published_activity_objects SET in_reply_to_object_id=:new WHERE in_reply_to_object_id=:old"), {"old": old, "new": new})
         conn.execute(text("UPDATE published_activity_objects SET conversation_root_object_id=:new WHERE conversation_root_object_id=:old"), {"old": old, "new": new})
+    return object_id_map
 
 
 def _migrate_stage4_message_mappings(
@@ -935,9 +944,10 @@ def _migrate_stage4_message_mappings(
 
 def _migrate_stage4_local_community_content(
     conn: Connection, origin: str, community_slug_by_id: dict[int, str]
-) -> None:
+) -> dict[str, str]:
     """Rewrite canonical local-community rows while preserving surface rows."""
     thread_object_map: dict[str, str] = {}
+    all_object_map: dict[str, str] = {}
     if _table_columns(conn, "local_community_threads"):
         for row in conn.execute(text("SELECT * FROM local_community_threads")).mappings():
             if row.get("origin_kind") not in {"discord", "local", "local_discord"} and row.get("direction") not in {"discord_to_fediverse", "outbound", "local"}:
@@ -952,6 +962,7 @@ def _migrate_stage4_local_community_content(
                 origin=origin, slug=slug, object_id=object_token
             )
             thread_object_map[old_object] = new_object
+            all_object_map[old_object] = new_object
             conn.execute(
                 text(
                     "UPDATE local_community_threads SET ap_object_id=:object_id, "
@@ -988,6 +999,7 @@ def _migrate_stage4_local_community_content(
             activity_token = _terminal_id(str(row["ap_activity_id"]), origin)
             new_object = build_community_comment_object_id(origin=origin, slug=slug, object_id=object_token)
             parent_map[old_object] = new_object
+            all_object_map[old_object] = new_object
             conn.execute(text("UPDATE local_community_messages SET ap_object_id=:object_id, ap_activity_id=:activity_id WHERE id=:id"), {"id": row["id"], "object_id": new_object, "activity_id": build_community_create_comment_activity_id(origin=origin, slug=slug, activity_id=activity_token)})
         for old, new in {**thread_object_map, **parent_map}.items():
             conn.execute(
@@ -997,6 +1009,7 @@ def _migrate_stage4_local_community_content(
                 ),
                 {"old": old, "new": new},
             )
+    return all_object_map
 
 
 def _migrate_stage4_profile_update_sources(conn: Connection, origin: str) -> None:
@@ -1011,6 +1024,229 @@ def _migrate_stage4_profile_update_sources(conn: Connection, origin: str) -> Non
         activity_id = build_user_profile_update_activity_id(origin=origin, username=str(row["activitypub_username"]), profile_version_or_activity_id=row["logical_version"])
         conn.execute(text("UPDATE user_actor_outbound_sources SET activity_id=:activity_id WHERE id=:id"), {"id": row["id"], "activity_id": activity_id})
 
+
+
+def _migrate_stage4_content_mutations(
+    conn: Connection,
+    origin: str,
+    object_id_map: dict[str, str],
+    user_actor_map: dict[str, str],
+    community_actor_map: dict[str, str],
+) -> None:
+    """Rewrite retained user content mutation rows and cached JSON payloads."""
+    columns = _table_columns(conn, "user_actor_content_mutations")
+    if not columns or not _table_columns(conn, "users") or not _table_columns(conn, "published_activity_objects"):
+        return
+    required = {"id", "published_object_id", "user_id", "kind", "operation_id", "activity_id", "request_json"}
+    if not required.issubset(columns):
+        return
+    rows = list(
+        conn.execute(
+            text(
+                "SELECT m.*, u.activitypub_username, u.actor_url AS user_actor_url, "
+                "p.object_id AS published_object_ap_id, p.kind AS published_kind, "
+                "p.community_actor_url AS published_community_actor_url, "
+                "p.conversation_root_object_id AS published_conversation_root_object_id, "
+                "p.in_reply_to_object_id AS published_in_reply_to_object_id "
+                "FROM user_actor_content_mutations m "
+                "JOIN users u ON u.id=m.user_id "
+                "JOIN published_activity_objects p ON p.id=m.published_object_id"
+            )
+        ).mappings()
+    )
+    for row in rows:
+        username = str(row["activitypub_username"])
+        object_kind = "comments" if str(row["published_kind"]) == "comment" or "/comments/" in str(row["published_object_ap_id"]) else "posts"
+        typed_user_actor = build_actor_address(
+            origin=origin, kind=LocalActorKind.USER, identifier=username
+        ).actor_url
+        replacements = dict(object_id_map)
+        replacements[str(row["user_actor_url"])] = typed_user_actor
+        request = _json_load_or_none(row["request_json"])
+        if isinstance(request, dict):
+            request["apObjectId"] = str(row["published_object_ap_id"])
+            if request.get("communityActorUrl"):
+                request["communityActorUrl"] = _migrate_stage4_json_local_url(
+                    str(request["communityActorUrl"]), origin, replacements, user_actor_map, community_actor_map
+                )
+            for key, replacement in (
+                ("conversationRootObjectId", row["published_conversation_root_object_id"]),
+                ("inReplyToObjectId", row["published_in_reply_to_object_id"]),
+            ):
+                if request.get(key) and replacement:
+                    request[key] = str(replacement)
+                elif request.get(key):
+                    request[key] = _migrate_stage4_json_local_url(
+                        str(request[key]), origin, replacements, user_actor_map, community_actor_map
+                    )
+            operation_id = _stage4_content_mutation_operation_id(
+                kind=str(row["kind"]),
+                expected_revision=int(row["expected_revision"]),
+                next_revision=int(row["next_revision"]),
+                request=request,
+            )
+        else:
+            operation_id = str(row["operation_id"])
+        if row["kind"] == "content_delete":
+            activity_id = (
+                build_user_delete_comment_activity_id(origin=origin, username=username, activity_id=operation_id)
+                if object_kind == "comments"
+                else build_user_delete_post_activity_id(origin=origin, username=username, activity_id=operation_id)
+            )
+        else:
+            activity_id = (
+                build_user_update_comment_activity_id(origin=origin, username=username, activity_id=operation_id)
+                if object_kind == "comments"
+                else build_user_update_post_activity_id(origin=origin, username=username, activity_id=operation_id)
+            )
+        replacements[str(row["activity_id"])] = activity_id
+        if isinstance(request, dict):
+            request["operationId"] = operation_id
+            request["activityId"] = activity_id
+            request_json = json.dumps(request, separators=(",", ":"), sort_keys=True)
+        else:
+            request_json = row["request_json"]
+        canonical_json = row.get("canonical_activity_json") if "canonical_activity_json" in row else None
+        if canonical_json is not None:
+            canonical = _json_load_or_none(canonical_json)
+            if canonical is not None:
+                canonical = _migrate_stage4_json_value(
+                    canonical, origin, replacements, user_actor_map, community_actor_map
+                )
+                canonical_json = json.dumps(canonical, separators=(",", ":"), sort_keys=True)
+        conn.execute(
+            text(
+                "UPDATE user_actor_content_mutations SET operation_id=:operation_id, "
+                "activity_id=:activity_id, request_json=:request_json, "
+                "canonical_activity_json=:canonical_activity_json WHERE id=:id"
+            ),
+            {
+                "id": row["id"],
+                "operation_id": operation_id,
+                "activity_id": activity_id,
+                "request_json": request_json,
+                "canonical_activity_json": canonical_json,
+            },
+        )
+
+
+def _stage4_content_mutation_operation_id(
+    *, kind: str, expected_revision: int, next_revision: int, request: dict[str, object]
+) -> str:
+    """Recompute the deterministic mutation operation id after local URL migration."""
+    identity_request = {
+        "actorUsername": request.get("actorUsername"),
+        "publicationContext": request.get("publicationContext"),
+        "communityActorUrl": request.get("communityActorUrl"),
+        "conversationRootObjectId": request.get("conversationRootObjectId"),
+        "apObjectId": request.get("apObjectId"),
+        "kind": request.get("kind") if kind == "content_update" else None,
+        "title": request.get("title") if kind == "content_update" else None,
+        "bodyMarkdown": request.get("bodyMarkdown") if kind == "content_update" else None,
+        "inReplyToObjectId": request.get("inReplyToObjectId") if kind == "content_update" else None,
+        "targetInboxUrls": request.get("targetInboxUrls"),
+        "mutationTimestamp": request.get("mutationTimestamp"),
+    }
+    identity = json.dumps(
+        {
+            "objectId": request.get("apObjectId"),
+            "kind": kind,
+            "expectedRevision": expected_revision,
+            "nextRevision": next_revision,
+            "request": identity_request,
+        },
+        separators=(",", ":"),
+        sort_keys=True,
+    )
+    return hashlib.sha256(identity.encode()).hexdigest()
+
+
+def _migrate_stage4_local_community_relay_deliveries(
+    conn: Connection, origin: str, community_slug_by_id: dict[int, str]
+) -> None:
+    """Migrate retained local-community relay Announce ids to typed grammar."""
+    columns = _table_columns(conn, "local_community_relay_deliveries")
+    if not columns or "relay_activity_id" not in columns:
+        return
+    required = {"id", "local_community_id", "object_kind", "relay_activity_id"}
+    if not required.issubset(columns):
+        return
+    rows = list(
+        conn.execute(
+            text(
+                "SELECT id, local_community_id, object_kind, relay_activity_id "
+                "FROM local_community_relay_deliveries WHERE relay_activity_id IS NOT NULL"
+            )
+        ).mappings()
+    )
+    for row in rows:
+        old_id = str(row["relay_activity_id"])
+        if not _is_same_origin_url(old_id, origin):
+            continue
+        slug = community_slug_by_id.get(int(row["local_community_id"]))
+        if slug is None:
+            conn.execute(text("UPDATE local_community_relay_deliveries SET relay_activity_id=NULL WHERE id=:id"), {"id": row["id"]})
+            continue
+        token = _terminal_id(old_id, origin)
+        object_kind = str(row["object_kind"])
+        new_id = (
+            build_community_announce_comment_activity_id(origin=origin, slug=slug, activity_id=token)
+            if object_kind == "comment"
+            else build_community_announce_post_activity_id(origin=origin, slug=slug, activity_id=token)
+        )
+        conn.execute(
+            text("UPDATE local_community_relay_deliveries SET relay_activity_id=:relay_activity_id WHERE id=:id"),
+            {"id": row["id"], "relay_activity_id": new_id},
+        )
+
+
+def _json_load_or_none(value: object) -> object | None:
+    if not isinstance(value, str):
+        return None
+    try:
+        return json.loads(value)
+    except json.JSONDecodeError:
+        return None
+
+
+def _migrate_stage4_json_value(
+    value: object,
+    origin: str,
+    replacements: dict[str, str],
+    user_actor_map: dict[str, str],
+    community_actor_map: dict[str, str],
+) -> object:
+    if isinstance(value, str):
+        return _migrate_stage4_json_local_url(value, origin, replacements, user_actor_map, community_actor_map)
+    if isinstance(value, list):
+        return [_migrate_stage4_json_value(item, origin, replacements, user_actor_map, community_actor_map) for item in value]
+    if isinstance(value, dict):
+        return {key: _migrate_stage4_json_value(item, origin, replacements, user_actor_map, community_actor_map) for key, item in value.items()}
+    return value
+
+
+def _migrate_stage4_json_local_url(
+    value: str,
+    origin: str,
+    replacements: dict[str, str],
+    user_actor_map: dict[str, str],
+    community_actor_map: dict[str, str],
+) -> str:
+    if value in replacements:
+        return replacements[value]
+    if value in user_actor_map:
+        return user_actor_map[value]
+    if value in community_actor_map:
+        return community_actor_map[value]
+    if not _is_same_origin_url(value, origin):
+        return value
+    username = _username_from_actor_url(value, origin)
+    if username is not None:
+        return build_actor_address(origin=origin, kind=LocalActorKind.USER, identifier=username).actor_url
+    slug = _slug_from_actor_url(value, origin)
+    if slug is not None:
+        return build_actor_address(origin=origin, kind=LocalActorKind.COMMUNITY, identifier=slug).actor_url
+    return value
 
 def _purge_stage4_remote_relationship_state(conn: Connection) -> None:
     """Remove old local-actor relationship state that cannot be reused safely."""
@@ -1039,6 +1275,7 @@ def _verify_stage4_identity_invariants(conn: Connection, origin: str) -> None:
         ("local_community_threads", ("ap_activity_id", "ap_object_id")),
         ("local_community_messages", ("ap_activity_id", "ap_object_id", "parent_ap_object_id")),
         ("user_actor_outbound_sources", ("activity_id",)),
+        ("user_actor_content_mutations", ("activity_id", "request_json", "canonical_activity_json")),
         ("local_community_relay_deliveries", ("relay_activity_id",)),
     ]
     for table, columns in checks:
@@ -1051,15 +1288,32 @@ def _verify_stage4_identity_invariants(conn: Connection, origin: str) -> None:
         rows = conn.execute(text(f"SELECT id, {', '.join(wanted)} FROM {table}")).mappings()
         for row in rows:
             for column in wanted:
-                value = row[column]
-                if not isinstance(value, str) or not _is_same_origin_url(value, origin):
-                    continue
-                path = urlsplit(value).path
-                allowed = path.startswith("/actors/users/") or path.startswith("/actors/communities/") or path.startswith("/actors/services/")
-                if not allowed and any(path.startswith(prefix) for prefix in retired):
-                    raise RuntimeError(f"Stage 4 migration left retired local URL in {table}.{column} id={row['id']}: {value}")
-                if path.startswith("/actors/") and not allowed:
-                    raise RuntimeError(f"Stage 4 migration left untyped actor URL in {table}.{column} id={row['id']}: {value}")
+                raw_value = row[column]
+                values = [raw_value]
+                if column.endswith("_json") and isinstance(raw_value, str):
+                    parsed = _json_load_or_none(raw_value)
+                    if parsed is not None:
+                        values = list(_iter_stage4_json_strings(parsed))
+                for value in values:
+                    if not isinstance(value, str) or not _is_same_origin_url(value, origin):
+                        continue
+                    path = urlsplit(value).path
+                    allowed = path.startswith("/actors/users/") or path.startswith("/actors/communities/") or path.startswith("/actors/services/")
+                    if not allowed and any(path.startswith(prefix) for prefix in retired):
+                        raise RuntimeError(f"Stage 4 migration left retired local URL in {table}.{column} id={row['id']}: {value}")
+                    if path.startswith("/actors/") and not allowed:
+                        raise RuntimeError(f"Stage 4 migration left untyped actor URL in {table}.{column} id={row['id']}: {value}")
+
+
+def _iter_stage4_json_strings(value: object):
+    if isinstance(value, str):
+        yield value
+    elif isinstance(value, list):
+        for item in value:
+            yield from _iter_stage4_json_strings(item)
+    elif isinstance(value, dict):
+        for item in value.values():
+            yield from _iter_stage4_json_strings(item)
 
 
 def _slug_from_actor_url(value: str, origin: str) -> str | None:

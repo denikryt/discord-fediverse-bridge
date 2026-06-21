@@ -75,6 +75,31 @@ async function main(): Promise<void> {
   assert.equal(config.actorName, "Test Bridge");
   assert.equal(config.actorSummary, "Test summary");
 
+  const prefixedEnvPath = path.join(tempDir, "prefixed.env");
+  await writeFile(
+    prefixedEnvPath,
+    [
+      "PUBLIC_BASE_URL=https://root.example.com/ap",
+      "FEDIFY_SHARED_SECRET=root-secret",
+      "",
+    ].join("\n"),
+  );
+  const prefixedResult = spawnSync(
+    process.execPath,
+    ["--env-file", prefixedEnvPath, "./node_modules/.bin/tsx", probePath],
+    {
+      cwd: gatewayDir,
+      encoding: "utf8",
+      env: {
+        HOME: process.env.HOME ?? "",
+        PATH: process.env.PATH ?? "",
+        TMPDIR: process.env.TMPDIR ?? "",
+      },
+    },
+  );
+  assert.notEqual(prefixedResult.status, 0);
+  assert.match(prefixedResult.stderr + prefixedResult.stdout, /PUBLIC_BASE_URL must not contain a non-root path/);
+
   console.log("verify:env-loading passed");
 }
 
