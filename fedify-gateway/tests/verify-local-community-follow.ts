@@ -8,6 +8,7 @@ import initSqlJs, { seedBridgeActorJwk } from "./support/sqlite-fixture.js";
 import { closeAllPythonBridgeFixtures, importFixedRsaKeyPair, startPythonBridgeFixture } from "./support/python-bridge-fixture.js";
 
 import { buildLocalFollowRequestedEvent } from "../src/federation.js";
+import { loadActorKeyPair } from "../src/actor-store.js";
 import type { GatewayConfig } from "../src/config.js";
 
 const TEST_ORIGIN = "https://discord-bridge.example.com/";
@@ -93,6 +94,10 @@ async function main(): Promise<void> {
         pythonBridgeSharedSecret: "secret",
     logLevel: "info",
   };
+
+  const serviceKeyPair = await loadActorKeyPair(config, "services/bridge");
+  assert.ok(serviceKeyPair, "typed service actor key lookup should succeed");
+  assert.equal(await loadActorKeyPair(config, "bridge"), null);
 
   const activity = new Follow({
     id: new URL(`${REMOTE_ORIGIN}activities/follow/1`),

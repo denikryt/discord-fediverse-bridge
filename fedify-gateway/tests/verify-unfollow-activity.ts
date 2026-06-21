@@ -18,9 +18,9 @@ function makeConfig(fedifyOrigin: string): GatewayConfig {
 
 const config = makeConfig("https://bot-test.nachitima.com/");
 
-const actorUri = new URL("https://bot-test.nachitima.com/actors/bridge");
+const actorUri = new URL("https://bot-test.nachitima.com/actors/services/bridge");
 const communityUri = "https://lemmy.example/c/hackers";
-const followActivityId = "https://bot-test.nachitima.com/activities/follow/123/abc";
+const followActivityId = "https://bot-test.nachitima.com/actors/services/bridge/activities/follow/123-abc";
 
 const undo = buildLemmyCompatibleUnfollowActivity(
   config,
@@ -40,7 +40,7 @@ assert.equal(embeddedFollow.actor, actorUri.href);
 assert.equal(embeddedFollow.object, communityUri);
 assert.deepEqual(embeddedFollow.to, [communityUri]);
 assert.notEqual(typeof undoJson.object, "string");
-assert.match(String(undoJson.id), /^https:\/\/bot-test\.nachitima\.com\/activities\/undo\//);
+assert.match(String(undoJson.id), /^https:\/\/bot-test\.nachitima\.com\/actors\/services\/bridge\/activities\/undo\/follows\//);
 
 for (const fedifyOrigin of [
   "https://bot-test.nachitima.com",
@@ -56,7 +56,7 @@ for (const fedifyOrigin of [
     followActivityId,
   );
   const builtJson = await renderPublicActivityJson(built);
-  assert.match(String(builtJson.id), /^https:\/\/bot-test\.nachitima\.com\/activities\/undo\//);
+  assert.match(String(builtJson.id), /^https:\/\/bot-test\.nachitima\.com\/actors\/services\/bridge\/activities\/undo\/follows\//);
   assert.ok(
     !String(builtJson.id).includes(".comactivities"),
     "Undo id must not concatenate FEDIFY_ORIGIN and activities without a slash",

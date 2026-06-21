@@ -791,7 +791,7 @@ def _migrate_stage4_typed_activitypub_identity(
     object_id_map = _migrate_stage4_published_objects(conn, origin, user_actor_map, community_actor_map)
     _migrate_stage4_message_mappings(conn, origin, user_actor_map, community_actor_map)
     object_id_map.update(_migrate_stage4_local_community_content(conn, origin, community_slug_by_id))
-    _migrate_stage4_profile_update_sources(conn, origin)
+    _migrate_stage4_user_actor_outbound_sources(conn, origin, object_id_map, user_actor_map, community_actor_map)
     _migrate_stage4_content_mutations(conn, origin, object_id_map, user_actor_map, community_actor_map)
     _migrate_stage4_local_community_relay_deliveries(conn, origin, community_slug_by_id)
     _purge_stage4_remote_relationship_state(conn)
@@ -1012,18 +1012,114 @@ def _migrate_stage4_local_community_content(
     return all_object_map
 
 
-def _migrate_stage4_profile_update_sources(conn: Connection, origin: str) -> None:
-    """Migrate retained profile Update activity ids to the typed user grammar."""
+def _migrate_stage4_user_actor_outbound_sources(
+    conn: Connection,
+    origin: str,
+    object_id_map: dict[str, str],
+    user_actor_map: dict[str, str],
+    community_actor_map: dict[str, str],
+) -> None:
+    """Migrate retained User Actor delivery sources and cached AP JSON."""
     source_columns = _table_columns(conn, "user_actor_outbound_sources")
     if not source_columns or not _table_columns(conn, "users"):
         return
-    rows = conn.execute(text("SELECT s.id, s.user_id, s.source_kind, s.logical_version, u.activitypub_username FROM user_actor_outbound_sources s JOIN users u ON u.id=s.user_id")).mappings()
+    rows = list(
+        conn.execute(
+            text(
+                "SELECT s.*, u.activitypub_username, u.actor_url AS user_actor_url, "
+                "p.object_id AS published_object_ap_id, p.activity_id AS published_activity_id, "
+                "p.kind AS published_kind, p.community_actor_url AS published_community_actor_url, "
+                "p.conversation_root_object_id AS published_conversation_root_object_id, "
+                "p.in_reply_to_object_id AS published_in_reply_to_object_id "
+                "FROM user_actor_outbound_sources s "
+                "JOIN users u ON u.id=s.user_id "
+                "LEFT JOIN published_activity_objects p ON p.id=s.published_object_id"
+            )
+        ).mappings()
+    )
     for row in rows:
-        if row["source_kind"] != "profile_update":
-            continue
-        activity_id = build_user_profile_update_activity_id(origin=origin, username=str(row["activitypub_username"]), profile_version_or_activity_id=row["logical_version"])
-        conn.execute(text("UPDATE user_actor_outbound_sources SET activity_id=:activity_id WHERE id=:id"), {"id": row["id"], "activity_id": activity_id})
+        username = str(row["activitypub_username"])
+        source_kind = str(row["source_kind"])
+        old_activity_id = str(row["activity_id"])
+        if source_kind == "profile_update":
+            new_activity_id = build_user_profile_update_activity_id(
+                origin=origin,
+                username=username,
+                profile_version_or_activity_id=row["logical_version"],
+            )
+        else:
+            token = _terminal_id(old_activity_id, origin)
+            object_kind = "comments" if str(row.get("published_kind")) == "comment" else "posts"
+            if source_kind == "content_delete":
+                new_activity_id = (
+                    build_user_delete_comment_activity_id(origin=origin, username=username, activity_id=token)
+                    if object_kind == "comments"
+                    else build_user_delete_post_activity_id(origin=origin, username=username, activity_id=token)
+                )
+            elif source_kind == "content_update":
+                new_activity_id = (
+                    build_user_update_comment_activity_id(origin=origin, username=username, activity_id=token)
+                    if object_kind == "comments"
+                    else build_user_update_post_activity_id(origin=origin, username=username, activity_id=token)
+                )
+            else:
+                new_activity_id = (
+                    build_user_create_comment_activity_id(origin=origin, username=username, activity_id=token)
+                    if object_kind == "comments"
+                    else build_user_create_post_activity_id(origin=origin, username=username, activity_id=token)
+                )
+        typed_user_actor = build_actor_address(
+            origin=origin, kind=LocalActorKind.USER, identifier=username
+        ).actor_url
+        replacements = dict(object_id_map)
+        replacements[old_activity_id] = new_activity_id
+        replacements[str(row["user_actor_url"])] = typed_user_actor
+        if row.get("published_object_ap_id") is not None:
+            # The joined published row has already been migrated in this transaction.
+            replacements[str(row["published_object_ap_id"])] = str(row["published_object_ap_id"])
+        if row.get("published_activity_id") is not None:
+            replacements[str(row["published_activity_id"])] = str(row["published_activity_id"])
+        for maybe_local in (
+            row.get("published_community_actor_url"),
+            row.get("published_conversation_root_object_id"),
+            row.get("published_in_reply_to_object_id"),
+        ):
+            if isinstance(maybe_local, str) and maybe_local in object_id_map:
+                replacements[maybe_local] = object_id_map[maybe_local]
+        snapshot_json = _migrate_stage4_json_column(
+            row.get("snapshot_json"), origin, replacements, user_actor_map, community_actor_map
+        )
+        activity_json = _migrate_stage4_json_column(
+            row.get("activity_json"), origin, replacements, user_actor_map, community_actor_map
+        )
+        conn.execute(
+            text(
+                "UPDATE user_actor_outbound_sources SET activity_id=:activity_id, "
+                "snapshot_json=:snapshot_json, activity_json=:activity_json WHERE id=:id"
+            ),
+            {
+                "id": row["id"],
+                "activity_id": new_activity_id,
+                "snapshot_json": snapshot_json,
+                "activity_json": activity_json,
+            },
+        )
 
+
+def _migrate_stage4_json_column(
+    raw_json: object,
+    origin: str,
+    replacements: dict[str, str],
+    user_actor_map: dict[str, str],
+    community_actor_map: dict[str, str],
+) -> object:
+    parsed = _json_load_or_none(raw_json)
+    if parsed is None:
+        return raw_json
+    migrated = _migrate_stage4_json_value(
+        parsed, origin, replacements, user_actor_map, community_actor_map
+    )
+    return json.dumps(migrated, separators=(",", ":"), sort_keys=True)
 
 
 def _migrate_stage4_content_mutations(
@@ -1246,7 +1342,34 @@ def _migrate_stage4_json_local_url(
     slug = _slug_from_actor_url(value, origin)
     if slug is not None:
         return build_actor_address(origin=origin, kind=LocalActorKind.COMMUNITY, identifier=slug).actor_url
+    actor_child = _stage4_actor_child_url(value, origin)
+    if actor_child is not None:
+        return actor_child
     return value
+
+
+def _stage4_actor_child_url(value: str, origin: str) -> str | None:
+    """Rewrite legacy actor-owned inbox/outbox/followers URLs in cached JSON."""
+    tail = _legacy_tail(value, origin)
+    if tail is None:
+        return None
+    parts = tail.split("/")
+    if not parts or parts[-1] not in {"inbox", "outbox", "followers"}:
+        return None
+    child = parts[-1]
+    if len(parts) == 3 and parts[0] == "actors":
+        address = build_actor_address(origin=origin, kind=LocalActorKind.USER, identifier=parts[1])
+    elif len(parts) == 3 and parts[0] in {"communities", "c"}:
+        address = build_actor_address(origin=origin, kind=LocalActorKind.COMMUNITY, identifier=parts[1])
+    elif len(parts) == 4 and parts[0] == "actors" and parts[1] == "users":
+        address = build_actor_address(origin=origin, kind=LocalActorKind.USER, identifier=parts[2])
+    elif len(parts) == 4 and parts[0] == "actors" and parts[1] == "communities":
+        address = build_actor_address(origin=origin, kind=LocalActorKind.COMMUNITY, identifier=parts[2])
+    elif len(parts) == 4 and parts[0] == "actors" and parts[1] == "services":
+        address = build_actor_address(origin=origin, kind=LocalActorKind.SERVICE, identifier=parts[2])
+    else:
+        return None
+    return getattr(address, f"{child}_url")
 
 def _purge_stage4_remote_relationship_state(conn: Connection) -> None:
     """Remove old local-actor relationship state that cannot be reused safely."""
@@ -1274,7 +1397,7 @@ def _verify_stage4_identity_invariants(conn: Connection, origin: str) -> None:
         ("message_mappings", ("actor_url", "community_actor_url", "activity_id", "object_id")),
         ("local_community_threads", ("ap_activity_id", "ap_object_id")),
         ("local_community_messages", ("ap_activity_id", "ap_object_id", "parent_ap_object_id")),
-        ("user_actor_outbound_sources", ("activity_id",)),
+        ("user_actor_outbound_sources", ("activity_id", "snapshot_json", "activity_json")),
         ("user_actor_content_mutations", ("activity_id", "request_json", "canonical_activity_json")),
         ("local_community_relay_deliveries", ("relay_activity_id",)),
     ]

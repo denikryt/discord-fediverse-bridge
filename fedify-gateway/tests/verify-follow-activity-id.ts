@@ -39,14 +39,16 @@ async function main(): Promise<void> {
     const fakeFederation = {
       createContext() {
         return {
-          getActorUri() {
+          getActorUri(identifier: string) {
+            assert.equal(identifier, "services/bridge");
             return new URL(`${TEST_ORIGIN}/actors/services/bridge`);
           },
           async sendActivity(
-            _sender: object,
+            sender: { username?: string },
             recipient: { id: URL; inboxId: URL },
             activity: { id?: URL },
           ): Promise<void> {
+            assert.equal(sender.username, "services/bridge");
             sentActivities.push({
               recipients: [{ id: recipient.id.href, inboxId: recipient.inboxId.href }],
               activity,
@@ -64,7 +66,7 @@ async function main(): Promise<void> {
 
     assert.match(
       result.followActivityId,
-      /^https:\/\/bot-test\.nachitima\.com\/activities\/follow\/\d+\/[a-z0-9]+$/,
+      /^https:\/\/bot-test\.nachitima\.com\/actors\/services\/bridge\/activities\/follow\/\d+-[a-z0-9]+$/,
     );
     assert.equal(sentActivities.length, 1);
     assert.equal(

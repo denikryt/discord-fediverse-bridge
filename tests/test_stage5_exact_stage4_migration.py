@@ -224,9 +224,10 @@ def test_exact_stage4_delivery_graph_survives_complete_stage5_upgrade(tmp_path) 
         assert source["id"] == 61
         assert source["ordering_key"] == "profile:41"
         assert source["logical_version"] == 7
+        assert source["activity_id"] == "https://bridge.example/actors/users/alice/activities/update/profile/7"
         assert source["snapshot_json"] == '{"displayName":"Alice"}'
         assert source["activity_json"] == (
-            '{"id":"https://bridge.example/activities/profile/7"}'
+            '{"id":"https://bridge.example/actors/users/alice/activities/update/profile/7"}'
         )
         assert delivery["id"] == 71
         assert delivery["status"] == "failed"

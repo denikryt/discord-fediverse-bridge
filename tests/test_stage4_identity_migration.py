@@ -153,3 +153,43 @@ def test_stage4_migration_rewrites_local_community_relay_announce_ids(tmp_path) 
         relay_id = connection.execute(text("SELECT relay_activity_id FROM local_community_relay_deliveries WHERE id=1")).scalar_one()
         assert relay_id == "https://bridge.example/actors/communities/python/activities/announce/posts/relay-1"
     database.close()
+
+
+def test_stage4_migration_rewrites_user_actor_outbound_source_json(tmp_path) -> None:
+    """Ready retained User Actor delivery sources must not emit retired local IDs."""
+    database = Database(f"sqlite:///{tmp_path / 'outbound-sources.db'}")
+    database.create_all()
+    now = "2026-06-21T12:00:00Z"
+    old_actor = "https://bridge.example/actors/alice"
+    old_object = "https://bridge.example/users/alice/objects/posts/post-1"
+    old_create = "https://bridge.example/users/alice/activities/create/posts/create-1"
+    old_update = "https://bridge.example/users/alice/activities/update/posts/update-1"
+    with database.engine.begin() as connection:
+        connection.execute(text("INSERT INTO users (id, discord_user_id, activitypub_username, actor_url, inbox_url, outbox_url, followers_url, public_key_pem, private_key_pem, profile_version, created_at, updated_at) VALUES (1, '1', 'alice', :actor, :inbox, :outbox, :followers, 'public', 'private', 9, :now, :now)"), {"actor": old_actor, "inbox": f"{old_actor}/inbox", "outbox": f"{old_actor}/outbox", "followers": f"{old_actor}/followers", "now": now})
+        connection.execute(text("INSERT INTO published_activity_objects (id, actor_username, actor_url, publication_context, community_actor_url, activity_id, object_id, kind, title, body_markdown, in_reply_to_object_id, conversation_root_object_id, discord_guild_id, discord_channel_id, discord_message_id, content_revision, desired_kind, discord_reconciliation_needed, discord_reconciliation_attempt_count, published_at, created_at) VALUES (1, 'alice', :actor, 'personal_feed', NULL, :activity, :object, 'post', 'old', 'body', NULL, :object, 10, 20, 30, 1, 'update', 0, 0, :now, :now)"), {"actor": old_actor, "activity": old_create, "object": old_object, "now": now})
+        connection.execute(text("INSERT INTO user_actor_outbound_sources (id, user_id, source_kind, ordering_key, logical_version, activity_id, published_object_id, snapshot_json, activity_json, state, render_attempt_count, created_at, updated_at) VALUES (1, 1, 'content_update', 'content:old', 2, :activity, 1, :snapshot, :activity_json, 'ready', 0, :now, :now)"), {
+            "activity": old_update,
+            "snapshot": __import__('json').dumps({"actor": old_actor, "objectId": old_object, "remote": "https://remote.example/users/bob"}, separators=(",", ":"), sort_keys=True),
+            "activity_json": __import__('json').dumps({"id": old_update, "type": "Update", "actor": old_actor, "object": {"id": old_object, "url": old_object}, "to": ["https://remote.example/users/bob"], "cc": [f"{old_actor}/followers"]}, separators=(",", ":"), sort_keys=True),
+            "now": now,
+        })
+
+    config = Stage4IdentityMigrationConfig(public_origin="https://bridge.example", service_actor_identifier="bridge")
+    database.migrate(config)
+    database.migrate(config)
+
+    with database.engine.connect() as connection:
+        row = connection.execute(text("SELECT activity_id, snapshot_json, activity_json FROM user_actor_outbound_sources WHERE id=1")).mappings().one()
+        assert row["activity_id"] == "https://bridge.example/actors/users/alice/activities/update/posts/update-1"
+        snapshot = __import__('json').loads(row["snapshot_json"])
+        assert snapshot["actor"] == "https://bridge.example/actors/users/alice"
+        assert snapshot["objectId"] == "https://bridge.example/actors/users/alice/objects/posts/post-1"
+        assert snapshot["remote"] == "https://remote.example/users/bob"
+        activity = __import__('json').loads(row["activity_json"])
+        assert activity["id"] == row["activity_id"]
+        assert activity["actor"] == "https://bridge.example/actors/users/alice"
+        assert activity["object"]["id"] == snapshot["objectId"]
+        assert activity["object"]["url"] == snapshot["objectId"]
+        assert activity["to"] == ["https://remote.example/users/bob"]
+        assert activity["cc"] == ["https://bridge.example/actors/users/alice/followers"]
+    database.close()

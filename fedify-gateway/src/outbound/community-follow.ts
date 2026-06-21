@@ -11,7 +11,7 @@ import type { Federation } from "@fedify/fedify";
 import type { GatewayConfig } from "../config.js";
 import { appendDebugFileLog } from "../debug-file-log.js";
 import { loadActorKeyPair } from "../actor-store.js";
-import { buildGatewayUrl } from "./gateway-url.js";
+import { buildServiceFollowActivityId, buildServiceUndoFollowActivityId } from "../activitypub-identity-urls.js";
 import { renderPublicActivityJson } from "./activity-json.js";
 import { fetchRemoteCommunity } from "./remote-actor.js";
 import { sendSignedJsonActivity, shouldLogSignedJsonDelivery } from "./signed-json-delivery.js";
@@ -31,7 +31,8 @@ export async function followCommunity(
   // Outbound follow is kept explicit and separate from inbound delivery so the
   // gateway can be pointed at a known community actor before bot commands exist.
   const ctx = federation.createContext(new URL(config.fedifyOrigin), config);
-  const actorUri = ctx.getActorUri(config.actorIdentifier);
+  const serviceActorTail = `services/${config.actorIdentifier}`;
+  const actorUri = ctx.getActorUri(serviceActorTail);
 
   // Fetch the remote actor first because Follow delivery needs both the actor
   // id and its concrete inbox endpoint.
@@ -40,11 +41,10 @@ export async function followCommunity(
   // Build a unique Follow id locally so retries and remote logs can refer to a
   // concrete outbound activity URL.
   const follow = new Follow({
-    // Compose from an absolute path instead of string concatenation so the
-    // operator-facing `FEDIFY_ORIGIN` works with or without a trailing slash.
-    id: buildGatewayUrl(
-      config,
-      `/activities/follow/${Date.now()}/${Math.random().toString(36).slice(2)}`,
+    id: buildServiceFollowActivityId(
+      config.fedifyOrigin,
+      config.actorIdentifier,
+      `${Date.now()}-${Math.random().toString(36).slice(2)}`,
     ),
     actor: actorUri,
     object: new URL(communityId),
@@ -69,7 +69,7 @@ export async function followCommunity(
   // Fedify signs and delivers the activity; this helper only prepares the
   // target identity and object URLs.
   await ctx.sendActivity(
-    { username: config.actorIdentifier },
+    { username: serviceActorTail },
     { id: new URL(communityId), inboxId: new URL(inboxUrl) },
     follow,
   );
@@ -90,7 +90,8 @@ export async function unfollowCommunity(
   followActivityId: string,
 ): Promise<void> {
   const ctx = federation.createContext(new URL(config.fedifyOrigin), config);
-  const actorUri = ctx.getActorUri(config.actorIdentifier);
+  const serviceActorTail = `services/${config.actorIdentifier}`;
+  const actorUri = ctx.getActorUri(serviceActorTail);
 
   const { communityId, inboxUrl } = await fetchRemoteCommunity(communityActorUrl);
 
@@ -121,7 +122,7 @@ export async function unfollowCommunity(
     activity: undoJson,
   });
 
-  const keyPair = await loadActorKeyPair(config, config.actorIdentifier);
+  const keyPair = await loadActorKeyPair(config, serviceActorTail);
   if (keyPair == null) {
     throw new Error("Bridge actor signing key not found");
   }
@@ -151,9 +152,10 @@ export function buildLemmyCompatibleUnfollowActivity(
   // before it deletes the corresponding remote-subscriber row.
   const communityActorUrl = new URL(communityId);
   return new Undo({
-    id: buildGatewayUrl(
-      config,
-      `/activities/undo/${Date.now()}/${Math.random().toString(36).slice(2)}`,
+    id: buildServiceUndoFollowActivityId(
+      config.fedifyOrigin,
+      config.actorIdentifier,
+      `${Date.now()}-${Math.random().toString(36).slice(2)}`,
     ),
     actor: actorUri,
     object: new Follow({
