@@ -70,38 +70,70 @@ function normalizeHostname(hostname: string): string {
 }
 
 function isBlockedRemoteHostname(hostname: string): boolean {
-  if (isLoopbackHostname(hostname)) return true;
-  if (hostname === "localhost" || hostname === "metadata.google.internal") {
-    return true;
-  }
-  const ipVersion = isIP(hostname);
-  if (ipVersion === 0) return false;
-  return ipVersion === 4 ? isBlockedIpv4(hostname) : isBlockedIpv6(hostname);
+  const classified = classifyRemoteHostname(hostname);
+  return classified.kind !== "public";
 }
 
 function isLoopbackHostname(hostname: string): boolean {
-  if (hostname === "localhost" || hostname === "::1") return true;
-  if (hostname.startsWith("127.")) return true;
-  return false;
+  const classified = classifyRemoteHostname(hostname);
+  return classified.kind === "loopback";
 }
 
-function isBlockedIpv4(hostname: string): boolean {
+type RemoteHostnameClassification =
+  | { kind: "public" }
+  | { kind: "loopback" }
+  | { kind: "blocked" };
+
+function classifyRemoteHostname(hostname: string): RemoteHostnameClassification {
+  if (hostname === "localhost") return { kind: "loopback" };
+  if (hostname === "metadata.google.internal") return { kind: "blocked" };
+
+  const mappedIpv4 = parseIpv4MappedIpv6(hostname);
+  if (mappedIpv4 != null) {
+    return classifyIpv4(mappedIpv4);
+  }
+
+  const ipVersion = isIP(hostname);
+  if (ipVersion === 0) return { kind: "public" };
+  return ipVersion === 4 ? classifyIpv4(hostname) : classifyIpv6(hostname);
+}
+
+function classifyIpv4(hostname: string): RemoteHostnameClassification {
   const octets = hostname.split(".").map((part) => Number.parseInt(part, 10));
-  if (octets.length !== 4 || octets.some((part) => !Number.isInteger(part))) {
-    return true;
+  if (octets.length !== 4 || octets.some((part) => !Number.isInteger(part) || part < 0 || part > 255)) {
+    return { kind: "blocked" };
   }
   const [a, b] = octets;
-  if (a === 0 || a === 10 || a === 127) return true;
-  if (a === 169 && b === 254) return true;
-  if (a === 172 && b >= 16 && b <= 31) return true;
-  if (a === 192 && b === 168) return true;
-  if (a === 100 && b >= 64 && b <= 127) return true;
-  return false;
+  if (a === 127) return { kind: "loopback" };
+  if (a === 0 || a === 10) return { kind: "blocked" };
+  if (a === 169 && b === 254) return { kind: "blocked" };
+  if (a === 172 && b >= 16 && b <= 31) return { kind: "blocked" };
+  if (a === 192 && b === 168) return { kind: "blocked" };
+  if (a === 100 && b >= 64 && b <= 127) return { kind: "blocked" };
+  return { kind: "public" };
 }
 
-function isBlockedIpv6(hostname: string): boolean {
+function classifyIpv6(hostname: string): RemoteHostnameClassification {
   const value = hostname.toLowerCase();
-  if (value === "::" || value === "::1") return true;
-  if (value.startsWith("fe80:") || value.startsWith("fc") || value.startsWith("fd")) return true;
-  return false;
+  if (value === "::1") return { kind: "loopback" };
+  if (value === "::") return { kind: "blocked" };
+  if (value.startsWith("fe80:") || value.startsWith("fc") || value.startsWith("fd")) {
+    return { kind: "blocked" };
+  }
+  return { kind: "public" };
+}
+
+function parseIpv4MappedIpv6(hostname: string): string | null {
+  const value = hostname.toLowerCase();
+  const dotted = value.match(/^::ffff:(\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3})$/);
+  if (dotted != null) return dotted[1];
+
+  const hex = value.match(/^::ffff:([0-9a-f]{1,4}):([0-9a-f]{1,4})$/);
+  if (hex == null) return null;
+  const high = Number.parseInt(hex[1], 16);
+  const low = Number.parseInt(hex[2], 16);
+  if (!Number.isInteger(high) || !Number.isInteger(low) || high < 0 || high > 0xffff || low < 0 || low > 0xffff) {
+    return null;
+  }
+  return `${(high >> 8) & 0xff}.${high & 0xff}.${(low >> 8) & 0xff}.${low & 0xff}`;
 }

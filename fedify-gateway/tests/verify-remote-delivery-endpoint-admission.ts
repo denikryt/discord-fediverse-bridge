@@ -26,6 +26,9 @@ function main(): void {
     "https://127.0.0.1/inbox",
     "https://169.254.169.254/latest/meta-data",
     "https://10.0.0.1/inbox",
+    "https://[::ffff:127.0.0.1]/inbox",
+    "https://[::ffff:10.0.0.1]/inbox",
+    "https://[::ffff:169.254.169.254]/inbox",
     "https://bridge.example/accept-user-actor-follow",
   ]) {
     assert.throws(
