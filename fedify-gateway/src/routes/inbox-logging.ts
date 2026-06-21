@@ -10,6 +10,7 @@ import type { Hono } from "hono";
 
 import { storeRawActivity } from "../activitypub-raw-cache.js";
 import { appendDebugFileLog } from "../debug-file-log.js";
+import { parseTypedActorIdentifier, type TypedActorIdentifier } from "../typed-actor-routing.js";
 
 export interface InboxLoggingDependencies {
   isDebug: boolean;
@@ -20,6 +21,10 @@ export interface ActivityPubRequestData {
   activitypubRawBodySha256?: string;
 }
 
+export type InboxPathClassification =
+  | { kind: "shared"; path: "/inbox" }
+  | { kind: "actor"; actor: TypedActorIdentifier; path: string };
+
 /** Register compact /inbox logging immediately before Fedify middleware. */
 export function registerInboxLoggingMiddleware(
   app: Hono,
@@ -28,11 +33,12 @@ export function registerInboxLoggingMiddleware(
   app.use(async (context, next) => {
     const method = context.req.method;
     const path = context.req.path;
+    const classification = classifyInboxPath(method, path);
 
-    if (method === "POST" && path === "/inbox") {
+    if (classification != null) {
       // Always log a compact inbox summary because federation debugging depends
       // on knowing whether the gateway saw Page/Create/Note traffic at all.
-      console.log(`[HTTP] POST /inbox from ${context.req.header("user-agent")}`);
+      console.log(`[HTTP] POST ${classification.path} from ${context.req.header("user-agent")}`);
       const payloadSummary = await readInboxPayloadSummary(context);
       if (payloadSummary != null) {
         console.log("[HTTP] Inbox activity:", {
@@ -44,7 +50,10 @@ export function registerInboxLoggingMiddleware(
         if (dependencies.isDebug) {
           console.log("[HTTP][debug] Inbox payload summary:", payloadSummary);
           appendDebugFileLog("inbox.payload", {
-            path,
+            path: classification.path,
+            inboxKind: classification.kind,
+            actorKind: classification.kind === "actor" ? classification.actor.kind : null,
+            actorIdentifier: classification.kind === "actor" ? classification.actor.identifier : null,
             userAgent: context.req.header("user-agent") ?? null,
             signature: context.req.header("signature") ?? null,
             payloadSummary: payloadSummary as unknown as Record<string, unknown>,
@@ -57,10 +66,11 @@ export function registerInboxLoggingMiddleware(
 
     await next();
 
-    if (dependencies.isDebug && method === "POST" && path === "/inbox") {
+    if (dependencies.isDebug && classification != null) {
       console.log(`[HTTP][debug] Response status: ${context.res.status}`);
       appendDebugFileLog("inbox.response", {
-        path,
+        path: classification.path,
+        inboxKind: classification.kind,
         status: context.res.status,
       });
     }
@@ -71,7 +81,7 @@ export function registerInboxLoggingMiddleware(
 export async function buildActivityPubRequestData(
   context: RawRequestContext,
 ): Promise<ActivityPubRequestData> {
-  if (!isInboxPost(context.req.raw.method, context.req.raw.url)) {
+  if (classifyInboxPath(context.req.raw.method, context.req.raw.url) == null) {
     return {};
   }
 
@@ -101,6 +111,40 @@ export async function buildActivityPubRequestData(
   }
 }
 
+/** Classify shared and future typed actor inbox POST paths for raw capture. */
+export function classifyInboxPath(
+  method: string,
+  url: string,
+): InboxPathClassification | null {
+  if (method !== "POST") {
+    return null;
+  }
+
+  let path: string;
+  try {
+    path = new URL(url, "http://activitypub.local").pathname;
+  } catch {
+    return null;
+  }
+
+  if (path === "/inbox") {
+    return { kind: "shared", path };
+  }
+
+  const prefix = "/actors/";
+  const suffix = "/inbox";
+  if (!path.startsWith(prefix) || !path.endsWith(suffix)) {
+    return null;
+  }
+
+  const tail = path.slice(prefix.length, -suffix.length);
+  const actor = parseTypedActorIdentifier(tail);
+  if (actor == null) {
+    return null;
+  }
+  return { kind: "actor", actor, path };
+}
+
 interface InboxPayloadSummary {
   type: string | null;
   id: string | null;
@@ -121,10 +165,6 @@ async function readInboxPayloadSummary(
   } catch {
     return null;
   }
-}
-
-function isInboxPost(method: string, url: string): boolean {
-  return method === "POST" && new URL(url).pathname === "/inbox";
 }
 
 function summarizeInboxPayload(

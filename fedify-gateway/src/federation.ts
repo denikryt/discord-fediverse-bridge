@@ -454,6 +454,16 @@ function asString(value: unknown): string | null {
   return typeof value === "string" ? value : null;
 }
 
+function asUrlString(value: unknown): string | null {
+  if (typeof value === "string") {
+    return value;
+  }
+  if (value instanceof URL) {
+    return value.href;
+  }
+  return null;
+}
+
 function logDebug(isDebug: boolean, message: string): void {
   if (isDebug) {
     console.log(`[Fedify][debug] ${message}`);
@@ -518,7 +528,10 @@ export async function buildLocalFollowRequestedEvent(
   const remoteInboxUrl = remoteActor?.inboxId?.href;
   if (remoteInboxUrl == null) return null;
   const endpoints = asRecord((remoteActor as unknown as Record<string, unknown>)?.endpoints);
-  const remoteSharedInboxUrl = asString(endpoints?.sharedInbox);
+  // Fedify materializes endpoints.sharedInbox as a URL for real dereferenced
+  // actor documents, while earlier tests used a plain string fixture. Accept
+  // both shapes without trusting any inbox value from the Follow payload.
+  const remoteSharedInboxUrl = asUrlString(endpoints?.sharedInbox);
 
   return {
     actor_id: remoteActorId,
