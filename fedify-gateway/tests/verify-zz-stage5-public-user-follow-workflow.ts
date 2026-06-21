@@ -28,6 +28,7 @@ const BOB_SHARED_INBOX = "https://remote.example/inbox";
 const MALLORY_ACTOR = "https://remote.example/users/mallory";
 const UNSAFE_ACTOR = "https://unsafe.example/users/bob";
 const OTHER_ACTOR = "https://other.example/users/mallory";
+const BOB_IMPERSONATOR_ACTOR = `${BOB_ACTOR}/impersonator`;
 
 interface CapturedBridgeEvent {
   event_type?: string;
@@ -60,6 +61,7 @@ async function main(): Promise<void> {
     await assertMismatchedActorDocumentRejected(app, remoteKeys.privateKey, python);
     await assertUnsafeEndpointRejected(app, remoteKeys.privateKey, python);
     await assertUnsignedPublicUndoRejectedWithoutPythonEvent(app, python);
+    await assertSignedUndoReachesPublicListener(app, remoteKeys.privateKey, python);
   } finally {
     restoreFetch();
     await python.close();
@@ -165,7 +167,7 @@ async function assertUnsignedPublicUndoRejectedWithoutPythonEvent(
   const before = python.events.length;
   const undo = {
     "@context": "https://www.w3.org/ns/activitystreams",
-    id: "https://remote.example/activities/undo/1",
+    id: "https://remote.example/activities/undo/unsigned",
     type: "Undo",
     actor: BOB_ACTOR,
     object: buildFollow("https://remote.example/activities/follow/1", BOB_ACTOR),
@@ -189,6 +191,52 @@ async function assertUnsignedPublicUndoRejectedWithoutPythonEvent(
   assert.equal(body.totalItems, 1);
 }
 
+async function assertMismatchedSignedUndoRejectedWithoutPythonEvent(
+  app: ReturnType<typeof createGatewayApp>,
+  privateKey: CryptoKey,
+  python: PythonFixture,
+): Promise<void> {
+  const before = python.events.length;
+  const undo = buildUndo(
+    "https://remote.example/activities/undo/mismatch",
+    MALLORY_ACTOR,
+    buildFollow("https://remote.example/activities/follow/1", BOB_ACTOR),
+  );
+  const response = await app.fetch(await signedActivityRequest(undo, privateKey, `${MALLORY_ACTOR}#main-key`));
+  assert.ok([202, 204, 401].includes(response.status), `mismatched public Undo should fail closed at public boundary, got ${response.status}`);
+  await wait(5500);
+  assert.equal(python.events.length, before, "Undo actor must match embedded Follow actor before emitting a Python event");
+  assert.deepEqual(python.followers, [BOB_ACTOR]);
+}
+
+async function assertSignedUndoReachesPublicListener(
+  app: ReturnType<typeof createGatewayApp>,
+  privateKey: CryptoKey,
+  python: PythonFixture,
+): Promise<void> {
+  const undo = buildUndo(
+    "https://remote.example/activities/undo/1",
+    BOB_ACTOR,
+    buildFollow("https://remote.example/activities/follow/1", BOB_ACTOR),
+  );
+  const response = await app.fetch(await signedActivityRequest(undo, privateKey, `${BOB_ACTOR}#main-key`));
+  assert.ok([202, 204].includes(response.status), `signed public Undo should be accepted, got ${response.status}`);
+
+  const event = await waitForEvent(python, "local.unfollow_requested", 1);
+  assert.equal(event.target_actor_kind, "user");
+  assert.equal(event.target_actor_id, ALICE_ACTOR);
+  assert.equal(event.actor_id, BOB_ACTOR);
+  assert.equal(event.object?.follow_activity_id, "https://remote.example/activities/follow/1");
+  assert.deepEqual(python.followers, [], "signed public Undo must remove Bob from the fixture relationship state");
+
+  const followers = await app.request("/actors/users/alice/followers", {
+    headers: { Accept: "application/activity+json" },
+  });
+  assert.equal(followers.status, 200);
+  const body = await followers.json() as Record<string, unknown>;
+  assert.equal(body.totalItems, 0);
+}
+
 function buildFollow(id: string, actor: string, extra: Record<string, unknown> = {}): Record<string, unknown> {
   return {
     "@context": "https://www.w3.org/ns/activitystreams",
@@ -198,6 +246,16 @@ function buildFollow(id: string, actor: string, extra: Record<string, unknown> =
     object: ALICE_ACTOR,
     to: ALICE_ACTOR,
     ...extra,
+  };
+}
+
+function buildUndo(id: string, actor: string, follow: Record<string, unknown>): Record<string, unknown> {
+  return {
+    "@context": "https://www.w3.org/ns/activitystreams",
+    id,
+    type: "Undo",
+    actor,
+    object: follow,
   };
 }
 
@@ -233,11 +291,20 @@ function installRemoteActorFetch(publicKeyPem: string): () => void {
     if (url === ALICE_ACTOR) {
       return activityJsonResponse(buildActorDocument(ALICE_ACTOR, `${ALICE_ACTOR}/inbox`, publicKeyPem, null));
     }
+    if (url === "https://remote.example/activities/follow/1") {
+      return activityJsonResponse(buildFollow("https://remote.example/activities/follow/1", BOB_ACTOR));
+    }
+    if (url === "https://remote.example/activities/follow/unsigned") {
+      return activityJsonResponse(buildFollow("https://remote.example/activities/follow/unsigned", BOB_ACTOR));
+    }
     if (url === BOB_ACTOR || url === `${BOB_ACTOR}#main-key`) {
       return activityJsonResponse(buildActorDocument(BOB_ACTOR, BOB_INBOX, publicKeyPem, BOB_SHARED_INBOX));
     }
     if (url === MALLORY_ACTOR || url === `${MALLORY_ACTOR}#main-key` || url === OTHER_ACTOR || url === `${OTHER_ACTOR}#main-key`) {
       return activityJsonResponse(buildActorDocument(OTHER_ACTOR, "https://remote.example/users/mallory/inbox", publicKeyPem, null));
+    }
+    if (url === BOB_IMPERSONATOR_ACTOR || url === `${BOB_IMPERSONATOR_ACTOR}#main-key`) {
+      return activityJsonResponse(buildActorDocument(BOB_IMPERSONATOR_ACTOR, "https://remote.example/users/bob/impersonator/inbox", publicKeyPem, null));
     }
     if (url === UNSAFE_ACTOR || url === `${UNSAFE_ACTOR}#main-key`) {
       return activityJsonResponse(buildActorDocument(UNSAFE_ACTOR, "https://[::ffff:127.0.0.1]/accept-user-actor-follow", publicKeyPem, null));
@@ -412,5 +479,10 @@ function toPem(label: string, bytes: Buffer): string {
   return `-----BEGIN ${label}-----\n${wrapped}\n-----END ${label}-----\n`;
 }
 
-await main();
-process.exit(0);
+void main().then(
+  () => process.exit(0),
+  (error) => {
+    console.error(error);
+    process.exit(1);
+  },
+);

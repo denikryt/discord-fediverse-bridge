@@ -267,10 +267,13 @@ export function createGatewayFederation(
       });
     })
     .on(Undo, async (ctx, activity) => {
+      const activityId = activity.id?.href;
+      const cachedRaw = activityId == null ? null : getRawActivity(activityId);
+      const rawForUndo = asRecord(cachedRaw?.rawJson ?? ctx.data.activitypubRawJson);
       const event = await buildLocalUnfollowRequestedEvent(
         config,
         activity,
-        asRecord(ctx.data.activitypubRawJson),
+        rawForUndo,
       );
       if (event == null) {
         return;
