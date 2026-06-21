@@ -10,6 +10,15 @@ import type { Socket } from "node:net";
 import type { DocumentLoader } from "@fedify/vocab";
 import { preloadedContexts } from "@fedify/vocab-runtime";
 
+export interface RemoteActorFixtureOptions {
+  /** Override actor document id to exercise hostile identity binding. */
+  actorDocumentId?: string;
+  /** Override actor document inbox to exercise endpoint admission. */
+  inboxUrl?: string;
+  /** Override actor document sharedInbox to exercise endpoint admission. */
+  sharedInboxUrl?: string | null;
+}
+
 export interface RemoteActorFixture {
   /** Origin of the ephemeral fake remote server. */
   origin: string;
@@ -40,12 +49,12 @@ eQIDAQAB
 -----END PUBLIC KEY-----`;
 
 /** Start Bob's fake remote actor document and inbox endpoints. */
-export async function startRemoteActorFixture(): Promise<RemoteActorFixture> {
+export async function startRemoteActorFixture(options: RemoteActorFixtureOptions = {}): Promise<RemoteActorFixture> {
   const capturedPosts = new Map<string, string[]>();
   const sockets = new Set<Socket>();
 
   const server = createServer(async (request, response) => {
-    await routeRemoteActorRequest(request, response, capturedPosts, server);
+    await routeRemoteActorRequest(request, response, capturedPosts, server, options);
   });
   server.on("connection", (socket) => {
     sockets.add(socket);
@@ -67,8 +76,8 @@ export async function startRemoteActorFixture(): Promise<RemoteActorFixture> {
   return {
     origin,
     actorId: `${origin}/users/bob`,
-    inboxUrl: `${origin}/users/bob/inbox`,
-    sharedInboxUrl: `${origin}/inbox`,
+    inboxUrl: options.inboxUrl ?? `${origin}/users/bob/inbox`,
+    sharedInboxUrl: options.sharedInboxUrl ?? `${origin}/inbox`,
     publicKeyId: `${origin}/users/bob#main-key`,
     capturedPosts,
     documentLoader: async (url, options) => {
@@ -111,6 +120,7 @@ async function routeRemoteActorRequest(
   response: ServerResponse,
   capturedPosts: Map<string, string[]>,
   server: Server,
+  options: RemoteActorFixtureOptions,
 ): Promise<void> {
   const address = server.address();
   if (address == null || typeof address === "string") {
@@ -120,7 +130,7 @@ async function routeRemoteActorRequest(
   const url = new URL(request.url ?? "/", origin);
 
   if (request.method === "GET" && url.pathname === "/users/bob") {
-    return json(response, buildBobActorDocument(origin));
+    return json(response, buildBobActorDocument(origin, options));
   }
 
   if (request.method === "POST" && (url.pathname === "/users/bob/inbox" || url.pathname === "/inbox")) {
@@ -137,25 +147,28 @@ async function routeRemoteActorRequest(
   response.end("not found");
 }
 
-function buildBobActorDocument(origin: string): Record<string, unknown> {
-  return {
+function buildBobActorDocument(origin: string, options: RemoteActorFixtureOptions): Record<string, unknown> {
+  const document: Record<string, unknown> = {
     "@context": [
       "https://www.w3.org/ns/activitystreams",
       "https://w3id.org/security/v1",
     ],
-    id: `${origin}/users/bob`,
+    id: options.actorDocumentId ?? `${origin}/users/bob`,
     type: "Person",
     preferredUsername: "bob",
-    inbox: `${origin}/users/bob/inbox`,
-    endpoints: {
-      sharedInbox: `${origin}/inbox`,
-    },
+    inbox: options.inboxUrl ?? `${origin}/users/bob/inbox`,
     publicKey: {
       id: `${origin}/users/bob#main-key`,
-      owner: `${origin}/users/bob`,
+      owner: options.actorDocumentId ?? `${origin}/users/bob`,
       publicKeyPem: FIXTURE_PUBLIC_KEY_PEM,
     },
   };
+  if (options.sharedInboxUrl !== null) {
+    document.endpoints = {
+      sharedInbox: options.sharedInboxUrl ?? `${origin}/inbox`,
+    };
+  }
+  return document;
 }
 
 async function readBody(request: IncomingMessage): Promise<string> {

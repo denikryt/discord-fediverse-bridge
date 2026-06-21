@@ -66,6 +66,21 @@ assert_location_has_proxy "$single_out" "location ^~ /.well-known/discord-fedive
 assert_location_has_proxy "$single_out" "location ^~ /actors/" "proxy_pass http://127.0.0.1:3100;"
 assert_location_has_proxy "$single_out" "location ^~ /inbox" "proxy_pass http://127.0.0.1:3100;"
 assert_location_not_gateway "$single_out" "location /" "proxy_pass http://127.0.0.1:3100;"
+for internal_gateway_route in \
+    /accept-user-actor-follow \
+    /send-user-actor-deliveries \
+    /render-user-actor-profile-update \
+    /follow-community \
+    /unfollow-community \
+    /publish \
+    /update \
+    /delete; do
+    if grep -Fq "location" "$single_out" && grep -Fq "$internal_gateway_route" "$single_out"; then
+        echo "Internal gateway route $internal_gateway_route must not be publicly routed" >&2
+        cat "$single_out" >&2
+        exit 1
+    fi
+done
 assert_contains "$single_out" "location ^~ /internal/ { return 404; }"
 
 legacy_env="$TMP_DIR/legacy.env"

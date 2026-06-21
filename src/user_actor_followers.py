@@ -6,6 +6,10 @@ import logging
 from urllib.parse import urlparse
 
 from .inbound_activity_outcomes import InboundActivityOutcome
+from .remote_delivery_endpoints import (
+    RemoteDeliveryEndpointError,
+    admit_remote_delivery_endpoint,
+)
 from .runtime_ports import DiscordUserLookupPort
 
 logger = logging.getLogger(__name__)
@@ -41,6 +45,27 @@ class UserActorFollowService:
                 InboundActivityOutcome.IGNORED_UNKNOWN_FOLLOW,
                 "unknown local user actor",
             )
+        # Endpoint admission happens before persistence and before the immediate
+        # Accept side effect so the social graph never stores an SSRF-capable
+        # remote inbox for later fanout or direct Accept delivery.
+        try:
+            admitted_inbox_url = admit_remote_delivery_endpoint(
+                remote_inbox_url, local_origin=target_actor_id
+            )
+            admitted_shared_inbox_url = (
+                None
+                if remote_shared_inbox_url is None
+                else admit_remote_delivery_endpoint(
+                    remote_shared_inbox_url, local_origin=target_actor_id
+                )
+            )
+        except RemoteDeliveryEndpointError as exc:
+            return HandlerResult(
+                "skipped",
+                InboundActivityOutcome.IGNORED_UNMAPPED_CONTEXT,
+                str(exc),
+            )
+
         # The immediate transaction makes ledger ownership and relationship refresh
         # one atomic decision under concurrent duplicate deliveries.
         try:
@@ -49,8 +74,8 @@ class UserActorFollowService:
                     session,
                     user_id=user.id,
                     remote_actor_id=remote_actor_id,
-                    remote_inbox_url=remote_inbox_url,
-                    remote_shared_inbox_url=remote_shared_inbox_url,
+                    remote_inbox_url=admitted_inbox_url,
+                    remote_shared_inbox_url=admitted_shared_inbox_url,
                     follow_activity_id=follow_activity_id,
                 )
         except Exception as exc:
@@ -76,7 +101,7 @@ class UserActorFollowService:
             actor_username=user.activitypub_username,
             actor_url=user.actor_url,
             remote_actor_id=remote_actor_id,
-            remote_inbox_url=remote_inbox_url,
+            remote_inbox_url=admitted_inbox_url,
             follow_activity_id=follow_activity_id,
         )
         claimed = self.database.user_actor_followers.claim_notification_attempt(

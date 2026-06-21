@@ -47,7 +47,9 @@ async function main(): Promise<void> {
       contextLoader: remote.documentLoader,
     });
 
-    const event = await buildLocalFollowRequestedEvent(config, activity);
+    const event = await buildLocalFollowRequestedEvent(config, activity, {
+      allowHttpLoopbackForTests: true,
+    });
     assert.ok(event != null);
     assert.equal(event.target_actor_kind, "user");
     assert.equal(event.target_actor_id, `${TEST_ORIGIN}actors/users/alice`);
@@ -55,12 +57,61 @@ async function main(): Promise<void> {
     assert.equal(event.object.follow_activity_id, `${remote.origin}/activities/follow/1`);
     assert.equal(event.object.remote_inbox_url, remote.inboxUrl);
     assert.equal(event.object.remote_shared_inbox_url, remote.sharedInboxUrl);
+    await assertMismatchedDereferencedActorIsRejected(config);
+    await assertPrivateEndpointIsRejected(config);
   } finally {
     await remote.close();
     await closeAllPythonBridgeFixtures();
   }
 
   console.log("verify:remote-actor-dereference-fixture passed");
+}
+
+/** Prove the Follow actor principal must match the fetched actor document id. */
+async function assertMismatchedDereferencedActorIsRejected(config: GatewayConfig): Promise<void> {
+  const hostile = await startRemoteActorFixture({
+    actorDocumentId: "https://other.example/users/mallory",
+  });
+  try {
+    const activity = new Follow({
+      id: new URL(`${hostile.origin}/activities/follow/confused`),
+      actor: new URL(hostile.actorId),
+      object: new URL(`${TEST_ORIGIN}actors/users/alice`),
+    }, {
+      documentLoader: hostile.documentLoader,
+      contextLoader: hostile.documentLoader,
+    });
+    const event = await buildLocalFollowRequestedEvent(config, activity, {
+      allowHttpLoopbackForTests: true,
+    });
+    assert.equal(event, null, "Follow actor and dereferenced actor id must match");
+  } finally {
+    await hostile.close();
+  }
+}
+
+/** Prove actor-document inboxes still pass through outbound endpoint admission. */
+async function assertPrivateEndpointIsRejected(config: GatewayConfig): Promise<void> {
+  const hostile = await startRemoteActorFixture({
+    inboxUrl: "http://169.254.169.254/latest/meta-data",
+    sharedInboxUrl: null,
+  });
+  try {
+    const activity = new Follow({
+      id: new URL(`${hostile.origin}/activities/follow/ssrf`),
+      actor: new URL(hostile.actorId),
+      object: new URL(`${TEST_ORIGIN}actors/users/alice`),
+    }, {
+      documentLoader: hostile.documentLoader,
+      contextLoader: hostile.documentLoader,
+    });
+    const event = await buildLocalFollowRequestedEvent(config, activity, {
+      allowHttpLoopbackForTests: true,
+    });
+    assert.equal(event, null, "private metadata endpoints must not produce a Python event");
+  } finally {
+    await hostile.close();
+  }
 }
 
 /** Build a pre-cutover registered user row for target actor resolution. */

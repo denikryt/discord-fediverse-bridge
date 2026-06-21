@@ -210,3 +210,45 @@ async def test_undo_and_refollow_create_a_new_relationship_incarnation(follow_ru
 
     assert first is not None and second is not None and second.id != first.id
     assert len(bot.user.messages) == 2
+
+
+@pytest.mark.asyncio
+async def test_follow_rejects_private_remote_inbox_before_persistence(follow_runtime):
+    """A dereferenced inbox on a private network cannot create a follower or Accept."""
+    runtime, user, gateway, _bot = follow_runtime
+    event = _follow(follow_id="https://remote.example/follows/private")
+    event.object.remote_inbox_url = "https://169.254.169.254/latest/meta-data"
+    event.object.remote_shared_inbox_url = None
+
+    result = await dispatch_activitypub_event(event, runtime)
+
+    assert result.status == "skipped"
+    assert (
+        runtime.database.user_actor_followers.get_relationship(
+            user_id=user.id, remote_actor_id="https://remote.example/actors/users/bob"
+        )
+        is None
+    )
+    assert gateway.accepts == []
+
+
+@pytest.mark.asyncio
+async def test_duplicate_follow_refreshes_dereferenced_shared_inbox(follow_runtime):
+    """A repeat Follow updates Bob's current actor-document endpoint snapshot."""
+    runtime, user, gateway, _bot = follow_runtime
+    await dispatch_activitypub_event(
+        _follow(follow_id="https://remote.example/follows/refresh-1"), runtime
+    )
+    refreshed = _follow(follow_id="https://remote.example/follows/refresh-2")
+    refreshed.object.remote_shared_inbox_url = "https://remote.example/new-shared-inbox"
+
+    await dispatch_activitypub_event(refreshed, runtime)
+
+    row = runtime.database.user_actor_followers.get_relationship(
+        user_id=user.id, remote_actor_id="https://remote.example/actors/users/bob"
+    )
+    assert row is not None
+    assert row.remote_shared_inbox_url == "https://remote.example/new-shared-inbox"
+    assert gateway.accepts[-1]["remote_inbox_url"] == (
+        "https://remote.example/actors/users/bob/inbox"
+    )

@@ -15,6 +15,7 @@ import type { GatewayConfig } from "../config.js";
 import { loadActorKeyPair, loadUserActorIdentity } from "../actor-store.js";
 import { loadLocalCommunitySigningKey } from "../local-community-keys.js";
 import type { AcceptLocalCommunityFollowRequest, AcceptUserActorFollowRequest } from "../types.js";
+import { admitRemoteDeliveryEndpoint } from "../remote-delivery-endpoints.js";
 import { buildGatewayUrl } from "./gateway-url.js";
 
 /** Send a deterministic Accept(Follow) as one registered User Actor. */
@@ -41,10 +42,13 @@ export async function acceptUserActorFollow(
       object: new URL(request.actorUrl),
     }),
   });
+  const admittedInboxUrl = admitRemoteDeliveryEndpoint(request.remoteInboxUrl, {
+    localOrigin: config.fedifyOrigin,
+  });
   const ctx = federation.createContext(new URL(config.fedifyOrigin), config);
   await ctx.sendActivity(
     [{ keyId: new URL(`${request.actorUrl}#main-key`), privateKey: keyPair.privateKey }],
-    { id: new URL(request.remoteActorId), inboxId: new URL(request.remoteInboxUrl) },
+    { id: new URL(request.remoteActorId), inboxId: new URL(admittedInboxUrl) },
     accept,
   );
 }

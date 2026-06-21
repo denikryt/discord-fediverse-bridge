@@ -29,6 +29,7 @@ import {
   normalizeDeleteActivityFromJson,
 } from "./normalize.js";
 import { getPythonBridgeClient } from "./python-bridge-client.js";
+import { admitRemoteDeliveryEndpoint, type RemoteEndpointAdmissionOptions } from "./remote-delivery-endpoints.js";
 import { parseTypedActorIdentifier } from "./typed-actor-routing.js";
 import type {
   BridgeContentEvent,
@@ -511,6 +512,7 @@ export function buildFollowAcceptedEvent(
 export async function buildLocalFollowRequestedEvent(
   config: GatewayContextData,
   activity: Follow,
+  endpointAdmission: RemoteEndpointAdmissionOptions = {},
 ): Promise<LocalFollowRequestedEvent | null> {
   const targetActorId = activity.objectId?.href;
   const remoteActorId = activity.actorId?.href;
@@ -526,6 +528,9 @@ export async function buildLocalFollowRequestedEvent(
   if (targetKind == null) return null;
 
   const remoteActor = await activity.getActor({ suppressError: true });
+  const dereferencedActorId = asUrlString(
+    (remoteActor as unknown as Record<string, unknown> | null)?.id,
+  );
   const remoteInboxUrl = remoteActor?.inboxId?.href;
   if (remoteInboxUrl == null) return null;
   const endpoints = asRecord((remoteActor as unknown as Record<string, unknown>)?.endpoints);
@@ -533,6 +538,31 @@ export async function buildLocalFollowRequestedEvent(
   // actor documents, while earlier tests used a plain string fixture. Accept
   // both shapes without trusting any inbox value from the Follow payload.
   const remoteSharedInboxUrl = asUrlString(endpoints?.sharedInbox);
+  let admittedInboxUrl = remoteInboxUrl;
+  let admittedSharedInboxUrl = remoteSharedInboxUrl;
+  if (targetKind === "user") {
+    if (dereferencedActorId !== remoteActorId) {
+      // The same remote principal must own the activity, actor document, inbox,
+      // persisted follower identity, and later delivery endpoint.  Stage 5
+      // enforces this for User Actor follows without changing Stage 6 community
+      // semantics early.
+      return null;
+    }
+    try {
+      admittedInboxUrl = admitRemoteDeliveryEndpoint(remoteInboxUrl, {
+        ...endpointAdmission,
+        localOrigin: config.fedifyOrigin,
+      });
+      admittedSharedInboxUrl = remoteSharedInboxUrl == null
+        ? null
+        : admitRemoteDeliveryEndpoint(remoteSharedInboxUrl, {
+          ...endpointAdmission,
+          localOrigin: config.fedifyOrigin,
+        });
+    } catch {
+      return null;
+    }
+  }
 
   return {
     actor_id: remoteActorId,
@@ -542,8 +572,8 @@ export async function buildLocalFollowRequestedEvent(
     event_type: "local.follow_requested",
     object: {
       follow_activity_id: activity.id.href,
-      remote_inbox_url: remoteInboxUrl,
-      remote_shared_inbox_url: remoteSharedInboxUrl,
+      remote_inbox_url: admittedInboxUrl,
+      remote_shared_inbox_url: admittedSharedInboxUrl,
     },
     occurred_at: new Date().toISOString(),
   };
