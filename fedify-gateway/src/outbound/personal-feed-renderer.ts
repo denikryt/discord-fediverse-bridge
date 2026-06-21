@@ -27,12 +27,12 @@ export function renderPersonalFeedCreate(
   // comments. Python owns persistence and delivery; the gateway owns canonical
   // ActivityStreams construction without loading signing keys.
   const origin = new URL(config.fedifyOrigin).origin;
-  const actorId = new URL(`/actors/${encodeURIComponent(request.actorUsername)}`, origin).href;
+  const actorId = new URL(`/actors/users/${encodeURIComponent(request.actorUsername)}`, origin).href;
   const followersId = `${actorId}/followers`;
   const kind = request.kind ?? "post";
-  const objectSegment = kind === "comment" ? "comment" : "post";
-  const expectedObjectId = new URL(`/users/${encodeURIComponent(request.actorUsername)}/${objectSegment}/${request.operationId}`, origin).href;
-  const expectedActivityId = new URL(`/users/${encodeURIComponent(request.actorUsername)}/activities/create/${objectSegment}/${request.operationId}`, origin).href;
+  const objectSegment = kind === "comment" ? "comments" : "posts";
+  const expectedObjectId = new URL(`/actors/users/${encodeURIComponent(request.actorUsername)}/objects/${objectSegment}/${request.operationId}`, origin).href;
+  const expectedActivityId = new URL(`/actors/users/${encodeURIComponent(request.actorUsername)}/activities/create/${objectSegment}/${request.operationId}`, origin).href;
   if (request.objectId !== expectedObjectId || request.activityId !== expectedActivityId) {
     throw new Error("personal-feed IDs do not match canonical origin/path");
   }

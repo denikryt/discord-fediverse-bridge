@@ -96,7 +96,7 @@ def _publish_results(
     """Build gateway publish results for deterministic AP ids in scenarios."""
     return [
         PublishLocalCommunityContentResult(
-            a, o, "https://bridge.example/communities/hackers", 0, 0
+            a, o, "https://bridge.example/actors/communities/hackers", 0, 0
         )
         for a, o in pairs
     ]
@@ -644,7 +644,7 @@ async def test_local_subscriber_source_edit_delete_is_stage5_authoritative(
     )
     database.activitypub_objects.create_published_activity_object(
         actor_username="alice",
-        actor_url="https://bridge.example/actors/alice",
+        actor_url="https://bridge.example/actors/users/alice",
         community_actor_url=local_community.actor_url,
         activity_id="a-post",
         object_id="o-post",

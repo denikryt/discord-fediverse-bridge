@@ -16,6 +16,7 @@ from .db.database import Database
 from .db.repositories.user_profiles import UserProfileView
 from .models import ProfileMediaAsset, User, UserProfileField
 from .profile_media import FileLock, ProfileMediaStore
+from .activitypub_identity_urls import build_user_profile_update_activity_id
 
 if TYPE_CHECKING:
     from .user_actor_delivery import ProfileFanoutSummary, UserActorDeliveryService
@@ -212,9 +213,12 @@ class UserProfileService:
                 else None
             )
             snapshot = self._snapshot(user, fields, avatar, header)
-            activity_id = (
-                f"{self.public_origin}/activities/user-profile-update/"
-                f"{user.id}/{user.profile_version}"
+            # Profile Update IDs are externally visible delivery source ids and
+            # must follow the typed User Actor grammar after the Stage 4 cutover.
+            activity_id = build_user_profile_update_activity_id(
+                origin=self.public_origin,
+                username=str(user.activitypub_username),
+                profile_version_or_activity_id=str(user.profile_version),
             )
             followers = self.database.user_actor_followers.list_accepted_for_snapshot(
                 session, user_id=user_id

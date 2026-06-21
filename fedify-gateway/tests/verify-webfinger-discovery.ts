@@ -68,10 +68,10 @@ async function main(): Promise<void> {
       [
         "123",
         "alice",
-        `${TEST_ORIGIN}actors/alice`,
-        `${TEST_ORIGIN}actors/alice/inbox`,
-        `${TEST_ORIGIN}actors/alice/outbox`,
-        `${TEST_ORIGIN}actors/alice/followers`,
+        `${TEST_ORIGIN}actors/users/alice`,
+        `${TEST_ORIGIN}actors/users/alice/inbox`,
+        `${TEST_ORIGIN}actors/users/alice/outbox`,
+        `${TEST_ORIGIN}actors/users/alice/followers`,
         await exportPublicKeyPem(bridgeKeys.publicKey),
         await exportPrivateKeyPem(bridgeKeys.privateKey),
       ],
@@ -99,10 +99,10 @@ async function main(): Promise<void> {
         "hackers",
         "Hackers",
         "A local hackerspace forum.",
-        `${TEST_ORIGIN}communities/hackers`,
-        `${TEST_ORIGIN}communities/hackers/inbox`,
-        `${TEST_ORIGIN}communities/hackers/outbox`,
-        `${TEST_ORIGIN}communities/hackers/followers`,
+        `${TEST_ORIGIN}actors/communities/hackers`,
+        `${TEST_ORIGIN}actors/communities/hackers/inbox`,
+        `${TEST_ORIGIN}actors/communities/hackers/outbox`,
+        `${TEST_ORIGIN}actors/communities/hackers/followers`,
         await exportPublicKeyPem(bridgeKeys.publicKey),
         await exportPrivateKeyPem(bridgeKeys.privateKey),
         "active",
@@ -110,7 +110,7 @@ async function main(): Promise<void> {
     );
     seedBridgeActorJwk(
       db,
-      `${TEST_ORIGIN}actors/bridge`,
+      `${TEST_ORIGIN}actors/services/bridge`,
       JSON.stringify(await exportJwk(bridgeKeys.privateKey)),
       JSON.stringify(await exportJwk(bridgeKeys.publicKey)),
     );
@@ -136,22 +136,22 @@ async function main(): Promise<void> {
   await assertWebFingerSelfLink(
     app,
     `acct:bridge@discord-bridge.example.com`,
-    `${TEST_ORIGIN}actors/bridge`,
+    `${TEST_ORIGIN}actors/services/bridge`,
   );
   await assertWebFingerSelfLink(
     app,
     `acct:alice@discord-bridge.example.com`,
-    `${TEST_ORIGIN}actors/alice`,
+    `${TEST_ORIGIN}actors/users/alice`,
   );
   await assertWebFingerSelfLink(
     app,
     `acct:!hackers@discord-bridge.example.com`,
-    `${TEST_ORIGIN}communities/hackers`,
+    `${TEST_ORIGIN}actors/communities/hackers`,
   );
   await assertWebFingerSelfLink(
     app,
     `acct:hackers@discord-bridge.example.com`,
-    `${TEST_ORIGIN}communities/hackers`,
+    `${TEST_ORIGIN}actors/communities/hackers`,
   );
 
   const communityAliasResponse = await app.request(

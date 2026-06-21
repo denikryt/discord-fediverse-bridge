@@ -98,7 +98,7 @@ def _post_event(*, suffix: str = "1") -> ActivityPubEvent:
             "source_activity_id": source["id"],
             "source_announce_id": "https://lemmy.example/activities/announce/1",
             "occurred_at": "2026-05-19T10:00:00Z",
-            "community_actor_id": "https://bridge.example/communities/hackers",
+            "community_actor_id": "https://bridge.example/actors/communities/hackers",
             "actor_id": "https://lemmy.example/u/bob",
             "object": {
                 "ap_id": f"https://lemmy.example/post/{suffix}",
@@ -121,25 +121,25 @@ def _mastodon_comment_event() -> ActivityPubEvent:
     """Build a Mastodon-shaped inbound reply that needs threadiverse projection."""
     source = {
         "@context": ["https://www.w3.org/ns/activitystreams"],
-        "id": "https://mastodon.example/ap/users/alice/statuses/1/activity",
+        "id": "https://mastodon.example/ap/actors/users/alice/statuses/1/activity",
         "type": "Create",
         "actor": {
-            "id": "https://mastodon.example/ap/users/alice",
+            "id": "https://mastodon.example/ap/actors/users/alice",
             "type": "Person",
-            "inbox": "https://mastodon.example/ap/users/alice/inbox",
+            "inbox": "https://mastodon.example/ap/actors/users/alice/inbox",
         },
         "to": "as:Public",
         "cc": [
-            "https://mastodon.example/ap/users/alice/followers",
+            "https://mastodon.example/ap/actors/users/alice/followers",
             "https://bridge.example/actors/choikak2",
         ],
         "object": {
-            "id": "https://mastodon.example/ap/users/alice/statuses/1",
+            "id": "https://mastodon.example/ap/actors/users/alice/statuses/1",
             "type": "Note",
             "interactionPolicy": {"canQuote": {"automaticApproval": "as:Public"}},
-            "attributedTo": "https://mastodon.example/ap/users/alice",
+            "attributedTo": "https://mastodon.example/ap/actors/users/alice",
             "cc": [
-                "https://mastodon.example/ap/users/alice/followers",
+                "https://mastodon.example/ap/actors/users/alice/followers",
                 "https://bridge.example/actors/choikak2",
             ],
             "content": '<p><span class="h-card">@alice</span><br />test-2 from mastodon</p>',
@@ -164,10 +164,10 @@ def _mastodon_comment_event() -> ActivityPubEvent:
             "source_activity_id": source["id"],
             "source_announce_id": None,
             "occurred_at": "2026-05-21T01:55:50Z",
-            "community_actor_id": "https://bridge.example/communities/hackers",
-            "actor_id": "https://mastodon.example/ap/users/alice",
+            "community_actor_id": "https://bridge.example/actors/communities/hackers",
+            "actor_id": "https://mastodon.example/ap/actors/users/alice",
             "object": {
-                "ap_id": "https://mastodon.example/ap/users/alice/statuses/1",
+                "ap_id": "https://mastodon.example/ap/actors/users/alice/statuses/1",
                 "kind": "comment",
                 "lemmy_id": 0,
                 "post_ap_id": "https://lemmy.example/post/243",
@@ -187,24 +187,24 @@ def _mastodon_top_level_comment_event() -> ActivityPubEvent:
     """Build a Mastodon-shaped reply directly to a post, not another comment."""
     source = {
         "@context": ["https://www.w3.org/ns/activitystreams"],
-        "id": "https://mastodon.example/ap/users/alice/statuses/top/activity",
+        "id": "https://mastodon.example/ap/actors/users/alice/statuses/top/activity",
         "type": "Create",
         "actor": {
-            "id": "https://mastodon.example/ap/users/alice",
+            "id": "https://mastodon.example/ap/actors/users/alice",
             "type": "Person",
         },
         "to": "as:Public",
         "cc": [
-            "https://mastodon.example/ap/users/alice/followers",
+            "https://mastodon.example/ap/actors/users/alice/followers",
             "https://bridge.example/actors/choikak2",
         ],
         "object": {
-            "id": "https://mastodon.example/ap/users/alice/statuses/top",
+            "id": "https://mastodon.example/ap/actors/users/alice/statuses/top",
             "type": "Note",
             "interactionPolicy": {"canQuote": {"automaticApproval": "as:Public"}},
-            "attributedTo": "https://mastodon.example/ap/users/alice",
+            "attributedTo": "https://mastodon.example/ap/actors/users/alice",
             "cc": [
-                "https://mastodon.example/ap/users/alice/followers",
+                "https://mastodon.example/ap/actors/users/alice/followers",
                 "https://bridge.example/actors/choikak2",
             ],
             "content": '<p><span class="h-card">@choikak2</span><br />test-1 from mastodon</p>',
@@ -229,10 +229,10 @@ def _mastodon_top_level_comment_event() -> ActivityPubEvent:
             "source_activity_id": source["id"],
             "source_announce_id": None,
             "occurred_at": "2026-05-21T16:59:20Z",
-            "community_actor_id": "https://bridge.example/communities/hackers",
-            "actor_id": "https://mastodon.example/ap/users/alice",
+            "community_actor_id": "https://bridge.example/actors/communities/hackers",
+            "actor_id": "https://mastodon.example/ap/actors/users/alice",
             "object": {
-                "ap_id": "https://mastodon.example/ap/users/alice/statuses/top",
+                "ap_id": "https://mastodon.example/ap/actors/users/alice/statuses/top",
                 "kind": "comment",
                 "lemmy_id": 0,
                 "post_ap_id": "https://bridge.example/users/choikak2/post/1779382297938",
@@ -258,19 +258,19 @@ def _lemmy_comment_event() -> ActivityPubEvent:
         "id": "https://lemmy.example/activities/create/comment/225",
         "type": "Create",
         "actor": "https://lemmy.example/u/bob",
-        "audience": "https://bridge.example/communities/hackers",
+        "audience": "https://bridge.example/actors/communities/hackers",
         "to": ["https://www.w3.org/ns/activitystreams#Public"],
         "cc": [
-            "https://bridge.example/communities/hackers",
+            "https://bridge.example/actors/communities/hackers",
             "https://lemmy.example/u/bob",
         ],
         "object": {
             "id": "https://lemmy.example/comment/225",
             "type": "Note",
             "attributedTo": "https://lemmy.example/u/bob",
-            "audience": "https://bridge.example/communities/hackers",
+            "audience": "https://bridge.example/actors/communities/hackers",
             "cc": [
-                "https://bridge.example/communities/hackers",
+                "https://bridge.example/actors/communities/hackers",
                 "https://lemmy.example/u/bob",
             ],
             "content": "<p>YOUO whatsuP!</p>\n",
@@ -289,7 +289,7 @@ def _lemmy_comment_event() -> ActivityPubEvent:
             "source_activity_id": source["id"],
             "source_announce_id": None,
             "occurred_at": "2026-05-21T00:53:51Z",
-            "community_actor_id": "https://bridge.example/communities/hackers",
+            "community_actor_id": "https://bridge.example/actors/communities/hackers",
             "actor_id": "https://lemmy.example/u/bob",
             "object": {
                 "ap_id": "https://lemmy.example/comment/225",
@@ -375,8 +375,8 @@ async def test_mastodon_shaped_comment_relay_to_lemmy_gets_threadiverse_payload(
     local_community = _local_community(database)
     database.remote_subscribers.create_remote_subscriber(
         local_community_id=local_community.id,
-        remote_actor_id="https://mastodon.example/ap/users/alice",
-        remote_inbox_url="https://mastodon.example/ap/users/alice/inbox",
+        remote_actor_id="https://mastodon.example/ap/actors/users/alice",
+        remote_inbox_url="https://mastodon.example/ap/actors/users/alice/inbox",
         follow_activity_id="https://mastodon.example/follows/1",
     )
     database.remote_subscribers.create_remote_subscriber(
@@ -432,16 +432,16 @@ async def test_mastodon_shaped_comment_relay_to_lemmy_gets_threadiverse_payload(
     assert activity["type"] == "Announce"
     assert activity["actor"] == local_community.actor_url
     assert create["type"] == "Create"
-    assert create["id"] == "https://mastodon.example/ap/users/alice/statuses/1/activity"
-    assert create["actor"] == "https://mastodon.example/ap/users/alice"
+    assert create["id"] == "https://mastodon.example/ap/actors/users/alice/statuses/1/activity"
+    assert create["actor"] == "https://mastodon.example/ap/actors/users/alice"
     assert isinstance(create["actor"], str)
     assert create["audience"] == local_community.actor_url
     assert create["to"] == ["https://www.w3.org/ns/activitystreams#Public"]
     assert local_community.actor_url in create["cc"]
-    assert "https://mastodon.example/ap/users/alice" in create["cc"]
-    assert note["id"] == "https://mastodon.example/ap/users/alice/statuses/1"
+    assert "https://mastodon.example/ap/actors/users/alice" in create["cc"]
+    assert note["id"] == "https://mastodon.example/ap/actors/users/alice/statuses/1"
     assert note["type"] == "Note"
-    assert note["attributedTo"] == "https://mastodon.example/ap/users/alice"
+    assert note["attributedTo"] == "https://mastodon.example/ap/actors/users/alice"
     assert note["inReplyTo"] == "https://lemmy.example/comment/227"
     assert note["audience"] == local_community.actor_url
     assert note["content"] == "<p>test-2 from mastodon</p>"
@@ -473,8 +473,8 @@ async def test_mastodon_shaped_top_level_comment_relay_uses_post_as_in_reply_to(
     local_community = _local_community(database)
     database.remote_subscribers.create_remote_subscriber(
         local_community_id=local_community.id,
-        remote_actor_id="https://mastodon.example/ap/users/alice",
-        remote_inbox_url="https://mastodon.example/ap/users/alice/inbox",
+        remote_actor_id="https://mastodon.example/ap/actors/users/alice",
+        remote_inbox_url="https://mastodon.example/ap/actors/users/alice/inbox",
         follow_activity_id="https://mastodon.example/follows/1",
     )
     database.remote_subscribers.create_remote_subscriber(
@@ -543,8 +543,8 @@ async def test_lemmy_shaped_comment_relay_preserves_source_activity(
     )
     database.remote_subscribers.create_remote_subscriber(
         local_community_id=local_community.id,
-        remote_actor_id="https://mastodon.example/ap/users/alice",
-        remote_inbox_url="https://mastodon.example/ap/users/alice/inbox",
+        remote_actor_id="https://mastodon.example/ap/actors/users/alice",
+        remote_inbox_url="https://mastodon.example/ap/actors/users/alice/inbox",
         follow_activity_id="https://mastodon.example/follows/alice",
     )
     database.local_community_content.create_local_community_thread(
@@ -660,7 +660,7 @@ def _post_update_event() -> ActivityPubEvent:
             "source_activity_id": source["id"],
             "source_announce_id": "https://lemmy.example/activities/announce/update/1",
             "occurred_at": "2026-05-19T10:10:00Z",
-            "community_actor_id": "https://bridge.example/communities/hackers",
+            "community_actor_id": "https://bridge.example/actors/communities/hackers",
             "actor_id": "https://lemmy.example/u/bob",
             "object": {
                 "ap_id": "https://lemmy.example/post/1",

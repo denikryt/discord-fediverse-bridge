@@ -8,6 +8,7 @@ import discord
 from sqlalchemy import inspect
 
 from src.db import Database
+from src.db.migrations import Stage4IdentityMigrationConfig
 from src.discord_channel_types import (
     is_normal_guild_text_channel,
     is_personal_feed_root_channel,
@@ -47,7 +48,7 @@ def test_migration_creates_personal_feed_table_and_restart_restores_binding(
     database.close()
 
     reopened = Database(f"sqlite:///{path}")
-    reopened.migrate()
+    reopened.migrate(Stage4IdentityMigrationConfig(public_origin="https://bridge.test", service_actor_identifier="bridge"))
     binding = PersonalFeedService(reopened).resolve_root_binding(100, 200)
     assert binding is not None
     assert binding.discord_user_id == "10"
@@ -175,7 +176,7 @@ def test_repository_lookups_and_active_binding_survive_move_unbind_and_reopen(
 
     database.close()
     reopened = Database(f"sqlite:///{path}")
-    reopened.migrate()
+    reopened.migrate(Stage4IdentityMigrationConfig(public_origin="https://bridge.test", service_actor_identifier="bridge"))
     reopened_service = PersonalFeedService(reopened)
     reopened_router = DiscordEventRouter(
         database=reopened,

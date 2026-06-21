@@ -17,6 +17,12 @@ from ...models import (
     UserActorContentMutation,
     UserActorFollower,
 )
+from ...activitypub_identity_urls import (
+    build_user_delete_comment_activity_id,
+    build_user_delete_post_activity_id,
+    build_user_update_comment_activity_id,
+    build_user_update_post_activity_id,
+)
 from .base import BaseRepository
 
 
@@ -192,11 +198,39 @@ class ContentMutationRepository(BaseRepository):
             sort_keys=True,
         )
         operation_id = hashlib.sha256(identity.encode()).hexdigest()
+        # The gateway renders mutations against canonical typed User Actor
+        # activity ids; persistence must not reintroduce retired /users URLs.
         actor_parts = urlsplit(published.actor_url)
-        activity_id = (
-            f"{actor_parts.scheme}://{actor_parts.netloc}/users/{published.actor_username}/activities/"
-            f"{'delete' if kind == 'content_delete' else 'update'}/{operation_id}"
-        )
+        public_origin = f"{actor_parts.scheme}://{actor_parts.netloc}"
+        is_comment = "/comments/" in published.object_id or "/comment/" in published.object_id
+        if kind == "content_delete":
+            activity_id = (
+                build_user_delete_comment_activity_id(
+                    origin=public_origin,
+                    username=published.actor_username,
+                    activity_id=operation_id,
+                )
+                if is_comment
+                else build_user_delete_post_activity_id(
+                    origin=public_origin,
+                    username=published.actor_username,
+                    activity_id=operation_id,
+                )
+            )
+        else:
+            activity_id = (
+                build_user_update_comment_activity_id(
+                    origin=public_origin,
+                    username=published.actor_username,
+                    activity_id=operation_id,
+                )
+                if is_comment
+                else build_user_update_post_activity_id(
+                    origin=public_origin,
+                    username=published.actor_username,
+                    activity_id=operation_id,
+                )
+            )
         request["operationId"] = operation_id
         request["activityId"] = activity_id
         mutation = UserActorContentMutation(

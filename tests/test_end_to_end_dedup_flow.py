@@ -119,13 +119,13 @@ async def test_inbound_post_with_discord_originated_mapping_is_skipped_as_echo(
     """A looped-back Discord-originated post should not create a Discord thread."""
     database = _database(tmp_path)
     _accepted_subscription(database)
-    object_id = f"https://{BRIDGE_HOST_DOMAIN}/users/alice/objects/post/1"
+    object_id = f"https://{BRIDGE_HOST_DOMAIN}/actors/users/alice/objects/posts/1"
     database.message_mappings.create_message_mapping(
         source_platform="discord",
         source_id="300",
-        activity_id=f"https://{BRIDGE_HOST_DOMAIN}/users/alice/activities/create/post/1",
+        activity_id=f"https://{BRIDGE_HOST_DOMAIN}/actors/users/alice/activities/create/posts/1",
         object_id=object_id,
-        actor_url=f"https://{BRIDGE_HOST_DOMAIN}/users/alice",
+        actor_url=f"https://{BRIDGE_HOST_DOMAIN}/actors/users/alice",
         community_actor_url=f"https://{LEMMY_EXAMPLE_DOMAIN}/c/hackers",
         discord_channel_id=100,
         discord_message_id=300,
@@ -157,13 +157,13 @@ async def test_inbound_comment_with_discord_originated_mapping_is_skipped_as_ech
     """A looped-back Discord-originated comment should not create a Discord reply."""
     database = _database(tmp_path)
     _accepted_subscription(database)
-    object_id = f"https://{BRIDGE_HOST_DOMAIN}/users/alice/objects/comment/1"
+    object_id = f"https://{BRIDGE_HOST_DOMAIN}/actors/users/alice/objects/comments/1"
     database.message_mappings.create_message_mapping(
         source_platform="discord",
         source_id="301",
-        activity_id=f"https://{BRIDGE_HOST_DOMAIN}/users/alice/activities/create/comment/1",
+        activity_id=f"https://{BRIDGE_HOST_DOMAIN}/actors/users/alice/activities/create/comments/1",
         object_id=object_id,
-        actor_url=f"https://{BRIDGE_HOST_DOMAIN}/users/alice",
+        actor_url=f"https://{BRIDGE_HOST_DOMAIN}/actors/users/alice",
         community_actor_url=f"https://{LEMMY_EXAMPLE_DOMAIN}/c/hackers",
         discord_channel_id=100,
         discord_message_id=301,
@@ -181,7 +181,7 @@ async def test_inbound_comment_with_discord_originated_mapping_is_skipped_as_ech
     result = await dispatch_activitypub_event(
         _comment_event(
             object_id=object_id,
-            post_ap_id=f"https://{BRIDGE_HOST_DOMAIN}/users/alice/post/111",
+            post_ap_id=f"https://{BRIDGE_HOST_DOMAIN}/actors/users/alice/objects/posts/111",
         ),
         runtime,
     )

@@ -239,7 +239,7 @@ def test_banned_actor_comment_is_acked_and_skipped_before_message_side_effects(
     client = TestClient(create_http_app(runtime), raise_server_exceptions=False)
     payload = _comment_payload(
         delivery_id="https://example.com/activities/create/comment/1",
-        actor_id="https://example.com/users/alice",
+        actor_id="https://example.com/actors/users/alice",
         community_actor_id=community.actor_url,
     )
 

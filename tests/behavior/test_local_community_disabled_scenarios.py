@@ -75,7 +75,7 @@ def _post_event() -> ActivityPubEvent:
             "event_type": "post.created",
             "delivery_id": "https://remote.example/activities/post/1",
             "occurred_at": "2026-05-19T10:00:00Z",
-            "community_actor_id": "https://bridge.example/communities/cats",
+            "community_actor_id": "https://bridge.example/actors/communities/cats",
             "actor_id": "https://remote.example/u/alice",
             "object": {
                 "ap_id": "https://remote.example/post/1",
@@ -102,7 +102,7 @@ def _follow_event() -> LocalFollowRequestEvent:
             "delivery_id": "https://remote.example/activities/follow/1",
             "occurred_at": "2026-05-19T10:00:00Z",
             "target_actor_kind": "community",
-            "target_actor_id": "https://bridge.example/communities/cats",
+            "target_actor_id": "https://bridge.example/actors/communities/cats",
             "actor_id": "https://remote.example/u/alice",
             "object": {
                 "follow_activity_id": "https://remote.example/activities/follow/1",
@@ -202,10 +202,10 @@ def test_disabled_community_blocks_local_subscriber_subscription(
     database.users.create_user(
         discord_user_id="1234567890",
         activitypub_username="alice",
-        actor_url="https://bridge.example/actors/alice",
-        inbox_url="https://bridge.example/actors/alice/inbox",
-        outbox_url="https://bridge.example/actors/alice/outbox",
-        followers_url="https://bridge.example/actors/alice/followers",
+        actor_url="https://bridge.example/actors/users/alice",
+        inbox_url="https://bridge.example/actors/users/alice/inbox",
+        outbox_url="https://bridge.example/actors/users/alice/outbox",
+        followers_url="https://bridge.example/actors/users/alice/followers",
         public_key_pem="public-key",
         private_key_pem="private-key",
     )

@@ -48,7 +48,7 @@ def test_normalize_remote_actor_handle_rejects_non_v1_inputs(raw: str) -> None:
     ("actor_url", "expected"),
     [
         ("https://example.com/u/alice", "alice@example.com"),
-        ("https://example.com/users/alice", "alice@example.com"),
+        ("https://example.com/actors/users/alice", "alice@example.com"),
         ("https://Example.COM/users/Alice/", "Alice@example.com"),
     ],
 )
@@ -60,7 +60,7 @@ def test_extract_remote_actor_handle_from_actor_url_uses_common_actor_paths(
 
 
 @pytest.mark.parametrize(
-    "actor_url", ["invalid-url", "https://example.com/", "https:///users/alice"]
+    "actor_url", ["invalid-url", "https://example.com/", "https:///actors/users/alice"]
 )
 def test_extract_remote_actor_handle_from_actor_url_returns_none_for_unknown_shapes(
     actor_url: str,

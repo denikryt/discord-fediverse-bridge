@@ -22,7 +22,7 @@ const server = createServer(async (request, response) => {
     return;
   }
   if (path === "/internal/fedify/actors/bridge/key") {
-    response.end(JSON.stringify({ actor_url: "https://bridge.example/actors/bridge", key_id: "https://bridge.example/actors/bridge#main-key", key_format: "jwk", algorithm: "RSASSA-PKCS1-v1_5", public_key_data: "{}", private_key_data: "{}" }));
+    response.end(JSON.stringify({ actor_url: "https://bridge.example/actors/services/bridge", key_id: "https://bridge.example/actors/services/bridge#main-key", key_format: "jwk", algorithm: "RSASSA-PKCS1-v1_5", public_key_data: "{}", private_key_data: "{}" }));
     return;
   }
   if (path.startsWith("/internal/fedify/actors/users/")) {

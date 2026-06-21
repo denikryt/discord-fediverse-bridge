@@ -71,10 +71,10 @@ async function buildLegacyOnlyConfig(): Promise<GatewayConfig> {
         "hackers",
         "Hackers",
         "A local hackerspace forum.",
-        `${TEST_ORIGIN}communities/hackers`,
-        `${TEST_ORIGIN}communities/hackers/inbox`,
-        `${TEST_ORIGIN}communities/hackers/outbox`,
-        `${TEST_ORIGIN}communities/hackers/followers`,
+        `${TEST_ORIGIN}actors/communities/hackers`,
+        `${TEST_ORIGIN}actors/communities/hackers/inbox`,
+        `${TEST_ORIGIN}actors/communities/hackers/outbox`,
+        `${TEST_ORIGIN}actors/communities/hackers/followers`,
         "public-key",
         "private-key",
         "active",
@@ -125,7 +125,7 @@ async function main(): Promise<void> {
   assert.deepEqual(
     await loadAcceptedRemoteSubscribersByActorUrl(
       config,
-      `${TEST_ORIGIN}communities/hackers`,
+      `${TEST_ORIGIN}actors/communities/hackers`,
     ),
     [],
   );

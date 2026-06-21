@@ -45,7 +45,7 @@ def _settings() -> SimpleNamespace:
 
 def _register_user(database: Database, discord_user_id: str = "1234567890") -> None:
     """Seed one registered moderator for subscribe-community authorization."""
-    actor_url = f"https://{BRIDGE_EXAMPLE_DOMAIN}/users/alice"
+    actor_url = f"https://{BRIDGE_EXAMPLE_DOMAIN}/actors/users/alice"
     database.users.create_user(
         discord_user_id=discord_user_id,
         activitypub_username="alice",
@@ -133,7 +133,7 @@ async def test_subscribe_community_persists_local_subscriber_without_remote_foll
     assert (
         database.remote_subscribers.get_remote_subscriber(
             local_community_id=community.id,
-            remote_actor_id=f"https://{BRIDGE_EXAMPLE_DOMAIN}/actors/bridge",
+            remote_actor_id=f"https://{BRIDGE_EXAMPLE_DOMAIN}/actors/services/bridge",
         )
         is None
     )

@@ -63,17 +63,17 @@ async function main(): Promise<void> {
       [
         "1234567890",
         "alice",
-        `${TEST_ORIGIN}actors/alice`,
-        `${TEST_ORIGIN}actors/alice/inbox`,
-        `${TEST_ORIGIN}actors/alice/outbox`,
-        `${TEST_ORIGIN}actors/alice/followers`,
+        `${TEST_ORIGIN}actors/users/alice`,
+        `${TEST_ORIGIN}actors/users/alice/inbox`,
+        `${TEST_ORIGIN}actors/users/alice/outbox`,
+        `${TEST_ORIGIN}actors/users/alice/followers`,
         await exportPublicKeyPem(userKeys.publicKey),
         await exportPrivateKeyPem(userKeys.privateKey),
       ],
     );
     seedBridgeActorJwk(
       db,
-      `${TEST_ORIGIN}actors/bridge`,
+      `${TEST_ORIGIN}actors/services/bridge`,
       JSON.stringify(await exportJwk(bridgeKeys.privateKey)),
       JSON.stringify(await exportJwk(bridgeKeys.publicKey)),
     );
@@ -96,15 +96,15 @@ async function main(): Promise<void> {
 
   const bridgeIdentity = getBridgeActorIdentity(config);
   const userIdentity = await loadUserActorIdentity(config, "alice");
-  const userKeyPair = await loadActorKeyPair(config, "alice");
-  const bridgeKeyPair = await loadActorKeyPair(config, "bridge");
+  const userKeyPair = await loadActorKeyPair(config, "users/alice");
+  const bridgeKeyPair = await loadActorKeyPair(config, "services/bridge");
 
-  assert.equal(bridgeIdentity.actorId.href, `${TEST_ORIGIN}actors/bridge`);
-  assert.equal(await hasLocalActor(config, "bridge"), true);
-  assert.equal(await hasLocalActor(config, "alice"), true);
+  assert.equal(bridgeIdentity.actorId.href, `${TEST_ORIGIN}actors/services/bridge`);
+  assert.equal(await hasLocalActor(config, "services/bridge"), true);
+  assert.equal(await hasLocalActor(config, "users/alice"), true);
   assert.equal(await hasLocalActor(config, "missing"), false);
   assert.ok(userIdentity != null);
-  assert.equal(userIdentity?.actorId.href, `${TEST_ORIGIN}actors/alice`);
+  assert.equal(userIdentity?.actorId.href, `${TEST_ORIGIN}actors/users/alice`);
   assert.ok(userKeyPair != null);
   assert.ok(bridgeKeyPair != null);
 
@@ -119,9 +119,9 @@ async function main(): Promise<void> {
     [],
   );
 
-  assert.equal(bridgeActor.id?.href, `${TEST_ORIGIN}actors/bridge`);
-  assert.equal(userActor.id?.href, `${TEST_ORIGIN}actors/alice`);
-  assert.equal(userActor.inboxId?.href, `${TEST_ORIGIN}actors/alice/inbox`);
+  assert.equal(bridgeActor.id?.href, `${TEST_ORIGIN}actors/services/bridge`);
+  assert.equal(userActor.id?.href, `${TEST_ORIGIN}actors/users/alice`);
+  assert.equal(userActor.inboxId?.href, `${TEST_ORIGIN}actors/users/alice/inbox`);
 
   console.log("verify:actor-layer passed");
 }

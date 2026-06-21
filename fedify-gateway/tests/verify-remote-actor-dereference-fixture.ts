@@ -41,7 +41,7 @@ async function main(): Promise<void> {
     const activity = new Follow({
       id: new URL(`${remote.origin}/activities/follow/1`),
       actor: new URL(remote.actorId),
-      object: new URL(`${TEST_ORIGIN}actors/alice`),
+      object: new URL(`${TEST_ORIGIN}actors/users/alice`),
     }, {
       documentLoader: remote.documentLoader,
       contextLoader: remote.documentLoader,
@@ -50,7 +50,7 @@ async function main(): Promise<void> {
     const event = await buildLocalFollowRequestedEvent(config, activity);
     assert.ok(event != null);
     assert.equal(event.target_actor_kind, "user");
-    assert.equal(event.target_actor_id, `${TEST_ORIGIN}actors/alice`);
+    assert.equal(event.target_actor_id, `${TEST_ORIGIN}actors/users/alice`);
     assert.equal(event.actor_id, remote.actorId);
     assert.equal(event.object.follow_activity_id, `${remote.origin}/activities/follow/1`);
     assert.equal(event.object.remote_inbox_url, remote.inboxUrl);
@@ -84,7 +84,7 @@ async function buildConfig(): Promise<GatewayConfig> {
     db.run(
       `INSERT INTO users (discord_user_id, activitypub_username, actor_url, inbox_url, outbox_url, followers_url, public_key_pem, private_key_pem)
        VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
-      ["1", "alice", `${TEST_ORIGIN}actors/alice`, `${TEST_ORIGIN}actors/alice/inbox`, `${TEST_ORIGIN}actors/alice/outbox`, `${TEST_ORIGIN}actors/alice/followers`, "public", "private"],
+      ["1", "alice", `${TEST_ORIGIN}actors/users/alice`, `${TEST_ORIGIN}actors/users/alice/inbox`, `${TEST_ORIGIN}actors/users/alice/outbox`, `${TEST_ORIGIN}actors/users/alice/followers`, "public", "private"],
     );
     await writeFile(databasePath, Buffer.from(db.export()));
   } finally {

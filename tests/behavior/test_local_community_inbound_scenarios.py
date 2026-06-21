@@ -66,7 +66,7 @@ def _post_event(*, actor_id: str = "https://lemmy.example/u/bob") -> ActivityPub
             "event_type": "post.created",
             "delivery_id": "https://lemmy.example/activities/create/post/1",
             "occurred_at": "2026-05-19T10:00:00Z",
-            "community_actor_id": "https://bridge.example/communities/hackers",
+            "community_actor_id": "https://bridge.example/actors/communities/hackers",
             "actor_id": actor_id,
             "object": {
                 "ap_id": "https://lemmy.example/post/1",
@@ -96,7 +96,7 @@ def _comment_event(
             "event_type": "comment.created",
             "delivery_id": "https://lemmy.example/activities/create/comment/1",
             "occurred_at": "2026-05-19T10:05:00Z",
-            "community_actor_id": "https://bridge.example/communities/hackers",
+            "community_actor_id": "https://bridge.example/actors/communities/hackers",
             "actor_id": actor_id,
             "object": {
                 "ap_id": "https://lemmy.example/comment/1",
@@ -240,7 +240,7 @@ async def test_remote_follower_nested_reply_uses_real_discord_message_reference(
         local_community_id=local_community.id,
         discord_thread_id=200,
         discord_starter_message_id=300,
-        ap_activity_id="https://bridge.example/users/alice/activities/create/post/1",
+        ap_activity_id="https://bridge.example/actors/users/alice/activities/create/posts/1",
         ap_object_id="https://lemmy.example/post/1",
         direction="ap_to_discord",
         origin_kind="remote_follower",
@@ -336,7 +336,7 @@ async def test_remote_follower_reply_creates_message_in_mapped_thread(
         local_community_id=local_community.id,
         discord_thread_id=200,
         discord_starter_message_id=300,
-        ap_activity_id="https://bridge.example/users/alice/activities/create/post/1",
+        ap_activity_id="https://bridge.example/actors/users/alice/activities/create/posts/1",
         ap_object_id="https://lemmy.example/post/1",
         direction="ap_to_discord",
         origin_kind="remote_follower",
@@ -368,7 +368,7 @@ async def test_remote_follower_reply_creates_message_in_mapped_thread(
     assert generic_mapping.actor_url == "https://lemmy.example/u/bob"
     assert (
         generic_mapping.community_actor_url
-        == "https://bridge.example/communities/hackers"
+        == "https://bridge.example/actors/communities/hackers"
     )
     assert generic_mapping.discord_channel_id == 200
     assert generic_mapping.discord_message_id == 400
@@ -398,7 +398,7 @@ async def test_remote_follower_reply_keeps_existing_generic_mapping(
         local_community_id=local_community.id,
         discord_thread_id=200,
         discord_starter_message_id=300,
-        ap_activity_id="https://bridge.example/users/alice/activities/create/post/1",
+        ap_activity_id="https://bridge.example/actors/users/alice/activities/create/posts/1",
         ap_object_id="https://lemmy.example/post/1",
         direction="ap_to_discord",
         origin_kind="remote_follower",
@@ -409,7 +409,7 @@ async def test_remote_follower_reply_keeps_existing_generic_mapping(
         activity_id="https://lemmy.example/activities/create/comment/1",
         object_id="https://lemmy.example/comment/1",
         actor_url="https://lemmy.example/u/bob",
-        community_actor_url="https://bridge.example/communities/hackers",
+        community_actor_url="https://bridge.example/actors/communities/hackers",
         discord_channel_id=200,
         discord_message_id=399,
     )

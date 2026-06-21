@@ -41,7 +41,7 @@ def _accepted_subscription(database: Database) -> None:
 
 def _registered_user(database: Database) -> None:
     """Seed one local AP user actor for registered publish scenarios."""
-    actor_url = f"https://{BRIDGE_HOST_DOMAIN}/users/alice"
+    actor_url = f"https://{BRIDGE_HOST_DOMAIN}/actors/users/alice"
     database.users.create_user(
         discord_user_id="123",
         activitypub_username="alice",
@@ -112,8 +112,8 @@ async def test_registered_user_with_accepted_subscription_publishes_thread_start
     _registered_user(database)
     fedify_gateway = AsyncMock()
     fedify_gateway.publish_content.return_value = PublishContentResult(
-        activity_id=f"https://{BRIDGE_HOST_DOMAIN}/users/alice/activities/create/post/1",
-        object_id=f"https://{BRIDGE_HOST_DOMAIN}/users/alice/objects/post/1",
+        activity_id=f"https://{BRIDGE_HOST_DOMAIN}/actors/users/alice/activities/create/posts/1",
+        object_id=f"https://{BRIDGE_HOST_DOMAIN}/actors/users/alice/objects/posts/1",
         community_actor_url=f"https://{LEMMY_EXAMPLE_DOMAIN}/c/hackers",
     )
     service = _service(database, fedify_gateway)
@@ -125,14 +125,14 @@ async def test_registered_user_with_accepted_subscription_publishes_thread_start
     mapping = database.message_mappings.get_message_mapping_by_discord_message_id(300)
     stored_object = (
         database.activitypub_objects.get_published_activity_object_by_object_id(
-            f"https://{BRIDGE_HOST_DOMAIN}/users/alice/objects/post/1"
+            f"https://{BRIDGE_HOST_DOMAIN}/actors/users/alice/objects/posts/1"
         )
     )
 
     assert result.status == "published"
     assert mapping is not None
     assert (
-        mapping.object_id == f"https://{BRIDGE_HOST_DOMAIN}/users/alice/objects/post/1"
+        mapping.object_id == f"https://{BRIDGE_HOST_DOMAIN}/actors/users/alice/objects/posts/1"
     )
     assert stored_object is not None
     assert stored_object.kind == "post"
@@ -152,13 +152,13 @@ async def test_registered_user_with_accepted_subscription_publishes_thread_reply
     database = _database(tmp_path)
     _accepted_subscription(database)
     _registered_user(database)
-    post_object_url = f"https://{BRIDGE_HOST_DOMAIN}/users/alice/objects/post/1"
+    post_object_url = f"https://{BRIDGE_HOST_DOMAIN}/actors/users/alice/objects/posts/1"
     thread_group = database.discord_fanout_groups.create_thread_group(
         community_actor_id=f"https://{LEMMY_EXAMPLE_DOMAIN}/c/hackers",
         source_channel_id=100,
         source_thread_id=200,
         source_starter_message_id=300,
-        ap_activity_id=f"https://{BRIDGE_HOST_DOMAIN}/users/alice/activities/create/post/1",
+        ap_activity_id=f"https://{BRIDGE_HOST_DOMAIN}/actors/users/alice/activities/create/posts/1",
         ap_object_id=post_object_url,
     )
     database.discord_fanout_groups.add_thread_delivery(
@@ -170,8 +170,8 @@ async def test_registered_user_with_accepted_subscription_publishes_thread_reply
     )
     fedify_gateway = AsyncMock()
     fedify_gateway.publish_content.return_value = PublishContentResult(
-        activity_id=f"https://{BRIDGE_HOST_DOMAIN}/users/alice/activities/create/comment/1",
-        object_id=f"https://{BRIDGE_HOST_DOMAIN}/users/alice/objects/comment/1",
+        activity_id=f"https://{BRIDGE_HOST_DOMAIN}/actors/users/alice/activities/create/comments/1",
+        object_id=f"https://{BRIDGE_HOST_DOMAIN}/actors/users/alice/objects/comments/1",
         community_actor_url=f"https://{LEMMY_EXAMPLE_DOMAIN}/c/hackers",
     )
     service = _service(database, fedify_gateway)
@@ -182,7 +182,7 @@ async def test_registered_user_with_accepted_subscription_publishes_thread_reply
     mapping = database.message_mappings.get_message_mapping_by_discord_message_id(301)
     stored_object = (
         database.activitypub_objects.get_published_activity_object_by_object_id(
-            f"https://{BRIDGE_HOST_DOMAIN}/users/alice/objects/comment/1"
+            f"https://{BRIDGE_HOST_DOMAIN}/actors/users/alice/objects/comments/1"
         )
     )
 
@@ -190,7 +190,7 @@ async def test_registered_user_with_accepted_subscription_publishes_thread_reply
     assert mapping is not None
     assert (
         mapping.object_id
-        == f"https://{BRIDGE_HOST_DOMAIN}/users/alice/objects/comment/1"
+        == f"https://{BRIDGE_HOST_DOMAIN}/actors/users/alice/objects/comments/1"
     )
     assert stored_object is not None
     assert stored_object.kind == "comment"
@@ -204,13 +204,13 @@ async def test_remote_subscription_reply_semantics_preserve_nested_and_unknown_f
     database = _database(tmp_path)
     _accepted_subscription(database)
     _registered_user(database)
-    post_object_url = f"https://{BRIDGE_HOST_DOMAIN}/users/alice/objects/post/1"
+    post_object_url = f"https://{BRIDGE_HOST_DOMAIN}/actors/users/alice/objects/posts/1"
     thread_group = database.discord_fanout_groups.create_thread_group(
         community_actor_id=f"https://{LEMMY_EXAMPLE_DOMAIN}/c/hackers",
         source_channel_id=100,
         source_thread_id=200,
         source_starter_message_id=300,
-        ap_activity_id=f"https://{BRIDGE_HOST_DOMAIN}/users/alice/activities/create/post/1",
+        ap_activity_id=f"https://{BRIDGE_HOST_DOMAIN}/actors/users/alice/activities/create/posts/1",
         ap_object_id=post_object_url,
     )
     database.discord_fanout_groups.add_thread_delivery(
@@ -226,8 +226,8 @@ async def test_remote_subscription_reply_semantics_preserve_nested_and_unknown_f
         source_channel_id=100,
         source_thread_id=200,
         source_message_id=301,
-        ap_activity_id=f"https://{BRIDGE_HOST_DOMAIN}/users/alice/activities/create/comment/0",
-        ap_object_id=f"https://{BRIDGE_HOST_DOMAIN}/users/alice/objects/comment/0",
+        ap_activity_id=f"https://{BRIDGE_HOST_DOMAIN}/actors/users/alice/activities/create/comments/0",
+        ap_object_id=f"https://{BRIDGE_HOST_DOMAIN}/actors/users/alice/objects/comments/0",
     )
     database.discord_fanout_groups.add_message_delivery(
         message_group_id=parent_group.id,
@@ -239,13 +239,13 @@ async def test_remote_subscription_reply_semantics_preserve_nested_and_unknown_f
     fedify_gateway = AsyncMock()
     fedify_gateway.publish_content.side_effect = [
         PublishContentResult(
-            activity_id=f"https://{BRIDGE_HOST_DOMAIN}/users/alice/activities/create/comment/1",
-            object_id=f"https://{BRIDGE_HOST_DOMAIN}/users/alice/objects/comment/1",
+            activity_id=f"https://{BRIDGE_HOST_DOMAIN}/actors/users/alice/activities/create/comments/1",
+            object_id=f"https://{BRIDGE_HOST_DOMAIN}/actors/users/alice/objects/comments/1",
             community_actor_url=f"https://{LEMMY_EXAMPLE_DOMAIN}/c/hackers",
         ),
         PublishContentResult(
-            activity_id=f"https://{BRIDGE_HOST_DOMAIN}/users/alice/activities/create/comment/2",
-            object_id=f"https://{BRIDGE_HOST_DOMAIN}/users/alice/objects/comment/2",
+            activity_id=f"https://{BRIDGE_HOST_DOMAIN}/actors/users/alice/activities/create/comments/2",
+            object_id=f"https://{BRIDGE_HOST_DOMAIN}/actors/users/alice/objects/comments/2",
             community_actor_url=f"https://{LEMMY_EXAMPLE_DOMAIN}/c/hackers",
         ),
     ]
@@ -268,7 +268,7 @@ async def test_remote_subscription_reply_semantics_preserve_nested_and_unknown_f
     unknown_request = fedify_gateway.publish_content.await_args_list[1].args[0]
     assert (
         nested_request.in_reply_to_object_id
-        == f"https://{BRIDGE_HOST_DOMAIN}/users/alice/objects/comment/0"
+        == f"https://{BRIDGE_HOST_DOMAIN}/actors/users/alice/objects/comments/0"
     )
     assert unknown_request.in_reply_to_object_id == post_object_url
 

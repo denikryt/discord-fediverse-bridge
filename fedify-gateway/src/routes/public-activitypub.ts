@@ -86,161 +86,110 @@ export interface PublicActivityPubRouteDependencies {
   renders: PublicActivityPubRenderPort;
 }
 
-/** Register public ActivityPub routes in the same order as the former server. */
+/** Register public ActivityPub routes in the typed Stage 4 namespace. */
 export function registerPublicActivityPubRoutes(
   app: Hono,
   dependencies: PublicActivityPubRouteDependencies,
 ): void {
-  app.get("/users/:username", async (context) => {
-    const username = context.req.param("username");
-    const actor = await dependencies.renders.buildRegisteredUserActorDocument(username);
-    if (actor == null) {
-      return context.json({ error: "user actor not found" }, 404);
-    }
-    return activityJsonResponse(await actor.toJsonLd());
-  });
-
-  app.get("/communities/:slug", async (context) => {
-    return await renderLocalCommunityActor(context, dependencies);
-  });
-
-  app.get("/c/:slug", async (context) => {
-    return await renderLocalCommunityActor(context, dependencies);
-  });
-
-  app.get("/communities/:slug/outbox", async (context) => {
-    const slug = context.req.param("slug");
-    const community = await dependencies.reads.loadLocalCommunityIdentity(slug);
-    if (community == null) {
-      return context.json({ error: "community actor not found" }, 404);
-    }
-    return activityJsonResponse(
-      await buildEmptyOrderedCollection(
-        new URL(`/communities/${slug}/outbox`, dependencies.publicConfig.fedifyOrigin),
-      ).toJsonLd(),
-    );
-  });
-
-  app.get("/communities/:slug/followers", async (context) => {
-    const slug = context.req.param("slug");
-    const community = await dependencies.reads.loadLocalCommunityIdentity(slug);
-    if (community == null) {
-      return context.json({ error: "community actor not found" }, 404);
-    }
-    return activityJsonResponse(
-      await buildEmptyOrderedCollection(
-        new URL(`/communities/${slug}/followers`, dependencies.publicConfig.fedifyOrigin),
-      ).toJsonLd(),
-    );
-  });
-
-  app.get("/communities/:slug/post/:objectId", async (context) => {
-    const object = await loadPublishedObjectForRequest(dependencies, context.req.path);
-    if (object == null || object.kind !== "post") {
-      return context.json({ error: "published post not found" }, 404);
-    }
-    return activityJsonResponse(buildPublishedActivityObjectJson(object));
-  });
-
-  app.get("/communities/:slug/comment/:objectId", async (context) => {
-    const object = await loadPublishedObjectForRequest(dependencies, context.req.path);
-    if (object == null || object.kind !== "comment") {
-      return context.json({ error: "published comment not found" }, 404);
-    }
-    return activityJsonResponse(buildPublishedActivityObjectJson(object));
-  });
-
-  app.get("/users/:username/outbox", async (context) => {
+  // Actor root documents are served by Fedify through /actors/{+identifier}.
+  // This module owns actor collections and object/activity dereference routes.
+  app.get("/actors/users/:username/outbox", async (context) => {
     return await renderUserOutbox(dependencies, context, context.req.param("username"));
   });
 
-  app.get("/users/:username/followers", async (context) => {
+  app.get("/actors/users/:username/followers", async (context) => {
     return await renderUserFollowers(dependencies, context, context.req.param("username"));
   });
 
-  app.get("/users/:username/activities/create/post/:activityId", async (context) => {
-    const activity = await loadPublishedCreateActivityForRequest(
-      dependencies,
-      context.req.path,
-      context.req.param("username"),
-      "post",
-    );
-    if (activity == null) {
-      return context.json({ error: "published create activity not found" }, 404);
-    }
-    return activityJsonResponse(buildPublishedCreateActivityJson(activity));
+  app.get("/actors/users/:username/activities/create/posts/:activityId", async (context) => {
+    return await renderCreateActivityForRequest(dependencies, context, context.req.param("username"), "post");
   });
 
-  app.get("/users/:username/activities/create/comment/:activityId", async (context) => {
-    const activity = await loadPublishedCreateActivityForRequest(
-      dependencies,
-      context.req.path,
-      context.req.param("username"),
-      "comment",
-    );
-    if (activity == null) {
-      return context.json({ error: "published create activity not found" }, 404);
-    }
-    return activityJsonResponse(buildPublishedCreateActivityJson(activity));
+  app.get("/actors/users/:username/activities/create/comments/:activityId", async (context) => {
+    return await renderCreateActivityForRequest(dependencies, context, context.req.param("username"), "comment");
   });
 
-  app.get("/users/:username/post/:objectId", async (context) => {
-    const object = await loadPublishedObjectForRequest(dependencies, context.req.path);
-    if (object == null || object.kind !== "post") {
-      return context.json({ error: "published post not found" }, 404);
-    }
-    return activityJsonResponse(buildPublishedActivityObjectJson(object));
+  app.get("/actors/users/:username/objects/posts/:objectId", async (context) => {
+    return await renderObjectForRequest(dependencies, context, "post");
   });
 
-  app.get("/users/:username/comment/:objectId", async (context) => {
-    const object = await loadPublishedObjectForRequest(dependencies, context.req.path);
-    if (object == null || object.kind !== "comment") {
-      return context.json({ error: "published comment not found" }, 404);
-    }
-    return activityJsonResponse(buildPublishedActivityObjectJson(object));
+  app.get("/actors/users/:username/objects/comments/:objectId", async (context) => {
+    return await renderObjectForRequest(dependencies, context, "comment");
   });
 
-  app.get("/actors/:identifier/outbox", async (context) => {
+  app.get("/actors/services/:identifier/outbox", async (context) => {
     const identifier = context.req.param("identifier");
-    if ((await dependencies.reads.loadUserActorIdentity(identifier)) != null) {
-      return await renderUserOutbox(dependencies, context, identifier);
-    }
-    if (!(await dependencies.reads.hasLocalActor(identifier))) {
-      return context.json({ error: "actor not found" }, 404);
+    if (identifier !== dependencies.publicConfig.actorIdentifier) {
+      return context.json({ error: "service actor not found" }, 404);
     }
     return activityJsonResponse(
       await buildEmptyOrderedCollection(
-        new URL(`/actors/${identifier}/outbox`, dependencies.publicConfig.fedifyOrigin),
+        new URL(`/actors/services/${identifier}/outbox`, dependencies.publicConfig.fedifyOrigin),
       ).toJsonLd(),
     );
   });
 
-  app.get("/actors/:identifier/followers", async (context) => {
+  app.get("/actors/services/:identifier/followers", async (context) => {
     const identifier = context.req.param("identifier");
-    if ((await dependencies.reads.loadUserActorIdentity(identifier)) != null) {
-      return await renderUserFollowers(dependencies, context, identifier);
-    }
-    if (!(await dependencies.reads.hasLocalActor(identifier))) {
-      return context.json({ error: "actor not found" }, 404);
+    if (identifier !== dependencies.publicConfig.actorIdentifier) {
+      return context.json({ error: "service actor not found" }, 404);
     }
     return activityJsonResponse(
       await buildEmptyOrderedCollection(
-        new URL(`/actors/${identifier}/followers`, dependencies.publicConfig.fedifyOrigin),
+        new URL(`/actors/services/${identifier}/followers`, dependencies.publicConfig.fedifyOrigin),
       ).toJsonLd(),
     );
   });
-}
 
-async function renderLocalCommunityActor(
-  context: Context,
-  dependencies: PublicActivityPubRouteDependencies,
-): Promise<Response> {
-  const slug = context.req.param("slug") ?? "";
-  const actor = await dependencies.renders.buildLocalCommunityActorDocument(slug);
-  if (actor == null) {
-    return context.json({ error: "community actor not found" }, 404);
-  }
-  return activityJsonResponse(await actor.toJsonLd());
+  app.get("/actors/communities/:slug/outbox", async (context) => {
+    const slug = context.req.param("slug");
+    const community = await dependencies.reads.loadLocalCommunityIdentity(slug);
+    if (community == null) {
+      return context.json({ error: "community actor not found" }, 404);
+    }
+    return activityJsonResponse(
+      await buildEmptyOrderedCollection(
+        new URL(`/actors/communities/${slug}/outbox`, dependencies.publicConfig.fedifyOrigin),
+      ).toJsonLd(),
+    );
+  });
+
+  app.get("/actors/communities/:slug/followers", async (context) => {
+    const slug = context.req.param("slug");
+    const community = await dependencies.reads.loadLocalCommunityIdentity(slug);
+    if (community == null) {
+      return context.json({ error: "community actor not found" }, 404);
+    }
+    return activityJsonResponse(
+      await buildEmptyOrderedCollection(
+        new URL(`/actors/communities/${slug}/followers`, dependencies.publicConfig.fedifyOrigin),
+      ).toJsonLd(),
+    );
+  });
+
+  app.get("/actors/communities/:slug/objects/posts/:objectId", async (context) => {
+    return await renderObjectForRequest(dependencies, context, "post");
+  });
+
+  app.get("/actors/communities/:slug/objects/comments/:objectId", async (context) => {
+    return await renderObjectForRequest(dependencies, context, "comment");
+  });
+
+  app.get("/actors/communities/:slug/activities/create/posts/:activityId", async (context) => {
+    return await renderCreateActivityForRequest(dependencies, context, null, "post");
+  });
+
+  app.get("/actors/communities/:slug/activities/create/comments/:activityId", async (context) => {
+    return await renderCreateActivityForRequest(dependencies, context, null, "comment");
+  });
+
+  app.get("/actors/communities/:slug/activities/announce/posts/:activityId", async (context) => {
+    return await renderCreateActivityForRequest(dependencies, context, null, "post");
+  });
+
+  app.get("/actors/communities/:slug/activities/announce/comments/:activityId", async (context) => {
+    return await renderCreateActivityForRequest(dependencies, context, null, "comment");
+  });
 }
 
 async function renderUserOutbox(
@@ -336,6 +285,36 @@ async function renderUserFollowers(
   });
 }
 
+async function renderObjectForRequest(
+  dependencies: PublicActivityPubRouteDependencies,
+  context: Context,
+  kind: "post" | "comment",
+): Promise<Response> {
+  const object = await loadPublishedObjectForRequest(dependencies, context.req.path);
+  if (object == null || object.kind !== kind) {
+    return context.json({ error: `published ${kind} not found` }, 404);
+  }
+  return activityJsonResponse(buildPublishedActivityObjectJson(object));
+}
+
+async function renderCreateActivityForRequest(
+  dependencies: PublicActivityPubRouteDependencies,
+  context: Context,
+  username: string | null,
+  kind: "post" | "comment",
+): Promise<Response> {
+  const activity = await loadPublishedCreateActivityForRequest(
+    dependencies,
+    context.req.path,
+    username,
+    kind,
+  );
+  if (activity == null) {
+    return context.json({ error: "published create activity not found" }, 404);
+  }
+  return activityJsonResponse(buildPublishedCreateActivityJson(activity));
+}
+
 async function loadPublishedObjectForRequest(
   dependencies: PublicActivityPubRouteDependencies,
   requestPath: string,
@@ -349,14 +328,17 @@ async function loadPublishedObjectForRequest(
 async function loadPublishedCreateActivityForRequest(
   dependencies: PublicActivityPubRouteDependencies,
   requestPath: string,
-  username: string,
+  username: string | null,
   kind: "post" | "comment",
 ): Promise<PublishedActivityObjectView | null> {
   // The delivered Create.id is a full URL. Reconstruct it from the request path
   // so dereference uses the exact same durable id Python stored after publish.
   const activityUrl = new URL(requestPath, dependencies.publicConfig.fedifyOrigin).href;
   const activity = await dependencies.reads.loadPublishedActivityObjectByActivityId(activityUrl);
-  if (activity == null || activity.actorUsername !== username || activity.kind !== kind) {
+  if (activity == null || activity.kind !== kind) {
+    return null;
+  }
+  if (username != null && activity.actorUsername !== username) {
     return null;
   }
   return activity;

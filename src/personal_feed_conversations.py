@@ -5,13 +5,16 @@ from __future__ import annotations
 from dataclasses import dataclass
 from datetime import timezone
 from hashlib import sha256
-from urllib.parse import quote
 
 from .content_sync.persistence import (
     inspect_publish_artifacts,
     persist_publish_artifacts,
 )
 from .fedify_gateway_client import RenderPersonalFeedRequest
+from .activitypub_identity_urls import (
+    build_user_comment_object_id,
+    build_user_create_comment_activity_id,
+)
 
 
 @dataclass(frozen=True, slots=True)
@@ -200,9 +203,14 @@ class PersonalFeedConversationRuntime:
         operation_id = sha256(
             f"personal-feed-reply:{guild_id}:{thread_id}:{message_id}:{user.id}".encode()
         ).hexdigest()
-        username = quote(str(user.activitypub_username), safe="")
-        object_id = f"{self.fedify_origin}/users/{username}/comment/{operation_id}"
-        activity_id = f"{self.fedify_origin}/users/{username}/activities/create/comment/{operation_id}"
+        username = str(user.activitypub_username)
+        # Replies share the same typed User Actor identity as root posts.
+        object_id = build_user_comment_object_id(
+            origin=self.fedify_origin, username=username, object_id=operation_id
+        )
+        activity_id = build_user_create_comment_activity_id(
+            origin=self.fedify_origin, username=username, activity_id=operation_id
+        )
         created_at = getattr(message, "created_at").astimezone(timezone.utc)
         published_at = created_at.isoformat(timespec="milliseconds").replace(
             "+00:00", "Z"

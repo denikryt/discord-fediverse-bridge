@@ -227,7 +227,7 @@ class LocalCommunityRelayHarness:
                 "source_activity_id": source["id"],
                 "source_announce_id": "https://lemmy.example/activities/announce/1",
                 "occurred_at": "2026-05-19T10:00:00Z",
-                "community_actor_id": "https://bridge.example/communities/hackers",
+                "community_actor_id": "https://bridge.example/actors/communities/hackers",
                 "actor_id": "https://lemmy.example/u/bob",
                 "object": {
                     "ap_id": f"https://lemmy.example/post/{suffix}",
@@ -277,7 +277,7 @@ class LocalCommunityRelayHarness:
                 "source_activity_id": source_id,
                 "source_announce_id": None,
                 "occurred_at": "2026-05-19T10:10:00Z",
-                "community_actor_id": ("https://bridge.example/communities/hackers"),
+                "community_actor_id": ("https://bridge.example/actors/communities/hackers"),
                 "actor_id": "https://lemmy.example/u/bob",
                 "object": {
                     "ap_id": object_id,

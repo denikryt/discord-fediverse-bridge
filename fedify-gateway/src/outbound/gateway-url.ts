@@ -20,9 +20,8 @@ export function buildGatewayUrl(config: GatewayConfig, absolutePath: string): UR
   return new URL(path, config.fedifyOrigin);
 }
 
-/** Build the canonical ActivityPub actor URL for one registered bridge user. */
+/** Build the canonical typed ActivityPub actor URL for one registered bridge user. */
 export function buildUserActorUri(config: GatewayConfig, actorUsername: string): URL {
-  // Registered users are canonical Fedify actors. Their posts/comments can keep
-  // /users object URLs, but author identity and signing use /actors.
-  return buildGatewayUrl(config, `/actors/${actorUsername}`);
+  // Stage 4 makes user actor identity live under /actors/users/{username}.
+  return buildGatewayUrl(config, `/actors/users/${actorUsername}`);
 }

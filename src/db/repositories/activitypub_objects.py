@@ -102,11 +102,11 @@ class ActivityPubObjectRepository(BaseRepository):
         """Load count and rows from one transaction-owned SQLite snapshot."""
         if offset < 0 or limit <= 0:
             raise ValueError("offset must be non-negative and limit must be positive")
+        # Stage 4 removes legacy /users outbox compatibility; retained rows are
+        # migrated to the canonical typed actor URL before this query runs.
         predicate = (
             PublishedActivityObject.actor_username == user.activitypub_username,
-            PublishedActivityObject.actor_url.in_(
-                (user.actor_url, user.actor_url.replace("/actors/", "/users/"))
-            ),
+            PublishedActivityObject.actor_url == user.actor_url,
             PublishedActivityObject.kind.in_(("post", "comment")),
             PublishedActivityObject.deleted_at.is_(None),
         )

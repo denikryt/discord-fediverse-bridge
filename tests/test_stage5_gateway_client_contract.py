@@ -27,7 +27,7 @@ async def test_update_and_delete_endpoints_return_exact_canonical_activity_json(
         activity = {
             "id": payload["activityId"],
             "type": kind,
-            "actor": "https://bridge.example/actors/alice",
+            "actor": "https://bridge.example/actors/users/alice",
             "object": (
                 {
                     "id": payload["apObjectId"],
@@ -58,12 +58,12 @@ async def test_update_and_delete_endpoints_return_exact_canonical_activity_json(
             UpdateContentRequest(
                 actor_username="alice",
                 community_actor_url="https://remote.example/c/group",
-                ap_object_id="https://bridge.example/users/alice/comment/1",
+                ap_object_id="https://bridge.example/actors/users/alice/objects/comments/1",
                 kind="comment",
                 body_markdown="edited",
                 in_reply_to_object_id="https://remote.example/post/1",
                 operation_id="operation-update",
-                activity_id="https://bridge.example/users/alice/activities/update/operation-update",
+                activity_id="https://bridge.example/actors/users/alice/activities/update/operation-update",
                 mutation_timestamp="2026-06-16T12:00:00+00:00",
                 expected_revision=1,
                 next_revision=2,
@@ -73,9 +73,9 @@ async def test_update_and_delete_endpoints_return_exact_canonical_activity_json(
             DeleteContentRequest(
                 actor_username="alice",
                 community_actor_url="https://remote.example/c/group",
-                ap_object_id="https://bridge.example/users/alice/comment/1",
+                ap_object_id="https://bridge.example/actors/users/alice/objects/comments/1",
                 operation_id="operation-delete",
-                activity_id="https://bridge.example/users/alice/activities/delete/operation-delete",
+                activity_id="https://bridge.example/actors/users/alice/activities/delete/operation-delete",
                 mutation_timestamp="2026-06-16T12:01:00+00:00",
                 expected_revision=2,
                 next_revision=3,
@@ -89,10 +89,10 @@ async def test_update_and_delete_endpoints_return_exact_canonical_activity_json(
         update.activity_json["object"]["inReplyTo"] == "https://remote.example/post/1"
     )
     assert delete.activity_json == {
-        "id": "https://bridge.example/users/alice/activities/delete/operation-delete",
+        "id": "https://bridge.example/actors/users/alice/activities/delete/operation-delete",
         "type": "Delete",
-        "actor": "https://bridge.example/actors/alice",
-        "object": "https://bridge.example/users/alice/comment/1",
+        "actor": "https://bridge.example/actors/users/alice",
+        "object": "https://bridge.example/actors/users/alice/objects/comments/1",
     }
     assert [item["path"] for item in requests] == ["/update", "/delete"]
     assert requests[0]["payload"]["expectedRevision"] == 1

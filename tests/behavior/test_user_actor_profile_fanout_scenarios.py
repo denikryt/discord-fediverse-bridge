@@ -8,6 +8,7 @@ import pytest
 from sqlalchemy import select
 
 from src.db import Database
+from src.db.migrations import Stage4IdentityMigrationConfig
 from src.models import (
     UserActorOutboundDelivery,
     UserActorOutboundDeliveryFollower,
@@ -83,10 +84,10 @@ def _system(tmp_path):
     user = database.users.create_user(
         discord_user_id="1",
         activitypub_username="alice",
-        actor_url="https://bridge.example/users/alice",
-        inbox_url="https://bridge.example/users/alice/inbox",
-        outbox_url="https://bridge.example/users/alice/outbox",
-        followers_url="https://bridge.example/users/alice/followers",
+        actor_url="https://bridge.example/actors/users/alice",
+        inbox_url="https://bridge.example/actors/users/alice/inbox",
+        outbox_url="https://bridge.example/actors/users/alice/outbox",
+        followers_url="https://bridge.example/actors/users/alice/followers",
         public_key_pem="public",
         private_key_pem="private",
     )
@@ -415,17 +416,21 @@ def test_legacy_stage3_database_migrates_profile_version_without_synthetic_sourc
                 INSERT INTO users (
                     discord_user_id, activitypub_username, actor_url, inbox_url,
                     outbox_url, followers_url, public_key_pem, private_key_pem
-                ) VALUES ('1', 'alice', 'https://bridge.example/users/alice',
-                    'https://bridge.example/users/alice/inbox',
-                    'https://bridge.example/users/alice/outbox',
-                    'https://bridge.example/users/alice/followers', 'public', 'private')
+                ) VALUES ('1', 'alice', 'https://bridge.example/actors/users/alice',
+                    'https://bridge.example/actors/users/alice/inbox',
+                    'https://bridge.example/actors/users/alice/outbox',
+                    'https://bridge.example/actors/users/alice/followers', 'public', 'private')
             """)
         )
     engine.dispose()
 
     database = Database(f"sqlite:///{database_path}")
     database.create_all()
-    database.migrate()
+    database.migrate(
+        Stage4IdentityMigrationConfig(
+            public_origin="https://bridge.example", service_actor_identifier="bridge"
+        )
+    )
 
     with database.session() as session:
         assert (
@@ -575,10 +580,10 @@ def test_claim_batch_applies_global_and_per_user_fairness_caps(tmp_path) -> None
     second_user = database.users.create_user(
         discord_user_id="2",
         activitypub_username="bob",
-        actor_url="https://bridge.example/users/bob",
-        inbox_url="https://bridge.example/users/bob/inbox",
-        outbox_url="https://bridge.example/users/bob/outbox",
-        followers_url="https://bridge.example/users/bob/followers",
+        actor_url="https://bridge.example/actors/users/bob",
+        inbox_url="https://bridge.example/actors/users/bob/inbox",
+        outbox_url="https://bridge.example/actors/users/bob/outbox",
+        followers_url="https://bridge.example/actors/users/bob/followers",
         public_key_pem="public",
         private_key_pem="private",
     )

@@ -11,6 +11,7 @@ import re
 from collections.abc import Callable
 from dataclasses import dataclass
 
+from ..activitypub_identity_urls import LocalActorKind, build_actor_address
 from ..db import Database
 from ..registration_service import generate_rsa_keypair_pem
 
@@ -161,10 +162,14 @@ class LocalCommunityService:
 
     def build_actor_urls(self, slug: str) -> tuple[str, str, str, str]:
         """Build the canonical actor URLs for one local community slug."""
-        actor_url = f"{self.base_url}/communities/{slug}"
+        # Stage 4 makes local communities first-class typed actors rather than
+        # exposing the retired /communities/{slug} ActivityPub identity.
+        address = build_actor_address(
+            origin=self.base_url, kind=LocalActorKind.COMMUNITY, identifier=slug
+        )
         return (
-            actor_url,
-            f"{actor_url}/inbox",
-            f"{actor_url}/outbox",
-            f"{actor_url}/followers",
+            address.actor_url,
+            address.inbox_url,
+            address.outbox_url,
+            address.followers_url,
         )

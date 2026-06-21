@@ -74,17 +74,17 @@ export function buildPublishCreateActivity(
   const objectNumericId = Date.now();
   const objectId = buildGatewayUrl(
     config,
-    `/users/${request.actorUsername}/${request.kind}/${objectNumericId}`,
+    `/actors/users/${request.actorUsername}/objects/${request.kind === "comment" ? "comments" : "posts"}/${objectNumericId}`,
   );
   const activityId = buildGatewayUrl(
     config,
-    `/users/${request.actorUsername}/activities/create/${request.kind}/${Date.now()}-${Math.random().toString(36).slice(2)}`,
+    `/actors/users/${request.actorUsername}/activities/create/${request.kind === "comment" ? "comments" : "posts"}/${Date.now()}-${Math.random().toString(36).slice(2)}`,
   );
   const communityId = resolvedCommunityId ?? request.communityActorUrl;
   const object = buildPublishObject(request, actorUri, objectId, communityId);
   const PUBLIC = new URL("https://www.w3.org/ns/activitystreams#Public");
   const community = new URL(resolvedCommunityId ?? request.communityActorUrl);
-  const followers = buildGatewayUrl(config, `/actors/${request.actorUsername}/followers`);
+  const followers = buildGatewayUrl(config, `/actors/users/${request.actorUsername}/followers`);
   return {
     actorUri,
     activityId,

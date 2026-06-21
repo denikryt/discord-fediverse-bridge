@@ -47,8 +47,8 @@ def test_internal_fedify_reads_are_authenticated_and_no_store(tmp_path: Path) ->
     """Gateway can resolve persisted actors and keys only with the shared secret."""
     runtime, database = _runtime(tmp_path)
     database.bridge_actor_keys.create(
-        actor_url="https://bridge.example/actors/bridge",
-        key_id="https://bridge.example/actors/bridge#main-key",
+        actor_url="https://bridge.example/actors/services/bridge",
+        key_id="https://bridge.example/actors/services/bridge#main-key",
         key_format="jwk",
         algorithm="RSASSA-PKCS1-v1_5",
         public_key_data='{"kty":"RSA","n":"public"}',
@@ -57,10 +57,10 @@ def test_internal_fedify_reads_are_authenticated_and_no_store(tmp_path: Path) ->
     database.users.create_user(
         discord_user_id="1",
         activitypub_username="alice",
-        actor_url="https://bridge.example/users/alice",
-        inbox_url="https://bridge.example/users/alice/inbox",
-        outbox_url="https://bridge.example/users/alice/outbox",
-        followers_url="https://bridge.example/users/alice/followers",
+        actor_url="https://bridge.example/actors/users/alice",
+        inbox_url="https://bridge.example/actors/users/alice/inbox",
+        outbox_url="https://bridge.example/actors/users/alice/outbox",
+        followers_url="https://bridge.example/actors/users/alice/followers",
         public_key_pem="user-public",
         private_key_pem="user-private",
     )
@@ -95,10 +95,10 @@ def test_internal_fedify_resolves_community_subscribers_objects_and_mappings(
         display_name="Test",
         summary="Summary",
         created_by_discord_user_id="1",
-        actor_url="https://bridge.example/communities/test",
-        inbox_url="https://bridge.example/communities/test/inbox",
-        outbox_url="https://bridge.example/communities/test/outbox",
-        followers_url="https://bridge.example/communities/test/followers",
+        actor_url="https://bridge.example/actors/communities/test",
+        inbox_url="https://bridge.example/actors/communities/test/inbox",
+        outbox_url="https://bridge.example/actors/communities/test/outbox",
+        followers_url="https://bridge.example/actors/communities/test/followers",
         public_key_pem="community-public",
         private_key_pem="community-private",
     )
@@ -110,7 +110,7 @@ def test_internal_fedify_resolves_community_subscribers_objects_and_mappings(
     )
     database.activitypub_objects.create_published_activity_object(
         actor_username="alice",
-        actor_url="https://bridge.example/users/alice",
+        actor_url="https://bridge.example/actors/users/alice",
         community_actor_url=community.actor_url,
         activity_id="https://bridge.example/activities/1",
         object_id="https://bridge.example/objects/1",
@@ -126,7 +126,7 @@ def test_internal_fedify_resolves_community_subscribers_objects_and_mappings(
         source_id="30",
         activity_id="https://bridge.example/activities/1",
         object_id="https://bridge.example/objects/1",
-        actor_url="https://bridge.example/users/alice",
+        actor_url="https://bridge.example/actors/users/alice",
         community_actor_url=community.actor_url,
         discord_channel_id=20,
         discord_message_id=30,
@@ -200,10 +200,10 @@ def test_internal_user_actor_profile_dto_exposes_public_fields_without_storage_d
     user = database.users.create_user(
         discord_user_id="2",
         activitypub_username="bob",
-        actor_url="https://bridge.example/users/bob",
-        inbox_url="https://bridge.example/users/bob/inbox",
-        outbox_url="https://bridge.example/users/bob/outbox",
-        followers_url="https://bridge.example/users/bob/followers",
+        actor_url="https://bridge.example/actors/users/bob",
+        inbox_url="https://bridge.example/actors/users/bob/inbox",
+        outbox_url="https://bridge.example/actors/users/bob/outbox",
+        followers_url="https://bridge.example/actors/users/bob/followers",
         public_key_pem="user-public",
         private_key_pem="user-private",
     )
@@ -320,10 +320,10 @@ def test_internal_user_outbox_is_canonical_ordered_and_filtered(tmp_path: Path) 
     user = database.users.create_user(
         discord_user_id="900",
         activitypub_username="alice",
-        actor_url="https://bridge.example/actors/alice",
-        inbox_url="https://bridge.example/actors/alice/inbox",
-        outbox_url="https://bridge.example/actors/alice/outbox",
-        followers_url="https://bridge.example/actors/alice/followers",
+        actor_url="https://bridge.example/actors/users/alice",
+        inbox_url="https://bridge.example/actors/users/alice/inbox",
+        outbox_url="https://bridge.example/actors/users/alice/outbox",
+        followers_url="https://bridge.example/actors/users/alice/followers",
         public_key_pem="public",
         private_key_pem="private",
     )
@@ -334,10 +334,10 @@ def test_internal_user_outbox_is_canonical_ordered_and_filtered(tmp_path: Path) 
         display_name="Stage 9",
         summary=None,
         created_by_discord_user_id="900",
-        actor_url="https://bridge.example/communities/stage9",
-        inbox_url="https://bridge.example/communities/stage9/inbox",
-        outbox_url="https://bridge.example/communities/stage9/outbox",
-        followers_url="https://bridge.example/communities/stage9/followers",
+        actor_url="https://bridge.example/actors/communities/stage9",
+        inbox_url="https://bridge.example/actors/communities/stage9/inbox",
+        outbox_url="https://bridge.example/actors/communities/stage9/outbox",
+        followers_url="https://bridge.example/actors/communities/stage9/followers",
         public_key_pem="public",
         private_key_pem="private",
     )
@@ -379,7 +379,7 @@ def test_internal_user_outbox_is_canonical_ordered_and_filtered(tmp_path: Path) 
     assert response.status_code == 200
     assert response.headers["cache-control"] == "no-store"
     payload = response.json()
-    assert payload["outbox_url"] == "https://bridge.example/actors/alice/outbox"
+    assert payload["outbox_url"] == "https://bridge.example/actors/users/alice/outbox"
     assert payload["total_items"] == 1
     assert [item["object_id"] for item in payload["items"]] == [second.object_id]
     assert (

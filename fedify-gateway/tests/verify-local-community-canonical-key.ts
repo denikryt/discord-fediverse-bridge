@@ -63,30 +63,33 @@ async function testActorBuilderPublishesCanonicalKey(config: GatewayConfig): Pro
   const json = await actor.toJsonLd() as Record<string, unknown>;
   const publicKey = json.publicKey as Record<string, unknown>;
 
-  assert.equal(json.id, `${TEST_ORIGIN}communities/hackers`);
-  assert.equal(publicKey.id, `${TEST_ORIGIN}communities/hackers#main-key`);
-  assert.equal(publicKey.owner, `${TEST_ORIGIN}communities/hackers`);
+  assert.equal(json.id, `${TEST_ORIGIN}actors/communities/hackers`);
+  assert.equal(publicKey.id, `${TEST_ORIGIN}actors/communities/hackers#main-key`);
+  assert.equal(publicKey.owner, `${TEST_ORIGIN}actors/communities/hackers`);
 }
 
 /**
- * Action: fetch the community through both public routes.
- * Expected: every route returns the same canonical actor/key ownership.
+ * Action: fetch the community through the typed public actor route.
+ * Expected: old route families are unsupported and typed key ownership renders.
  */
 async function testHttpActorRoutesPublishCanonicalKey(config: GatewayConfig): Promise<void> {
   const app = createGatewayApp(config);
 
-  for (const pathName of ["/communities/hackers", "/actors/hackers"]) {
-    const response = await app.request(pathName, {
-      headers: { Accept: "application/activity+json" },
-    });
-    assert.equal(response.status, 200, `${pathName} should resolve`);
-    const json = await response.json() as Record<string, unknown>;
-    const publicKey = json.publicKey as Record<string, unknown>;
-
-    assert.equal(json.id, `${TEST_ORIGIN}communities/hackers`);
-    assert.equal(publicKey.id, `${TEST_ORIGIN}communities/hackers#main-key`);
-    assert.equal(publicKey.owner, `${TEST_ORIGIN}communities/hackers`);
+  for (const oldPath of ["/communities/hackers", "/c/hackers", "/actors/hackers"]) {
+    const oldResponse = await app.request(oldPath);
+    assert.equal(oldResponse.status, 404, `${oldPath} must be unsupported`);
   }
+
+  const response = await app.request("/actors/communities/hackers", {
+    headers: { Accept: "application/activity+json" },
+  });
+  assert.equal(response.status, 200, "typed community actor should resolve");
+  const json = await response.json() as Record<string, unknown>;
+  const publicKey = json.publicKey as Record<string, unknown>;
+
+  assert.equal(json.id, `${TEST_ORIGIN}actors/communities/hackers`);
+  assert.equal(publicKey.id, `${TEST_ORIGIN}actors/communities/hackers#main-key`);
+  assert.equal(publicKey.owner, `${TEST_ORIGIN}actors/communities/hackers`);
 }
 
 /**
@@ -99,7 +102,7 @@ async function testAcceptFollowSignsWithCanonicalCommunityKey(config: GatewayCon
 
   await acceptLocalCommunityFollow(fakeFederation as never, config, {
     communitySlug: "hackers",
-    communityActorUrl: `${TEST_ORIGIN}communities/hackers`,
+    communityActorUrl: `${TEST_ORIGIN}actors/communities/hackers`,
     remoteActorId: `${REMOTE_ORIGIN}ap/users/alice`,
     remoteInboxUrl: `${REMOTE_ORIGIN}ap/users/alice/inbox`,
     followActivityId: `${REMOTE_ORIGIN}activities/follow/1`,
@@ -109,11 +112,11 @@ async function testAcceptFollowSignsWithCanonicalCommunityKey(config: GatewayCon
   assertSenderKey(deliveries[0]?.sender);
   assert.equal(deliveries[0]?.recipient, `${REMOTE_ORIGIN}ap/users/alice/inbox`);
   assert.equal(deliveries[0]?.payload.type, "Accept");
-  assert.equal(deliveries[0]?.payload.actor, `${TEST_ORIGIN}communities/hackers`);
+  assert.equal(deliveries[0]?.payload.actor, `${TEST_ORIGIN}actors/communities/hackers`);
   assert.equal(deliveries[0]?.payload.to, `${REMOTE_ORIGIN}ap/users/alice`);
   assert.equal((deliveries[0]?.payload.object as Record<string, unknown>).id, `${REMOTE_ORIGIN}activities/follow/1`);
   assert.equal((deliveries[0]?.payload.object as Record<string, unknown>).actor, `${REMOTE_ORIGIN}ap/users/alice`);
-  assert.equal((deliveries[0]?.payload.object as Record<string, unknown>).object, `${TEST_ORIGIN}communities/hackers`);
+  assert.equal((deliveries[0]?.payload.object as Record<string, unknown>).object, `${TEST_ORIGIN}actors/communities/hackers`);
 }
 
 /**
@@ -126,9 +129,9 @@ async function testRelaySignsWithCanonicalCommunityKey(config: GatewayConfig): P
   const restoreFetch = installFetchRecorder(deliveries);
   const activityJson = {
     "@context": "https://www.w3.org/ns/activitystreams",
-    id: `${TEST_ORIGIN}communities/hackers/activities/announce/1`,
+    id: `${TEST_ORIGIN}actors/communities/hackers/activities/announce/1`,
     type: "Announce",
-    actor: `${TEST_ORIGIN}communities/hackers`,
+    actor: `${TEST_ORIGIN}actors/communities/hackers`,
     object: {
       type: "Create",
       actor: `${REMOTE_ORIGIN}ap/users/bob`,
@@ -136,7 +139,7 @@ async function testRelaySignsWithCanonicalCommunityKey(config: GatewayConfig): P
     },
   };
   const request: SendLocalCommunityRelayRequest = {
-    signingActorUrl: `${TEST_ORIGIN}communities/hackers`,
+    signingActorUrl: `${TEST_ORIGIN}actors/communities/hackers`,
     deliveries: [
       {
         deliveryId: 10,
@@ -155,7 +158,7 @@ async function testRelaySignsWithCanonicalCommunityKey(config: GatewayConfig): P
   assert.equal(deliveries[0]?.payload.id, activityJson.id);
   assert.equal(deliveries[0]?.payload.type, activityJson.type);
   assert.equal(deliveries[0]?.headers["content-type"], "application/activity+json");
-  assert.match(deliveries[0]?.headers.signature ?? "", /keyId="https:\/\/discord-bridge.example.com\/communities\/hackers#main-key"/);
+  assert.match(deliveries[0]?.headers.signature ?? "", /keyId="https:\/\/discord-bridge.example.com\/actors\/communities\/hackers#main-key"/);
 }
 
 function installFetchRecorder(
@@ -205,7 +208,7 @@ function buildFakeFederation(
 function assertSenderKey(sender: unknown): void {
   /** Assert that local-community outbound delivery uses the canonical key id. */
   const keyPairs = sender as Array<{ keyId: URL; privateKey: CryptoKey }>;
-  assert.equal(keyPairs[0]?.keyId.href, `${TEST_ORIGIN}communities/hackers#main-key`);
+  assert.equal(keyPairs[0]?.keyId.href, `${TEST_ORIGIN}actors/communities/hackers#main-key`);
   assert.ok(keyPairs[0]?.privateKey != null);
 }
 
@@ -260,10 +263,10 @@ async function buildConfig(): Promise<GatewayConfig> {
         "hackers",
         "Hackers",
         "A local hackerspace forum.",
-        `${TEST_ORIGIN}communities/hackers`,
-        `${TEST_ORIGIN}communities/hackers/inbox`,
-        `${TEST_ORIGIN}communities/hackers/outbox`,
-        `${TEST_ORIGIN}communities/hackers/followers`,
+        `${TEST_ORIGIN}actors/communities/hackers`,
+        `${TEST_ORIGIN}actors/communities/hackers/inbox`,
+        `${TEST_ORIGIN}actors/communities/hackers/outbox`,
+        `${TEST_ORIGIN}actors/communities/hackers/followers`,
         await exportPublicKeyPem(communityKeys.publicKey),
         await exportPrivateKeyPem(communityKeys.privateKey),
         "active",
@@ -271,7 +274,7 @@ async function buildConfig(): Promise<GatewayConfig> {
     );
     seedBridgeActorJwk(
       db,
-      `${TEST_ORIGIN}actors/bridge`,
+      `${TEST_ORIGIN}actors/services/bridge`,
       JSON.stringify(await exportJwk(bridgeKeys.privateKey)),
       JSON.stringify(await exportJwk(bridgeKeys.publicKey)),
     );

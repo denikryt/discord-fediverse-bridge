@@ -78,7 +78,7 @@ export function registerInternalProfileRoutes(
           header: snapshot.header == null ? null : { ...snapshot.header, url: new URL(snapshot.header.url) },
         },
         new URL("/inbox", config.fedifyOrigin),
-        await fedifyContext.getActorKeyPairs(snapshot.username),
+        await fedifyContext.getActorKeyPairs(`users/${snapshot.username}`),
       );
       const activity = new Update({
         id: new URL(payload.activityId),

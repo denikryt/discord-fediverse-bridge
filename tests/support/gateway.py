@@ -20,9 +20,9 @@ def build_publish_result(
     """Build one stable publish result returned by the fake gateway."""
     return PublishContentResult(
         activity_id=activity_id
-        or f"https://{BRIDGE_HOST_DOMAIN}/users/alice/activities/create/{kind}/1",
+        or f"https://{BRIDGE_HOST_DOMAIN}/actors/users/alice/activities/create/{kind}/1",
         object_id=object_id
-        or f"https://{BRIDGE_HOST_DOMAIN}/users/alice/objects/{kind}/1",
+        or f"https://{BRIDGE_HOST_DOMAIN}/actors/users/alice/objects/{kind}/1",
         community_actor_url=community_actor_url,
     )
 

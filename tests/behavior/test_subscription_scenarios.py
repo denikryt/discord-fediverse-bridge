@@ -34,10 +34,10 @@ def _register_user(database: Database, discord_user_id: str = "1234567890") -> N
     database.users.create_user(
         discord_user_id=discord_user_id,
         activitypub_username="alice",
-        actor_url=f"https://{BRIDGE_EXAMPLE_DOMAIN}/users/alice",
-        inbox_url=f"https://{BRIDGE_EXAMPLE_DOMAIN}/users/alice/inbox",
-        outbox_url=f"https://{BRIDGE_EXAMPLE_DOMAIN}/users/alice/outbox",
-        followers_url=f"https://{BRIDGE_EXAMPLE_DOMAIN}/users/alice/followers",
+        actor_url=f"https://{BRIDGE_EXAMPLE_DOMAIN}/actors/users/alice",
+        inbox_url=f"https://{BRIDGE_EXAMPLE_DOMAIN}/actors/users/alice/inbox",
+        outbox_url=f"https://{BRIDGE_EXAMPLE_DOMAIN}/actors/users/alice/outbox",
+        followers_url=f"https://{BRIDGE_EXAMPLE_DOMAIN}/actors/users/alice/followers",
         public_key_pem="public-key",
         private_key_pem="private-key",
     )

@@ -158,10 +158,10 @@ async def test_metadata_modal_replaces_ordered_rows_atomically_with_multiline_va
     user = database.users.create_user(
         discord_user_id="7",
         activitypub_username="alice",
-        actor_url="https://bridge.example/users/alice",
-        inbox_url="https://bridge.example/users/alice/inbox",
-        outbox_url="https://bridge.example/users/alice/outbox",
-        followers_url="https://bridge.example/users/alice/followers",
+        actor_url="https://bridge.example/actors/users/alice",
+        inbox_url="https://bridge.example/actors/users/alice/inbox",
+        outbox_url="https://bridge.example/actors/users/alice/outbox",
+        followers_url="https://bridge.example/actors/users/alice/followers",
         public_key_pem="public",
         private_key_pem="private",
     )
@@ -224,10 +224,10 @@ async def test_metadata_modal_partial_row_rejects_whole_replacement(
     user = database.users.create_user(
         discord_user_id="7",
         activitypub_username="alice",
-        actor_url="https://bridge.example/users/alice",
-        inbox_url="https://bridge.example/users/alice/inbox",
-        outbox_url="https://bridge.example/users/alice/outbox",
-        followers_url="https://bridge.example/users/alice/followers",
+        actor_url="https://bridge.example/actors/users/alice",
+        inbox_url="https://bridge.example/actors/users/alice/inbox",
+        outbox_url="https://bridge.example/actors/users/alice/outbox",
+        followers_url="https://bridge.example/actors/users/alice/followers",
         public_key_pem="public",
         private_key_pem="private",
     )
@@ -440,10 +440,10 @@ async def test_feed_view_callback_reports_unbound_and_bound_state(
             User(
                 discord_user_id="7",
                 activitypub_username="alice",
-                actor_url="https://bridge.test/users/alice",
-                inbox_url="https://bridge.test/users/alice/inbox",
-                outbox_url="https://bridge.test/users/alice/outbox",
-                followers_url="https://bridge.test/users/alice/followers",
+                actor_url="https://bridge.test/actors/users/alice",
+                inbox_url="https://bridge.test/actors/users/alice/inbox",
+                outbox_url="https://bridge.test/actors/users/alice/outbox",
+                followers_url="https://bridge.test/actors/users/alice/followers",
                 public_key_pem="public",
                 private_key_pem="private",
             )

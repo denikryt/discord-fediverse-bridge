@@ -164,10 +164,10 @@ async def test_runtime_close_cancels_inflight_personal_feed_delivery_before_depe
         user = User(
             discord_user_id="10",
             activitypub_username="alice",
-            actor_url="https://bridge.example/users/alice",
-            inbox_url="https://bridge.example/users/alice/inbox",
-            outbox_url="https://bridge.example/users/alice/outbox",
-            followers_url="https://bridge.example/users/alice/followers",
+            actor_url="https://bridge.example/actors/users/alice",
+            inbox_url="https://bridge.example/actors/users/alice/inbox",
+            outbox_url="https://bridge.example/actors/users/alice/outbox",
+            followers_url="https://bridge.example/actors/users/alice/followers",
             public_key_pem="public",
             private_key_pem="private",
         )
@@ -197,8 +197,8 @@ async def test_runtime_close_cancels_inflight_personal_feed_delivery_before_depe
         object_id="https://remote.example/o/blocked",
         root_object_id="https://bridge.example/o/root",
         parent_object_id="https://bridge.example/o/root",
-        activity_actor_id="https://remote.example/users/bob",
-        attributed_to_actor_id="https://remote.example/users/bob",
+        activity_actor_id="https://remote.example/actors/users/bob",
+        attributed_to_actor_id="https://remote.example/actors/users/bob",
         actor_name="Bob",
         content_markdown="blocked",
         published_at=datetime.now(timezone.utc),
@@ -272,7 +272,7 @@ def test_partial_startup_failure_after_database_closes_database_and_lease(
         def create_all(self) -> None:
             """Preserve the schema creation milestone before migration."""
 
-        def migrate(self) -> None:
+        def migrate(self, *_args: object, **_kwargs: object) -> None:
             """Raise after DB construction so cleanup must dispose the engine."""
             raise RuntimeError("migration failed")
 
@@ -313,7 +313,7 @@ def test_partial_startup_failure_after_gateway_closes_gateway_database_and_lease
         def create_all(self) -> None:
             """No-op schema setup for composition failure testing."""
 
-        def migrate(self) -> None:
+        def migrate(self, *_args: object, **_kwargs: object) -> None:
             """No-op migration setup for composition failure testing."""
 
         def close(self) -> None:

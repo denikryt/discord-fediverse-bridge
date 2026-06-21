@@ -4,7 +4,9 @@ import {
   importJwk,
 } from "@fedify/fedify";
 
+import { buildActorAddress, parseLocalActorUrl } from "./activitypub-identity-urls.js";
 import type { GatewayConfig } from "./config.js";
+import { parseTypedActorIdentifier } from "./typed-actor-routing.js";
 import {
   loadBridgeActorKey,
   loadLocalCommunityByActorUrl,
@@ -57,24 +59,19 @@ export interface LocalCommunityIdentity {
   summary: string;
 }
 
-export type LocalActorKind = "bridge" | "user" | "community";
+export type LocalActorKind = "service" | "user" | "community";
 
 
 export function getBridgeActorIdentity(
   config: GatewayConfig,
 ): BridgeActorIdentity {
+  const address = buildActorAddress(config.fedifyOrigin, "service", config.actorIdentifier);
   return {
-    actorId: new URL(`/actors/${config.actorIdentifier}`, config.fedifyOrigin),
+    actorId: address.actor,
     identifier: config.actorIdentifier,
-    inboxId: new URL("/inbox", config.fedifyOrigin),
-    outboxId: new URL(
-      `/actors/${config.actorIdentifier}/outbox`,
-      config.fedifyOrigin,
-    ),
-    followersId: new URL(
-      `/actors/${config.actorIdentifier}/followers`,
-      config.fedifyOrigin,
-    ),
+    inboxId: address.inbox,
+    outboxId: address.outbox,
+    followersId: address.followers,
     name: config.actorName,
     summary: config.actorSummary,
   };
@@ -106,48 +103,39 @@ export async function hasLocalActor(
   config: GatewayConfig,
   identifier: string,
 ): Promise<boolean> {
-  if (identifier === config.actorIdentifier) {
-    return true;
-  }
-  if ((await loadRegisteredUserByUsername(config, identifier)) != null) {
-    return true;
-  }
-  return (await loadLocalCommunityBySlug(config, identifier)) != null;
+  return (await resolveLocalActorKind(config, identifier)) != null;
 }
 
 export async function resolveLocalActorKind(
   config: GatewayConfig,
   identifier: string,
 ): Promise<LocalActorKind | null> {
-  if (identifier === config.actorIdentifier) {
-    return "bridge";
+  const typed = parseTypedActorIdentifier(identifier);
+  if (typed == null) return null;
+  if (typed.kind === "service") {
+    return typed.identifier === config.actorIdentifier ? "service" : null;
   }
-  if ((await loadRegisteredUserByUsername(config, identifier)) != null) {
-    return "user";
+  if (typed.kind === "user") {
+    return (await loadRegisteredUserByUsername(config, typed.identifier)) == null ? null : "user";
   }
-  if ((await loadLocalCommunityBySlug(config, identifier)) != null) {
-    return "community";
-  }
-  return null;
+  return (await loadLocalCommunityBySlug(config, typed.identifier)) == null ? null : "community";
 }
 
 export async function loadActorKeyPair(
   config: GatewayConfig,
   identifier: string,
 ): Promise<CryptoKeyPair | null> {
-  if (identifier === config.actorIdentifier) {
-    return await loadBridgeActorKeyPair(config);
+  const typed = parseTypedActorIdentifier(identifier);
+  if (typed == null) return null;
+  if (typed.kind === "service") {
+    return typed.identifier === config.actorIdentifier ? await loadBridgeActorKeyPair(config) : null;
   }
-
-  const user = await loadUserActorIdentity(config, identifier);
-  if (user != null) {
-    return await importPemKeyPair(user.publicKeyPem, user.privateKeyPem);
+  if (typed.kind === "user") {
+    const user = await loadUserActorIdentity(config, typed.identifier);
+    return user == null ? null : await importPemKeyPair(user.publicKeyPem, user.privateKeyPem);
   }
-  const community = await loadLocalCommunityIdentity(config, identifier);
-  if (community != null) {
-    return await importPemKeyPair(community.publicKeyPem, community.privateKeyPem);
-  }
-  return null;
+  const community = await loadLocalCommunityIdentity(config, typed.identifier);
+  return community == null ? null : await importPemKeyPair(community.publicKeyPem, community.privateKeyPem);
 }
 
 async function loadBridgeActorKeyPair(
@@ -207,6 +195,10 @@ export async function resolveLocalCommunityByActorUrl(
   config: GatewayConfig,
   actorUrl: string,
 ): Promise<LocalCommunityIdentity | null> {
+  const parsed = parseLocalActorUrl(config.fedifyOrigin, actorUrl);
+  if (parsed?.kind === "community") {
+    return await loadLocalCommunityIdentity(config, parsed.identifier);
+  }
   const row = await loadLocalCommunityByActorUrl(config, actorUrl);
   if (row == null) {
     return null;

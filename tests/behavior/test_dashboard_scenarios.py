@@ -81,7 +81,7 @@ def test_empty_dashboard_state_renders_open_federation(tmp_path: Path) -> None:
     assert payload["instance"]["version"] == "0.1.0"
     assert (
         payload["instance"]["bridgeActorUrl"]
-        == "https://discrod-bridge.example.com/actors/bridge"
+        == "https://discrod-bridge.example.com/actors/services/bridge"
     )
     assert payload["instance"]["registeredUserCount"] == 0
     assert payload["localCommunities"] == []
@@ -98,20 +98,20 @@ def test_local_communities_show_safe_public_metadata_and_counts(tmp_path: Path) 
     database.users.create_user(
         discord_user_id="1234567890",
         activitypub_username="alice",
-        actor_url="https://discrod-bridge.example.com/users/alice",
-        inbox_url="https://discrod-bridge.example.com/users/alice/inbox",
-        outbox_url="https://discrod-bridge.example.com/users/alice/outbox",
-        followers_url="https://discrod-bridge.example.com/users/alice/followers",
+        actor_url="https://discrod-bridge.example.com/actors/users/alice",
+        inbox_url="https://discrod-bridge.example.com/actors/users/alice/inbox",
+        outbox_url="https://discrod-bridge.example.com/actors/users/alice/outbox",
+        followers_url="https://discrod-bridge.example.com/actors/users/alice/followers",
         public_key_pem="public-key",
         private_key_pem="private-key",
     )
     database.users.create_user(
         discord_user_id="9999999999",
         activitypub_username="bob",
-        actor_url="https://discrod-bridge.example.com/users/bob",
-        inbox_url="https://discrod-bridge.example.com/users/bob/inbox",
-        outbox_url="https://discrod-bridge.example.com/users/bob/outbox",
-        followers_url="https://discrod-bridge.example.com/users/bob/followers",
+        actor_url="https://discrod-bridge.example.com/actors/users/bob",
+        inbox_url="https://discrod-bridge.example.com/actors/users/bob/inbox",
+        outbox_url="https://discrod-bridge.example.com/actors/users/bob/outbox",
+        followers_url="https://discrod-bridge.example.com/actors/users/bob/followers",
         public_key_pem="public-key",
         private_key_pem="private-key",
     )
@@ -145,10 +145,10 @@ def test_local_communities_show_safe_public_metadata_and_counts(tmp_path: Path) 
     assert community_payload["relayHandle"] == "!hackers@discrod-bridge.example.com"
     assert (
         community_payload["actorUrl"]
-        == "https://discrod-bridge.example.com/communities/hackers"
+        == "https://discrod-bridge.example.com/actors/communities/hackers"
     )
     assert (
-        community_payload["aliasUrl"] == "https://discrod-bridge.example.com/c/hackers"
+        community_payload["aliasUrl"] == "https://discrod-bridge.example.com/actors/communities/hackers"
     )
     assert community_payload["remoteSubscriberCount"] == 2
     assert community_payload["localSubscriberCount"] == 0

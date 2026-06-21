@@ -8,6 +8,7 @@ from sqlalchemy import create_engine, text
 
 from src.config import Settings
 from src.db import Database
+from src.db.migrations import Stage4IdentityMigrationConfig
 from src.local_communities.service import LocalCommunityService
 from src.operations.create_community import (
     CreateCommunityInput,
@@ -62,7 +63,7 @@ def test_allowlisted_operator_creates_local_community_and_persists_actor_metadat
     assert created.display_name == "Hackers"
     assert created.summary == "A local hackerspace forum."
     assert created.created_by_discord_user_id == "123"
-    assert created.actor_url == "https://bridge.example/communities/hackers"
+    assert created.actor_url == "https://bridge.example/actors/communities/hackers"
 
 
 def test_registered_policy_no_longer_uses_operator_allowlist_for_create(
@@ -352,10 +353,10 @@ def test_existing_database_migration_adds_nullable_owner_column(tmp_path: Path) 
                     'cats',
                     'Cats',
                     'Cat photos.',
-                    'https://bridge.example/communities/cats',
-                    'https://bridge.example/communities/cats/inbox',
-                    'https://bridge.example/communities/cats/outbox',
-                    'https://bridge.example/communities/cats/followers',
+                    'https://bridge.example/actors/communities/cats',
+                    'https://bridge.example/actors/communities/cats/inbox',
+                    'https://bridge.example/actors/communities/cats/outbox',
+                    'https://bridge.example/actors/communities/cats/followers',
                     'public-key',
                     'private-key',
                     'active',
@@ -368,7 +369,7 @@ def test_existing_database_migration_adds_nullable_owner_column(tmp_path: Path) 
     engine.dispose()
 
     database = Database(f"sqlite:///{db_path}")
-    database.migrate()
+    database.migrate(Stage4IdentityMigrationConfig(public_origin="https://bridge.example", service_actor_identifier="bridge"))
     migrated = database.local_communities.get_local_community_by_slug("cats")
 
     assert migrated is not None
@@ -391,7 +392,7 @@ def test_owner_column_migration_is_idempotent(tmp_path: Path) -> None:
     database = Database(f"sqlite:///{db_path}")
     database.create_all()
     database.migrate()
-    database.migrate()
+    database.migrate(Stage4IdentityMigrationConfig(public_origin="https://bridge.example", service_actor_identifier="bridge"))
 
     with database.engine.connect() as conn:
         columns = conn.execute(text("PRAGMA table_info(local_communities)")).fetchall()
@@ -463,10 +464,10 @@ def test_summary_nullable_migration_preserves_unique_constraints(
                     status, created_at, updated_at
                 ) VALUES (
                     10, 100, 'cats', 'Cats', 'Cat photos.',
-                    'https://bridge.example/communities/cats',
-                    'https://bridge.example/communities/cats/inbox',
-                    'https://bridge.example/communities/cats/outbox',
-                    'https://bridge.example/communities/cats/followers',
+                    'https://bridge.example/actors/communities/cats',
+                    'https://bridge.example/actors/communities/cats/inbox',
+                    'https://bridge.example/actors/communities/cats/outbox',
+                    'https://bridge.example/actors/communities/cats/followers',
                     'public-key', 'private-key', 'active', '2026-01-01 00:00:00', '2026-01-01 00:00:00'
                 )
                 """
@@ -475,7 +476,11 @@ def test_summary_nullable_migration_preserves_unique_constraints(
     engine.dispose()
 
     database = Database(f"sqlite:///{db_path}")
-    database.migrate()
+    database.migrate(
+        Stage4IdentityMigrationConfig(
+            public_origin="https://bridge.example", service_actor_identifier="bridge"
+        )
+    )
 
     with database.engine.begin() as conn:
         summary_column = [
@@ -492,7 +497,7 @@ def test_summary_nullable_migration_preserves_unique_constraints(
                 discord_guild_id, discord_forum_channel_id, slug, display_name, summary,
                 actor_url, inbox_url, outbox_url, followers_url, public_key_pem, private_key_pem,
                 status, created_at, updated_at
-            ) VALUES (10, 100, 'dogs', 'Dogs', NULL, 'https://bridge.example/communities/dogs',
+            ) VALUES (10, 100, 'dogs', 'Dogs', NULL, 'https://bridge.example/actors/communities/dogs',
                 'i', 'o', 'f', 'public', 'private', 'active', '2026-01-01', '2026-01-01')
             """,
             """
@@ -500,7 +505,7 @@ def test_summary_nullable_migration_preserves_unique_constraints(
                 discord_guild_id, discord_forum_channel_id, slug, display_name, summary,
                 actor_url, inbox_url, outbox_url, followers_url, public_key_pem, private_key_pem,
                 status, created_at, updated_at
-            ) VALUES (10, 101, 'cats', 'Cats 2', NULL, 'https://bridge.example/communities/cats-2',
+            ) VALUES (10, 101, 'cats', 'Cats 2', NULL, 'https://bridge.example/actors/communities/cats-2',
                 'i', 'o', 'f', 'public', 'private', 'active', '2026-01-01', '2026-01-01')
             """,
             """
@@ -508,7 +513,7 @@ def test_summary_nullable_migration_preserves_unique_constraints(
                 discord_guild_id, discord_forum_channel_id, slug, display_name, summary,
                 actor_url, inbox_url, outbox_url, followers_url, public_key_pem, private_key_pem,
                 status, created_at, updated_at
-            ) VALUES (10, 102, 'birds', 'Birds', NULL, 'https://bridge.example/communities/cats',
+            ) VALUES (10, 102, 'birds', 'Birds', NULL, 'https://bridge.example/actors/communities/cats',
                 'i', 'o', 'f', 'public', 'private', 'active', '2026-01-01', '2026-01-01')
             """,
         ):

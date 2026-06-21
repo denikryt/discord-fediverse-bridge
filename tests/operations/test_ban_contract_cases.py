@@ -63,10 +63,10 @@ def _seed_target(database: object, case: BanContractCase) -> str:
     database.users.create_user(
         discord_user_id="777",
         activitypub_username="alice",
-        actor_url="https://bridge.example/users/alice",
-        inbox_url="https://bridge.example/users/alice/inbox",
-        outbox_url="https://bridge.example/users/alice/outbox",
-        followers_url="https://bridge.example/users/alice/followers",
+        actor_url="https://bridge.example/actors/users/alice",
+        inbox_url="https://bridge.example/actors/users/alice/inbox",
+        outbox_url="https://bridge.example/actors/users/alice/outbox",
+        followers_url="https://bridge.example/actors/users/alice/followers",
         public_key_pem="public-key",
         private_key_pem="private-key",
     )

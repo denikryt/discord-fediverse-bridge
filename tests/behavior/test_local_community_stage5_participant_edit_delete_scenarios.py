@@ -154,7 +154,7 @@ def _thread_with_surfaces(scenario: SimpleNamespace) -> object:
     )
     scenario.database.activitypub_objects.create_published_activity_object(
         actor_username="alice",
-        actor_url="https://bridge.example/users/alice",
+        actor_url="https://bridge.example/actors/users/alice",
         community_actor_url=scenario.community.actor_url,
         activity_id="https://bridge.example/activities/create/post/1",
         object_id="https://bridge.example/post/1",
@@ -224,7 +224,7 @@ def _comment_with_surfaces(scenario: SimpleNamespace, thread_row: object) -> obj
     )
     scenario.database.activitypub_objects.create_published_activity_object(
         actor_username="alice",
-        actor_url="https://bridge.example/users/alice",
+        actor_url="https://bridge.example/actors/users/alice",
         community_actor_url=scenario.community.actor_url,
         activity_id="https://bridge.example/activities/create/comment/1",
         object_id="https://bridge.example/comment/1",
@@ -278,7 +278,7 @@ def _remote_post_event(event_type: str) -> ActivityPubEvent:
             "event_type": event_type,
             "delivery_id": f"https://remote.example/activities/{event_type}/post/1",
             "occurred_at": "2026-05-19T10:00:00Z",
-            "community_actor_id": "https://bridge.example/communities/hackers",
+            "community_actor_id": "https://bridge.example/actors/communities/hackers",
             "actor_id": "https://remote.example/u/bob",
             "object": {
                 "ap_id": "https://bridge.example/post/1",
@@ -304,7 +304,7 @@ def _remote_comment_event(event_type: str) -> ActivityPubEvent:
             "event_type": event_type,
             "delivery_id": f"https://remote.example/activities/{event_type}/comment/1",
             "occurred_at": "2026-05-19T10:05:00Z",
-            "community_actor_id": "https://bridge.example/communities/hackers",
+            "community_actor_id": "https://bridge.example/actors/communities/hackers",
             "actor_id": "https://remote.example/u/bob",
             "object": {
                 "ap_id": "https://bridge.example/comment/1",

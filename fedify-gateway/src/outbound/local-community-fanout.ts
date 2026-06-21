@@ -126,7 +126,7 @@ export function buildLocalCommunityAnnounceActivity(
   const PUBLIC = new URL("https://www.w3.org/ns/activitystreams#Public");
   const announceId = buildGatewayUrl(
     config,
-    `/communities/${encodeURIComponent(communityActor.pathname.split("/").filter(Boolean).at(-1) ?? "community")}/activities/announce/${Date.now()}-${Math.random().toString(36).slice(2)}`,
+    `/actors/communities/${encodeURIComponent(communityActor.pathname.split("/").filter(Boolean).at(-1) ?? "community")}/activities/announce/posts/${Date.now()}-${Math.random().toString(36).slice(2)}`,
   );
 
   // The Announce is only a delivery envelope. User authorship and canonical

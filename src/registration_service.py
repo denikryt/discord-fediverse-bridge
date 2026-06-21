@@ -10,6 +10,7 @@ from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
 
+from .activitypub_identity_urls import LocalActorKind, build_actor_address
 from .db import Database
 
 USERNAME_PATTERN = re.compile(r"^[a-z0-9_-]+$")
@@ -95,15 +96,16 @@ class RegistrationService:
 
     def build_actor_urls(self, username: str) -> tuple[str, str, str, str]:
         """Build the canonical local actor URLs for one registered username."""
-        # Registered users use the Fedify actor namespace as their canonical
-        # ActivityPub identity. Object URLs can still live under /users, but
-        # actor/key ownership must stay aligned with /actors/{username}.
-        actor_url = f"{self.base_url}/actors/{username}"
+        # Stage 4 moves registered users to the typed actor namespace so actor
+        # documents, inbox delivery, key ownership, and durable rows agree.
+        address = build_actor_address(
+            origin=self.base_url, kind=LocalActorKind.USER, identifier=username
+        )
         return (
-            actor_url,
-            f"{actor_url}/inbox",
-            f"{actor_url}/outbox",
-            f"{actor_url}/followers",
+            address.actor_url,
+            address.inbox_url,
+            address.outbox_url,
+            address.followers_url,
         )
 
     def actor_handle(self, username: str) -> str:

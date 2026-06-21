@@ -27,7 +27,7 @@ def _root(database: Database) -> PublishedActivityObject:
     with database.session() as session:
         root = PublishedActivityObject(
             actor_username="alice",
-            actor_url="https://bridge.example/users/alice",
+            actor_url="https://bridge.example/actors/users/alice",
             publication_context="personal_feed",
             community_actor_url=None,
             activity_id="https://bridge.example/a/root",
@@ -81,7 +81,7 @@ def test_create_rejects_actor_attributed_to_mismatch_before_storage() -> None:
         root_object_id="https://bridge.example/o/root",
         parent_object_id="https://bridge.example/o/root",
         activity_actor_id="https://remote.example/users/mallory",
-        attributed_to_actor_id="https://remote.example/users/bob",
+        attributed_to_actor_id="https://remote.example/actors/users/bob",
         actor_name="Mallory",
         content_markdown="forged",
         published_at=datetime.now(timezone.utc),
@@ -105,8 +105,8 @@ def test_same_origin_wrong_actor_cannot_update_or_delete_comment() -> None:
         object_id="https://remote.example/o/1",
         root_object_id="https://bridge.example/o/root",
         parent_object_id="https://bridge.example/o/root",
-        activity_actor_id="https://remote.example/users/bob",
-        attributed_to_actor_id="https://remote.example/users/bob",
+        activity_actor_id="https://remote.example/actors/users/bob",
+        attributed_to_actor_id="https://remote.example/actors/users/bob",
         actor_name="Bob",
         content_markdown="original",
         published_at=datetime.now(timezone.utc),
@@ -146,8 +146,8 @@ def test_pending_parent_does_not_consume_discord_attempt_budget() -> None:
         object_id="https://remote.example/o/child",
         root_object_id="https://bridge.example/o/root",
         parent_object_id="https://remote.example/o/parent",
-        activity_actor_id="https://remote.example/users/bob",
-        attributed_to_actor_id="https://remote.example/users/bob",
+        activity_actor_id="https://remote.example/actors/users/bob",
+        attributed_to_actor_id="https://remote.example/actors/users/bob",
         actor_name="Bob",
         content_markdown="child",
         published_at=datetime.now(timezone.utc),
@@ -183,8 +183,8 @@ def test_only_actual_discord_calls_exhaust_three_attempt_budget() -> None:
         object_id="https://remote.example/o/1",
         root_object_id="https://bridge.example/o/root",
         parent_object_id="https://bridge.example/o/root",
-        activity_actor_id="https://remote.example/users/bob",
-        attributed_to_actor_id="https://remote.example/users/bob",
+        activity_actor_id="https://remote.example/actors/users/bob",
+        attributed_to_actor_id="https://remote.example/actors/users/bob",
         actor_name="Bob",
         content_markdown="reply",
         published_at=datetime.now(timezone.utc),
@@ -226,8 +226,8 @@ def test_delivered_update_reuses_discord_message_and_delete_becomes_due() -> Non
         object_id="https://remote.example/o/1",
         root_object_id="https://bridge.example/o/root",
         parent_object_id="https://bridge.example/o/root",
-        activity_actor_id="https://remote.example/users/bob",
-        attributed_to_actor_id="https://remote.example/users/bob",
+        activity_actor_id="https://remote.example/actors/users/bob",
+        attributed_to_actor_id="https://remote.example/actors/users/bob",
         actor_name="Bob",
         content_markdown="original",
         published_at=datetime.now(timezone.utc),
@@ -241,8 +241,8 @@ def test_delivered_update_reuses_discord_message_and_delete_becomes_due() -> Non
 
     updated = database.personal_feed_conversations.admit_update(
         object_id="https://remote.example/o/1",
-        activity_actor_id="https://remote.example/users/bob",
-        attributed_to_actor_id="https://remote.example/users/bob",
+        activity_actor_id="https://remote.example/actors/users/bob",
+        attributed_to_actor_id="https://remote.example/actors/users/bob",
         content_markdown="edited",
         updated_at=datetime.now(timezone.utc) + timedelta(seconds=1),
         source_activity={"type": "Update"},
@@ -257,7 +257,7 @@ def test_delivered_update_reuses_discord_message_and_delete_becomes_due() -> Non
 
     deleted = database.personal_feed_conversations.admit_delete(
         object_id="https://remote.example/o/1",
-        activity_actor_id="https://remote.example/users/bob",
+        activity_actor_id="https://remote.example/actors/users/bob",
     )
     assert deleted.status == "accepted"
     claim = database.personal_feed_conversations.claim_due()[0]
@@ -274,8 +274,8 @@ def test_delete_before_first_discord_render_is_suppressed_without_attempt() -> N
         object_id="https://remote.example/o/1",
         root_object_id="https://bridge.example/o/root",
         parent_object_id="https://bridge.example/o/root",
-        activity_actor_id="https://remote.example/users/bob",
-        attributed_to_actor_id="https://remote.example/users/bob",
+        activity_actor_id="https://remote.example/actors/users/bob",
+        attributed_to_actor_id="https://remote.example/actors/users/bob",
         actor_name="Bob",
         content_markdown="transient",
         published_at=datetime.now(timezone.utc),
@@ -286,7 +286,7 @@ def test_delete_before_first_discord_render_is_suppressed_without_attempt() -> N
 
     database.personal_feed_conversations.admit_delete(
         object_id="https://remote.example/o/1",
-        activity_actor_id="https://remote.example/users/bob",
+        activity_actor_id="https://remote.example/actors/users/bob",
     )
 
     assert database.personal_feed_conversations.claim_due() == []
@@ -305,7 +305,7 @@ def test_community_comment_is_retained_without_personal_feed_delivery_state() ->
         object_id="https://remote.example/o/community-comment",
         root_object_id="https://remote.example/o/community-post",
         parent_object_id="https://remote.example/o/community-post",
-        actor_id="https://remote.example/users/bob",
+        actor_id="https://remote.example/actors/users/bob",
         actor_name="Bob",
         content_markdown="retained",
         published_at=datetime.now(timezone.utc),
@@ -341,10 +341,10 @@ async def test_worker_stop_cancels_blocked_discord_call_without_spending_attempt
             User(
                 discord_user_id="10",
                 activitypub_username="alice",
-                actor_url="https://bridge.example/users/alice",
-                inbox_url="https://bridge.example/users/alice/inbox",
-                outbox_url="https://bridge.example/users/alice/outbox",
-                followers_url="https://bridge.example/users/alice/followers",
+                actor_url="https://bridge.example/actors/users/alice",
+                inbox_url="https://bridge.example/actors/users/alice/inbox",
+                outbox_url="https://bridge.example/actors/users/alice/outbox",
+                followers_url="https://bridge.example/actors/users/alice/followers",
                 public_key_pem="public",
                 private_key_pem="private",
             )
@@ -357,8 +357,8 @@ async def test_worker_stop_cancels_blocked_discord_call_without_spending_attempt
         object_id="https://remote.example/o/blocked",
         root_object_id="https://bridge.example/o/root",
         parent_object_id="https://bridge.example/o/root",
-        activity_actor_id="https://remote.example/users/bob",
-        attributed_to_actor_id="https://remote.example/users/bob",
+        activity_actor_id="https://remote.example/actors/users/bob",
+        attributed_to_actor_id="https://remote.example/actors/users/bob",
         actor_name="Bob",
         content_markdown="blocked",
         published_at=datetime.now(timezone.utc),
@@ -412,10 +412,10 @@ async def test_worker_creates_deterministic_thread_and_sends_without_mentions(
             User(
                 discord_user_id="10",
                 activitypub_username="alice",
-                actor_url="https://bridge.example/users/alice",
-                inbox_url="https://bridge.example/users/alice/inbox",
-                outbox_url="https://bridge.example/users/alice/outbox",
-                followers_url="https://bridge.example/users/alice/followers",
+                actor_url="https://bridge.example/actors/users/alice",
+                inbox_url="https://bridge.example/actors/users/alice/inbox",
+                outbox_url="https://bridge.example/actors/users/alice/outbox",
+                followers_url="https://bridge.example/actors/users/alice/followers",
                 public_key_pem="public",
                 private_key_pem="private",
             )
@@ -428,8 +428,8 @@ async def test_worker_creates_deterministic_thread_and_sends_without_mentions(
         object_id="https://remote.example/o/1",
         root_object_id="https://bridge.example/o/root",
         parent_object_id="https://bridge.example/o/root",
-        activity_actor_id="https://remote.example/users/bob",
-        attributed_to_actor_id="https://remote.example/users/bob",
+        activity_actor_id="https://remote.example/actors/users/bob",
+        attributed_to_actor_id="https://remote.example/actors/users/bob",
         actor_name="Bob",
         content_markdown="hello @everyone",
         published_at=datetime.now(timezone.utc),
@@ -500,10 +500,10 @@ async def test_worker_rechecks_binding_after_network_lookup_before_discord_send(
             User(
                 discord_user_id="10",
                 activitypub_username="alice",
-                actor_url="https://bridge.example/users/alice",
-                inbox_url="https://bridge.example/users/alice/inbox",
-                outbox_url="https://bridge.example/users/alice/outbox",
-                followers_url="https://bridge.example/users/alice/followers",
+                actor_url="https://bridge.example/actors/users/alice",
+                inbox_url="https://bridge.example/actors/users/alice/inbox",
+                outbox_url="https://bridge.example/actors/users/alice/outbox",
+                followers_url="https://bridge.example/actors/users/alice/followers",
                 public_key_pem="public",
                 private_key_pem="private",
             )
@@ -514,8 +514,8 @@ async def test_worker_rechecks_binding_after_network_lookup_before_discord_send(
         object_id="https://remote.example/o/race",
         root_object_id="https://bridge.example/o/root",
         parent_object_id="https://bridge.example/o/root",
-        activity_actor_id="https://remote.example/users/bob",
-        attributed_to_actor_id="https://remote.example/users/bob",
+        activity_actor_id="https://remote.example/actors/users/bob",
+        attributed_to_actor_id="https://remote.example/actors/users/bob",
         actor_name="Bob",
         content_markdown="reply",
         published_at=datetime.now(timezone.utc),

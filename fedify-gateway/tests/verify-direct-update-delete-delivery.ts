@@ -38,7 +38,7 @@ async function testDirectUpdateDeliversCommentUpdatedEvent(): Promise<void> {
       object: new Note({
         id: new URL(`${REMOTE_ORIGIN}comment/125`),
         attribution: new URL(`${REMOTE_ORIGIN}u/admin`),
-        audience: new URL(`${TEST_ORIGIN}communities/hackers`),
+        audience: new URL(`${TEST_ORIGIN}actors/communities/hackers`),
         source: new Source({
           content: "Updated comment text",
           mediaType: "text/markdown",
@@ -72,7 +72,7 @@ async function testDirectDeleteDeliversCommentDeletedEvent(): Promise<void> {
       actor: new URL(`${REMOTE_ORIGIN}u/admin`),
       object: new URL(`${REMOTE_ORIGIN}comment/125`),
       tos: [new URL("https://www.w3.org/ns/activitystreams#Public")],
-      ccs: [new URL(`${TEST_ORIGIN}communities/hackers`)],
+      ccs: [new URL(`${TEST_ORIGIN}actors/communities/hackers`)],
     });
 
     await deliverDirectDeleteActivity(buildConfig(capture.url), activity);

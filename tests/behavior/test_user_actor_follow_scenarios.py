@@ -59,10 +59,10 @@ def follow_runtime(tmp_path):
     user = database.users.create_user(
         discord_user_id="42",
         activitypub_username="alice",
-        actor_url="https://bridge.example/actors/alice",
-        inbox_url="https://bridge.example/actors/alice/inbox",
-        outbox_url="https://bridge.example/actors/alice/outbox",
-        followers_url="https://bridge.example/actors/alice/followers",
+        actor_url="https://bridge.example/actors/users/alice",
+        inbox_url="https://bridge.example/actors/users/alice/inbox",
+        outbox_url="https://bridge.example/actors/users/alice/outbox",
+        followers_url="https://bridge.example/actors/users/alice/followers",
         public_key_pem="public",
         private_key_pem="private",
     )
@@ -87,7 +87,7 @@ def follow_runtime(tmp_path):
 
 
 def _follow(
-    *, follow_id: str, actor_id: str = "https://remote.example/users/bob"
+    *, follow_id: str, actor_id: str = "https://remote.example/actors/users/bob"
 ) -> LocalFollowRequestEvent:
     """Build one strict internal event matching gateway normalization."""
     return LocalFollowRequestEvent(
@@ -95,7 +95,7 @@ def _follow(
         delivery_id=follow_id,
         occurred_at=datetime.now(timezone.utc),
         target_actor_kind="user",
-        target_actor_id="https://bridge.example/actors/alice",
+        target_actor_id="https://bridge.example/actors/users/alice",
         actor_id=actor_id,
         object={
             "follow_activity_id": follow_id,
@@ -120,7 +120,7 @@ async def test_follow_duplicate_refreshes_one_relationship_and_notifies_once(
     )
 
     row = runtime.database.user_actor_followers.get_relationship(
-        user_id=user.id, remote_actor_id="https://remote.example/users/bob"
+        user_id=user.id, remote_actor_id="https://remote.example/actors/users/bob"
     )
     assert first.status == second.status == "processed"
     assert row is not None and row.follow_activity_id.endswith("/2")
@@ -142,7 +142,7 @@ async def test_failed_accept_keeps_notification_pending_until_duplicate_succeeds
             _follow(follow_id="https://remote.example/follows/1"), runtime
         )
     pending = runtime.database.user_actor_followers.get_relationship(
-        user_id=user.id, remote_actor_id="https://remote.example/users/bob"
+        user_id=user.id, remote_actor_id="https://remote.example/actors/users/bob"
     )
     assert pending is not None and pending.owner_notification_state == "pending"
 
@@ -150,7 +150,7 @@ async def test_failed_accept_keeps_notification_pending_until_duplicate_succeeds
         _follow(follow_id="https://remote.example/follows/1"), runtime
     )
     recovered = runtime.database.user_actor_followers.get_relationship(
-        user_id=user.id, remote_actor_id="https://remote.example/users/bob"
+        user_id=user.id, remote_actor_id="https://remote.example/actors/users/bob"
     )
     assert recovered is not None and recovered.id == pending.id
     assert recovered.owner_notification_state == "attempted"
@@ -189,7 +189,7 @@ async def test_undo_and_refollow_create_a_new_relationship_incarnation(follow_ru
         _follow(follow_id="https://remote.example/follows/1"), runtime
     )
     first = runtime.database.user_actor_followers.get_relationship(
-        user_id=user.id, remote_actor_id="https://remote.example/users/bob"
+        user_id=user.id, remote_actor_id="https://remote.example/actors/users/bob"
     )
     undo = LocalUnfollowRequestEvent(
         event_type="local.unfollow_requested",
@@ -197,7 +197,7 @@ async def test_undo_and_refollow_create_a_new_relationship_incarnation(follow_ru
         occurred_at=datetime.now(timezone.utc),
         target_actor_kind="user",
         target_actor_id=user.actor_url,
-        actor_id="https://remote.example/users/bob",
+        actor_id="https://remote.example/actors/users/bob",
         object={"follow_activity_id": "https://remote.example/follows/1"},
     )
     await dispatch_activitypub_event(undo, runtime)
@@ -205,7 +205,7 @@ async def test_undo_and_refollow_create_a_new_relationship_incarnation(follow_ru
         _follow(follow_id="https://remote.example/follows/2"), runtime
     )
     second = runtime.database.user_actor_followers.get_relationship(
-        user_id=user.id, remote_actor_id="https://remote.example/users/bob"
+        user_id=user.id, remote_actor_id="https://remote.example/actors/users/bob"
     )
 
     assert first is not None and second is not None and second.id != first.id

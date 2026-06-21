@@ -40,7 +40,7 @@ async function main(): Promise<void> {
       createContext() {
         return {
           getActorUri() {
-            return new URL(`${TEST_ORIGIN}/actors/bridge`);
+            return new URL(`${TEST_ORIGIN}/actors/services/bridge`);
           },
           async sendActivity(
             _sender: object,

@@ -21,13 +21,18 @@ This document explains HTTP route ownership between the Python bridge and the Fe
 | `/.well-known/webfinger` | GET | Fedify gateway | public | Actor discovery | `fedify-gateway/src/routes/public-discovery.ts` | Gateway |
 | `/.well-known/discord-fediverse-bridge/communities` | GET | Fedify gateway | public | Bridge-owned public local-community discovery | `fedify-gateway/src/routes/public-discovery.ts` | Gateway |
 | `/inbox` | POST | Fedify gateway | public AP | Inbound ActivityPub with pre-Fedify request logging | `fedify-gateway/src/federation.ts`, `fedify-gateway/src/routes/inbox-logging.ts` | Gateway |
-| `/users/:username` | GET | Fedify gateway | public AP | Local user actor | `fedify-gateway/src/routes/public-activitypub.ts` | Gateway |
-| `/communities/:slug` | GET | Fedify gateway | public AP | Local community actor | `fedify-gateway/src/routes/public-activitypub.ts` | Gateway |
-| `/c/:slug` | GET | Fedify gateway | public AP | Lemmy-style community alias | `fedify-gateway/src/routes/public-activitypub.ts` | Gateway |
-| `/communities/:slug/outbox` | GET | Fedify gateway | public AP | Community outbox | `fedify-gateway/src/routes/public-activitypub.ts` | Gateway |
-| `/communities/:slug/followers` | GET | Fedify gateway | public AP | Community followers collection | `fedify-gateway/src/routes/public-activitypub.ts` | Gateway |
-| `/users/:username/outbox` | GET | Fedify gateway | public AP | User outbox | `fedify-gateway/src/routes/public-activitypub.ts` | Gateway |
-| `/users/:username/followers` | GET | Fedify gateway | public AP | User followers collection | `fedify-gateway/src/routes/public-activitypub.ts` | Gateway |
+| `/actors/services/:identifier` | GET | Fedify gateway | public AP | Bridge service actor | `fedify-gateway/src/federation.ts`, `fedify-gateway/src/routes/public-activitypub.ts` | Gateway |
+| `/actors/services/:identifier/inbox` | POST | Fedify gateway | public AP | Service actor-specific inbox | `fedify-gateway/src/federation.ts` | Gateway |
+| `/actors/services/:identifier/outbox` | GET | Fedify gateway | public AP | Service actor outbox | `fedify-gateway/src/routes/public-activitypub.ts` | Gateway |
+| `/actors/services/:identifier/followers` | GET | Fedify gateway | public AP | Service actor followers collection | `fedify-gateway/src/routes/public-activitypub.ts` | Gateway |
+| `/actors/users/:username` | GET | Fedify gateway | public AP | Local user actor | `fedify-gateway/src/federation.ts`, `fedify-gateway/src/routes/public-activitypub.ts` | Gateway |
+| `/actors/users/:username/inbox` | POST | Fedify gateway | public AP | User actor-specific inbox | `fedify-gateway/src/federation.ts` | Gateway |
+| `/actors/users/:username/outbox` | GET | Fedify gateway | public AP | User outbox | `fedify-gateway/src/routes/public-activitypub.ts` | Gateway |
+| `/actors/users/:username/followers` | GET | Fedify gateway | public AP | User followers collection | `fedify-gateway/src/routes/public-activitypub.ts` | Gateway |
+| `/actors/communities/:slug` | GET | Fedify gateway | public AP | Local community actor | `fedify-gateway/src/federation.ts`, `fedify-gateway/src/routes/public-activitypub.ts` | Gateway |
+| `/actors/communities/:slug/inbox` | POST | Fedify gateway | public AP | Community actor-specific inbox | `fedify-gateway/src/federation.ts` | Gateway |
+| `/actors/communities/:slug/outbox` | GET | Fedify gateway | public AP | Community outbox | `fedify-gateway/src/routes/public-activitypub.ts` | Gateway |
+| `/actors/communities/:slug/followers` | GET | Fedify gateway | public AP | Community followers collection | `fedify-gateway/src/routes/public-activitypub.ts` | Gateway |
 | `/follow-community` | POST | Fedify gateway | internal | Send Follow | `fedify-gateway/src/routes/internal-follow.ts` | Internal/gateway |
 | `/unfollow-community` | POST | Fedify gateway | internal | Send Undo(Follow) | `fedify-gateway/src/routes/internal-follow.ts` | Internal/gateway |
 | `/publish` | POST | Fedify gateway | internal | Publish remote-community content | `fedify-gateway/src/routes/internal-publish.ts` | Internal/gateway |
@@ -41,7 +46,7 @@ This document explains HTTP route ownership between the Python bridge and the Fe
 
 All `/internal/*` routes are authenticated with the shared gateway secret and must not be routed publicly by nginx.
 
-`/users/`, `/communities/`, `/c/`, `/.well-known/webfinger`, `/.well-known/discord-fediverse-bridge/communities`, and `/inbox` are gateway-owned public identity, discovery, or delivery paths and should stay out of the Python bridge namespace.
+`/actors/`, `/.well-known/webfinger`, `/.well-known/discord-fediverse-bridge/communities`, and `/inbox` are gateway-owned public identity, discovery, or delivery paths and should stay out of the Python bridge namespace. Retired local ActivityPub aliases under `/users/`, `/communities/`, `/c/`, and `/activitypub/` are not public AP gateway surfaces.
 
 ## Profile media
 
@@ -49,4 +54,4 @@ All `/internal/*` routes are authenticated with the shared gateway secret and mu
 
 ### User Actor outbox
 
-`GET /actors/{username}/outbox` and compatibility alias `GET /users/{username}/outbox` return the same canonical collection identity. `?page=N` returns a fixed-size `OrderedCollectionPage`. The private gateway endpoint is `GET /internal/fedify/actors/users/{username}/outbox?page=N&page_size=40`.
+`GET /actors/users/{username}/outbox` returns the canonical collection identity. `?page=N` returns a fixed-size `OrderedCollectionPage`. The private gateway endpoint is `GET /internal/fedify/actors/users/{username}/outbox?page=N&page_size=40`.

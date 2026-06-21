@@ -25,20 +25,20 @@ async function main(): Promise<void> {
   const app = createGatewayApp(config);
   const snapshot = {
     schemaVersion: 1,
-    actorId: `${ORIGIN}actors/alice`,
+    actorId: `${ORIGIN}actors/users/alice`,
     username: "alice",
     displayName: "Alice Example",
     summary: "Bridge operator",
-    inboxId: `${ORIGIN}actors/alice/inbox`,
-    outboxId: `${ORIGIN}actors/alice/outbox`,
-    followersId: `${ORIGIN}actors/alice/followers`,
-    publicKeyId: `${ORIGIN}actors/alice#main-key`,
+    inboxId: `${ORIGIN}actors/users/alice/inbox`,
+    outboxId: `${ORIGIN}actors/users/alice/outbox`,
+    followersId: `${ORIGIN}actors/users/alice/followers`,
+    publicKeyId: `${ORIGIN}actors/users/alice#main-key`,
     publicKeyPem: await exportPublicKeyPem(userKeys.publicKey),
     fields: [{ name: "Site", value: "https://example.com" }],
     avatar: null,
     header: null,
   };
-  const activityId = `${ORIGIN}activities/user-profile-update/1/1`;
+  const activityId = `${ORIGIN}actors/users/alice/activities/update/profile/1`;
 
   const rendered = await app.request("/render-user-actor-profile-update", {
     method: "POST",
@@ -185,10 +185,10 @@ async function buildConfig(
       [
         "1",
         "alice",
-        `${ORIGIN}actors/alice`,
-        `${ORIGIN}actors/alice/inbox`,
-        `${ORIGIN}actors/alice/outbox`,
-        `${ORIGIN}actors/alice/followers`,
+        `${ORIGIN}actors/users/alice`,
+        `${ORIGIN}actors/users/alice/inbox`,
+        `${ORIGIN}actors/users/alice/outbox`,
+        `${ORIGIN}actors/users/alice/followers`,
         await exportPublicKeyPem(userKeys.publicKey),
         await exportPrivateKeyPem(userKeys.privateKey),
         "Current value is intentionally ignored",
@@ -219,7 +219,7 @@ async function buildConfig(
     `);
     seedBridgeActorJwk(
       db,
-      `${ORIGIN}actors/bridge`,
+      `${ORIGIN}actors/services/bridge`,
       JSON.stringify(await exportJwk(bridgeKeys.privateKey)),
       JSON.stringify(await exportJwk(bridgeKeys.publicKey)),
     );

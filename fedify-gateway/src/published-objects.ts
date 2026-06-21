@@ -66,11 +66,9 @@ export function buildPublishedCreateActivityJson(
 }
 
 function canonicalActorUrlForRecord(record: PublishedActivityObjectRow): string {
-  // Published object rows may predate the /actors user migration and still store
-  // /users/{username}. Use the durable username plus the stored origin to expose
-  // the canonical registered-user actor identity during object dereference.
-  const storedActorUrl = new URL(record.actorUrl);
-  return new URL(`/actors/${record.actorUsername}`, storedActorUrl.origin).href;
+  // Stage 4 migration stores the canonical typed actor URL directly on retained
+  // local publication rows, so renderers must not reconstruct old untyped roots.
+  return record.actorUrl;
 }
 
 function normalizePublishedTimestamp(value: string): string {

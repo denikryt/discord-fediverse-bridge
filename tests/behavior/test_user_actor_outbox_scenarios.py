@@ -21,10 +21,10 @@ def _database(tmp_path: Path) -> tuple[Database, object]:
     user = database.users.create_user(
         discord_user_id="1",
         activitypub_username="alice",
-        actor_url="https://bridge.test/actors/alice",
-        inbox_url="https://bridge.test/actors/alice/inbox",
-        outbox_url="https://bridge.test/actors/alice/outbox",
-        followers_url="https://bridge.test/actors/alice/followers",
+        actor_url="https://bridge.test/actors/users/alice",
+        inbox_url="https://bridge.test/actors/users/alice/inbox",
+        outbox_url="https://bridge.test/actors/users/alice/outbox",
+        followers_url="https://bridge.test/actors/users/alice/followers",
         public_key_pem="public",
         private_key_pem="private",
     )
@@ -113,7 +113,7 @@ def test_stage8_schema_upgrade_installs_outbox_index(tmp_path: Path) -> None:
                 "activity_id, object_id, kind, body_markdown, content_revision, desired_kind, "
                 "discord_reconciliation_needed, discord_reconciliation_attempt_count, "
                 "published_at, created_at) VALUES "
-                "('alice', 'https://bridge.test/actors/alice', 'community', "
+                "('alice', 'https://bridge.test/actors/users/alice', 'community', "
                 "'https://bridge.test/communities/test', 'a1', 'o1', 'post', 'body', "
                 "1, 'none', 0, 0, '2026-01-01', '2026-01-01')"
             )

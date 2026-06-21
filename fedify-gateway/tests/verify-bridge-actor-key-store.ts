@@ -28,7 +28,7 @@ async function main(): Promise<void> {
   const emptyPath = await createDatabase(null);
   const emptyConfig = configFor(emptyPath);
   await assert.rejects(
-    () => loadActorKeyPair(emptyConfig, "bridge"),
+    () => loadActorKeyPair(emptyConfig, "services/bridge"),
     /404 Not Found/,
   );
   console.log("verify:bridge-actor-key-store passed");
@@ -40,7 +40,7 @@ async function verifyStoredPair(
   privateData: string,
 ): Promise<void> {
   const pythonBridgeInternalUrl = await createDatabase({ keyFormat, publicData, privateData });
-  assert.ok(await loadActorKeyPair(configFor(pythonBridgeInternalUrl), "bridge"));
+  assert.ok(await loadActorKeyPair(configFor(pythonBridgeInternalUrl), "services/bridge"));
 }
 
 async function createDatabase(
@@ -66,8 +66,8 @@ async function createDatabase(
       database.run(
         `INSERT INTO bridge_actor_keys VALUES (?, ?, ?, 'RSASSA-PKCS1-v1_5', ?, ?)`,
         [
-          "https://bridge.example/actors/bridge",
-          "https://bridge.example/actors/bridge#main-key",
+          "https://bridge.example/actors/services/bridge",
+          "https://bridge.example/actors/services/bridge#main-key",
           row.keyFormat,
           row.publicData,
           row.privateData,

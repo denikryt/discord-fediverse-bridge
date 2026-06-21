@@ -13,6 +13,7 @@ from pathlib import Path
 from sqlalchemy import text
 
 from src.db import Database
+from src.db.migrations import Stage4IdentityMigrationConfig
 from src.local_communities.service import LocalCommunityService
 from support.db import build_database
 
@@ -39,17 +40,17 @@ def _create_current_local_community_activity(database: Database) -> None:
         local_community_id=community.id,
         discord_thread_id=200,
         discord_starter_message_id=300,
-        ap_activity_id="https://bridge.example/users/alice/activities/create/post/1",
-        ap_object_id="https://bridge.example/users/alice/post/1",
+        ap_activity_id="https://bridge.example/actors/users/alice/activities/create/posts/1",
+        ap_object_id="https://bridge.example/actors/users/alice/objects/posts/1",
         direction="discord_to_ap",
         origin_kind="discord_local",
     )
     database.local_community_content.create_local_community_message(
         local_community_thread_id=thread.id,
         discord_message_id=301,
-        ap_activity_id="https://bridge.example/users/alice/activities/create/comment/1",
-        ap_object_id="https://bridge.example/users/alice/comment/1",
-        parent_ap_object_id="https://bridge.example/users/alice/post/1",
+        ap_activity_id="https://bridge.example/actors/users/alice/activities/create/comments/1",
+        ap_object_id="https://bridge.example/actors/users/alice/objects/comments/1",
+        parent_ap_object_id="https://bridge.example/actors/users/alice/objects/posts/1",
         parent_discord_message_id=300,
         direction="discord_to_ap",
     )
@@ -97,8 +98,11 @@ def test_stage5_current_schema_migrate_remains_idempotent(tmp_path: Path) -> Non
         )
     }
 
-    database.migrate()
-    database.migrate()
+    config = Stage4IdentityMigrationConfig(
+        public_origin="https://bridge.example", service_actor_identifier="bridge"
+    )
+    database.migrate(config)
+    database.migrate(config)
 
     after_counts = {table: _count(database, table) for table in before_counts}
     assert after_counts == before_counts

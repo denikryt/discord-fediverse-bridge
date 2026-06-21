@@ -10,6 +10,7 @@ from typing import Any
 from sqlalchemy import text
 
 from src.db import Database
+from src.db.migrations import Stage4IdentityMigrationConfig
 
 _STAGE4_SCHEMA = Path(__file__).with_name("fixtures") / "stage4_schema.sql"
 _AFFECTED_TABLES = (
@@ -82,10 +83,10 @@ def _build_exact_stage4_database(path: Path) -> None:
                 outbox_url, followers_url, public_key_pem, private_key_pem,
                 profile_version, created_at, updated_at
             ) VALUES (
-                41, '41', 'alice', 'https://bridge.example/actors/alice',
-                'https://bridge.example/actors/alice/inbox',
-                'https://bridge.example/actors/alice/outbox',
-                'https://bridge.example/actors/alice/followers',
+                41, '41', 'alice', 'https://bridge.example/actors/users/alice',
+                'https://bridge.example/actors/users/alice/inbox',
+                'https://bridge.example/actors/users/alice/outbox',
+                'https://bridge.example/actors/users/alice/followers',
                 'public', 'private', 7, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP
             );
 
@@ -104,8 +105,8 @@ def _build_exact_stage4_database(path: Path) -> None:
                 object_id, kind, title, body_markdown, in_reply_to_object_id,
                 discord_channel_id, discord_message_id, published_at, created_at
             ) VALUES (
-                31, 'alice', 'https://bridge.example/actors/alice',
-                'https://bridge.example/communities/test',
+                31, 'alice', 'https://bridge.example/actors/users/alice',
+                'https://bridge.example/actors/communities/test',
                 'https://bridge.example/activities/create/31',
                 'https://bridge.example/objects/31', 'post', 'Original title',
                 'Original body', NULL, 1001, 2001, CURRENT_TIMESTAMP,
@@ -178,7 +179,11 @@ def test_exact_stage4_delivery_graph_survives_complete_stage5_upgrade(tmp_path) 
         before.close()
 
     upgraded = Database(f"sqlite:///{path}")
-    upgraded.migrate()
+    upgraded.migrate(
+        Stage4IdentityMigrationConfig(
+            public_origin="https://bridge.example", service_actor_identifier="bridge"
+        )
+    )
     with upgraded.engine.connect() as connection:
         source = (
             connection.execute(

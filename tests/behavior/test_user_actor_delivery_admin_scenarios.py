@@ -27,10 +27,10 @@ def _database(tmp_path):
     alice = database.users.create_user(
         discord_user_id="1",
         activitypub_username="alice",
-        actor_url="https://bridge.test/actors/alice",
-        inbox_url="https://bridge.test/actors/alice/inbox",
-        outbox_url="https://bridge.test/actors/alice/outbox",
-        followers_url="https://bridge.test/actors/alice/followers",
+        actor_url="https://bridge.test/actors/users/alice",
+        inbox_url="https://bridge.test/actors/users/alice/inbox",
+        outbox_url="https://bridge.test/actors/users/alice/outbox",
+        followers_url="https://bridge.test/actors/users/alice/followers",
         public_key_pem="public",
         private_key_pem="private",
     )

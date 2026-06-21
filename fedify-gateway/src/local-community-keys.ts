@@ -1,12 +1,11 @@
 /**
  * Local-community key helpers.
  *
- * Fedify derives public-key ownership from the `/actors/{identifier}` dispatcher
- * when callers use `ctx.getActorKeyPairs(identifier)`. Local communities use a
- * database-backed canonical actor URL under `/communities/{slug}`, so this file
- * builds the public actor key and outbound signing key explicitly from that
- * canonical URL. Keeping the override here prevents regular bridge/user actor
- * key behavior from changing.
+ * Fedify passes the typed `{+identifier}` tail to `ctx.getActorKeyPairs`.
+ * Local communities still load key material from the database-backed actor row,
+ * so this file builds the public actor key and outbound signing key explicitly
+ * from `/actors/communities/{slug}`. Keeping the override here prevents
+ * regular service/user actor key behavior from changing.
  */
 import { webcrypto } from "node:crypto";
 
@@ -39,9 +38,9 @@ export interface LocalCommunitySigningKey {
 export async function buildLocalCommunityPublicKey(
   identity: LocalCommunityIdentity,
 ): Promise<CryptographicKey> {
-  // The key id and owner intentionally derive from identity.actorId, not from
-  // Fedify's `/actors/{identifier}` dispatcher route. Mastodon treats that
-  // owner relation as part of signature verification for Accept(Follow).
+  // The key id and owner intentionally derive from the typed actor URL stored
+  // in Python. Mastodon treats that owner relation as part of signature
+  // verification for Accept(Follow).
   return new CryptographicKey({
     id: new URL("#main-key", identity.actorId),
     owner: identity.actorId,

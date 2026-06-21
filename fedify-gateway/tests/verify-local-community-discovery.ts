@@ -40,11 +40,11 @@ async function testDiscoveryEndpointReturnsStablePublicCommunitySummaries(): Pro
   assert.equal(payload.communities[1]?.slug, "hackers");
   assert.equal(
     payload.communities[0]?.actor_id,
-    `${TEST_ORIGIN}communities/announcements`,
+    `${TEST_ORIGIN}actors/communities/announcements`,
   );
   assert.equal(
     payload.communities[0]?.alternate_actor_id,
-    `${TEST_ORIGIN}c/announcements`,
+    `${TEST_ORIGIN}actors/communities/announcements`,
   );
   assert.equal(
     payload.communities[0]?.handle,
@@ -65,8 +65,8 @@ async function buildConfig(): Promise<{ config: GatewayConfig; close: () => Prom
     }
     response.setHeader("Content-Type", "application/json");
     response.end(JSON.stringify({ items: [
-      { id: 2, slug: "announcements", display_name: "Announcements", summary: "One-way service updates.", actor_url: `${TEST_ORIGIN}communities/announcements` },
-      { id: 1, slug: "hackers", display_name: "Hackers", summary: "A local hackerspace forum.", actor_url: `${TEST_ORIGIN}communities/hackers` },
+      { id: 2, slug: "announcements", display_name: "Announcements", summary: "One-way service updates.", actor_url: `${TEST_ORIGIN}actors/communities/announcements` },
+      { id: 1, slug: "hackers", display_name: "Hackers", summary: "A local hackerspace forum.", actor_url: `${TEST_ORIGIN}actors/communities/hackers` },
     ] }));
   });
   await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));

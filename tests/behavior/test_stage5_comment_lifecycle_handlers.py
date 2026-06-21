@@ -122,13 +122,13 @@ async def test_remote_comment_create_update_delete_uses_real_runtime_and_one_can
         ap_activity_id="https://remote.example/activities/create/root",
     )
     canonical_create = {
-        "id": "https://bridge.example/users/alice/activities/create/comment/1",
+        "id": "https://bridge.example/actors/users/alice/activities/create/comments/1",
         "type": "Create",
         "actor": user.actor_url,
         "to": ["https://www.w3.org/ns/activitystreams#Public"],
         "cc": [user.followers_url],
         "object": {
-            "id": "https://bridge.example/users/alice/comment/1",
+            "id": "https://bridge.example/actors/users/alice/objects/comments/1",
             "type": "Note",
             "attributedTo": user.actor_url,
             "audience": "https://lemmy.example/c/hackers",
@@ -215,24 +215,24 @@ async def test_local_comment_create_update_delete_preserves_user_create_and_comm
         description="Local",
         created_by_discord_user_id="123",
     )
-    community = "https://bridge.example/communities/hackers"
+    community = "https://bridge.example/actors/communities/hackers"
     root_create = {
-        "id": "https://bridge.example/users/alice/activities/create/post/1",
+        "id": "https://bridge.example/actors/users/alice/activities/create/posts/1",
         "type": "Create",
         "actor": user.actor_url,
         "object": {
-            "id": "https://bridge.example/users/alice/post/1",
+            "id": "https://bridge.example/actors/users/alice/objects/posts/1",
             "type": "Page",
             "attributedTo": user.actor_url,
             "audience": community,
         },
     }
     comment_create = {
-        "id": "https://bridge.example/users/alice/activities/create/comment/1",
+        "id": "https://bridge.example/actors/users/alice/activities/create/comments/1",
         "type": "Create",
         "actor": user.actor_url,
         "object": {
-            "id": "https://bridge.example/users/alice/comment/1",
+            "id": "https://bridge.example/actors/users/alice/objects/comments/1",
             "type": "Note",
             "attributedTo": user.actor_url,
             "audience": community,

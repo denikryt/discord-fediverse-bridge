@@ -28,10 +28,10 @@ def test_write_user_identity_backup_creates_restore_usable_sqlite_db(
     database.users.create_user(
         discord_user_id="123456789",
         activitypub_username="alice",
-        actor_url="https://bridge.example/users/alice",
-        inbox_url="https://bridge.example/users/alice/inbox",
-        outbox_url="https://bridge.example/users/alice/outbox",
-        followers_url="https://bridge.example/users/alice/followers",
+        actor_url="https://bridge.example/actors/users/alice",
+        inbox_url="https://bridge.example/actors/users/alice/inbox",
+        outbox_url="https://bridge.example/actors/users/alice/outbox",
+        followers_url="https://bridge.example/actors/users/alice/followers",
         public_key_pem="PUBLIC-KEY",
         private_key_pem="PRIVATE-KEY",
     )
@@ -59,7 +59,7 @@ def test_write_user_identity_backup_creates_restore_usable_sqlite_db(
     assert row == (
         "123456789",
         "alice",
-        "https://bridge.example/users/alice",
+        "https://bridge.example/actors/users/alice",
         "PUBLIC-KEY",
         "PRIVATE-KEY",
     )
@@ -75,10 +75,10 @@ def test_dump_local_users_cli_writes_users_db_backup(
     database.users.create_user(
         discord_user_id="999",
         activitypub_username="bob",
-        actor_url="https://bridge.example/users/bob",
-        inbox_url="https://bridge.example/users/bob/inbox",
-        outbox_url="https://bridge.example/users/bob/outbox",
-        followers_url="https://bridge.example/users/bob/followers",
+        actor_url="https://bridge.example/actors/users/bob",
+        inbox_url="https://bridge.example/actors/users/bob/inbox",
+        outbox_url="https://bridge.example/actors/users/bob/outbox",
+        followers_url="https://bridge.example/actors/users/bob/followers",
         public_key_pem="PUBLIC-KEY-BOB",
         private_key_pem="PRIVATE-KEY-BOB",
     )

@@ -62,10 +62,10 @@ async function main(): Promise<void> {
         "hackers",
         "Hackers",
         "A local hackerspace forum.",
-        `${TEST_ORIGIN}communities/hackers`,
-        `${TEST_ORIGIN}communities/hackers/inbox`,
-        `${TEST_ORIGIN}communities/hackers/outbox`,
-        `${TEST_ORIGIN}communities/hackers/followers`,
+        `${TEST_ORIGIN}actors/communities/hackers`,
+        `${TEST_ORIGIN}actors/communities/hackers/inbox`,
+        `${TEST_ORIGIN}actors/communities/hackers/outbox`,
+        `${TEST_ORIGIN}actors/communities/hackers/followers`,
         "public-key",
         "private-key",
         "active",
@@ -73,7 +73,7 @@ async function main(): Promise<void> {
     );
     seedBridgeActorJwk(
       db,
-      `${TEST_ORIGIN}actors/bridge`,
+      `${TEST_ORIGIN}actors/services/bridge`,
       JSON.stringify(await exportJwk(bridgeKeys.privateKey)),
       JSON.stringify(await exportJwk(bridgeKeys.publicKey)),
     );
@@ -97,7 +97,7 @@ async function main(): Promise<void> {
   const activity = new Follow({
     id: new URL(`${REMOTE_ORIGIN}activities/follow/1`),
     actor: new URL(`${REMOTE_ORIGIN}u/bob`),
-    object: new URL(`${TEST_ORIGIN}communities/hackers`),
+    object: new URL(`${TEST_ORIGIN}actors/communities/hackers`),
   });
   Object.assign(activity, {
     getActor: async () => ({
@@ -109,7 +109,7 @@ async function main(): Promise<void> {
 
   assert.ok(event != null);
   assert.equal(event?.event_type, "local.follow_requested");
-  assert.equal(event?.target_actor_id, `${TEST_ORIGIN}communities/hackers`);
+  assert.equal(event?.target_actor_id, `${TEST_ORIGIN}actors/communities/hackers`);
   assert.equal(event?.target_actor_kind, "community");
   assert.equal(event?.actor_id, `${REMOTE_ORIGIN}u/bob`);
   assert.equal(event?.object.follow_activity_id, `${REMOTE_ORIGIN}activities/follow/1`);

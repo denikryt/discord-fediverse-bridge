@@ -6,10 +6,10 @@ import { buildUserPersonActor } from "../src/actors.js";
 import type { UserActorIdentity } from "../src/actor-store.js";
 
 const identity: UserActorIdentity = {
-  actorId: new URL("https://bridge.example/actors/alice"),
-  followersId: new URL("https://bridge.example/actors/alice/followers"),
-  inboxId: new URL("https://bridge.example/actors/alice/inbox"),
-  outboxId: new URL("https://bridge.example/actors/alice/outbox"),
+  actorId: new URL("https://bridge.example/actors/users/alice"),
+  followersId: new URL("https://bridge.example/actors/users/alice/followers"),
+  inboxId: new URL("https://bridge.example/actors/users/alice/inbox"),
+  outboxId: new URL("https://bridge.example/actors/users/alice/outbox"),
   publicKeyPem: "public",
   privateKeyPem: "private",
   username: "alice",

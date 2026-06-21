@@ -22,9 +22,9 @@ import type { GatewayConfig } from "../src/config.js";
 import type { PublishLocalCommunityContentRequest } from "../src/types.js";
 
 const TEST_ORIGIN = "https://discord-bridge.example.com/";
-const COMMUNITY_ACTOR = `${TEST_ORIGIN}communities/hackers`;
+const COMMUNITY_ACTOR = `${TEST_ORIGIN}actors/communities/hackers`;
 const COMMUNITY_FOLLOWERS = `${COMMUNITY_ACTOR}/followers`;
-const USER_ACTOR = `${TEST_ORIGIN}actors/alice`;
+const USER_ACTOR = `${TEST_ORIGIN}actors/users/alice`;
 const PUBLIC = "https://www.w3.org/ns/activitystreams#Public";
 
 interface DeliveryRecord {
@@ -365,7 +365,7 @@ async function buildConfig(logLevel: "info" | "debug" = "info"): Promise<Gateway
     );
     seedBridgeActorJwk(
       db,
-      `${TEST_ORIGIN}actors/bridge`,
+      `${TEST_ORIGIN}actors/services/bridge`,
       JSON.stringify(await exportJwk(bridgeKeys.privateKey)),
       JSON.stringify(await exportJwk(bridgeKeys.publicKey)),
     );
@@ -395,7 +395,7 @@ function hasRawDeliveryLog(logs: unknown[][]): boolean {
 function assertSignedJsonDelivery(delivery: DeliveryRecord): void {
   /** The exact JSON fanout path signs HTTP requests with the community key. */
   assert.equal(delivery.headers["content-type"], "application/activity+json");
-  assert.match(delivery.headers.signature ?? "", /keyId="https:\/\/discord-bridge.example.com\/communities\/hackers#main-key"/);
+  assert.match(delivery.headers.signature ?? "", /keyId="https:\/\/discord-bridge.example.com\/actors\/communities\/hackers#main-key"/);
   assert.match(delivery.headers.signature ?? "", /headers="\(request-target\) host date digest content-type"/);
   assert.ok(delivery.headers.digest?.startsWith("SHA-256="));
 }

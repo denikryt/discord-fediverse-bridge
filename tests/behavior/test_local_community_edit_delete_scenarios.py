@@ -69,7 +69,7 @@ def _local_post_event(*, event_type: str) -> ActivityPubEvent:
             "event_type": event_type,
             "delivery_id": f"https://lemmy.example/activities/{event_type}/post/1",
             "occurred_at": "2026-05-19T10:00:00Z",
-            "community_actor_id": "https://bridge.example/communities/hackers",
+            "community_actor_id": "https://bridge.example/actors/communities/hackers",
             "actor_id": "https://lemmy.example/u/bob",
             "object": {
                 "ap_id": "https://lemmy.example/post/1",
@@ -95,7 +95,7 @@ def _local_comment_event(*, event_type: str) -> ActivityPubEvent:
             "event_type": event_type,
             "delivery_id": f"https://lemmy.example/activities/{event_type}/comment/1",
             "occurred_at": "2026-05-19T10:05:00Z",
-            "community_actor_id": "https://bridge.example/communities/hackers",
+            "community_actor_id": "https://bridge.example/actors/communities/hackers",
             "actor_id": "https://lemmy.example/u/bob",
             "object": {
                 "ap_id": "https://lemmy.example/comment/1",
@@ -125,19 +125,19 @@ async def test_local_community_thread_starter_edit_updates_ap_post(
     database.message_mappings.create_message_mapping(
         source_platform="discord",
         source_id="300",
-        activity_id="https://bridge.example/users/alice/activities/create/post/1",
-        object_id="https://bridge.example/users/alice/post/1",
-        actor_url="https://bridge.example/users/alice",
+        activity_id="https://bridge.example/actors/users/alice/activities/create/posts/1",
+        object_id="https://bridge.example/actors/users/alice/objects/posts/1",
+        actor_url="https://bridge.example/actors/users/alice",
         community_actor_url=local_community.actor_url,
         discord_channel_id=100,
         discord_message_id=300,
     )
     database.activitypub_objects.create_published_activity_object(
         actor_username="alice",
-        actor_url="https://bridge.example/users/alice",
+        actor_url="https://bridge.example/actors/users/alice",
         community_actor_url=local_community.actor_url,
-        activity_id="https://bridge.example/users/alice/activities/create/post/1",
-        object_id="https://bridge.example/users/alice/post/1",
+        activity_id="https://bridge.example/actors/users/alice/activities/create/posts/1",
+        object_id="https://bridge.example/actors/users/alice/objects/posts/1",
         kind="post",
         title="Thread title",
         body_markdown="old body",
@@ -149,8 +149,8 @@ async def test_local_community_thread_starter_edit_updates_ap_post(
         local_community_id=local_community.id,
         discord_thread_id=200,
         discord_starter_message_id=300,
-        ap_activity_id="https://bridge.example/users/alice/activities/create/post/1",
-        ap_object_id="https://bridge.example/users/alice/post/1",
+        ap_activity_id="https://bridge.example/actors/users/alice/activities/create/posts/1",
+        ap_object_id="https://bridge.example/actors/users/alice/objects/posts/1",
         direction="discord_to_ap",
         origin_kind="discord_local",
     )
@@ -164,7 +164,7 @@ async def test_local_community_thread_starter_edit_updates_ap_post(
 
     local_runtime.fedify_gateway.update_content.assert_awaited_once()
     request = local_runtime.fedify_gateway.update_content.await_args.args[0]
-    assert request.ap_object_id == "https://bridge.example/users/alice/post/1"
+    assert request.ap_object_id == "https://bridge.example/actors/users/alice/objects/posts/1"
     assert request.kind == "post"
     assert request.community_actor_url == local_community.actor_url
 
@@ -179,40 +179,40 @@ async def test_local_community_comment_delete_sends_ap_delete(tmp_path: Path) ->
         local_community_id=local_community.id,
         discord_thread_id=200,
         discord_starter_message_id=300,
-        ap_activity_id="https://bridge.example/users/alice/activities/create/post/1",
-        ap_object_id="https://bridge.example/users/alice/post/1",
+        ap_activity_id="https://bridge.example/actors/users/alice/activities/create/posts/1",
+        ap_object_id="https://bridge.example/actors/users/alice/objects/posts/1",
         direction="discord_to_ap",
         origin_kind="discord_local",
     )
     database.message_mappings.create_message_mapping(
         source_platform="discord",
         source_id="301",
-        activity_id="https://bridge.example/users/alice/activities/create/comment/1",
-        object_id="https://bridge.example/users/alice/comment/1",
-        actor_url="https://bridge.example/users/alice",
+        activity_id="https://bridge.example/actors/users/alice/activities/create/comments/1",
+        object_id="https://bridge.example/actors/users/alice/objects/comments/1",
+        actor_url="https://bridge.example/actors/users/alice",
         community_actor_url=local_community.actor_url,
         discord_channel_id=100,
         discord_message_id=301,
     )
     database.activitypub_objects.create_published_activity_object(
         actor_username="alice",
-        actor_url="https://bridge.example/users/alice",
+        actor_url="https://bridge.example/actors/users/alice",
         community_actor_url=local_community.actor_url,
-        activity_id="https://bridge.example/users/alice/activities/create/comment/1",
-        object_id="https://bridge.example/users/alice/comment/1",
+        activity_id="https://bridge.example/actors/users/alice/activities/create/comments/1",
+        object_id="https://bridge.example/actors/users/alice/objects/comments/1",
         kind="comment",
         title=None,
         body_markdown="old comment",
-        in_reply_to_object_id="https://bridge.example/users/alice/post/1",
+        in_reply_to_object_id="https://bridge.example/actors/users/alice/objects/posts/1",
         discord_channel_id=100,
         discord_message_id=301,
     )
     database.local_community_content.create_local_community_message(
         local_community_thread_id=thread_row.id,
         discord_message_id=301,
-        ap_activity_id="https://bridge.example/users/alice/activities/create/comment/1",
-        ap_object_id="https://bridge.example/users/alice/comment/1",
-        parent_ap_object_id="https://bridge.example/users/alice/post/1",
+        ap_activity_id="https://bridge.example/actors/users/alice/activities/create/comments/1",
+        ap_object_id="https://bridge.example/actors/users/alice/objects/comments/1",
+        parent_ap_object_id="https://bridge.example/actors/users/alice/objects/posts/1",
         parent_discord_message_id=300,
         direction="discord_to_ap",
     )
@@ -224,7 +224,7 @@ async def test_local_community_comment_delete_sends_ap_delete(tmp_path: Path) ->
 
     local_runtime.fedify_gateway.delete_content.assert_awaited_once()
     request = local_runtime.fedify_gateway.delete_content.await_args.args[0]
-    assert request.ap_object_id == "https://bridge.example/users/alice/comment/1"
+    assert request.ap_object_id == "https://bridge.example/actors/users/alice/objects/comments/1"
     assert request.community_actor_url == local_community.actor_url
 
 

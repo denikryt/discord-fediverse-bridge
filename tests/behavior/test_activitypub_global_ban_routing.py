@@ -21,14 +21,14 @@ def _event(*, target_kind: str = "user") -> LocalFollowRequestEvent:
         occurred_at=datetime.now(timezone.utc),
         target_actor_kind=target_kind,
         target_actor_id=(
-            "https://bridge.example/actors/alice"
+            "https://bridge.example/actors/users/alice"
             if target_kind == "user"
-            else "https://bridge.example/communities/cats"
+            else "https://bridge.example/actors/communities/cats"
         ),
-        actor_id="https://remote.example/users/bob",
+        actor_id="https://remote.example/actors/users/bob",
         object={
             "follow_activity_id": "https://remote.example/follows/1",
-            "remote_inbox_url": "https://remote.example/users/bob/inbox",
+            "remote_inbox_url": "https://remote.example/actors/users/bob/inbox",
             "remote_shared_inbox_url": "https://remote.example/inbox",
         },
     )
@@ -41,7 +41,7 @@ def _runtime(tmp_path) -> SimpleNamespace:
     database.community_actor_bans.create_active_ban(
         local_community_id=None,
         actor_handle="bob@remote.example",
-        actor_url="https://remote.example/users/bob",
+        actor_url="https://remote.example/actors/users/bob",
         created_by_discord_user_id="1",
         reason="instance-wide abuse",
     )
@@ -115,7 +115,7 @@ async def test_community_scoped_ban_does_not_block_user_actor_follow(tmp_path) -
     database.community_actor_bans.create_active_ban(
         local_community_id=community.id,
         actor_handle="bob@remote.example",
-        actor_url="https://remote.example/users/bob",
+        actor_url="https://remote.example/actors/users/bob",
         created_by_discord_user_id="1",
         reason="community-only abuse",
     )

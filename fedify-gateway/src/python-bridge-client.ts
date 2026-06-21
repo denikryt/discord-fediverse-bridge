@@ -222,7 +222,7 @@ export class PythonBridgeClient implements PythonBridgeReadClient {
         title: requiredString(row, "display_name"),
         description: nullableString(row, "summary"),
         actor_id: requiredString(row, "actor_url"),
-        alternate_actor_id: new URL(`/c/${slug}`, fedifyOrigin).href,
+        alternate_actor_id: requiredString(row, "actor_url"),
         handle: `!${slug}@${hostname}`,
       };
     });

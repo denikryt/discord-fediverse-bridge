@@ -185,7 +185,7 @@ async function buildRegisteredUserActorDocument(
   return buildUserPersonActor(
     userIdentity,
     new URL("/inbox", config.fedifyOrigin),
-    await context.getActorKeyPairs(username),
+    await context.getActorKeyPairs(`users/${username}`),
   );
 }
 

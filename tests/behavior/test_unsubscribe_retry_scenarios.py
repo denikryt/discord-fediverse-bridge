@@ -28,7 +28,7 @@ def _community_actor_url() -> str:
 
 def _register_user(database: Database, discord_user_id: str = "1234567890") -> None:
     """Seed the registered command caller required by unsubscribe ingress."""
-    actor_url = f"https://{BRIDGE_EXAMPLE_DOMAIN}/users/alice"
+    actor_url = f"https://{BRIDGE_EXAMPLE_DOMAIN}/actors/users/alice"
     database.users.create_user(
         discord_user_id=discord_user_id,
         activitypub_username="alice",

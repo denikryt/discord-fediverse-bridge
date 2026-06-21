@@ -68,10 +68,10 @@ async function main(): Promise<void> {
         "hackers",
         "Hackers",
         "A local hackerspace forum.",
-        `${TEST_ORIGIN}communities/hackers`,
-        `${TEST_ORIGIN}communities/hackers/inbox`,
-        `${TEST_ORIGIN}communities/hackers/outbox`,
-        `${TEST_ORIGIN}communities/hackers/followers`,
+        `${TEST_ORIGIN}actors/communities/hackers`,
+        `${TEST_ORIGIN}actors/communities/hackers/inbox`,
+        `${TEST_ORIGIN}actors/communities/hackers/outbox`,
+        `${TEST_ORIGIN}actors/communities/hackers/followers`,
         await exportPublicKeyPem(communityKeys.publicKey),
         await exportPrivateKeyPem(communityKeys.privateKey),
         "active",
@@ -79,7 +79,7 @@ async function main(): Promise<void> {
     );
     seedBridgeActorJwk(
       db,
-      `${TEST_ORIGIN}actors/bridge`,
+      `${TEST_ORIGIN}actors/services/bridge`,
       JSON.stringify(await exportJwk(bridgeKeys.privateKey)),
       JSON.stringify(await exportJwk(bridgeKeys.publicKey)),
     );
@@ -101,12 +101,12 @@ async function main(): Promise<void> {
   };
 
   const identity = await loadLocalCommunityIdentity(config, "hackers");
-  const keyPair = await loadActorKeyPair(config, "hackers");
+  const keyPair = await loadActorKeyPair(config, "communities/hackers");
 
   assert.ok(identity != null);
-  assert.equal(identity?.actorId.href, `${TEST_ORIGIN}communities/hackers`);
+  assert.equal(identity?.actorId.href, `${TEST_ORIGIN}actors/communities/hackers`);
   assert.equal(identity?.displayName, "Hackers");
-  assert.equal(await hasLocalActor(config, "hackers"), true);
+  assert.equal(await hasLocalActor(config, "communities/hackers"), true);
   assert.ok(keyPair != null);
 
   const actor = buildLocalCommunityGroupActor(
@@ -114,9 +114,9 @@ async function main(): Promise<void> {
     new URL(`${TEST_ORIGIN}inbox`),
     [],
   );
-  assert.equal(actor.id?.href, `${TEST_ORIGIN}communities/hackers`);
+  assert.equal(actor.id?.href, `${TEST_ORIGIN}actors/communities/hackers`);
   assert.equal(actor.name, "Hackers");
-  assert.equal(actor.followersId?.href, `${TEST_ORIGIN}communities/hackers/followers`);
+  assert.equal(actor.followersId?.href, `${TEST_ORIGIN}actors/communities/hackers/followers`);
   console.log("verify:local-community-actor passed");
 }
 

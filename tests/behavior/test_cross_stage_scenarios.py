@@ -233,8 +233,8 @@ async def test_register_subscribe_accept_publish_then_echo_is_suppressed(
 
     publish_gateway = AsyncMock()
     publish_gateway.publish_content.return_value = PublishContentResult(
-        activity_id=f"https://{BRIDGE_HOST_DOMAIN}/users/alice/activities/create/post/1",
-        object_id=f"https://{BRIDGE_HOST_DOMAIN}/users/alice/objects/post/1",
+        activity_id=f"https://{BRIDGE_HOST_DOMAIN}/actors/users/alice/activities/create/posts/1",
+        object_id=f"https://{BRIDGE_HOST_DOMAIN}/actors/users/alice/objects/posts/1",
         community_actor_url=community_actor_url,
     )
     publish_service = ContentPublishService(
@@ -295,8 +295,8 @@ async def test_lemmy_announce_of_local_post_is_suppressed_via_actor_check(
     _register_user(client, database, username="alice")
 
     community_actor_url = f"https://{LEMMY_EXAMPLE_DOMAIN}/c/hackers"
-    object_id = f"https://{BRIDGE_HOST_DOMAIN}/users/alice/post/9999"
-    actor_url = f"https://{BRIDGE_HOST_DOMAIN}/actors/alice"
+    object_id = f"https://{BRIDGE_HOST_DOMAIN}/actors/users/alice/objects/posts/9999"
+    actor_url = f"https://{BRIDGE_HOST_DOMAIN}/actors/users/alice"
 
     # Simulate Lemmy Announce: delivery_id and object_id are new Lemmy-generated ids,
     # but actor_id is our own registered user.
@@ -362,10 +362,10 @@ async def test_failed_subscribe_retry_then_accept_allows_publish(
     database.users.create_user(
         discord_user_id="1234567890",
         activitypub_username="alice",
-        actor_url=f"https://{BRIDGE_HOST_DOMAIN}/users/alice",
-        inbox_url=f"https://{BRIDGE_HOST_DOMAIN}/users/alice/inbox",
-        outbox_url=f"https://{BRIDGE_HOST_DOMAIN}/users/alice/outbox",
-        followers_url=f"https://{BRIDGE_HOST_DOMAIN}/users/alice/followers",
+        actor_url=f"https://{BRIDGE_HOST_DOMAIN}/actors/users/alice",
+        inbox_url=f"https://{BRIDGE_HOST_DOMAIN}/actors/users/alice/inbox",
+        outbox_url=f"https://{BRIDGE_HOST_DOMAIN}/actors/users/alice/outbox",
+        followers_url=f"https://{BRIDGE_HOST_DOMAIN}/actors/users/alice/followers",
         public_key_pem="public-key",
         private_key_pem="private-key",
     )
@@ -431,8 +431,8 @@ async def test_failed_subscribe_retry_then_accept_allows_publish(
 
     publish_gateway = AsyncMock()
     publish_gateway.publish_content.return_value = PublishContentResult(
-        activity_id=f"https://{BRIDGE_HOST_DOMAIN}/users/alice/activities/create/post/2",
-        object_id=f"https://{BRIDGE_HOST_DOMAIN}/users/alice/objects/post/2",
+        activity_id=f"https://{BRIDGE_HOST_DOMAIN}/actors/users/alice/activities/create/posts/2",
+        object_id=f"https://{BRIDGE_HOST_DOMAIN}/actors/users/alice/objects/posts/2",
         community_actor_url=community_actor_url,
     )
     publish_service = ContentPublishService(

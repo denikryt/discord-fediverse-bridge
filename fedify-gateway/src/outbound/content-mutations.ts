@@ -54,9 +54,11 @@ export function verifyMutationIdentity(config: GatewayConfig, request: UpdateCon
   });
   const expectedOperationId = createHash("sha256").update(identity).digest("hex");
   if (expectedOperationId !== request.operationId) throw new Error("mutation operation identity mismatch");
+  const objectKindSegment = "kind" in request && request.kind === "comment" ? "comments" : request.apObjectId.includes("/comments/") ? "comments" : "posts";
+  const actionSegment = kind === "content_delete" ? "delete" : "update";
   const expectedActivityId = buildGatewayUrl(
     config,
-    `/users/${request.actorUsername}/activities/${kind === "content_delete" ? "delete" : "update"}/${expectedOperationId}`,
+    `/actors/users/${request.actorUsername}/activities/${actionSegment}/${objectKindSegment}/${expectedOperationId}`,
   ).href;
   if (expectedActivityId !== new URL(request.activityId).href) throw new Error("mutation activity identity mismatch");
 }
@@ -72,7 +74,7 @@ function buildUpdateActivity(
   const activityId = request.activityId == null
     ? buildGatewayUrl(
         config,
-        `/users/${request.actorUsername}/activities/update/${request.kind}/${Date.now()}-${Math.random().toString(36).slice(2)}`,
+        `/actors/users/${request.actorUsername}/activities/update/${request.kind === "comment" ? "comments" : "posts"}/${Date.now()}-${Math.random().toString(36).slice(2)}`,
       )
     : new URL(request.activityId);
   const htmlContent = markdownToHtml(request.bodyMarkdown);
@@ -89,7 +91,7 @@ function buildUpdateActivity(
   if (personalFeed && community != null) {
     throw new Error("personal-feed mutation cannot carry communityActorUrl");
   }
-  const followers = buildGatewayUrl(config, `/actors/${request.actorUsername}/followers`);
+  const followers = buildGatewayUrl(config, `/actors/users/${request.actorUsername}/followers`);
   const updated = request.mutationTimestamp == null
     ? Temporal.Now.instant()
     : Temporal.Instant.from(request.mutationTimestamp);
@@ -144,10 +146,11 @@ function buildDeleteActivity(
   /** Build one user-authored Delete using the Lemmy URL-object convention. */
   verifyMutationIdentity(config, request, "content_delete");
   const actorUri = buildUserActorUri(config, request.actorUsername);
+  const deleteKindSegment = request.apObjectId.includes("/comments/") ? "comments" : "posts";
   const activityId = request.activityId == null
     ? buildGatewayUrl(
         config,
-        `/users/${request.actorUsername}/activities/delete/${Date.now()}-${Math.random().toString(36).slice(2)}`,
+        `/actors/users/${request.actorUsername}/activities/delete/${deleteKindSegment}/${Date.now()}-${Math.random().toString(36).slice(2)}`,
       )
     : new URL(request.activityId);
   const PUBLIC = new URL("https://www.w3.org/ns/activitystreams#Public");
@@ -159,7 +162,7 @@ function buildDeleteActivity(
   if (personalFeed && community != null) {
     throw new Error("personal-feed mutation cannot carry communityActorUrl");
   }
-  const followers = buildGatewayUrl(config, `/actors/${request.actorUsername}/followers`);
+  const followers = buildGatewayUrl(config, `/actors/users/${request.actorUsername}/followers`);
   return {
     activityId,
     activity: new Delete({

@@ -23,7 +23,7 @@ export async function sendUserActorDeliveries(
   if (identity == null || identity.actorId.href !== request.signingActorUrl) {
     throw new Error("actorUsername and signingActorUrl must identify the same local User Actor");
   }
-  const keyPair = await loadActorKeyPair(config, request.actorUsername);
+  const keyPair = await loadActorKeyPair(config, `users/${request.actorUsername}`);
   if (keyPair == null) throw new Error("User Actor signing key not found");
   const signingKey = { keyId: new URL("#main-key", identity.actorId), privateKey: keyPair.privateKey };
   const outcomes = [];

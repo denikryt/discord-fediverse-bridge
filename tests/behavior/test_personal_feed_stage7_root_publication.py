@@ -12,6 +12,7 @@ from sqlalchemy.exc import IntegrityError
 
 from src.content_sync.persistence import PublicationConflictError
 from src.db import Database
+from src.db.migrations import Stage4IdentityMigrationConfig
 from src.fedify_gateway_client import RenderPersonalFeedResult
 from src.models import (
     MessageMapping,
@@ -28,10 +29,10 @@ def _user() -> User:
     return User(
         discord_user_id="10",
         activitypub_username="alice",
-        actor_url="https://bridge.test/actors/alice",
-        inbox_url="https://bridge.test/actors/alice/inbox",
-        outbox_url="https://bridge.test/actors/alice/outbox",
-        followers_url="https://bridge.test/actors/alice/followers",
+        actor_url="https://bridge.test/actors/users/alice",
+        inbox_url="https://bridge.test/actors/users/alice/inbox",
+        outbox_url="https://bridge.test/actors/users/alice/outbox",
+        followers_url="https://bridge.test/actors/users/alice/followers",
         public_key_pem="public",
         private_key_pem="private",
     )
@@ -46,7 +47,7 @@ class Gateway:
     async def render_personal_feed(self, request):
         """Return JSON using the exact deterministic request identity."""
         self.requests.append(request)
-        actor = "https://bridge.test/actors/alice"
+        actor = "https://bridge.test/actors/users/alice"
         followers = f"{actor}/followers"
         activity = {
             "type": "Create",
@@ -198,7 +199,7 @@ def test_database_rejects_incomplete_personal_feed_source_identity(tmp_path) -> 
                     source_id="300",
                     activity_id="https://bridge.test/a",
                     object_id="https://bridge.test/o",
-                    actor_url="https://bridge.test/actors/alice",
+                    actor_url="https://bridge.test/actors/users/alice",
                     publication_context="personal_feed",
                     community_actor_url=None,
                     discord_guild_id=100,
@@ -211,7 +212,7 @@ def test_database_rejects_incomplete_personal_feed_source_identity(tmp_path) -> 
             session.add(
                 PublishedActivityObject(
                     actor_username="alice",
-                    actor_url="https://bridge.test/actors/alice",
+                    actor_url="https://bridge.test/actors/users/alice",
                     publication_context="personal_feed",
                     community_actor_url=None,
                     activity_id="https://bridge.test/a2",
@@ -307,9 +308,9 @@ async def test_preflight_duplicate_fails_closed_when_canonical_object_is_missing
             MessageMapping(
                 source_platform="discord",
                 source_id="300",
-                activity_id=f"https://bridge.test/users/alice/activities/create/post/{operation_id}",
-                object_id=f"https://bridge.test/users/alice/post/{operation_id}",
-                actor_url="https://bridge.test/actors/alice",
+                activity_id=f"https://bridge.test/actors/users/alice/activities/create/posts/{operation_id}",
+                object_id=f"https://bridge.test/actors/users/alice/objects/posts/{operation_id}",
+                actor_url="https://bridge.test/actors/users/alice",
                 publication_context="personal_feed",
                 community_actor_url=None,
                 discord_guild_id=100,
@@ -526,7 +527,7 @@ async def test_restart_replay_reuses_durable_publication_without_render(
     ).status == "published"
 
     reopened = Database(f"sqlite:///{tmp_path / 'bridge.sqlite3'}")
-    reopened.migrate()
+    reopened.migrate(Stage4IdentityMigrationConfig(public_origin="https://bridge.test", service_actor_identifier="bridge"))
     bindings = PersonalFeedService(reopened)
     gateway = Gateway()
     restarted = PersonalFeedPublisher(

@@ -29,6 +29,7 @@ import {
   normalizeDeleteActivityFromJson,
 } from "./normalize.js";
 import { getPythonBridgeClient } from "./python-bridge-client.js";
+import { parseTypedActorIdentifier } from "./typed-actor-routing.js";
 import type {
   BridgeContentEvent,
   FollowAcceptedEvent,
@@ -49,11 +50,13 @@ export function createGatewayFederation(
   });
 
   federation
-    .setActorDispatcher("/actors/{identifier}", async (ctx, identifier) => {
+    .setActorDispatcher("/actors/{+identifier}", async (ctx, identifier) => {
       const sharedInboxId = ctx.getInboxUri();
+      const typed = parseTypedActorIdentifier(identifier);
+      if (typed == null) return null;
       const actorKind = await resolveLocalActorKind(config, identifier);
 
-      if (actorKind === "bridge") {
+      if (actorKind === "service") {
         const bridgeIdentity = getBridgeActorIdentity(config);
         const bridgeKeys = await ctx.getActorKeyPairs(identifier);
         return buildBridgeServiceActor(
@@ -64,14 +67,13 @@ export function createGatewayFederation(
       }
 
       if (actorKind === "user") {
-        const userIdentity = await loadUserActorIdentity(config, identifier);
+        const userIdentity = await loadUserActorIdentity(config, typed.identifier);
         if (userIdentity == null) {
           return null;
         }
 
-        // User actors remain Person objects and now use the dispatcher route as
-        // their canonical ActivityPub identity. This keeps actor IDs and Fedify
-        // key ownership aligned for Mastodon/Lemmy fetch-time validation.
+        // The typed tail must be used for key-pair lookup because Fedify binds
+        // key ownership to the dispatcher identifier it received.
         return buildUserPersonActor(
           userIdentity,
           sharedInboxId,
@@ -80,7 +82,7 @@ export function createGatewayFederation(
       }
 
       if (actorKind === "community") {
-        const communityIdentity = await loadLocalCommunityIdentity(config, identifier);
+        const communityIdentity = await loadLocalCommunityIdentity(config, typed.identifier);
         if (communityIdentity == null) {
           return null;
         }
@@ -101,28 +103,27 @@ export function createGatewayFederation(
       return [keyPair];
     })
     .mapHandle(async (_ctx, username) => {
-      if (!(await hasLocalActor(config, username))) {
-        return null;
+      if (username === config.actorIdentifier) {
+        return `services/${config.actorIdentifier}`;
       }
-      return username;
+      if ((await loadUserActorIdentity(config, username)) != null) {
+        return `users/${username}`;
+      }
+      if ((await loadLocalCommunityIdentity(config, username)) != null) {
+        return `communities/${username}`;
+      }
+      return null;
     })
     .mapAlias(async (_ctx, resource) => {
-      if (
-        resource.href ===
-        new URL(`/actors/${config.actorIdentifier}`, config.fedifyOrigin).href
-      ) {
-        return { identifier: config.actorIdentifier };
-      }
-
-      const username = parseUserAlias(resource, config.fedifyOrigin);
-      if (username == null || !(await hasLocalActor(config, username))) {
+      const tail = parseTypedActorAlias(resource, config.fedifyOrigin);
+      if (tail == null || !(await hasLocalActor(config, tail))) {
         return null;
       }
-      return { username };
+      return { identifier: tail };
     });
 
   federation
-    .setInboxListeners("/communities/{identifier}/inbox", "/inbox")
+    .setInboxListeners("/actors/{+identifier}/inbox", "/inbox")
     .withIdempotency("per-inbox")
     .on(Create, async (_ctx, activity) => {
       if (isDebug) {
@@ -579,17 +580,24 @@ export async function buildLocalUnfollowRequestedEvent(
   };
 }
 
+function parseTypedActorAlias(resource: URL, origin: string): string | null {
+  // Only typed actor aliases are accepted after Stage 4; old actor URLs are not
+  // rewritten because they are no longer a compatibility surface.
+  if (resource.origin !== new URL(origin).origin) return null;
+  const match = resource.pathname.match(/^\/actors\/(services|users|communities)\/([^/]+)$/);
+  return match == null ? null : `${match[1]}/${match[2]}`;
+}
+
 function parseUserAlias(resource: URL, origin: string): string | null {
-  // /actors is the canonical registered-user actor namespace. /users remains a
-  // compatibility alias so older object/profile links can still resolve.
+  // Stage 4 accepts only the typed user actor URL as local User identity.
   const resourceOrigin = new URL(origin);
   if (resource.origin !== resourceOrigin.origin) {
     return null;
   }
 
   const parts = resource.pathname.split("/").filter(Boolean);
-  if (parts.length !== 2 || (parts[0] !== "actors" && parts[0] !== "users")) {
+  if (parts.length !== 3 || parts[0] !== "actors" || parts[1] !== "users") {
     return null;
   }
-  return parts[1];
+  return parts[2];
 }

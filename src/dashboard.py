@@ -165,7 +165,7 @@ def build_dashboard_payload(runtime: Any) -> dict[str, object]:
                 "relayHandle": relay_handle,
                 "hostDiscord": host_discord,
                 "actorUrl": getattr(community, "actor_url"),
-                "aliasUrl": f"{origin}/c/{getattr(community, 'slug')}",
+                "aliasUrl": getattr(community, "actor_url"),
                 "followersUrl": getattr(community, "followers_url"),
                 # Stage 1 keeps participant types explicit. A later read model
                 # may add a combined total, but the payload should not imply
@@ -304,7 +304,7 @@ def build_dashboard_payload(runtime: Any) -> dict[str, object]:
             ),
             "version": APP_VERSION,
             "origin": origin,
-            "bridgeActorUrl": f"{origin}/actors/{actor_identifier}",
+            "bridgeActorUrl": f"{origin}/actors/services/{actor_identifier}",
             "registeredUserCount": len(registered_users),
             "localCommunityCount": len(community_payloads),
             "localCommunityFollowerCount": len(remote_subscribers),

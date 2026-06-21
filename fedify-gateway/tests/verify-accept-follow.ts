@@ -55,7 +55,7 @@ const ACCEPT_PAYLOAD = {
   object: {
     id: FOLLOW_ACTIVITY_ID,
     type: "Follow",
-    actor: `${TEST_ORIGIN}actors/bridge`,
+    actor: `${TEST_ORIGIN}actors/services/bridge`,
     object: COMMUNITY_ACTOR_ID,
   },
 };

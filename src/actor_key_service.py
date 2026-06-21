@@ -6,6 +6,7 @@ import json
 import logging
 from dataclasses import dataclass
 
+from .activitypub_identity_urls import LocalActorKind, build_actor_address
 from .config import Settings
 from .db import Database
 from .models import BridgeActorKey, LocalCommunity, User
@@ -82,8 +83,16 @@ class BridgeActorKeyBootstrap:
                 "Both legacy FEDIFY bridge JWK values are required for one-time import"
             )
 
-        actor_url = f"{self.settings.normalized_fedify_origin}/actors/{self.settings.fedify_actor_identifier}"
-        key_id = f"{actor_url}#main-key"
+        # The service actor uses the same typed actor-address helper as users
+        # and communities; no secret-bearing settings are passed beyond this
+        # bootstrap boundary.
+        address = build_actor_address(
+            origin=self.settings.normalized_fedify_origin,
+            kind=LocalActorKind.SERVICE,
+            identifier=self.settings.fedify_actor_identifier,
+        )
+        actor_url = address.actor_url
+        key_id = address.public_key_url
         if private_jwk is not None and public_jwk is not None:
             _validate_jwk_json(private_jwk, "private")
             _validate_jwk_json(public_jwk, "public")

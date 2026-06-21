@@ -19,6 +19,7 @@ from sqlalchemy import text
 from src.discord_event_router import DiscordEventRouter
 from src.content_publish_service import ContentPublishService
 from src.local_communities.runtime import LocalCommunityRuntime
+from src.db.migrations import Stage4IdentityMigrationConfig
 from src.local_communities.service import LocalCommunityService
 from support.db import add_registered_user, build_database
 from support.discord import build_starter_message, build_thread, build_thread_message
@@ -85,16 +86,16 @@ async def test_host_forum_create_paths_write_exactly_one_host_surface_per_canoni
     add_registered_user(database)
     runtime.fedify_gateway.publish_local_community_content.side_effect = [
         SimpleNamespace(
-            activity_id="https://bridge.example/users/alice/activities/create/post/1",
-            object_id="https://bridge.example/users/alice/post/1",
-            community_actor_url="https://bridge.example/communities/hackers",
+            activity_id="https://bridge.example/actors/users/alice/activities/create/posts/1",
+            object_id="https://bridge.example/actors/users/alice/objects/posts/1",
+            community_actor_url="https://bridge.example/actors/communities/hackers",
             delivered_follower_count=0,
             failed_follower_count=0,
         ),
         SimpleNamespace(
-            activity_id="https://bridge.example/users/alice/activities/create/comment/1",
-            object_id="https://bridge.example/users/alice/comment/1",
-            community_actor_url="https://bridge.example/communities/hackers",
+            activity_id="https://bridge.example/actors/users/alice/activities/create/comments/1",
+            object_id="https://bridge.example/actors/users/alice/objects/comments/1",
+            community_actor_url="https://bridge.example/actors/communities/hackers",
             delivered_follower_count=0,
             failed_follower_count=0,
         ),
@@ -108,7 +109,7 @@ async def test_host_forum_create_paths_write_exactly_one_host_surface_per_canoni
 
     canonical_thread = (
         database.local_community_content.get_local_community_thread_by_ap_object_id(
-            "https://bridge.example/users/alice/post/1"
+            "https://bridge.example/actors/users/alice/objects/posts/1"
         )
     )
     assert canonical_thread is not None
@@ -130,7 +131,7 @@ async def test_host_forum_create_paths_write_exactly_one_host_surface_per_canoni
 
     canonical_message = (
         database.local_community_content.get_local_community_message_by_ap_object_id(
-            "https://bridge.example/users/alice/comment/1"
+            "https://bridge.example/actors/users/alice/objects/comments/1"
         )
     )
     assert canonical_message is not None
@@ -177,23 +178,24 @@ def test_stage2_current_schema_migrate_keeps_host_surfaces_idempotent(
         local_community_id=community.id,
         discord_thread_id=200,
         discord_starter_message_id=300,
-        ap_activity_id="https://bridge.example/users/alice/activities/create/post/1",
-        ap_object_id="https://bridge.example/users/alice/post/1",
+        ap_activity_id="https://bridge.example/actors/users/alice/activities/create/posts/1",
+        ap_object_id="https://bridge.example/actors/users/alice/objects/posts/1",
         direction="discord_to_ap",
         origin_kind="discord_local",
     )
     canonical_message = migrated.local_community_content.create_local_community_message(
         local_community_thread_id=canonical_thread.id,
         discord_message_id=301,
-        ap_activity_id="https://bridge.example/users/alice/activities/create/comment/1",
-        ap_object_id="https://bridge.example/users/alice/comment/1",
-        parent_ap_object_id="https://bridge.example/users/alice/post/1",
+        ap_activity_id="https://bridge.example/actors/users/alice/activities/create/comments/1",
+        ap_object_id="https://bridge.example/actors/users/alice/objects/comments/1",
+        parent_ap_object_id="https://bridge.example/actors/users/alice/objects/posts/1",
         parent_discord_message_id=300,
         direction="discord_to_ap",
     )
 
-    migrated.migrate()
-    migrated.migrate()
+    config = Stage4IdentityMigrationConfig(public_origin="https://bridge.example", service_actor_identifier="bridge")
+    migrated.migrate(config)
+    migrated.migrate(config)
 
     thread_surfaces = (
         migrated.local_community_surfaces.list_local_community_thread_surfaces(

@@ -57,7 +57,7 @@ def _accepted_subscription(database: Database, *, channel_id: int) -> None:
 
 def _registered_user(database: Database) -> None:
     """Insert one registered local user actor for outbound publish scenarios."""
-    actor_url = f"https://{BRIDGE_HOST_DOMAIN}/users/alice"
+    actor_url = f"https://{BRIDGE_HOST_DOMAIN}/actors/users/alice"
     database.users.create_user(
         discord_user_id="123",
         activitypub_username="alice",
@@ -74,8 +74,8 @@ def _publish_gateway() -> AsyncMock:
     """Build a mocked FedifyGatewayClient returning a valid PublishContentResult."""
     gateway = AsyncMock()
     gateway.publish_content.return_value = PublishContentResult(
-        activity_id=f"https://{BRIDGE_HOST_DOMAIN}/users/alice/activities/create/comment/1",
-        object_id=f"https://{BRIDGE_HOST_DOMAIN}/users/alice/objects/comment/1",
+        activity_id=f"https://{BRIDGE_HOST_DOMAIN}/actors/users/alice/activities/create/comments/1",
+        object_id=f"https://{BRIDGE_HOST_DOMAIN}/actors/users/alice/objects/comments/1",
         community_actor_url=COMMUNITY_ACTOR_URL,
     )
     return gateway

@@ -104,7 +104,7 @@ def _post_event(
             "source_activity_id": f"https://lemmy.example/activities/create/post/{suffix}",
             "source_announce_id": None,
             "occurred_at": "2026-05-19T10:00:00Z",
-            "community_actor_id": "https://bridge.example/communities/hackers",
+            "community_actor_id": "https://bridge.example/actors/communities/hackers",
             "actor_id": actor_id,
             "object": {
                 "ap_id": f"https://lemmy.example/post/{suffix}",
@@ -143,7 +143,7 @@ def _comment_event(
             "source_activity_id": f"https://lemmy.example/activities/create/comment/{suffix}",
             "source_announce_id": None,
             "occurred_at": "2026-05-19T10:05:00Z",
-            "community_actor_id": "https://bridge.example/communities/hackers",
+            "community_actor_id": "https://bridge.example/actors/communities/hackers",
             "actor_id": "https://lemmy.example/u/bob",
             "object": {
                 "ap_id": f"https://lemmy.example/comment/{suffix}",
@@ -183,8 +183,8 @@ async def test_host_thread_create_fans_out_to_local_subscriber_thread_surfaces(
     )
     runtime.fedify_gateway.publish_local_community_content.return_value = (
         PublishLocalCommunityContentResult(
-            activity_id="https://bridge.example/users/alice/activities/create/post/1",
-            object_id="https://bridge.example/users/alice/post/1",
+            activity_id="https://bridge.example/actors/users/alice/activities/create/posts/1",
+            object_id="https://bridge.example/actors/users/alice/objects/posts/1",
             community_actor_url=local_community.actor_url,
             delivered_follower_count=0,
             failed_follower_count=0,
@@ -198,7 +198,7 @@ async def test_host_thread_create_fans_out_to_local_subscriber_thread_surfaces(
 
     surfaces = database.local_community_surfaces.list_local_community_thread_surfaces(
         database.local_community_content.get_local_community_thread_by_ap_object_id(
-            "https://bridge.example/users/alice/post/1"
+            "https://bridge.example/actors/users/alice/objects/posts/1"
         ).id
     )
     assert [(s.discord_forum_channel_id, s.role) for s in surfaces] == [
@@ -602,7 +602,7 @@ async def test_local_subscriber_mirror_edit_delete_is_stage5_authoritative(
     )
     database.activitypub_objects.create_published_activity_object(
         actor_username="alice",
-        actor_url="https://bridge.example/actors/alice",
+        actor_url="https://bridge.example/actors/users/alice",
         community_actor_url=local_community.actor_url,
         activity_id="a-post",
         object_id="o-post",

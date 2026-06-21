@@ -37,9 +37,9 @@ async def test_community_runtime_thread_create_publishes_and_persists(
     database = build_database(tmp_path, "community-runtime.db")
     add_accepted_subscription(database)
     add_registered_user(database)
-    post_object_url = f"https://{BRIDGE_HOST_DOMAIN}/users/alice/objects/post/1"
+    post_object_url = f"https://{BRIDGE_HOST_DOMAIN}/actors/users/alice/objects/posts/1"
     post_activity_url = (
-        f"https://{BRIDGE_HOST_DOMAIN}/users/alice/activities/create/post/1"
+        f"https://{BRIDGE_HOST_DOMAIN}/actors/users/alice/activities/create/posts/1"
     )
     fedify_gateway = AsyncMock()
     fedify_gateway.publish_content.return_value = PublishContentResult(
@@ -97,10 +97,10 @@ async def test_community_runtime_thread_message_publishes_as_comment(
     add_accepted_subscription(database)
     add_registered_user(database)
     thread = build_thread()
-    post_object_url = f"https://{BRIDGE_HOST_DOMAIN}/users/alice/objects/post/1"
-    comment_object_url = f"https://{BRIDGE_HOST_DOMAIN}/users/alice/objects/comment/1"
+    post_object_url = f"https://{BRIDGE_HOST_DOMAIN}/actors/users/alice/objects/posts/1"
+    comment_object_url = f"https://{BRIDGE_HOST_DOMAIN}/actors/users/alice/objects/comments/1"
     comment_activity_url = (
-        f"https://{BRIDGE_HOST_DOMAIN}/users/alice/activities/create/comment/1"
+        f"https://{BRIDGE_HOST_DOMAIN}/actors/users/alice/activities/create/comments/1"
     )
     # CommunityThreadGroup lets publish_thread_message resolve the post context.
     thread_group = database.discord_fanout_groups.create_thread_group(
@@ -108,7 +108,7 @@ async def test_community_runtime_thread_message_publishes_as_comment(
         source_channel_id=thread.parent_id,
         source_thread_id=thread.id,
         source_starter_message_id=300,
-        ap_activity_id=f"https://{BRIDGE_HOST_DOMAIN}/users/alice/activities/create/post/1",
+        ap_activity_id=f"https://{BRIDGE_HOST_DOMAIN}/actors/users/alice/activities/create/posts/1",
         ap_object_id=post_object_url,
     )
     database.discord_fanout_groups.add_thread_delivery(

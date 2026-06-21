@@ -65,13 +65,11 @@ def test_optional_nginx_routes_gateway_paths_and_bridge_fallback() -> None:
         "/.well-known/webfinger",
         "/.well-known/discord-fediverse-bridge/",
         "/actors/",
-        "/c/",
-        "/users/",
-        "/communities/",
         "/inbox",
-        "/activitypub/",
     ):
         assert route in config
+    for retired_route in ("/c/", "/users/", "/communities/", "/activitypub/"):
+        assert retired_route not in config
     assert "proxy_pass http://fedify-gateway:3000" in config
     assert "location / { proxy_pass http://bridge:8080" in config
 

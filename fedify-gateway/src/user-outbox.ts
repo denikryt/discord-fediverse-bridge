@@ -17,7 +17,7 @@ export function validateCanonicalUserOutboxUrl(
   } catch {
     throw new Error("invalid canonical user outbox URL");
   }
-  const expectedPath = `/actors/${encodeURIComponent(username)}/outbox`;
+  const expectedPath = `/actors/users/${encodeURIComponent(username)}/outbox`;
   if (
     candidate.origin !== origin.origin ||
     candidate.username !== "" ||

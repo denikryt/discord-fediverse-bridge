@@ -53,7 +53,7 @@ def test_user_action_edits_local_community_metadata_end_to_end(tmp_path: Path) -
     assert reloaded.summary == "Updated summary"
     assert reloaded.slug == "cats"
     assert reloaded.discord_forum_channel_id == 100
-    assert reloaded.actor_url == "https://bridge.example/communities/cats"
+    assert reloaded.actor_url == "https://bridge.example/actors/communities/cats"
 
 
 def test_local_only_metadata_edit_does_not_touch_moderation_or_identity(

@@ -11,6 +11,7 @@ from sqlalchemy.orm import Session, sessionmaker
 from ..management_actions import ManagementActions
 from ..management_audit_recorder import ManagementAuditRecorder
 from . import migrations, schema
+from .migrations import Stage4IdentityMigrationConfig
 from .repositories import (
     ActivityPubObjectRepository,
     BridgeActorKeyRepository,
@@ -113,9 +114,11 @@ class Database:
         """Create the full clean-schema set required by the current codebase."""
         schema.create_all(self.engine)
 
-    def migrate(self) -> None:
-        """Apply additive schema migrations that create_all cannot handle."""
-        migrations.migrate(self.engine)
+    def migrate(
+        self, stage4_identity: Stage4IdentityMigrationConfig | None = None
+    ) -> None:
+        """Apply schema and identity migrations that create_all cannot handle."""
+        migrations.migrate(self.engine, stage4_identity=stage4_identity)
 
     @contextmanager
     def immediate_session(self) -> Iterator[Session]:

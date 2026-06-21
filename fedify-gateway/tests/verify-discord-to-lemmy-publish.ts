@@ -41,7 +41,7 @@ const COMMUNITY_URL = "https://lemmy.example/c/testcommunity";
 const ACTOR_USERNAME = "alice";
 const PARENT_POST_AP_ID = `${GATEWAY_ORIGIN}users/${ACTOR_USERNAME}/post/100`;
 const PUBLIC = "as:Public";
-const ACTOR_URL = `${GATEWAY_ORIGIN}actors/${ACTOR_USERNAME}`;
+const ACTOR_URL = `${GATEWAY_ORIGIN}actors/users/${ACTOR_USERNAME}`;
 
 const TEST_CONFIG: GatewayConfig = {
   actorIdentifier: "bridge",

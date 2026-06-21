@@ -41,13 +41,13 @@ The gateway serves these ActivityPub actor categories:
 
 | Actor category | ActivityStreams type | Example route | Purpose |
 | --- | --- | --- | --- |
-| Bridge actor | `Service` | `/actors/bridge` | Shared federation actor used for remote community follow/publish flows. |
-| Registered Discord user | `Person` | `/users/{username}` | Per-user ActivityPub identity for registered Discord users. |
-| Local community | `Group` | `/communities/{slug}` and `/c/{slug}` | Discord forum channel exposed as a local ActivityPub community. |
+| Bridge actor | `Service` | `/actors/services/{identifier}` | Shared federation actor used for remote community follow/publish flows. |
+| Registered Discord user | `Person` | `/actors/users/{username}` | Per-user ActivityPub identity for registered Discord users. |
+| Local community | `Group` | `/actors/communities/{slug}` | Discord forum channel exposed as a local ActivityPub community. |
 
 Actor documents provide stable identity and routing fields plus editable registered-user profile data. User `Person` actors expose immutable `preferredUsername`, editable `name` and escaped `summary`, optional `icon` and `image` objects backed by bridge-owned immutable media URLs, and up to four ordered `PropertyValue` attachments. Successful profile edits also create a durable complete `Update(Person)` and deliver it to the unique accepted follower endpoints.
 
-Registered User Actor followers are auto-accepted and stored separately from local-community subscribers. Their canonical `/actors/{username}/followers` collection, with `/users/{username}/followers` as a compatibility alias, publicly exposes accepted remote actor IDs through bounded pages. User-authored public content is delivered to the accepted follower endpoint snapshot through durable per-target retry. User outboxes remain empty placeholders until the dedicated outbox stage.
+Registered User Actor followers are auto-accepted and stored separately from local-community subscribers. Their canonical `/actors/users/{username}/followers` collection publicly exposes accepted remote actor IDs through bounded pages. User-authored public content is delivered to the accepted follower endpoint snapshot through durable per-target retry. User outboxes remain empty placeholders until the dedicated outbox stage.
 
 A bound personal-feed guild text channel publishes only owner-authored root messages. Each accepted root becomes one bridge-owned public `Create(Note)` with deterministic object/activity IDs, a canonical `published` value derived from the Discord message creation time, Public addressing, and the User Actor followers collection in `cc`. Replies use a lazily adopted or created public Discord thread whose snowflake equals the root message ID. Registered Discord users publish replies as their own `Person` actors; unregistered users are rejected without federation. Inbound remote comments are stored canonically before Discord delivery, and remote Update/Delete activities must match the stored exact actor owner before they may edit or remove the mapped Discord message.
 
@@ -152,7 +152,7 @@ Important assumptions include:
 - Comments are represented as `Note` objects.
 - Community fanout is represented through community-owned `Announce` activities.
 - Remote Lemmy object URLs may contain `/post/{id}` or `/comment/{id}` and may be parsed for compatibility metadata.
-- Local communities expose Lemmy-style community routes such as `/communities/{slug}` and `/c/{slug}`.
+- Local communities expose ActivityPub Group actors under `/actors/communities/{slug}`; retired `/communities/{slug}` and `/c/{slug}` local actor aliases are not compatibility routes.
 - Compatibility rendering avoids JSON-LD compaction forms that known Lemmy receivers reject.
 
 These assumptions are not required by the base ActivityPub specification. They are bridge-specific interoperability choices.
@@ -256,4 +256,4 @@ Create persistence snapshots the accepted follower relationships in the same dat
 
 ## User Actor outbox
 
-`/actors/{username}/outbox` is the canonical `OrderedCollection`; `/users/{username}/outbox` is an HTTP alias that emits canonical `/actors/...` identifiers. Fixed pages contain current `Create` activities for durable undeleted public posts and comments, ordered by publication time and durable row id. Separate page requests are not an immutable snapshot.
+`/actors/users/{username}/outbox` is the canonical `OrderedCollection`. Fixed pages contain current `Create` activities for durable undeleted public posts and comments, ordered by publication time and durable row id. Separate page requests are not an immutable snapshot.

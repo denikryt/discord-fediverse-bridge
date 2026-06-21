@@ -60,10 +60,10 @@ def _create_bridge_user(database: Database) -> None:
     database.users.create_user(
         discord_user_id="1234567890",
         activitypub_username="alice",
-        actor_url=f"https://{BRIDGE_EXAMPLE_DOMAIN}/users/alice",
-        inbox_url=f"https://{BRIDGE_EXAMPLE_DOMAIN}/users/alice/inbox",
-        outbox_url=f"https://{BRIDGE_EXAMPLE_DOMAIN}/users/alice/outbox",
-        followers_url=f"https://{BRIDGE_EXAMPLE_DOMAIN}/users/alice/followers",
+        actor_url=f"https://{BRIDGE_EXAMPLE_DOMAIN}/actors/users/alice",
+        inbox_url=f"https://{BRIDGE_EXAMPLE_DOMAIN}/actors/users/alice/inbox",
+        outbox_url=f"https://{BRIDGE_EXAMPLE_DOMAIN}/actors/users/alice/outbox",
+        followers_url=f"https://{BRIDGE_EXAMPLE_DOMAIN}/actors/users/alice/followers",
         public_key_pem="public-key",
         private_key_pem="private-key",
     )

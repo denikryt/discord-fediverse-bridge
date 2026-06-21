@@ -33,9 +33,9 @@ async def test_thread_starter_from_registered_user_publishes_and_persists_mappin
     database = build_database(tmp_path, "bridge-stage6.db")
     add_accepted_subscription(database)
     add_registered_user(database)
-    post_object_url = f"https://{BRIDGE_HOST_DOMAIN}/users/alice/objects/post/1"
+    post_object_url = f"https://{BRIDGE_HOST_DOMAIN}/actors/users/alice/objects/posts/1"
     post_activity_url = (
-        f"https://{BRIDGE_HOST_DOMAIN}/users/alice/activities/create/post/1"
+        f"https://{BRIDGE_HOST_DOMAIN}/actors/users/alice/activities/create/posts/1"
     )
     fedify_gateway = AsyncMock()
     fedify_gateway.publish_content.return_value = build_publish_result(
@@ -102,17 +102,17 @@ async def test_thread_message_from_registered_user_publishes_as_comment(
     add_accepted_subscription(database)
     add_registered_user(database)
     thread = build_thread()
-    post_object_url = f"https://{BRIDGE_HOST_DOMAIN}/users/alice/objects/post/1"
-    comment_object_url = f"https://{BRIDGE_HOST_DOMAIN}/users/alice/objects/comment/1"
+    post_object_url = f"https://{BRIDGE_HOST_DOMAIN}/actors/users/alice/objects/posts/1"
+    comment_object_url = f"https://{BRIDGE_HOST_DOMAIN}/actors/users/alice/objects/comments/1"
     comment_activity_url = (
-        f"https://{BRIDGE_HOST_DOMAIN}/users/alice/activities/create/comment/1"
+        f"https://{BRIDGE_HOST_DOMAIN}/actors/users/alice/activities/create/comments/1"
     )
     thread_group = database.discord_fanout_groups.create_thread_group(
         community_actor_id=f"https://{LEMMY_EXAMPLE_DOMAIN}/c/hackers",
         source_channel_id=100,
         source_thread_id=thread.id,
         source_starter_message_id=300,
-        ap_activity_id=f"https://{BRIDGE_HOST_DOMAIN}/users/alice/activities/create/post/1",
+        ap_activity_id=f"https://{BRIDGE_HOST_DOMAIN}/actors/users/alice/activities/create/posts/1",
         ap_object_id=post_object_url,
     )
     database.discord_fanout_groups.add_thread_delivery(
@@ -159,16 +159,16 @@ async def test_thread_reply_uses_parent_comment_object_id_when_available(
     add_accepted_subscription(database)
     add_registered_user(database)
     thread = build_thread()
-    post_object_url = f"https://{BRIDGE_HOST_DOMAIN}/users/alice/objects/post/1"
+    post_object_url = f"https://{BRIDGE_HOST_DOMAIN}/actors/users/alice/objects/posts/1"
     parent_comment_object_url = (
-        f"https://{BRIDGE_HOST_DOMAIN}/users/alice/objects/comment/parent"
+        f"https://{BRIDGE_HOST_DOMAIN}/actors/users/alice/objects/comments/parent"
     )
     thread_group = database.discord_fanout_groups.create_thread_group(
         community_actor_id=f"https://{LEMMY_EXAMPLE_DOMAIN}/c/hackers",
         source_channel_id=100,
         source_thread_id=thread.id,
         source_starter_message_id=300,
-        ap_activity_id=f"https://{BRIDGE_HOST_DOMAIN}/users/alice/activities/create/post/1",
+        ap_activity_id=f"https://{BRIDGE_HOST_DOMAIN}/actors/users/alice/activities/create/posts/1",
         ap_object_id=post_object_url,
     )
     database.discord_fanout_groups.add_thread_delivery(
@@ -184,7 +184,7 @@ async def test_thread_reply_uses_parent_comment_object_id_when_available(
         source_channel_id=100,
         source_thread_id=thread.id,
         source_message_id=401,
-        ap_activity_id=f"https://{BRIDGE_HOST_DOMAIN}/users/alice/activities/create/comment/parent",
+        ap_activity_id=f"https://{BRIDGE_HOST_DOMAIN}/actors/users/alice/activities/create/comments/parent",
         ap_object_id=parent_comment_object_url,
     )
     database.discord_fanout_groups.add_message_delivery(
@@ -197,8 +197,8 @@ async def test_thread_reply_uses_parent_comment_object_id_when_available(
     fedify_gateway = AsyncMock()
     fedify_gateway.publish_content.return_value = build_publish_result(
         kind="comment",
-        activity_id=f"https://{BRIDGE_HOST_DOMAIN}/users/alice/activities/create/comment/2",
-        object_id=f"https://{BRIDGE_HOST_DOMAIN}/users/alice/objects/comment/2",
+        activity_id=f"https://{BRIDGE_HOST_DOMAIN}/actors/users/alice/activities/create/comments/2",
+        object_id=f"https://{BRIDGE_HOST_DOMAIN}/actors/users/alice/objects/comments/2",
     )
     service = _service(database, fedify_gateway)
     message = build_thread_message(
@@ -213,7 +213,7 @@ async def test_thread_reply_uses_parent_comment_object_id_when_available(
     request = fedify_gateway.publish_content.await_args.args[0]
     stored_object = (
         database.activitypub_objects.get_published_activity_object_by_object_id(
-            f"https://{BRIDGE_HOST_DOMAIN}/users/alice/objects/comment/2"
+            f"https://{BRIDGE_HOST_DOMAIN}/actors/users/alice/objects/comments/2"
         )
     )
     assert request.in_reply_to_object_id == parent_comment_object_url

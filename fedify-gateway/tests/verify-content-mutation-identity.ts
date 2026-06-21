@@ -20,7 +20,7 @@ function buildRequest(kind: "content_update" | "content_delete") {
   const base = {
     actorUsername: "alice",
     communityActorUrl: "https://remote.example/c/group",
-    apObjectId: "https://bridge.example/posts/1",
+    apObjectId: "https://bridge.example/actors/users/alice/objects/posts/1",
     targetInboxUrls: [],
     mutationTimestamp: "2026-06-16T10:00:00+00:00",
     expectedRevision: 1,
@@ -39,7 +39,7 @@ function buildRequest(kind: "content_update" | "content_delete") {
   };
   const identity = stableJson({objectId: base.apObjectId, kind, expectedRevision: 1, nextRevision: 2, request: requestShape});
   const operationId = createHash("sha256").update(identity).digest("hex");
-  const activityId = `https://bridge.example/users/alice/activities/${kind === "content_delete" ? "delete" : "update"}/${operationId}`;
+  const activityId = `https://bridge.example/actors/users/alice/activities/${kind === "content_delete" ? "delete" : "update"}/posts/${operationId}`;
   return kind === "content_update"
     ? {...base, kind: "post" as const, title: "Topic", bodyMarkdown: "new", inReplyToObjectId: null, operationId, activityId}
     : {...base, operationId, activityId};

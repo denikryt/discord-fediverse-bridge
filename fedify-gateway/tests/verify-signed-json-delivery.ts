@@ -38,7 +38,7 @@ async function testSignedJsonHeadersAndRequestTarget(): Promise<void> {
     "@context": "https://www.w3.org/ns/activitystreams",
     type: "Create",
     id: "https://bridge.example/activities/1",
-    actor: "https://bridge.example/actors/alice",
+    actor: "https://bridge.example/actors/users/alice",
   };
   const captured: CapturedRequest[] = [];
   const rawLogs: unknown[][] = [];
@@ -49,7 +49,7 @@ async function testSignedJsonHeadersAndRequestTarget(): Promise<void> {
     await sendSignedJsonActivity(
       "TransportTest",
       "https://remote.example/inbox?x=1",
-      { keyId: new URL("https://bridge.example/actors/alice#main-key"), privateKey: keyPair.privateKey },
+      { keyId: new URL("https://bridge.example/actors/users/alice#main-key"), privateKey: keyPair.privateKey },
       activityJson,
       { debugDelivery: true },
     );
@@ -72,7 +72,7 @@ async function testSignedJsonHeadersAndRequestTarget(): Promise<void> {
   assert.equal(request.headers.Host, "remote.example");
   assert.match(request.headers.Date ?? "", /^[A-Z][a-z]{2}, /);
   assert.ok(
-    request.headers.Signature?.includes('keyId="https://bridge.example/actors/alice#main-key"'),
+    request.headers.Signature?.includes('keyId="https://bridge.example/actors/users/alice#main-key"'),
   );
   assert.ok(request.headers.Signature?.includes('algorithm="rsa-sha256"'));
   assert.ok(
@@ -102,7 +102,7 @@ async function testHttpFailureRedactsResponseBodyWhenDisabled(): Promise<void> {
       () => sendSignedJsonActivity(
         "TransportTest",
         "https://remote.example/inbox",
-        { keyId: new URL("https://bridge.example/actors/alice#main-key"), privateKey: keyPair.privateKey },
+        { keyId: new URL("https://bridge.example/actors/users/alice#main-key"), privateKey: keyPair.privateKey },
         { type: "Update", id: "https://bridge.example/activities/2" },
         {
           debugDelivery: false,

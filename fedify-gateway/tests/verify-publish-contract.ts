@@ -2,16 +2,10 @@ import assert from "node:assert/strict";
 
 import type { GatewayConfig } from "../src/config.js";
 import { buildPublishCreateActivity } from "../src/federation-outbound.js";
-import { normalizeCreateActivity } from "../src/normalize.js";
 import type { PublishContentRequest } from "../src/types.js";
 
 const TEST_ORIGIN = "https://discord-bridge.example.com/";
 const TEST_COMMUNITY_URL = "https://lemmy.example/c/hackers";
-const EMPTY_LOOKUP_CLIENT = {
-  async loadMessageMappingByObjectId(): Promise<null> { return null; },
-  async loadPublishedActivityObjectByObjectId(): Promise<null> { return null; },
-};
-
 const TEST_CONFIG: GatewayConfig = {
   actorIdentifier: "bridge",
   actorName: "Bridge",
@@ -38,29 +32,13 @@ async function main(): Promise<void> {
     kind: "comment",
     title: null,
     bodyMarkdown: "hello comment",
-    inReplyToObjectId: `${TEST_ORIGIN}users/alice/post/123`,
+    inReplyToObjectId: `${TEST_ORIGIN}actors/users/alice/objects/posts/123`,
   };
 
-  const postEvent = await normalizeCreateActivity(
-    buildPublishCreateActivity(TEST_CONFIG, postRequest, TEST_COMMUNITY_URL)
-      .activity,
-    { pythonBridgeClient: EMPTY_LOOKUP_CLIENT },
-  );
-  const commentEvent = await normalizeCreateActivity(
-    buildPublishCreateActivity(TEST_CONFIG, commentRequest, TEST_COMMUNITY_URL)
-      .activity,
-    { pythonBridgeClient: EMPTY_LOOKUP_CLIENT },
-  );
-
-  assert.ok(postEvent);
-  assert.ok(commentEvent);
-  assert.equal(postEvent.actor_id, `${TEST_ORIGIN}actors/alice`);
-  assert.equal(postEvent.event_type, "post.created");
-  assert.equal(postEvent.community_actor_id, TEST_COMMUNITY_URL);
-  assert.equal(commentEvent.actor_id, `${TEST_ORIGIN}actors/alice`);
-  assert.equal(commentEvent.event_type, "comment.created");
-  assert.equal(commentEvent.object.post_ap_id, `${TEST_ORIGIN}users/alice/post/123`);
-
+  // The Stage 4 cutover makes locally emitted personal-user IDs non-Lemmy
+  // paths. This test therefore verifies the outbound JSON contract directly
+  // instead of routing the bridge's own Create back through inbound Lemmy
+  // normalization, which is reserved for remote objects with Lemmy numeric IDs.
   // Lemmy requires `to` to contain the community and AS#Public so it can route
   // the activity. Verify via JSON-LD serialization to avoid HTTP dereferences.
   const PUBLIC_SHORT = "as:Public";
@@ -77,7 +55,7 @@ async function main(): Promise<void> {
 
   assert.ok(postTos.includes(PUBLIC_SHORT), "Create.to must include as:Public");
   assert.ok(postTos.includes(TEST_COMMUNITY_URL), "Create.to must include community");
-  assert.ok(postCcs.includes(`${TEST_ORIGIN}actors/alice`), "Create.cc must include actor");
+  assert.ok(postCcs.includes(`${TEST_ORIGIN}actors/users/alice`), "Create.cc must include actor");
   assert.ok(postObjectTos.includes(PUBLIC_SHORT), "Page.to must include as:Public");
   assert.ok(postObjectTos.includes(TEST_COMMUNITY_URL), "Page.to must include community");
 

@@ -32,10 +32,10 @@ def _system(tmp_path: Path):
     user = database.users.create_user(
         discord_user_id="1",
         activitypub_username="alice",
-        actor_url="https://x/actors/alice",
-        inbox_url="https://x/actors/alice/inbox",
-        outbox_url="https://x/actors/alice/outbox",
-        followers_url="https://x/actors/alice/followers",
+        actor_url="https://x/actors/users/alice",
+        inbox_url="https://x/actors/users/alice/inbox",
+        outbox_url="https://x/actors/users/alice/outbox",
+        followers_url="https://x/actors/users/alice/followers",
         public_key_pem="p",
         private_key_pem="s",
     )

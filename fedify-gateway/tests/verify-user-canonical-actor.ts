@@ -14,11 +14,10 @@ import { createGatewayApp } from "../src/server.js";
 const TEST_ORIGIN = "https://discord-bridge.example.com/";
 
 /**
- * Verify that registered-user actor documents expose one canonical /actors id.
+ * Verify that registered-user actor documents expose the typed /actors/users id.
  *
- * This regression protects Mastodon fetch-time actor validation: the DB stores
- * users under /actors/{username}, and /users/{username} must only resolve as a
- * compatibility entry point that returns the same canonical actor.
+ * This regression protects Mastodon fetch-time actor validation after Stage 4:
+ * the DB and Fedify route both use /actors/users/{username}.
  */
 async function main(): Promise<void> {
   const bridgeKeys = await importFixedRsaKeyPair();
@@ -26,8 +25,12 @@ async function main(): Promise<void> {
   const config = await buildConfig(bridgeKeys, userKeys);
   const app = createGatewayApp(config);
 
-  await assertCanonicalUserActor(app, "/actors/alice");
-  await assertCanonicalUserActor(app, "/users/alice");
+  await assertCanonicalUserActor(app, "/actors/users/alice");
+
+  const oldActorResponse = await app.request("/actors/alice");
+  assert.equal(oldActorResponse.status, 404);
+  const oldUserResponse = await app.request("/users/alice");
+  assert.equal(oldUserResponse.status, 404);
 
   console.log("verify:user-canonical-actor passed");
 }
@@ -45,14 +48,14 @@ async function assertCanonicalUserActor(
   const actor = await response.json() as Record<string, unknown>;
   const publicKey = actor.publicKey as Record<string, unknown>;
 
-  assert.equal(actor.id, `${TEST_ORIGIN}actors/alice`);
+  assert.equal(actor.id, `${TEST_ORIGIN}actors/users/alice`);
   assert.equal(actor.type, "Person");
   assert.equal(actor.preferredUsername, "alice");
-  assert.equal(actor.inbox, `${TEST_ORIGIN}actors/alice/inbox`);
-  assert.equal(actor.outbox, `${TEST_ORIGIN}actors/alice/outbox`);
-  assert.equal(actor.followers, `${TEST_ORIGIN}actors/alice/followers`);
-  assert.equal(publicKey.id, `${TEST_ORIGIN}actors/alice#main-key`);
-  assert.equal(publicKey.owner, `${TEST_ORIGIN}actors/alice`);
+  assert.equal(actor.inbox, `${TEST_ORIGIN}actors/users/alice/inbox`);
+  assert.equal(actor.outbox, `${TEST_ORIGIN}actors/users/alice/outbox`);
+  assert.equal(actor.followers, `${TEST_ORIGIN}actors/users/alice/followers`);
+  assert.equal(publicKey.id, `${TEST_ORIGIN}actors/users/alice#main-key`);
+  assert.equal(publicKey.owner, `${TEST_ORIGIN}actors/users/alice`);
 }
 
 async function buildConfig(
@@ -95,17 +98,17 @@ async function buildConfig(
       [
         "123",
         "alice",
-        `${TEST_ORIGIN}actors/alice`,
-        `${TEST_ORIGIN}actors/alice/inbox`,
-        `${TEST_ORIGIN}actors/alice/outbox`,
-        `${TEST_ORIGIN}actors/alice/followers`,
+        `${TEST_ORIGIN}actors/users/alice`,
+        `${TEST_ORIGIN}actors/users/alice/inbox`,
+        `${TEST_ORIGIN}actors/users/alice/outbox`,
+        `${TEST_ORIGIN}actors/users/alice/followers`,
         await exportPublicKeyPem(userKeys.publicKey),
         await exportPrivateKeyPem(userKeys.privateKey),
       ],
     );
     seedBridgeActorJwk(
       db,
-      `${TEST_ORIGIN}actors/bridge`,
+      `${TEST_ORIGIN}actors/services/bridge`,
       JSON.stringify(await exportJwk(bridgeKeys.privateKey)),
       JSON.stringify(await exportJwk(bridgeKeys.publicKey)),
     );

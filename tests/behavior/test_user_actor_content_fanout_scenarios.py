@@ -45,10 +45,10 @@ async def test_remote_publish_commits_exact_canonical_create_and_shared_inbox_on
     user = database.users.create_user(
         discord_user_id="1",
         activitypub_username="alice",
-        actor_url="https://bridge.example/actors/alice",
-        inbox_url="https://bridge.example/actors/alice/inbox",
-        outbox_url="https://bridge.example/actors/alice/outbox",
-        followers_url="https://bridge.example/actors/alice/followers",
+        actor_url="https://bridge.example/actors/users/alice",
+        inbox_url="https://bridge.example/actors/users/alice/inbox",
+        outbox_url="https://bridge.example/actors/users/alice/outbox",
+        followers_url="https://bridge.example/actors/users/alice/followers",
         public_key_pem="public",
         private_key_pem="private",
     )
@@ -103,7 +103,7 @@ async def test_remote_publish_commits_exact_canonical_create_and_shared_inbox_on
         assert source.activity_id == canonical["id"]
         assert (
             source.activity_json
-            == '{"actor":"https://bridge.example/actors/alice","id":"https://bridge.example/activities/create/1","object":{"id":"https://bridge.example/posts/1","type":"Page"},"type":"Create"}'
+            == '{"actor":"https://bridge.example/actors/users/alice","id":"https://bridge.example/activities/create/1","object":{"id":"https://bridge.example/posts/1","type":"Page"},"type":"Create"}'
         )
         assert [row.target_endpoint_url for row in deliveries] == [
             "https://remote.example/inbox"
@@ -125,10 +125,10 @@ async def test_update_is_reserved_once_and_duplicate_discord_edit_is_noop(
     user = database.users.create_user(
         discord_user_id="1",
         activitypub_username="alice",
-        actor_url="https://bridge.example/actors/alice",
-        inbox_url="https://bridge.example/actors/alice/inbox",
-        outbox_url="https://bridge.example/actors/alice/outbox",
-        followers_url="https://bridge.example/actors/alice/followers",
+        actor_url="https://bridge.example/actors/users/alice",
+        inbox_url="https://bridge.example/actors/users/alice/inbox",
+        outbox_url="https://bridge.example/actors/users/alice/outbox",
+        followers_url="https://bridge.example/actors/users/alice/followers",
         public_key_pem="public",
         private_key_pem="private",
     )
@@ -225,10 +225,10 @@ async def test_delete_waits_for_ambiguous_update_then_commits_terminal_revision(
     user = database.users.create_user(
         discord_user_id="1",
         activitypub_username="alice",
-        actor_url="https://bridge.example/actors/alice",
-        inbox_url="https://bridge.example/actors/alice/inbox",
-        outbox_url="https://bridge.example/actors/alice/outbox",
-        followers_url="https://bridge.example/actors/alice/followers",
+        actor_url="https://bridge.example/actors/users/alice",
+        inbox_url="https://bridge.example/actors/users/alice/inbox",
+        outbox_url="https://bridge.example/actors/users/alice/outbox",
+        followers_url="https://bridge.example/actors/users/alice/followers",
         public_key_pem="public",
         private_key_pem="private",
     )
@@ -330,10 +330,10 @@ async def test_python_reservation_uses_gateway_user_activity_namespace(
     user = database.users.create_user(
         discord_user_id="1",
         activitypub_username="alice",
-        actor_url="https://bridge.example/actors/alice",
-        inbox_url="https://bridge.example/actors/alice/inbox",
-        outbox_url="https://bridge.example/actors/alice/outbox",
-        followers_url="https://bridge.example/actors/alice/followers",
+        actor_url="https://bridge.example/actors/users/alice",
+        inbox_url="https://bridge.example/actors/users/alice/inbox",
+        outbox_url="https://bridge.example/actors/users/alice/outbox",
+        followers_url="https://bridge.example/actors/users/alice/followers",
         public_key_pem="public",
         private_key_pem="private",
     )
@@ -362,7 +362,7 @@ async def test_python_reservation_uses_gateway_user_activity_namespace(
     with database.session() as session:
         mutation = session.scalar(select(UserActorContentMutation))
         assert mutation.activity_id.startswith(
-            "https://bridge.example/users/alice/activities/update/"
+            "https://bridge.example/actors/users/alice/activities/update/"
         )
 
 
@@ -378,10 +378,10 @@ async def test_pre_send_invalid_update_does_not_block_later_delete(tmp_path) -> 
     user = database.users.create_user(
         discord_user_id="1",
         activitypub_username="alice",
-        actor_url="https://bridge.example/actors/alice",
-        inbox_url="https://bridge.example/actors/alice/inbox",
-        outbox_url="https://bridge.example/actors/alice/outbox",
-        followers_url="https://bridge.example/actors/alice/followers",
+        actor_url="https://bridge.example/actors/users/alice",
+        inbox_url="https://bridge.example/actors/users/alice/inbox",
+        outbox_url="https://bridge.example/actors/users/alice/outbox",
+        followers_url="https://bridge.example/actors/users/alice/followers",
         public_key_pem="public",
         private_key_pem="private",
     )
@@ -458,10 +458,10 @@ async def test_durable_partial_edit_reconciles_after_restart(tmp_path) -> None:
     user = database.users.create_user(
         discord_user_id="1",
         activitypub_username="alice",
-        actor_url="https://bridge.example/actors/alice",
-        inbox_url="https://bridge.example/actors/alice/inbox",
-        outbox_url="https://bridge.example/actors/alice/outbox",
-        followers_url="https://bridge.example/actors/alice/followers",
+        actor_url="https://bridge.example/actors/users/alice",
+        inbox_url="https://bridge.example/actors/users/alice/inbox",
+        outbox_url="https://bridge.example/actors/users/alice/outbox",
+        followers_url="https://bridge.example/actors/users/alice/followers",
         public_key_pem="public",
         private_key_pem="private",
     )
@@ -543,10 +543,10 @@ async def test_reconciliation_conflict_converges_to_authoritative_fetch(
     user = database.users.create_user(
         discord_user_id="1",
         activitypub_username="alice",
-        actor_url="https://bridge.example/actors/alice",
-        inbox_url="https://bridge.example/actors/alice/inbox",
-        outbox_url="https://bridge.example/actors/alice/outbox",
-        followers_url="https://bridge.example/actors/alice/followers",
+        actor_url="https://bridge.example/actors/users/alice",
+        inbox_url="https://bridge.example/actors/users/alice/inbox",
+        outbox_url="https://bridge.example/actors/users/alice/outbox",
+        followers_url="https://bridge.example/actors/users/alice/followers",
         public_key_pem="public",
         private_key_pem="private",
     )
@@ -637,10 +637,10 @@ async def test_authoritative_reconciliation_does_not_overwrite_newer_update_or_d
     user = database.users.create_user(
         discord_user_id="1",
         activitypub_username="alice",
-        actor_url="https://bridge.example/actors/alice",
-        inbox_url="https://bridge.example/actors/alice/inbox",
-        outbox_url="https://bridge.example/actors/alice/outbox",
-        followers_url="https://bridge.example/actors/alice/followers",
+        actor_url="https://bridge.example/actors/users/alice",
+        inbox_url="https://bridge.example/actors/users/alice/inbox",
+        outbox_url="https://bridge.example/actors/users/alice/outbox",
+        followers_url="https://bridge.example/actors/users/alice/followers",
         public_key_pem="public",
         private_key_pem="private",
     )
@@ -730,10 +730,10 @@ async def test_local_community_reconciliation_preserves_policy_filtered_targets(
     user = database.users.create_user(
         discord_user_id="1",
         activitypub_username="alice",
-        actor_url="https://bridge.example/actors/alice",
-        inbox_url="https://bridge.example/actors/alice/inbox",
-        outbox_url="https://bridge.example/actors/alice/outbox",
-        followers_url="https://bridge.example/actors/alice/followers",
+        actor_url="https://bridge.example/actors/users/alice",
+        inbox_url="https://bridge.example/actors/users/alice/inbox",
+        outbox_url="https://bridge.example/actors/users/alice/outbox",
+        followers_url="https://bridge.example/actors/users/alice/followers",
         public_key_pem="public",
         private_key_pem="private",
     )
@@ -810,10 +810,10 @@ def _content_delivery_lifecycle(tmp_path):
     user = database.users.create_user(
         discord_user_id="1",
         activitypub_username="alice",
-        actor_url="https://bridge.example/actors/alice",
-        inbox_url="https://bridge.example/actors/alice/inbox",
-        outbox_url="https://bridge.example/actors/alice/outbox",
-        followers_url="https://bridge.example/actors/alice/followers",
+        actor_url="https://bridge.example/actors/users/alice",
+        inbox_url="https://bridge.example/actors/users/alice/inbox",
+        outbox_url="https://bridge.example/actors/users/alice/outbox",
+        followers_url="https://bridge.example/actors/users/alice/followers",
         public_key_pem="public",
         private_key_pem="private",
     )
@@ -998,10 +998,10 @@ async def test_worker_cancellation_after_dispatch_keeps_same_reservation_recover
     user = database.users.create_user(
         discord_user_id="1",
         activitypub_username="alice",
-        actor_url="https://bridge.example/actors/alice",
-        inbox_url="https://bridge.example/actors/alice/inbox",
-        outbox_url="https://bridge.example/actors/alice/outbox",
-        followers_url="https://bridge.example/actors/alice/followers",
+        actor_url="https://bridge.example/actors/users/alice",
+        inbox_url="https://bridge.example/actors/users/alice/inbox",
+        outbox_url="https://bridge.example/actors/users/alice/outbox",
+        followers_url="https://bridge.example/actors/users/alice/followers",
         public_key_pem="public",
         private_key_pem="private",
     )
@@ -1130,10 +1130,10 @@ async def test_canonical_ready_reservation_commits_after_restart_without_gateway
     user = database.users.create_user(
         discord_user_id="1",
         activitypub_username="alice",
-        actor_url="https://bridge.example/actors/alice",
-        inbox_url="https://bridge.example/actors/alice/inbox",
-        outbox_url="https://bridge.example/actors/alice/outbox",
-        followers_url="https://bridge.example/actors/alice/followers",
+        actor_url="https://bridge.example/actors/users/alice",
+        inbox_url="https://bridge.example/actors/users/alice/inbox",
+        outbox_url="https://bridge.example/actors/users/alice/outbox",
+        followers_url="https://bridge.example/actors/users/alice/followers",
         public_key_pem="public",
         private_key_pem="private",
     )
@@ -1216,10 +1216,10 @@ async def test_post_commit_restart_re_evaluates_newer_desired_delete(tmp_path) -
     user = database.users.create_user(
         discord_user_id="1",
         activitypub_username="alice",
-        actor_url="https://bridge.example/actors/alice",
-        inbox_url="https://bridge.example/actors/alice/inbox",
-        outbox_url="https://bridge.example/actors/alice/outbox",
-        followers_url="https://bridge.example/actors/alice/followers",
+        actor_url="https://bridge.example/actors/users/alice",
+        inbox_url="https://bridge.example/actors/users/alice/inbox",
+        outbox_url="https://bridge.example/actors/users/alice/outbox",
+        followers_url="https://bridge.example/actors/users/alice/followers",
         public_key_pem="public",
         private_key_pem="private",
     )
@@ -1330,10 +1330,10 @@ async def test_cancellation_before_mutation_drain_leaves_reserved_work_restartab
     user = database.users.create_user(
         discord_user_id="1",
         activitypub_username="alice",
-        actor_url="https://bridge.example/actors/alice",
-        inbox_url="https://bridge.example/actors/alice/inbox",
-        outbox_url="https://bridge.example/actors/alice/outbox",
-        followers_url="https://bridge.example/actors/alice/followers",
+        actor_url="https://bridge.example/actors/users/alice",
+        inbox_url="https://bridge.example/actors/users/alice/inbox",
+        outbox_url="https://bridge.example/actors/users/alice/outbox",
+        followers_url="https://bridge.example/actors/users/alice/followers",
         public_key_pem="public",
         private_key_pem="private",
     )

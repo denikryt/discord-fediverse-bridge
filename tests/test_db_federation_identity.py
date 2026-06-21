@@ -40,7 +40,7 @@ def test_registered_user_can_be_created_and_loaded_by_all_identity_keys(
 ) -> None:
     """User ownership records must resolve by Discord ID, username, and actor URL."""
     database = _database(tmp_path)
-    actor_url = f"https://{BRIDGE_HOST_DOMAIN}/users/alice"
+    actor_url = f"https://{BRIDGE_HOST_DOMAIN}/actors/users/alice"
 
     created = database.users.create_user(
         discord_user_id="1234567890",
@@ -117,7 +117,7 @@ def test_message_mapping_lookup_supports_dedup_keys_used_by_bridge(
 ) -> None:
     """Generic message mappings must be queryable by both activity and object IDs."""
     database = _database(tmp_path)
-    actor_url = f"https://{BRIDGE_HOST_DOMAIN}/users/alice"
+    actor_url = f"https://{BRIDGE_HOST_DOMAIN}/actors/users/alice"
     activity_id = f"https://{BRIDGE_HOST_DOMAIN}/activities/555"
     object_id = f"https://{BRIDGE_HOST_DOMAIN}/objects/555"
 
@@ -187,13 +187,13 @@ def test_published_activity_objects_can_be_loaded_by_canonical_object_id(
 ) -> None:
     """Published AP objects must stay addressable by their canonical object URL."""
     database = _database(tmp_path)
-    object_id = f"https://{BRIDGE_HOST_DOMAIN}/users/alice/post/555"
+    object_id = f"https://{BRIDGE_HOST_DOMAIN}/actors/users/alice/objects/posts/555"
 
     created = database.activitypub_objects.create_published_activity_object(
         actor_username="alice",
-        actor_url=f"https://{BRIDGE_HOST_DOMAIN}/users/alice",
+        actor_url=f"https://{BRIDGE_HOST_DOMAIN}/actors/users/alice",
         community_actor_url=f"https://{LEMMY_WORLD_DOMAIN}/c/hackers",
-        activity_id=f"https://{BRIDGE_HOST_DOMAIN}/users/alice/activities/create/post/555",
+        activity_id=f"https://{BRIDGE_HOST_DOMAIN}/actors/users/alice/activities/create/posts/555",
         object_id=object_id,
         kind="post",
         title="Stored bridge post",

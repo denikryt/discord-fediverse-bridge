@@ -5,7 +5,6 @@ from __future__ import annotations
 from dataclasses import dataclass
 from datetime import timezone
 from hashlib import sha256
-from urllib.parse import quote
 
 from .content_sync.persistence import (
     PublicationConflictError,
@@ -13,6 +12,10 @@ from .content_sync.persistence import (
     persist_publish_artifacts,
 )
 from .fedify_gateway_client import RenderPersonalFeedRequest
+from .activitypub_identity_urls import (
+    build_user_create_post_activity_id,
+    build_user_post_object_id,
+)
 
 
 @dataclass(frozen=True, slots=True)
@@ -81,9 +84,14 @@ class PersonalFeedPublisher:
         operation_id = sha256(
             f"personal-feed:{guild_id}:{channel_id}:{message_id}:{user.id}".encode()
         ).hexdigest()
-        username = quote(str(user.activitypub_username), safe="")
-        object_id = f"{self.fedify_origin}/users/{username}/post/{operation_id}"
-        activity_id = f"{self.fedify_origin}/users/{username}/activities/create/post/{operation_id}"
+        username = str(user.activitypub_username)
+        # Stage 4 stores new personal-feed roots under the typed User Actor URL.
+        object_id = build_user_post_object_id(
+            origin=self.fedify_origin, username=username, object_id=operation_id
+        )
+        activity_id = build_user_create_post_activity_id(
+            origin=self.fedify_origin, username=username, activity_id=operation_id
+        )
         created_at = getattr(message, "created_at").astimezone(timezone.utc)
         published_at = created_at.isoformat(timespec="milliseconds").replace(
             "+00:00", "Z"

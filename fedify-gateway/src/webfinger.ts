@@ -39,10 +39,7 @@ export async function buildWebFingerDocument(
     }
     return buildDocument(
       resource,
-      [
-        communityIdentity.actorId.href,
-        new URL(`/c/${communitySlug}`, config.fedifyOrigin).href,
-      ],
+      [communityIdentity.actorId.href],
       communityIdentity.actorId.href,
     );
   }
@@ -65,10 +62,7 @@ export async function buildWebFingerDocument(
   }
   return buildDocument(
     resource,
-    [
-      communityIdentity.actorId.href,
-      new URL(`/c/${username}`, config.fedifyOrigin).href,
-    ],
+    [communityIdentity.actorId.href],
     communityIdentity.actorId.href,
   );
 }

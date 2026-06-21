@@ -35,10 +35,10 @@ def test_complete_backup_restores_matching_database_and_media_generation(
     user = database.users.create_user(
         discord_user_id="1",
         activitypub_username="alice",
-        actor_url="https://x/actors/alice",
-        inbox_url="https://x/actors/alice/inbox",
-        outbox_url="https://x/actors/alice/outbox",
-        followers_url="https://x/actors/alice/followers",
+        actor_url="https://x/actors/users/alice",
+        inbox_url="https://x/actors/users/alice/inbox",
+        outbox_url="https://x/actors/users/alice/outbox",
+        followers_url="https://x/actors/users/alice/followers",
         public_key_pem="p",
         private_key_pem="s",
     )
@@ -174,10 +174,10 @@ def test_legacy_restore_rejects_snapshot_with_profile_media_references(
     user = database.users.create_user(
         discord_user_id="1",
         activitypub_username="alice",
-        actor_url="https://x/actors/alice",
-        inbox_url="https://x/actors/alice/inbox",
-        outbox_url="https://x/actors/alice/outbox",
-        followers_url="https://x/actors/alice/followers",
+        actor_url="https://x/actors/users/alice",
+        inbox_url="https://x/actors/users/alice/inbox",
+        outbox_url="https://x/actors/users/alice/outbox",
+        followers_url="https://x/actors/users/alice/followers",
         public_key_pem="p",
         private_key_pem="s",
     )
@@ -364,10 +364,10 @@ def _archive_with_media(tmp_path: Path) -> tuple[Path, Path, Path]:
     user = database.users.create_user(
         discord_user_id="1",
         activitypub_username="alice",
-        actor_url="https://x/actors/alice",
-        inbox_url="https://x/actors/alice/inbox",
-        outbox_url="https://x/actors/alice/outbox",
-        followers_url="https://x/actors/alice/followers",
+        actor_url="https://x/actors/users/alice",
+        inbox_url="https://x/actors/users/alice/inbox",
+        outbox_url="https://x/actors/users/alice/outbox",
+        followers_url="https://x/actors/users/alice/followers",
         public_key_pem="p",
         private_key_pem="s",
     )

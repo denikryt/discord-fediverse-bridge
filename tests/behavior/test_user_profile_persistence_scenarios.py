@@ -18,10 +18,10 @@ def _system(tmp_path: Path) -> tuple[Database, UserProfileService, int]:
     user = database.users.create_user(
         discord_user_id="1",
         activitypub_username="alice",
-        actor_url="https://example.test/actors/alice",
-        inbox_url="https://example.test/actors/alice/inbox",
-        outbox_url="https://example.test/actors/alice/outbox",
-        followers_url="https://example.test/actors/alice/followers",
+        actor_url="https://example.test/actors/users/alice",
+        inbox_url="https://example.test/actors/users/alice/inbox",
+        outbox_url="https://example.test/actors/users/alice/outbox",
+        followers_url="https://example.test/actors/users/alice/followers",
         public_key_pem="public",
         private_key_pem="private",
     )

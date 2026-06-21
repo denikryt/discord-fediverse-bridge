@@ -18,10 +18,10 @@ async function main(): Promise<void> {
     if (request.url === "/internal/fedify/actors/users/alice") {
       response.end(JSON.stringify({
         activitypub_username: "alice",
-        actor_url: "https://bridge.example/actors/alice",
-        inbox_url: "https://bridge.example/actors/alice/inbox",
-        outbox_url: "https://bridge.example/actors/alice/outbox",
-        followers_url: "https://bridge.example/actors/alice/followers",
+        actor_url: "https://bridge.example/actors/users/alice",
+        inbox_url: "https://bridge.example/actors/users/alice/inbox",
+        outbox_url: "https://bridge.example/actors/users/alice/outbox",
+        followers_url: "https://bridge.example/actors/users/alice/followers",
         public_key_pem: "public",
         private_key_pem: "private",
         display_name: "Alice",
@@ -43,7 +43,7 @@ async function main(): Promise<void> {
       const pageSize = Number(url.searchParams.get("page_size") ?? "40");
       const start = (page - 1) * pageSize;
       response.end(JSON.stringify({
-        followers_url: "https://bridge.example/actors/alice/followers",
+        followers_url: "https://bridge.example/actors/users/alice/followers",
         total_items: followers.length,
         page,
         page_size: pageSize,
@@ -71,48 +71,48 @@ async function main(): Promise<void> {
   const app = createGatewayApp(config);
 
   try {
-    const top = await app.request("/actors/alice/followers");
+    const top = await app.request("/actors/users/alice/followers");
     assert.equal(top.status, 200);
     const topBody = await top.json() as Record<string, unknown>;
     assert.equal(topBody.type, "OrderedCollection");
     assert.equal(topBody.totalItems, 81);
-    assert.equal(topBody.first, "https://bridge.example/actors/alice/followers?page=true");
+    assert.equal(topBody.first, "https://bridge.example/actors/users/alice/followers?page=true");
 
-    const alias = await app.request("/users/alice/followers");
+    const alias = await app.request("/actors/users/alice/followers");
     assert.equal(alias.status, 200);
     assert.deepEqual(await alias.json(), topBody);
 
-    const firstPage = await app.request("/actors/alice/followers?page=true");
+    const firstPage = await app.request("/actors/users/alice/followers?page=true");
     assert.equal(firstPage.status, 200);
     const firstBody = await firstPage.json() as Record<string, unknown>;
-    assert.equal(firstBody.id, "https://bridge.example/actors/alice/followers?page=true");
-    assert.equal(firstBody.partOf, "https://bridge.example/actors/alice/followers");
+    assert.equal(firstBody.id, "https://bridge.example/actors/users/alice/followers?page=true");
+    assert.equal(firstBody.partOf, "https://bridge.example/actors/users/alice/followers");
     assert.equal((firstBody.orderedItems as unknown[]).length, 40);
     assert.equal((firstBody.orderedItems as string[])[0], followers[0]);
     assert.equal(firstBody.prev, undefined);
-    assert.equal(firstBody.next, "https://bridge.example/actors/alice/followers?page=true&page_number=2");
+    assert.equal(firstBody.next, "https://bridge.example/actors/users/alice/followers?page=true&page_number=2");
 
-    const secondPage = await app.request("/actors/alice/followers?page=true&page_number=2&page_size=80");
+    const secondPage = await app.request("/actors/users/alice/followers?page=true&page_number=2&page_size=80");
     assert.equal(secondPage.status, 200);
     const secondBody = await secondPage.json() as Record<string, unknown>;
     assert.equal((secondBody.orderedItems as unknown[]).length, 40);
-    assert.equal(secondBody.prev, "https://bridge.example/actors/alice/followers?page=true&page_number=1");
-    assert.equal(secondBody.next, "https://bridge.example/actors/alice/followers?page=true&page_number=3");
+    assert.equal(secondBody.prev, "https://bridge.example/actors/users/alice/followers?page=true&page_number=1");
+    assert.equal(secondBody.next, "https://bridge.example/actors/users/alice/followers?page=true&page_number=3");
     assert.ok(requests.some((path) => path.endsWith("/followers?page=2&page_size=40")));
 
-    assert.equal((await app.request("/actors/alice/followers?page=false")).status, 400);
-    assert.equal((await app.request("/actors/alice/followers?page=true&page_number=0")).status, 400);
-    assert.equal((await app.request("/actors/alice/followers?page=true&page_number=abc")).status, 400);
-    assert.equal((await app.request("/actors/alice/followers?page=true&page_number=4")).status, 404);
+    assert.equal((await app.request("/actors/users/alice/followers?page=false")).status, 400);
+    assert.equal((await app.request("/actors/users/alice/followers?page=true&page_number=0")).status, 400);
+    assert.equal((await app.request("/actors/users/alice/followers?page=true&page_number=abc")).status, 400);
+    assert.equal((await app.request("/actors/users/alice/followers?page=true&page_number=4")).status, 404);
 
     followers.splice(0, followers.length);
-    const empty = await app.request("/actors/alice/followers");
+    const empty = await app.request("/actors/users/alice/followers");
     const emptyBody = await empty.json() as Record<string, unknown>;
     assert.equal(emptyBody.totalItems, 0);
     assert.equal(emptyBody.first, undefined);
 
     failFollowersRead = true;
-    const failed = await app.request("/actors/alice/followers");
+    const failed = await app.request("/actors/users/alice/followers");
     assert.equal(failed.status, 502);
     const failedBody = await failed.json() as Record<string, unknown>;
     assert.notEqual(failedBody.totalItems, 0);

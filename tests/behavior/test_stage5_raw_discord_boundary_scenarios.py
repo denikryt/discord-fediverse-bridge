@@ -50,8 +50,8 @@ def _published(database):
         actor_username=user.activitypub_username,
         actor_url=user.actor_url,
         community_actor_url="https://remote.example/c/group",
-        activity_id="https://bridge.example/users/alice/activities/create/1",
-        object_id="https://bridge.example/users/alice/post/1",
+        activity_id="https://bridge.example/actors/users/alice/activities/create/1",
+        object_id="https://bridge.example/actors/users/alice/objects/posts/1",
         kind="post",
         title="Topic",
         body_markdown="old",
@@ -106,8 +106,8 @@ async def test_partial_raw_update_fetch_failure_is_durable_before_handler_return
         source_channel_id=10,
         source_thread_id=10,
         source_starter_message_id=99,
-        ap_activity_id="https://bridge.example/users/alice/activities/create/root",
-        ap_object_id="https://bridge.example/users/alice/post/root",
+        ap_activity_id="https://bridge.example/actors/users/alice/activities/create/root",
+        ap_object_id="https://bridge.example/actors/users/alice/objects/posts/root",
     )
     message_group = database.discord_fanout_groups.create_message_group(
         community_actor_id="https://remote.example/c/group",
@@ -115,8 +115,8 @@ async def test_partial_raw_update_fetch_failure_is_durable_before_handler_return
         source_channel_id=10,
         source_thread_id=10,
         source_message_id=11,
-        ap_activity_id="https://bridge.example/users/alice/activities/create/1",
-        ap_object_id="https://bridge.example/users/alice/post/1",
+        ap_activity_id="https://bridge.example/actors/users/alice/activities/create/1",
+        ap_object_id="https://bridge.example/actors/users/alice/objects/posts/1",
     )
     database.discord_fanout_groups.add_message_delivery(
         message_group_id=message_group.id,
@@ -129,7 +129,7 @@ async def test_partial_raw_update_fetch_failure_is_durable_before_handler_return
     await BridgeBot.on_raw_message_edit(bot, payload)
 
     published = database.activitypub_objects.get_published_activity_object_by_object_id(
-        "https://bridge.example/users/alice/post/1"
+        "https://bridge.example/actors/users/alice/objects/posts/1"
     )
     assert published.discord_reconciliation_needed is True
     assert published.discord_reconciliation_attempt_count == 0

@@ -60,7 +60,7 @@ def _database(tmp_path, name: str) -> Database:
 
 def _add_user(database: Database, discord_id: str, username: str) -> User:
     """Persist one registered local User Actor."""
-    actor = f"https://bridge.example/users/{username}"
+    actor = f"https://bridge.example/actors/users/{username}"
     with database.session() as session:
         user = User(
             discord_user_id=discord_id,
@@ -112,11 +112,11 @@ class _Gateway:
         activity = {
             "id": request.activity_id,
             "type": "Create",
-            "actor": "https://bridge.example/users/alice",
+            "actor": "https://bridge.example/actors/users/alice",
             "object": {
                 "id": request.object_id,
                 "type": "Note",
-                "attributedTo": "https://bridge.example/users/alice",
+                "attributedTo": "https://bridge.example/actors/users/alice",
                 "content": request.body_markdown,
                 "inReplyTo": request.in_reply_to_object_id,
             },
@@ -256,7 +256,7 @@ async def test_bridgebot_registered_reply_persists_once_and_duplicate_is_safe(
             session.query(MessageMapping).filter_by(discord_message_id=200).all()
         )
         assert len(rows) == 1
-        assert rows[0].actor_url.endswith("/users/bob")
+        assert rows[0].actor_url.endswith("/actors/users/bob")
         assert rows[0].in_reply_to_object_id == "https://bridge.example/o/root"
         assert len(mappings) == 1
 
@@ -399,7 +399,7 @@ async def test_activitypub_personal_target_precedes_community_dispatch(
     )
     event = SimpleNamespace(
         event_type="comment.created",
-        actor_id="https://remote.example/users/bob",
+        actor_id="https://remote.example/actors/users/bob",
         community_actor_id=None,
         delivery_id="https://remote.example/a/1",
         source_activity_id="https://remote.example/a/1",
@@ -409,7 +409,7 @@ async def test_activitypub_personal_target_precedes_community_dispatch(
         ),
         object=SimpleNamespace(
             ap_id="https://remote.example/o/1",
-            attributed_to_actor_id="https://remote.example/users/bob",
+            attributed_to_actor_id="https://remote.example/actors/users/bob",
             author_name="Bob",
             body_markdown="remote reply",
             parent_ap_id="https://bridge.example/o/root",

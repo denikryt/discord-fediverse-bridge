@@ -580,7 +580,7 @@ async def test_inbound_post_from_own_actor_is_suppressed_before_handler(
     _accepted_subscription(database, channel_id=100)
 
     # Register a local user actor — echo suppression checks actor_url ownership.
-    actor_url = f"https://{BRIDGE_HOST_DOMAIN}/users/alice"
+    actor_url = f"https://{BRIDGE_HOST_DOMAIN}/actors/users/alice"
     database.users.create_user(
         discord_user_id="123",
         activitypub_username="alice",
@@ -593,11 +593,11 @@ async def test_inbound_post_from_own_actor_is_suppressed_before_handler(
     )
 
     # The object_id that the bridge published — Lemmy will echo it back.
-    object_id = f"https://{BRIDGE_HOST_DOMAIN}/users/alice/objects/post/1"
+    object_id = f"https://{BRIDGE_HOST_DOMAIN}/actors/users/alice/objects/posts/1"
     database.message_mappings.create_message_mapping(
         source_platform="discord",
         source_id="300",
-        activity_id=f"https://{BRIDGE_HOST_DOMAIN}/users/alice/activities/create/post/1",
+        activity_id=f"https://{BRIDGE_HOST_DOMAIN}/actors/users/alice/activities/create/posts/1",
         object_id=object_id,
         actor_url=actor_url,
         community_actor_url=COMMUNITY_ACTOR_URL,

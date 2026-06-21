@@ -8,9 +8,27 @@ change, because SQLite cannot drop a NOT NULL constraint in place.
 
 from __future__ import annotations
 
+from dataclasses import dataclass
+from urllib.parse import urlsplit
+
 from sqlalchemy import text
 from sqlalchemy.engine import Connection, Engine
 
+from ..activitypub_identity_urls import (
+    LocalActorKind,
+    build_actor_address,
+    build_community_announce_comment_activity_id,
+    build_community_announce_post_activity_id,
+    build_community_comment_object_id,
+    build_community_create_comment_activity_id,
+    build_community_create_post_activity_id,
+    build_community_post_object_id,
+    build_user_comment_object_id,
+    build_user_create_comment_activity_id,
+    build_user_create_post_activity_id,
+    build_user_post_object_id,
+    build_user_profile_update_activity_id,
+)
 from ..models import (
     Base,
     BridgeActorKey,
@@ -38,7 +56,15 @@ from ..models import (
 )
 
 
-def migrate(engine: Engine) -> None:
+@dataclass(frozen=True, slots=True)
+class Stage4IdentityMigrationConfig:
+    """Non-secret identity settings required by the Stage 4 URL cutover."""
+
+    public_origin: str
+    service_actor_identifier: str
+
+
+def migrate(engine: Engine, stage4_identity: Stage4IdentityMigrationConfig | None = None) -> None:
     """Apply schema migrations that `create_all()` cannot handle.
 
     `create_all()` creates missing tables but does not alter existing columns.
@@ -218,6 +244,7 @@ def migrate(engine: Engine) -> None:
         _verify_stage2_surface_invariants(conn)
         _migrate_profile_field_name_width(conn)
         _migrate_user_actor_outbound_sources_stage5(conn)
+        _migrate_stage4_typed_activitypub_identity(conn, stage4_identity)
         _install_profile_media_triggers(conn)
         # Partial legacy fixtures may not contain authored-object storage yet.
         if _table_columns(conn, "published_activity_objects"):
@@ -655,3 +682,407 @@ def _install_profile_media_triggers(conn: Connection) -> None:
         END
     """)
     )
+
+
+def _migrate_stage4_typed_activitypub_identity(
+    conn: Connection, config: Stage4IdentityMigrationConfig | None
+) -> None:
+    """Convert retained same-origin local ActivityPub identity to typed URLs.
+
+    The migration deliberately receives only non-secret identity configuration.
+    It rewrites local application rows, purges stale remote relationship state,
+    and then checks the retained local columns before the surrounding transaction
+    commits so startup cannot finish in a mixed namespace state.
+    """
+    if config is None:
+        # Fresh-schema tests may run migration without runtime settings before
+        # any local identity exists. Populated local identity rows require the
+        # narrow non-secret config so service key ownership cannot be inferred
+        # from stale /actors/{identifier} rows after FEDIFY_ACTOR_IDENTIFIER
+        # changes.
+        for table in ("users", "local_communities", "bridge_actor_keys"):
+            if not _table_columns(conn, table):
+                continue
+            count = int(conn.execute(text(f"SELECT COUNT(*) FROM {table}")).scalar() or 0)
+            if count:
+                raise RuntimeError(
+                    "Stage 4 identity migration requires public_origin and "
+                    "service_actor_identifier when local identity rows exist"
+                )
+        return
+
+    origin = _normalize_stage4_origin(config.public_origin)
+    service = build_actor_address(
+        origin=origin,
+        kind=LocalActorKind.SERVICE,
+        identifier=config.service_actor_identifier,
+    )
+
+    user_rows = list(
+        conn.execute(
+            text("SELECT id, activitypub_username, actor_url FROM users")
+        ).mappings()
+    ) if _table_columns(conn, "users") else []
+    user_actor_map: dict[str, str] = {}
+    for row in user_rows:
+        username = str(row["activitypub_username"])
+        address = build_actor_address(
+            origin=origin, kind=LocalActorKind.USER, identifier=username
+        )
+        old_actor = row["actor_url"]
+        if isinstance(old_actor, str):
+            user_actor_map[old_actor] = address.actor_url
+        conn.execute(
+            text(
+                "UPDATE users SET actor_url=:actor_url, inbox_url=:inbox_url, "
+                "outbox_url=:outbox_url, followers_url=:followers_url WHERE id=:id"
+            ),
+            {
+                "id": row["id"],
+                "actor_url": address.actor_url,
+                "inbox_url": address.inbox_url,
+                "outbox_url": address.outbox_url,
+                "followers_url": address.followers_url,
+            },
+        )
+
+    community_rows = list(
+        conn.execute(
+            text("SELECT id, slug, actor_url FROM local_communities")
+        ).mappings()
+    ) if _table_columns(conn, "local_communities") else []
+    community_actor_map: dict[str, str] = {}
+    community_slug_by_id: dict[int, str] = {}
+    for row in community_rows:
+        slug = str(row["slug"])
+        community_slug_by_id[int(row["id"])] = slug
+        address = build_actor_address(
+            origin=origin, kind=LocalActorKind.COMMUNITY, identifier=slug
+        )
+        old_actor = row["actor_url"]
+        if isinstance(old_actor, str):
+            community_actor_map[old_actor] = address.actor_url
+        conn.execute(
+            text(
+                "UPDATE local_communities SET actor_url=:actor_url, inbox_url=:inbox_url, "
+                "outbox_url=:outbox_url, followers_url=:followers_url WHERE id=:id"
+            ),
+            {
+                "id": row["id"],
+                "actor_url": address.actor_url,
+                "inbox_url": address.inbox_url,
+                "outbox_url": address.outbox_url,
+                "followers_url": address.followers_url,
+            },
+        )
+
+    if _table_columns(conn, "bridge_actor_keys"):
+        conn.execute(
+            text("UPDATE bridge_actor_keys SET actor_url=:actor_url, key_id=:key_id"),
+            {"actor_url": service.actor_url, "key_id": service.public_key_url},
+        )
+
+    _migrate_stage4_published_objects(conn, origin, user_actor_map, community_actor_map)
+    _migrate_stage4_message_mappings(conn, origin, user_actor_map, community_actor_map)
+    _migrate_stage4_local_community_content(conn, origin, community_slug_by_id)
+    _migrate_stage4_profile_update_sources(conn, origin)
+    _purge_stage4_remote_relationship_state(conn)
+    _verify_stage4_identity_invariants(conn, origin)
+
+
+def _normalize_stage4_origin(origin: str) -> str:
+    """Normalize the public ActivityPub origin used by SQL migration helpers."""
+    parsed = urlsplit(origin)
+    if parsed.scheme not in {"http", "https"} or not parsed.netloc:
+        raise RuntimeError("Stage 4 migration public_origin must be an http(s) origin")
+    if parsed.username or parsed.password or parsed.query or parsed.fragment:
+        raise RuntimeError("Stage 4 migration public_origin must be origin-only")
+    if parsed.path not in {"", "/"}:
+        raise RuntimeError("Stage 4 migration public_origin must not contain a path")
+    host = parsed.hostname
+    if host is None:
+        raise RuntimeError("Stage 4 migration public_origin must include a host")
+    port = f":{parsed.port}" if parsed.port is not None else ""
+    return f"{parsed.scheme}://{host}{port}"
+
+
+def _is_same_origin_url(value: str | None, origin: str) -> bool:
+    """Return whether one persisted URL belongs to this bridge origin."""
+    if not value:
+        return False
+    try:
+        parsed = urlsplit(value)
+    except ValueError:
+        return False
+    host = parsed.hostname
+    if host is None:
+        return False
+    port = f":{parsed.port}" if parsed.port is not None else ""
+    return f"{parsed.scheme}://{host}{port}" == origin
+
+
+def _legacy_tail(value: str, origin: str) -> str | None:
+    """Return the path tail for a same-origin URL or None for remote values."""
+    if not _is_same_origin_url(value, origin):
+        return None
+    return urlsplit(value).path.strip("/")
+
+
+def _terminal_id(value: str, origin: str) -> str:
+    """Extract the terminal stable id from a retained local AP URL."""
+    tail = _legacy_tail(value, origin)
+    if tail is None:
+        return value.rsplit("/", 1)[-1]
+    terminal = tail.rsplit("/", 1)[-1]
+    if not terminal:
+        raise RuntimeError(f"Cannot migrate local URL without terminal id: {value}")
+    return terminal
+
+
+def _migrate_stage4_published_objects(
+    conn: Connection,
+    origin: str,
+    user_actor_map: dict[str, str],
+    community_actor_map: dict[str, str],
+) -> None:
+    """Rewrite retained published object rows to typed actor/object/activity IDs."""
+    if not _table_columns(conn, "published_activity_objects"):
+        return
+    rows = list(conn.execute(text("SELECT * FROM published_activity_objects")).mappings())
+    object_id_map: dict[str, str] = {}
+    updates: list[tuple[int, dict[str, object]]] = []
+    for row in rows:
+        kind = row["kind"]
+        old_object = row["object_id"]
+        old_activity = row["activity_id"]
+        publication_context = row.get("publication_context") or "community"
+        values: dict[str, object] = {"id": row["id"]}
+        if publication_context == "personal_feed":
+            username = str(row["actor_username"])
+            object_token = _terminal_id(str(old_object), origin)
+            activity_token = _terminal_id(str(old_activity), origin)
+            if kind == "comment":
+                new_object = build_user_comment_object_id(origin=origin, username=username, object_id=object_token)
+                new_activity = build_user_create_comment_activity_id(origin=origin, username=username, activity_id=activity_token)
+            else:
+                new_object = build_user_post_object_id(origin=origin, username=username, object_id=object_token)
+                new_activity = build_user_create_post_activity_id(origin=origin, username=username, activity_id=activity_token)
+            address = build_actor_address(origin=origin, kind=LocalActorKind.USER, identifier=username)
+            values.update(actor_url=address.actor_url, object_id=new_object, activity_id=new_activity)
+        elif row["community_actor_url"] in community_actor_map or _legacy_tail(str(row["community_actor_url"] or ""), origin):
+            slug = _slug_from_actor_url(str(row["community_actor_url"] or row["actor_url"]), origin)
+            if slug is None:
+                continue
+            object_token = _terminal_id(str(old_object), origin)
+            activity_token = _terminal_id(str(old_activity), origin)
+            if kind == "comment":
+                new_object = build_community_comment_object_id(origin=origin, slug=slug, object_id=object_token)
+                new_activity = build_community_create_comment_activity_id(origin=origin, slug=slug, activity_id=activity_token)
+            else:
+                new_object = build_community_post_object_id(origin=origin, slug=slug, object_id=object_token)
+                new_activity = build_community_create_post_activity_id(origin=origin, slug=slug, activity_id=activity_token)
+            address = build_actor_address(origin=origin, kind=LocalActorKind.COMMUNITY, identifier=slug)
+            values.update(actor_url=address.actor_url, community_actor_url=address.actor_url, object_id=new_object, activity_id=new_activity)
+        else:
+            continue
+        object_id_map[str(old_object)] = str(values["object_id"])
+        updates.append((int(row["id"]), values))
+    for _row_id, values in updates:
+        conn.execute(text("UPDATE published_activity_objects SET actor_url=COALESCE(:actor_url, actor_url), community_actor_url=:community_actor_url, activity_id=:activity_id, object_id=:object_id WHERE id=:id"), {
+            "id": values["id"],
+            "actor_url": values.get("actor_url"),
+            "community_actor_url": values.get("community_actor_url"),
+            "activity_id": values["activity_id"],
+            "object_id": values["object_id"],
+        })
+    for old, new in object_id_map.items():
+        conn.execute(text("UPDATE published_activity_objects SET in_reply_to_object_id=:new WHERE in_reply_to_object_id=:old"), {"old": old, "new": new})
+        conn.execute(text("UPDATE published_activity_objects SET conversation_root_object_id=:new WHERE conversation_root_object_id=:old"), {"old": old, "new": new})
+
+
+def _migrate_stage4_message_mappings(
+    conn: Connection,
+    origin: str,
+    user_actor_map: dict[str, str],
+    community_actor_map: dict[str, str],
+) -> None:
+    """Rewrite local message mappings without changing Discord mapping columns."""
+    if not _table_columns(conn, "message_mappings"):
+        return
+    rows = list(conn.execute(text("SELECT * FROM message_mappings")).mappings())
+    for row in rows:
+        context = row.get("publication_context") or "community"
+        object_token = _terminal_id(str(row["object_id"]), origin)
+        activity_token = _terminal_id(str(row["activity_id"]), origin)
+        if context == "personal_feed":
+            username = _username_from_actor_url(str(row["actor_url"]), origin) or str(row["actor_url"]).rstrip('/').rsplit('/', 1)[-1]
+            kind = "comments" if "/comment" in str(row["object_id"]) else "posts"
+            object_id = build_user_comment_object_id(origin=origin, username=username, object_id=object_token) if kind == "comments" else build_user_post_object_id(origin=origin, username=username, object_id=object_token)
+            activity_id = build_user_create_comment_activity_id(origin=origin, username=username, activity_id=activity_token) if kind == "comments" else build_user_create_post_activity_id(origin=origin, username=username, activity_id=activity_token)
+            actor_url = build_actor_address(origin=origin, kind=LocalActorKind.USER, identifier=username).actor_url
+            community_actor_url = None
+        else:
+            slug = _slug_from_actor_url(str(row["community_actor_url"] or row["actor_url"]), origin)
+            if slug is None:
+                continue
+            kind = "comments" if "/comment" in str(row["object_id"]) else "posts"
+            object_id = build_community_comment_object_id(origin=origin, slug=slug, object_id=object_token) if kind == "comments" else build_community_post_object_id(origin=origin, slug=slug, object_id=object_token)
+            activity_id = build_community_create_comment_activity_id(origin=origin, slug=slug, activity_id=activity_token) if kind == "comments" else build_community_create_post_activity_id(origin=origin, slug=slug, activity_id=activity_token)
+            actor_url = build_actor_address(origin=origin, kind=LocalActorKind.COMMUNITY, identifier=slug).actor_url
+            community_actor_url = actor_url
+        conn.execute(text("UPDATE message_mappings SET actor_url=:actor_url, community_actor_url=:community_actor_url, activity_id=:activity_id, object_id=:object_id WHERE id=:id"), {"id": row["id"], "actor_url": actor_url, "community_actor_url": community_actor_url, "activity_id": activity_id, "object_id": object_id})
+
+
+def _migrate_stage4_local_community_content(
+    conn: Connection, origin: str, community_slug_by_id: dict[int, str]
+) -> None:
+    """Rewrite canonical local-community rows while preserving surface rows."""
+    thread_object_map: dict[str, str] = {}
+    if _table_columns(conn, "local_community_threads"):
+        for row in conn.execute(text("SELECT * FROM local_community_threads")).mappings():
+            if row.get("origin_kind") not in {"discord", "local", "local_discord"} and row.get("direction") not in {"discord_to_fediverse", "outbound", "local"}:
+                continue
+            slug = community_slug_by_id.get(int(row["local_community_id"]))
+            if slug is None:
+                continue
+            old_object = str(row["ap_object_id"])
+            object_token = _terminal_id(old_object, origin)
+            activity_token = _terminal_id(str(row["ap_activity_id"]), origin)
+            new_object = build_community_post_object_id(
+                origin=origin, slug=slug, object_id=object_token
+            )
+            thread_object_map[old_object] = new_object
+            conn.execute(
+                text(
+                    "UPDATE local_community_threads SET ap_object_id=:object_id, "
+                    "ap_activity_id=:activity_id WHERE id=:id"
+                ),
+                {
+                    "id": row["id"],
+                    "object_id": new_object,
+                    "activity_id": build_community_create_post_activity_id(
+                        origin=origin, slug=slug, activity_id=activity_token
+                    ),
+                },
+            )
+    message_columns = _table_columns(conn, "local_community_messages")
+    thread_columns = _table_columns(conn, "local_community_threads")
+    if {"local_community_thread_id", "ap_activity_id", "ap_object_id"}.issubset(message_columns) and {"id", "local_community_id"}.issubset(thread_columns):
+        parent_map: dict[str, str] = {}
+        rows = list(
+            conn.execute(
+                text(
+                    "SELECT m.*, t.local_community_id FROM local_community_messages m "
+                    "JOIN local_community_threads t ON t.id=m.local_community_thread_id"
+                )
+            ).mappings()
+        )
+        for row in rows:
+            if row.get("direction") not in {"discord_to_fediverse", "outbound", "local"}:
+                continue
+            slug = community_slug_by_id.get(int(row["local_community_id"]))
+            if slug is None:
+                continue
+            old_object = str(row["ap_object_id"])
+            object_token = _terminal_id(old_object, origin)
+            activity_token = _terminal_id(str(row["ap_activity_id"]), origin)
+            new_object = build_community_comment_object_id(origin=origin, slug=slug, object_id=object_token)
+            parent_map[old_object] = new_object
+            conn.execute(text("UPDATE local_community_messages SET ap_object_id=:object_id, ap_activity_id=:activity_id WHERE id=:id"), {"id": row["id"], "object_id": new_object, "activity_id": build_community_create_comment_activity_id(origin=origin, slug=slug, activity_id=activity_token)})
+        for old, new in {**thread_object_map, **parent_map}.items():
+            conn.execute(
+                text(
+                    "UPDATE local_community_messages SET parent_ap_object_id=:new "
+                    "WHERE parent_ap_object_id=:old"
+                ),
+                {"old": old, "new": new},
+            )
+
+
+def _migrate_stage4_profile_update_sources(conn: Connection, origin: str) -> None:
+    """Migrate retained profile Update activity ids to the typed user grammar."""
+    source_columns = _table_columns(conn, "user_actor_outbound_sources")
+    if not source_columns or not _table_columns(conn, "users"):
+        return
+    rows = conn.execute(text("SELECT s.id, s.user_id, s.source_kind, s.logical_version, u.activitypub_username FROM user_actor_outbound_sources s JOIN users u ON u.id=s.user_id")).mappings()
+    for row in rows:
+        if row["source_kind"] != "profile_update":
+            continue
+        activity_id = build_user_profile_update_activity_id(origin=origin, username=str(row["activitypub_username"]), profile_version_or_activity_id=row["logical_version"])
+        conn.execute(text("UPDATE user_actor_outbound_sources SET activity_id=:activity_id WHERE id=:id"), {"id": row["id"], "activity_id": activity_id})
+
+
+def _purge_stage4_remote_relationship_state(conn: Connection) -> None:
+    """Remove old local-actor relationship state that cannot be reused safely."""
+    for table in ("user_actor_follow_activity_ids", "user_actor_followers", "remote_subscribers", "bridge_actor_follows"):
+        if _table_columns(conn, table):
+            conn.execute(text(f"DELETE FROM {table}"))
+    subscription_columns = _table_columns(conn, "channel_community_subscriptions")
+    if {"follow_activity_id", "status"}.issubset(subscription_columns):
+        conn.execute(
+            text(
+                "UPDATE channel_community_subscriptions "
+                "SET follow_activity_id=NULL, status='pending'"
+            )
+        )
+
+
+def _verify_stage4_identity_invariants(conn: Connection, origin: str) -> None:
+    """Fail before commit if retained local rows still expose retired URL roots."""
+    retired = ("/communities/", "/c/", "/users/", "/activities/", "/actors/")
+    checks = [
+        ("users", ("actor_url", "inbox_url", "outbox_url", "followers_url")),
+        ("local_communities", ("actor_url", "inbox_url", "outbox_url", "followers_url")),
+        ("bridge_actor_keys", ("actor_url", "key_id")),
+        ("published_activity_objects", ("actor_url", "community_actor_url", "activity_id", "object_id", "in_reply_to_object_id", "conversation_root_object_id")),
+        ("message_mappings", ("actor_url", "community_actor_url", "activity_id", "object_id")),
+        ("local_community_threads", ("ap_activity_id", "ap_object_id")),
+        ("local_community_messages", ("ap_activity_id", "ap_object_id", "parent_ap_object_id")),
+        ("user_actor_outbound_sources", ("activity_id",)),
+        ("local_community_relay_deliveries", ("relay_activity_id",)),
+    ]
+    for table, columns in checks:
+        existing = _table_columns(conn, table)
+        if not existing:
+            continue
+        wanted = [column for column in columns if column in existing]
+        if not wanted:
+            continue
+        rows = conn.execute(text(f"SELECT id, {', '.join(wanted)} FROM {table}")).mappings()
+        for row in rows:
+            for column in wanted:
+                value = row[column]
+                if not isinstance(value, str) or not _is_same_origin_url(value, origin):
+                    continue
+                path = urlsplit(value).path
+                allowed = path.startswith("/actors/users/") or path.startswith("/actors/communities/") or path.startswith("/actors/services/")
+                if not allowed and any(path.startswith(prefix) for prefix in retired):
+                    raise RuntimeError(f"Stage 4 migration left retired local URL in {table}.{column} id={row['id']}: {value}")
+                if path.startswith("/actors/") and not allowed:
+                    raise RuntimeError(f"Stage 4 migration left untyped actor URL in {table}.{column} id={row['id']}: {value}")
+
+
+def _slug_from_actor_url(value: str, origin: str) -> str | None:
+    """Extract a local community slug from legacy or typed community actor URLs."""
+    tail = _legacy_tail(value, origin)
+    if tail is None:
+        return None
+    parts = tail.split("/")
+    if len(parts) == 2 and parts[0] in {"communities", "c"}:
+        return parts[1]
+    if len(parts) == 3 and parts[0] == "actors" and parts[1] == "communities":
+        return parts[2]
+    return None
+
+
+def _username_from_actor_url(value: str, origin: str) -> str | None:
+    """Extract a local username from legacy or typed user actor URLs."""
+    tail = _legacy_tail(value, origin)
+    if tail is None:
+        return None
+    parts = tail.split("/")
+    if len(parts) == 2 and parts[0] == "actors":
+        return parts[1]
+    if len(parts) == 3 and parts[0] == "actors" and parts[1] == "users":
+        return parts[2]
+    return None

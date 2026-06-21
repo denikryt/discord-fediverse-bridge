@@ -28,11 +28,11 @@ export async function acceptUserActorFollow(
   if (identity == null || identity.actorId.href !== request.actorUrl) {
     throw new Error("actorUsername and actorUrl must identify the same registered user");
   }
-  const keyPair = await loadActorKeyPair(config, request.actorUsername);
+  const keyPair = await loadActorKeyPair(config, `users/${request.actorUsername}`);
   if (keyPair == null) throw new Error("User Actor signing key not found");
   const hash = createHash("sha256").update(request.followActivityId).digest("hex");
   const accept = new Accept({
-    id: buildGatewayUrl(config, `/actors/${request.actorUsername}/activities/accept/${hash}`),
+    id: buildGatewayUrl(config, `/actors/users/${request.actorUsername}/activities/accept/follows/${hash}`),
     actor: new URL(request.actorUrl),
     to: new URL(request.remoteActorId),
     object: new Follow({
@@ -70,7 +70,7 @@ export async function acceptLocalCommunityFollow(
   const sender = [{ keyId: signingKey.keyId, privateKey: signingKey.privateKey }];
   const acceptId = buildGatewayUrl(
     config,
-    `/communities/${request.communitySlug}/activities/accept/${Date.now()}-${Math.random().toString(36).slice(2)}`,
+    `/actors/communities/${request.communitySlug}/activities/accept/follows/${Date.now()}-${Math.random().toString(36).slice(2)}`,
   );
 
   const accept = new Accept({

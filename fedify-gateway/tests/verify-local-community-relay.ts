@@ -41,7 +41,7 @@ async function testRelaySendsAlreadyRenderedActivityToExplicitTargets(): Promise
   const config = await buildConfig();
   const activityJson = buildAnnounceJson();
   const request: SendLocalCommunityRelayRequest = {
-    signingActorUrl: `${TEST_ORIGIN}communities/hackers`,
+    signingActorUrl: `${TEST_ORIGIN}actors/communities/hackers`,
     deliveries: [
       {
         deliveryId: 1,
@@ -68,7 +68,7 @@ async function testRelaySendsAlreadyRenderedActivityToExplicitTargets(): Promise
   );
   assert.ok(deliveries.every((delivery) => JSON.stringify(delivery.payload) === JSON.stringify(activityJson)));
   assert.ok(deliveries.every((delivery) => delivery.headers["content-type"] === "application/activity+json"));
-  assert.ok(deliveries.every((delivery) => delivery.headers.signature.includes(`keyId="${TEST_ORIGIN}communities/hackers#main-key"`)));
+  assert.ok(deliveries.every((delivery) => delivery.headers.signature.includes(`keyId="${TEST_ORIGIN}actors/communities/hackers#main-key"`)));
 }
 
 /**
@@ -84,7 +84,7 @@ async function testRelayRejectsMismatchedActorWithoutDelivery(): Promise<void> {
   activityJson.actor = `${TEST_ORIGIN}communities/other`;
 
   const result = await sendLocalCommunityRelay({} as never, await buildConfig(), {
-    signingActorUrl: `${TEST_ORIGIN}communities/hackers`,
+    signingActorUrl: `${TEST_ORIGIN}actors/communities/hackers`,
     deliveries: [
       {
         deliveryId: 3,
@@ -173,10 +173,10 @@ async function buildConfig(): Promise<GatewayConfig> {
         "hackers",
         "Hackers",
         "A local hackerspace forum.",
-        `${TEST_ORIGIN}communities/hackers`,
-        `${TEST_ORIGIN}communities/hackers/inbox`,
-        `${TEST_ORIGIN}communities/hackers/outbox`,
-        `${TEST_ORIGIN}communities/hackers/followers`,
+        `${TEST_ORIGIN}actors/communities/hackers`,
+        `${TEST_ORIGIN}actors/communities/hackers/inbox`,
+        `${TEST_ORIGIN}actors/communities/hackers/outbox`,
+        `${TEST_ORIGIN}actors/communities/hackers/followers`,
         await exportPublicKeyPem(communityKeys.publicKey),
         await exportPrivateKeyPem(communityKeys.privateKey),
         "active",
@@ -184,7 +184,7 @@ async function buildConfig(): Promise<GatewayConfig> {
     );
     seedBridgeActorJwk(
       db,
-      `${TEST_ORIGIN}actors/bridge`,
+      `${TEST_ORIGIN}actors/services/bridge`,
       JSON.stringify(await exportJwk(bridgeKeys.privateKey)),
       JSON.stringify(await exportJwk(bridgeKeys.publicKey)),
     );
@@ -231,9 +231,9 @@ function buildAnnounceJson(): Record<string, unknown> {
   /** Build the already-rendered relay activity that Python would submit. */
   return {
     "@context": "https://www.w3.org/ns/activitystreams",
-    id: `${TEST_ORIGIN}communities/hackers/activities/announce/1`,
+    id: `${TEST_ORIGIN}actors/communities/hackers/activities/announce/1`,
     type: "Announce",
-    actor: `${TEST_ORIGIN}communities/hackers`,
+    actor: `${TEST_ORIGIN}actors/communities/hackers`,
     object: {
       type: "Create",
       id: "https://lemmy.example/activities/create/post/1",

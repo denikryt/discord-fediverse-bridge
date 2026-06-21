@@ -67,9 +67,9 @@ async def test_registered_user_thread_starter_in_local_community_publishes_post(
     )
     runtime.fedify_gateway.publish_local_community_content.return_value = (
         PublishLocalCommunityContentResult(
-            activity_id="https://bridge.example/users/alice/activities/create/post/1",
-            object_id="https://bridge.example/users/alice/post/1",
-            community_actor_url="https://bridge.example/communities/hackers",
+            activity_id="https://bridge.example/actors/users/alice/activities/create/posts/1",
+            object_id="https://bridge.example/actors/users/alice/objects/posts/1",
+            community_actor_url="https://bridge.example/actors/communities/hackers",
             delivered_follower_count=1,
             failed_follower_count=0,
         )
@@ -89,7 +89,7 @@ async def test_registered_user_thread_starter_in_local_community_publishes_post(
 
     assert result.status == "published"
     assert created is not None
-    assert created.ap_object_id == "https://bridge.example/users/alice/post/1"
+    assert created.ap_object_id == "https://bridge.example/actors/users/alice/objects/posts/1"
     runtime.fedify_gateway.publish_local_community_content.assert_awaited_once()
     with database.session() as session:
         assert session.scalar(select(func.count()).select_from(MessageMapping)) == 1
@@ -138,16 +138,16 @@ async def test_discord_reply_in_local_community_thread_publishes_comment_with_pa
     )
     runtime.fedify_gateway.publish_local_community_content.side_effect = [
         PublishLocalCommunityContentResult(
-            activity_id="https://bridge.example/users/alice/activities/create/post/1",
-            object_id="https://bridge.example/users/alice/post/1",
-            community_actor_url="https://bridge.example/communities/hackers",
+            activity_id="https://bridge.example/actors/users/alice/activities/create/posts/1",
+            object_id="https://bridge.example/actors/users/alice/objects/posts/1",
+            community_actor_url="https://bridge.example/actors/communities/hackers",
             delivered_follower_count=1,
             failed_follower_count=0,
         ),
         PublishLocalCommunityContentResult(
-            activity_id="https://bridge.example/users/alice/activities/create/comment/1",
-            object_id="https://bridge.example/users/alice/comment/1",
-            community_actor_url="https://bridge.example/communities/hackers",
+            activity_id="https://bridge.example/actors/users/alice/activities/create/comments/1",
+            object_id="https://bridge.example/actors/users/alice/objects/comments/1",
+            community_actor_url="https://bridge.example/actors/communities/hackers",
             delivered_follower_count=1,
             failed_follower_count=0,
         ),
@@ -167,7 +167,7 @@ async def test_discord_reply_in_local_community_thread_publishes_comment_with_pa
 
     assert result.status == "published"
     assert created is not None
-    assert created.parent_ap_object_id == "https://bridge.example/users/alice/post/1"
+    assert created.parent_ap_object_id == "https://bridge.example/actors/users/alice/objects/posts/1"
     assert runtime.fedify_gateway.publish_local_community_content.await_count == 2
 
 
@@ -183,30 +183,30 @@ async def test_local_community_reply_semantics_preserve_nested_and_unknown_fallb
     starter = build_starter_message()
     runtime.fedify_gateway.publish_local_community_content.side_effect = [
         PublishLocalCommunityContentResult(
-            activity_id="https://bridge.example/users/alice/activities/create/post/1",
-            object_id="https://bridge.example/users/alice/post/1",
-            community_actor_url="https://bridge.example/communities/hackers",
+            activity_id="https://bridge.example/actors/users/alice/activities/create/posts/1",
+            object_id="https://bridge.example/actors/users/alice/objects/posts/1",
+            community_actor_url="https://bridge.example/actors/communities/hackers",
             delivered_follower_count=1,
             failed_follower_count=0,
         ),
         PublishLocalCommunityContentResult(
-            activity_id="https://bridge.example/users/alice/activities/create/comment/0",
-            object_id="https://bridge.example/users/alice/comment/0",
-            community_actor_url="https://bridge.example/communities/hackers",
+            activity_id="https://bridge.example/actors/users/alice/activities/create/comments/0",
+            object_id="https://bridge.example/actors/users/alice/objects/comments/0",
+            community_actor_url="https://bridge.example/actors/communities/hackers",
             delivered_follower_count=1,
             failed_follower_count=0,
         ),
         PublishLocalCommunityContentResult(
-            activity_id="https://bridge.example/users/alice/activities/create/comment/1",
-            object_id="https://bridge.example/users/alice/comment/1",
-            community_actor_url="https://bridge.example/communities/hackers",
+            activity_id="https://bridge.example/actors/users/alice/activities/create/comments/1",
+            object_id="https://bridge.example/actors/users/alice/objects/comments/1",
+            community_actor_url="https://bridge.example/actors/communities/hackers",
             delivered_follower_count=1,
             failed_follower_count=0,
         ),
         PublishLocalCommunityContentResult(
-            activity_id="https://bridge.example/users/alice/activities/create/comment/2",
-            object_id="https://bridge.example/users/alice/comment/2",
-            community_actor_url="https://bridge.example/communities/hackers",
+            activity_id="https://bridge.example/actors/users/alice/activities/create/comments/2",
+            object_id="https://bridge.example/actors/users/alice/objects/comments/2",
+            community_actor_url="https://bridge.example/actors/communities/hackers",
             delivered_follower_count=1,
             failed_follower_count=0,
         ),
@@ -235,11 +235,11 @@ async def test_local_community_reply_semantics_preserve_nested_and_unknown_fallb
     )
     assert (
         nested_request.in_reply_to_object_id
-        == "https://bridge.example/users/alice/comment/0"
+        == "https://bridge.example/actors/users/alice/objects/comments/0"
     )
     assert (
         unknown_request.in_reply_to_object_id
-        == "https://bridge.example/users/alice/post/1"
+        == "https://bridge.example/actors/users/alice/objects/posts/1"
     )
 
 
@@ -266,26 +266,26 @@ async def test_local_community_create_preserves_canonical_create_for_direct_foll
         )
 
     canonical = {
-        "id": "https://bridge.example/users/alice/activities/create/post/1",
+        "id": "https://bridge.example/actors/users/alice/activities/create/posts/1",
         "type": "Create",
         "actor": user.actor_url,
         "to": [
             "https://www.w3.org/ns/activitystreams#Public",
-            "https://bridge.example/communities/hackers",
+            "https://bridge.example/actors/communities/hackers",
         ],
         "cc": [user.followers_url],
         "object": {
-            "id": "https://bridge.example/users/alice/post/1",
+            "id": "https://bridge.example/actors/users/alice/objects/posts/1",
             "type": "Page",
             "attributedTo": user.actor_url,
-            "audience": "https://bridge.example/communities/hackers",
+            "audience": "https://bridge.example/actors/communities/hackers",
         },
     }
     runtime.fedify_gateway.publish_local_community_content.return_value = (
         PublishLocalCommunityContentResult(
             activity_id=canonical["id"],
             object_id=canonical["object"]["id"],
-            community_actor_url="https://bridge.example/communities/hackers",
+            community_actor_url="https://bridge.example/actors/communities/hackers",
             delivered_follower_count=1,
             failed_follower_count=0,
             activity_json=canonical,

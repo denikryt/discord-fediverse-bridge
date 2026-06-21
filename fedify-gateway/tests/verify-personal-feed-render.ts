@@ -5,8 +5,8 @@ import { buildPublishedCreateActivityJson } from "../src/published-objects.js";
 
 const config = { fedifyOrigin: "https://bridge.test" } as never;
 const operationId = "a".repeat(64);
-const activityId = `https://bridge.test/users/alice/activities/create/post/${operationId}`;
-const objectId = `https://bridge.test/users/alice/post/${operationId}`;
+const activityId = `https://bridge.test/actors/users/alice/activities/create/posts/${operationId}`;
+const objectId = `https://bridge.test/actors/users/alice/objects/posts/${operationId}`;
 const rendered = renderPersonalFeedCreate(config, {
   actorUsername: "alice",
   operationId,
@@ -23,7 +23,7 @@ assert.equal("audience" in rendered.activityJson, false);
 
 const reconstructed = buildPublishedCreateActivityJson({
   actorUsername: "alice",
-  actorUrl: "https://bridge.test/actors/alice",
+  actorUrl: "https://bridge.test/actors/users/alice",
   publicationContext: "personal_feed",
   communityActorUrl: null,
   activityId,

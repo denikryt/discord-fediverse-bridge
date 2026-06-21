@@ -464,13 +464,13 @@ async def test_discord_originated_echo_is_skipped_without_creating_duplicate(
     """A looped-back AP object from Discord publish should be suppressed as echo."""
     database = _database(tmp_path)
     _accepted_subscription(database)
-    object_id = f"https://{BRIDGE_HOST_DOMAIN}/users/alice/objects/post/1"
+    object_id = f"https://{BRIDGE_HOST_DOMAIN}/actors/users/alice/objects/posts/1"
     database.message_mappings.create_message_mapping(
         source_platform="discord",
         source_id="300",
-        activity_id=f"https://{BRIDGE_HOST_DOMAIN}/users/alice/activities/create/post/1",
+        activity_id=f"https://{BRIDGE_HOST_DOMAIN}/actors/users/alice/activities/create/posts/1",
         object_id=object_id,
-        actor_url=f"https://{BRIDGE_HOST_DOMAIN}/users/alice",
+        actor_url=f"https://{BRIDGE_HOST_DOMAIN}/actors/users/alice",
         community_actor_url=f"https://{LEMMY_EXAMPLE_DOMAIN}/c/hackers",
         discord_channel_id=100,
         discord_message_id=300,

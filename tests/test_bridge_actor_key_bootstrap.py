@@ -90,10 +90,10 @@ def test_actor_key_service_preserves_owner_specific_storage(tmp_path) -> None:
     user = database.users.create_user(
         discord_user_id="1",
         activitypub_username="alice",
-        actor_url="https://bridge.example/actors/alice",
-        inbox_url="https://bridge.example/actors/alice/inbox",
-        outbox_url="https://bridge.example/actors/alice/outbox",
-        followers_url="https://bridge.example/actors/alice/followers",
+        actor_url="https://bridge.example/actors/users/alice",
+        inbox_url="https://bridge.example/actors/users/alice/inbox",
+        outbox_url="https://bridge.example/actors/users/alice/outbox",
+        followers_url="https://bridge.example/actors/users/alice/followers",
         public_key_pem="user-public",
         private_key_pem="user-private",
     )

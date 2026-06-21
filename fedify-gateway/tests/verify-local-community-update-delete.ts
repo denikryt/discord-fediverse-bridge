@@ -19,8 +19,8 @@ import { deleteContent, updateContent } from "../src/federation-outbound.js";
 import type { GatewayConfig } from "../src/config.js";
 
 const TEST_ORIGIN = "https://discord-bridge.example.com/";
-const COMMUNITY_ACTOR = `${TEST_ORIGIN}communities/hackers`;
-const USER_ACTOR = `${TEST_ORIGIN}actors/alice`;
+const COMMUNITY_ACTOR = `${TEST_ORIGIN}actors/communities/hackers`;
+const USER_ACTOR = `${TEST_ORIGIN}actors/users/alice`;
 
 interface DeliveryRecord {
   inboxId: string;
@@ -212,7 +212,7 @@ async function buildConfig(): Promise<GatewayConfig> {
     );
     seedBridgeActorJwk(
       db,
-      `${TEST_ORIGIN}actors/bridge`,
+      `${TEST_ORIGIN}actors/services/bridge`,
       JSON.stringify(await exportJwk(bridgeKeys.privateKey)),
       JSON.stringify(await exportJwk(bridgeKeys.publicKey)),
     );
