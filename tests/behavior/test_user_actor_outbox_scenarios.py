@@ -36,8 +36,8 @@ def _row(database: Database, user, index: int, *, kind: str = "post"):
     return database.activitypub_objects.create_published_activity_object(
         actor_username=user.activitypub_username,
         actor_url=user.actor_url,
-        community_actor_url="https://bridge.test/communities/test",
-        activity_id=f"https://bridge.test/activities/{index}",
+        community_actor_url="https://bridge.test/actors/communities/test",
+        activity_id=f"https://bridge.test/actors/users/alice/activities/create/posts/{index}",
         object_id=f"https://bridge.test/objects/{index}",
         kind=kind,
         title=None,
@@ -64,8 +64,8 @@ def test_outbox_slice_orders_filters_and_is_bounded(tmp_path: Path) -> None:
                 actor_username="mallory",
                 actor_url=user.actor_url,
                 publication_context="community",
-                community_actor_url="https://bridge.test/communities/test",
-                activity_id="https://bridge.test/activities/leak",
+                community_actor_url="https://bridge.test/actors/communities/test",
+                activity_id="https://bridge.test/actors/users/mallory/activities/create/posts/leak",
                 object_id="https://bridge.test/objects/leak",
                 kind="post",
                 title=None,
@@ -114,7 +114,7 @@ def test_stage8_schema_upgrade_installs_outbox_index(tmp_path: Path) -> None:
                 "discord_reconciliation_needed, discord_reconciliation_attempt_count, "
                 "published_at, created_at) VALUES "
                 "('alice', 'https://bridge.test/actors/users/alice', 'community', "
-                "'https://bridge.test/communities/test', 'a1', 'o1', 'post', 'body', "
+                "'https://bridge.test/actors/communities/test', 'a1', 'o1', 'post', 'body', "
                 "1, 'none', 0, 0, '2026-01-01', '2026-01-01')"
             )
         )

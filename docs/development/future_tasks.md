@@ -259,19 +259,18 @@ Open details:
 - how edits, deletes, pagination, and partial retries are handled;
 - whether restored history should be published to Discord.
 
-## 25. Human-facing local community pages with ActivityPub negotiation
+## 25. Human-facing local community pages
 
-Local community URLs currently act as ActivityPub actor endpoints only. The project does not yet provide a human-facing per-community page comparable to Lemmy or Mastodon resource pages.
+Local community ActivityPub actors are canonical only under `/actors/communities/{slug}`. The project does not yet provide a human-facing per-community page comparable to Lemmy or Mastodon resource pages.
 
-Future work should design one browser-facing local community route while preserving federation-compatible actor resolution.
+Future work may design a browser-facing `/communities/{slug}` or `/c/{slug}` product route, but it must not act as an ActivityPub actor alias. Federation clients should continue to discover and dereference `/actors/communities/{slug}` through WebFinger and actor documents.
 
 Open details:
 
-- whether the canonical route should remain `/communities/{slug}` or move the human-facing page to `/c/{slug}`;
-- whether browser requests should receive HTML via content negotiation while `Accept: application/activity+json` continues to return the actor document;
+- whether the human page should use `/communities/{slug}`, `/c/{slug}`, or another browser-only route;
 - whether the HTML page should be static server-rendered community metadata, a dashboard-style generated page, or a richer per-community view;
-- how to expose a stable link between the human page and the ActivityPub actor document, similar to other Fediverse software;
-- how to keep WebFinger, actor ids, and remote fetch behavior fully compatible during the transition.
+- how to expose a stable HTML link to the typed ActivityPub actor document without changing actor ids;
+- how to keep WebFinger, typed actor ids, and remote fetch behavior isolated from browser-only routing.
 
 ## 27. Dashboard active-user statistics
 

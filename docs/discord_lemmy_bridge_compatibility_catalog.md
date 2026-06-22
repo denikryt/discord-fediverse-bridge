@@ -393,29 +393,30 @@ Only after the remote subscribe operation no longer requires a Lemmy numeric id,
 
 ## 5. ActivityPub and federation compatibility
 
-### 5.1 `/users/{username}` compatibility route for user actors
+### 5.1 Retired local ActivityPub actor URL aliases
 
 **Where**
 
-- `fedify-gateway/src/server.ts`
 - `fedify-gateway/src/federation.ts`
-- `fedify-gateway/tests/verify-user-canonical-actor.ts`
+- `fedify-gateway/src/routes/public-activitypub.ts`
+- `fedify-gateway/tests/verify-local-community-canonical-key.ts`
+- `tests/test_stage7_no_old_local_activitypub_urls.py`
 
 **What it does**
 
-Registered user actors are canonicalized under `/actors/{identifier}`, but `/users/{username}` remains as a compatibility entry point.
+Local ActivityPub actors are canonical only under the typed namespace: `/actors/services/{identifier}`, `/actors/users/{username}`, and `/actors/communities/{slug}`. Retired local `/users/{username}`, `/communities/{slug}`, `/c/{slug}`, untyped `/actors/{identifier}`, and root-level bridge-owned `/activities/...` URLs are not compatibility aliases.
 
 **Why it exists**
 
-ActivityPub actor IDs and object URLs are federated identifiers. Remote servers may cache or reference old `/users/{username}` URLs. Removing the route would break dereferencing for old objects and actors.
+The unified actor namespace deliberately invalidates old local actor IDs so the gateway, WebFinger, key ownership, followers collections, object IDs, and fanout logic share one address grammar. Keeping old aliases would recreate the split namespace and make later regressions hard to detect.
 
 **Can it be removed?**
 
-Not safely without an explicit federation migration plan. This should be treated as long-term compatibility.
+No. This is the current federation identity contract. Legacy old-local URLs may appear only as migration inputs or rejection fixtures; normal code and tests must use typed builders.
 
 ---
 
-### 5.2 Published object canonical actor URL normalization
+### 5.2 Published object typed actor URL normalization
 
 **Where**
 
@@ -424,17 +425,15 @@ Not safely without an explicit federation migration plan. This should be treated
 
 **What it does**
 
-Published object rows may contain older actor URLs using `/users/{username}`. The gateway can still serve those objects and normalize actor references toward the canonical actor route where appropriate.
+Published object rows use typed local actor, object, and activity IDs. The gateway may still normalize stored JSON-LD fields such as timestamps and actor references, but it must not treat retired local `/users/{username}` URLs as a supported public route.
 
 **Why it exists**
 
-Old `PublishedActivityObject` rows should remain dereferenceable after actor route canonicalization.
+Stored ActivityPub JSON is durable delivery data. Normalization keeps current typed objects renderable without reintroducing old local actor compatibility.
 
 **Can it be removed?**
 
-Not while old rows with `/users/` actor URLs may exist.
-
----
+Only after the gateway no longer serves durable published-object rows.
 
 ### 5.3 Timestamp normalization for stored published objects
 
@@ -628,7 +627,7 @@ Do not remove schema migrations just because runtime call sites no longer use ol
 | `DiscordPublishService` alias | Removed | Stage 2 moved call sites and runtime wiring to `ContentPublishService` |
 | Old autocomplete payload parser | Later | Useful for stale Discord choices |
 | Legacy `Accept(Follow)` path | Removed | Stage 4 now skips unknown accepts unless a `BridgeActorFollow` exists |
-| `/users/{username}` route | No | Federated URL compatibility |
+| Retired local actor aliases | No | Must stay unsupported; typed actor namespace is the federation contract |
 | Published object actor/timestamp normalization | No | Old persisted object compatibility |
 | ActivityPub payload fallbacks | No | Real fediverse interop |
 | Discord header fallback | No | Old mirrored-message edit compatibility |

@@ -1,30 +1,30 @@
 /**
- * Regression checks for direct Create delivery targeting local community URLs.
+ * Regression checks for direct Create delivery targeting typed local community URLs.
  *
- * Local communities use `/communities/{slug}` as the canonical actor id. The
- * normalizer must treat that path as a valid community actor target so direct
- * Lemmy Create(Page) deliveries reach the Python bridge.
+ * Local communities use `/actors/communities/{slug}` as the canonical actor id.
+ * The normalizer must treat that typed path as a valid community actor target so
+ * direct ActivityPub Create(Page) deliveries reach the Python bridge.
  */
 
 import assert from "node:assert/strict";
 
 import { normalizeCreateActivityFromJson } from "../src/normalize.js";
 
-const COMMUNITY_URL = "https://bridge.example/communities/hackers";
+const COMMUNITY_URL = "https://bridge.example/actors/communities/hackers";
 
 async function main(): Promise<void> {
-  await testDirectCreateToLocalCommunityPathNormalizesPost();
+  await testDirectCreateToTypedLocalCommunityPathNormalizesPost();
   console.log("verify:normalize-local-community-create passed");
 }
 
 /**
  * Action: a remote instance sends a direct Create(Page) to one local community
- * actor whose canonical id lives under `/communities/{slug}`.
+ * actor whose canonical id lives under `/actors/communities/{slug}`.
  *
  * Expected: normalization succeeds and preserves the canonical community actor
  * URL instead of dropping the event as a non-community target.
  */
-async function testDirectCreateToLocalCommunityPathNormalizesPost(): Promise<void> {
+async function testDirectCreateToTypedLocalCommunityPathNormalizesPost(): Promise<void> {
   const event = await normalizeCreateActivityFromJson({
     type: "Create",
     id: "https://lemmy.example/activities/create/post/1",

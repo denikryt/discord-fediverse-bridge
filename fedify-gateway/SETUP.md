@@ -55,9 +55,7 @@ One public host serves both services:
 /.well-known/discord-fediverse-bridge/communities -> fedify-gateway
 /inbox                 -> fedify-gateway
 /actors/...            -> fedify-gateway
-/communities/...       -> fedify-gateway
-/c/...                 -> fedify-gateway
-/users/...             -> fedify-gateway
+# /users, /communities, and /c are not ActivityPub actor aliases.
 /register              -> Python bridge
 /auth/discord/...      -> Python bridge
 /dashboard             -> Python bridge (redirects to `/`)

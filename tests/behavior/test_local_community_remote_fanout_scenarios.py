@@ -131,7 +131,7 @@ def _mastodon_comment_event() -> ActivityPubEvent:
         "to": "as:Public",
         "cc": [
             "https://mastodon.example/ap/actors/users/alice/followers",
-            "https://bridge.example/actors/choikak2",
+            "https://bridge.example/actors/users/choikak2",
         ],
         "object": {
             "id": "https://mastodon.example/ap/actors/users/alice/statuses/1",
@@ -140,7 +140,7 @@ def _mastodon_comment_event() -> ActivityPubEvent:
             "attributedTo": "https://mastodon.example/ap/actors/users/alice",
             "cc": [
                 "https://mastodon.example/ap/actors/users/alice/followers",
-                "https://bridge.example/actors/choikak2",
+                "https://bridge.example/actors/users/choikak2",
             ],
             "content": '<p><span class="h-card">@alice</span><br />test-2 from mastodon</p>',
             "contentMap": {"en": "<p>test-2 from mastodon</p>"},
@@ -196,7 +196,7 @@ def _mastodon_top_level_comment_event() -> ActivityPubEvent:
         "to": "as:Public",
         "cc": [
             "https://mastodon.example/ap/actors/users/alice/followers",
-            "https://bridge.example/actors/choikak2",
+            "https://bridge.example/actors/users/choikak2",
         ],
         "object": {
             "id": "https://mastodon.example/ap/actors/users/alice/statuses/top",
@@ -205,13 +205,13 @@ def _mastodon_top_level_comment_event() -> ActivityPubEvent:
             "attributedTo": "https://mastodon.example/ap/actors/users/alice",
             "cc": [
                 "https://mastodon.example/ap/actors/users/alice/followers",
-                "https://bridge.example/actors/choikak2",
+                "https://bridge.example/actors/users/choikak2",
             ],
             "content": '<p><span class="h-card">@choikak2</span><br />test-1 from mastodon</p>',
             "contentMap": {"en": "<p>test-1 from mastodon</p>"},
             "context": "https://mastodon.example/contexts/1",
             "conversation": "https://mastodon.example/contexts/1",
-            "inReplyTo": "https://bridge.example/users/choikak2/post/1779382297938",
+            "inReplyTo": "https://bridge.example/actors/users/choikak2/objects/posts/1779382297938",
             "likes": {"type": "Collection", "totalItems": 0},
             "published": "2026-05-21T16:59:20Z",
             "replies": {"type": "Collection"},
@@ -235,7 +235,7 @@ def _mastodon_top_level_comment_event() -> ActivityPubEvent:
                 "ap_id": "https://mastodon.example/ap/actors/users/alice/statuses/top",
                 "kind": "comment",
                 "lemmy_id": 0,
-                "post_ap_id": "https://bridge.example/users/choikak2/post/1779382297938",
+                "post_ap_id": "https://bridge.example/actors/users/choikak2/objects/posts/1779382297938",
                 "post_lemmy_id": 0,
                 "parent_ap_id": None,
                 "title": None,
@@ -487,8 +487,8 @@ async def test_mastodon_shaped_top_level_comment_relay_uses_post_as_in_reply_to(
         local_community_id=local_community.id,
         discord_thread_id=200,
         discord_starter_message_id=300,
-        ap_activity_id="https://bridge.example/users/choikak2/activities/create/post/1779382297938",
-        ap_object_id="https://bridge.example/users/choikak2/post/1779382297938",
+        ap_activity_id="https://bridge.example/actors/users/choikak2/activities/create/posts/1779382297938",
+        ap_object_id="https://bridge.example/actors/users/choikak2/objects/posts/1779382297938",
         direction="discord_to_ap",
         origin_kind="local_user",
     )
@@ -523,7 +523,7 @@ async def test_mastodon_shaped_top_level_comment_relay_uses_post_as_in_reply_to(
     ][0]
     note = delivery.activity_json["object"]["object"]
     assert (
-        note["inReplyTo"] == "https://bridge.example/users/choikak2/post/1779382297938"
+        note["inReplyTo"] == "https://bridge.example/actors/users/choikak2/objects/posts/1779382297938"
     )
     assert note["content"] == "<p>test-1 from mastodon</p>"
 

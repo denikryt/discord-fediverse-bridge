@@ -158,9 +158,9 @@ async function loadBridgeActorKeyPair(
 
 function mapRegisteredUserRow(row: RegisteredUserRow): UserActorIdentity {
   const actorId = new URL(row.actorUrl);
-  // Development databases store registered users under /actors/{username}; this
-  // matches the configured Fedify dispatcher and keeps user actor ids aligned
-  // with their signing key owner.
+  // Registered users are loaded from the already-migrated typed actor URL.
+  // The gateway derives collection URLs from that row so it cannot accidentally
+  // reintroduce the retired untyped actor namespace.
   return {
     actorId,
     followersId: new URL("followers", `${actorId.href.replace(/\/$/, "")}/`),

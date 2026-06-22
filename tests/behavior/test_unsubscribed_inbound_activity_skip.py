@@ -127,7 +127,7 @@ async def test_pending_follow_still_implicit_accepts_before_unsubscribed_skip(
     """Inbound content for a pending follow should promote state before skip checks."""
     database = build_database(tmp_path, "implicit-accept.sqlite3")
     community_actor_id = "https://remote.example/c/news"
-    follow_activity_id = "https://bridge.example/activities/follow/1"
+    follow_activity_id = "https://bridge.example/actors/services/bridge/activities/follow/1"
     database.bridge_actor_follows.create_bridge_actor_follow(
         community_actor_id=community_actor_id,
         follow_activity_id=follow_activity_id,

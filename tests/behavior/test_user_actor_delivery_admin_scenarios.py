@@ -37,10 +37,10 @@ def _database(tmp_path):
     database.users.create_user(
         discord_user_id="2",
         activitypub_username="bob",
-        actor_url="https://bridge.test/actors/bob",
-        inbox_url="https://bridge.test/actors/bob/inbox",
-        outbox_url="https://bridge.test/actors/bob/outbox",
-        followers_url="https://bridge.test/actors/bob/followers",
+        actor_url="https://bridge.test/actors/users/bob",
+        inbox_url="https://bridge.test/actors/users/bob/inbox",
+        outbox_url="https://bridge.test/actors/users/bob/outbox",
+        followers_url="https://bridge.test/actors/users/bob/followers",
         public_key_pem="public",
         private_key_pem="private",
     )
@@ -50,7 +50,7 @@ def _database(tmp_path):
             source_kind="content_create",
             ordering_key="object:1",
             logical_version=1,
-            activity_id="https://bridge.test/activities/1",
+            activity_id="https://bridge.test/actors/users/bob/activities/create/posts/1",
             snapshot_json="{}",
             activity_json="{}",
             state="ready",
@@ -128,7 +128,7 @@ def test_list_exposes_bounded_operator_diagnostics_and_redacts_errors(
     payload = json.loads(capsys.readouterr().out)
     assert payload == [
         {
-            "activity_id": "https://bridge.test/activities/1",
+            "activity_id": "https://bridge.test/actors/users/bob/activities/create/posts/1",
             "attempt_count": 2,
             "delivery_id": failed_id,
             "last_attempted_at": "2026-06-18 00:00:00",

@@ -65,13 +65,13 @@ async function withFakeGateway(
   const server = createServer((req: IncomingMessage, res: ServerResponse) => {
     const path = req.url ?? "/";
 
-    if (path === "/users/alice/post/100") {
+    if (path === "/actors/users/alice/objects/posts/100") {
       res.writeHead(200, { "Content-Type": "application/activity+json" });
       res.end(JSON.stringify({
         "@context": "https://www.w3.org/ns/activitystreams",
-        id: `${baseUrl}/users/alice/post/100`,
+        id: `${baseUrl}/actors/users/alice/objects/posts/100`,
         type: "Page",
-        attributedTo: `${baseUrl}/users/alice`,
+        attributedTo: `${baseUrl}/actors/users/alice`,
         name: "Original post",
         to: ["as:Public", COMMUNITY_URL],
         audience: COMMUNITY_URL,
@@ -79,14 +79,14 @@ async function withFakeGateway(
       return;
     }
 
-    if (path === "/users/alice/comment/200") {
+    if (path === "/actors/users/alice/objects/comments/200") {
       res.writeHead(200, { "Content-Type": "application/activity+json" });
       res.end(JSON.stringify({
         "@context": "https://www.w3.org/ns/activitystreams",
-        id: `${baseUrl}/users/alice/comment/200`,
+        id: `${baseUrl}/actors/users/alice/objects/comments/200`,
         type: "Note",
-        attributedTo: `${baseUrl}/users/alice`,
-        inReplyTo: `${baseUrl}/users/alice/post/100`,
+        attributedTo: `${baseUrl}/actors/users/alice`,
+        inReplyTo: `${baseUrl}/actors/users/alice/objects/posts/100`,
         to: [COMMUNITY_URL],
         audience: COMMUNITY_URL,
       }));
@@ -120,7 +120,7 @@ async function withFakeGateway(
  */
 async function testLemmyReplyToGatewayPost(): Promise<void> {
   await withFakeGateway(async (gatewayBase) => {
-    const gatewayPostUrl = `${gatewayBase}/users/alice/post/100`;
+    const gatewayPostUrl = `${gatewayBase}/actors/users/alice/objects/posts/100`;
 
     const createActivity = {
       type: "Create",
@@ -166,8 +166,8 @@ async function testLemmyReplyToGatewayPost(): Promise<void> {
  */
 async function testLemmyReplyToGatewayComment(): Promise<void> {
   await withFakeGateway(async (gatewayBase) => {
-    const gatewayPostUrl = `${gatewayBase}/users/alice/post/100`;
-    const gatewayCommentUrl = `${gatewayBase}/users/alice/comment/200`;
+    const gatewayPostUrl = `${gatewayBase}/actors/users/alice/objects/posts/100`;
+    const gatewayCommentUrl = `${gatewayBase}/actors/users/alice/objects/comments/200`;
 
     const createActivity = {
       type: "Create",
@@ -228,12 +228,12 @@ async function testDirectNoteReplyToMappedLocalComment(): Promise<void> {
       }),
       object: new Note({
         id: new URL("https://mastodon.example/users/alice/statuses/900"),
-        replyTarget: new URL("https://bridge.example/users/bob/comment/200"),
+        replyTarget: new URL("https://bridge.example/actors/users/bob/objects/comments/200"),
         // Mastodon replies do not provide source.content; they send rendered
         // HTML with a leading mention of the local actor. The bridge must store
         // readable text for Discord placement instead of raw HTML.
         content:
-          '<p><span class="h-card"><a href="https://bridge.example/actors/bob">@<span>bob</span></a></span> <br />reply from mastodon-shaped server</p>',
+          '<p><span class="h-card"><a href="https://bridge.example/actors/users/bob">@<span>bob</span></a></span> <br />reply from mastodon-shaped server</p>',
         url: new URL("https://mastodon.example/@alice/900"),
       }),
     });
@@ -242,11 +242,11 @@ async function testDirectNoteReplyToMappedLocalComment(): Promise<void> {
 
     assert.ok(event, "direct Note reply to mapped local parent must normalize");
     assert.equal(event.event_type, "comment.created");
-    assert.equal(event.community_actor_id, "https://bridge.example/communities/general");
+    assert.equal(event.community_actor_id, "https://bridge.example/actors/communities/general");
     assert.equal(event.object.lemmy_id, 0);
     assert.equal(event.object.body_markdown, "reply from mastodon-shaped server");
-    assert.equal(event.object.parent_ap_id, "https://bridge.example/users/bob/comment/200");
-    assert.equal(event.object.post_ap_id, "https://bridge.example/users/bob/post/100");
+    assert.equal(event.object.parent_ap_id, "https://bridge.example/actors/users/bob/objects/comments/200");
+    assert.equal(event.object.post_ap_id, "https://bridge.example/actors/users/bob/objects/posts/100");
     assert.equal(event.object.post_lemmy_id, 0);
   } finally {
     rmSync(tempDir, { force: true, recursive: true });
@@ -275,7 +275,7 @@ async function testDirectNoteReplyToUnmappedLocalCommentRejects(): Promise<void>
       }),
       object: new Note({
         id: new URL("https://mastodon.example/users/alice/statuses/901"),
-        replyTarget: new URL("https://bridge.example/users/bob/comment/200"),
+        replyTarget: new URL("https://bridge.example/actors/users/bob/objects/comments/200"),
         source: new Source({
           content: "reply with no placement mapping",
           mediaType: "text/markdown",
@@ -348,10 +348,10 @@ async function writeBridgeParentDatabase(
       `,
       [
         "bob",
-        "https://bridge.example/actors/bob",
-        "https://bridge.example/communities/general",
-        "https://bridge.example/users/bob/activities/create/post/100",
-        "https://bridge.example/users/bob/post/100",
+        "https://bridge.example/actors/users/bob",
+        "https://bridge.example/actors/communities/general",
+        "https://bridge.example/actors/users/bob/activities/create/posts/100",
+        "https://bridge.example/actors/users/bob/objects/posts/100",
         "post",
         "Root post",
         "root body",
@@ -361,14 +361,14 @@ async function writeBridgeParentDatabase(
         "2026-05-08T12:00:00Z",
         "2026-05-08T12:00:00Z",
         "bob",
-        "https://bridge.example/actors/bob",
-        "https://bridge.example/communities/general",
-        "https://bridge.example/users/bob/activities/create/comment/200",
-        "https://bridge.example/users/bob/comment/200",
+        "https://bridge.example/actors/users/bob",
+        "https://bridge.example/actors/communities/general",
+        "https://bridge.example/actors/users/bob/activities/create/comments/200",
+        "https://bridge.example/actors/users/bob/objects/comments/200",
         "comment",
         null,
         "parent comment body",
-        "https://bridge.example/users/bob/post/100",
+        "https://bridge.example/actors/users/bob/objects/posts/100",
         10,
         2000,
         "2026-05-08T12:01:00Z",
@@ -386,10 +386,10 @@ async function writeBridgeParentDatabase(
         [
           "discord",
           "2000",
-          "https://bridge.example/users/bob/activities/create/comment/200",
-          "https://bridge.example/users/bob/comment/200",
-          "https://bridge.example/actors/bob",
-          "https://bridge.example/communities/general",
+          "https://bridge.example/actors/users/bob/activities/create/comments/200",
+          "https://bridge.example/actors/users/bob/objects/comments/200",
+          "https://bridge.example/actors/users/bob",
+          "https://bridge.example/actors/communities/general",
           10,
           2000,
           "2026-05-08T12:01:00Z",

@@ -5,7 +5,7 @@ import { createGatewayApp } from "../src/server.js";
 import { buildUserOutboxJson, validateCanonicalUserOutboxUrl } from "../src/user-outbox.js";
 
 const canonical = "https://bridge.example/actors/users/alice/outbox";
-const item = { actor_username: "alice", actor_url: "https://bridge.example/actors/users/alice", publication_context: "personal_feed", community_actor_url: null, activity_id: "https://bridge.example/activities/1", object_id: "https://bridge.example/objects/1", kind: "post", title: null, body_markdown: "hello", in_reply_to_object_id: null, published_at: "2026-06-18T00:00:00Z", discord_guild_id: 1, discord_channel_id: 2, discord_message_id: 3 };
+const item = { actor_username: "alice", actor_url: "https://bridge.example/actors/users/alice", publication_context: "personal_feed", community_actor_url: null, activity_id: "https://bridge.example/actors/users/alice/activities/create/posts/1", object_id: "https://bridge.example/actors/users/alice/objects/posts/1", kind: "post", title: null, body_markdown: "hello", in_reply_to_object_id: null, published_at: "2026-06-18T00:00:00Z", discord_guild_id: 1, discord_channel_id: 2, discord_message_id: 3 };
 
 async function main(): Promise<void> {
   assert.equal(validateCanonicalUserOutboxUrl(canonical, "https://bridge.example/", "alice"), canonical);

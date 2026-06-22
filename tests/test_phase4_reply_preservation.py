@@ -50,7 +50,7 @@ def _accepted_subscription(database: Database, *, channel_id: int) -> None:
         lemmy_community_id=42,
         community_handle=f"!hackers@{LEMMY_EXAMPLE_DOMAIN}",
         community_inbox_url=f"{COMMUNITY_ACTOR_URL}/inbox",
-        follow_activity_id=f"https://{BRIDGE_HOST_DOMAIN}/activities/follow/{channel_id}",
+        follow_activity_id=f"https://{BRIDGE_HOST_DOMAIN}/actors/services/bridge/activities/follow/{channel_id}",
         status="accepted",
     )
 
@@ -153,7 +153,7 @@ def _create_thread_group_with_source_delivery(
     via the legacy path (same pattern as Phase 3 helper).
     """
     ap_object_id = f"https://{BRIDGE_HOST_DOMAIN}/objects/post/1"
-    ap_activity_id = f"https://{BRIDGE_HOST_DOMAIN}/activities/create/post/1"
+    ap_activity_id = f"https://{BRIDGE_HOST_DOMAIN}/actors/users/alice/activities/create/posts/1"
     database.legacy_lemmy_mappings.create_post_link(
         lemmy_post_id=-thread_id,
         lemmy_post_ap_id=ap_object_id,
@@ -366,7 +366,7 @@ async def test_phase4_reply_to_mirrored_message_references_mirror_delivery(
         source_channel_id=100,
         source_thread_id=200,
         source_message_id=400,
-        ap_activity_id=f"https://{BRIDGE_HOST_DOMAIN}/activities/create/comment/prior",
+        ap_activity_id=f"https://{BRIDGE_HOST_DOMAIN}/actors/users/alice/activities/create/comments/prior",
         ap_object_id=f"https://{BRIDGE_HOST_DOMAIN}/objects/comment/prior",
     )
     # Source delivery for prior message.
@@ -503,7 +503,7 @@ async def test_phase4_reply_db_consistency_mirror_delivery_recorded(
         source_channel_id=100,
         source_thread_id=200,
         source_message_id=400,
-        ap_activity_id=f"https://{BRIDGE_HOST_DOMAIN}/activities/create/comment/prior",
+        ap_activity_id=f"https://{BRIDGE_HOST_DOMAIN}/actors/users/alice/activities/create/comments/prior",
         ap_object_id=f"https://{BRIDGE_HOST_DOMAIN}/objects/comment/prior",
     )
     database.discord_fanout_groups.add_message_delivery(

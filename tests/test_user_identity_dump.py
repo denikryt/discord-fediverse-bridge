@@ -116,10 +116,10 @@ def test_dump_local_users_entrypoint_writes_users_db_backup(tmp_path: Path) -> N
     database.users.create_user(
         discord_user_id="555",
         activitypub_username="carol",
-        actor_url="https://bridge.example/users/carol",
-        inbox_url="https://bridge.example/users/carol/inbox",
-        outbox_url="https://bridge.example/users/carol/outbox",
-        followers_url="https://bridge.example/users/carol/followers",
+        actor_url="https://bridge.example/actors/users/carol",
+        inbox_url="https://bridge.example/actors/users/carol/inbox",
+        outbox_url="https://bridge.example/actors/users/carol/outbox",
+        followers_url="https://bridge.example/actors/users/carol/followers",
         public_key_pem="PUBLIC-KEY-CAROL",
         private_key_pem="PRIVATE-KEY-CAROL",
     )
@@ -151,10 +151,10 @@ def test_dump_local_users_entrypoint_uses_default_paths(tmp_path: Path) -> None:
     database.users.create_user(
         discord_user_id="777",
         activitypub_username="dave",
-        actor_url="https://bridge.example/users/dave",
-        inbox_url="https://bridge.example/users/dave/inbox",
-        outbox_url="https://bridge.example/users/dave/outbox",
-        followers_url="https://bridge.example/users/dave/followers",
+        actor_url="https://bridge.example/actors/users/dave",
+        inbox_url="https://bridge.example/actors/users/dave/inbox",
+        outbox_url="https://bridge.example/actors/users/dave/outbox",
+        followers_url="https://bridge.example/actors/users/dave/followers",
         public_key_pem="PUBLIC-KEY-DAVE",
         private_key_pem="PRIVATE-KEY-DAVE",
     )

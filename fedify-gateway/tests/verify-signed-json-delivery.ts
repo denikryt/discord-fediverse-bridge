@@ -37,7 +37,7 @@ async function testSignedJsonHeadersAndRequestTarget(): Promise<void> {
   const activityJson = {
     "@context": "https://www.w3.org/ns/activitystreams",
     type: "Create",
-    id: "https://bridge.example/activities/1",
+    id: "https://bridge.example/actors/users/alice/activities/create/posts/1",
     actor: "https://bridge.example/actors/users/alice",
   };
   const captured: CapturedRequest[] = [];
@@ -103,7 +103,7 @@ async function testHttpFailureRedactsResponseBodyWhenDisabled(): Promise<void> {
         "TransportTest",
         "https://remote.example/inbox",
         { keyId: new URL("https://bridge.example/actors/users/alice#main-key"), privateKey: keyPair.privateKey },
-        { type: "Update", id: "https://bridge.example/activities/2" },
+        { type: "Update", id: "https://bridge.example/actors/users/alice/activities/update/posts/2" },
         {
           debugDelivery: false,
           includeResponseBodyInDiagnostics: false,

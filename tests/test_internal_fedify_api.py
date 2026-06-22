@@ -112,7 +112,7 @@ def test_internal_fedify_resolves_community_subscribers_objects_and_mappings(
         actor_username="alice",
         actor_url="https://bridge.example/actors/users/alice",
         community_actor_url=community.actor_url,
-        activity_id="https://bridge.example/activities/1",
+        activity_id="https://bridge.example/actors/users/alice/activities/create/posts/1",
         object_id="https://bridge.example/objects/1",
         kind="post",
         title="Title",
@@ -124,7 +124,7 @@ def test_internal_fedify_resolves_community_subscribers_objects_and_mappings(
     database.message_mappings.create_message_mapping(
         source_platform="discord",
         source_id="30",
-        activity_id="https://bridge.example/activities/1",
+        activity_id="https://bridge.example/actors/users/alice/activities/create/posts/1",
         object_id="https://bridge.example/objects/1",
         actor_url="https://bridge.example/actors/users/alice",
         community_actor_url=community.actor_url,
@@ -168,7 +168,7 @@ def test_internal_fedify_resolves_community_subscribers_objects_and_mappings(
     object_response = client.post(
         "/internal/fedify/published-objects/resolve",
         headers=_headers(),
-        json={"activity_id": "https://bridge.example/activities/1"},
+        json={"activity_id": "https://bridge.example/actors/users/alice/activities/create/posts/1"},
     )
     assert object_response.json()["object_id"] == "https://bridge.example/objects/1"
 
@@ -262,10 +262,10 @@ def test_internal_user_actor_profile_defaults_and_cleared_media_are_omitted(
     database.users.create_user(
         discord_user_id="3",
         activitypub_username="carol",
-        actor_url="https://bridge.example/users/carol",
-        inbox_url="https://bridge.example/users/carol/inbox",
-        outbox_url="https://bridge.example/users/carol/outbox",
-        followers_url="https://bridge.example/users/carol/followers",
+        actor_url="https://bridge.example/actors/users/carol",
+        inbox_url="https://bridge.example/actors/users/carol/inbox",
+        outbox_url="https://bridge.example/actors/users/carol/outbox",
+        followers_url="https://bridge.example/actors/users/carol/followers",
         public_key_pem="user-public",
         private_key_pem="user-private",
     )
@@ -289,10 +289,10 @@ def test_internal_user_followers_are_newest_first_and_fixed_to_forty(
     user = database.users.create_user(
         discord_user_id="4",
         activitypub_username="dana",
-        actor_url="https://bridge.example/actors/dana",
-        inbox_url="https://bridge.example/actors/dana/inbox",
-        outbox_url="https://bridge.example/actors/dana/outbox",
-        followers_url="https://bridge.example/actors/dana/followers",
+        actor_url="https://bridge.example/actors/users/dana",
+        inbox_url="https://bridge.example/actors/users/dana/inbox",
+        outbox_url="https://bridge.example/actors/users/dana/outbox",
+        followers_url="https://bridge.example/actors/users/dana/followers",
         public_key_pem="user-public",
         private_key_pem="user-private",
     )
@@ -358,7 +358,7 @@ def test_internal_user_outbox_is_canonical_ordered_and_filtered(tmp_path: Path) 
         actor_username="alice",
         actor_url=user.actor_url,
         community_actor_url=community.actor_url,
-        activity_id="https://bridge.example/activities/1",
+        activity_id="https://bridge.example/actors/users/alice/activities/create/posts/1",
         object_id="https://bridge.example/objects/1",
         kind="post",
         title="One",
@@ -371,7 +371,7 @@ def test_internal_user_outbox_is_canonical_ordered_and_filtered(tmp_path: Path) 
         actor_username="alice",
         actor_url=user.actor_url,
         community_actor_url=community.actor_url,
-        activity_id="https://bridge.example/activities/2",
+        activity_id="https://bridge.example/actors/users/alice/activities/create/posts/2",
         object_id="https://bridge.example/objects/2",
         kind="comment",
         title=None,

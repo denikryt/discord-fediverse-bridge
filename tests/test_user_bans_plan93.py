@@ -72,7 +72,7 @@ def _registered_local_user(
     database: Database, *, discord_user_id: str = "123", username: str = "Alice"
 ) -> object:
     """Create one local bridge identity used by moderation scenarios."""
-    actor_url = f"https://bridge.example:8443/users/{username}"
+    actor_url = f"https://bridge.example:8443/actors/users/{username}"
     return database.users.create_user(
         discord_user_id=discord_user_id,
         activitypub_username=username,

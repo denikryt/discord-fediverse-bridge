@@ -98,7 +98,7 @@ def _accepted_subscription(database: Database, *, channel_id: int = 100) -> None
         lemmy_community_id=42,
         community_handle=f"!hackers@{LEMMY_EXAMPLE_DOMAIN}",
         community_inbox_url=f"https://{LEMMY_EXAMPLE_DOMAIN}/c/hackers/inbox",
-        follow_activity_id=f"https://{BRIDGE_HOST_DOMAIN}/activities/follow/{channel_id}",
+        follow_activity_id=f"https://{BRIDGE_HOST_DOMAIN}/actors/services/bridge/activities/follow/{channel_id}",
         status="accepted",
     )
 

@@ -123,7 +123,7 @@ def _thread_with_surfaces(scenario: SimpleNamespace) -> object:
     """Create one canonical post with host/source/sibling Discord surfaces."""
     thread_row = scenario.database.local_community_content.create_local_community_thread_canonical(
         local_community_id=scenario.community.id,
-        ap_activity_id="https://bridge.example/activities/create/post/1",
+        ap_activity_id="https://bridge.example/actors/users/alice/activities/create/posts/1",
         ap_object_id="https://bridge.example/post/1",
         direction="discord_to_ap",
         origin_kind="discord_local_subscriber",
@@ -156,7 +156,7 @@ def _thread_with_surfaces(scenario: SimpleNamespace) -> object:
         actor_username="alice",
         actor_url="https://bridge.example/actors/users/alice",
         community_actor_url=scenario.community.actor_url,
-        activity_id="https://bridge.example/activities/create/post/1",
+        activity_id="https://bridge.example/actors/users/alice/activities/create/posts/1",
         object_id="https://bridge.example/post/1",
         kind="post",
         title="Thread title",
@@ -190,7 +190,7 @@ def _comment_with_surfaces(scenario: SimpleNamespace, thread_row: object) -> obj
     )
     message_row = scenario.database.local_community_content.create_local_community_message_canonical(
         local_community_thread_id=thread_row.id,
-        ap_activity_id="https://bridge.example/activities/create/comment/1",
+        ap_activity_id="https://bridge.example/actors/users/alice/activities/create/comments/1",
         ap_object_id="https://bridge.example/comment/1",
         parent_ap_object_id="https://bridge.example/post/1",
         direction="discord_to_ap",
@@ -226,7 +226,7 @@ def _comment_with_surfaces(scenario: SimpleNamespace, thread_row: object) -> obj
         actor_username="alice",
         actor_url="https://bridge.example/actors/users/alice",
         community_actor_url=scenario.community.actor_url,
-        activity_id="https://bridge.example/activities/create/comment/1",
+        activity_id="https://bridge.example/actors/users/alice/activities/create/comments/1",
         object_id="https://bridge.example/comment/1",
         kind="comment",
         title=None,

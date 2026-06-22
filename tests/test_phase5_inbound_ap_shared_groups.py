@@ -50,7 +50,7 @@ def _accepted_subscription(database: Database, *, channel_id: int) -> None:
         lemmy_community_id=42,
         community_handle=f"!hackers@{LEMMY_EXAMPLE_DOMAIN}",
         community_inbox_url=f"{COMMUNITY_ACTOR_URL}/inbox",
-        follow_activity_id=f"https://{BRIDGE_HOST_DOMAIN}/activities/follow/{channel_id}",
+        follow_activity_id=f"https://{BRIDGE_HOST_DOMAIN}/actors/services/bridge/activities/follow/{channel_id}",
         status="accepted",
     )
 
@@ -586,7 +586,7 @@ async def test_phase5_outbound_publish_does_not_create_post_link(
     _registered_user(database)
 
     ap_object_id = f"https://{BRIDGE_HOST_DOMAIN}/objects/post/1"
-    ap_activity_id = f"https://{BRIDGE_HOST_DOMAIN}/activities/create/post/1"
+    ap_activity_id = f"https://{BRIDGE_HOST_DOMAIN}/actors/users/alice/activities/create/posts/1"
     thread_group = database.discord_fanout_groups.create_thread_group(
         community_actor_id=COMMUNITY_ACTOR_URL,
         source_channel_id=100,

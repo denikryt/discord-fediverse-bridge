@@ -22,10 +22,10 @@ def _user(discord_id: str, username: str) -> User:
     return User(
         discord_user_id=discord_id,
         activitypub_username=username,
-        actor_url=f"https://bridge.test/users/{username}",
-        inbox_url=f"https://bridge.test/users/{username}/inbox",
-        outbox_url=f"https://bridge.test/users/{username}/outbox",
-        followers_url=f"https://bridge.test/users/{username}/followers",
+        actor_url=f"https://bridge.test/actors/users/{username}",
+        inbox_url=f"https://bridge.test/actors/users/{username}/inbox",
+        outbox_url=f"https://bridge.test/actors/users/{username}/outbox",
+        followers_url=f"https://bridge.test/actors/users/{username}/followers",
         public_key_pem="public",
         private_key_pem="private",
     )

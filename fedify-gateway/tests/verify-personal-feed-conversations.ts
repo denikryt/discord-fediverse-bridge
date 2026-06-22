@@ -8,7 +8,7 @@ import {
   normalizeUpdateActivityFromJson,
 } from "../src/normalize.js";
 
-const ROOT = "https://bridge.example/users/alice/post/root";
+const ROOT = "https://bridge.example/actors/users/alice/objects/posts/root";
 const PARENT = "https://remote.example/comments/parent";
 const OBJECT = "https://remote.example/comments/child";
 const ACTOR = "https://remote.example/users/bob";
@@ -19,7 +19,7 @@ const lookup = {
       return {
         publicationContext: "personal_feed",
         rootObjectId: ROOT,
-        actorId: objectId === OBJECT ? ACTOR : "https://bridge.example/users/alice",
+        actorId: objectId === OBJECT ? ACTOR : "https://bridge.example/actors/users/alice",
       };
     }
     return null;
@@ -30,7 +30,7 @@ const lookup = {
         publicationContext: "personal_feed",
         objectId,
         conversationRootObjectId: ROOT,
-        actorUrl: objectId === OBJECT ? ACTOR : "https://bridge.example/users/alice",
+        actorUrl: objectId === OBJECT ? ACTOR : "https://bridge.example/actors/users/alice",
       };
     }
     return null;
@@ -41,7 +41,7 @@ const lookup = {
         publicationContext: "personal_feed",
         objectId: ROOT,
         conversationRootObjectId: ROOT,
-        actorUrl: "https://bridge.example/users/alice",
+        actorUrl: "https://bridge.example/actors/users/alice",
       };
     }
     return null;

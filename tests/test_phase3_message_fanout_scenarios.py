@@ -42,7 +42,7 @@ def _accepted_subscription(database: Database, *, channel_id: int) -> None:
         lemmy_community_id=42,
         community_handle=f"!hackers@{LEMMY_EXAMPLE_DOMAIN}",
         community_inbox_url=f"{COMMUNITY_ACTOR_URL}/inbox",
-        follow_activity_id=f"https://{BRIDGE_HOST_DOMAIN}/activities/follow/{channel_id}",
+        follow_activity_id=f"https://{BRIDGE_HOST_DOMAIN}/actors/services/bridge/activities/follow/{channel_id}",
         status="accepted",
     )
 
@@ -138,7 +138,7 @@ def _create_thread_group_with_source_delivery(
     path depends on.
     """
     ap_object_id = f"https://{BRIDGE_HOST_DOMAIN}/objects/post/1"
-    ap_activity_id = f"https://{BRIDGE_HOST_DOMAIN}/activities/create/post/1"
+    ap_activity_id = f"https://{BRIDGE_HOST_DOMAIN}/actors/users/alice/activities/create/posts/1"
     # PostLink is required by publish_thread_message to resolve post context.
     database.legacy_lemmy_mappings.create_post_link(
         lemmy_post_id=-thread_id,
@@ -315,7 +315,7 @@ async def test_phase3_duplicate_message_is_ignored(tmp_path: Path) -> None:
         source_channel_id=100,
         source_thread_id=200,
         source_message_id=400,
-        ap_activity_id=f"https://{BRIDGE_HOST_DOMAIN}/activities/create/comment/1",
+        ap_activity_id=f"https://{BRIDGE_HOST_DOMAIN}/actors/users/alice/activities/create/comments/1",
         ap_object_id=f"https://{BRIDGE_HOST_DOMAIN}/objects/comment/1",
     )
     gateway = _publish_gateway()

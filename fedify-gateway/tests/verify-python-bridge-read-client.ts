@@ -26,15 +26,15 @@ const server = createServer(async (request, response) => {
     return;
   }
   if (path.startsWith("/internal/fedify/actors/users/")) {
-    response.end(JSON.stringify({ activitypub_username: "alice", actor_url: "https://bridge.example/users/alice", inbox_url: "https://bridge.example/users/alice/inbox", outbox_url: "https://bridge.example/users/alice/outbox", followers_url: "https://bridge.example/users/alice/followers", public_key_pem: "public", private_key_pem: "private", display_name: "Alice", summary: null, fields: [], avatar: null, header: null }));
+    response.end(JSON.stringify({ activitypub_username: "alice", actor_url: "https://bridge.example/actors/users/alice", inbox_url: "https://bridge.example/actors/users/alice/inbox", outbox_url: "https://bridge.example/actors/users/alice/outbox", followers_url: "https://bridge.example/actors/users/alice/followers", public_key_pem: "public", private_key_pem: "private", display_name: "Alice", summary: null, fields: [], avatar: null, header: null }));
     return;
   }
   if (path.startsWith("/internal/fedify/actors/communities/")) {
-    response.end(JSON.stringify({ slug: "test", actor_url: "https://bridge.example/communities/test", inbox_url: "https://bridge.example/communities/test/inbox", outbox_url: "https://bridge.example/communities/test/outbox", followers_url: "https://bridge.example/communities/test/followers", display_name: "Test", summary: null, public_key_pem: "public", private_key_pem: "private" }));
+    response.end(JSON.stringify({ slug: "test", actor_url: "https://bridge.example/actors/communities/test", inbox_url: "https://bridge.example/actors/communities/test/inbox", outbox_url: "https://bridge.example/actors/communities/test/outbox", followers_url: "https://bridge.example/actors/communities/test/followers", display_name: "Test", summary: null, public_key_pem: "public", private_key_pem: "private" }));
     return;
   }
   if (path === "/internal/fedify/communities") {
-    response.end(JSON.stringify({ items: [{ id: 1, slug: "test", display_name: "Test", summary: null, actor_url: "https://bridge.example/communities/test" }] }));
+    response.end(JSON.stringify({ items: [{ id: 1, slug: "test", display_name: "Test", summary: null, actor_url: "https://bridge.example/actors/communities/test" }] }));
     return;
   }
   if (path === "/internal/fedify/communities/subscribers") {
@@ -42,15 +42,15 @@ const server = createServer(async (request, response) => {
     return;
   }
   if (path === "/internal/fedify/published-objects/resolve") {
-    response.end(JSON.stringify({ actor_username: "alice", actor_url: "https://bridge.example/users/alice", community_actor_url: "https://bridge.example/communities/test", activity_id: "https://bridge.example/activities/1", object_id: "https://bridge.example/objects/1", kind: "post", title: "Title", body_markdown: "Body", in_reply_to_object_id: null, published_at: "2026-01-01T00:00:00+00:00", discord_channel_id: 1, discord_message_id: 2 }));
+    response.end(JSON.stringify({ actor_username: "alice", actor_url: "https://bridge.example/actors/users/alice", community_actor_url: "https://bridge.example/actors/communities/test", activity_id: "https://bridge.example/actors/users/alice/activities/create/posts/1", object_id: "https://bridge.example/actors/users/alice/objects/posts/1", kind: "post", title: "Title", body_markdown: "Body", in_reply_to_object_id: null, published_at: "2026-01-01T00:00:00+00:00", discord_channel_id: 1, discord_message_id: 2 }));
     return;
   }
   if (path === "/internal/fedify/message-mappings/resolve") {
-    response.end(JSON.stringify({ source_platform: "discord", source_id: "2", activity_id: "https://bridge.example/activities/1", object_id: "https://bridge.example/objects/1", actor_url: "https://bridge.example/users/alice", community_actor_url: "https://bridge.example/communities/test", discord_channel_id: 1, discord_message_id: 2 }));
+    response.end(JSON.stringify({ source_platform: "discord", source_id: "2", activity_id: "https://bridge.example/actors/users/alice/activities/create/posts/1", object_id: "https://bridge.example/actors/users/alice/objects/posts/1", actor_url: "https://bridge.example/actors/users/alice", community_actor_url: "https://bridge.example/actors/communities/test", discord_channel_id: 1, discord_message_id: 2 }));
     return;
   }
   if (path === "/internal/fedify/channel-community-subscriptions") {
-    response.end(JSON.stringify({ items: [{ community_actor_url: "https://remote.example/c/test", follow_activity_id: "https://bridge.example/follows/1", status: "accepted" }] }));
+    response.end(JSON.stringify({ items: [{ community_actor_url: "https://remote.example/c/test", follow_activity_id: "https://bridge.example/actors/services/bridge/activities/follow/1", status: "accepted" }] }));
     return;
   }
   if (path === "/internal/activitypub/events") {
@@ -69,12 +69,12 @@ try {
   assert.equal(await client.loadRegisteredUserByUsername("missing"), null);
   assert.equal((await client.loadRegisteredUserByUsername("alice"))?.activitypubUsername, "alice");
   assert.equal((await client.loadLocalCommunityBySlug("test"))?.slug, "test");
-  assert.equal((await client.loadLocalCommunityByActorUrl("https://bridge.example/communities/test"))?.slug, "test");
+  assert.equal((await client.loadLocalCommunityByActorUrl("https://bridge.example/actors/communities/test"))?.slug, "test");
   assert.equal((await client.listLocalCommunities("https://bridge.example"))[0]?.handle, "!test@bridge.example");
-  assert.equal((await client.loadAcceptedRemoteSubscribersByActorUrl("https://bridge.example/communities/test"))[0]?.status, "accepted");
-  assert.equal((await client.loadPublishedActivityObjectByObjectId("https://bridge.example/objects/1"))?.discordMessageId, 2);
-  assert.equal((await client.loadPublishedActivityObjectByActivityId("https://bridge.example/activities/1"))?.objectId, "https://bridge.example/objects/1");
-  assert.equal((await client.loadMessageMappingByObjectId("https://bridge.example/objects/1"))?.sourcePlatform, "discord");
+  assert.equal((await client.loadAcceptedRemoteSubscribersByActorUrl("https://bridge.example/actors/communities/test"))[0]?.status, "accepted");
+  assert.equal((await client.loadPublishedActivityObjectByObjectId("https://bridge.example/actors/users/alice/objects/posts/1"))?.discordMessageId, 2);
+  assert.equal((await client.loadPublishedActivityObjectByActivityId("https://bridge.example/actors/users/alice/activities/create/posts/1"))?.objectId, "https://bridge.example/actors/users/alice/objects/posts/1");
+  assert.equal((await client.loadMessageMappingByObjectId("https://bridge.example/actors/users/alice/objects/posts/1"))?.sourcePlatform, "discord");
   assert.equal((await client.listChannelCommunitySubscriptions())[0]?.status, "accepted");
   await client.deliverEvent({ actor_id: "a", community_actor_id: "c", delivery_id: "d", event_type: "follow.accepted", object: { follow_activity_id: "f" }, occurred_at: "2026-01-01T00:00:00Z" });
   assert.ok(seen.every((entry) => entry.authorization === `Bearer ${secret}`));

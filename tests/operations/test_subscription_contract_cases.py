@@ -19,7 +19,7 @@ from src.operations import (
 from support.subscription_contracts import SUBSCRIPTION_CASES, SubscriptionCase
 
 ACTOR_ID = "https://lemmy.example/c/hackers"
-FOLLOW_ACTIVITY_ID = "https://bridge.example/activities/follow/1"
+FOLLOW_ACTIVITY_ID = "https://bridge.example/actors/services/bridge/activities/follow/1"
 CHANNEL_ID = 123
 CHANNEL_MENTION = "<#123>"
 COMMUNITY_HANDLE = "!hackers@lemmy.example"

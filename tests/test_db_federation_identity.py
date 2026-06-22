@@ -79,7 +79,7 @@ def test_subscription_follow_state_is_persisted_for_existing_subscription(
         lemmy_community_id=42,
         community_handle=f"!hackers@{LEMMY_WORLD_DOMAIN}",
         community_inbox_url=f"{community_actor_url}/inbox",
-        follow_activity_id=f"https://{BRIDGE_HOST_DOMAIN}/activities/follow-1",
+        follow_activity_id=f"https://{BRIDGE_HOST_DOMAIN}/actors/services/bridge/activities/follow/follow-1",
         status="accepted",
     )
 
@@ -90,14 +90,14 @@ def test_subscription_follow_state_is_persisted_for_existing_subscription(
     assert subscription.community_inbox_url == f"{community_actor_url}/inbox"
     assert (
         subscription.follow_activity_id
-        == f"https://{BRIDGE_HOST_DOMAIN}/activities/follow-1"
+        == f"https://{BRIDGE_HOST_DOMAIN}/actors/services/bridge/activities/follow/follow-1"
     )
     assert subscription.status == "accepted"
 
     database.remote_subscriptions.update_subscription_follow_state(
         discord_channel_id=777,
         community_inbox_url=f"https://{LEMMY_WORLD_DOMAIN}/inbox/updated",
-        follow_activity_id=f"https://{BRIDGE_HOST_DOMAIN}/activities/follow-2",
+        follow_activity_id=f"https://{BRIDGE_HOST_DOMAIN}/actors/services/bridge/activities/follow/follow-2",
         status="pending",
     )
 
@@ -107,7 +107,7 @@ def test_subscription_follow_state_is_persisted_for_existing_subscription(
     assert updated.community_inbox_url == f"https://{LEMMY_WORLD_DOMAIN}/inbox/updated"
     assert (
         updated.follow_activity_id
-        == f"https://{BRIDGE_HOST_DOMAIN}/activities/follow-2"
+        == f"https://{BRIDGE_HOST_DOMAIN}/actors/services/bridge/activities/follow/follow-2"
     )
     assert updated.status == "pending"
 
@@ -118,7 +118,7 @@ def test_message_mapping_lookup_supports_dedup_keys_used_by_bridge(
     """Generic message mappings must be queryable by both activity and object IDs."""
     database = _database(tmp_path)
     actor_url = f"https://{BRIDGE_HOST_DOMAIN}/actors/users/alice"
-    activity_id = f"https://{BRIDGE_HOST_DOMAIN}/activities/555"
+    activity_id = f"https://{BRIDGE_HOST_DOMAIN}/actors/users/alice/activities/create/posts/555"
     object_id = f"https://{BRIDGE_HOST_DOMAIN}/objects/555"
 
     created = database.message_mappings.create_message_mapping(

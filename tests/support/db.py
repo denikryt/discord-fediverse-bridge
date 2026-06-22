@@ -9,6 +9,13 @@ from __future__ import annotations
 
 from pathlib import Path
 
+from src.activitypub_identity_urls import (
+    LocalActorKind,
+    build_actor_address,
+    build_service_follow_activity_id,
+    build_user_create_post_activity_id,
+    build_user_post_object_id,
+)
 from src.db import Database
 from tests_constants import BRIDGE_HOST_DOMAIN, LEMMY_EXAMPLE_DOMAIN
 
@@ -40,7 +47,11 @@ def add_accepted_subscription(
         lemmy_community_id=community_id,
         community_handle=f"!{community_name}@{LEMMY_EXAMPLE_DOMAIN}",
         community_inbox_url=f"{community_actor_url}/inbox",
-        follow_activity_id=f"https://{BRIDGE_HOST_DOMAIN}/activities/follow/{channel_id}",
+        follow_activity_id=build_service_follow_activity_id(
+            origin=f"https://{BRIDGE_HOST_DOMAIN}",
+            identifier="bridge",
+            activity_id=str(channel_id),
+        ),
         status="accepted",
     )
 
@@ -52,14 +63,18 @@ def add_registered_user(
     username: str = "alice",
 ) -> None:
     """Insert one registered local user actor used by outbound publish scenarios."""
-    actor_url = f"https://{BRIDGE_HOST_DOMAIN}/actors/{username}"
+    address = build_actor_address(
+        origin=f"https://{BRIDGE_HOST_DOMAIN}",
+        kind=LocalActorKind.USER,
+        identifier=username,
+    )
     database.users.create_user(
         discord_user_id=discord_user_id,
         activitypub_username=username,
-        actor_url=actor_url,
-        inbox_url=f"{actor_url}/inbox",
-        outbox_url=f"{actor_url}/outbox",
-        followers_url=f"{actor_url}/followers",
+        actor_url=address.actor_url,
+        inbox_url=address.inbox_url,
+        outbox_url=address.outbox_url,
+        followers_url=address.followers_url,
         public_key_pem="public-key",
         private_key_pem="private-key",
     )
@@ -71,8 +86,12 @@ def create_source_thread_group(
     channel_id: int = 100,
     thread_id: int = 200,
     starter_message_id: int = 300,
-    ap_object_id: str = f"https://{BRIDGE_HOST_DOMAIN}/objects/post/1",
-    ap_activity_id: str = f"https://{BRIDGE_HOST_DOMAIN}/activities/create/post/1",
+    ap_object_id: str = build_user_post_object_id(
+        origin=f"https://{BRIDGE_HOST_DOMAIN}", username="alice", object_id="1"
+    ),
+    ap_activity_id: str = build_user_create_post_activity_id(
+        origin=f"https://{BRIDGE_HOST_DOMAIN}", username="alice", activity_id="1"
+    ),
     community_actor_url: str = COMMUNITY_ACTOR_URL,
     include_post_link: bool = False,
 ) -> object:

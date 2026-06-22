@@ -186,7 +186,7 @@ def _setup_user(
     username: str = "testuser",
 ) -> None:
     """Create a registered user for AP publishing."""
-    actor_url = f"https://{BRIDGE_HOST_DOMAIN}/users/{username}"
+    actor_url = f"https://{BRIDGE_HOST_DOMAIN}/actors/users/{username}"
     database.users.create_user(
         discord_user_id=discord_user_id,
         activitypub_username=username,

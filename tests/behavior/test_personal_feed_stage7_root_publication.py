@@ -381,7 +381,7 @@ async def test_duplicate_replay_rejects_conflicting_canonical_graph(
         source = session.scalar(select(UserActorOutboundSource))
         if corruption == "published_context":
             published.publication_context = "community"
-            published.community_actor_url = "https://bridge.test/communities/wrong"
+            published.community_actor_url = "https://bridge.test/actors/communities/wrong"
         elif corruption == "published_channel":
             published.discord_channel_id = 999
         elif corruption == "published_message":

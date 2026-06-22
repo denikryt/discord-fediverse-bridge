@@ -2,10 +2,10 @@
  * Gateway verification for local-community canonical key identity.
  *
  * Local communities are canonical ActivityPub Group actors under
- * `/communities/{slug}`. Fedify's generic actor dispatcher lives under
- * `/actors/{identifier}`, so this test locks the compatibility invariant that
- * community actor documents and outbound community signatures use the
- * community URL as the key owner/key id.
+ * `/actors/communities/{slug}`. This test locks the Stage 7 cleanup invariant
+ * that retired `/communities/{slug}`, `/c/{slug}`, and untyped `/actors/{slug}`
+ * routes stay unsupported while typed community signatures use the typed actor
+ * URL as the key owner/key id.
  */
 import assert from "node:assert/strict";
 import { mkdtemp, writeFile } from "node:fs/promises";
@@ -49,7 +49,7 @@ async function main(): Promise<void> {
 
 /**
  * Action: build the local-community Group actor from the DB-backed identity.
- * Expected: actor id, public key id, and key owner all use /communities/hackers.
+ * Expected: actor id, public key id, and key owner all use /actors/communities/hackers.
  */
 async function testActorBuilderPublishesCanonicalKey(config: GatewayConfig): Promise<void> {
   const identity = await loadLocalCommunityIdentity(config, "hackers");

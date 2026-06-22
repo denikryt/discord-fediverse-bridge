@@ -454,7 +454,7 @@ def test_source_state_constraints_reject_payload_state_mismatch(tmp_path) -> Non
         "user_id": user.id,
         "source_kind": "profile_update",
         "logical_version": 1,
-        "activity_id": "https://bridge.example/activities/invalid/1",
+        "activity_id": "https://bridge.example/actors/users/alice/activities/update/profile/invalid-1",
         "profile_snapshot_json": "{}",
     }
     with pytest.raises(IntegrityError):
@@ -490,7 +490,7 @@ def test_source_state_constraints_reject_payload_state_mismatch(tmp_path) -> Non
                 {
                     **base,
                     "logical_version": 2,
-                    "activity_id": "https://bridge.example/activities/invalid/2",
+                    "activity_id": "https://bridge.example/actors/users/alice/activities/update/profile/invalid-2",
                 },
             )
 
