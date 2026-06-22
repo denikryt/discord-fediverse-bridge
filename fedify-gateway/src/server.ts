@@ -95,6 +95,7 @@ export function createGatewayApp(config: GatewayConfig): Hono {
   registerInternalPublishRoutes(app, internalDependencies);
   registerInternalDeliveryRoutes(app, internalDependencies);
   registerInternalProfileRoutes(app, internalDependencies);
+  registerUnsignedInboxRejection(app);
   registerInboxLoggingMiddleware(app, { isDebug });
 
   app.use(
@@ -155,6 +156,51 @@ function installDebugAccessLogging(app: Hono, isDebug: boolean): void {
       forwardedFor,
     });
   });
+}
+
+
+function registerUnsignedInboxRejection(app: Hono): void {
+  app.use("*", async (context, next) => {
+    if (context.req.method !== "POST" || !isActivityPubInboxPath(context.req.path)) {
+      await next();
+      return;
+    }
+    if (hasActivityPubAuthenticationHeader(context.req.raw.headers)) {
+      await next();
+      return;
+    }
+    if (await hasJsonLdProof(context.req.raw.clone())) {
+      await next();
+      return;
+    }
+    return context.text("Missing ActivityPub signature or proof.", 401);
+  });
+}
+
+function isActivityPubInboxPath(path: string): boolean {
+  return path === "/inbox" || /^\/actors\/[^/]+\/.+\/inbox$/.test(path);
+}
+
+function hasActivityPubAuthenticationHeader(headers: Headers): boolean {
+  if (headers.has("signature") || headers.has("signature-input")) {
+    return true;
+  }
+  const authorization = headers.get("authorization") ?? "";
+  return /(?:^|\s|,)Signature\b/i.test(authorization);
+}
+
+async function hasJsonLdProof(request: Request): Promise<boolean> {
+  try {
+    const contentType = request.headers.get("content-type") ?? "";
+    if (!contentType.includes("json")) {
+      return false;
+    }
+    const body = await request.json() as Record<string, unknown>;
+    const proof = body.proof;
+    return proof != null && (typeof proof === "object" || typeof proof === "string");
+  } catch {
+    return false;
+  }
 }
 
 function toPublicRouteConfig(config: GatewayConfig): PublicRouteConfig {

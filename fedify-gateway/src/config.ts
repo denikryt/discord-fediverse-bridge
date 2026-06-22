@@ -11,6 +11,7 @@ export interface GatewayConfig {
   pythonBridgeInternalUrl: string;
   pythonBridgeSharedSecret: string;
   logLevel: "info" | "debug";
+  skipSignatureVerificationForTests?: boolean;
 }
 
 export interface GatewayContextData extends GatewayConfig {

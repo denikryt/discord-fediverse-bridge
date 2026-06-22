@@ -48,6 +48,7 @@ export function createGatewayFederation(
     origin: config.fedifyOrigin,
     kv: new MemoryKvStore(),
     queue: new InProcessMessageQueue(),
+    skipSignatureVerification: config.skipSignatureVerificationForTests === true,
   });
 
   federation
