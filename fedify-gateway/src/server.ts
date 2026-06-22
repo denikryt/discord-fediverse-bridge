@@ -31,6 +31,7 @@ import { buildLocalCommunityPublicKeyCarrier } from "./local-community-keys.js";
 import { APP_VERSION } from "./project-version.js";
 import {
   listLocalCommunities,
+  loadCommunityFollowers,
   loadPublishedActivityObjectByActivityId,
   loadPublishedActivityObjectByObjectId,
   loadUserFollowers,
@@ -83,6 +84,8 @@ export function createGatewayApp(config: GatewayConfig): Hono {
         loadUserOutbox(config, username, page, pageSize),
       loadUserFollowers: (username, page, pageSize) =>
         loadUserFollowers(config, username, page, pageSize),
+      loadCommunityFollowers: (slug, page, pageSize) =>
+        loadCommunityFollowers(config, slug, page, pageSize),
     },
     renders: {
       buildRegisteredUserActorDocument: (username) =>
@@ -102,7 +105,7 @@ export function createGatewayApp(config: GatewayConfig): Hono {
     fedifyMiddleware(fedify, async (context): Promise<GatewayContextData> => {
       // Fedify still needs full context data for the existing inbound pipeline;
       // raw request metadata is attached only for POST /inbox recovery.
-      const activitypubRequestData = await buildActivityPubRequestData(context);
+      const activitypubRequestData = await buildActivityPubRequestData(context, config.fedifyOrigin);
       return { ...config, ...activitypubRequestData };
     }),
   );

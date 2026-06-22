@@ -255,8 +255,8 @@ export function createGatewayFederation(
         );
       }
     })
-    .on(Follow, async (_ctx, activity) => {
-      const event = await buildLocalFollowRequestedEvent(config, activity);
+    .on(Follow, async (ctx, activity) => {
+      const event = await buildLocalFollowRequestedEvent(ctx.data, activity);
       if (event == null) {
         return;
       }
@@ -272,7 +272,7 @@ export function createGatewayFederation(
       const cachedRaw = activityId == null ? null : getRawActivity(activityId);
       const rawForUndo = asRecord(cachedRaw?.rawJson ?? ctx.data.activitypubRawJson);
       const event = await buildLocalUnfollowRequestedEvent(
-        config,
+        ctx.data,
         activity,
         rawForUndo,
       );
@@ -530,6 +530,9 @@ export async function buildLocalFollowRequestedEvent(
     if (user != null && user.actorId.href === targetActorId) targetKind = "user";
   }
   if (targetKind == null) return null;
+  if (!matchesActorSpecificInboxOwner(config, targetKind, targetActorId)) {
+    return null;
+  }
 
   const remoteActor = await activity.getActor({ suppressError: true });
   const dereferencedActorId = asUrlString(
@@ -544,28 +547,25 @@ export async function buildLocalFollowRequestedEvent(
   const remoteSharedInboxUrl = asUrlString(endpoints?.sharedInbox);
   let admittedInboxUrl = remoteInboxUrl;
   let admittedSharedInboxUrl = remoteSharedInboxUrl;
-  if (targetKind === "user") {
-    if (dereferencedActorId !== remoteActorId) {
-      // The same remote principal must own the activity, actor document, inbox,
-      // persisted follower identity, and later delivery endpoint.  Stage 5
-      // enforces this for User Actor follows without changing Stage 6 community
-      // semantics early.
-      return null;
-    }
-    try {
-      admittedInboxUrl = admitRemoteDeliveryEndpoint(remoteInboxUrl, {
+  if (dereferencedActorId !== remoteActorId) {
+    // The same remote principal must own the activity, actor document, inbox,
+    // persisted follower identity, and later delivery endpoint for every local
+    // actor kind that can create a durable Follow side effect.
+    return null;
+  }
+  try {
+    admittedInboxUrl = admitRemoteDeliveryEndpoint(remoteInboxUrl, {
+      ...endpointAdmission,
+      localOrigin: config.fedifyOrigin,
+    });
+    admittedSharedInboxUrl = remoteSharedInboxUrl == null
+      ? null
+      : admitRemoteDeliveryEndpoint(remoteSharedInboxUrl, {
         ...endpointAdmission,
         localOrigin: config.fedifyOrigin,
       });
-      admittedSharedInboxUrl = remoteSharedInboxUrl == null
-        ? null
-        : admitRemoteDeliveryEndpoint(remoteSharedInboxUrl, {
-          ...endpointAdmission,
-          localOrigin: config.fedifyOrigin,
-        });
-    } catch {
-      return null;
-    }
+  } catch {
+    return null;
   }
 
   return {
@@ -603,6 +603,9 @@ export async function buildLocalUnfollowRequestedEvent(
     if (user != null && user.actorId.href === targetActorId) targetKind = "user";
   }
   if (targetKind == null) return null;
+  if (!matchesActorSpecificInboxOwner(config, targetKind, targetActorId)) {
+    return null;
+  }
   return {
     actor_id: undoActorId,
     target_actor_kind: targetKind,
@@ -612,6 +615,19 @@ export async function buildLocalUnfollowRequestedEvent(
     object: { follow_activity_id: asString(embeddedFollow.id) },
     occurred_at: new Date().toISOString(),
   };
+}
+
+function matchesActorSpecificInboxOwner(
+  config: GatewayContextData,
+  targetKind: "community" | "user",
+  targetActorId: string,
+): boolean {
+  // Shared inbox deliveries have no route owner and intentionally continue to
+  // route by the ActivityPub object target. Actor-specific inbox deliveries are
+  // server-selected recipient boundaries and must not mutate another actor.
+  const owner = config.activitypubInboxOwner;
+  if (owner == null) return true;
+  return owner.kind === targetKind && owner.actorUrl === targetActorId;
 }
 
 function parseTypedActorAlias(resource: URL, origin: string): string | null {

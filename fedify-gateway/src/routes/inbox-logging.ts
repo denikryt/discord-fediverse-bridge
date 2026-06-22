@@ -10,15 +10,23 @@ import type { Hono } from "hono";
 
 import { storeRawActivity } from "../activitypub-raw-cache.js";
 import { appendDebugFileLog } from "../debug-file-log.js";
+import { buildActorAddress } from "../activitypub-identity-urls.js";
 import { parseTypedActorIdentifier, type TypedActorIdentifier } from "../typed-actor-routing.js";
 
 export interface InboxLoggingDependencies {
   isDebug: boolean;
 }
 
+export interface ActivityPubInboxOwner {
+  kind: TypedActorIdentifier["kind"];
+  identifier: string;
+  actorUrl: string;
+}
+
 export interface ActivityPubRequestData {
   activitypubRawJson?: unknown;
   activitypubRawBodySha256?: string;
+  activitypubInboxOwner?: ActivityPubInboxOwner;
 }
 
 export type InboxPathClassification =
@@ -80,10 +88,23 @@ export function registerInboxLoggingMiddleware(
 /** Build Fedify context data for raw inbound ActivityPub recovery. */
 export async function buildActivityPubRequestData(
   context: RawRequestContext,
+  fedifyOrigin: string,
 ): Promise<ActivityPubRequestData> {
-  if (classifyInboxPath(context.req.raw.method, context.req.raw.url) == null) {
+  const classification = classifyInboxPath(context.req.raw.method, context.req.raw.url);
+  if (classification == null) {
     return {};
   }
+  const activitypubInboxOwner = classification.kind === "actor"
+    ? {
+      kind: classification.actor.kind,
+      identifier: classification.actor.identifier,
+      actorUrl: buildActorAddress(
+        fedifyOrigin,
+        classification.actor.kind,
+        classification.actor.identifier,
+      ).actor.href,
+    }
+    : undefined;
 
   try {
     const rawBody = await context.req.raw.clone().text();
@@ -105,6 +126,7 @@ export async function buildActivityPubRequestData(
     return {
       activitypubRawJson,
       activitypubRawBodySha256,
+      activitypubInboxOwner,
     };
   } catch {
     return {};

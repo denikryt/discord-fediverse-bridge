@@ -4,6 +4,7 @@ from __future__ import annotations
 from support.runtime import build_test_policy_service
 
 from pathlib import Path
+from concurrent.futures import ThreadPoolExecutor
 from types import SimpleNamespace
 from unittest.mock import AsyncMock
 
@@ -183,6 +184,79 @@ async def test_repeated_remote_follow_resends_accept_and_refreshes_request_detai
         remote_inbox_url="https://mastodon.social/ap/users/116015738644832902/inbox",
         follow_activity_id="https://mastodon.social/new-follow",
     )
+
+def test_concurrent_duplicate_remote_follow_mutation_leaves_one_subscriber(
+    tmp_path: Path,
+) -> None:
+    """Concurrent duplicate Follow writes should serialize into one row."""
+    database, _runtime_obj = _runtime(tmp_path)
+    local_community = _local_community(database)
+
+    def persist(follow_id: str) -> str:
+        """Persist one Follow in the same immediate path used by the handler."""
+        with database.immediate_session() as session:
+            transition = database.remote_subscribers.create_or_refresh_accepted(
+                session,
+                local_community_id=local_community.id,
+                remote_actor_id="https://lemmy.example/u/concurrent",
+                remote_inbox_url="https://lemmy.example/u/concurrent/inbox",
+                follow_activity_id=follow_id,
+            )
+            return transition.transition
+
+    with ThreadPoolExecutor(max_workers=2) as executor:
+        transitions = list(
+            executor.map(
+                persist,
+                [
+                    "https://lemmy.example/activities/follow/concurrent-1",
+                    "https://lemmy.example/activities/follow/concurrent-2",
+                ],
+            )
+        )
+
+    rows = database.remote_subscribers.list_remote_subscribers(
+        local_community.id, status=None
+    )
+    assert sorted(transitions) == ["created", "refreshed"]
+    assert len(rows) == 1
+    assert rows[0].remote_actor_id == "https://lemmy.example/u/concurrent"
+    assert rows[0].follow_activity_id in {
+        "https://lemmy.example/activities/follow/concurrent-1",
+        "https://lemmy.example/activities/follow/concurrent-2",
+    }
+
+
+@pytest.mark.asyncio
+async def test_reused_follow_activity_id_for_another_relationship_is_skipped(
+    tmp_path: Path,
+) -> None:
+    """A globally reused Follow ID must not overwrite another subscriber row."""
+    database, runtime = _runtime(tmp_path)
+    local_community = _local_community(database)
+    database.remote_subscribers.create_remote_subscriber(
+        local_community_id=local_community.id,
+        remote_actor_id="https://lemmy.example/u/alice",
+        remote_inbox_url="https://lemmy.example/u/alice/inbox",
+        follow_activity_id="https://lemmy.example/activities/follow/reused",
+        status="accepted",
+    )
+
+    result = await runtime.handle_follow_request(
+        local_community_actor_id=local_community.actor_url,
+        remote_actor_id="https://lemmy.example/u/bob",
+        remote_inbox_url="https://lemmy.example/u/bob/inbox",
+        follow_activity_id="https://lemmy.example/activities/follow/reused",
+    )
+    rows = database.remote_subscribers.list_remote_subscribers(
+        local_community.id, status=None
+    )
+
+    assert result.status == "skipped"
+    assert result.detail == "Follow ID belongs to another remote-subscriber relationship"
+    assert len(rows) == 1
+    assert rows[0].remote_actor_id == "https://lemmy.example/u/alice"
+    runtime.fedify_gateway.accept_local_community_follow.assert_not_awaited()
 
 
 @pytest.mark.asyncio

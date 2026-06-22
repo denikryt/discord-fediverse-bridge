@@ -106,6 +106,7 @@ async function main(): Promise<void> {
   });
   Object.assign(activity, {
     getActor: async () => ({
+      id: new URL(`${REMOTE_ORIGIN}u/bob`),
       inboxId: new URL(`${REMOTE_ORIGIN}u/bob/inbox`),
     }),
   });

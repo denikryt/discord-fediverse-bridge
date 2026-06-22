@@ -14,6 +14,10 @@ from ..bridge_policy import BridgePolicyService
 from ..db import Database
 from ..fedify_gateway_client import FedifyGatewayClient
 from ..inbound_activity_outcomes import InboundActivityOutcome
+from ..remote_delivery_endpoints import (
+    RemoteDeliveryEndpointError,
+    admit_remote_delivery_endpoint,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -72,46 +76,61 @@ class LocalCommunityFollowerHandler:
                 detail="remote follow denied by federation policy",
             )
 
-        existing = self.database.remote_subscribers.get_remote_subscriber(
-            local_community_id=getattr(local_community, "id"),
-            remote_actor_id=remote_actor_id,
-        )
-        if existing is not None:
-            # Accept(Follow) delivery is intentionally idempotent. A remote
-            # server such as Mastodon can remain in a "requested" state if the
-            # bridge persisted the remote subscriber but the original Accept was lost, so
-            # repeated Follow deliveries must refresh the stored request details
-            # and re-send the Accept instead of returning early.
-            self.database.remote_subscribers.update_remote_subscriber_acceptance(
-                local_community_id=getattr(local_community, "id"),
-                remote_actor_id=remote_actor_id,
-                remote_inbox_url=remote_inbox_url,
-                follow_activity_id=follow_activity_id,
-                status="accepted",
+        try:
+            admitted_inbox_url = admit_remote_delivery_endpoint(
+                remote_inbox_url, local_origin=local_community_actor_id
             )
-            detail = "local community remote subscriber accepted again"
-        else:
-            self.database.remote_subscribers.create_remote_subscriber(
-                local_community_id=getattr(local_community, "id"),
-                remote_actor_id=remote_actor_id,
-                remote_inbox_url=remote_inbox_url,
-                follow_activity_id=follow_activity_id,
-                status="accepted",
+        except RemoteDeliveryEndpointError as exc:
+            return _HandlerResult(
+                status="skipped",
+                outcome=InboundActivityOutcome.IGNORED_UNMAPPED_CONTEXT,
+                detail=str(exc),
             )
-            detail = "local community remote subscriber accepted"
+
+        try:
+            with self.database.immediate_session() as session:
+                # The relationship row and Follow-ID uniqueness guard must be
+                # decided together so concurrent duplicate Follows cannot leak
+                # as raw IntegrityError or create duplicate fanout targets.
+                transition = (
+                    self.database.remote_subscribers.create_or_refresh_accepted(
+                        session,
+                        local_community_id=getattr(local_community, "id"),
+                        remote_actor_id=remote_actor_id,
+                        remote_inbox_url=admitted_inbox_url,
+                        follow_activity_id=follow_activity_id,
+                    )
+                )
+        except Exception as exc:
+            from ..db.repositories.remote_subscribers import FollowActivityIdCollision
+
+            if isinstance(exc, FollowActivityIdCollision):
+                logger.warning(
+                    "Rejected reused local-community Follow ID id=%s actor=%s target=%s",
+                    follow_activity_id,
+                    remote_actor_id,
+                    local_community_actor_id,
+                )
+                return _HandlerResult(
+                    status="skipped",
+                    outcome=InboundActivityOutcome.IGNORED_ALREADY_APPLIED,
+                    detail="Follow ID belongs to another remote-subscriber relationship",
+                )
+            raise
+        detail = f"local community remote subscriber {transition.transition}"
 
         logger.info(
             "Accepting local-community Follow community=%s remote_actor=%s inbox=%s follow_activity=%s",
             getattr(local_community, "slug"),
             remote_actor_id,
-            remote_inbox_url,
+            admitted_inbox_url,
             follow_activity_id,
         )
         await self.fedify_gateway.accept_local_community_follow(
             community_slug=getattr(local_community, "slug"),
             community_actor_url=getattr(local_community, "actor_url"),
             remote_actor_id=remote_actor_id,
-            remote_inbox_url=remote_inbox_url,
+            remote_inbox_url=admitted_inbox_url,
             follow_activity_id=follow_activity_id,
         )
         return _HandlerResult(

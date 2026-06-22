@@ -97,6 +97,16 @@ class UserFollowersResponse(BaseModel):
     actor_ids: list[str]
 
 
+class CommunityFollowersResponse(BaseModel):
+    """Expose accepted community follower actor IDs without delivery metadata."""
+
+    followers_url: str
+    total_items: int
+    page: int
+    page_size: int
+    actor_ids: list[str]
+
+
 class CommunityActorResponse(BaseModel):
     slug: str
     actor_url: str
@@ -387,6 +397,43 @@ def create_internal_fedify_router(runtime: Runtime) -> APIRouter:
         if row is None:
             raise HTTPException(status_code=404, detail="Community actor not found")
         return community_payload(row)
+
+
+    @router.get(
+        "/actors/communities/{slug}/followers",
+        response_model=CommunityFollowersResponse,
+    )
+    def community_followers(
+        slug: str,
+        response: Response,
+        page: int = 1,
+        page_size: int = 40,
+        authorization: str | None = Header(default=None),
+    ) -> CommunityFollowersResponse:
+        """Return one bounded page of accepted community follower IDs."""
+        authorize(authorization)
+        no_store(response)
+        if page < 1 or page_size != 40:
+            raise HTTPException(
+                status_code=400,
+                detail="page must be positive and page_size must equal 40",
+            )
+        community = runtime.database.local_communities.get_local_community_by_slug(slug)
+        if community is None:
+            raise HTTPException(status_code=404, detail="Community actor not found")
+        return CommunityFollowersResponse(
+            followers_url=community.followers_url,
+            total_items=runtime.database.remote_subscribers.count_accepted_for_community(
+                local_community_id=community.id
+            ),
+            page=page,
+            page_size=page_size,
+            actor_ids=runtime.database.remote_subscribers.list_accepted_actor_ids_for_community(
+                local_community_id=community.id,
+                offset=(page - 1) * page_size,
+                limit=page_size,
+            ),
+        )
 
     @router.post("/actors/communities/resolve", response_model=CommunityActorResponse)
     def resolve_community_actor(

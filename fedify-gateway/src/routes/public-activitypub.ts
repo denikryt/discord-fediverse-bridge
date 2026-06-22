@@ -53,7 +53,7 @@ export interface UserOutboxPageView {
   items: PublishedActivityObjectView[];
 }
 
-export interface UserFollowersPageView {
+export interface FollowersPageView {
   followersUrl: string;
   totalItems: number;
   page: number;
@@ -68,7 +68,8 @@ export interface PublicActivityPubReadPort {
   loadPublishedActivityObjectByObjectId(objectUrl: string): Promise<PublishedActivityObjectView | null>;
   loadPublishedActivityObjectByActivityId(activityUrl: string): Promise<PublishedActivityObjectView | null>;
   loadUserOutbox(username: string, page: number, pageSize: number): Promise<UserOutboxPageView | null>;
-  loadUserFollowers(username: string, page: number, pageSize: number): Promise<UserFollowersPageView | null>;
+  loadUserFollowers(username: string, page: number, pageSize: number): Promise<FollowersPageView | null>;
+  loadCommunityFollowers(slug: string, page: number, pageSize: number): Promise<FollowersPageView | null>;
 }
 
 export interface ActivityPubDocument {
@@ -160,10 +161,11 @@ export function registerPublicActivityPubRoutes(
     if (community == null) {
       return context.json({ error: "community actor not found" }, 404);
     }
-    return activityJsonResponse(
-      await buildEmptyOrderedCollection(
-        new URL(`/actors/communities/${slug}/followers`, dependencies.publicConfig.fedifyOrigin),
-      ).toJsonLd(),
+    return await renderFollowersCollection(
+      dependencies,
+      context,
+      () => dependencies.reads.loadCommunityFollowers(slug, parseFollowersPage(context).page, 40),
+      "community actor not found",
     );
   });
 
@@ -231,34 +233,52 @@ async function renderUserFollowers(
   context: Context,
   username: string,
 ): Promise<Response> {
+  return await renderFollowersCollection(
+    dependencies,
+    context,
+    () => dependencies.reads.loadUserFollowers(username, parseFollowersPage(context).page, 40),
+    "user actor not found",
+  );
+}
+
+function parseFollowersPage(context: Context): { isPageRequest: boolean; page: number; error: Response | null } {
+  /** Decode the fixed ActivityStreams followers pagination contract. */
   const pageMarker = context.req.query("page");
   const requestedPageNumber = context.req.query("page_number");
   const isPageRequest = pageMarker != null;
-  if (isPageRequest && pageMarker !== "true") {
-    return context.json({ error: "invalid pagination" }, 400);
-  }
-
-  // The public ActivityStreams contract has a fixed page size. Keeping the
-  // size out of client control makes page URLs stable across peers and releases.
-  const pageSize = 40;
   const page = requestedPageNumber == null ? 1 : Number(requestedPageNumber);
-  if (!Number.isInteger(page) || page < 1 || (!isPageRequest && requestedPageNumber != null)) {
-    return context.json({ error: "invalid pagination" }, 400);
+  if (isPageRequest && pageMarker !== "true") {
+    return { isPageRequest, page, error: context.json({ error: "invalid pagination" }, 400) };
   }
+  if (!Number.isInteger(page) || page < 1 || (!isPageRequest && requestedPageNumber != null)) {
+    return { isPageRequest, page, error: context.json({ error: "invalid pagination" }, 400) };
+  }
+  return { isPageRequest, page, error: null };
+}
 
+async function renderFollowersCollection(
+  dependencies: PublicActivityPubRouteDependencies,
+  context: Context,
+  load: () => Promise<FollowersPageView | null>,
+  notFoundMessage: string,
+): Promise<Response> {
+  const pageRequest = parseFollowersPage(context);
+  if (pageRequest.error != null) return pageRequest.error;
+
+  const pageSize = 40;
   let data;
   try {
-    data = await dependencies.reads.loadUserFollowers(username, page, pageSize);
+    data = await load();
   } catch {
     // A failed persistence read must never be rendered as an empty social graph.
     return context.json({ error: "followers collection unavailable" }, 502);
   }
   if (data == null) {
-    return context.json({ error: "user actor not found" }, 404);
+    return context.json({ error: notFoundMessage }, 404);
   }
 
   const id = data.followersUrl;
-  if (!isPageRequest) {
+  if (!pageRequest.isPageRequest) {
     return activityJsonResponse({
       "@context": "https://www.w3.org/ns/activitystreams",
       type: "OrderedCollection",
@@ -269,10 +289,10 @@ async function renderUserFollowers(
   }
 
   const totalPages = Math.ceil(data.totalItems / pageSize);
-  if (page > totalPages || totalPages === 0) {
+  if (pageRequest.page > totalPages || totalPages === 0) {
     return context.json({ error: "followers page not found" }, 404);
   }
-  const pageId = page === 1 ? `${id}?page=true` : `${id}?page=true&page_number=${page}`;
+  const pageId = pageRequest.page === 1 ? `${id}?page=true` : `${id}?page=true&page_number=${pageRequest.page}`;
   return activityJsonResponse({
     "@context": "https://www.w3.org/ns/activitystreams",
     type: "OrderedCollectionPage",
@@ -280,8 +300,8 @@ async function renderUserFollowers(
     partOf: id,
     totalItems: data.totalItems,
     orderedItems: data.actorIds,
-    ...(page > 1 ? { prev: `${id}?page=true&page_number=${page - 1}` } : {}),
-    ...(page < totalPages ? { next: `${id}?page=true&page_number=${page + 1}` } : {}),
+    ...(pageRequest.page > 1 ? { prev: `${id}?page=true&page_number=${pageRequest.page - 1}` } : {}),
+    ...(pageRequest.page < totalPages ? { next: `${id}?page=true&page_number=${pageRequest.page + 1}` } : {}),
   });
 }
 

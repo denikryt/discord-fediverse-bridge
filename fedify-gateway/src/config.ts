@@ -19,6 +19,11 @@ export interface GatewayContextData extends GatewayConfig {
   // recovery may need the original JSON body.
   activitypubRawJson?: unknown;
   activitypubRawBodySha256?: string;
+  activitypubInboxOwner?: {
+    kind: "service" | "user" | "community";
+    identifier: string;
+    actorUrl: string;
+  };
 }
 
 function requireEnv(name: string): string {

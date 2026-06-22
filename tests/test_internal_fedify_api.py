@@ -152,6 +152,19 @@ def test_internal_fedify_resolves_community_subscribers_objects_and_mappings(
     )
     assert subscribers.json()["items"][0]["remote_actor_id"].endswith("/alice")
 
+    followers = client.get(
+        "/internal/fedify/actors/communities/test/followers?page=1&page_size=40",
+        headers=_headers(),
+    )
+    assert followers.status_code == 200
+    assert followers.json() == {
+        "followers_url": "https://bridge.example/actors/communities/test/followers",
+        "total_items": 1,
+        "page": 1,
+        "page_size": 40,
+        "actor_ids": ["https://remote.example/u/alice"],
+    }
+
     object_response = client.post(
         "/internal/fedify/published-objects/resolve",
         headers=_headers(),

@@ -16,7 +16,7 @@ import { loadActorKeyPair, loadUserActorIdentity } from "../actor-store.js";
 import { loadLocalCommunitySigningKey } from "../local-community-keys.js";
 import type { AcceptLocalCommunityFollowRequest, AcceptUserActorFollowRequest } from "../types.js";
 import { admitRemoteDeliveryEndpoint } from "../remote-delivery-endpoints.js";
-import { buildGatewayUrl } from "./gateway-url.js";
+import { buildCommunityAcceptFollowActivityId, buildUserAcceptFollowActivityId } from "../activitypub-identity-urls.js";
 
 /** Send a deterministic Accept(Follow) as one registered User Actor. */
 export async function acceptUserActorFollow(
@@ -33,7 +33,7 @@ export async function acceptUserActorFollow(
   if (keyPair == null) throw new Error("User Actor signing key not found");
   const hash = createHash("sha256").update(request.followActivityId).digest("hex");
   const accept = new Accept({
-    id: buildGatewayUrl(config, `/actors/users/${request.actorUsername}/activities/accept/follows/${hash}`),
+    id: buildUserAcceptFollowActivityId(config.fedifyOrigin, request.actorUsername, hash),
     actor: new URL(request.actorUrl),
     to: new URL(request.remoteActorId),
     object: new Follow({
@@ -72,10 +72,15 @@ export async function acceptLocalCommunityFollow(
     throw new Error("communityActorUrl must match the canonical local community actor URL");
   }
   const sender = [{ keyId: signingKey.keyId, privateKey: signingKey.privateKey }];
-  const acceptId = buildGatewayUrl(
-    config,
-    `/actors/communities/${request.communitySlug}/activities/accept/follows/${Date.now()}-${Math.random().toString(36).slice(2)}`,
+  const acceptHash = createHash("sha256").update(request.followActivityId).digest("hex");
+  const acceptId = buildCommunityAcceptFollowActivityId(
+    config.fedifyOrigin,
+    request.communitySlug,
+    acceptHash,
   );
+  const admittedInboxUrl = admitRemoteDeliveryEndpoint(request.remoteInboxUrl, {
+    localOrigin: config.fedifyOrigin,
+  });
 
   const accept = new Accept({
     id: acceptId,
@@ -100,7 +105,7 @@ export async function acceptLocalCommunityFollow(
   try {
     await ctx.sendActivity(
       sender,
-      { id: remoteActorUri, inboxId: new URL(request.remoteInboxUrl) },
+      { id: remoteActorUri, inboxId: new URL(admittedInboxUrl) },
       accept,
     );
     console.log("[LocalCommunityFollow] Accept(Follow) delivered:", {

@@ -37,6 +37,14 @@ export interface UserFollowersRow {
   actorIds: string[];
 }
 
+export interface CommunityFollowersRow {
+  followersUrl: string;
+  totalItems: number;
+  page: number;
+  pageSize: number;
+  actorIds: string[];
+}
+
 export interface LocalCommunityRow {
   slug: string;
   actorUrl: string;
@@ -164,18 +172,16 @@ export class PythonBridgeClient implements PythonBridgeReadClient {
       `/internal/fedify/actors/users/${encodeURIComponent(username)}/followers?page=${page}&page_size=${pageSize}`,
       { notFound: true },
     );
-    return row == null ? null : {
-      followersUrl: requiredString(row, "followers_url"),
-      totalItems: requiredNumber(row, "total_items"),
-      page: requiredNumber(row, "page"),
-      pageSize: requiredNumber(row, "page_size"),
-      actorIds: requiredArray(row, "actor_ids").map((value) => {
-        if (typeof value !== "string") throw new Error("actor_ids must contain strings");
-        return value;
-      }),
-    };
+    return row == null ? null : mapFollowers(row);
   }
 
+  async loadCommunityFollowers(slug: string, page: number, pageSize: number): Promise<CommunityFollowersRow | null> {
+    const row = await this.fetchJson<Record<string, unknown>>(
+      `/internal/fedify/actors/communities/${encodeURIComponent(slug)}/followers?page=${page}&page_size=${pageSize}`,
+      { notFound: true },
+    );
+    return row == null ? null : mapFollowers(row);
+  }
 
   async loadUserOutbox(username: string, page: number, pageSize: number): Promise<UserOutboxPageRow | null> {
     const row = await this.fetchJson<Record<string, unknown>>(
@@ -378,6 +384,9 @@ export async function loadRegisteredUserByUsername(config: GatewayConfig, userna
 export async function loadUserFollowers(config: GatewayConfig, username: string, page: number, pageSize: number): Promise<UserFollowersRow | null> {
   return await getPythonBridgeClient(config).loadUserFollowers(username, page, pageSize);
 }
+export async function loadCommunityFollowers(config: GatewayConfig, slug: string, page: number, pageSize: number): Promise<CommunityFollowersRow | null> {
+  return await getPythonBridgeClient(config).loadCommunityFollowers(slug, page, pageSize);
+}
 export async function loadLocalCommunityBySlug(config: GatewayConfig, slug: string): Promise<LocalCommunityRow | null> {
   return await getPythonBridgeClient(config).loadLocalCommunityBySlug(slug);
 }
@@ -400,6 +409,19 @@ export async function loadPublishedActivityObjectByObjectId(config: GatewayConfi
 }
 export async function loadPublishedActivityObjectByActivityId(config: GatewayConfig, activityId: string): Promise<PublishedActivityObjectRow | null> {
   return await getPythonBridgeClient(config).loadPublishedActivityObjectByActivityId(activityId);
+}
+
+function mapFollowers(row: Record<string, unknown>): UserFollowersRow {
+  return {
+    followersUrl: requiredString(row, "followers_url"),
+    totalItems: requiredNumber(row, "total_items"),
+    page: requiredNumber(row, "page"),
+    pageSize: requiredNumber(row, "page_size"),
+    actorIds: requiredArray(row, "actor_ids").map((value) => {
+      if (typeof value !== "string") throw new Error("actor_ids must contain strings");
+      return value;
+    }),
+  };
 }
 
 function mapPublishedObject(row: Record<string, unknown>): PublishedActivityObjectRow {
