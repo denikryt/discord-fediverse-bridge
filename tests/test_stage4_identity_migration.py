@@ -193,3 +193,101 @@ def test_stage4_migration_rewrites_user_actor_outbound_source_json(tmp_path) -> 
         assert activity["to"] == ["https://remote.example/users/bob"]
         assert activity["cc"] == ["https://bridge.example/actors/users/alice/followers"]
     database.close()
+
+
+def test_stage4_migration_rewrites_community_sync_group_local_user_ids(tmp_path) -> None:
+    """Startup migration rewrites retained community-sync local user AP IDs."""
+    database = Database(f"sqlite:///{tmp_path / 'community-sync-groups.db'}")
+    database.create_all()
+    now = "2026-06-21T12:00:00Z"
+    with database.engine.begin() as connection:
+        connection.execute(text("INSERT INTO users (id, discord_user_id, activitypub_username, actor_url, inbox_url, outbox_url, followers_url, public_key_pem, private_key_pem, profile_version, created_at, updated_at) VALUES (1, '1', 'alice', 'https://bridge.example/actors/alice', 'https://bridge.example/actors/alice/inbox', 'https://bridge.example/actors/alice/outbox', 'https://bridge.example/actors/alice/followers', 'public', 'private', 1, :now, :now)"), {"now": now})
+        connection.execute(text("INSERT INTO community_thread_groups (id, community_actor_id, source_channel_id, source_thread_id, source_starter_message_id, ap_activity_id, ap_object_id, created_at) VALUES (1, 'https://remote.example/c/python', 100, 200, 201, 'https://bridge.example/users/alice/activities/create/post/create-1', 'https://bridge.example/users/alice/post/thread-1', :now)"), {"now": now})
+        connection.execute(text("INSERT INTO community_thread_group_deliveries (id, thread_group_id, discord_channel_id, discord_thread_id, discord_starter_message_id, role) VALUES (1, 1, 100, 200, 201, 'source')"))
+        connection.execute(text("INSERT INTO community_message_groups (id, community_actor_id, thread_group_id, source_channel_id, source_thread_id, source_message_id, ap_activity_id, ap_object_id, parent_message_group_id, created_at) VALUES (2, 'https://remote.example/c/python', 1, 100, 200, 300, 'https://bridge.example/users/alice/activities/create/comment/create-msg-1', 'https://bridge.example/users/alice/comment/msg-1', NULL, :now)"), {"now": now})
+        connection.execute(text("INSERT INTO community_message_group_deliveries (id, message_group_id, discord_channel_id, discord_thread_id, discord_message_id, role) VALUES (2, 2, 100, 200, 300, 'source')"))
+
+    config = Stage4IdentityMigrationConfig(public_origin="https://bridge.example", service_actor_identifier="bridge")
+    database.migrate(config)
+    database.migrate(config)
+
+    with database.engine.connect() as connection:
+        thread = connection.execute(text("SELECT community_actor_id, ap_activity_id, ap_object_id FROM community_thread_groups WHERE id=1")).mappings().one()
+        assert thread["community_actor_id"] == "https://remote.example/c/python"
+        assert thread["ap_object_id"] == "https://bridge.example/actors/users/alice/objects/posts/thread-1"
+        assert thread["ap_activity_id"] == "https://bridge.example/actors/users/alice/activities/create/posts/create-1"
+        message = connection.execute(text("SELECT community_actor_id, ap_activity_id, ap_object_id, parent_message_group_id FROM community_message_groups WHERE id=2")).mappings().one()
+        assert message["community_actor_id"] == "https://remote.example/c/python"
+        assert message["ap_object_id"] == "https://bridge.example/actors/users/alice/objects/comments/msg-1"
+        assert message["ap_activity_id"] == "https://bridge.example/actors/users/alice/activities/create/comments/create-msg-1"
+        assert message["parent_message_group_id"] is None
+        assert connection.execute(text("SELECT COUNT(*) FROM community_thread_group_deliveries WHERE thread_group_id=1")).scalar_one() == 1
+        assert connection.execute(text("SELECT COUNT(*) FROM community_message_group_deliveries WHERE message_group_id=2")).scalar_one() == 1
+        assert connection.execute(text("PRAGMA foreign_key_check")).fetchall() == []
+    database.close()
+
+
+def test_stage4_migration_rewrites_community_sync_group_local_community_actor_ids(tmp_path) -> None:
+    """Startup migration rewrites same-origin group community actor IDs."""
+    database = Database(f"sqlite:///{tmp_path / 'community-sync-actors.db'}")
+    database.create_all()
+    now = "2026-06-21T12:00:00Z"
+    with database.engine.begin() as connection:
+        connection.execute(text("INSERT INTO community_thread_groups (id, community_actor_id, source_channel_id, source_thread_id, source_starter_message_id, ap_activity_id, ap_object_id, created_at) VALUES (1, 'https://bridge.example/communities/python', 100, 200, 201, NULL, NULL, :now)"), {"now": now})
+        connection.execute(text("INSERT INTO community_message_groups (id, community_actor_id, thread_group_id, source_channel_id, source_thread_id, source_message_id, ap_activity_id, ap_object_id, parent_message_group_id, created_at) VALUES (2, 'https://bridge.example/communities/python', 1, 100, 200, 300, NULL, NULL, NULL, :now)"), {"now": now})
+
+    config = Stage4IdentityMigrationConfig(public_origin="https://bridge.example", service_actor_identifier="bridge")
+    database.migrate(config)
+    database.migrate(config)
+
+    with database.engine.connect() as connection:
+        assert connection.execute(text("SELECT community_actor_id FROM community_thread_groups WHERE id=1")).scalar_one() == "https://bridge.example/actors/communities/python"
+        assert connection.execute(text("SELECT community_actor_id FROM community_message_groups WHERE id=2")).scalar_one() == "https://bridge.example/actors/communities/python"
+    database.close()
+
+
+
+def test_stage4_migration_invariants_cover_community_sync_group_tables(tmp_path) -> None:
+    """Startup fails when a group table keeps an unclassified retired local URL."""
+    database = Database(f"sqlite:///{tmp_path / 'community-sync-invariant.db'}")
+    database.create_all()
+    now = "2026-06-21T12:00:00Z"
+    with database.engine.begin() as connection:
+        connection.execute(text("INSERT INTO community_thread_groups (id, community_actor_id, source_channel_id, source_thread_id, source_starter_message_id, ap_activity_id, ap_object_id, created_at) VALUES (1, 'https://remote.example/c/python', 100, 200, 201, 'https://bridge.example/users/alice/unclassified/create-1', NULL, :now)"), {"now": now})
+
+    config = Stage4IdentityMigrationConfig(public_origin="https://bridge.example", service_actor_identifier="bridge")
+    try:
+        database.migrate(config)
+    except RuntimeError as error:
+        assert "community_thread_groups.ap_activity_id" in str(error)
+    else:  # pragma: no cover - defensive because the error is the contract.
+        raise AssertionError("retired group-table local URL should fail invariant checks")
+    finally:
+        database.close()
+
+def test_stage4_migration_preserves_remote_community_sync_group_ids(tmp_path) -> None:
+    """Startup migration must not rewrite remote AP identity that resembles old paths."""
+    database = Database(f"sqlite:///{tmp_path / 'community-sync-remote.db'}")
+    database.create_all()
+    now = "2026-06-21T12:00:00Z"
+    with database.engine.begin() as connection:
+        connection.execute(text("INSERT INTO community_thread_groups (id, community_actor_id, source_channel_id, source_thread_id, source_starter_message_id, ap_activity_id, ap_object_id, created_at) VALUES (1, 'https://remote.example/c/python', 100, 200, 201, 'https://remote.example/users/alice/activities/create/post/create-remote', 'https://remote.example/users/alice/post/thread-remote', :now)"), {"now": now})
+        connection.execute(text("INSERT INTO community_message_groups (id, community_actor_id, thread_group_id, source_channel_id, source_thread_id, source_message_id, ap_activity_id, ap_object_id, parent_message_group_id, created_at) VALUES (2, 'https://remote.example/c/python', 1, 100, 200, 300, 'https://remote.example/users/alice/activities/create/comment/create-remote', 'https://remote.example/users/alice/comment/msg-remote', NULL, :now)"), {"now": now})
+
+    config = Stage4IdentityMigrationConfig(public_origin="https://bridge.example", service_actor_identifier="bridge")
+    database.migrate(config)
+
+    with database.engine.connect() as connection:
+        thread = connection.execute(text("SELECT community_actor_id, ap_activity_id, ap_object_id FROM community_thread_groups WHERE id=1")).mappings().one()
+        assert dict(thread) == {
+            "community_actor_id": "https://remote.example/c/python",
+            "ap_activity_id": "https://remote.example/users/alice/activities/create/post/create-remote",
+            "ap_object_id": "https://remote.example/users/alice/post/thread-remote",
+        }
+        message = connection.execute(text("SELECT community_actor_id, ap_activity_id, ap_object_id FROM community_message_groups WHERE id=2")).mappings().one()
+        assert dict(message) == {
+            "community_actor_id": "https://remote.example/c/python",
+            "ap_activity_id": "https://remote.example/users/alice/activities/create/comment/create-remote",
+            "ap_object_id": "https://remote.example/users/alice/comment/msg-remote",
+        }
+    database.close()

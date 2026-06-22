@@ -2,6 +2,7 @@
 
 - Verified: bridge-local bans do not remove existing remote subscriber rows and do not emit ActivityPub moderation activities.
 - Verified: remote handle resolution remains string-only; WebFinger/actor fetch resolution is not implemented.
+- Fixed/verified: Stage 4 startup migration now repairs retained community-sync group AP IDs and same-origin local community actor IDs in `community_thread_groups` and `community_message_groups`.
 - Known operational behavior: a globally banned super-admin cannot unban themselves through Discord commands; recovery requires another non-banned super-admin or direct database intervention.
 
 ## Local-community relay outcome persistence is not atomic

@@ -8,6 +8,7 @@ change, because SQLite cannot drop a NOT NULL constraint in place.
 
 from __future__ import annotations
 
+from collections.abc import Callable
 from dataclasses import dataclass
 import hashlib
 import json
@@ -68,6 +69,14 @@ class Stage4IdentityMigrationConfig:
 
     public_origin: str
     service_actor_identifier: str
+
+
+@dataclass(frozen=True, slots=True)
+class _Stage4UserContentIdentity:
+    """Describe a same-origin user-owned AP URL found in retained rows."""
+
+    username: str
+    terminal_id: str
 
 
 def migrate(engine: Engine, stage4_identity: Stage4IdentityMigrationConfig | None = None) -> None:
@@ -794,6 +803,7 @@ def _migrate_stage4_typed_activitypub_identity(
     _migrate_stage4_user_actor_outbound_sources(conn, origin, object_id_map, user_actor_map, community_actor_map)
     _migrate_stage4_content_mutations(conn, origin, object_id_map, user_actor_map, community_actor_map)
     _migrate_stage4_local_community_relay_deliveries(conn, origin, community_slug_by_id)
+    _migrate_stage4_community_sync_groups(conn, origin)
     _purge_stage4_remote_relationship_state(conn)
     _verify_stage4_identity_invariants(conn, origin)
 
@@ -1296,6 +1306,159 @@ def _migrate_stage4_local_community_relay_deliveries(
         )
 
 
+def _migrate_stage4_community_sync_groups(conn: Connection, origin: str) -> None:
+    """Migrate retained community-sync group identity through startup migration.
+
+    Community sync group tables are live dedup, reply, fanout, and edit/delete
+    mappings.  They are not remote relationship state, so retained same-origin
+    local AP IDs must be repaired in place while remote AP identity remains
+    byte-for-byte unchanged.
+    """
+    # The two group tables have the same identity-bearing column contract, but
+    # thread groups represent posts and message groups represent comments.  Keep
+    # the table-specific builders explicit so the migration never guesses object
+    # kind from an arbitrary legacy path string.
+    _migrate_stage4_community_sync_group_table(
+        conn=conn,
+        origin=origin,
+        table="community_thread_groups",
+        object_rewriter=_stage4_user_post_object_url,
+        activity_rewriter=_stage4_user_create_post_activity_url,
+    )
+    _migrate_stage4_community_sync_group_table(
+        conn=conn,
+        origin=origin,
+        table="community_message_groups",
+        object_rewriter=_stage4_user_comment_object_url,
+        activity_rewriter=_stage4_user_create_comment_activity_url,
+    )
+
+
+def _migrate_stage4_community_sync_group_table(
+    *,
+    conn: Connection,
+    origin: str,
+    table: str,
+    object_rewriter: Callable[[object, str], object],
+    activity_rewriter: Callable[[object, str], object],
+) -> None:
+    """Rewrite identity columns for one community-sync group table if present."""
+    columns = _table_columns(conn, table)
+    wanted = [
+        column
+        for column in ("community_actor_id", "ap_activity_id", "ap_object_id")
+        if column in columns
+    ]
+    if "id" not in columns or not wanted:
+        return
+    rows = list(conn.execute(text(f"SELECT id, {', '.join(wanted)} FROM {table}")).mappings())
+    for row in rows:
+        updates: dict[str, object | None] = {}
+        if "community_actor_id" in wanted:
+            # Local community actor IDs are part of the bridge's retained
+            # application state. Remote community actors are external identity
+            # and are intentionally preserved by _stage4_community_actor_url.
+            new_actor = _stage4_community_actor_url(row["community_actor_id"], origin)
+            if new_actor != row["community_actor_id"]:
+                updates["community_actor_id"] = new_actor
+        if "ap_activity_id" in wanted:
+            new_activity = activity_rewriter(row["ap_activity_id"], origin)
+            if new_activity != row["ap_activity_id"]:
+                updates["ap_activity_id"] = new_activity
+        if "ap_object_id" in wanted:
+            new_object = object_rewriter(row["ap_object_id"], origin)
+            if new_object != row["ap_object_id"]:
+                updates["ap_object_id"] = new_object
+        if not updates:
+            continue
+        assignments = ", ".join(f"{column}=:{column}" for column in updates)
+        conn.execute(
+            text(f"UPDATE {table} SET {assignments} WHERE id=:id"),
+            {"id": row["id"], **updates},
+        )
+
+
+def _stage4_user_content_identity(
+    value: object, origin: str
+) -> _Stage4UserContentIdentity | None:
+    """Extract owner and stable terminal token from a same-origin user AP URL."""
+    if not isinstance(value, str):
+        return None
+    tail = _legacy_tail(value, origin)
+    if tail is None:
+        return None
+    parts = [part for part in tail.split("/") if part]
+    username: str | None = None
+    if len(parts) == 4 and parts[0] == "users" and parts[2] in {"post", "comment"}:
+        username = parts[1]
+    elif len(parts) == 5 and parts[0] == "users" and parts[2] == "objects" and parts[3] in {"posts", "comments"}:
+        username = parts[1]
+    elif len(parts) == 6 and parts[0] == "users" and parts[2:4] == ["activities", "create"] and parts[4] in {"post", "posts", "comment", "comments"}:
+        username = parts[1]
+    elif len(parts) == 6 and parts[0] == "actors" and parts[1] == "users" and parts[3] == "objects" and parts[4] in {"posts", "comments"}:
+        username = parts[2]
+    elif len(parts) == 7 and parts[0] == "actors" and parts[1] == "users" and parts[3:5] == ["activities", "create"] and parts[5] in {"posts", "comments"}:
+        username = parts[2]
+    if username is None:
+        return None
+    terminal_id = parts[-1]
+    if not username or not terminal_id:
+        return None
+    return _Stage4UserContentIdentity(username=username, terminal_id=terminal_id)
+
+
+def _stage4_user_post_object_url(value: object, origin: str) -> object:
+    """Canonicalize a community-sync user post object URL when local."""
+    identity = _stage4_user_content_identity(value, origin)
+    if identity is None:
+        return value
+    return build_user_post_object_id(
+        origin=origin, username=identity.username, object_id=identity.terminal_id
+    )
+
+
+def _stage4_user_create_post_activity_url(value: object, origin: str) -> object:
+    """Canonicalize a community-sync user Create(Post) activity URL when local."""
+    identity = _stage4_user_content_identity(value, origin)
+    if identity is None:
+        return value
+    return build_user_create_post_activity_id(
+        origin=origin, username=identity.username, activity_id=identity.terminal_id
+    )
+
+
+def _stage4_user_comment_object_url(value: object, origin: str) -> object:
+    """Canonicalize a community-sync user comment object URL when local."""
+    identity = _stage4_user_content_identity(value, origin)
+    if identity is None:
+        return value
+    return build_user_comment_object_id(
+        origin=origin, username=identity.username, object_id=identity.terminal_id
+    )
+
+
+def _stage4_user_create_comment_activity_url(value: object, origin: str) -> object:
+    """Canonicalize a community-sync user Create(Comment) activity URL when local."""
+    identity = _stage4_user_content_identity(value, origin)
+    if identity is None:
+        return value
+    return build_user_create_comment_activity_id(
+        origin=origin, username=identity.username, activity_id=identity.terminal_id
+    )
+
+
+def _stage4_community_actor_url(value: object, origin: str) -> object:
+    """Canonicalize a same-origin community actor URL while preserving remotes."""
+    if not isinstance(value, str):
+        return value
+    slug = _slug_from_actor_url(value, origin)
+    if slug is None:
+        return value
+    return build_actor_address(
+        origin=origin, kind=LocalActorKind.COMMUNITY, identifier=slug
+    ).actor_url
+
+
 def _json_load_or_none(value: object) -> object | None:
     if not isinstance(value, str):
         return None
@@ -1397,6 +1560,8 @@ def _verify_stage4_identity_invariants(conn: Connection, origin: str) -> None:
         ("message_mappings", ("actor_url", "community_actor_url", "activity_id", "object_id")),
         ("local_community_threads", ("ap_activity_id", "ap_object_id")),
         ("local_community_messages", ("ap_activity_id", "ap_object_id", "parent_ap_object_id")),
+        ("community_thread_groups", ("community_actor_id", "ap_activity_id", "ap_object_id")),
+        ("community_message_groups", ("community_actor_id", "ap_activity_id", "ap_object_id")),
         ("user_actor_outbound_sources", ("activity_id", "snapshot_json", "activity_json")),
         ("user_actor_content_mutations", ("activity_id", "request_json", "canonical_activity_json")),
         ("local_community_relay_deliveries", ("relay_activity_id",)),
