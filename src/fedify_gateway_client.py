@@ -33,6 +33,15 @@ class UnfollowCommunityResult:
 
 @dataclass(slots=True)
 class PublishContentRequest:
+    """Describe one normalized outbound Create request owned by Python.
+
+    The same request shape is used by both the ordinary remote-community
+    publish path and the local-community follower-fanout path. Newer gateway
+    routes may attach mutation metadata, but existing callers must remain able
+    to submit the original Stage 5 request without providing those optional
+    fields.
+    """
+
     # The Python bridge decides actor ownership and reply context, then passes
     # the normalized publish intent to the gateway for signed AP delivery.
     actor_username: str
@@ -42,6 +51,9 @@ class PublishContentRequest:
     body_markdown: str
     in_reply_to_object_id: str | None
     target_inbox_urls: list[str] | None = None
+    operation_id: str | None = None
+    activity_id: str | None = None
+    mutation_timestamp: str | None = None
 
 
 @dataclass(slots=True)

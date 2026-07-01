@@ -1,16 +1,21 @@
 """Behavior scenarios for Discord-originated local-community publishes."""
 
 from __future__ import annotations
-from support.runtime import build_test_policy_service
 
+import json
 from pathlib import Path
 from unittest.mock import AsyncMock
 
+import httpx
 import pytest
+from support.runtime import build_test_policy_service
 from sqlalchemy import func, select
 
 from src.content_publish_service import ContentPublishService
-from src.fedify_gateway_client import PublishLocalCommunityContentResult
+from src.fedify_gateway_client import (
+    FedifyGatewayClient,
+    PublishLocalCommunityContentResult,
+)
 from src.local_communities.runtime import LocalCommunityRuntime
 from src.local_communities.service import LocalCommunityService
 from src.models import MessageMapping, PublishedActivityObject
@@ -52,6 +57,58 @@ def _local_community(database: object, *, channel_id: int = 100) -> None:
         description="A local hackerspace forum.",
         created_by_discord_user_id="123",
     )
+
+
+def _real_gateway_runtime(
+    tmp_path: Path,
+) -> tuple[object, LocalCommunityRuntime, list[dict]]:
+    """Build a runtime that exercises the real gateway client serialization."""
+
+    requests: list[dict] = []
+
+    async def capture(request: httpx.Request) -> httpx.Response:
+        """Record the outbound payload and return one successful gateway response."""
+        payload = json.loads(request.content)
+        requests.append({"path": request.url.path, "payload": payload})
+        return httpx.Response(
+            200,
+            json={
+                "activityId": "https://bridge.example/actors/users/alice/activities/create/posts/1",
+                "objectId": "https://bridge.example/actors/users/alice/objects/posts/1",
+                "communityActorUrl": payload["communityActorUrl"],
+                "deliveredFollowerCount": 1,
+                "failedFollowerCount": 0,
+                "activityJson": {
+                    "id": "https://bridge.example/actors/users/alice/activities/create/posts/1",
+                    "type": "Create",
+                    "object": {
+                        "id": "https://bridge.example/actors/users/alice/objects/posts/1"
+                    },
+                },
+            },
+        )
+
+    database = build_database(tmp_path, "local-community-publish-real.db")
+    gateway = object.__new__(FedifyGatewayClient)
+    gateway._shared_secret = "secret"
+    gateway._client = httpx.AsyncClient(
+        base_url="http://gateway.test",
+        transport=httpx.MockTransport(capture),
+    )
+    publish_service = ContentPublishService(
+        database=database,
+        fedify_gateway=gateway,
+        bridge_prefix="[bridge]",
+        bridge_policy_service=build_test_policy_service(database),
+    )
+    runtime = LocalCommunityRuntime(
+        database=database,
+        fedify_gateway=gateway,
+        content_publish_service=publish_service,
+        bridge_prefix="[bridge]",
+        bridge_policy_service=build_test_policy_service(database),
+    )
+    return database, runtime, requests
 
 
 @pytest.mark.asyncio
@@ -312,3 +369,41 @@ async def test_local_community_create_preserves_canonical_create_for_direct_foll
         assert json.loads(source.activity_json) == canonical
         assert delivery is not None
         assert delivery.target_endpoint_url == "https://remote.example/inbox"
+
+
+@pytest.mark.asyncio
+async def test_registered_user_thread_starter_uses_real_gateway_client_payload(
+    tmp_path: Path,
+) -> None:
+    """A local-community starter must reach the real gateway client publish serializer."""
+
+    database, runtime, requests = _real_gateway_runtime(tmp_path)
+    _local_community(database)
+    add_registered_user(database)
+
+    try:
+        result = await runtime.handle_discord_thread_create(
+            thread=build_thread(),
+            starter_message=build_starter_message(),
+        )
+    finally:
+        await runtime.fedify_gateway.close()
+
+    assert result.status == "published"
+    assert requests == [
+        {
+            "path": "/publish-local-community",
+            "payload": {
+                "actorUsername": "alice",
+                "communityActorUrl": "https://bridge.example/actors/communities/hackers",
+                "kind": "post",
+                "title": "Thread title",
+                "bodyMarkdown": "hello from discord",
+                "inReplyToObjectId": None,
+                "targetInboxUrls": [],
+                "operationId": None,
+                "activityId": None,
+                "mutationTimestamp": None,
+            },
+        }
+    ]

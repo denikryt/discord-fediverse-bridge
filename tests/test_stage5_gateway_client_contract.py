@@ -10,6 +10,7 @@ import pytest
 from src.fedify_gateway_client import (
     DeleteContentRequest,
     FedifyGatewayClient,
+    PublishContentRequest,
     UpdateContentRequest,
 )
 
@@ -97,3 +98,70 @@ async def test_update_and_delete_endpoints_return_exact_canonical_activity_json(
     assert [item["path"] for item in requests] == ["/update", "/delete"]
     assert requests[0]["payload"]["expectedRevision"] == 1
     assert requests[1]["payload"]["nextRevision"] == 3
+
+
+@pytest.mark.asyncio
+async def test_publish_local_community_endpoint_accepts_base_publish_request_shape() -> (
+    None
+):
+    """Local-community publish must accept the original Stage 5 request shape."""
+
+    requests: list[dict] = []
+
+    async def handler(request: httpx.Request) -> httpx.Response:
+        """Capture the outbound payload and return one canonical Create response."""
+        payload = json.loads(request.content)
+        requests.append({"path": request.url.path, "payload": payload})
+        return httpx.Response(
+            200,
+            json={
+                "activityId": "https://bridge.example/actors/users/alice/activities/create/posts/1",
+                "objectId": "https://bridge.example/actors/users/alice/objects/posts/1",
+                "communityActorUrl": payload["communityActorUrl"],
+                "deliveredFollowerCount": 1,
+                "failedFollowerCount": 0,
+                "activityJson": {
+                    "id": "https://bridge.example/actors/users/alice/activities/create/posts/1",
+                    "type": "Create",
+                },
+            },
+        )
+
+    client = object.__new__(FedifyGatewayClient)
+    client._shared_secret = "secret"
+    client._client = httpx.AsyncClient(
+        base_url="http://gateway.test", transport=httpx.MockTransport(handler)
+    )
+    try:
+        result = await client.publish_local_community_content(
+            PublishContentRequest(
+                actor_username="alice",
+                community_actor_url="https://bridge.example/actors/communities/hackers",
+                kind="post",
+                title="Hello",
+                body_markdown="Body",
+                in_reply_to_object_id=None,
+                target_inbox_urls=["https://remote.example/inbox"],
+            )
+        )
+    finally:
+        await client.close()
+
+    assert result.object_id == "https://bridge.example/actors/users/alice/objects/posts/1"
+    assert requests == [
+        {
+            "path": "/publish-local-community",
+            "payload": {
+                "actorUsername": "alice",
+                "communityActorUrl": "https://bridge.example/actors/communities/hackers",
+                "kind": "post",
+                "title": "Hello",
+                "bodyMarkdown": "Body",
+                "inReplyToObjectId": None,
+                "targetInboxUrls": ["https://remote.example/inbox"],
+                "operationId": None,
+                "activityId": None,
+                "mutationTimestamp": None,
+            },
+        }
+    ]
