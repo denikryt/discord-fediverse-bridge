@@ -857,6 +857,22 @@ def _terminal_id(value: str, origin: str) -> str:
     return terminal
 
 
+def _stage4_activity_token(value: str, origin: str, fallback_object_url: str | None = None) -> str:
+    """Return a stable Stage 4 activity token for one migrated legacy URL.
+
+    Some historical remote community activity IDs ended in the generic terminal
+    segment ``activity``. Reusing that literal suffix would collapse distinct
+    rows into the same typed URL, so the migration falls back to the matching
+    object ID token when it is available.
+    """
+
+    token = _terminal_id(value, origin)
+    if token != "activity" or fallback_object_url is None:
+        return token
+    fallback_token = _terminal_id(fallback_object_url, origin)
+    return fallback_token or token
+
+
 def _migrate_stage4_published_objects(
     conn: Connection,
     origin: str,
@@ -874,9 +890,15 @@ def _migrate_stage4_published_objects(
         old_object = row["object_id"]
         old_activity = row["activity_id"]
         publication_context = row.get("publication_context") or "community"
+        legacy_actor_username = _username_from_actor_url(str(row["actor_url"]), origin)
         values: dict[str, object] = {"id": row["id"]}
-        if publication_context == "personal_feed":
-            username = str(row["actor_username"])
+        community_actor_url_value = row["community_actor_url"]
+        if publication_context == "personal_feed" or (
+            legacy_actor_username is not None and community_actor_url_value is None
+        ):
+            username = str(row["actor_username"]) if row["actor_username"] else legacy_actor_username
+            if username is None:
+                continue
             object_token = _terminal_id(str(old_object), origin)
             activity_token = _terminal_id(str(old_activity), origin)
             if kind == "comment":
@@ -887,6 +909,23 @@ def _migrate_stage4_published_objects(
                 new_activity = build_user_create_post_activity_id(origin=origin, username=username, activity_id=activity_token)
             address = build_actor_address(origin=origin, kind=LocalActorKind.USER, identifier=username)
             values.update(actor_url=address.actor_url, object_id=new_object, activity_id=new_activity)
+        elif (
+            legacy_actor_username is not None
+            and not _is_same_origin_url(str(community_actor_url_value or ""), origin)
+        ):
+            username = str(row["actor_username"]) if row["actor_username"] else legacy_actor_username
+            if username is None:
+                continue
+            object_token = _terminal_id(str(old_object), origin)
+            activity_token = _terminal_id(str(old_activity), origin)
+            if kind == "comment":
+                new_object = build_user_comment_object_id(origin=origin, username=username, object_id=object_token)
+                new_activity = build_user_create_comment_activity_id(origin=origin, username=username, activity_id=activity_token)
+            else:
+                new_object = build_user_post_object_id(origin=origin, username=username, object_id=object_token)
+                new_activity = build_user_create_post_activity_id(origin=origin, username=username, activity_id=activity_token)
+            address = build_actor_address(origin=origin, kind=LocalActorKind.USER, identifier=username)
+            values.update(actor_url=address.actor_url, community_actor_url=community_actor_url_value, object_id=new_object, activity_id=new_activity)
         elif row["community_actor_url"] in community_actor_map or _legacy_tail(str(row["community_actor_url"] or ""), origin):
             slug = _slug_from_actor_url(str(row["community_actor_url"] or row["actor_url"]), origin)
             if slug is None:
@@ -932,7 +971,11 @@ def _migrate_stage4_message_mappings(
     for row in rows:
         context = row.get("publication_context") or "community"
         object_token = _terminal_id(str(row["object_id"]), origin)
-        activity_token = _terminal_id(str(row["activity_id"]), origin)
+        activity_token = _stage4_activity_token(
+            str(row["activity_id"]), origin, str(row["object_id"])
+        )
+        legacy_actor_username = _username_from_actor_url(str(row["actor_url"]), origin)
+        community_actor_url_value = row["community_actor_url"]
         if context == "personal_feed":
             username = _username_from_actor_url(str(row["actor_url"]), origin) or str(row["actor_url"]).rstrip('/').rsplit('/', 1)[-1]
             kind = "comments" if "/comment" in str(row["object_id"]) else "posts"
@@ -940,6 +983,13 @@ def _migrate_stage4_message_mappings(
             activity_id = build_user_create_comment_activity_id(origin=origin, username=username, activity_id=activity_token) if kind == "comments" else build_user_create_post_activity_id(origin=origin, username=username, activity_id=activity_token)
             actor_url = build_actor_address(origin=origin, kind=LocalActorKind.USER, identifier=username).actor_url
             community_actor_url = None
+        elif legacy_actor_username is not None and not _is_same_origin_url(str(community_actor_url_value or ""), origin):
+            username = legacy_actor_username
+            kind = "comments" if "/comment" in str(row["object_id"]) else "posts"
+            object_id = build_user_comment_object_id(origin=origin, username=username, object_id=object_token) if kind == "comments" else build_user_post_object_id(origin=origin, username=username, object_id=object_token)
+            activity_id = build_user_create_comment_activity_id(origin=origin, username=username, activity_id=activity_token) if kind == "comments" else build_user_create_post_activity_id(origin=origin, username=username, activity_id=activity_token)
+            actor_url = build_actor_address(origin=origin, kind=LocalActorKind.USER, identifier=username).actor_url
+            community_actor_url = community_actor_url_value
         else:
             slug = _slug_from_actor_url(str(row["community_actor_url"] or row["actor_url"]), origin)
             if slug is None:
@@ -960,7 +1010,7 @@ def _migrate_stage4_local_community_content(
     all_object_map: dict[str, str] = {}
     if _table_columns(conn, "local_community_threads"):
         for row in conn.execute(text("SELECT * FROM local_community_threads")).mappings():
-            if row.get("origin_kind") not in {"discord", "local", "local_discord"} and row.get("direction") not in {"discord_to_fediverse", "outbound", "local"}:
+            if row.get("origin_kind") not in {"discord", "local", "local_discord"} and row.get("direction") not in {"discord_to_fediverse", "discord_to_ap", "outbound", "local"}:
                 continue
             slug = community_slug_by_id.get(int(row["local_community_id"]))
             if slug is None:
@@ -999,14 +1049,16 @@ def _migrate_stage4_local_community_content(
             ).mappings()
         )
         for row in rows:
-            if row.get("direction") not in {"discord_to_fediverse", "outbound", "local"}:
+            if row.get("direction") not in {"discord_to_fediverse", "discord_to_ap", "outbound", "local"}:
                 continue
             slug = community_slug_by_id.get(int(row["local_community_id"]))
             if slug is None:
                 continue
             old_object = str(row["ap_object_id"])
             object_token = _terminal_id(old_object, origin)
-            activity_token = _terminal_id(str(row["ap_activity_id"]), origin)
+            activity_token = _stage4_activity_token(
+                str(row["ap_activity_id"]), origin, old_object
+            )
             new_object = build_community_comment_object_id(origin=origin, slug=slug, object_id=object_token)
             parent_map[old_object] = new_object
             all_object_map[old_object] = new_object

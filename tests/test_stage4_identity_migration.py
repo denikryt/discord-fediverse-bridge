@@ -291,3 +291,206 @@ def test_stage4_migration_preserves_remote_community_sync_group_ids(tmp_path) ->
             "ap_object_id": "https://remote.example/users/alice/comment/msg-remote",
         }
     database.close()
+
+
+def test_stage4_migration_falls_back_to_object_id_for_generic_legacy_activity_tail(
+    tmp_path,
+) -> None:
+    """Stage 4 must keep generic ``/activity`` tails from collapsing into duplicates."""
+    database = Database(f"sqlite:///{tmp_path / 'generic-tail.db'}")
+    database.create_all()
+    now = "2026-06-21T12:00:00Z"
+    with database.engine.begin() as connection:
+        connection.execute(
+            text(
+                "INSERT INTO local_communities (id, discord_guild_id, discord_forum_channel_id, slug, display_name, actor_url, inbox_url, outbox_url, followers_url, public_key_pem, private_key_pem, status, created_at, updated_at) VALUES (1, 10, 20, 'great_community', 'Great Community', 'https://bot-test.nachitima.com/communities/great_community', 'https://bot-test.nachitima.com/communities/great_community/inbox', 'https://bot-test.nachitima.com/communities/great_community/outbox', 'https://bot-test.nachitima.com/communities/great_community/followers', 'public', 'private', 'active', :now, :now)"
+            ),
+            {"now": now},
+        )
+        connection.execute(
+                text(
+                    "INSERT INTO message_mappings (id, source_platform, source_id, publication_context, activity_id, object_id, actor_url, community_actor_url, discord_channel_id, discord_message_id, created_at) VALUES "
+                    "(1, 'discord', '1', 'community', 'https://mastodon.social/ap/users/alice/statuses/1/activity', 'https://mastodon.social/ap/users/alice/statuses/1', 'https://mastodon.social/ap/users/alice', 'https://bot-test.nachitima.com/communities/great_community', 11, 101, :now), "
+                    "(2, 'discord', '2', 'community', 'https://mastodon.social/ap/users/alice/statuses/2/activity', 'https://mastodon.social/ap/users/alice/statuses/2', 'https://mastodon.social/ap/users/alice', 'https://bot-test.nachitima.com/communities/great_community', 11, 102, :now)"
+                ),
+                {"now": now},
+            )
+        connection.execute(
+            text(
+                "INSERT INTO local_community_threads (id, local_community_id, ap_activity_id, ap_object_id, direction, origin_kind, created_at) VALUES (1, 1, 'https://bot-test.nachitima.com/users/choikak/activities/create/post/thread-1', 'https://bot-test.nachitima.com/users/choikak/post/thread-1', 'outbound', 'discord', :now)"
+            ),
+            {"now": now},
+        )
+        connection.execute(
+            text(
+                "INSERT INTO local_community_thread_surfaces (id, local_community_thread_id, discord_forum_channel_id, discord_thread_id, discord_starter_message_id, local_subscriber_id, role, created_at) VALUES (1, 1, 20, 200, 201, NULL, 'host', :now)"
+            ),
+            {"now": now},
+        )
+        connection.execute(
+            text(
+                "INSERT INTO local_community_messages (id, local_community_thread_id, ap_activity_id, ap_object_id, parent_ap_object_id, direction, created_at) VALUES "
+                "(1, 1, 'https://mastodon.social/ap/users/alice/statuses/3/activity', 'https://mastodon.social/ap/users/alice/statuses/3', 'https://bot-test.nachitima.com/users/choikak/post/thread-1', 'outbound', :now), "
+                "(2, 1, 'https://mastodon.social/ap/users/alice/statuses/4/activity', 'https://mastodon.social/ap/users/alice/statuses/4', 'https://bot-test.nachitima.com/users/choikak/post/thread-1', 'outbound', :now)"
+            ),
+            {"now": now},
+        )
+        connection.execute(
+            text(
+                "INSERT INTO local_community_message_surfaces (id, local_community_message_id, local_community_thread_surface_id, discord_forum_channel_id, discord_message_id, parent_discord_message_id, local_subscriber_id, role, created_at) VALUES "
+                "(1, 1, 1, 20, 300, 201, NULL, 'host', :now), "
+                "(2, 2, 1, 20, 301, 201, NULL, 'host', :now)"
+            ),
+            {"now": now},
+        )
+
+    config = Stage4IdentityMigrationConfig(
+        public_origin="https://bot-test.nachitima.com",
+        service_actor_identifier="bridge",
+    )
+    database.migrate(config)
+    database.migrate(config)
+
+    with database.engine.connect() as connection:
+        mapping_rows = connection.execute(
+            text("SELECT id, activity_id, object_id FROM message_mappings ORDER BY id")
+        ).mappings().all()
+        assert mapping_rows[0]["activity_id"].endswith("/1")
+        assert mapping_rows[1]["activity_id"].endswith("/2")
+        assert mapping_rows[0]["activity_id"] != mapping_rows[1]["activity_id"]
+        message_rows = connection.execute(
+            text(
+                "SELECT id, ap_activity_id, ap_object_id FROM local_community_messages ORDER BY id"
+            )
+        ).mappings().all()
+        assert message_rows[0]["ap_activity_id"].endswith("/3")
+        assert message_rows[1]["ap_activity_id"].endswith("/4")
+        assert message_rows[0]["ap_activity_id"] != message_rows[1]["ap_activity_id"]
+    database.close()
+
+
+def test_stage4_migration_rewrites_old_user_actor_urls_for_remote_communities(
+    tmp_path,
+) -> None:
+    """Stage 4 must rewrite old user actor URLs even when the community is remote."""
+    database = Database(f"sqlite:///{tmp_path / 'remote-community-actor.db'}")
+    database.create_all()
+    now = "2026-06-21T12:00:00Z"
+    with database.engine.begin() as connection:
+        connection.execute(
+            text(
+                "INSERT INTO published_activity_objects (id, actor_username, actor_url, publication_context, community_actor_url, activity_id, object_id, kind, title, body_markdown, in_reply_to_object_id, conversation_root_object_id, discord_guild_id, discord_channel_id, discord_message_id, content_revision, desired_kind, discord_reconciliation_needed, discord_reconciliation_attempt_count, published_at, created_at) VALUES "
+                "(1, 'alice', 'https://bot-test.nachitima.com/actors/alice', 'community', 'https://lemmy.world/c/fediverse', 'https://bot-test.nachitima.com/users/alice/activities/create/post/31', 'https://bot-test.nachitima.com/users/alice/post/31', 'post', 'old', 'body', NULL, 'https://bot-test.nachitima.com/users/alice/post/31', 10, 20, 30, 1, 'update', 0, 0, :now, :now)"
+            ),
+            {"now": now},
+        )
+
+    config = Stage4IdentityMigrationConfig(
+        public_origin="https://bot-test.nachitima.com",
+        service_actor_identifier="bridge",
+    )
+    database.migrate(config)
+    database.migrate(config)
+
+    with database.engine.connect() as connection:
+        row = connection.execute(
+            text("SELECT actor_url, community_actor_url, activity_id, object_id FROM published_activity_objects WHERE id=1")
+        ).mappings().one()
+        assert row["actor_url"] == "https://bot-test.nachitima.com/actors/users/alice"
+        assert row["community_actor_url"] == "https://lemmy.world/c/fediverse"
+        assert row["activity_id"] == "https://bot-test.nachitima.com/actors/users/alice/activities/create/posts/31"
+        assert row["object_id"] == "https://bot-test.nachitima.com/actors/users/alice/objects/posts/31"
+    database.close()
+
+
+def test_stage4_migration_rewrites_discord_to_ap_local_community_rows(tmp_path) -> None:
+    """Stage 4 must migrate old Discord-origin local community rows in both directions."""
+    database = Database(f"sqlite:///{tmp_path / 'discord-to-ap-local-community.db'}")
+    database.create_all()
+    now = "2026-06-21T12:00:00Z"
+    with database.engine.begin() as connection:
+        connection.execute(
+            text(
+                "INSERT INTO local_communities (id, discord_guild_id, discord_forum_channel_id, slug, display_name, actor_url, inbox_url, outbox_url, followers_url, public_key_pem, private_key_pem, status, created_at, updated_at) VALUES (1, 10, 20, 'great_community', 'Great Community', 'https://bot-test.nachitima.com/communities/great_community', 'https://bot-test.nachitima.com/communities/great_community/inbox', 'https://bot-test.nachitima.com/communities/great_community/outbox', 'https://bot-test.nachitima.com/communities/great_community/followers', 'public', 'private', 'active', :now, :now)"
+            ),
+            {"now": now},
+        )
+        connection.execute(
+            text(
+                "INSERT INTO local_community_threads (id, local_community_id, ap_activity_id, ap_object_id, direction, origin_kind, created_at) VALUES (1, 1, 'https://bot-test.nachitima.com/users/choikak/activities/create/post/31', 'https://bot-test.nachitima.com/users/choikak/post/31', 'discord_to_ap', 'discord', :now)"
+            ),
+            {"now": now},
+        )
+        connection.execute(
+            text(
+                "INSERT INTO local_community_thread_surfaces (id, local_community_thread_id, discord_forum_channel_id, discord_thread_id, discord_starter_message_id, local_subscriber_id, role, created_at) VALUES (1, 1, 20, 200, 201, NULL, 'host', :now)"
+            ),
+            {"now": now},
+        )
+        connection.execute(
+            text(
+                "INSERT INTO local_community_messages (id, local_community_thread_id, ap_activity_id, ap_object_id, parent_ap_object_id, direction, created_at) VALUES (1, 1, 'https://bot-test.nachitima.com/users/choikak/activities/create/comment/32', 'https://bot-test.nachitima.com/users/choikak/comment/32', 'https://bot-test.nachitima.com/users/choikak/post/31', 'discord_to_ap', :now)"
+            ),
+            {"now": now},
+        )
+        connection.execute(
+            text(
+                "INSERT INTO local_community_message_surfaces (id, local_community_message_id, local_community_thread_surface_id, discord_forum_channel_id, discord_message_id, parent_discord_message_id, local_subscriber_id, role, created_at) VALUES (1, 1, 1, 20, 300, 201, NULL, 'host', :now)"
+            ),
+            {"now": now},
+        )
+
+    config = Stage4IdentityMigrationConfig(
+        public_origin="https://bot-test.nachitima.com",
+        service_actor_identifier="bridge",
+    )
+    database.migrate(config)
+    database.migrate(config)
+
+    with database.engine.connect() as connection:
+        thread = connection.execute(
+            text("SELECT ap_activity_id, ap_object_id FROM local_community_threads WHERE id=1")
+        ).mappings().one()
+        message = connection.execute(
+            text("SELECT ap_activity_id, ap_object_id, parent_ap_object_id FROM local_community_messages WHERE id=1")
+        ).mappings().one()
+        assert thread["ap_activity_id"] == "https://bot-test.nachitima.com/actors/communities/great_community/activities/create/posts/31"
+        assert thread["ap_object_id"] == "https://bot-test.nachitima.com/actors/communities/great_community/objects/posts/31"
+        assert message["ap_activity_id"] == "https://bot-test.nachitima.com/actors/communities/great_community/activities/create/comments/32"
+        assert message["ap_object_id"] == "https://bot-test.nachitima.com/actors/communities/great_community/objects/comments/32"
+        assert message["parent_ap_object_id"] == thread["ap_object_id"]
+    database.close()
+
+
+def test_stage4_migration_rewrites_message_mapping_actor_urls_for_remote_communities(
+    tmp_path,
+) -> None:
+    """Stage 4 must rewrite message-mapping actor URLs even when the community is remote."""
+    database = Database(f"sqlite:///{tmp_path / 'remote-community-message-mapping.db'}")
+    database.create_all()
+    now = "2026-06-21T12:00:00Z"
+    with database.engine.begin() as connection:
+        connection.execute(
+            text(
+                "INSERT INTO message_mappings (id, source_platform, source_id, publication_context, activity_id, object_id, actor_url, community_actor_url, discord_channel_id, discord_message_id, created_at) VALUES "
+                "(1, 'discord', '1', 'community', 'https://bot-test.nachitima.com/users/alice/activities/create/comment/31', 'https://bot-test.nachitima.com/users/alice/comment/31', 'https://bot-test.nachitima.com/actors/alice', 'https://lemmy.world/c/fediverse', 10, 20, :now)"
+            ),
+            {"now": now},
+        )
+
+    config = Stage4IdentityMigrationConfig(
+        public_origin="https://bot-test.nachitima.com",
+        service_actor_identifier="bridge",
+    )
+    database.migrate(config)
+    database.migrate(config)
+
+    with database.engine.connect() as connection:
+        row = connection.execute(
+            text("SELECT actor_url, community_actor_url, activity_id, object_id FROM message_mappings WHERE id=1")
+        ).mappings().one()
+        assert row["actor_url"] == "https://bot-test.nachitima.com/actors/users/alice"
+        assert row["community_actor_url"] == "https://lemmy.world/c/fediverse"
+        assert row["activity_id"] == "https://bot-test.nachitima.com/actors/users/alice/activities/create/comments/31"
+        assert row["object_id"] == "https://bot-test.nachitima.com/actors/users/alice/objects/comments/31"
+    database.close()
