@@ -155,7 +155,10 @@ def run_legacy_schema_helpers(engine: Engine) -> None:
             "display_name",
             "ALTER TABLE users ADD COLUMN display_name VARCHAR(30)",
         ),
-        ("users", "summary", "ALTER TABLE users ADD COLUMN summary VARCHAR(500)"),
+        (
+            "users", 
+            "summary", 
+            "ALTER TABLE users ADD COLUMN summary VARCHAR(500)"),
         (
             "users",
             "avatar_media_id",
@@ -170,66 +173,6 @@ def run_legacy_schema_helpers(engine: Engine) -> None:
             "users",
             "profile_version",
             "ALTER TABLE users ADD COLUMN profile_version INTEGER NOT NULL DEFAULT 0",
-        ),
-        (
-            "published_activity_objects",
-            "content_revision",
-            "ALTER TABLE published_activity_objects ADD COLUMN content_revision INTEGER NOT NULL DEFAULT 1",
-        ),
-        (
-            "published_activity_objects",
-            "deleted_at",
-            "ALTER TABLE published_activity_objects ADD COLUMN deleted_at DATETIME",
-        ),
-        (
-            "published_activity_objects",
-            "desired_kind",
-            "ALTER TABLE published_activity_objects ADD COLUMN desired_kind VARCHAR(16) NOT NULL DEFAULT 'none'",
-        ),
-        (
-            "published_activity_objects",
-            "desired_title",
-            "ALTER TABLE published_activity_objects ADD COLUMN desired_title VARCHAR(512)",
-        ),
-        (
-            "published_activity_objects",
-            "desired_body_markdown",
-            "ALTER TABLE published_activity_objects ADD COLUMN desired_body_markdown TEXT",
-        ),
-        (
-            "published_activity_objects",
-            "desired_edited_timestamp",
-            "ALTER TABLE published_activity_objects ADD COLUMN desired_edited_timestamp DATETIME",
-        ),
-        (
-            "published_activity_objects",
-            "desired_fingerprint",
-            "ALTER TABLE published_activity_objects ADD COLUMN desired_fingerprint VARCHAR(64)",
-        ),
-        (
-            "published_activity_objects",
-            "discord_reconciliation_needed",
-            "ALTER TABLE published_activity_objects ADD COLUMN discord_reconciliation_needed BOOLEAN NOT NULL DEFAULT 0",
-        ),
-        (
-            "published_activity_objects",
-            "discord_reconciliation_attempt_count",
-            "ALTER TABLE published_activity_objects ADD COLUMN discord_reconciliation_attempt_count INTEGER NOT NULL DEFAULT 0",
-        ),
-        (
-            "published_activity_objects",
-            "discord_reconciliation_next_attempt_at",
-            "ALTER TABLE published_activity_objects ADD COLUMN discord_reconciliation_next_attempt_at DATETIME",
-        ),
-        (
-            "published_activity_objects",
-            "discord_reconciliation_last_error",
-            "ALTER TABLE published_activity_objects ADD COLUMN discord_reconciliation_last_error VARCHAR(512)",
-        ),
-        (
-            "published_activity_objects",
-            "conversation_root_object_id",
-            "ALTER TABLE published_activity_objects ADD COLUMN conversation_root_object_id VARCHAR(512)",
         ),
     ]
     with engine.connect() as conn:
