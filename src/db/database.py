@@ -11,7 +11,6 @@ from sqlalchemy.orm import Session, sessionmaker
 from ..management_actions import ManagementActions
 from ..management_audit_recorder import ManagementAuditRecorder
 from . import migrations, schema
-from .migrations import Stage4IdentityMigrationConfig
 from .repositories import (
     ActivityPubObjectRepository,
     BridgeActorKeyRepository,
@@ -114,11 +113,22 @@ class Database:
         """Create the full clean-schema set required by the current codebase."""
         schema.create_all(self.engine)
 
-    def migrate(
-        self, stage4_identity: Stage4IdentityMigrationConfig | None = None
-    ) -> None:
-        """Apply schema and identity migrations that create_all cannot handle."""
-        migrations.migrate(self.engine, stage4_identity=stage4_identity)
+    def migrate(self) -> None:
+        """Preflight and initialize SQLite without rewriting federation identities.
+
+        Existing versioned databases upgrade before metadata sees new tables.
+        Fresh databases bootstrap current models; only the baseline release
+        accepts nonempty unversioned development databases without a manual step.
+        """
+        version, _empty = migrations.read_database_state(self.engine)
+        if version:
+            migrations.run_pending_migrations(self.engine)
+        # These retained operations are deliberately outside upgrade atomicity.
+        # New schema/data changes belong in registered migration functions.
+        self.create_all()
+        migrations.run_legacy_schema_helpers(self.engine)
+        if version == 0:
+            migrations.stamp_initial_version(self.engine)
 
     @contextmanager
     def immediate_session(self) -> Iterator[Session]:

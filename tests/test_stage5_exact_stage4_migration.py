@@ -10,7 +10,6 @@ from typing import Any
 from sqlalchemy import text
 
 from src.db import Database
-from src.db.migrations import Stage4IdentityMigrationConfig
 
 _STAGE4_SCHEMA = Path(__file__).with_name("fixtures") / "stage4_schema.sql"
 _AFFECTED_TABLES = (
@@ -179,11 +178,7 @@ def test_exact_stage4_delivery_graph_survives_complete_stage5_upgrade(tmp_path) 
         before.close()
 
     upgraded = Database(f"sqlite:///{path}")
-    upgraded.migrate(
-        Stage4IdentityMigrationConfig(
-            public_origin="https://bridge.example", service_actor_identifier="bridge"
-        )
-    )
+    upgraded.migrate()
     with upgraded.engine.connect() as connection:
         source = (
             connection.execute(
@@ -224,10 +219,11 @@ def test_exact_stage4_delivery_graph_survives_complete_stage5_upgrade(tmp_path) 
         assert source["id"] == 61
         assert source["ordering_key"] == "profile:41"
         assert source["logical_version"] == 7
-        assert source["activity_id"] == "https://bridge.example/actors/users/alice/activities/update/profile/7"
+        assert source["activity_id"] == "https://bridge.example/activities/profile/7"
+        # Schema maintenance preserves retained activity IDs and JSON verbatim.
         assert source["snapshot_json"] == '{"displayName":"Alice"}'
         assert source["activity_json"] == (
-            '{"id":"https://bridge.example/actors/users/alice/activities/update/profile/7"}'
+            '{"id":"https://bridge.example/activities/profile/7"}'
         )
         assert delivery["id"] == 71
         assert delivery["status"] == "failed"

@@ -13,7 +13,6 @@ from pathlib import Path
 from sqlalchemy import text
 
 from src.db import Database
-from src.db.migrations import Stage4IdentityMigrationConfig
 from src.local_communities.service import LocalCommunityService
 from support.db import build_database
 
@@ -98,11 +97,8 @@ def test_stage5_current_schema_migrate_remains_idempotent(tmp_path: Path) -> Non
         )
     }
 
-    config = Stage4IdentityMigrationConfig(
-        public_origin="https://bridge.example", service_actor_identifier="bridge"
-    )
-    database.migrate(config)
-    database.migrate(config)
+    database.migrate()
+    database.migrate()
 
     after_counts = {table: _count(database, table) for table in before_counts}
     assert after_counts == before_counts

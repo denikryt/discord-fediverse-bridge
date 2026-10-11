@@ -8,7 +8,6 @@ from sqlalchemy import create_engine, text
 
 from src.config import Settings
 from src.db import Database
-from src.db.migrations import Stage4IdentityMigrationConfig
 from src.local_communities.service import LocalCommunityService
 from src.operations.create_community import (
     CreateCommunityInput,
@@ -369,7 +368,7 @@ def test_existing_database_migration_adds_nullable_owner_column(tmp_path: Path) 
     engine.dispose()
 
     database = Database(f"sqlite:///{db_path}")
-    database.migrate(Stage4IdentityMigrationConfig(public_origin="https://bridge.example", service_actor_identifier="bridge"))
+    database.migrate()
     migrated = database.local_communities.get_local_community_by_slug("cats")
 
     assert migrated is not None
@@ -392,7 +391,7 @@ def test_owner_column_migration_is_idempotent(tmp_path: Path) -> None:
     database = Database(f"sqlite:///{db_path}")
     database.create_all()
     database.migrate()
-    database.migrate(Stage4IdentityMigrationConfig(public_origin="https://bridge.example", service_actor_identifier="bridge"))
+    database.migrate()
 
     with database.engine.connect() as conn:
         columns = conn.execute(text("PRAGMA table_info(local_communities)")).fetchall()
@@ -476,11 +475,7 @@ def test_summary_nullable_migration_preserves_unique_constraints(
     engine.dispose()
 
     database = Database(f"sqlite:///{db_path}")
-    database.migrate(
-        Stage4IdentityMigrationConfig(
-            public_origin="https://bridge.example", service_actor_identifier="bridge"
-        )
-    )
+    database.migrate()
 
     with database.engine.begin() as conn:
         summary_column = [

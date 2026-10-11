@@ -103,6 +103,7 @@ This document is a short, feature-oriented index of the test suite. It helps mai
 ## Persistence, configuration, gateway, and deployment
 
 - Database federation identity and actor persistence — [`tests/test_db_federation_identity.py`](../../tests/test_db_federation_identity.py)
+- SQLite versions, startup preservation, DDL ordering, rollback and concurrent upgrades — [`tests/test_migration_safety.py`](../../tests/test_migration_safety.py)
 - Schema cleanup and migration idempotency — [`tests/test_stage5_schema_cleanup.py`](../../tests/test_stage5_schema_cleanup.py)
 - Removal of legacy remote-subscriber naming compatibility — [`tests/test_stage1_remote_subscriber_naming.py`](../../tests/test_stage1_remote_subscriber_naming.py)
 - SQLite backups — [`tests/behavior/test_sqlite_backup_scenarios.py`](../../tests/behavior/test_sqlite_backup_scenarios.py)

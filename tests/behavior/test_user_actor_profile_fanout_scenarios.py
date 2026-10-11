@@ -8,7 +8,6 @@ import pytest
 from sqlalchemy import select
 
 from src.db import Database
-from src.db.migrations import Stage4IdentityMigrationConfig
 from src.models import (
     UserActorOutboundDelivery,
     UserActorOutboundDeliveryFollower,
@@ -426,11 +425,7 @@ def test_legacy_stage3_database_migrates_profile_version_without_synthetic_sourc
 
     database = Database(f"sqlite:///{database_path}")
     database.create_all()
-    database.migrate(
-        Stage4IdentityMigrationConfig(
-            public_origin="https://bridge.example", service_actor_identifier="bridge"
-        )
-    )
+    database.migrate()
 
     with database.session() as session:
         assert (

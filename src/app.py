@@ -16,7 +16,6 @@ from .community_sync.discord_fanout import DiscordFanout
 from .community_sync.runtime import CommunityRuntime
 from .config import Settings
 from .db import Database
-from .db.migrations import Stage4IdentityMigrationConfig
 from .discord_bot import BridgeBot
 from .discord_event_router import DiscordEventRouter
 from .discord_message_mutations import DiscordMessageMutationHandler
@@ -112,13 +111,7 @@ def _build_live_runtime(settings: Settings, deployment_lease: FileLock) -> Runti
             max_pixels=settings.profile_media_max_pixels,
         )
         media_store.initialize()
-        database.create_all()
-        database.migrate(
-            Stage4IdentityMigrationConfig(
-                public_origin=settings.normalized_fedify_origin,
-                service_actor_identifier=settings.fedify_actor_identifier,
-            )
-        )
+        database.migrate()
         BridgeActorKeyBootstrap(database=database, settings=settings).ensure()
 
         bridge_policy_service = BridgePolicyService(

@@ -1,8 +1,12 @@
 # Known issues
 
+- Simplified startup: only Database.create_all() creates missing metadata tables; retained schema helpers require that initialization and do not repeat it.
+
+- Fixed/verified: startup no longer runs the historical ActivityPub identity rewrite or deletes federation relationships; SQLite versions protect future registered upgrades.
+- Test environment baseline: six runtime/OAuth tests fail when the configured SOCKS proxy is used without the optional socksio dependency; unrelated tests are unchanged.
+- Known migration boundary: adopting unversioned development databases does not validate historical identities; legacy schema helpers remain outside registered-upgrade atomicity.
 - Verified: bridge-local bans do not remove existing remote subscriber rows and do not emit ActivityPub moderation activities.
 - Verified: remote handle resolution remains string-only; WebFinger/actor fetch resolution is not implemented.
-- Fixed/verified: Stage 4 startup migration now repairs retained community-sync group AP IDs and same-origin local community actor IDs in `community_thread_groups` and `community_message_groups`.
 - Fixed/verified: local-community Discord -> Lemmy publish no longer crashes when the gateway client serializes Stage 5 publish requests without optional mutation metadata; the regression was introduced by commit `f0d7eb4`.
 - Known operational behavior: a globally banned super-admin cannot unban themselves through Discord commands; recovery requires another non-banned super-admin or direct database intervention.
 

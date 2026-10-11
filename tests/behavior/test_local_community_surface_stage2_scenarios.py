@@ -19,7 +19,6 @@ from sqlalchemy import text
 from src.discord_event_router import DiscordEventRouter
 from src.content_publish_service import ContentPublishService
 from src.local_communities.runtime import LocalCommunityRuntime
-from src.db.migrations import Stage4IdentityMigrationConfig
 from src.local_communities.service import LocalCommunityService
 from support.db import add_registered_user, build_database
 from support.discord import build_starter_message, build_thread, build_thread_message
@@ -193,9 +192,8 @@ def test_stage2_current_schema_migrate_keeps_host_surfaces_idempotent(
         direction="discord_to_ap",
     )
 
-    config = Stage4IdentityMigrationConfig(public_origin="https://bridge.example", service_actor_identifier="bridge")
-    migrated.migrate(config)
-    migrated.migrate(config)
+    migrated.migrate()
+    migrated.migrate()
 
     thread_surfaces = (
         migrated.local_community_surfaces.list_local_community_thread_surfaces(

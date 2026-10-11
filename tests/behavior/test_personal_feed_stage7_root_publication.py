@@ -12,7 +12,6 @@ from sqlalchemy.exc import IntegrityError
 
 from src.content_sync.persistence import PublicationConflictError
 from src.db import Database
-from src.db.migrations import Stage4IdentityMigrationConfig
 from src.fedify_gateway_client import RenderPersonalFeedResult
 from src.models import (
     MessageMapping,
@@ -527,7 +526,7 @@ async def test_restart_replay_reuses_durable_publication_without_render(
     ).status == "published"
 
     reopened = Database(f"sqlite:///{tmp_path / 'bridge.sqlite3'}")
-    reopened.migrate(Stage4IdentityMigrationConfig(public_origin="https://bridge.test", service_actor_identifier="bridge"))
+    reopened.migrate()
     bindings = PersonalFeedService(reopened)
     gateway = Gateway()
     restarted = PersonalFeedPublisher(
