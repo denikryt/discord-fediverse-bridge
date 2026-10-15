@@ -10,6 +10,7 @@ import pytest
 from sqlalchemy import event
 from sqlalchemy.orm import Session
 from src.db import Database, migrations
+from src.db import legacy_v0_to_v1 as direct
 
 
 @pytest.fixture(params=["tagged_database", "independent_models"])
@@ -389,7 +390,7 @@ def test_unknown_source_or_header_is_rejected_unchanged(legacy, mutation):
     assert _evidence(legacy) == before
 
 
-@pytest.mark.parametrize("phase", ["normalized", "platform", "header"])
+@pytest.mark.parametrize("phase", ["created", "copied", "header"])
 def test_failure_rolls_back_original_release_then_retry(legacy, monkeypatch, phase):
     """Faults at either internal phase or stamping undo every source DDL/data change."""
     _seed(legacy)
@@ -398,13 +399,13 @@ def test_failure_rolls_back_original_release_then_retry(legacy, monkeypatch, pha
     def reject(*args):
         raise RuntimeError("injected fault")
 
-    if phase in {"normalized", "platform"}:
+    if phase in {"created", "copied"}:
         name = (
-            "_upgrade_platform_model_from_legacy_input"
-            if phase == "normalized"
-            else "_assert_legacy_source_preserved"
+            "_copy_source_rows"
+            if phase == "created"
+            else "_assert_preserved"
         )
-        monkeypatch.setattr(migrations, name, reject)
+        monkeypatch.setattr(direct, name, reject)
     else:
 
         def trace(c, cursor, statement, parameters, context, many):
@@ -462,7 +463,7 @@ def test_fresh_and_upgraded_semantic_manifests_match(legacy, tmp_path):
 
 
 @pytest.mark.parametrize(
-    "fault", ["normalization_drop", "platform_drop", "claim", "commit"]
+    "fault", ["source_drop", "published_copy", "claim", "commit"]
 )
 def test_release_fault_boundaries_restore_exact_original(legacy, fault):
     """Real DROP, claim DML and commit failures restore every original row and DDL."""
@@ -473,16 +474,11 @@ def test_release_fault_boundaries_restore_exact_original(legacy, fault):
     def interrupt(conn, cursor, statement, parameters, context, many):
         """Inject after the selected physical operation, never bypassing FK restoration."""
         nonlocal drops
-        if statement.strip() == 'DROP TABLE "published_activity_objects"':
-            drops += 1
-            if drops == (1 if fault == "normalization_drop" else 2) and fault in {
-                "normalization_drop",
-                "platform_drop",
-            }:
-                raise RuntimeError("fault boundary")
-        if fault == "claim" and statement.startswith(
-            "UPDATE platform_channel_surfaces SET"
-        ):
+        if fault == "source_drop" and statement.strip() == 'DROP TABLE main."published_activity_objects"':
+            raise RuntimeError("fault boundary")
+        if fault == "published_copy" and statement.lstrip().startswith('INSERT INTO main.published_activity_objects'):
+            raise RuntimeError("fault boundary")
+        if fault == "claim" and statement.startswith("UPDATE main.platform_channel_surfaces SET"):
             raise RuntimeError("fault boundary")
 
     def before_commit(conn):
@@ -528,7 +524,7 @@ def test_failed_fk_restore_invalidates_physical_connection(
         def fail(*args):
             raise RuntimeError("upgrade fault")
 
-        monkeypatch.setattr(migrations, "_assert_legacy_source_preserved", fail)
+        monkeypatch.setattr(direct, "_assert_preserved", fail)
     try:
         with pytest.raises(RuntimeError, match="Failed to restore"):
             legacy.migrate()
@@ -982,7 +978,7 @@ def test_release_snapshot_loaded_once_per_inspection_and_kept_immutable(legacy, 
     from copy import deepcopy
 
     _seed(legacy)
-    real_capture = migrations._capture_legacy_identity_and_row_evidence
+    real_capture = direct.capture_source_evidence
     captures = []
     transaction = None
 
@@ -999,7 +995,7 @@ def test_release_snapshot_loaded_once_per_inspection_and_kept_immutable(legacy, 
         return snapshot
 
     event.listen(legacy.engine, 'before_cursor_execute', trace)
-    monkeypatch.setattr(migrations, '_capture_legacy_identity_and_row_evidence', capture)
+    monkeypatch.setattr(direct, 'capture_source_evidence', capture)
     legacy.migrate()
     assert len(captures) == 2
     assert [entry[1] for entry in captures] == ['BEGIN', 'BEGIN IMMEDIATE']

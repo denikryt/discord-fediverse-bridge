@@ -485,10 +485,10 @@ def plan_identity_cutover(
                 new["follow_activity_id"] = None
     # Source-declared uniqueness includes cache and relay identities as well as
     # primary content URLs. Detect collisions before any normalization writes.
-    from .legacy_stage00_ddl import RELEASE_MANIFEST
+    from .legacy_v0_to_v1 import release_unique_columns
 
-    for table, manifest in RELEASE_MANIFEST.items():
-        for fields in manifest["unique"]:
+    for table, constraints in release_unique_columns().items():
+        for fields in constraints:
             seen = set()
             for row in expected[table]:
                 values = tuple(row[field] for field in fields)

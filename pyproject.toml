@@ -49,3 +49,6 @@ testpaths = [
   "vendor/discordops/tests",
 ]
 asyncio_mode = "auto"
+
+[tool.setuptools.package-data]
+"src.db" = ["legacy_v0.sql"]

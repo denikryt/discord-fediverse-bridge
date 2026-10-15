@@ -145,3 +145,7 @@ Behavior coverage lives in `test_user_profile_persistence_scenarios.py`, `test_p
 - Complete generated-role column admission: appended expression, wrapper, VIRTUAL mode rejection, formatting tolerance and unchanged database on rejection — [`tests/test_current_v1_generated_role_validation.py`](../../tests/test_current_v1_generated_role_validation.py).
 
 - Real released AP namespaces, selective relationship reset, linked routing/JSON conversion, signed-payload/collision rejection, actor API, concurrent cutover and retained-claim retry — [`tests/test_legacy_identity_cutover.py`](../../tests/test_legacy_identity_cutover.py).
+
+## Direct released SQLite upgrade (plan 147)
+
+`tests/test_direct_sql_v0_to_v1_migration.py` covers native source staging before DROP, single ORM target creation, physical-window failures, TEMP cleanup, malformed integer-affinity snowflakes and pinned-source/schema provenance. `tests/test_legacy_v0_to_v1_migration.py` and `tests/test_legacy_identity_cutover.py` retain release, preservation, identity/owner, concurrency and runtime scenarios. Historical Stage 00 cascade tests use only the captured test oracle in `tests/support/historical_platform_probe.py`; it is not a supported startup route.

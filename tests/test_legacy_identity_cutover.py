@@ -104,9 +104,10 @@ def test_cutover_requires_context_and_rollback_restores_old_namespace(
     assert _evidence(legacy) == before
     from src.db import migrations
 
-    real = migrations._upgrade_platform_model_from_legacy_input
+    from src.db import legacy_v0_to_v1 as direct
+    real = direct._assert_preserved
 
-    def fail(conn):
+    def fail(conn, *args):
         """Abort after the identity phase wrote real rows, before target stamping."""
         assert (
             conn.exec_driver_sql("SELECT actor_url FROM users WHERE id=7").scalar_one()
@@ -114,11 +115,11 @@ def test_cutover_requires_context_and_rollback_restores_old_namespace(
         )
         raise RuntimeError("cutover fault")
 
-    monkeypatch.setattr(migrations, "_upgrade_platform_model_from_legacy_input", fail)
+    monkeypatch.setattr(direct, "_assert_preserved", fail)
     with pytest.raises(RuntimeError, match="cutover fault"):
         legacy.migrate(identity=_config())
     assert _evidence(legacy) == before
-    monkeypatch.setattr(migrations, "_upgrade_platform_model_from_legacy_input", real)
+    monkeypatch.setattr(direct, "_assert_preserved", real)
     legacy.migrate(identity=_config())
 
 

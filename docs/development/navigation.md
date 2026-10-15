@@ -135,4 +135,4 @@ Discord OAuth boundary code consumes `Settings.resolved_discord_oauth_redirect_u
 4. `src/operations/subscribe.py` and `src/personal_feeds.py` — retry compare-and-set and atomic rebinding.
 5. `tests/test_platform_data_model.py`, `tests/test_platform_data_model_migration_stage01.py`, and `tests/behavior/test_platform_data_model_stage01.py` — invariants, isolated historical cascade proofs, and mixed-connector runtime behavior.
 
-Released v0 recognition and direct current-v1 upgrade scenarios: `tests/test_legacy_v0_to_v1_migration.py`; pinned production normalization evidence: `src/db/legacy_stage00_ddl.py`.
+Released v0 recognition and direct current-v1 upgrade scenarios: `tests/test_legacy_v0_to_v1_migration.py`; pinned source schema: `src/db/legacy_v0.sql`; direct SQL transfer: `src/db/legacy_v0_to_v1.py`; staging/fault coverage: `tests/test_direct_sql_v0_to_v1_migration.py`.

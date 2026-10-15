@@ -11,6 +11,7 @@ from sqlalchemy.orm import Session
 from src.db import Database
 from src.db import migrations
 from support.historical_platform_probe import upgrade_historical_probe
+from support import historical_platform_probe as historical
 
 
 def _historical_stage00(path):
@@ -259,7 +260,7 @@ def test_bootstrap_fault_rolls_back_schema_and_header(tmp_path, monkeypatch):
 def test_rebuild_fault_restores_v1_and_fk_enforcement(tmp_path, monkeypatch):
     """Failure after DROP of the published parent restores the original schema."""
     database = _historical_stage00(tmp_path / "old.db")
-    original = migrations._rebuild_current_table
+    original = historical._rebuild_current_table
 
     def fail(conn, name, rows):
         """Inject an error after rebuilding the real historical parent."""
@@ -267,7 +268,7 @@ def test_rebuild_fault_restores_v1_and_fk_enforcement(tmp_path, monkeypatch):
         if name == "published_activity_objects":
             raise RuntimeError("injected rebuild failure")
 
-    monkeypatch.setattr(migrations, "_rebuild_current_table", fail)
+    monkeypatch.setattr(historical, "_rebuild_current_table", fail)
     with pytest.raises(RuntimeError, match="injected rebuild failure"):
         upgrade_historical_probe(database)
     with database.engine.connect() as conn:
@@ -282,7 +283,7 @@ def test_rebuild_fault_restores_v1_and_fk_enforcement(tmp_path, monkeypatch):
             ).all()
             == []
         )
-    monkeypatch.setattr(migrations, "_rebuild_current_table", original)
+    monkeypatch.setattr(historical, "_rebuild_current_table", original)
     upgrade_historical_probe(database)
 
 

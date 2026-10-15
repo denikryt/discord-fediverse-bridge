@@ -4,7 +4,7 @@ This document defines supported database versions, startup recognition and atomi
 
 ## Supported source and target
 
-The current target is **database v1**, the complete 45-table Stage 01 model. The supported legacy source is **unversioned v0** with the released `v0.1.0` (`8ab4403e`) 30-table schema. Startup recognizes its columns, defaults, CHECK/UNIQUE/FK constraints, indexes, triggers and ownership/parent relationships before writes. The release identity cutover is planned from source rows using non-secret public-origin/service-identifier settings; ambiguous namespaces fail before DDL. Unknown and partial sources fail closed.
+The current target is **database v1**, the complete 45-table Stage 01 model. The supported legacy source is **unversioned v0** with the released `v0.1.0` (`8ab4403e`) 30-table schema. Startup recognizes its columns, defaults, CHECK/UNIQUE/FK constraints, indexes, triggers and ownership/parent relationships before writes. The source fact is `src/db/legacy_v0.sql`, installed as package data and introspected in a disposable in-memory reference database. The release identity cutover is planned from narrow source metadata using non-secret public-origin/service-identifier settings; ambiguous namespaces fail before DDL. Unknown and partial sources fail closed.
 
 Back up the database and media before upgrading. Run the current application once: startup supplies `IdentityCutoverConfig` from settings to `Database.migrate(identity=...)`, which upgrades a recognized release v0 directly to current v1. No intermediate application install or manual header stamp is needed. A genuine empty file bootstraps current v1 directly.
 
@@ -12,7 +12,9 @@ Unpublished Stage 00 databases stamped 1 and development databases stamped 2 are
 
 ## Transaction boundary
 
-Read-only preflight uses a stable SQLite read snapshot. Writing paths reread the header and table inventory under `BEGIN IMMEDIATE`. Fresh initialization keeps foreign-key enforcement ON. The released-source path suspends enforcement before the transaction, normalizes historical publication/profile shapes, converts legacy ActivityPub identities, and applies connector/channel backfill on the same connection. The internal 43-table input is neither committed nor stamped. Each source inspection loads its own historical snapshot: advisory preflight under BEGIN, then authoritative validation under BEGIN IMMEDIATE. Inside the writer transaction, relationship checks, identity planning and normalization share that one unchanged snapshot; normalization copies individual rows. Reads after schema/data changes remain independent validation evidence. There is no snapshot cache across inspections.
+Read-only preflight uses a stable SQLite read snapshot. Writing paths reread the header and table inventory under `BEGIN IMMEDIATE`. Fresh initialization keeps foreign-key enforcement ON. The released-source path suspends enforcement before the transaction and calls `legacy_v0_to_v1.upgrade_released_v0_to_v1(conn, identity)` directly. It revalidates source schema/data, plans protocol deltas, copies all 30 source tables to transactional SQL TEMP staging, then removes the old main tables. Current `Base.metadata.create_all(conn)` creates all 45 target tables once. Native SQL builds the channel inventory, copies preserved values with INSERT/SELECT and JOIN, and installs typed claims before applying identity deltas. No Stage 00 business schema or persistent intermediate header exists.
+
+Advisory and writer inspections read separate evidence under BEGIN and BEGIN IMMEDIATE. Python evidence contains only fields needed for relationship/identity validation; key material, publication bodies, timestamps and untouched audit/policy payloads stay in SQL staging. Preservation compares complete staged source rows against the target with bidirectional EXCEPT after applying only approved protocol deltas to the staged oracle. TEMP copies are removed before commit. There is no cross-transaction cache. Reads of the changed target remain separate validation evidence.
 
 Before commit, the runner validates the full target schema, every preserved row/column against the explicit expected identity transformation, removed host projections against their physical claims, `foreign_key_check` and `integrity_check`. It assigns version 1 once. Rebuilds create/copy a replacement before dropping the original, preserving incoming cascade families and indexes/triggers. Errors roll back both DDL/data and the header. The runner verifies physical SQLite rollback even when SQLAlchemy's logical commit failed.
 
@@ -22,11 +24,11 @@ Already-current v1 startup validates through read-only queries, including the se
 
 ## Historical evidence and tests
 
-`tests/fixtures/release_v0_1_0_original.sqlite` was created with tagged `Database.create_all()` followed by tagged `migrate()`. Its SQL capture and immutable tagged models provide independent fixture routes. Production uses named semantic evidence and only the 16 definitions needed for normalization in `src/db/legacy_stage00_ddl.py`; it never imports test models.
+`tests/fixtures/release_v0_1_0_original.sqlite` was created with tagged `Database.create_all()` followed by tagged `migrate()`. Its SQL capture and immutable tagged models provide independent fixture routes. Production uses the one pinned SQL source and current ORM target; it never imports test models or stores a parallel historical Python manifest. `INSERT ... SELECT *` is not used for transfer; source staging uses CREATE TEMP TABLE AS SELECT before any DROP.
 
-The obsolete additive/rebuild migration entry point and its seven private helpers have been removed; the atomic registered runner is the only supported migration path.
+Both the obsolete helper entry point and the internal Stage 00 normalization/platform pipeline have been removed. The atomic registered direct runner is the only production migration path.
 
-The historical Stage 00 SQL/model fixture exists solely for isolated private platform/cascade proofs. `tests/test_legacy_v0_to_v1_migration.py` covers the actual supported startup contract, preservation, faults, concurrency, backup/reopen and migrated runtime actions.
+The historical Stage 00 SQL/model fixture and captured 146 platform test oracle exist solely in tests for isolated cascade proofs; application startup still rejects that unpublished source. `tests/test_legacy_v0_to_v1_migration.py` covers the actual supported startup contract, preservation, faults, concurrency, backup/reopen and migrated runtime actions.
 
 ## One-time ActivityPub identity transition
 
@@ -35,3 +37,5 @@ Released `/actors/{user}` and `/communities/{slug}` identities become their type
 Incoming remote_subscribers are deleted only for communities whose actor id changes. Shared BridgeActorFollow and channel subscription rows are retained with `failed` and cleared Follow IDs only if their service sender or local target actor changes. Existing IDs, creation times and claims survive. Unchanged actors retain their relationship state. Repeat startup does not apply this reset.
 
 Affected outgoing subscriptions require a normal moderator subscribe retry; `pending` would block that retry without a new Follow. Affected incoming followers must follow the new community id. The transaction sends no network activities. Configuration-backed current-v1 startup rejects incompatible actor metadata without repairs.
+
+The direct SQL scenarios, physical-window rollback and malformed affinity checks are in `tests/test_direct_sql_v0_to_v1_migration.py`. The 147 A/B comparison uses the committed 146 baseline on byte-identical populated tag/model files, with legacy and already-typed identities; only timestamps of newly created connector/surface rows are excluded.
