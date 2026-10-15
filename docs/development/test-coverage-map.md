@@ -136,9 +136,9 @@ Behavior coverage lives in `test_user_profile_persistence_scenarios.py`, `test_p
 
 - Generated roles, owner exclusivity, scoped identity, parent-channel FKs, recipient selection, and retry CAS — [`tests/test_platform_data_model.py`](../../tests/test_platform_data_model.py).
 - Claim kind admission for all owner types on both connectors, schema-only `create_all()` and explicit application bootstrap — [`tests/test_stage01_review_regressions.py`](../../tests/test_stage01_review_regressions.py).
-- Isolated historical platform-input transformation, fresh/current schema parity, populated cascade preservation, failures during rebuild, concurrent migration runners, and FK enforcement after commit — [`tests/test_platform_data_model_migration_stage01.py`](../../tests/test_platform_data_model_migration_stage01.py).
+- Released-source/fresh schema parity, current-only cascade/restart preservation, real replacement-window failures, concurrent migration runners, and FK enforcement after commit — [`tests/test_platform_data_model_migration_stage01.py`](../../tests/test_platform_data_model_migration_stage01.py).
 - Mixed Discord/Fluxer post/comment routing, explicit/implicit Accept with global status promotion and Discord-only DMs, local publish fanout, HTTP dashboard, guild/guildless subscription lists, and Personal Feed view/mutation isolation — [`tests/behavior/test_platform_data_model_stage01.py`](../../tests/behavior/test_platform_data_model_stage01.py).
-- `tests/fixtures/platform_v1_schema.sql` and `tests/fixtures/platform_v1_models.py` preserve the independent v1 baseline; current ORM metadata must not generate the upgrade fixture.
+- `tests/fixtures/unsupported_stage00_schema.sql` is a rejection-only unsupported development schema; supported upgrade fixtures come from released v0 SQL, independent tagged models and the tagged SQLite file.
 
 - Released v0→current v1, source recognition, exact rollback, restored FK enforcement, semantic DDL parity, concurrent startup and migrated runtime actions — [`tests/test_legacy_v0_to_v1_migration.py`](../../tests/test_legacy_v0_to_v1_migration.py).
 
@@ -148,4 +148,4 @@ Behavior coverage lives in `test_user_profile_persistence_scenarios.py`, `test_p
 
 ## Direct released SQLite upgrade (plan 147)
 
-`tests/test_direct_sql_v0_to_v1_migration.py` covers native source staging before DROP, single ORM target creation, physical-window failures, TEMP cleanup, malformed integer-affinity snowflakes and pinned-source/schema provenance. `tests/test_legacy_v0_to_v1_migration.py` and `tests/test_legacy_identity_cutover.py` retain release, preservation, identity/owner, concurrency and runtime scenarios. Historical Stage 00 cascade tests use only the captured test oracle in `tests/support/historical_platform_probe.py`; it is not a supported startup route.
+`tests/test_direct_sql_v0_to_v1_migration.py` covers native source staging before DROP, single ORM target creation, physical-window failures, TEMP cleanup, malformed integer-affinity snowflakes and pinned-source/schema provenance. `tests/test_legacy_v0_to_v1_migration.py` and `tests/test_legacy_identity_cutover.py` retain release, preservation, identity/owner, concurrency and runtime scenarios. Current-only descendants are checked directly on v1; no obsolete migration oracle remains. `tests/test_migration_cleanup.py` covers every released scalar relation missing an FK, ancestry cycles, pre-staging rejection and native index contract changes.

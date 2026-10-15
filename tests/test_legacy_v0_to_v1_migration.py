@@ -379,7 +379,7 @@ def test_unknown_source_or_header_is_rejected_unchanged(legacy, mutation):
             if mutation == "stage00":
                 c.executescript(
                     (
-                        Path(__file__).parent / "fixtures/platform_v1_schema.sql"
+                        Path(__file__).parent / "fixtures/unsupported_stage00_schema.sql"
                     ).read_text()
                 )
         if mutation == "schema_only":

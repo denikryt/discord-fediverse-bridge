@@ -15,8 +15,6 @@ from sqlalchemy.engine import Connection, Engine
 
 from .legacy_identity_cutover import (
     IdentityCutoverConfig,
-    plan_identity_cutover,
-    apply_identity_cutover,
     validate_current_identity,
 )
 
@@ -31,126 +29,47 @@ def _normalized_sql(sql):
     return " ".join(t if t.startswith("'") else t.strip('"`[]').lower() for t in tokens)
 
 
-def _column_definition(ddl: str, name: str) -> str | None:
-    """Extract one complete table column clause, respecting nested and quoted SQL.
-
-    Commas/parentheses inside generated expressions or string literals must not
-    truncate the clause; checking the entire clause catches appended operators.
-    """
-    tokens = re.findall(
-        r"'(?:''|[^'])*'|\"(?:\"\"|[^\"])*\"|`(?:``|[^`])*`|\[[^\]]*\]|\w+|[^\s]", ddl
-    )
-    depth = 0
-    clause = []
-    for token in tokens:
-        if token == "(":
-            depth += 1
-            if depth == 1:
-                continue
-        elif token == ")":
-            depth -= 1
-        if depth == 0 or token == "," and depth == 1:
-            if clause and _normalized_sql(clause[0]) == _normalized_sql(name):
-                return _normalized_sql(" ".join(clause))
-            clause = []
-        elif depth > 0:
-            clause.append(token)
-    return None
-
-
-def _checks(sql):
-    """Extract balanced CHECK expressions without depending on constraint names."""
-    result = []
-    for m in re.finditer(r"\bCHECK\s*\(", sql or "", re.I):
-        start = m.end()
-        depth = 1
-        quote = None
-        i = start
-        while depth:
-            c = sql[i]
-            if quote:
-                if c == quote:
-                    if i + 1 < len(sql) and sql[i + 1] == quote:
-                        i += 1
-                    else:
-                        quote = None
-            elif c in "'\"":
-                quote = c
-            elif c == "(":
-                depth += 1
-            elif c == ")":
-                depth -= 1
-            i += 1
-        result.append(_normalized_sql(sql[start : i - 1]))
-    return tuple(sorted(result))
-
-
 def _table_manifest(conn: Connection, name: str) -> dict:
-    """Record semantic columns, FK groups, uniqueness, checks and explicit objects."""
+    """Compare complete SQLite DDL and native physical schema evidence.
 
-    def rows(sql):
-        """Read schema evidence through the runner-owned connection."""
-        return conn.exec_driver_sql(sql).all()
-
-    quote = '"' + name.replace('"', '""') + '"'
-    cols = tuple(
-        sorted(
-            (
-                r[1],
-                r[2].upper(),
-                r[3],
-                _normalized_sql(r[4]) if r[4] is not None else None,
-                r[5],
-                r[6],
-            )
-            for r in rows("PRAGMA table_xinfo(" + quote + ")")
-        )
-    )
-    groups = {}
-    for r in rows("PRAGMA foreign_key_list(" + quote + ")"):
-        groups.setdefault(r[0], []).append(r)
-    fks = tuple(
-        sorted(
-            (
-                g[0][2],
-                tuple(r[3] for r in sorted(g, key=lambda r: r[1])),
-                tuple(r[4] for r in sorted(g, key=lambda r: r[1])),
-                g[0][5],
-                g[0][6],
-                g[0][7],
-            )
-            for g in groups.values()
-        )
+    Keep literals intact. Only identifier quoting, whitespace and constraint
+    labels are incidental; generated expressions and STORED remain in full DDL.
+    """
+    ddl = conn.exec_driver_sql(
+        "SELECT sql FROM sqlite_master WHERE type='table' AND name=?", (name,)
+    ).scalar_one()
+    ddl = re.sub(
+        r"('(?:''|[^'])*')|\bconstraint [a-z_][a-z_0-9]* (?=(?:check|unique|primary|foreign)\b)",
+        lambda match: match.group(1) or "",
+        _normalized_sql(ddl),
     )
     indexes = []
-    unique = []
-    for r in rows("PRAGMA index_list(" + quote + ")"):
-        columns = tuple(x[2] for x in rows('PRAGMA index_info("' + r[1] + '")'))
-        if r[2]:
-            unique.append(columns)
-        if r[3] == "c":
-            sql = rows("SELECT sql FROM sqlite_master WHERE name='" + r[1] + "'")[0][0]
-            indexes.append((r[1], _normalized_sql(sql)))
-    ddl = rows(
-        "SELECT sql FROM sqlite_master WHERE type='table' AND name='" + name + "'"
-    )[0][0]
-    triggers = tuple(
-        sorted(
-            (r[0], _normalized_sql(r[1]))
-            for r in rows(
-                "SELECT name,sql FROM sqlite_master WHERE type='trigger' AND tbl_name='"
-                + name
-                + "'"
+    for index in conn.exec_driver_sql(f'PRAGMA index_list("{name}")'):
+        sql = conn.exec_driver_sql(
+            "SELECT sql FROM sqlite_master WHERE name=?", (index[1],)
+        ).scalar_one()
+        indexes.append(
+            (
+                index[1],
+                index[2],
+                index[3],
+                index[4],
+                tuple(conn.exec_driver_sql(f'PRAGMA index_xinfo("{index[1]}")').all()),
+                _normalized_sql(sql),
             )
         )
-    )
     return {
-        "columns": cols,
-        "fks": fks,
-        "unique": tuple(sorted(unique)),
-        "checks": _checks(ddl),
+        "ddl": ddl,
+        "columns": tuple(conn.exec_driver_sql(f'PRAGMA table_xinfo("{name}")').all()),
+        "fks": tuple(conn.exec_driver_sql(f'PRAGMA foreign_key_list("{name}")').all()),
         "indexes": tuple(sorted(indexes)),
-        "triggers": triggers,
+        "triggers": tuple(
+            (row[0], _normalized_sql(row[1]))
+            for row in conn.exec_driver_sql(
+                "SELECT name,sql FROM sqlite_master WHERE type='trigger' AND tbl_name=? ORDER BY name",
+                (name,),
+            )
+        ),
     }
 
 
@@ -166,68 +85,6 @@ def _require_sqlite_model_support(conn: Connection) -> None:
         raise RuntimeError("Stage 01 requires SQLite >= 3.31.0 for STORED role")
 
 
-def _model_table_manifest(conn: Connection, table) -> dict:
-    """Build the target semantic contract from current metadata, not a persistent snapshot."""
-    from sqlalchemy import UniqueConstraint
-    from sqlalchemy.schema import CreateTable, CreateIndex
-
-    primary = list(table.primary_key.columns)
-    columns = tuple(
-        sorted(
-            (
-                c.name,
-                c.type.compile(dialect=conn.dialect).upper(),
-                int(not c.nullable),
-                (
-                    _normalized_sql(str(c.server_default.arg))
-                    if c.server_default is not None and c.computed is None
-                    else None
-                ),
-                primary.index(c) + 1 if c in primary else 0,
-                3 if c.computed is not None and c.computed.persisted else 0,
-            )
-            for c in table.columns
-        )
-    )
-    fks = tuple(
-        sorted(
-            (
-                fk.elements[0].column.table.name,
-                tuple(e.parent.name for e in fk.elements),
-                tuple(e.column.name for e in fk.elements),
-                fk.onupdate or "NO ACTION",
-                fk.ondelete or "NO ACTION",
-                fk.match or "NONE",
-            )
-            for fk in table.foreign_key_constraints
-        )
-    )
-    uniques = tuple(
-        sorted(
-            tuple(c.name for c in constraint.columns)
-            for constraint in table.constraints
-            if isinstance(constraint, UniqueConstraint)
-        )
-    )
-    indexes = tuple(
-        sorted(
-            (
-                index.name,
-                _normalized_sql(str(CreateIndex(index).compile(dialect=conn.dialect))),
-            )
-            for index in table.indexes
-        )
-    )
-    return dict(
-        columns=columns,
-        fks=fks,
-        unique=uniques,
-        checks=_checks(str(CreateTable(table).compile(dialect=conn.dialect))),
-        indexes=indexes,
-        triggers=(),
-    )
-
-
 def _validate_current_v1_schema(conn: Connection) -> None:
     """Validate all target columns, constraints, indexes and triggers without repairing them."""
     from ..models import Base
@@ -238,60 +95,29 @@ def _validate_current_v1_schema(conn: Connection) -> None:
         )
     if conn.exec_driver_sql("SELECT name FROM sqlite_master WHERE type='view'").first():
         raise RuntimeError("Unexpected current v1 schema view")
-    # These deployment objects intentionally supplement model-owned indexes.
-    extras = {
-        "published_activity_objects": (
-            (
-                "ix_published_activity_objects_conversation_root_object_id",
-                _normalized_sql(
-                    "CREATE INDEX ix_published_activity_objects_conversation_root_object_id ON published_activity_objects (conversation_root_object_id)"
-                ),
-            ),
-            (
-                "ix_published_objects_user_outbox",
-                _normalized_sql(
-                    "CREATE INDEX ix_published_objects_user_outbox ON published_activity_objects (actor_username,actor_url,deleted_at,published_at,id)"
-                ),
-            ),
-        )
-    }
-    for table in Base.metadata.tables.values():
-        expected = _model_table_manifest(conn, table)
-        expected["indexes"] = tuple(
-            sorted(dict(expected["indexes"] + extras.get(table.name, ())).items())
-        )
-        if table.name == "users":
-            triggers = []
-            for slot in ("avatar", "header"):
-                for action in ("insert", "update"):
-                    name = f"users_{slot}_media_kind_{action}"
-                    operation = (
-                        "INSERT" if action == "insert" else f"UPDATE OF {slot}_media_id"
-                    )
-                    sql = f"CREATE TRIGGER {name} BEFORE {operation} ON users WHEN NEW.{slot}_media_id IS NOT NULL BEGIN SELECT CASE WHEN (SELECT media_kind FROM profile_media_assets WHERE id = NEW.{slot}_media_id) != '{slot}' THEN RAISE(ABORT, '{slot}_media_id must reference {slot} media') END; END"
-                    triggers.append((name, _normalized_sql(sql)))
-            expected["triggers"] = tuple(sorted(triggers))
-        actual = _table_manifest(conn, table.name)
-        for boundary, evidence in expected.items():
-            if actual[boundary] != evidence:
-                raise RuntimeError(
-                    f"Not the current v1 schema: {table.name}.{boundary}; restore a verified backup"
-                )
-    ddl = conn.exec_driver_sql(
-        "SELECT sql FROM sqlite_master WHERE name='platform_channel_surfaces'"
-    ).scalar_one()
-    from sqlalchemy.schema import CreateColumn
+    from sqlalchemy import create_engine
+    from . import schema
 
-    # table_xinfo proves STORED (hidden=3); the full column definition also
-    # proves the exact expression and its boundary, not merely a CASE substring.
-    role = Base.metadata.tables["platform_channel_surfaces"].c.role
-    expected_role = _normalized_sql(
-        str(CreateColumn(role).compile(dialect=conn.dialect))
-    )
-    if _column_definition(ddl, "role") != expected_role:
-        raise RuntimeError(
-            "Current v1 generated role expression differs from the model"
-        )
+    # Let SQLite construct the reference from the same ORM and deployment
+    # objects. No hand-built duplicate of model constraints is maintained.
+    reference_engine = create_engine("sqlite://")
+    try:
+        with reference_engine.connect() as reference:
+            schema.create_all(reference)
+            _install_current_schema_objects(reference)
+            for name in sorted(Base.metadata.tables):
+                actual = _table_manifest(conn, name)
+                for boundary, expected in _table_manifest(reference, name).items():
+                    if actual[boundary] != expected:
+                        # Retain diagnostic boundaries used by startup callers;
+                        # complete column/constraint DDL includes generated role.
+                        label = "columns" if boundary == "ddl" else boundary
+                        raise RuntimeError(
+                            f"Not the current v1 schema: {name}.{label}; "
+                            "restore a verified backup"
+                        )
+    finally:
+        reference_engine.dispose()
     _validate_sqlite_integrity(conn, "Current v1")
     if (
         conn.exec_driver_sql(

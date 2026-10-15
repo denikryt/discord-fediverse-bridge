@@ -28,7 +28,7 @@ Already-current v1 startup validates through read-only queries, including the se
 
 Both the obsolete helper entry point and the internal Stage 00 normalization/platform pipeline have been removed. The atomic registered direct runner is the only production migration path.
 
-The historical Stage 00 SQL/model fixture and captured 146 platform test oracle exist solely in tests for isolated cascade proofs; application startup still rejects that unpublished source. `tests/test_legacy_v0_to_v1_migration.py` covers the actual supported startup contract, preservation, faults, concurrency, backup/reopen and migrated runtime actions.
+The rejection-only `tests/fixtures/unsupported_stage00_schema.sql` captures the unsupported development shape. No test upgrades it. Released-source preservation/fault scenarios execute production `Database.migrate()`; personal-feed/outbox/mutation features absent from the release are tested on current v1 for restart preservation and actual FK cascades. The historical migration probe and its model fixture have been removed. `tests/test_legacy_v0_to_v1_migration.py` covers the actual supported startup contract, preservation, faults, concurrency, backup/reopen and migrated runtime actions.
 
 ## One-time ActivityPub identity transition
 
@@ -39,3 +39,5 @@ Incoming remote_subscribers are deleted only for communities whose actor id chan
 Affected outgoing subscriptions require a normal moderator subscribe retry; `pending` would block that retry without a new Follow. Affected incoming followers must follow the new community id. The transaction sends no network activities. Configuration-backed current-v1 startup rejects incompatible actor metadata without repairs.
 
 The direct SQL scenarios, physical-window rollback and malformed affinity checks are in `tests/test_direct_sql_v0_to_v1_migration.py`. The 147 A/B comparison uses the committed 146 baseline on byte-identical populated tag/model files, with legacy and already-typed identities; only timestamps of newly created connector/surface rows are excluded.
+
+Current-v1 admission constructs an independent in-memory schema from the ORM and retained deployment indexes/triggers, then compares complete normalized table DDL and native SQLite column/FK/index/trigger evidence. Complete generated expressions, STORED mode, defaults, collation and index predicates participate; there is no separate Python model manifest or column/CHECK parser. Unknown DDL differences remain unsupported. Fixed released relationships and channel sources are explicit SQL in `src/db/legacy_v0_sql.py`; the live runner executes individual statements without executescript.

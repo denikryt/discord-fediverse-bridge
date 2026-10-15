@@ -3,32 +3,15 @@
 from __future__ import annotations
 
 import sqlite3
-import runpy
 from pathlib import Path
-from concurrent.futures import ThreadPoolExecutor
-from threading import Barrier
 
 import pytest
-from sqlalchemy import Column, Integer, Table, event, text
+from sqlalchemy import event, text
 
 from src.db import Database, migrations
 from test_legacy_v0_to_v1_migration import legacy, _seed
-from support.historical_platform_probe import upgrade_historical_probe
 
 BASE_REGISTRY = dict(migrations.MIGRATIONS)
-
-from src.models import (
-    Base,
-    BridgeActorFollow,
-    ChannelCommunitySubscription,
-    MessageMapping,
-    PersonalFeedThreadMapping,
-    PublishedActivityObject,
-    UserActorFollowActivityId,
-    UserActorOutboundSource,
-    UserActorOutboundDelivery,
-    UserActorOutboundDeliveryFollower,
-)
 
 
 def test_new_follower_survives_repeated_migrate(tmp_path):
@@ -129,7 +112,9 @@ def test_unversioned_nonempty_database_is_not_guessed(tmp_path):
     path = tmp_path / "unknown.db"
     with sqlite3.connect(path) as connection:
         connection.executescript(
-            (Path(__file__).parent / "fixtures/platform_v1_schema.sql").read_text()
+            (
+                Path(__file__).parent / "fixtures/unsupported_stage00_schema.sql"
+            ).read_text()
         )
         connection.execute("PRAGMA user_version=0")
     database = Database(f"sqlite:///{path}")
@@ -183,13 +168,13 @@ def test_invalid_registry_fails_before_any_writes(tmp_path, monkeypatch, registr
     database.close()
 
 
-def test_both_internal_phases_share_unstamped_transaction(legacy):
-    """A reader sees released v0 while normalization/backfill share the writer lock."""
+def test_direct_transfer_shares_unstamped_transaction(legacy):
+    """A reader sees released v0 while target creation and transfer share the writer lock."""
     _seed(legacy)
     seen = []
 
     def inspect(connection, cursor, statement, parameters, context, many):
-        """Observe from an independent connection at the first platform DDL."""
+        """Observe from an independent connection at the first target DDL."""
         if statement.strip().startswith("CREATE TABLE platform_connectors"):
             assert connection.connection.driver_connection.in_transaction
             assert connection.exec_driver_sql("PRAGMA user_version").scalar_one() == 0
@@ -224,230 +209,161 @@ def test_current_runner_allows_an_existing_writer(tmp_path):
         database.close()
 
 
-def _seed_federation(database):
-    """Persist accepted relationships, typed identities, keys and mapped deliveries."""
-    old = runpy.run_path(str(Path(__file__).parent / "fixtures/platform_v1_models.py"))
-    BridgeActorFollow = old["BridgeActorFollow"]
-    ChannelCommunitySubscription = old["ChannelCommunitySubscription"]
-    MessageMapping = old["MessageMapping"]
-    PublishedActivityObject = old["PublishedActivityObject"]
-    PersonalFeedThreadMapping = old["PersonalFeedThreadMapping"]
-    UserActorFollowActivityId = old["UserActorFollowActivityId"]
-    UserActorOutboundSource = old["UserActorOutboundSource"]
-    UserActorOutboundDelivery = old["UserActorOutboundDelivery"]
-    UserActorOutboundDeliveryFollower = old["UserActorOutboundDeliveryFollower"]
-    now = "2026-06-21T12:00:00Z"
-    with database.engine.begin() as connection:
-        connection.execute(
-            text(
-                "INSERT INTO users (id, discord_user_id, activitypub_username, actor_url, inbox_url, outbox_url, followers_url, public_key_pem, private_key_pem, profile_version, created_at, updated_at) VALUES (1, '1', 'alice', 'https://bridge.example/actors/users/alice', 'https://bridge.example/actors/users/alice/inbox', 'https://bridge.example/actors/users/alice/outbox', 'https://bridge.example/actors/users/alice/followers', 'public', 'private', 3, :now, :now)"
-            ),
-            {"now": now},
-        )
-        connection.execute(
-            text(
-                "INSERT INTO local_communities (id, discord_guild_id, discord_forum_channel_id, slug, display_name, actor_url, inbox_url, outbox_url, followers_url, public_key_pem, private_key_pem, status, created_at, updated_at) VALUES (2, 10, 20, 'python', 'Python', 'https://bridge.example/actors/communities/python', 'https://bridge.example/actors/communities/python/inbox', 'https://bridge.example/actors/communities/python/outbox', 'https://bridge.example/actors/communities/python/followers', 'public', 'private', 'active', :now, :now)"
-            ),
-            {"now": now},
-        )
-        connection.execute(
-            text(
-                "INSERT INTO bridge_actor_keys (id, actor_url, key_id, key_format, algorithm, public_key_data, private_key_data, created_at, updated_at) VALUES (1, 'https://bridge.example/actors/services/bridge', 'https://bridge.example/actors/services/bridge#main-key', 'jwk', 'RSASSA-PKCS1-v1_5', '{}', '{}', :now, :now)"
-            ),
-            {"now": now},
-        )
-        connection.execute(
-            text(
-                "INSERT INTO local_community_threads (id, local_community_id, ap_activity_id, ap_object_id, direction, origin_kind, created_at) VALUES (5, 2, 'https://bridge.example/actors/communities/python/activities/create/posts/thread-1', 'https://bridge.example/actors/communities/python/objects/posts/thread-1', 'outbound', 'discord', :now)"
-            ),
-            {"now": now},
-        )
-        connection.execute(
-            text(
-                "INSERT INTO local_community_thread_surfaces (id, local_community_thread_id, discord_forum_channel_id, discord_thread_id, discord_starter_message_id, local_subscriber_id, role, created_at) VALUES (6, 5, 20, 30, 40, NULL, 'host', :now)"
-            ),
-            {"now": now},
-        )
-        connection.execute(
-            text(
-                "INSERT INTO local_community_messages (id, local_community_thread_id, ap_activity_id, ap_object_id, parent_ap_object_id, direction, created_at) VALUES (7, 5, 'https://bridge.example/actors/communities/python/activities/create/comments/msg-1', 'https://bridge.example/actors/communities/python/objects/comments/msg-1', 'https://bridge.example/actors/communities/python/objects/posts/thread-1', 'outbound', :now)"
-            ),
-            {"now": now},
-        )
-        connection.execute(
-            text(
-                "INSERT INTO local_community_message_surfaces (id, local_community_message_id, local_community_thread_surface_id, discord_forum_channel_id, discord_message_id, parent_discord_message_id, local_subscriber_id, role, created_at) VALUES (8, 7, 6, 20, 50, 40, NULL, 'host', :now)"
-            ),
-            {"now": now},
-        )
-        connection.execute(
-            text(
-                "INSERT INTO user_actor_followers (id, user_id, remote_actor_id, remote_inbox_url, follow_activity_id, status, owner_notification_state, created_at, updated_at) VALUES (9, 1, 'https://remote.example/actors/users/bob', 'https://remote.example/inbox', 'https://remote.example/follows/1', 'accepted', 'pending', :now, :now)"
-            ),
-            {"now": now},
-        )
-        connection.execute(
-            text(
-                "INSERT INTO remote_subscribers (id, local_community_id, remote_actor_id, remote_inbox_url, follow_activity_id, status, created_at, updated_at) VALUES (10, 2, 'https://remote.example/u/bob', 'https://remote.example/inbox', 'https://remote.example/follows/2', 'accepted', :now, :now)"
-            ),
-            {"now": now},
-        )
+def _seed_current_federation_confirmations(database):
+    """Retain accepted followers, Follow ledger, service keys, claims and retry metadata on v1."""
+    from src.models import (
+        User,
+        BridgeActorKey,
+        LocalCommunity,
+        LocalSubscriber,
+        RemoteSubscriber,
+        ChannelCommunitySubscription,
+        BridgeActorFollow,
+        UserActorOutboundDelivery,
+    )
 
-        # Core inserts apply model defaults, while the raw snapshot preserves
-        # every column rather than only the originally reported follower count.
-        connection.execute(
-            UserActorFollowActivityId.__table__.insert().values(
-                follow_activity_id="https://remote.example/follows/1",
-                user_id=1,
-                remote_actor_id="https://remote.example/actors/users/bob",
+    with database.immediate_session() as session:
+        user = session.query(User).one()
+        user.profile_version = 3
+        service = "https://bridge.test/actors/services/bridge"
+        session.add(
+            BridgeActorKey(
+                actor_url=service,
+                key_id=service + "#main-key",
+                key_format="jwk",
+                algorithm="RSASSA-PKCS1-v1_5",
+                public_key_data="{}",
+                private_key_data="{}",
             )
         )
-        connection.execute(
-            BridgeActorFollow.__table__.insert().values(
-                community_actor_id="https://remote.example/c/python",
-                follow_activity_id="https://bridge.example/actors/services/bridge/follows/1",
-                community_inbox_url="https://remote.example/inbox",
-                status="accepted",
-            )
+        database.user_actor_followers.create_or_refresh(
+            session,
+            user_id=user.id,
+            remote_actor_id="https://remote.test/u/bob",
+            remote_inbox_url="https://remote.test/inbox",
+            remote_shared_inbox_url=None,
+            follow_activity_id="https://remote.test/follows/1",
         )
-        connection.execute(
-            ChannelCommunitySubscription.__table__.insert().values(
-                discord_channel_id=99,
-                discord_guild_id=10,
-                lemmy_community_actor_id="https://remote.example/c/python",
-                follow_activity_id="https://bridge.example/actors/services/bridge/follows/1",
-                status="accepted",
-            )
+        actor = "https://bridge.test/actors/communities/news"
+        community = LocalCommunity(
+            slug="news",
+            display_name="News",
+            actor_url=actor,
+            inbox_url=actor + "/inbox",
+            outbox_url=actor + "/outbox",
+            followers_url=actor + "/followers",
+            public_key_pem="community-public",
+            private_key_pem="community-private",
         )
-        actor = "https://bridge.example/actors/users/alice"
-        activity = f"{actor}/activities/create/posts/content"
-        object_id = f"{actor}/objects/posts/content"
-        connection.execute(
-            PublishedActivityObject.__table__.insert().values(
-                id=1,
-                actor_username="alice",
-                actor_url=actor,
-                publication_context="personal_feed",
-                community_actor_url=None,
-                activity_id=activity,
-                object_id=object_id,
-                kind="post",
-                body_markdown="durable body",
-                conversation_root_object_id=object_id,
-                discord_guild_id=10,
-                discord_channel_id=20,
-                discord_message_id=100,
-            )
+        session.add(community)
+        session.flush()
+        subscriber = LocalSubscriber(
+            local_community_id=community.id, discord_guild_id=1, discord_channel_id=991
         )
-        connection.execute(
-            MessageMapping.__table__.insert().values(
-                source_platform="discord",
-                source_id="100",
-                activity_id=activity,
-                object_id=object_id,
-                actor_url=actor,
-                publication_context="personal_feed",
-                community_actor_url=None,
-                discord_guild_id=10,
-                discord_channel_id=20,
-                discord_message_id=100,
-            )
+        follow_id = service + "/activities/follow/stable"
+        subscription = ChannelCommunitySubscription(
+            discord_guild_id=1,
+            discord_channel_id=992,
+            lemmy_community_actor_id="https://remote.test/c/news",
+            status="accepted",
+            follow_activity_id=follow_id,
         )
-        connection.execute(
-            PersonalFeedThreadMapping.__table__.insert().values(
-                root_published_object_id=1,
-                root_discord_channel_id=20,
-                root_discord_message_id=100,
-                thread_id=100,
-            )
+        session.add_all(
+            [
+                subscriber,
+                subscription,
+                RemoteSubscriber(
+                    local_community_id=community.id,
+                    remote_actor_id="https://remote.test/u/bob",
+                    remote_inbox_url="https://remote.test/inbox",
+                    follow_activity_id="https://remote.test/follows/community",
+                ),
+                BridgeActorFollow(
+                    community_actor_id="https://remote.test/c/news",
+                    follow_activity_id=follow_id,
+                    status="accepted",
+                ),
+            ]
         )
-        connection.execute(
-            UserActorOutboundSource.__table__.insert().values(
-                id=1,
-                user_id=1,
-                source_kind="content_create",
-                ordering_key="content:1",
-                logical_version=1,
-                activity_id=activity,
-                published_object_id=1,
-                snapshot_json='{"body":"durable body"}',
-                activity_json='{"type":"Create"}',
-                state="ready",
-            )
+        session.flush()
+        repo = database.platform_surfaces
+        host = repo.ensure_channel(
+            session,
+            connector_key="discord-primary",
+            external_channel_id="990",
+            external_guild_id="1",
+            kind="forum",
         )
-        connection.execute(
-            UserActorOutboundDelivery.__table__.insert().values(
-                id=1,
-                source_id=1,
-                target_endpoint_url="https://remote.example/inbox",
-                status="failed",
-                attempt_count=2,
-                last_error="retry retained",
-            )
+        repo.claim_local_host(session, host.id, community.id)
+        local = repo.ensure_channel(
+            session,
+            connector_key="discord-primary",
+            external_channel_id="991",
+            external_guild_id="1",
+            kind="forum",
         )
-        connection.execute(
-            UserActorOutboundDeliveryFollower.__table__.insert().values(
-                delivery_id=1,
-                relationship_id_snapshot=9,
-                remote_actor_id="https://remote.example/actors/users/bob",
-                snapshotted_endpoint_url="https://remote.example/inbox",
-            )
+        repo.claim_local_subscriber(session, local.id, subscriber.id)
+        remote = repo.ensure_channel(
+            session,
+            connector_key="discord-primary",
+            external_channel_id="992",
+            external_guild_id="1",
+            kind="forum",
         )
+        repo.claim_remote_subscription(session, remote.id, subscription.id)
+        delivery = session.query(UserActorOutboundDelivery).one()
+        delivery.status = "failed"
+        delivery.attempt_count = 2
+        delivery.last_error = "retry retained"
 
 
-@pytest.mark.parametrize("initial_version", [0, 1])
-def test_baseline_and_restart_preserve_complete_federation_snapshot(
-    tmp_path, initial_version
-):
-    """Isolated internal phase preserves identity/state; public unversioned adoption is rejected."""
+@pytest.mark.parametrize("source", ["release", "current"])
+def test_restart_preserves_complete_federation_snapshot(tmp_path, source):
+    """Supported release/current state survives migration and a fresh process-style reopen."""
+    from test_platform_data_model_migration_stage01 import (
+        _released_database,
+        _current_database,
+        _seed_cascade_graph,
+    )
+
     path = tmp_path / "federation.db"
-    with sqlite3.connect(path) as connection:
-        connection.executescript(
-            (Path(__file__).parent / "fixtures/platform_v1_schema.sql").read_text()
-        )
-    database = Database(f"sqlite:///{path}")
-    _seed_federation(database)
-    with database.engine.begin() as connection:
-        connection.exec_driver_sql(f"PRAGMA user_version={initial_version}")
-    before = _snapshot(database)
-    if initial_version == 0:
-        with pytest.raises(RuntimeError, match="Unsupported"):
-            database.migrate()
-        assert _snapshot(database) == before and _version(database) == 0
-        database.close()
-        return
-    with database.engine.connect() as connection:
+    db = _released_database(path) if source == "release" else _current_database(path)
+    (_seed if source == "release" else _seed_cascade_graph)(db)
+    if source == "current":
+        _seed_current_federation_confirmations(db)
+    with db.engine.connect() as c:
         columns = {
             name: [
-                r[1]
-                for r in connection.exec_driver_sql(f'PRAGMA table_info("{name}")')
+                row[1]
+                for row in c.exec_driver_sql(f'PRAGMA table_info("{name}")')
                 if name != "local_communities"
-                or r[1] not in {"discord_guild_id", "discord_forum_channel_id"}
+                or row[1] not in {"discord_guild_id", "discord_forum_channel_id"}
             ]
-            for name in before[1]
+            for (name,) in c.exec_driver_sql(
+                "SELECT name FROM sqlite_master WHERE type='table' AND name NOT GLOB 'sqlite_*'"
+            )
         }
-        preserved = {
-            name: connection.exec_driver_sql(
-                f'SELECT {",".join(columns[name])} FROM "{name}" ORDER BY rowid'
+        before = {
+            name: c.exec_driver_sql(
+                f'SELECT {",".join(cols)} FROM "{name}" ORDER BY id'
             ).all()
-            for name in columns
+            for name, cols in columns.items()
         }
-    upgrade_historical_probe(database)
-    assert _version(database) == 1
-    after = _snapshot(database)
-    database.close()
+    db.migrate()
+    after = _snapshot(db)
+    db.close()
     reopened = Database(f"sqlite:///{path}")
     reopened.migrate()
-    assert _version(reopened) == 1 and _snapshot(reopened) == after
-    with reopened.engine.connect() as connection:
-        for name in columns:
+    assert _snapshot(reopened) == after
+    with reopened.engine.connect() as c:
+        for name, cols in columns.items():
             assert (
-                connection.exec_driver_sql(
-                    f'SELECT {",".join(columns[name])} FROM "{name}" ORDER BY rowid'
+                c.exec_driver_sql(
+                    f'SELECT {",".join(cols)} FROM "{name}" ORDER BY id'
                 ).all()
-                == preserved[name]
+                == before[name]
             )
-        assert connection.exec_driver_sql("PRAGMA foreign_key_check").all() == []
+        assert c.exec_driver_sql("PRAGMA foreign_key_check").all() == []
     reopened.close()
 
 
