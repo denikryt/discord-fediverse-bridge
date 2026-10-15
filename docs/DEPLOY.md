@@ -213,3 +213,7 @@ The bot also needs permission in each bound feed channel to view the channel, re
 ## Stage 9 maintenance
 
 Use `bridge-user-deliveries` for bounded, database-only diagnostics and explicit retry resets. Bulk retry requires `--username --all-failed --limit` and processes at most 100 rows. Use `bridge-profile-media cleanup` with explicit database, media root, deployment lock, and media lock paths. A complete backup must contain both the SQLite database and profile-media volume; exporting a container image is not a volume backup.
+
+## Database upgrade boundary
+
+Back up SQLite and profile media before starting a new application revision. Current startup migrates a recognized released `v0.1.0` database directly from schema version 0 to current 1. It rejects unsupported/partial schemas rather than repairing or stamping them. Do not manually change `user_version` or install an intermediate revision; see [SQLite startup migrations](development/database-migrations.md).

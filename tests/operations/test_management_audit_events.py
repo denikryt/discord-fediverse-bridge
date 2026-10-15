@@ -100,7 +100,7 @@ def test_clean_database_has_audit_and_corrupt_current_database_is_rejected(
     existing = build_database(tmp_path, "audit-existing.db")
     with existing.session() as session:
         session.execute(text("DROP TABLE management_audit_events"))
-    with pytest.raises(RuntimeError, match="Incomplete"):
+    with pytest.raises(RuntimeError, match="current v1"):
         existing.migrate()
     with clean.session() as session:
         assert (

@@ -1,4 +1,5 @@
--- Immutable baseline a37986c schema, generated before v2 model edits.
+-- Historical Stage 00 input (a37986c), test-only private-phase probe.
+-- profile_version DEFAULT 0 matches the deployed normalization contract.
 CREATE TABLE activitypub_event_receipts (
 	id INTEGER NOT NULL,
 	delivery_id VARCHAR(128) NOT NULL,
@@ -709,7 +710,7 @@ CREATE TABLE users (
 	summary VARCHAR(500),
 	avatar_media_id INTEGER,
 	header_media_id INTEGER,
-	profile_version INTEGER NOT NULL,
+	profile_version INTEGER DEFAULT 0 NOT NULL,
 	created_at DATETIME NOT NULL,
 	updated_at DATETIME NOT NULL,
 	PRIMARY KEY (id),

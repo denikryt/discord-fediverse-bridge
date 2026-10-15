@@ -101,3 +101,5 @@ The gateway renders User Actor outboxes from a fixed-size internal DTO. Python o
 ## Platform persistence boundary
 
 Stage 01 separates domain actors from physical connector/channel locations. `src/db/repositories/platform_surfaces.py` owns placement resolution and typed claim mutations. Discord routing uses current `discord-primary` claims; connector-scoped historical copies survive release and rebinding. Fluxer rows are persistence-only at this stage. SQLite 3.31+ is required for stored generated roles; PostgreSQL 12+ DDL compatibility does not imply a PostgreSQL runtime migration implementation.
+
+Database startup supports released v0.1.0 SQLite sources at version 0 and the complete current model at version 1. It upgrades directly in one transaction; Stage 00 normalization is private transaction-local input. See [SQLite startup migrations](../development/database-migrations.md).

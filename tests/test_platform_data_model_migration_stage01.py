@@ -1,4 +1,4 @@
-"""Real immutable v1 SQLite upgrades and atomic v2 bootstrap scenarios."""
+"""Isolated historical-input cascade proofs and atomic current-v1 bootstrap scenarios."""
 
 import sqlite3
 import runpy
@@ -10,10 +10,11 @@ from sqlalchemy.orm import Session
 
 from src.db import Database
 from src.db import migrations
+from support.historical_platform_probe import upgrade_historical_probe
 
 
-def _v1(path):
-    """Install the independently captured v1 DDL, never new ORM metadata."""
+def _historical_stage00(path):
+    """Install a private historical input fixture, not a supported public database."""
     conn = sqlite3.connect(path)
     conn.executescript(
         (Path(__file__).parent / "fixtures/platform_v1_schema.sql").read_text()
@@ -114,8 +115,8 @@ def _seed_cascade_graph(database):
 
 
 def test_populated_published_parent_rebuild_preserves_cascade_graph(tmp_path):
-    """Published root and all cascade families survive the real registered upgrade."""
-    database = _v1(tmp_path / "old.db")
+    """Published root and all cascade families survive the isolated private platform phase."""
+    database = _historical_stage00(tmp_path / "old.db")
     _seed_cascade_graph(database)
     names = [
         "published_activity_objects",
@@ -131,7 +132,7 @@ def test_populated_published_parent_rebuild_preserves_cascade_graph(tmp_path):
             n: conn.exec_driver_sql(f'SELECT * FROM "{n}" ORDER BY id').mappings().all()
             for n in names
         }
-    database.migrate()
+    upgrade_historical_probe(database)
     with database.engine.connect() as conn:
         for name in names:
             after = (
@@ -148,7 +149,7 @@ def test_populated_published_parent_rebuild_preserves_cascade_graph(tmp_path):
 
 def test_known_discord_source_without_channel_keeps_scoped_dedup_identity(tmp_path):
     """A known source connector is retained even when its legacy channel is unknown."""
-    database = _v1(tmp_path / "unknown-channel.db")
+    database = _historical_stage00(tmp_path / "unknown-channel.db")
     old = runpy.run_path(str(Path(__file__).parent / "fixtures/platform_v1_models.py"))
     with Session(database.engine, expire_on_commit=False) as session:
         row = old["MessageMapping"](
@@ -161,7 +162,7 @@ def test_known_discord_source_without_channel_keeps_scoped_dedup_identity(tmp_pa
         )
         session.add(row)
         session.commit()
-    database.migrate()
+    upgrade_historical_probe(database)
     actual = database.message_mappings.get_message_mapping_by_source(
         "discord", "opaque-source"
     )
@@ -186,13 +187,13 @@ def test_known_discord_source_without_channel_keeps_scoped_dedup_identity(tmp_pa
 
 
 def test_v1_upgrade_and_fresh_bootstrap_have_equivalent_schema(tmp_path):
-    """A real v1 header upgrades once and matches atomically bootstrapped v2."""
-    upgraded = _v1(tmp_path / "old.db")
+    """Private historical transformation matches atomically bootstrapped current v1."""
+    upgraded = _historical_stage00(tmp_path / "old.db")
     fresh = Database(f"sqlite:///{tmp_path / 'fresh.db'}")
     for db in (upgraded, fresh):
-        db.migrate()
+        upgrade_historical_probe(db)
         with db.engine.connect() as conn:
-            assert conn.exec_driver_sql("PRAGMA user_version").scalar_one() == 2
+            assert conn.exec_driver_sql("PRAGMA user_version").scalar_one() == 1
             assert conn.exec_driver_sql("PRAGMA foreign_keys").scalar_one() == 1
             assert conn.exec_driver_sql("PRAGMA foreign_key_check").all() == []
             assert (
@@ -214,7 +215,7 @@ def test_v1_upgrade_and_fresh_bootstrap_have_equivalent_schema(tmp_path):
                 )[6]
                 == 3
             )
-        db.migrate()
+        upgrade_historical_probe(db)
 
     def inventory(db):
         """Compare actual constraints/index/trigger DDL, allowing quoting of rebuilt names."""
@@ -241,7 +242,7 @@ def test_bootstrap_fault_rolls_back_schema_and_header(tmp_path, monkeypatch):
 
     monkeypatch.setattr(migrations, "_install_profile_media_triggers", fail)
     with pytest.raises(RuntimeError, match="injected failure"):
-        database.migrate()
+        upgrade_historical_probe(database)
     with database.engine.connect() as conn:
         assert conn.exec_driver_sql("PRAGMA user_version").scalar_one() == 0
         assert (
@@ -252,13 +253,13 @@ def test_bootstrap_fault_rolls_back_schema_and_header(tmp_path, monkeypatch):
         )
         assert conn.exec_driver_sql("PRAGMA foreign_keys").scalar_one() == 1
     monkeypatch.setattr(migrations, "_install_profile_media_triggers", original)
-    database.migrate()
+    upgrade_historical_probe(database)
 
 
 def test_rebuild_fault_restores_v1_and_fk_enforcement(tmp_path, monkeypatch):
     """Failure after DROP of the published parent restores the original schema."""
-    database = _v1(tmp_path / "old.db")
-    original = migrations._rebuild_v2_table
+    database = _historical_stage00(tmp_path / "old.db")
+    original = migrations._rebuild_current_table
 
     def fail(conn, name, rows):
         """Inject an error after rebuilding the real historical parent."""
@@ -266,9 +267,9 @@ def test_rebuild_fault_restores_v1_and_fk_enforcement(tmp_path, monkeypatch):
         if name == "published_activity_objects":
             raise RuntimeError("injected rebuild failure")
 
-    monkeypatch.setattr(migrations, "_rebuild_v2_table", fail)
+    monkeypatch.setattr(migrations, "_rebuild_current_table", fail)
     with pytest.raises(RuntimeError, match="injected rebuild failure"):
-        database.migrate()
+        upgrade_historical_probe(database)
     with database.engine.connect() as conn:
         assert conn.exec_driver_sql("PRAGMA user_version").scalar_one() == 1
         assert conn.exec_driver_sql("PRAGMA foreign_keys").scalar_one() == 1
@@ -281,15 +282,15 @@ def test_rebuild_fault_restores_v1_and_fk_enforcement(tmp_path, monkeypatch):
             ).all()
             == []
         )
-    monkeypatch.setattr(migrations, "_rebuild_v2_table", original)
-    database.migrate()
+    monkeypatch.setattr(migrations, "_rebuild_current_table", original)
+    upgrade_historical_probe(database)
 
 
 def test_failure_between_parent_drop_and_rename_restores_populated_graph(tmp_path):
     """An interrupted parent rebuild rolls back its cascades and original DDL."""
     from sqlalchemy import event
 
-    database = _v1(tmp_path / "drop-fault.db")
+    database = _historical_stage00(tmp_path / "drop-fault.db")
     _seed_cascade_graph(database)
     with database.engine.connect() as conn:
         before = conn.exec_driver_sql(
@@ -304,7 +305,7 @@ def test_failure_between_parent_drop_and_rename_restores_populated_graph(tmp_pat
     event.listen(database.engine, "after_cursor_execute", interrupt)
     try:
         with pytest.raises(RuntimeError, match="after parent drop"):
-            database.migrate()
+            upgrade_historical_probe(database)
     finally:
         event.remove(database.engine, "after_cursor_execute", interrupt)
     with database.engine.connect() as conn:
@@ -328,7 +329,7 @@ def test_failure_between_parent_drop_and_rename_restores_populated_graph(tmp_pat
             assert (
                 conn.exec_driver_sql(f'SELECT count(*) FROM "{name}"').scalar_one() == 1
             )
-    database.migrate()
+    upgrade_historical_probe(database)
 
 
 @pytest.mark.parametrize("upgrade", [False, True])
@@ -338,23 +339,32 @@ def test_two_migrators_recheck_header_under_writer_lock(tmp_path, upgrade):
     from threading import Barrier
 
     path = tmp_path / "concurrent.db"
-    first = _v1(path) if upgrade else Database(f"sqlite:///{path}")
+    first = Database(f"sqlite:///{path}")
     if upgrade:
-        _seed_cascade_graph(first)
+        with sqlite3.connect(path) as conn:
+            conn.executescript(
+                (
+                    Path(__file__).parent / "fixtures/release_v0_1_0_schema.sql"
+                ).read_text()
+            )
+    if upgrade:
+        from test_legacy_v0_to_v1_migration import _seed
+
+        _seed(first)
     second = Database(f"sqlite:///{path}")
     barrier = Barrier(2)
 
     def start(db):
         """Release both independently connected migration runners together."""
         barrier.wait(timeout=10)
-        db.migrate()
+        upgrade_historical_probe(db)
 
     with ThreadPoolExecutor(max_workers=2) as pool:
         results = [pool.submit(start, db) for db in (first, second)]
         for result in results:
             result.result(timeout=30)
     with first.engine.connect() as conn:
-        assert conn.exec_driver_sql("PRAGMA user_version").scalar_one() == 2
+        assert conn.exec_driver_sql("PRAGMA user_version").scalar_one() == 1
         assert (
             conn.exec_driver_sql(
                 "SELECT count(*) FROM platform_connectors"
@@ -366,9 +376,9 @@ def test_two_migrators_recheck_header_under_writer_lock(tmp_path, upgrade):
         if upgrade:
             assert (
                 conn.exec_driver_sql(
-                    "SELECT count(*) FROM user_actor_outbound_delivery_followers"
+                    "SELECT count(*) FROM published_activity_objects"
                 ).scalar_one()
-                == 1
+                == 2
             )
 
 
@@ -379,8 +389,8 @@ def test_published_composite_fk_is_enforced_after_commit(tmp_path, upgrade):
     from src.models import PublishedActivityObject
 
     path = tmp_path / "enforced.db"
-    database = _v1(path) if upgrade else Database(f"sqlite:///{path}")
-    database.migrate()
+    database = _historical_stage00(path) if upgrade else Database(f"sqlite:///{path}")
+    upgrade_historical_probe(database)
     with database.immediate_session() as session:
         repo = database.platform_surfaces
         connector = repo.add_connector(
@@ -440,7 +450,7 @@ def test_unsupported_sqlite_fails_before_any_write(tmp_path):
 
     event.listen(database.engine, "connect", old_version)
     with pytest.raises(RuntimeError, match="SQLite >= 3.31.0"):
-        database.migrate()
+        upgrade_historical_probe(database)
     with database.engine.connect() as conn:
         assert conn.exec_driver_sql("PRAGMA user_version").scalar_one() == 0
         assert (

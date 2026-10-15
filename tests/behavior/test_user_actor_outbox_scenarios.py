@@ -119,10 +119,10 @@ def test_current_missing_outbox_index_is_not_silently_repaired(tmp_path: Path) -
                 "1, 'none', 0, 0, '2026-01-01', '2026-01-01')"
             )
         )
-    with pytest.raises(RuntimeError, match="schema objects"):
+    with pytest.raises(RuntimeError, match="published_activity_objects.indexes"):
         database.migrate()
     with database.engine.connect() as migrated:
-        assert migrated.exec_driver_sql("PRAGMA user_version").scalar_one() == 2
+        assert migrated.exec_driver_sql("PRAGMA user_version").scalar_one() == 1
         assert (
             migrated.exec_driver_sql(
                 "SELECT count(*) FROM published_activity_objects"

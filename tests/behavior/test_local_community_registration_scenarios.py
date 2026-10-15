@@ -373,7 +373,7 @@ def test_existing_database_unversioned_startup_preserves_nullable_owner_column(
             ).all()
             for name in names
         }
-    with pytest.raises(RuntimeError, match="baseline"):
+    with pytest.raises(RuntimeError, match="Unsupported"):
         database.migrate()
     with database.engine.connect() as connection:
         assert connection.exec_driver_sql("PRAGMA user_version").scalar_one() == 0
@@ -481,7 +481,7 @@ def test_summary_nullable_unversioned_startup_preserves_constraints(
             ).all()
             for name in names
         }
-    with pytest.raises(RuntimeError, match="baseline"):
+    with pytest.raises(RuntimeError, match="Unsupported"):
         database.migrate()
     with database.engine.connect() as connection:
         assert connection.exec_driver_sql("PRAGMA user_version").scalar_one() == 0

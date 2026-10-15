@@ -136,6 +136,12 @@ Behavior coverage lives in `test_user_profile_persistence_scenarios.py`, `test_p
 
 - Generated roles, owner exclusivity, scoped identity, parent-channel FKs, recipient selection, and retry CAS — [`tests/test_platform_data_model.py`](../../tests/test_platform_data_model.py).
 - Claim kind admission for all owner types on both connectors, schema-only `create_all()` and explicit application bootstrap — [`tests/test_stage01_review_regressions.py`](../../tests/test_stage01_review_regressions.py).
-- Immutable v1 fixture upgrade, fresh/upgraded schema parity, populated cascade preservation, failures during rebuild, concurrent migration runners, and FK enforcement after commit — [`tests/test_platform_data_model_migration_stage01.py`](../../tests/test_platform_data_model_migration_stage01.py).
+- Isolated historical platform-input transformation, fresh/current schema parity, populated cascade preservation, failures during rebuild, concurrent migration runners, and FK enforcement after commit — [`tests/test_platform_data_model_migration_stage01.py`](../../tests/test_platform_data_model_migration_stage01.py).
 - Mixed Discord/Fluxer post/comment routing, explicit/implicit Accept with global status promotion and Discord-only DMs, local publish fanout, HTTP dashboard, guild/guildless subscription lists, and Personal Feed view/mutation isolation — [`tests/behavior/test_platform_data_model_stage01.py`](../../tests/behavior/test_platform_data_model_stage01.py).
 - `tests/fixtures/platform_v1_schema.sql` and `tests/fixtures/platform_v1_models.py` preserve the independent v1 baseline; current ORM metadata must not generate the upgrade fixture.
+
+- Released v0→current v1, source recognition, exact rollback, restored FK enforcement, semantic DDL parity, concurrent startup and migrated runtime actions — [`tests/test_legacy_v0_to_v1_migration.py`](../../tests/test_legacy_v0_to_v1_migration.py).
+
+- Complete generated-role column admission: appended expression, wrapper, VIRTUAL mode rejection, formatting tolerance and unchanged database on rejection — [`tests/test_current_v1_generated_role_validation.py`](../../tests/test_current_v1_generated_role_validation.py).
+
+- Real released AP namespaces, selective relationship reset, linked routing/JSON conversion, signed-payload/collision rejection, actor API, concurrent cutover and retained-claim retry — [`tests/test_legacy_identity_cutover.py`](../../tests/test_legacy_identity_cutover.py).

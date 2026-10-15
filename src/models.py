@@ -5,6 +5,7 @@ from __future__ import annotations
 from datetime import datetime, timezone
 
 from sqlalchemy import (
+    text,
     Boolean,
     CheckConstraint,
     Computed,
@@ -382,7 +383,9 @@ class User(Base):
     header_media_id: Mapped[int | None] = mapped_column(
         ForeignKey("profile_media_assets.id", ondelete="RESTRICT"), nullable=True
     )
-    profile_version: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    profile_version: Mapped[int] = mapped_column(
+        Integer, nullable=False, default=0, server_default=text("0")
+    )
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), default=utcnow, nullable=False
     )

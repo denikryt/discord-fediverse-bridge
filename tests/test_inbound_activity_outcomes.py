@@ -92,7 +92,7 @@ def test_unversioned_startup_preserves_outcome_without_backfilling_legacy_rows(
             ).all()
             for name in names
         }
-    with pytest.raises(RuntimeError, match="baseline"):
+    with pytest.raises(RuntimeError, match="Unsupported"):
         database.migrate()
     with database.engine.connect() as connection:
         assert connection.exec_driver_sql("PRAGMA user_version").scalar_one() == 0

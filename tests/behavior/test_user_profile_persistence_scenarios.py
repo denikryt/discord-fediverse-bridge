@@ -102,7 +102,7 @@ def test_profile_field_name_accepts_255_code_points_and_rejects_256(
 def test_current_startup_does_not_repeat_legacy_profile_field_rebuild(
     tmp_path: Path,
 ) -> None:
-    """An existing Stage 1 draft schema migrates to the approved 255-width contract."""
+    """A stamped but obsolete profile shape is rejected without repairs or row changes."""
     import sqlite3
 
     path = tmp_path / "legacy.db"
@@ -128,7 +128,8 @@ def test_current_startup_does_not_repeat_legacy_profile_field_rebuild(
         """)
         connection.execute("DROP TABLE user_profile_fields_current")
     migrated = Database(f"sqlite:///{path}")
-    migrated.migrate()
+    with pytest.raises(RuntimeError, match="user_profile_fields.columns"):
+        migrated.migrate()
     with migrated.engine.connect() as connection:
         rows = connection.execute(
             text("PRAGMA table_info(user_profile_fields)")

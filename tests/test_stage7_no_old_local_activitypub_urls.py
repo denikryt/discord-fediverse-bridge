@@ -28,6 +28,7 @@ EXCLUDED_PREFIXES = (
 )
 EXCLUDED_FILES = {
     "tests/test_stage4_identity_migration.py",
+    "tests/test_legacy_identity_cutover.py",
     "tests/test_stage5_exact_stage4_migration.py",
     "tests/test_activitypub_identity_urls.py",
     "fedify-gateway/tests/verify-activitypub-identity-urls.ts",

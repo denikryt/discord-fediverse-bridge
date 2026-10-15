@@ -127,18 +127,11 @@ class Database:
                 migrations._require_sqlite_model_support(conn)
             schema.create_all(conn)
 
-    def migrate(self) -> None:
-        """Preflight and initialize SQLite without rewriting federation identities.
-
-        Existing versioned databases upgrade before metadata sees new tables.
-        Fresh databases bootstrap current models and version together. Nonempty
-        unversioned files require an explicitly prepared versioned baseline.
-        """
-        version, _empty = migrations.read_database_state(self.engine)
-        if version:
-            migrations.run_pending_migrations(self.engine)
-        elif _empty:
-            migrations.bootstrap_current_schema_v2(self.engine)
+    def migrate(
+        self, *, identity: migrations.IdentityCutoverConfig | None = None
+    ) -> None:
+        """Validate current v1, bootstrap an empty file, or atomically upgrade released v0."""
+        migrations.run_pending_migrations(self.engine, identity)
 
     @contextmanager
     def immediate_session(self) -> Iterator[Session]:

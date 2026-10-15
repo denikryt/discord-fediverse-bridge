@@ -6,15 +6,8 @@
   workflows have runtime regressions. Personal Feed channel admission also
   checks the requested user, preventing cross-user channel collisions.
 
-- Stage 01 uses registered atomic v1→v2 migration with FK suspension before
-  the transaction and restoration after commit/rollback. Generated roles,
-  scoped copies, retry CAS and cascade preservation are covered by regressions.
-- Gateway Follow dispatch occurs before local persistence. Concurrent external
-  dispatches cannot be made exactly-once by the database claim transaction;
-  persistence rechecks ownership and fails closed on conflicting changes.
-
-- Local-community Discord create retries use missing surface rows as the retry signal. Edit and delete fanout has no durable per-surface mutation receipts, so retries require reprocessing the source event.
-- Nonempty unversioned development databases are rejected at startup; they require an explicitly prepared versioned baseline. Retained legacy helpers are not part of current startup.
+- Current-v1 admission compares the complete generated-role column definition with model DDL. Appended expressions and wrappers are rejected; STORED mode remains required.
+- Current startup upgrades the recognized v0.1.0 release schema directly from 0 to 1 in one transaction. Unknown release variants and unpublished development schemas are rejected unchanged; the actual deployment database has not been supplied for recognition. Released actor/object namespaces now cut over inside that transition, with only affected federation confirmations reset. Discord bindings/local subscribers and signing material are preserved; missing identity settings or unsafe signed-payload edits fail closed. Source collection/key ownership and canonical local content grammar are validated before writes; foreign metadata, unknown local formats and canonical IDs contradicting an explicit publication/outgoing-mapping/relay owner abort unchanged. Incoming relay actors and thread/group community context are not treated as object authors. The unused alternate schema helper mechanism has been removed. Writer stages share one immutable released-source snapshot; advisory preflight and post-change validation remain separate. Historical platform probes remain test-only.
 - Bridge-local bans leave existing remote subscriber rows unchanged and do not emit ActivityPub moderation activities.
 - Remote handle resolution is string-only; WebFinger and actor fetch resolution are not implemented.
 - A globally banned super-admin cannot unban themselves through Discord commands. Recovery requires another non-banned super-admin or direct database intervention.

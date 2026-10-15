@@ -435,7 +435,7 @@ def test_legacy_stage3_database_is_rejected_without_synthetic_source(
             ).all()
             for name in names
         }
-    with pytest.raises(RuntimeError, match="baseline"):
+    with pytest.raises(RuntimeError, match="Unsupported"):
         database.migrate()
     with database.engine.connect() as connection:
         assert connection.exec_driver_sql("PRAGMA user_version").scalar_one() == 0

@@ -8,7 +8,7 @@ Runtime behavior is not changed by this inventory. The repository names below de
 
 - Public/non-private `Database` methods found in `src/db/database.py`: 117.
 - Public methods assigned to exactly one owner below: 117.
-- Private helpers such as `_table_columns()` and `_verify_stage2_surface_invariants()` are excluded from the method inventory and are owned by Stage 2 schema/migration extraction.
+- Private helpers such as `_table_columns()` and `_table_info()` are excluded from the method inventory and are owned by Stage 2 schema/migration extraction.
 
 ## Repository group summary
 
@@ -278,7 +278,7 @@ Target owner: `BridgeActorFollowRepository`.
 ## Stage-order notes
 
 - Stage 1 can use this inventory and the existing table map to add or verify navigation banners without moving code.
-- Stage 2 owns infrastructure helpers and private schema/migration helpers, including `_table_columns()` and `_verify_stage2_surface_invariants()`.
+- Stage 2 owns infrastructure helpers and private schema/migration helpers, including `_table_columns()` and `_table_info()`.
 - Stage 3 owns the local-community repository groups: local communities, remote subscribers, local subscribers, local-community content, local-community surfaces, and local-community relay.
 - Stage 4 owns remote subscriptions and bridge actor follows.
 - Stage 5 owns users, registration sessions, and event receipts.

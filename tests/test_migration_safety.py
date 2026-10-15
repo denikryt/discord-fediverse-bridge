@@ -12,6 +12,8 @@ import pytest
 from sqlalchemy import Column, Integer, Table, event, text
 
 from src.db import Database, migrations
+from test_legacy_v0_to_v1_migration import legacy, _seed
+from support.historical_platform_probe import upgrade_historical_probe
 
 BASE_REGISTRY = dict(migrations.MIGRATIONS)
 
@@ -98,10 +100,10 @@ def test_fresh_database_bootstraps_once(tmp_path):
     """Direct migrate creates the complete fresh schema and stamps the baseline."""
     database = Database(f"sqlite:///{tmp_path / 'fresh.db'}")
     database.migrate()
-    assert _version(database) == 2
+    assert _version(database) == 1
     before = _snapshot(database)
     database.migrate()
-    assert _version(database) == 2
+    assert _version(database) == 1
     assert _snapshot(database) == before
     database.close()
 
@@ -122,60 +124,8 @@ def test_unsupported_version_rejected_before_schema_writes(tmp_path, version):
     database.close()
 
 
-@pytest.fixture
-def upgraded_metadata(monkeypatch):
-    """Represent a future current model and its concrete registered table upgrade."""
-    table = Table(
-        "migration_probe", Base.metadata, Column("id", Integer, primary_key=True)
-    )
-    calls = []
-
-    def add_probe(connection):
-        """Create the new current-model table with transactional SQLite DDL."""
-        calls.append("upgrade")
-        table.create(connection)
-
-    monkeypatch.setattr(migrations, "DATABASE_VERSION", 3)
-    monkeypatch.setattr(migrations, "MIGRATIONS", {**BASE_REGISTRY, 3: add_probe})
-    try:
-        yield table, calls
-    finally:
-        Base.metadata.remove(table)
-
-
-def test_upgrade_precedes_metadata_and_matches_fresh_bootstrap(
-    tmp_path, upgraded_metadata
-):
-    """Versioned upgrade owns new DDL; fresh bootstrap skips historical steps."""
-    table, calls = upgraded_metadata
-    upgraded = Database(f"sqlite:///{tmp_path / 'upgraded.db'}")
-    # Construct the supported previous database before exposing the new model.
-    Base.metadata.create_all(
-        upgraded.engine,
-        tables=[item for item in Base.metadata.sorted_tables if item is not table],
-    )
-    with upgraded.engine.begin() as connection:
-        migrations._install_current_schema_objects(connection)
-        connection.exec_driver_sql(
-            "INSERT INTO platform_connectors(connector_key,platform) VALUES('discord-primary','discord')"
-        )
-        connection.exec_driver_sql("PRAGMA user_version = 2")
-    upgraded.migrate()
-    assert calls == ["upgrade"]
-    assert _version(upgraded) == 3
-    upgraded.migrate()
-    assert calls == ["upgrade"]
-    fresh = Database(f"sqlite:///{tmp_path / 'fresh-current.db'}")
-    fresh.migrate()
-    assert calls == ["upgrade"]
-    assert _version(fresh) == 3
-    assert _snapshot(fresh) == _snapshot(upgraded)
-    fresh.close()
-    upgraded.close()
-
-
 def test_unversioned_nonempty_database_is_not_guessed(tmp_path):
-    """A verified immutable v1 baseline is adopted only after the explicit stamp."""
+    """Unpublished historical input is rejected with either header; stamping cannot adopt it."""
     path = tmp_path / "unknown.db"
     with sqlite3.connect(path) as connection:
         connection.executescript(
@@ -184,53 +134,36 @@ def test_unversioned_nonempty_database_is_not_guessed(tmp_path):
         connection.execute("PRAGMA user_version=0")
     database = Database(f"sqlite:///{path}")
     before = _snapshot(database)
-    with pytest.raises(RuntimeError, match="baseline"):
+    with pytest.raises(RuntimeError, match="Unsupported"):
         database.migrate()
     assert _version(database) == 0 and _snapshot(database) == before
     with database.engine.begin() as connection:
         connection.exec_driver_sql("PRAGMA user_version=1")
-    database.migrate()
-    assert _version(database) == 2
+    with pytest.raises(RuntimeError, match="current v1"):
+        database.migrate()
+    assert _version(database) == 1 and _snapshot(database) == before
     database.close()
 
 
-def test_failed_upgrade_rolls_back_ddl_dml_and_header_then_retries(
-    tmp_path, monkeypatch
-):
-    """A failing step leaves no partial work; a later successful attempt commits."""
-    database = Database(f"sqlite:///{tmp_path / 'rollback.db'}")
-    database.migrate()
-    with database.engine.begin() as connection:
-        connection.exec_driver_sql("CREATE TABLE sentinel (value INTEGER)")
-        connection.exec_driver_sql("INSERT INTO sentinel VALUES (7)")
-    before = _snapshot(database)
+def test_failed_upgrade_rolls_back_ddl_dml_and_header_then_retries(legacy, monkeypatch):
+    """A registered single-step fault undoes real DDL and user changes before retry."""
+    _seed(legacy)
+    before = _snapshot(legacy)
+    real = migrations.MIGRATIONS[1]
 
-    def apply_changes(connection):
-        """Perform both DDL and DML inside the runner-owned transaction."""
-        connection.exec_driver_sql("CREATE TABLE migration_probe (id INTEGER)")
-        connection.exec_driver_sql("UPDATE sentinel SET value = 8")
-
-    def fail_after_changes(connection):
-        """Inject an error after real changes to exercise physical rollback."""
-        apply_changes(connection)
+    def fail(connection, identity=None):
+        """Write under the real reserved transaction, then abort before final checks."""
+        connection.exec_driver_sql("CREATE TABLE migration_probe(id INTEGER)")
+        connection.exec_driver_sql("UPDATE users SET activitypub_username='changed'")
         raise RuntimeError("injected failure")
 
-    monkeypatch.setattr(migrations, "DATABASE_VERSION", 3)
-    monkeypatch.setattr(
-        migrations, "MIGRATIONS", {**BASE_REGISTRY, 3: fail_after_changes}
-    )
+    monkeypatch.setattr(migrations, "MIGRATIONS", {1: fail})
     with pytest.raises(RuntimeError, match="injected failure"):
-        database.migrate()
-    assert _version(database) == 2
-    assert _snapshot(database) == before
-    monkeypatch.setattr(migrations, "MIGRATIONS", {**BASE_REGISTRY, 3: apply_changes})
-    database.migrate()
-    assert _version(database) == 3
-    with database.engine.connect() as connection:
-        assert (
-            connection.exec_driver_sql("SELECT value FROM sentinel").scalar_one() == 8
-        )
-    database.close()
+        legacy.migrate()
+    assert _version(legacy) == 0 and _snapshot(legacy) == before
+    monkeypatch.setattr(migrations, "MIGRATIONS", {1: real})
+    legacy.migrate()
+    assert _version(legacy) == 1
 
 
 @pytest.mark.parametrize(
@@ -241,105 +174,38 @@ def test_invalid_registry_fails_before_any_writes(tmp_path, monkeypatch, registr
     database = Database(f"sqlite:///{tmp_path / 'registry.db'}")
     database.migrate()
     before = _snapshot(database)
-    monkeypatch.setattr(migrations, "DATABASE_VERSION", 2)
+    monkeypatch.setattr(migrations, "DATABASE_VERSION", 1)
     monkeypatch.setattr(migrations, "MIGRATIONS", registry)
     with pytest.raises(RuntimeError, match="registry"):
         database.migrate()
-    assert _version(database) == 2
+    assert _version(database) == 1
     assert _snapshot(database) == before
     database.close()
 
 
-def test_sequential_upgrades_commit_each_completed_step(tmp_path, monkeypatch):
-    """A later error preserves a prior completed step and resumes at the failure."""
-    database = Database(f"sqlite:///{tmp_path / 'sequence.db'}")
-    database.migrate()
+def test_both_internal_phases_share_unstamped_transaction(legacy):
+    """A reader sees released v0 while normalization/backfill share the writer lock."""
+    _seed(legacy)
+    seen = []
 
-    def first(connection):
-        """Install observable work in the first upgrade."""
-        connection.exec_driver_sql("CREATE TABLE first_upgrade (value INTEGER)")
+    def inspect(connection, cursor, statement, parameters, context, many):
+        """Observe from an independent connection at the first platform DDL."""
+        if statement.strip().startswith("CREATE TABLE platform_connectors"):
+            assert connection.connection.driver_connection.in_transaction
+            assert connection.exec_driver_sql("PRAGMA user_version").scalar_one() == 0
+            with sqlite3.connect(legacy.engine.url.database) as outside:
+                assert outside.execute("PRAGMA user_version").fetchone()[0] == 0
+                assert (
+                    outside.execute(
+                        "SELECT count(*) FROM sqlite_master WHERE type='table'"
+                    ).fetchone()[0]
+                    == 30
+                )
+            seen.append(True)
 
-    def second(connection):
-        """Verify the prior step's version before injecting a later failure."""
-        assert connection.exec_driver_sql("PRAGMA user_version").scalar_one() == 3
-        connection.exec_driver_sql("CREATE TABLE second_upgrade (value INTEGER)")
-        raise RuntimeError("later failure")
-
-    monkeypatch.setattr(migrations, "DATABASE_VERSION", 4)
-    monkeypatch.setattr(
-        migrations, "MIGRATIONS", {**BASE_REGISTRY, 3: first, 4: second}
-    )
-    with pytest.raises(RuntimeError, match="later failure"):
-        migrations.run_pending_migrations(database.engine)
-    assert _version(database) == 3
-    with database.engine.connect() as connection:
-        assert (
-            connection.exec_driver_sql(
-                "SELECT count(*) FROM first_upgrade"
-            ).scalar_one()
-            == 0
-        )
-        assert (
-            connection.exec_driver_sql(
-                "SELECT name FROM sqlite_master WHERE name='second_upgrade'"
-            ).all()
-            == []
-        )
-    monkeypatch.setattr(
-        migrations,
-        "MIGRATIONS",
-        {
-            **BASE_REGISTRY,
-            3: first,
-            4: lambda c: c.exec_driver_sql(
-                "CREATE TABLE second_upgrade (value INTEGER)"
-            ),
-        },
-    )
-    migrations.run_pending_migrations(database.engine)
-    assert _version(database) == 4
-    database.close()
-
-
-def test_concurrent_runners_reread_header_under_writer_lock(tmp_path, monkeypatch):
-    """Two runners seeing the old version execute one real DDL/DML step once."""
-    path = tmp_path / "concurrent.db"
-    database = Database(f"sqlite:///{path}")
-    database.migrate()
-    other = Database(f"sqlite:///{path}")
-    barrier = Barrier(2)
-
-    def wait_before_lock(connection, cursor, statement, parameters, context, many):
-        """Force both preflight reads to finish before either reserves the writer."""
-        if statement == "BEGIN IMMEDIATE":
-            barrier.wait(timeout=10)
-
-    for owner in (database, other):
-        event.listen(owner.engine, "before_cursor_execute", wait_before_lock)
-
-    def upgrade(connection):
-        """DDL fails if invoked twice, making duplicate execution observable."""
-        assert connection.connection.driver_connection.in_transaction
-        assert connection.exec_driver_sql("PRAGMA foreign_keys").scalar_one() == 1
-        connection.exec_driver_sql("CREATE TABLE migration_probe (id INTEGER)")
-        connection.exec_driver_sql("INSERT INTO migration_probe VALUES (1)")
-
-    monkeypatch.setattr(migrations, "DATABASE_VERSION", 3)
-    monkeypatch.setattr(migrations, "MIGRATIONS", {**BASE_REGISTRY, 3: upgrade})
-    with ThreadPoolExecutor(max_workers=2) as executor:
-        futures = [
-            executor.submit(migrations.run_pending_migrations, owner.engine)
-            for owner in (database, other)
-        ]
-        for future in futures:
-            future.result(timeout=15)
-    with database.engine.connect() as connection:
-        assert connection.exec_driver_sql("SELECT * FROM migration_probe").all() == [
-            (1,)
-        ]
-    assert _version(database) == 3
-    database.close()
-    other.close()
+    event.listen(legacy.engine, "before_cursor_execute", inspect)
+    legacy.migrate()
+    assert seen == [True] and _version(legacy) == 1
 
 
 def test_current_runner_allows_an_existing_writer(tmp_path):
@@ -351,7 +217,7 @@ def test_current_runner_allows_an_existing_writer(tmp_path):
     try:
         writer.execute("BEGIN IMMEDIATE")
         migrations.run_pending_migrations(database.engine)
-        assert _version(database) == 2
+        assert _version(database) == 1
     finally:
         writer.rollback()
         writer.close()
@@ -533,7 +399,7 @@ def _seed_federation(database):
 def test_baseline_and_restart_preserve_complete_federation_snapshot(
     tmp_path, initial_version
 ):
-    """V1 upgrades preserve original identity/state; unversioned adoption is rejected."""
+    """Isolated internal phase preserves identity/state; public unversioned adoption is rejected."""
     path = tmp_path / "federation.db"
     with sqlite3.connect(path) as connection:
         connection.executescript(
@@ -545,7 +411,7 @@ def test_baseline_and_restart_preserve_complete_federation_snapshot(
         connection.exec_driver_sql(f"PRAGMA user_version={initial_version}")
     before = _snapshot(database)
     if initial_version == 0:
-        with pytest.raises(RuntimeError, match="baseline"):
+        with pytest.raises(RuntimeError, match="Unsupported"):
             database.migrate()
         assert _snapshot(database) == before and _version(database) == 0
         database.close()
@@ -566,13 +432,13 @@ def test_baseline_and_restart_preserve_complete_federation_snapshot(
             ).all()
             for name in columns
         }
-    database.migrate()
-    assert _version(database) == 2
+    upgrade_historical_probe(database)
+    assert _version(database) == 1
     after = _snapshot(database)
     database.close()
     reopened = Database(f"sqlite:///{path}")
     reopened.migrate()
-    assert _version(reopened) == 2 and _snapshot(reopened) == after
+    assert _version(reopened) == 1 and _snapshot(reopened) == after
     with reopened.engine.connect() as connection:
         for name in columns:
             assert (
@@ -600,75 +466,50 @@ def test_bootstrap_failure_leaves_database_unversioned(tmp_path, monkeypatch):
     assert _version(database) == 0
     monkeypatch.setattr(migrations, "_install_current_schema_objects", original)
     database.migrate()
-    assert _version(database) == 2
+    assert _version(database) == 1
     database.close()
 
 
-def test_version_becoming_newer_before_lock_is_rejected(tmp_path, monkeypatch):
-    """The authoritative locked reread rejects a concurrently upgraded header."""
-    path = tmp_path / "changed-header.db"
-    database = Database(f"sqlite:///{path}")
-    database.migrate()
-    before = _snapshot(database)
-    monkeypatch.setattr(migrations, "DATABASE_VERSION", 3)
-
-    def upgrade(connection):
-        """Any executed DDL would violate the newly unsupported header."""
-        connection.exec_driver_sql("CREATE TABLE forbidden_upgrade (id INTEGER)")
-
-    monkeypatch.setattr(migrations, "MIGRATIONS", {**BASE_REGISTRY, 3: upgrade})
+def test_version_becoming_newer_before_lock_is_rejected(legacy):
+    """Locked reread rejects a future winner without normalization or header downgrade."""
+    before = _snapshot(legacy)
 
     def change_header(connection, cursor, statement, parameters, context, many):
-        """Simulate a newer application completing between read and writer lock."""
+        """Change only the external header between preflight and lock acquisition."""
         if statement == "BEGIN IMMEDIATE":
-            with sqlite3.connect(path) as external:
-                external.execute("PRAGMA user_version = 4")
+            with sqlite3.connect(legacy.engine.url.database) as outside:
+                outside.execute("PRAGMA user_version=2")
 
-    event.listen(database.engine, "before_cursor_execute", change_header)
+    event.listen(legacy.engine, "before_cursor_execute", change_header)
     with pytest.raises(RuntimeError, match="Unsupported"):
-        migrations.run_pending_migrations(database.engine)
-    with database.engine.connect() as connection:
-        assert connection.exec_driver_sql("PRAGMA user_version").scalar_one() == 4
-    assert _snapshot(database) == before
-    database.close()
+        legacy.migrate()
+    assert _version(legacy) == 2 and _snapshot(legacy) == before
 
 
-def test_runner_rejects_unestablished_baseline(tmp_path):
-    """Direct runner use cannot silently treat an unversioned database as upgraded."""
-    database = Database(f"sqlite:///{tmp_path / 'no-baseline.db'}")
-    with pytest.raises(RuntimeError, match="baseline"):
-        migrations.run_pending_migrations(database.engine)
-    assert _version(database) == 0
-    assert _snapshot(database) == ([], {})
-    database.close()
+def test_runner_bootstraps_empty_source(tmp_path):
+    """Direct runner and Database.migrate share the same atomic empty-file contract."""
+    db = Database(f"sqlite:///{tmp_path / 'empty.db'}")
+    migrations.run_pending_migrations(db.engine)
+    assert _version(db) == 1
+    db.close()
 
 
-def test_failure_after_header_assignment_rolls_back_the_version(tmp_path, monkeypatch):
-    """An error after PRAGMA assignment rolls back the header together with DDL."""
-    database = Database(f"sqlite:///{tmp_path / 'header-rollback.db'}")
-    database.migrate()
-    before = _snapshot(database)
+def test_failure_after_header_assignment_rolls_back_the_version(legacy):
+    """Header assignment stays transactional even after both schema transformations."""
+    before = _snapshot(legacy)
 
-    def upgrade(connection):
-        """Create observable transactional work before the runner assigns a version."""
-        connection.exec_driver_sql("CREATE TABLE migration_probe (id INTEGER)")
-
-    def fail_after_stamp(connection, cursor, statement, parameters, context, many):
-        """Fail after SQLite has changed its header but before transaction commit."""
-        if statement == "PRAGMA user_version = 3":
+    def fail(connection, cursor, statement, parameters, context, many):
+        """Abort after the only target stamp and before its transaction commits."""
+        if statement == "PRAGMA user_version = 1":
             raise RuntimeError("header failure")
 
-    monkeypatch.setattr(migrations, "DATABASE_VERSION", 3)
-    monkeypatch.setattr(migrations, "MIGRATIONS", {**BASE_REGISTRY, 3: upgrade})
-    event.listen(database.engine, "after_cursor_execute", fail_after_stamp)
+    event.listen(legacy.engine, "after_cursor_execute", fail)
     with pytest.raises(RuntimeError, match="header failure"):
-        database.migrate()
-    assert _version(database) == 2
-    assert _snapshot(database) == before
-    event.remove(database.engine, "after_cursor_execute", fail_after_stamp)
-    database.migrate()
-    assert _version(database) == 3
-    database.close()
+        legacy.migrate()
+    assert _version(legacy) == 0 and _snapshot(legacy) == before
+    event.remove(legacy.engine, "after_cursor_execute", fail)
+    legacy.migrate()
+    assert _version(legacy) == 1
 
 
 @pytest.mark.parametrize("target", [0, -1, True, 1.5, 2147483648])

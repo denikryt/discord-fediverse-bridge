@@ -123,7 +123,7 @@ def test_migrate_bootstraps_version_and_connector_once(tmp_path):
         db.migrate()
         db.migrate()
         with db.engine.connect() as conn:
-            assert conn.exec_driver_sql("PRAGMA user_version").scalar_one() == 2
+            assert conn.exec_driver_sql("PRAGMA user_version").scalar_one() == 1
             assert conn.exec_driver_sql(
                 "SELECT connector_key FROM platform_connectors"
             ).scalars().all() == ["discord-primary"]

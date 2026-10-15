@@ -52,3 +52,5 @@ Content copies retain connector/channel pairs, external thread/message/parent ID
 ## User profile foundation
 
 `users` now owns nullable `display_name`, `summary`, `avatar_media_id`, and `header_media_id`. `user_profile_fields` stores up to four ordered metadata rows. `profile_media_assets` stores immutable media metadata; bytes live under the durable profile-media root. SQLite foreign keys use `ON DELETE RESTRICT`, and triggers enforce that avatar/header slots reference matching media kinds.
+
+`users.profile_version` has both application default 0 and SQL server default 0, identical for fresh and migrated schemas. Supported persisted schema identity is current v1; historical release recognition is described in [SQLite startup migrations](../development/database-migrations.md).

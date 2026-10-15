@@ -3,12 +3,13 @@
 import pytest
 from sqlalchemy.orm import Session
 
+from support.historical_platform_probe import upgrade_historical_probe
 from src.db import Database
 from src.db.repositories.platform_surfaces import PlatformSurfaceRepository
 from src.models import PersonalFeedBinding
 from src.personal_feeds import PersonalFeedService
 from test_platform_data_model import _owners
-from test_platform_data_model_migration_stage01 import _v1
+from test_platform_data_model_migration_stage01 import _historical_stage00
 import runpy
 from pathlib import Path
 
@@ -19,7 +20,7 @@ from pathlib import Path
 def test_feed_service_uses_current_physical_claim(tmp_path, projection):
     """Account display and root admission agree with the durable claim repository."""
     db = Database(f"sqlite:///{tmp_path / 'feed.db'}")
-    db.migrate()
+    upgrade_historical_probe(db)
     try:
         with db.immediate_session() as session:
             owners = _owners(session)
@@ -59,7 +60,7 @@ def test_feed_service_uses_current_physical_claim(tmp_path, projection):
 )
 def test_upgrade_resolves_only_target_local_parent(tmp_path, scenario):
     """Upgrade preserves reply identity or rolls back when its exact target is absent."""
-    db = _v1(tmp_path / "legacy.db")
+    db = _historical_stage00(tmp_path / "legacy.db")
     old = runpy.run_path(str(Path(__file__).parent / "fixtures/platform_v1_models.py"))
     try:
         with Session(db.engine) as session:
@@ -106,7 +107,7 @@ def test_upgrade_resolves_only_target_local_parent(tmp_path, scenario):
             )
             session.commit()
         if scenario == "matching":
-            db.migrate()
+            upgrade_historical_probe(db)
             with db.engine.connect() as conn:
                 assert (
                     conn.exec_driver_sql(
@@ -119,7 +120,7 @@ def test_upgrade_resolves_only_target_local_parent(tmp_path, scenario):
             with pytest.raises(
                 RuntimeError, match="Missing message group|Missing target-local parent"
             ):
-                db.migrate()
+                upgrade_historical_probe(db)
             with db.engine.connect() as conn:
                 assert conn.exec_driver_sql("PRAGMA user_version").scalar_one() == 1
                 assert (

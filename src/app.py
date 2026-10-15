@@ -111,7 +111,13 @@ def _build_live_runtime(settings: Settings, deployment_lease: FileLock) -> Runti
             max_pixels=settings.profile_media_max_pixels,
         )
         media_store.initialize()
-        database.migrate()
+        from .db.legacy_identity_cutover import IdentityCutoverConfig
+
+        database.migrate(
+            identity=IdentityCutoverConfig(
+                settings.normalized_fedify_origin, settings.fedify_actor_identifier
+            )
+        )
         BridgeActorKeyBootstrap(database=database, settings=settings).ensure()
 
         bridge_policy_service = BridgePolicyService(
@@ -124,7 +130,9 @@ def _build_live_runtime(settings: Settings, deployment_lease: FileLock) -> Runti
         user_actor_delivery_service = UserActorDeliveryService(
             database, fedify_gateway, bridge_policy_service
         )
-        user_actor_delivery_worker = UserActorDeliveryWorker(user_actor_delivery_service)
+        user_actor_delivery_worker = UserActorDeliveryWorker(
+            user_actor_delivery_service
+        )
         content_publish_service = ContentPublishService(
             database=database,
             fedify_gateway=fedify_gateway,

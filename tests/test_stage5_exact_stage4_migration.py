@@ -132,7 +132,7 @@ def test_unversioned_stage4_delivery_graph_is_rejected_without_changes(
     }
     before.close()
     upgraded = Database(f"sqlite:///{path}")
-    with pytest.raises(RuntimeError, match="baseline"):
+    with pytest.raises(RuntimeError, match="Unsupported"):
         upgraded.migrate()
     with sqlite3.connect(path) as connection:
         assert connection.execute("PRAGMA user_version").fetchone()[0] == 0
