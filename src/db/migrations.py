@@ -9,9 +9,11 @@ from __future__ import annotations
 
 from collections.abc import Callable
 import re
+import logging
 
 from sqlalchemy import text
 from sqlalchemy.engine import Connection, Engine
+from sqlalchemy.exc import SQLAlchemyError, StatementError
 
 from .legacy_identity_cutover import (
     IdentityCutoverConfig,
@@ -19,6 +21,8 @@ from .legacy_identity_cutover import (
 )
 
 from .legacy_v0_to_v1 import upgrade_released_v0_to_v1, validate_released_v0
+
+logger = logging.getLogger(__name__)
 
 
 def _normalized_sql(sql):
@@ -35,42 +39,55 @@ def _table_manifest(conn: Connection, name: str) -> dict:
     Keep literals intact. Only identifier quoting, whitespace and constraint
     labels are incidental; generated expressions and STORED remain in full DDL.
     """
-    ddl = conn.exec_driver_sql(
-        "SELECT sql FROM sqlite_master WHERE type='table' AND name=?", (name,)
-    ).scalar_one()
-    ddl = re.sub(
-        r"('(?:''|[^'])*')|\bconstraint [a-z_][a-z_0-9]* (?=(?:check|unique|primary|foreign)\b)",
-        lambda match: match.group(1) or "",
-        _normalized_sql(ddl),
-    )
-    indexes = []
-    for index in conn.exec_driver_sql(f'PRAGMA index_list("{name}")'):
-        sql = conn.exec_driver_sql(
-            "SELECT sql FROM sqlite_master WHERE name=?", (index[1],)
+    context = f"schema inspection table {name}"
+    try:
+        ddl = conn.exec_driver_sql(
+            "SELECT sql FROM sqlite_master WHERE type='table' AND name=?", (name,)
         ).scalar_one()
-        indexes.append(
-            (
-                index[1],
-                index[2],
-                index[3],
-                index[4],
-                tuple(conn.exec_driver_sql(f'PRAGMA index_xinfo("{index[1]}")').all()),
-                _normalized_sql(sql),
-            )
+        ddl = re.sub(
+            r"('(?:''|[^'])*')|\bconstraint [a-z_][a-z_0-9]* (?=(?:check|unique|primary|foreign)\b)",
+            lambda match: match.group(1) or "",
+            _normalized_sql(ddl),
         )
-    return {
-        "ddl": ddl,
-        "columns": tuple(conn.exec_driver_sql(f'PRAGMA table_xinfo("{name}")').all()),
-        "fks": tuple(conn.exec_driver_sql(f'PRAGMA foreign_key_list("{name}")').all()),
-        "indexes": tuple(sorted(indexes)),
-        "triggers": tuple(
-            (row[0], _normalized_sql(row[1]))
-            for row in conn.exec_driver_sql(
-                "SELECT name,sql FROM sqlite_master WHERE type='trigger' AND tbl_name=? ORDER BY name",
-                (name,),
+        indexes = []
+        for index in conn.exec_driver_sql(f'PRAGMA index_list("{name}")'):
+            sql = conn.exec_driver_sql(
+                "SELECT sql FROM sqlite_master WHERE name=?", (index[1],)
+            ).scalar_one()
+            indexes.append(
+                (
+                    index[1],
+                    index[2],
+                    index[3],
+                    index[4],
+                    tuple(
+                        conn.exec_driver_sql(f'PRAGMA index_xinfo("{index[1]}")').all()
+                    ),
+                    _normalized_sql(sql),
+                )
             )
-        ),
-    }
+        return {
+            "ddl": ddl,
+            "columns": tuple(
+                conn.exec_driver_sql(f'PRAGMA table_xinfo("{name}")').all()
+            ),
+            "fks": tuple(
+                conn.exec_driver_sql(f'PRAGMA foreign_key_list("{name}")').all()
+            ),
+            "indexes": tuple(sorted(indexes)),
+            "triggers": tuple(
+                (row[0], _normalized_sql(row[1]))
+                for row in conn.exec_driver_sql(
+                    "SELECT name,sql FROM sqlite_master WHERE type='trigger' AND tbl_name=? ORDER BY name",
+                    (name,),
+                )
+            ),
+        }
+    except SQLAlchemyError as exc:
+        # Preserve the cause while keeping bound content/key data out of tracebacks.
+        if isinstance(exc, StatementError):
+            exc.hide_parameters = True
+        raise RuntimeError(f"Migration SQL failed during {context}") from exc
 
 
 def _require_sqlite_model_support(conn: Connection) -> None:
@@ -130,22 +147,40 @@ def _validate_current_v1_schema(conn: Connection) -> None:
 
 def _install_current_schema_objects(conn: Connection) -> None:
     """Install retained permanent profile and authored-object indexes on one connection."""
-    _install_profile_media_triggers(conn)
-    conn.exec_driver_sql(
-        "CREATE INDEX IF NOT EXISTS ix_published_activity_objects_conversation_root_object_id ON published_activity_objects (conversation_root_object_id)"
-    )
-    conn.exec_driver_sql(
-        "CREATE INDEX IF NOT EXISTS ix_published_objects_user_outbox ON published_activity_objects (actor_username,actor_url,deleted_at,published_at,id)"
-    )
+    context = "install profile media triggers for users"
+    try:
+        _install_profile_media_triggers(conn)
+        context = "install index published_activity_objects.ix_published_activity_objects_conversation_root_object_id"
+        conn.exec_driver_sql(
+            "CREATE INDEX IF NOT EXISTS ix_published_activity_objects_conversation_root_object_id ON published_activity_objects (conversation_root_object_id)"
+        )
+        context = (
+            "install index published_activity_objects.ix_published_objects_user_outbox"
+        )
+        conn.exec_driver_sql(
+            "CREATE INDEX IF NOT EXISTS ix_published_objects_user_outbox ON published_activity_objects (actor_username,actor_url,deleted_at,published_at,id)"
+        )
+    except SQLAlchemyError as exc:
+        if isinstance(exc, StatementError):
+            exc.hide_parameters = True
+        raise RuntimeError(f"Migration SQL failed during {context}") from exc
 
 
 def _validate_sqlite_integrity(conn: Connection, label: str) -> None:
     """Check structural and row-level integrity without logging sensitive row contents."""
-    violations = conn.exec_driver_sql("PRAGMA foreign_key_check").all()
-    if violations:
-        raise RuntimeError(f"{label} foreign-key violations: {violations}")
-    if conn.exec_driver_sql("PRAGMA integrity_check").scalars().all() != ["ok"]:
-        raise RuntimeError(f"{label} SQLite integrity check failed")
+    context = f"{label} foreign_key_check"
+    try:
+        violations = conn.exec_driver_sql("PRAGMA foreign_key_check").all()
+        if violations:
+            raise RuntimeError(f"{label} foreign-key violations: {violations}")
+        context = f"{label} integrity_check"
+        if conn.exec_driver_sql("PRAGMA integrity_check").scalars().all() != ["ok"]:
+            raise RuntimeError(f"{label} SQLite integrity check failed")
+    except SQLAlchemyError as exc:
+        # Preserve the cause while keeping bound content/key data out of tracebacks.
+        if isinstance(exc, StatementError):
+            exc.hide_parameters = True
+        raise RuntimeError(f"Migration SQL failed during {context}") from exc
 
 
 DATABASE_VERSION = 1
@@ -192,29 +227,36 @@ def read_database_state(
     engine: Engine, identity: IdentityCutoverConfig | None = None
 ) -> tuple[int, bool]:
     """Perform read-only source/target preflight; locked inspection remains authoritative."""
-    _validate_registry()
-    if engine.dialect.name != "sqlite":
-        raise RuntimeError("Database migrations support SQLite only")
-    with engine.connect() as conn:
-        _require_sqlite_model_support(conn)
-        if conn.exec_driver_sql("PRAGMA foreign_keys").scalar_one() != 1:
-            raise RuntimeError("Database preflight requires foreign_keys=ON")
-        # SQLite legacy transaction mode does not give SELECT a stable snapshot.
-        # Pin the advisory inspection so a concurrent commit cannot mix schemas.
-        conn.rollback()
-        conn.exec_driver_sql("BEGIN")
-        version = _read_version(conn)
-        empty = not _user_tables(conn)
-        if version == 1:
-            _validate_current_v1_schema(conn)
-            validate_current_identity(conn, identity)
-        elif not empty:
-            validate_released_v0(conn)
-        elif conn.exec_driver_sql(
-            "SELECT 1 FROM sqlite_master WHERE type='view'"
-        ).first():
-            raise RuntimeError("Unsupported empty database with schema objects")
-        return version, empty
+    context = "schema preflight"
+    try:
+        _validate_registry()
+        if engine.dialect.name != "sqlite":
+            raise RuntimeError("Database migrations support SQLite only")
+        with engine.connect() as conn:
+            _require_sqlite_model_support(conn)
+            if conn.exec_driver_sql("PRAGMA foreign_keys").scalar_one() != 1:
+                raise RuntimeError("Database preflight requires foreign_keys=ON")
+            # SQLite legacy transaction mode does not give SELECT a stable snapshot.
+            # Pin the advisory inspection so a concurrent commit cannot mix schemas.
+            conn.rollback()
+            conn.exec_driver_sql("BEGIN")
+            version = _read_version(conn)
+            empty = not _user_tables(conn)
+            if version == 1:
+                _validate_current_v1_schema(conn)
+                validate_current_identity(conn, identity)
+            elif not empty:
+                validate_released_v0(conn)
+            elif conn.exec_driver_sql(
+                "SELECT 1 FROM sqlite_master WHERE type='view'"
+            ).first():
+                raise RuntimeError("Unsupported empty database with schema objects")
+            return version, empty
+    except SQLAlchemyError as exc:
+        # Preserve the cause while keeping bound content/key data out of tracebacks.
+        if isinstance(exc, StatementError):
+            exc.hide_parameters = True
+        raise RuntimeError(f"Migration SQL failed during {context}") from exc
 
 
 def _rollback_physical_transaction(conn: Connection) -> None:
@@ -253,11 +295,14 @@ def run_pending_migrations(
     """
     from . import schema
 
+    logger.info("Database migration preflight: validating source schema")
     version, empty = read_database_state(engine, identity)
     if version == DATABASE_VERSION:
         return
+    logger.info("Database migration started: v%s -> v%s", version, DATABASE_VERSION)
     with engine.connect() as conn:
         suspended = False
+        phase = "prepare writer"
         try:
             conn.rollback()
             if conn.exec_driver_sql("PRAGMA foreign_keys").scalar_one() != 1:
@@ -271,35 +316,53 @@ def run_pending_migrations(
                         "Could not suspend FK enforcement before upgrade"
                     )
                 conn.rollback()
+            phase = "reserve writer"
             conn.exec_driver_sql("BEGIN IMMEDIATE")
             version = _read_version(conn)
             tables = _user_tables(conn)
             if version == DATABASE_VERSION:
                 # Another starter committed while this one waited for the writer.
+                phase = "validate concurrent winner"
                 _validate_current_v1_schema(conn)
             elif not tables:
                 if suspended:
                     raise RuntimeError(
                         "Source disappeared during startup; retry against verified file"
                     )
+                phase = "bootstrap schema"
                 schema.create_all(conn)
                 _install_current_schema_objects(conn)
+                phase = "bootstrap connector"
                 conn.exec_driver_sql(
                     "INSERT INTO platform_connectors(connector_key,platform,instance_origin) VALUES('discord-primary','discord',NULL)"
                 )
+                phase = "validate integrity"
                 _validate_current_v1_schema(conn)
+                phase = "stamp version"
                 conn.exec_driver_sql("PRAGMA user_version = 1")
             else:
                 if not suspended:
                     raise RuntimeError(
                         "Source changed during bootstrap; retry against verified file"
                     )
+                phase = "upgrade released v0 to v1"
                 MIGRATIONS[1](conn, identity)
+                phase = "validate integrity"
                 _validate_current_v1_schema(conn)
+                phase = "stamp version"
                 conn.exec_driver_sql("PRAGMA user_version = 1")
+            phase = "commit"
             conn.commit()
-        except BaseException:
+            logger.info("Database migration committed")
+        except BaseException as exc:
             _rollback_physical_transaction(conn)
+            # Never attach the exception/SQL parameters to phase logs. The
+            # contextual exception remains available to the caller through chaining.
+            logger.warning("Database migration rolled back: stage=%s", phase)
+            if isinstance(exc, SQLAlchemyError):
+                if isinstance(exc, StatementError):
+                    exc.hide_parameters = True
+                raise RuntimeError(f"Migration SQL failed during {phase}") from exc
             raise
         finally:
             if suspended:

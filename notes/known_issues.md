@@ -30,3 +30,5 @@ threads, or comments in a replacement Discord channel.
 
 - Personal Feed service lookups now share `discord_claim_query()` with the repository; mismatched guild/channel projections are excluded consistently.
 - Migration parent delivery lookup uses snapshot indexes keyed by group ID and exact target channel/thread; missing parents still abort and roll back the upgrade.
+
+- Migration diagnostics now provide SQL operation/table/check context with chained causes and hidden bound parameters. Conflict errors expose selected IDs only; phase logs report transaction outcomes without row bodies, keys or tracebacks. Historical v1 target pinning is tracked before any v2 ORM change.

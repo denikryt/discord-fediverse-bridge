@@ -12,6 +12,7 @@ import json
 from urllib.parse import urlsplit, unquote
 
 from ..activitypub_identity_urls import LocalActorKind, build_actor_address
+from sqlalchemy.exc import SQLAlchemyError, StatementError
 
 
 @dataclass(frozen=True)
@@ -240,7 +241,9 @@ def plan_identity_cutover(
         if value is None:
             return
         if not isinstance(value, str) or not value.startswith(("http://", "https://")):
-            raise RuntimeError("Unsupported local content identity: non-absolute canonical ID")
+            raise RuntimeError(
+                "Unsupported local content identity: non-absolute canonical ID"
+            )
         if _origin(value) not in origins:
             return
         p = urlsplit(value)
@@ -338,12 +341,13 @@ def plan_identity_cutover(
                 + tail[3]
             )
         if (
-            target and kind in {"post", "comment"}
+            target
+            and kind in {"post", "comment"}
             and (
-                len(tail) == 2 and tail[0] == "activities"
-                or len(tail) == 3 and tail[:2] in [
-                    ["activities", "announce"], ["activities", "delete"]
-                ]
+                len(tail) == 2
+                and tail[0] == "activities"
+                or len(tail) == 3
+                and tail[:2] in [["activities", "announce"], ["activities", "delete"]]
             )
         ):
             action = tail[1] if len(tail) == 3 else "create"
@@ -365,7 +369,8 @@ def plan_identity_cutover(
         if (
             actor
             and kind in {"post", "comment"}
-            and len(parts) == 2 and all(parts)
+            and len(parts) == 2
+            and all(parts)
             and parts[:1] in [["activities"], ["objects"]]
         ):
             return (
@@ -432,7 +437,10 @@ def plan_identity_cutover(
                     value, kind=kind, actor=actor, activity=is_activity, canonical=True
                 )
                 validate_primary(
-                    target, kind=kind, activity=is_activity, expected_owner=expected_owner
+                    target,
+                    kind=kind,
+                    activity=is_activity,
+                    expected_owner=expected_owner,
                 )
                 if value is not None:
                     record(value, target, primary=True)
@@ -473,6 +481,9 @@ def plan_identity_cutover(
         for r in snapshot["local_communities"]
         if r["id"] in changed_communities
     }
+    # A Follow confirms a specific actor pair. A renamed sender/target requires
+    # a new Follow even though keys and subscription rows survive. Failed allows
+    # an explicit subscribe retry; pending would block that retry as still in flight.
     for table in ["bridge_actor_follows", "channel_community_subscriptions"]:
         field = (
             "community_actor_id"
@@ -526,32 +537,41 @@ def _signed_json(value):
 
 def apply_identity_cutover(conn, original: dict, expected: dict, urls: dict) -> None:
     """Apply only the planned row/column delta on the caller's transaction connection."""
-    for table, rows in original.items():
-        targets = {r["id"]: r for r in expected[table]}
-        for old in rows:
-            new = targets.get(old["id"])
-            if new is None:
-                if table != "remote_subscribers":
-                    raise RuntimeError("Unapproved identity deletion")
+    context = "ActivityPub identity cutover"
+    try:
+        for table, rows in original.items():
+            context = f"identity cutover table {table}"
+            targets = {r["id"]: r for r in expected[table]}
+            for old in rows:
+                new = targets.get(old["id"])
+                if new is None:
+                    if table != "remote_subscribers":
+                        raise RuntimeError("Unapproved identity deletion")
+                    conn.exec_driver_sql(
+                        "DELETE FROM remote_subscribers WHERE id=?", (old["id"],)
+                    )
+                    continue
+                changes = {k: v for k, v in new.items() if v != old[k]}
+                if changes:
+                    conn.exec_driver_sql(
+                        f'UPDATE "{table}" SET '
+                        + ",".join(f'"{k}"=?' for k in changes)
+                        + " WHERE id=?",
+                        tuple(changes.values()) + (old["id"],),
+                    )
+        # This normalized column did not exist in v0; root links use the exact map.
+        for old, new in urls.items():
+            context = "identity cutover table published_activity_objects"
+            if old != new:
                 conn.exec_driver_sql(
-                    "DELETE FROM remote_subscribers WHERE id=?", (old["id"],)
+                    "UPDATE published_activity_objects SET conversation_root_object_id=? WHERE conversation_root_object_id=?",
+                    (new, old),
                 )
-                continue
-            changes = {k: v for k, v in new.items() if v != old[k]}
-            if changes:
-                conn.exec_driver_sql(
-                    f'UPDATE "{table}" SET '
-                    + ",".join(f'"{k}"=?' for k in changes)
-                    + " WHERE id=?",
-                    tuple(changes.values()) + (old["id"],),
-                )
-    # This normalized column did not exist in v0; root links use the exact map.
-    for old, new in urls.items():
-        if old != new:
-            conn.exec_driver_sql(
-                "UPDATE published_activity_objects SET conversation_root_object_id=? WHERE conversation_root_object_id=?",
-                (new, old),
-            )
+    except SQLAlchemyError as exc:
+        # Preserve the cause while keeping bound content/key data out of tracebacks.
+        if isinstance(exc, StatementError):
+            exc.hide_parameters = True
+        raise RuntimeError(f"Migration SQL failed during {context}") from exc
 
 
 def validate_current_identity(conn, config: IdentityCutoverConfig | None) -> None:

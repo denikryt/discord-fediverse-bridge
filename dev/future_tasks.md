@@ -20,3 +20,7 @@ Required work:
 Until this work is completed, new features must not introduce additional private-key consumers or include private-key material in queues, delivery records, snapshots, logs, diagnostics, or request payloads unrelated to the existing gateway identity lookup.
 
 - Restore durable personal-feed publications and comments into Discord after channel loss or rebinding.
+
+## Freeze historical v1 before adding database v2
+
+Before changing current SQLAlchemy models for database v2, pin the complete v1 target schema and required indexes/triggers for the existing v0→v1 step. Historical migration output must no longer depend on current ORM metadata. Add a separate v1→v2 transition and regressions proving both the frozen v0→v1 result and the complete supported upgrade chain preserve data, identity policy and FK guarantees. This is future work; current diagnostics do not introduce v2 or change the migration architecture.
