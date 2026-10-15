@@ -1,6 +1,9 @@
 """Tests for the stable inbound activity outcome vocabulary and persistence."""
 
 from __future__ import annotations
+
+import sqlite3
+import pytest
 from support.runtime import build_test_policy_service
 
 from pathlib import Path
@@ -11,7 +14,6 @@ from sqlalchemy import create_engine, inspect, text
 from src.db import Database
 from src.http_api import _begin_event_processing
 from src.inbound_activity_outcomes import InboundActivityOutcome
-
 
 RECEIPT_STATUSES = {"in_progress", "processed", "skipped", "deferred", "failed"}
 
@@ -28,7 +30,7 @@ def test_outcome_values_are_unique_and_fit_receipt_column() -> None:
 def test_fresh_schema_has_nullable_outcome_column(tmp_path: Path) -> None:
     """A fresh database should create the optional semantic outcome column."""
     database = Database(f"sqlite:///{tmp_path / 'fresh.db'}")
-    database.create_all()
+    database.migrate()
 
     columns = {
         column["name"]: column
@@ -39,14 +41,14 @@ def test_fresh_schema_has_nullable_outcome_column(tmp_path: Path) -> None:
     assert columns["outcome"]["type"].length == 64
 
 
-def test_migration_adds_outcome_without_backfilling_legacy_rows(tmp_path: Path) -> None:
+def test_unversioned_startup_preserves_outcome_without_backfilling_legacy_rows(
+    tmp_path: Path,
+) -> None:
     """Migration should preserve legacy receipts and leave outcome unknown."""
     db_path = tmp_path / "legacy.db"
     engine = create_engine(f"sqlite:///{db_path}", future=True)
     with engine.begin() as connection:
-        connection.execute(
-            text(
-                """
+        connection.execute(text("""
                 CREATE TABLE activitypub_event_receipts (
                     id INTEGER PRIMARY KEY AUTOINCREMENT,
                     delivery_id VARCHAR(128) UNIQUE NOT NULL,
@@ -57,9 +59,7 @@ def test_migration_adds_outcome_without_backfilling_legacy_rows(tmp_path: Path) 
                     created_at DATETIME NOT NULL,
                     updated_at DATETIME NOT NULL
                 )
-                """
-            )
-        )
+                """))
         connection.execute(
             text(
                 "CREATE TABLE local_community_threads (id INTEGER PRIMARY KEY AUTOINCREMENT)"
@@ -70,9 +70,7 @@ def test_migration_adds_outcome_without_backfilling_legacy_rows(tmp_path: Path) 
                 "CREATE TABLE local_community_messages (id INTEGER PRIMARY KEY AUTOINCREMENT)"
             )
         )
-        connection.execute(
-            text(
-                """
+        connection.execute(text("""
                 INSERT INTO activitypub_event_receipts (
                     delivery_id, event_type, object_ap_id, status, detail,
                     created_at, updated_at
@@ -80,29 +78,44 @@ def test_migration_adds_outcome_without_backfilling_legacy_rows(tmp_path: Path) 
                     'delivery-1', 'post.created', 'object-1', 'skipped',
                     'legacy detail', CURRENT_TIMESTAMP, CURRENT_TIMESTAMP
                 )
-                """
-            )
-        )
+                """))
 
     database = Database(f"sqlite:///{db_path}")
-    database.migrate()
-    database.migrate()
-
     with database.engine.connect() as connection:
-        row = connection.execute(
-            text(
-                "SELECT delivery_id, status, detail, outcome "
-                "FROM activitypub_event_receipts"
+        schema_before = connection.exec_driver_sql(
+            "SELECT type,name,sql FROM sqlite_master WHERE name NOT GLOB 'sqlite_*' ORDER BY type,name"
+        ).all()
+        names = [row[1] for row in schema_before if row[0] == "table"]
+        rows_before = {
+            name: connection.exec_driver_sql(
+                f'SELECT * FROM "{name}" ORDER BY rowid'
+            ).all()
+            for name in names
+        }
+    with pytest.raises(RuntimeError, match="baseline"):
+        database.migrate()
+    with database.engine.connect() as connection:
+        assert connection.exec_driver_sql("PRAGMA user_version").scalar_one() == 0
+        assert (
+            connection.exec_driver_sql(
+                "SELECT type,name,sql FROM sqlite_master WHERE name NOT GLOB 'sqlite_*' ORDER BY type,name"
+            ).all()
+            == schema_before
+        )
+        for name in names:
+            assert (
+                connection.exec_driver_sql(
+                    f'SELECT * FROM "{name}" ORDER BY rowid'
+                ).all()
+                == rows_before[name]
             )
-        ).one()
-
-    assert row == ("delivery-1", "skipped", "legacy detail", None)
+    database.close()
 
 
 def test_repository_updates_status_outcome_and_detail_together(tmp_path: Path) -> None:
     """One repository transition should persist the complete terminal result."""
     database = Database(f"sqlite:///{tmp_path / 'receipt.db'}")
-    database.create_all()
+    database.migrate()
     database.event_receipts.create_event_receipt(
         delivery_id="delivery-1",
         event_type="post.created",
@@ -127,7 +140,7 @@ def test_repository_updates_status_outcome_and_detail_together(tmp_path: Path) -
 def test_retry_start_clears_stale_terminal_outcome(tmp_path: Path) -> None:
     """Restarting a retry must not expose the previous attempt's outcome."""
     database = Database(f"sqlite:///{tmp_path / 'retry.db'}")
-    database.create_all()
+    database.migrate()
     database.event_receipts.create_event_receipt(
         delivery_id="delivery-1",
         event_type="comment.created",
@@ -156,7 +169,7 @@ def test_duplicate_legacy_receipt_returns_null_outcome_without_inference(
 ) -> None:
     """Duplicate responses must not derive missing outcomes from legacy detail."""
     database = Database(f"sqlite:///{tmp_path / 'legacy-duplicate.db'}")
-    database.create_all()
+    database.migrate()
     database.event_receipts.create_event_receipt(
         delivery_id="delivery-1",
         event_type="post.created",

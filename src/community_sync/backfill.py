@@ -33,6 +33,12 @@ async def backfill_post_as_thread_group(
         _fetch_ap_object,
     )
 
+    accepted = get_accepted_subscriptions(database, community_actor_id)
+    if not accepted:
+        # Preserve any historical canonical context without creating a new
+        # Discord group or fetching AP content solely for a non-Discord owner.
+        return database.discord_fanout_groups.get_thread_group_by_ap_object(post_ap_id)
+
     try:
         document = await _fetch_ap_object(post_ap_id)
     except Exception:
@@ -66,8 +72,6 @@ async def backfill_post_as_thread_group(
             thread_group.id
         )
     }
-    accepted = get_accepted_subscriptions(database, community_actor_id)
-
     await bot.wait_until_bridge_ready()
 
     for subscription in accepted:

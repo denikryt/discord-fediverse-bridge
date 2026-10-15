@@ -22,7 +22,6 @@ def _database(tmp_path):
     """Create one real database with two users and one immutable delivery graph."""
     path = tmp_path / "admin.db"
     database = Database(f"sqlite:///{path}")
-    database.create_all()
     database.migrate()
     alice = database.users.create_user(
         discord_user_id="1",

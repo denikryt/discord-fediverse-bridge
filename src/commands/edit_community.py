@@ -31,7 +31,11 @@ def _choice_label(label: str) -> str:
 
 
 def _community_label(
-    community: object, *, include_guild: bool, include_status: bool = False
+    community: object,
+    *,
+    include_guild: bool,
+    include_status: bool = False,
+    host_placement: object | None = None,
 ) -> str:
     """Build the display label for one community autocomplete choice."""
     slug = getattr(community, "slug")
@@ -39,8 +43,8 @@ def _community_label(
     pieces = [slug]
     if display_name and display_name != slug:
         pieces.append(display_name)
-    if include_guild:
-        pieces.append(f"guild {getattr(community, 'discord_guild_id', '')}")
+    if include_guild and host_placement is not None:
+        pieces.append(f"guild {getattr(host_placement, 'external_guild_id', '')}")
     if include_status:
         pieces.append(getattr(community, "status", "active"))
     return _choice_label(" — ".join(str(piece) for piece in pieces if piece))
@@ -103,7 +107,12 @@ def _edit_community_autocomplete(
                 choices.append(
                     app_commands.Choice(
                         name=_community_label(
-                            community, include_guild=include_guild, include_status=True
+                            community,
+                            include_guild=include_guild,
+                            include_status=True,
+                            host_placement=database.platform_surfaces.get_discord_host_placement(
+                                community.id
+                            ),
                         ),
                         value=slug,
                     )
@@ -240,6 +249,11 @@ def _can_open_edit_modal(
         discord_user_id=discord_user_id,
         discord_guild_id=discord_guild_id,
         local_community=community,
+        host_placement=(
+            database.platform_surfaces.get_discord_host_placement(community.id)
+            if community is not None
+            else None
+        ),
         include_disabled=True,
     ):
         return None, f"Unknown or inaccessible local community: {normalized_slug}"

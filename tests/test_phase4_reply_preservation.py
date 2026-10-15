@@ -36,7 +36,7 @@ COMMUNITY_ACTOR_URL = f"https://{LEMMY_EXAMPLE_DOMAIN}/c/hackers"
 def _database(tmp_path: Path) -> Database:
     """Create one real SQLite database for Phase 4 reply-preservation tests."""
     database = Database(f"sqlite:///{tmp_path / 'phase4-reply.db'}")
-    database.create_all()
+    database.migrate()
     return database
 
 

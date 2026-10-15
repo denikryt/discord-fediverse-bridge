@@ -34,10 +34,15 @@ def build_dashboard_payload(runtime: Any) -> dict[str, object]:
     actor_identifier = getattr(settings, "fedify_actor_identifier", "bridge")
     database = runtime.database
     snapshot = runtime.bridge_policy_service.snapshot()
+    all_communities = database.local_communities.list_local_communities()
+    placements = {
+        row.id: database.platform_surfaces.get_discord_host_placement(row.id)
+        for row in all_communities
+    }
     local_communities = [
         row
-        for row in database.local_communities.list_local_communities()
-        if _is_visible_local_community(row, snapshot)
+        for row in all_communities
+        if _is_visible_local_community(row, snapshot, placements.get(row.id))
     ]
     visible_local_community_ids = {
         getattr(community, "id") for community in local_communities
@@ -61,7 +66,9 @@ def build_dashboard_payload(runtime: Any) -> dict[str, object]:
     ]
     accepted_remote_subscriptions = [
         row
-        for row in database.remote_subscriptions.list_subscriptions(status="accepted")
+        for row in database.remote_subscriptions.list_discord_subscriptions(
+            status="accepted"
+        )
         if snapshot.is_discord_guild_allowed(getattr(row, "discord_guild_id", None))
         and snapshot.federation_decision(
             getattr(row, "lemmy_community_actor_id", "")
@@ -69,15 +76,14 @@ def build_dashboard_payload(runtime: Any) -> dict[str, object]:
     ]
     active_local_subscribers = [
         row
-        for row in database.local_subscribers.list_all_local_subscribers(
-            status="active"
-        )
+        for row in database.local_subscribers.list_discord_subscribers(status="active")
         if snapshot.is_discord_guild_allowed(getattr(row, "discord_guild_id", None))
         and _is_visible_local_community(
             database.local_communities.get_local_community_by_id(
                 getattr(row, "local_community_id", None)
             ),
             snapshot,
+            placements.get(getattr(row, "local_community_id", None)),
         )
     ]
     invite_publications = [
@@ -88,7 +94,7 @@ def build_dashboard_payload(runtime: Any) -> dict[str, object]:
 
     guild_snapshots, channel_snapshots = _load_discord_snapshots(
         database,
-        local_communities=local_communities,
+        local_communities=[p for p in placements.values() if p is not None],
         remote_subscriptions=accepted_remote_subscriptions,
         local_subscribers=active_local_subscribers,
     )
@@ -126,6 +132,15 @@ def build_dashboard_payload(runtime: Any) -> dict[str, object]:
             str(getattr(row, "slug", "")).lower(),
         ),
     ):
+        placement = placements.get(community.id)
+        host_guild = (
+            int(placement.external_guild_id)
+            if placement is not None and placement.external_guild_id is not None
+            else None
+        )
+        host_channel = (
+            int(placement.external_channel_id) if placement is not None else None
+        )
         community_remote_subscribers = remote_subscribers_by_community.get(
             getattr(community, "id"), []
         )
@@ -144,12 +159,14 @@ def build_dashboard_payload(runtime: Any) -> dict[str, object]:
                     ),
                 }
             )
-        local_subscriber_count = database.local_subscribers.count_local_subscribers(
-            getattr(community, "id")
+        local_subscriber_count = (
+            database.local_subscribers.count_discord_local_subscribers(
+                getattr(community, "id")
+            )
         )
         host_discord = _discord_labels_for_row(
-            guild_id=getattr(community, "discord_guild_id", None),
-            channel_id=getattr(community, "discord_forum_channel_id", None),
+            guild_id=host_guild,
+            channel_id=host_channel,
             guild_snapshots=guild_snapshots,
             channel_snapshots=channel_snapshots,
         )
@@ -177,22 +194,18 @@ def build_dashboard_payload(runtime: Any) -> dict[str, object]:
                 # hosted local community so operators can discover it from both
                 # navigation paths without exposing Discord ids.
                 "inviteUrl": (
-                    str(
-                        publications_by_guild[
-                            int(getattr(community, "discord_guild_id"))
-                        ].invite_url
-                    )
-                    if getattr(community, "discord_guild_id", None) is not None
-                    and int(getattr(community, "discord_guild_id"))
-                    in publications_by_guild
+                    str(publications_by_guild[host_guild].invite_url)
+                    if host_guild is not None and host_guild in publications_by_guild
                     else None
                 ),
             }
         )
+        if placement is None:
+            continue
         bucket = _guild_bucket(
             guild_buckets,
-            guild_id=getattr(community, "discord_guild_id", None),
-            channel_id=getattr(community, "discord_forum_channel_id", None),
+            guild_id=host_guild,
+            channel_id=host_channel,
             guild_snapshots=guild_snapshots,
             channel_snapshots=channel_snapshots,
         )
@@ -376,7 +389,7 @@ def _load_discord_snapshots(
     channel_ids: set[int] = set()
     for row, guild_attr, channel_attr in (
         *(
-            (row, "discord_guild_id", "discord_forum_channel_id")
+            (row, "external_guild_id", "external_channel_id")
             for row in local_communities
         ),
         *(
@@ -562,7 +575,9 @@ def _local_community_relay_handle(slug: str, origin_host: str) -> str:
     return f"!{slug}@{origin_host}"
 
 
-def _is_visible_local_community(community: object | None, snapshot: object) -> bool:
+def _is_visible_local_community(
+    community: object | None, snapshot: object, placement: object | None
+) -> bool:
     """Return whether one community should appear in the public dashboard.
 
     Disabled communities stay operationally hidden from the public dashboard so
@@ -572,6 +587,8 @@ def _is_visible_local_community(community: object | None, snapshot: object) -> b
         return False
     if getattr(community, "status", "active") == "disabled":
         return False
-    return snapshot.is_discord_guild_allowed(
-        getattr(community, "discord_guild_id", None)
+    return placement is None or snapshot.is_discord_guild_allowed(
+        int(placement.external_guild_id)
+        if placement.external_guild_id is not None
+        else None
     )

@@ -115,12 +115,14 @@ def changed_fields(
     return before_delta, after_delta
 
 
-def community_created_after(*, community: object) -> dict[str, object]:
+def community_created_after(
+    *, community: object, discord_forum_channel_id: int, discord_guild_id: int
+) -> dict[str, object]:
     """Build the safe creation snapshot for a local-community audit event."""
     return {
         "created_by_discord_user_id": getattr(community, "created_by_discord_user_id"),
-        "discord_forum_channel_id": getattr(community, "discord_forum_channel_id"),
-        "discord_guild_id": getattr(community, "discord_guild_id"),
+        "discord_forum_channel_id": discord_forum_channel_id,
+        "discord_guild_id": discord_guild_id,
         "display_name": getattr(community, "display_name"),
         "slug": getattr(community, "slug"),
         "status": getattr(community, "status"),

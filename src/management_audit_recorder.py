@@ -169,6 +169,16 @@ class ManagementAuditRecorder:
         community: LocalCommunity,
     ) -> ManagementAuditEvent:
         """Add the success audit row for a newly created local community."""
+        from .models import ChannelSurface
+        from sqlalchemy import select
+
+        placement = session.scalar(
+            select(ChannelSurface).where(
+                ChannelSurface.local_community_id == community.id
+            )
+        )
+        if placement is None or placement.external_guild_id is None:
+            raise ValueError("Community creation audit requires its atomic host claim")
         return self._events.add_event(
             session,
             action=ACTION_COMMUNITY_CREATED,
@@ -177,7 +187,11 @@ class ManagementAuditRecorder:
             local_community_id=community.id,
             target_type=TARGET_LOCAL_COMMUNITY,
             target_id=str(community.id),
-            after=community_created_after(community=community),
+            after=community_created_after(
+                community=community,
+                discord_forum_channel_id=int(placement.external_channel_id),
+                discord_guild_id=int(placement.external_guild_id),
+            ),
         )
 
     def add_community_settings_changed(
@@ -324,9 +338,11 @@ class ManagementAuditRecorder:
     ) -> ManagementAuditEvent:
         """Record a Manage Guild denial for invite publication or removal."""
         return self._events.create_event(
-            action=ACTION_GUILD_INVITE_REMOVE_FORBIDDEN
-            if removing
-            else ACTION_GUILD_INVITE_PUBLISH_FORBIDDEN,
+            action=(
+                ACTION_GUILD_INVITE_REMOVE_FORBIDDEN
+                if removing
+                else ACTION_GUILD_INVITE_PUBLISH_FORBIDDEN
+            ),
             result=RESULT_FORBIDDEN,
             actor_discord_user_id=actor_discord_user_id,
             target_type=TARGET_DISCORD_GUILD,
@@ -356,9 +372,11 @@ class ManagementAuditRecorder:
 
         return self._events.add_event(
             session,
-            action=ACTION_GUILD_INVITE_REPLACED
-            if before is not None
-            else ACTION_GUILD_INVITE_PUBLISHED,
+            action=(
+                ACTION_GUILD_INVITE_REPLACED
+                if before is not None
+                else ACTION_GUILD_INVITE_PUBLISHED
+            ),
             result=RESULT_SUCCESS,
             actor_discord_user_id=actor_discord_user_id,
             target_type=TARGET_DISCORD_GUILD,

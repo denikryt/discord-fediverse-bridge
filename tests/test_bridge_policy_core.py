@@ -31,7 +31,6 @@ def test_settings_require_bootstrap_super_admin() -> None:
 def test_dynamic_blocklist_overrides_bootstrap_allowlist(tmp_path: Path) -> None:
     """A committed dynamic block immediately overrides an immutable bootstrap allow."""
     database = Database(f"sqlite:///{tmp_path / 'bridge.db'}")
-    database.create_all()
     database.migrate()
     settings = Settings.model_validate(
         _settings_data(FEDERATION_ALLOWLIST="remote.example")
@@ -60,7 +59,7 @@ def test_empty_allowlists_are_unrestricted_but_blocklists_still_deny(
 ) -> None:
     """Empty allowlists preserve open mode while explicit blocks remain effective."""
     database = Database(f"sqlite:///{tmp_path / 'bridge.db'}")
-    database.create_all()
+    database.migrate()
     settings = Settings.model_validate(_settings_data())
     database.bridge_policy_entries.create_active(
         policy_type=PolicyType.DISCORD_GUILD_BLOCK.value,

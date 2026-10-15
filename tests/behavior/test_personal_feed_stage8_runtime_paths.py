@@ -10,6 +10,7 @@ import pytest
 
 from src.activitypub_handlers import dispatch_activitypub_event
 from src.db import Database
+from src.db.repositories.platform_surfaces import PlatformSurfaceRepository
 from src.discord_bot import BridgeBot
 from src.discord_event_router import DiscordEventRouter
 from src.discord_message_mutations import DiscordMessageMutationHandler
@@ -53,7 +54,6 @@ def _mutation_context() -> DiscordMutationContext:
 def _database(tmp_path, name: str) -> Database:
     """Create one migrated SQLite database for a runtime scenario."""
     database = Database(f"sqlite:///{tmp_path / name}")
-    database.create_all()
     database.migrate()
     return database
 
@@ -82,6 +82,8 @@ def _add_root(database: Database, *, actor_url: str, message_id: int = 100) -> N
     with database.session() as session:
         session.add(
             PublishedActivityObject(
+                **PlatformSurfaceRepository.discord_source_location(session, 10, 1),
+                source_external_message_id=str(message_id),
                 actor_username="alice",
                 actor_url=actor_url,
                 publication_context="personal_feed",
@@ -317,6 +319,7 @@ async def test_raw_personal_feed_edit_and_delete_route_to_user_actor_mutations(
     with database.session() as session:
         session.add(
             MessageMapping(
+                **PlatformSurfaceRepository.discord_source_location(session, 10, 1),
                 source_platform="discord",
                 source_id="100",
                 activity_id="https://bridge.example/a/root",

@@ -17,7 +17,6 @@ from src.models import (
 def _database() -> Database:
     """Create one migrated in-memory database for a concrete Stage 8 scenario."""
     database = Database("sqlite+pysqlite:///:memory:")
-    database.create_all()
     database.migrate()
     return database
 
@@ -334,7 +333,6 @@ async def test_worker_stop_cancels_blocked_discord_call_without_spending_attempt
     from src.personal_feeds import PersonalFeedService
 
     database = Database(f"sqlite:///{tmp_path / 'cancel.sqlite3'}")
-    database.create_all()
     database.migrate()
     with database.session() as session:
         session.add(
@@ -405,7 +403,6 @@ async def test_worker_creates_deterministic_thread_and_sends_without_mentions(
     from src.personal_feeds import PersonalFeedService
 
     database = Database(f"sqlite:///{tmp_path / 'worker.sqlite3'}")
-    database.create_all()
     database.migrate()
     with database.session() as session:
         session.add(
@@ -493,7 +490,6 @@ async def test_worker_rechecks_binding_after_network_lookup_before_discord_send(
     )
 
     database = Database(f"sqlite:///{tmp_path / 'stale-race.sqlite3'}")
-    database.create_all()
     database.migrate()
     with database.session() as session:
         session.add(

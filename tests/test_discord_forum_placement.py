@@ -24,6 +24,35 @@ def _database() -> Mock:
     )
     database.remote_subscriptions.get_subscription_by_channel.return_value = None
     database.local_subscribers.get_local_subscriber_by_channel.return_value = None
+
+    def claim(_connector, _channel):
+        """Supply explicitly mocked typed claims for the Discord SDK adapter."""
+        for repository, method, role, field in [
+            (
+                database.local_communities,
+                "get_local_community_by_forum_channel_id",
+                "local_host",
+                "local_community_id",
+            ),
+            (
+                database.remote_subscriptions,
+                "get_subscription_by_channel",
+                "remote_subscription",
+                "remote_subscription_id",
+            ),
+            (
+                database.local_subscribers,
+                "get_local_subscriber_by_channel",
+                "local_subscriber",
+                "local_subscriber_id",
+            ),
+        ]:
+            row = getattr(repository, method).return_value
+            if isinstance(row, SimpleNamespace):
+                return SimpleNamespace(role=role, **{field: getattr(row, "id", 1)})
+        return None
+
+    database.platform_surfaces.resolve_claim.side_effect = claim
     return database
 
 

@@ -15,7 +15,7 @@ def _database(tmp_path: Path) -> Database:
     """Create one real SQLite-backed database for user backup scenarios."""
 
     database = Database(f"sqlite:///{tmp_path / 'bridge-users.db'}")
-    database.create_all()
+    database.migrate()
     return database
 
 
@@ -147,7 +147,7 @@ def test_dump_local_users_entrypoint_uses_default_paths(tmp_path: Path) -> None:
     """The CLI should use bridge.db and dev/users.db.backup when no args are given."""
 
     database = Database(f"sqlite:///{tmp_path / 'bridge.db'}")
-    database.create_all()
+    database.migrate()
     database.users.create_user(
         discord_user_id="777",
         activitypub_username="dave",

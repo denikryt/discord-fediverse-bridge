@@ -40,7 +40,6 @@ async def test_remote_publish_commits_exact_canonical_create_and_shared_inbox_on
 ) -> None:
     """One Discord post keeps community delivery and adds one deduplicated follower source."""
     database = Database(f"sqlite:///{tmp_path / 'bridge.db'}")
-    database.create_all()
     database.migrate()
     user = database.users.create_user(
         discord_user_id="1",
@@ -120,7 +119,6 @@ async def test_update_is_reserved_once_and_duplicate_discord_edit_is_noop(
     from src.models import PublishedActivityObject, UserActorContentMutation
 
     database = Database(f"sqlite:///{tmp_path / 'bridge.db'}")
-    database.create_all()
     database.migrate()
     user = database.users.create_user(
         discord_user_id="1",
@@ -220,7 +218,6 @@ async def test_delete_waits_for_ambiguous_update_then_commits_terminal_revision(
     from src.models import PublishedActivityObject, UserActorContentMutation
 
     database = Database(f"sqlite:///{tmp_path / 'bridge.db'}")
-    database.create_all()
     database.migrate()
     user = database.users.create_user(
         discord_user_id="1",
@@ -325,7 +322,6 @@ async def test_python_reservation_uses_gateway_user_activity_namespace(
     from src.models import UserActorContentMutation
 
     database = Database(f"sqlite:///{tmp_path / 'bridge.db'}")
-    database.create_all()
     database.migrate()
     user = database.users.create_user(
         discord_user_id="1",
@@ -373,7 +369,6 @@ async def test_pre_send_invalid_update_does_not_block_later_delete(tmp_path) -> 
     from src.models import PublishedActivityObject, UserActorContentMutation
 
     database = Database(f"sqlite:///{tmp_path / 'bridge.db'}")
-    database.create_all()
     database.migrate()
     user = database.users.create_user(
         discord_user_id="1",
@@ -453,7 +448,6 @@ async def test_durable_partial_edit_reconciles_after_restart(tmp_path) -> None:
     from src.models import PublishedActivityObject
 
     database = Database(f"sqlite:///{tmp_path / 'bridge.db'}")
-    database.create_all()
     database.migrate()
     user = database.users.create_user(
         discord_user_id="1",
@@ -538,7 +532,6 @@ async def test_reconciliation_conflict_converges_to_authoritative_fetch(
     )
 
     database = Database(f"sqlite:///{tmp_path / 'bridge.db'}")
-    database.create_all()
     database.migrate()
     user = database.users.create_user(
         discord_user_id="1",
@@ -632,7 +625,6 @@ async def test_authoritative_reconciliation_does_not_overwrite_newer_update_or_d
     from src.models import PublishedActivityObject, UserActorContentMutation
 
     database = Database(f"sqlite:///{tmp_path / 'bridge.db'}")
-    database.create_all()
     database.migrate()
     user = database.users.create_user(
         discord_user_id="1",
@@ -725,7 +717,6 @@ async def test_local_community_reconciliation_preserves_policy_filtered_targets(
     from src.models import UserActorContentMutation
 
     database = Database(f"sqlite:///{tmp_path / 'bridge.db'}")
-    database.create_all()
     database.migrate()
     user = database.users.create_user(
         discord_user_id="1",
@@ -805,7 +796,6 @@ def _content_delivery_lifecycle(tmp_path):
     from src.models import PublishedActivityObject, UserActorFollower
 
     database = Database(f"sqlite:///{tmp_path / 'ordering.db'}")
-    database.create_all()
     database.migrate()
     user = database.users.create_user(
         discord_user_id="1",
@@ -993,7 +983,6 @@ async def test_worker_cancellation_after_dispatch_keeps_same_reservation_recover
     from src.models import UserActorContentMutation
 
     database = Database(f"sqlite:///{tmp_path / 'cancel.db'}")
-    database.create_all()
     database.migrate()
     user = database.users.create_user(
         discord_user_id="1",
@@ -1125,7 +1114,6 @@ async def test_canonical_ready_reservation_commits_after_restart_without_gateway
     from src.models import PublishedActivityObject, UserActorContentMutation
 
     database = Database(f"sqlite:///{tmp_path / 'canonical-ready.db'}")
-    database.create_all()
     database.migrate()
     user = database.users.create_user(
         discord_user_id="1",
@@ -1211,7 +1199,6 @@ async def test_post_commit_restart_re_evaluates_newer_desired_delete(tmp_path) -
     from src.models import PublishedActivityObject, UserActorContentMutation
 
     database = Database(f"sqlite:///{tmp_path / 'post-commit.db'}")
-    database.create_all()
     database.migrate()
     user = database.users.create_user(
         discord_user_id="1",
@@ -1325,7 +1312,6 @@ async def test_cancellation_before_mutation_drain_leaves_reserved_work_restartab
     from src.models import UserActorContentMutation
 
     database = Database(f"sqlite:///{tmp_path / 'pre-dispatch-cancel.db'}")
-    database.create_all()
     database.migrate()
     user = database.users.create_user(
         discord_user_id="1",

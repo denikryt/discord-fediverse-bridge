@@ -54,7 +54,7 @@ COMMENT_AP_ID = f"https://{LEMMY_EXAMPLE_DOMAIN}/comment/1"
 def _database(tmp_path: Path) -> Database:
     """Create one real SQLite database for Phase 8 edit/delete sync tests."""
     database = Database(f"sqlite:///{tmp_path / 'phase8.db'}")
-    database.create_all()
+    database.migrate()
     for channel_id in (100, 101, 102):
         database.remote_subscriptions.create_subscription(
             discord_channel_id=channel_id,

@@ -5,6 +5,8 @@ Discord fanout boundary and then asserts persisted or delivered outcomes.
 """
 
 from __future__ import annotations
+
+import sqlite3
 from support.runtime import build_test_policy_service
 
 from dataclasses import dataclass
@@ -591,15 +593,14 @@ async def test_discord_fanout_uses_registered_handle_not_mutable_nickname(
     )
 
 
-def test_legacy_schema_migrates_through_public_database_startup_and_is_idempotent(
+def test_legacy_schema_is_rejected_without_modification(
     tmp_path: Path,
 ) -> None:
-    """Normal startup upgrades legacy rows without loss or duplication."""
+    """Unknown unversioned schemas are rejected with every original row intact."""
     path = tmp_path / "plan93-legacy.db"
     engine = create_engine(f"sqlite:///{path}")
     with engine.begin() as connection:
-        connection.execute(
-            text("""
+        connection.execute(text("""
             CREATE TABLE community_actor_bans (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
                 local_community_id INTEGER NOT NULL,
@@ -612,10 +613,8 @@ def test_legacy_schema_migrates_through_public_database_startup_and_is_idempoten
                 updated_at DATETIME NOT NULL,
                 UNIQUE (local_community_id, actor_handle, status)
             )
-        """)
-        )
-        connection.execute(
-            text("""
+        """))
+        connection.execute(text("""
             INSERT INTO community_actor_bans (
                 local_community_id, actor_handle, actor_url, status,
                 created_by_discord_user_id, reason, created_at, updated_at
@@ -623,18 +622,35 @@ def test_legacy_schema_migrates_through_public_database_startup_and_is_idempoten
                 7, 'bob@remote.example', NULL, 'inactive', '999', 'old reason',
                 '2026-01-01 00:00:00', '2026-02-01 00:00:00'
             )
-        """)
-        )
+        """))
 
     database = Database(f"sqlite:///{path}")
-    database.create_all()
-    database.migrate()
-    database.migrate()
-
-    with database.session() as session:
-        rows = list(session.scalars(select(CommunityActorBan)))
-    assert len(rows) == 1
-    assert rows[0].scope == "community"
-    assert rows[0].scope_key == "7"
-    assert rows[0].reason == "old reason"
-    assert rows[0].created_by_discord_user_id == "999"
+    with database.engine.connect() as connection:
+        schema_before = connection.exec_driver_sql(
+            "SELECT type,name,sql FROM sqlite_master WHERE name NOT GLOB 'sqlite_*' ORDER BY type,name"
+        ).all()
+        names = [row[1] for row in schema_before if row[0] == "table"]
+        rows_before = {
+            name: connection.exec_driver_sql(
+                f'SELECT * FROM "{name}" ORDER BY rowid'
+            ).all()
+            for name in names
+        }
+    with pytest.raises(RuntimeError, match="baseline"):
+        database.migrate()
+    with database.engine.connect() as connection:
+        assert connection.exec_driver_sql("PRAGMA user_version").scalar_one() == 0
+        assert (
+            connection.exec_driver_sql(
+                "SELECT type,name,sql FROM sqlite_master WHERE name NOT GLOB 'sqlite_*' ORDER BY type,name"
+            ).all()
+            == schema_before
+        )
+        for name in names:
+            assert (
+                connection.exec_driver_sql(
+                    f'SELECT * FROM "{name}" ORDER BY rowid'
+                ).all()
+                == rows_before[name]
+            )
+    database.close()

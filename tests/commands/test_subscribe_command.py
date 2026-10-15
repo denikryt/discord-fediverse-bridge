@@ -17,16 +17,35 @@ def _policy_service(database, settings):
     )
 
 
+def _transactional_database(tmp_path):
+    """Create a registered moderator on a real primary Discord deployment."""
+    from src.db import Database
+
+    database = Database(f"sqlite:///{tmp_path / 'command.db'}")
+    database.migrate()
+    actor = f"https://{BRIDGE_EXAMPLE_DOMAIN}/actors/users/moderator"
+    database.users.create_user(
+        discord_user_id="1234567890",
+        activitypub_username="moderator",
+        actor_url=actor,
+        inbox_url=actor + "/inbox",
+        outbox_url=actor + "/outbox",
+        followers_url=actor + "/followers",
+        public_key_pem="public",
+        private_key_pem="private",
+    )
+    return database
+
+
 @pytest.mark.asyncio
 async def test_subscribe_community_success(
-    command_tree, interaction, forum_channel, database, lemmy, fedify_gateway
+    command_tree, interaction, forum_channel, tmp_path, lemmy, fedify_gateway
 ):
     # A successful subscription should resolve the community, send a real
     # bridge Follow, persist the pending lifecycle state, and return the
     # moderator-facing pending message.
+    database = _transactional_database(tmp_path)
     community_actor_url = f"https://{LEMMY_EXAMPLE_DOMAIN}/c/hackers"
-    database.users.get_user_by_discord_user_id.return_value = SimpleNamespace(id=1)
-    database.remote_subscriptions.get_subscription_by_channel.return_value = None
     fedify_gateway.follow_community.return_value = SimpleNamespace(
         community_actor_url=community_actor_url,
         community_inbox_url=f"{community_actor_url}/inbox",
@@ -55,23 +74,7 @@ async def test_subscribe_community_success(
             instance_domain=f"https://{LEMMY_EXAMPLE_DOMAIN}",
         )
 
-    assert database.remote_subscriptions.get_subscription_by_channel.call_count == 2
-    database.remote_subscriptions.get_subscription_by_channel.assert_any_call(
-        forum_channel.id
-    )
     fake_client.resolve_community_id.assert_awaited_once_with(name="hackers")
-    database.remote_subscriptions.create_subscription.assert_called_once_with(
-        discord_channel_id=forum_channel.id,
-        discord_guild_id=interaction.guild_id,
-        lemmy_community_actor_id=community_actor_url,
-        lemmy_community_name="hackers",
-        lemmy_community_id=777,
-        community_handle=f"!hackers@{LEMMY_EXAMPLE_DOMAIN}",
-        community_inbox_url=f"{community_actor_url}/inbox",
-        follow_activity_id=f"https://{BRIDGE_EXAMPLE_DOMAIN}/activities/follow/1",
-        initiated_by_discord_user_id="1234567890",
-        status="pending",
-    )
     fedify_gateway.follow_community.assert_awaited_once_with(community_actor_url)
     send_call = interaction.response.send_message.await_args
     assert send_call.args == (
@@ -79,6 +82,17 @@ async def test_subscribe_community_success(
     )
     assert send_call.kwargs.get("ephemeral", False) is False
     assert send_call.kwargs["allowed_mentions"].users is False
+
+    row = database.remote_subscriptions.get_subscription_by_channel(forum_channel.id)
+    assert row is not None and row.status == "pending"
+    assert row.discord_guild_id == interaction.guild_id
+    assert (
+        database.platform_surfaces.resolve_claim(
+            "discord-primary", str(forum_channel.id)
+        ).remote_subscription_id
+        == row.id
+    )
+    database.close()
 
 
 @pytest.mark.asyncio
@@ -207,12 +221,12 @@ async def test_subscribe_community_rejects_when_community_resolution_fails(
 
 @pytest.mark.asyncio
 async def test_subscribe_community_marks_failed_when_follow_dispatch_fails(
-    command_tree, interaction, forum_channel, database, lemmy, fedify_gateway
+    command_tree, interaction, forum_channel, tmp_path, lemmy, fedify_gateway
 ):
     # Follow dispatch failures must create a failed subscription row so retries
     # are explicit instead of leaving a fake pending state behind.
+    database = _transactional_database(tmp_path)
     community_actor_url = f"https://{LEMMY_EXAMPLE_DOMAIN}/c/hackers"
-    database.remote_subscriptions.get_subscription_by_channel.return_value = None
     fedify_gateway.follow_community.side_effect = RuntimeError("boom")
 
     settings = SimpleNamespace(discord_guild_allowlist=[], federation_allowlist=[])
@@ -237,38 +251,37 @@ async def test_subscribe_community_marks_failed_when_follow_dispatch_fails(
             instance_domain=f"https://{LEMMY_EXAMPLE_DOMAIN}",
         )
 
-    database.remote_subscriptions.create_subscription.assert_called_once_with(
-        discord_channel_id=forum_channel.id,
-        discord_guild_id=interaction.guild_id,
-        lemmy_community_actor_id=community_actor_url,
-        lemmy_community_name="hackers",
-        lemmy_community_id=777,
-        community_handle=f"!hackers@{LEMMY_EXAMPLE_DOMAIN}",
-        community_inbox_url=None,
-        follow_activity_id=None,
-        status="failed",
-    )
     interaction.response.send_message.assert_awaited_once_with(
         "Could not subscribe <#12345> to **hackers** because the bridge Follow request failed.",
         ephemeral=True,
     )
 
+    row = database.remote_subscriptions.get_subscription_by_channel(forum_channel.id)
+    assert row is not None and row.status == "failed"
+    assert row.discord_guild_id == interaction.guild_id
+    assert (
+        database.platform_surfaces.resolve_claim(
+            "discord-primary", str(forum_channel.id)
+        ).remote_subscription_id
+        == row.id
+    )
+    database.close()
+
 
 @pytest.mark.asyncio
 async def test_subscribe_community_retries_failed_subscription(
-    command_tree, interaction, forum_channel, database, lemmy, fedify_gateway
+    command_tree, interaction, forum_channel, tmp_path, lemmy, fedify_gateway
 ):
-    # Failed subscriptions are retriable. The old failed row is removed before
-    # the new pending attempt is written.
+    # Failed retries preserve the same owner while updating its follow state.
+    database = _transactional_database(tmp_path)
     community_actor_url = f"https://{LEMMY_EXAMPLE_DOMAIN}/c/hackers"
-    database.users.get_user_by_discord_user_id.return_value = SimpleNamespace(id=1)
-    database.remote_subscriptions.get_subscription_by_channel.return_value = (
-        SimpleNamespace(
-            status="failed",
-            community_handle=f"!hackers@{LEMMY_EXAMPLE_DOMAIN}",
-            lemmy_community_name="hackers",
-            lemmy_community_actor_id=community_actor_url,
-        )
+    original = database.remote_subscriptions.create_subscription(
+        discord_channel_id=forum_channel.id,
+        discord_guild_id=interaction.guild_id,
+        lemmy_community_actor_id=community_actor_url,
+        lemmy_community_name="hackers",
+        lemmy_community_id=777,
+        status="failed",
     )
     fedify_gateway.follow_community.return_value = SimpleNamespace(
         community_actor_url=community_actor_url,
@@ -294,21 +307,6 @@ async def test_subscribe_community_retries_failed_subscription(
         instance_domain=f"https://{LEMMY_EXAMPLE_DOMAIN}",
     )
 
-    database.remote_subscriptions.delete_subscription.assert_called_once_with(
-        forum_channel.id
-    )
-    database.remote_subscriptions.create_subscription.assert_called_once_with(
-        discord_channel_id=forum_channel.id,
-        discord_guild_id=interaction.guild_id,
-        lemmy_community_actor_id=community_actor_url,
-        lemmy_community_name="hackers",
-        lemmy_community_id=777,
-        community_handle=f"!hackers@{LEMMY_EXAMPLE_DOMAIN}",
-        community_inbox_url=f"{community_actor_url}/inbox",
-        follow_activity_id=f"https://{BRIDGE_EXAMPLE_DOMAIN}/activities/follow/2",
-        initiated_by_discord_user_id=str(interaction.user.id),
-        status="pending",
-    )
     fedify_gateway.follow_community.assert_awaited_once_with(community_actor_url)
     send_call = interaction.response.send_message.await_args
     assert send_call.args == (
@@ -316,6 +314,18 @@ async def test_subscribe_community_retries_failed_subscription(
     )
     assert send_call.kwargs.get("ephemeral", False) is False
     assert send_call.kwargs["allowed_mentions"].users is False
+
+    row = database.remote_subscriptions.get_subscription_by_channel(forum_channel.id)
+    assert row is not None and row.status == "pending"
+    assert row.discord_guild_id == interaction.guild_id
+    assert (
+        database.platform_surfaces.resolve_claim(
+            "discord-primary", str(forum_channel.id)
+        ).remote_subscription_id
+        == row.id
+    )
+    assert row.id == original.id
+    database.close()
 
 
 # ---------------------------------------------------------------------------
@@ -759,12 +769,11 @@ async def test_subscribe_community_rejects_forbidden_actor_url_without_instance(
 
 @pytest.mark.asyncio
 async def test_subscribe_community_accepts_actor_url_without_instance(
-    command_tree, interaction, forum_channel, database, fedify_gateway
+    command_tree, interaction, forum_channel, tmp_path, fedify_gateway
 ):
     """Selected Lemmyverse actor URLs should subscribe without instance_domain."""
+    database = _transactional_database(tmp_path)
     community_actor_url = f"https://{LEMMY_EXAMPLE_DOMAIN}/c/hackers"
-    database.users.get_user_by_discord_user_id.return_value = SimpleNamespace(id=1)
-    database.remote_subscriptions.get_subscription_by_channel.return_value = None
     fedify_gateway.follow_community.return_value = SimpleNamespace(
         community_actor_url=community_actor_url,
         community_inbox_url=f"{community_actor_url}/inbox",
@@ -795,7 +804,17 @@ async def test_subscribe_community_accepts_actor_url_without_instance(
     MockLemmyClient.assert_called_once_with(f"https://{LEMMY_EXAMPLE_DOMAIN}")
     fake_client.resolve_community.assert_awaited_once_with(name="hackers")
     fedify_gateway.follow_community.assert_awaited_once_with(community_actor_url)
-    database.remote_subscriptions.create_subscription.assert_called_once()
+
+    row = database.remote_subscriptions.get_subscription_by_channel(forum_channel.id)
+    assert row is not None and row.status == "pending"
+    assert row.discord_guild_id == interaction.guild_id
+    assert (
+        database.platform_surfaces.resolve_claim(
+            "discord-primary", str(forum_channel.id)
+        ).remote_subscription_id
+        == row.id
+    )
+    database.close()
 
 
 def test_subscribe_community_channel_description_fits_discord_limit(

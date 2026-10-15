@@ -80,7 +80,6 @@ async def test_owner_root_persists_one_canonical_note_and_duplicate_is_side_effe
 ) -> None:
     """One owner root creates one durable mapping/object/source and replays reuse it."""
     database = Database(f"sqlite:///{tmp_path / 'bridge.sqlite3'}")
-    database.create_all()
     database.migrate()
     with database.session() as session:
         session.add(_user())
@@ -144,7 +143,6 @@ async def test_non_owner_and_moved_binding_are_ignored_without_gateway_or_rows(
 ) -> None:
     """Authorship and current binding are revalidated immediately before rendering."""
     database = Database(f"sqlite:///{tmp_path / 'bridge.sqlite3'}")
-    database.create_all()
     database.migrate()
     with database.session() as session:
         session.add(_user())
@@ -189,7 +187,7 @@ async def test_non_owner_and_moved_binding_are_ignored_without_gateway_or_rows(
 def test_database_rejects_incomplete_personal_feed_source_identity(tmp_path) -> None:
     """Conditional checks protect every writer, migration, and repair path."""
     database = Database(f"sqlite:///{tmp_path / 'bridge.sqlite3'}")
-    database.create_all()
+    database.migrate()
     with pytest.raises(IntegrityError):
         with database.session() as session:
             session.add(
@@ -232,7 +230,6 @@ async def test_policy_revoked_after_routing_is_rejected_before_gateway(
     tmp_path,
 ) -> None:
     database = Database(f"sqlite:///{tmp_path / 'bridge.sqlite3'}")
-    database.create_all()
     database.migrate()
     with database.session() as session:
         session.add(_user())
@@ -271,7 +268,6 @@ async def test_preflight_duplicate_fails_closed_when_canonical_object_is_missing
     tmp_path,
 ) -> None:
     database = Database(f"sqlite:///{tmp_path / 'bridge.sqlite3'}")
-    database.create_all()
     database.migrate()
     with database.session() as session:
         user = _user()
@@ -305,6 +301,7 @@ async def test_preflight_duplicate_fails_closed_when_canonical_object_is_missing
     with database.session() as session:
         session.add(
             MessageMapping(
+                **database.platform_surfaces.discord_source_location(session, 200),
                 source_platform="discord",
                 source_id="300",
                 activity_id=f"https://bridge.test/actors/users/alice/activities/create/posts/{operation_id}",
@@ -323,7 +320,6 @@ async def test_preflight_duplicate_fails_closed_when_canonical_object_is_missing
 
 def _publisher_fixture(tmp_path, *, gateway=None, banned=False):
     database = Database(f"sqlite:///{tmp_path / 'bridge.sqlite3'}")
-    database.create_all()
     database.migrate()
     with database.session() as session:
         session.add(_user())
@@ -380,7 +376,9 @@ async def test_duplicate_replay_rejects_conflicting_canonical_graph(
         source = session.scalar(select(UserActorOutboundSource))
         if corruption == "published_context":
             published.publication_context = "community"
-            published.community_actor_url = "https://bridge.test/actors/communities/wrong"
+            published.community_actor_url = (
+                "https://bridge.test/actors/communities/wrong"
+            )
         elif corruption == "published_channel":
             published.discord_channel_id = 999
         elif corruption == "published_message":

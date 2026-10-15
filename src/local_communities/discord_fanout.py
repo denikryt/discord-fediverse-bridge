@@ -117,7 +117,14 @@ class LocalCommunityDiscordFanout:
         )
         if community is None:
             return None
-        return _valid_discord_guild_id(getattr(community, "discord_guild_id", None))
+        placement = self.database.platform_surfaces.get_discord_host_placement(
+            community.id
+        )
+        return (
+            _valid_discord_guild_id(int(placement.external_guild_id))
+            if placement is not None and placement.external_guild_id is not None
+            else None
+        )
 
     def _surface_is_allowed(self, forum_channel_id: int) -> bool:
         """Fail closed before mutating a persisted Discord surface."""
@@ -366,10 +373,10 @@ class LocalCommunityDiscordFanout:
         prevent the remaining local surfaces from receiving the mutation.
         """
         summary = LocalDiscordMutationFanoutSummary()
-        for surface in (
-            self.database.local_community_surfaces.list_local_community_thread_surfaces(
-                getattr(thread_row, "id")
-            )
+        for (
+            surface
+        ) in self.database.local_community_surfaces.list_local_community_thread_surfaces(
+            getattr(thread_row, "id")
         ):
             if not self._surface_is_allowed(
                 getattr(surface, "discord_forum_channel_id")
@@ -409,7 +416,9 @@ class LocalCommunityDiscordFanout:
     ) -> LocalDiscordMutationFanoutSummary:
         """Edit message surfaces for all selected copies of one comment."""
         summary = LocalDiscordMutationFanoutSummary()
-        for surface in self.database.local_community_surfaces.list_local_community_message_surfaces(
+        for (
+            surface
+        ) in self.database.local_community_surfaces.list_local_community_message_surfaces(
             getattr(message_row, "id")
         ):
             thread_surface = self.database.local_community_surfaces.get_local_community_thread_surface_by_id(
@@ -453,10 +462,10 @@ class LocalCommunityDiscordFanout:
     ) -> LocalDiscordMutationFanoutSummary:
         """Mark starter messages deleted for all selected surfaces of one post."""
         summary = LocalDiscordMutationFanoutSummary()
-        for surface in (
-            self.database.local_community_surfaces.list_local_community_thread_surfaces(
-                getattr(thread_row, "id")
-            )
+        for (
+            surface
+        ) in self.database.local_community_surfaces.list_local_community_thread_surfaces(
+            getattr(thread_row, "id")
         ):
             if not self._surface_is_allowed(
                 getattr(surface, "discord_forum_channel_id")
@@ -493,7 +502,9 @@ class LocalCommunityDiscordFanout:
     ) -> LocalDiscordMutationFanoutSummary:
         """Mark message surfaces deleted for all selected copies of one comment."""
         summary = LocalDiscordMutationFanoutSummary()
-        for surface in self.database.local_community_surfaces.list_local_community_message_surfaces(
+        for (
+            surface
+        ) in self.database.local_community_surfaces.list_local_community_message_surfaces(
             getattr(message_row, "id")
         ):
             thread_surface = self.database.local_community_surfaces.get_local_community_thread_surface_by_id(
@@ -564,17 +575,32 @@ class LocalCommunityDiscordFanout:
     ) -> list[LocalDiscordFanoutTarget]:
         """Select host and/or active local-subscriber fanout targets."""
         targets: list[LocalDiscordFanoutTarget] = []
-        host_forum_id = getattr(local_community, "discord_forum_channel_id")
-        if include_host and source_forum_channel_id != host_forum_id:
+        placement = self.database.platform_surfaces.get_discord_host_placement(
+            getattr(local_community, "id")
+        )
+        host_forum_id = (
+            int(placement.external_channel_id) if placement is not None else None
+        )
+        if (
+            include_host
+            and host_forum_id is not None
+            and source_forum_channel_id != host_forum_id
+        ):
             targets.append(
                 LocalDiscordFanoutTarget(
                     role="host",
                     discord_forum_channel_id=host_forum_id,
-                    discord_guild_id=getattr(local_community, "discord_guild_id", None),
+                    discord_guild_id=(
+                        int(placement.external_guild_id)
+                        if placement.external_guild_id is not None
+                        else None
+                    ),
                     local_subscriber_id=None,
                 )
             )
-        for subscriber in self.database.local_subscribers.list_local_subscribers(
+        for (
+            subscriber
+        ) in self.database.local_subscribers.list_discord_active_subscribers(
             getattr(local_community, "id")
         ):
             if getattr(subscriber, "status", "active") != "active":

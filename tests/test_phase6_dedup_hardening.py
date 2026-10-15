@@ -48,7 +48,7 @@ COMMENT_AP_ID = f"https://{LEMMY_EXAMPLE_DOMAIN}/comment/1"
 def _database(tmp_path: Path) -> Database:
     """Create one real SQLite database for Phase 6 dedup hardening tests."""
     database = Database(f"sqlite:///{tmp_path / 'phase6.db'}")
-    database.create_all()
+    database.migrate()
     return database
 
 

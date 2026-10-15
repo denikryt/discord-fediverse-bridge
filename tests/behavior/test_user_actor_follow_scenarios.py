@@ -54,7 +54,6 @@ class _Bot:
 def follow_runtime(tmp_path):
     """Build a real SQLite follower service behind the normal dispatch path."""
     database = Database(f"sqlite:///{tmp_path / 'bridge.db'}")
-    database.create_all()
     database.migrate()
     user = database.users.create_user(
         discord_user_id="42",

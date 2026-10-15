@@ -17,7 +17,7 @@ from src.db import Database
 def _database(tmp_path: Path) -> Database:
     """Create one real policy repository for direct-ownership regressions."""
     database = Database(f"sqlite:///{tmp_path / 'policy-owner.db'}")
-    database.create_all()
+    database.migrate()
     return database
 
 

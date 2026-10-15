@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from .platform_surfaces import PlatformSurfaceRepository, discord_copy_query
+
 from dataclasses import dataclass
 from datetime import datetime
 
@@ -11,7 +13,6 @@ from ...models import (
     utcnow,
 )
 from .base import BaseRepository
-
 
 """Persisted ActivityPub object JSON lookup persistence."""
 
@@ -46,6 +47,16 @@ class ActivityPubObjectRepository(BaseRepository):
         """Persist one canonical AP object emitted by the gateway publish path."""
         with self.session() as session:
             published_object = PublishedActivityObject(
+                **(
+                    PlatformSurfaceRepository.discord_source_location(
+                        session, discord_channel_id
+                    )
+                    if discord_channel_id is not None or discord_message_id is not None
+                    else {}
+                ),
+                source_external_message_id=(
+                    str(discord_message_id) if discord_message_id is not None else None
+                ),
                 actor_username=actor_username,
                 actor_url=actor_url,
                 community_actor_url=community_actor_url,
@@ -91,7 +102,7 @@ class ActivityPubObjectRepository(BaseRepository):
         """Load one stored gateway-published object by Discord message ID."""
         with self.session() as session:
             return session.scalar(
-                select(PublishedActivityObject).where(
+                discord_copy_query(PublishedActivityObject, source=True).where(
                     PublishedActivityObject.discord_message_id == discord_message_id
                 )
             )

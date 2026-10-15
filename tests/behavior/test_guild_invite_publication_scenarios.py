@@ -89,7 +89,7 @@ def _channel(
 async def test_publish_and_remove_guild_invite(tmp_path) -> None:
     """A valid host channel publishes one invite and removal clears it."""
     database = Database(f"sqlite:///{tmp_path / 'bridge.db'}")
-    database.create_all()
+    database.migrate()
     _create_active_community(database)
     guild = _guild()
     channel = _channel(guild=guild)
@@ -133,7 +133,7 @@ async def test_publish_and_remove_guild_invite(tmp_path) -> None:
 async def test_publication_requires_active_local_community(tmp_path) -> None:
     """Invite creation is side-effect free without an active local community."""
     database = Database(f"sqlite:///{tmp_path / 'bridge.db'}")
-    database.create_all()
+    database.migrate()
     guild = _guild()
     channel = _channel(guild=guild)
 
@@ -156,7 +156,7 @@ async def test_publication_selects_first_invitable_active_host_channel(
 ) -> None:
     """The operation skips unusable hosts and selects the first invitable one."""
     database = Database(f"sqlite:///{tmp_path / 'bridge.db'}")
-    database.create_all()
+    database.migrate()
     _create_active_community(database, channel_id=20, slug="alpha")
     _create_active_community(database, channel_id=21, slug="beta")
     guild = _guild()
@@ -186,7 +186,7 @@ async def test_publication_rejects_when_no_active_host_channel_can_create_invite
 ) -> None:
     """An active community is insufficient when none of its channels can invite."""
     database = Database(f"sqlite:///{tmp_path / 'bridge.db'}")
-    database.create_all()
+    database.migrate()
     _create_active_community(database)
     guild = _guild()
     channel = _channel(guild=guild, can_create_invite=False)
@@ -207,7 +207,7 @@ async def test_publication_rejects_when_no_active_host_channel_can_create_invite
 def test_dashboard_attaches_invite_only_to_existing_guild_bucket(tmp_path) -> None:
     """Published invites augment existing guild cards without creating orphans."""
     database = Database(f"sqlite:///{tmp_path / 'bridge.db'}")
-    database.create_all()
+    database.migrate()
     _create_active_community(database)
     with database.session() as session:
         database.guild_invite_publications.replace_in_session(
@@ -255,7 +255,7 @@ async def test_replacement_stays_published_when_old_invite_cleanup_fails(
 ) -> None:
     """Old-invite cleanup is best-effort after the new row commits."""
     database = Database(f"sqlite:///{tmp_path / 'bridge.db'}")
-    database.create_all()
+    database.migrate()
     _create_active_community(database)
     guild = _guild()
     first_channel = _channel(

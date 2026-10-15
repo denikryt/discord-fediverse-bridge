@@ -79,8 +79,87 @@ def database() -> Mock:
     )
     database.remote_subscriptions.get_subscription_by_channel.return_value = None
     database.local_subscribers.get_local_subscriber_by_channel.return_value = None
-    database.community_actor_bans.get_active_global_ban_by_discord_user_id.return_value = None
+    database.community_actor_bans.get_active_global_ban_by_discord_user_id.return_value = (
+        None
+    )
     database.bridge_policy_entries.list_all_active.return_value = []
+    from src.db.repositories.platform_surfaces import ChannelPlacement
+
+    def host_placement(community_id):
+        """Supply the separate placement projection used by command adapters."""
+        candidates = [
+            database.local_communities.get_local_community_by_slug.return_value
+        ]
+        for name in [
+            "list_local_communities",
+            "list_manageable_local_communities",
+            "list_active_local_communities",
+            "list_manageable_local_communities_by_guild",
+            "list_manageable_local_communities_owned_by_user_in_guild",
+            "list_active_local_communities_by_guild",
+            "list_active_local_communities_owned_by_user_in_guild",
+        ]:
+            value = getattr(database.local_communities, name).return_value
+            if isinstance(value, list):
+                candidates.extend(value)
+        for community in candidates:
+            if (
+                isinstance(community, SimpleNamespace)
+                and getattr(community, "id", None) == community_id
+            ):
+                guild_id = getattr(community, "discord_guild_id", None)
+                return ChannelPlacement(
+                    community_id,
+                    1,
+                    "discord-primary",
+                    "discord",
+                    str(getattr(community, "discord_forum_channel_id", 100)),
+                    str(guild_id) if guild_id is not None else None,
+                    "forum",
+                    "local_host",
+                    local_community_id=community_id,
+                )
+        return None
+
+    def channel_claim(connector_key, channel_id):
+        """Model only explicitly supplied current claims at the command boundary."""
+        for repository, method, role, field in [
+            (
+                database.local_communities,
+                "get_local_community_by_forum_channel_id",
+                "local_host",
+                "local_community_id",
+            ),
+            (
+                database.remote_subscriptions,
+                "get_subscription_by_channel",
+                "remote_subscription",
+                "remote_subscription_id",
+            ),
+            (
+                database.local_subscribers,
+                "get_local_subscriber_by_channel",
+                "local_subscriber",
+                "local_subscriber_id",
+            ),
+        ]:
+            value = getattr(repository, method).return_value
+            if isinstance(value, SimpleNamespace):
+                return ChannelPlacement(
+                    int(channel_id),
+                    1,
+                    connector_key,
+                    "discord",
+                    channel_id,
+                    None,
+                    "forum",
+                    role,
+                    **{field: getattr(value, "id", 1)},
+                )
+        return None
+
+    database.platform_surfaces.get_discord_host_placement.side_effect = host_placement
+    database.platform_surfaces.resolve_claim.side_effect = channel_claim
     return database
 
 

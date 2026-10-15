@@ -2,6 +2,9 @@
 
 from __future__ import annotations
 
+import sqlite3
+
+
 from types import SimpleNamespace
 
 import pytest
@@ -67,9 +70,11 @@ class FakeGateway:
             SimpleNamespace(
                 delivery_id=item["deliveryId"],
                 ok=item["targetEndpointUrl"] not in self.fail_targets,
-                error="remote unavailable"
-                if item["targetEndpointUrl"] in self.fail_targets
-                else None,
+                error=(
+                    "remote unavailable"
+                    if item["targetEndpointUrl"] in self.fail_targets
+                    else None
+                ),
             )
             for item in deliveries
         ]
@@ -78,7 +83,6 @@ class FakeGateway:
 def _system(tmp_path):
     """Build the real Stage 4 persistence and service graph."""
     database = Database(f"sqlite:///{tmp_path / 'bridge.db'}")
-    database.create_all()
     database.migrate()
     user = database.users.create_user(
         discord_user_id="1",
@@ -382,7 +386,7 @@ async def test_two_service_instances_submit_one_active_claim_for_same_source(
         assert row.attempt_count == 1
 
 
-def test_legacy_stage3_database_migrates_profile_version_without_synthetic_source(
+def test_legacy_stage3_database_is_rejected_without_synthetic_source(
     tmp_path,
 ) -> None:
     """Existing users receive version zero while migration emits no historical update."""
@@ -391,8 +395,7 @@ def test_legacy_stage3_database_migrates_profile_version_without_synthetic_sourc
     database_path = tmp_path / "legacy.db"
     engine = create_engine(f"sqlite:///{database_path}", future=True)
     with engine.begin() as connection:
-        connection.execute(
-            text("""
+        connection.execute(text("""
             CREATE TABLE users (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
                 discord_user_id VARCHAR(64) NOT NULL,
@@ -408,10 +411,8 @@ def test_legacy_stage3_database_migrates_profile_version_without_synthetic_sourc
                 avatar_media_id INTEGER,
                 header_media_id INTEGER
             )
-        """)
-        )
-        connection.execute(
-            text("""
+        """))
+        connection.execute(text("""
                 INSERT INTO users (
                     discord_user_id, activitypub_username, actor_url, inbox_url,
                     outbox_url, followers_url, public_key_pem, private_key_pem
@@ -419,24 +420,39 @@ def test_legacy_stage3_database_migrates_profile_version_without_synthetic_sourc
                     'https://bridge.example/actors/users/alice/inbox',
                     'https://bridge.example/actors/users/alice/outbox',
                     'https://bridge.example/actors/users/alice/followers', 'public', 'private')
-            """)
-        )
+            """))
     engine.dispose()
 
     database = Database(f"sqlite:///{database_path}")
-    database.create_all()
-    database.migrate()
-
-    with database.session() as session:
+    with database.engine.connect() as connection:
+        schema_before = connection.exec_driver_sql(
+            "SELECT type,name,sql FROM sqlite_master WHERE name NOT GLOB 'sqlite_*' ORDER BY type,name"
+        ).all()
+        names = [row[1] for row in schema_before if row[0] == "table"]
+        rows_before = {
+            name: connection.exec_driver_sql(
+                f'SELECT * FROM "{name}" ORDER BY rowid'
+            ).all()
+            for name in names
+        }
+    with pytest.raises(RuntimeError, match="baseline"):
+        database.migrate()
+    with database.engine.connect() as connection:
+        assert connection.exec_driver_sql("PRAGMA user_version").scalar_one() == 0
         assert (
-            session.execute(text("SELECT profile_version FROM users")).scalar_one() == 0
+            connection.exec_driver_sql(
+                "SELECT type,name,sql FROM sqlite_master WHERE name NOT GLOB 'sqlite_*' ORDER BY type,name"
+            ).all()
+            == schema_before
         )
-        assert (
-            session.execute(
-                text("SELECT COUNT(*) FROM user_actor_outbound_sources")
-            ).scalar_one()
-            == 0
-        )
+        for name in names:
+            assert (
+                connection.exec_driver_sql(
+                    f'SELECT * FROM "{name}" ORDER BY rowid'
+                ).all()
+                == rows_before[name]
+            )
+    database.close()
 
 
 def test_source_state_constraints_reject_payload_state_mismatch(tmp_path) -> None:

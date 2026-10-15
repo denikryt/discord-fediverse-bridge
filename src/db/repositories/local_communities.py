@@ -11,6 +11,8 @@ from ...local_community_lifecycle import VALID_LOCAL_COMMUNITY_STATUSES
 from ...management_audit import community_metadata_diff, community_status_diff
 from ...models import LocalCommunity
 from .base import BaseRepository
+from .platform_surfaces import PlatformSurfaceRepository, discord_claim_query
+from ...models import ChannelSurface
 
 
 @dataclass(slots=True)
@@ -32,6 +34,11 @@ class LocalCommunitySettingsUpdate:
 class LocalCommunityRepository(BaseRepository):
     """Persist the local communities domain without owning command policy."""
 
+    def __init__(self, session_provider, writer_provider):
+        """Keep read sessions separate from writer-reserved mutation transactions."""
+        super().__init__(session_provider)
+        self._writer_provider = writer_provider
+
     def create_local_community(
         self,
         *,
@@ -50,7 +57,7 @@ class LocalCommunityRepository(BaseRepository):
         status: str = "active",
     ) -> LocalCommunity:
         """Create one Discord-backed local community in a self-owned transaction."""
-        with self.session() as session:
+        with self._writer_provider() as session:
             return self.add_local_community(
                 session,
                 discord_guild_id=discord_guild_id,
@@ -93,8 +100,6 @@ class LocalCommunityRepository(BaseRepository):
         the public self-transactional wrapper above.
         """
         community = LocalCommunity(
-            discord_guild_id=discord_guild_id,
-            discord_forum_channel_id=discord_forum_channel_id,
             slug=slug,
             display_name=display_name,
             summary=summary,
@@ -109,16 +114,27 @@ class LocalCommunityRepository(BaseRepository):
         )
         session.add(community)
         session.flush()
+        surface = PlatformSurfaceRepository.discord_channel(
+            session, discord_forum_channel_id, discord_guild_id, "forum"
+        )
+        PlatformSurfaceRepository.claim_local_host(session, surface.id, community.id)
         return community
+
+    def get_host_placement(self, community_id):
+        """Read current host placement independently of stable actor identity."""
+        return PlatformSurfaceRepository(self._session_provider).get_host_placement(
+            community_id
+        )
 
     def get_local_community_by_forum_channel_id(
         self, discord_forum_channel_id: int
     ) -> LocalCommunity | None:
         """Load the local community bound to one Discord forum channel."""
+        # MULTIPLATFORM_STAGE01_TEMP: Discord-only community placement lookup delegates to connector-scoped channel surfaces.
         with self.session() as session:
             return session.scalar(
-                select(LocalCommunity).where(
-                    LocalCommunity.discord_forum_channel_id == discord_forum_channel_id
+                discord_claim_query(LocalCommunity, "local_community_id").where(
+                    ChannelSurface.external_channel_id == str(discord_forum_channel_id)
                 )
             )
 
@@ -158,12 +174,13 @@ class LocalCommunityRepository(BaseRepository):
         self, *, discord_guild_id: int
     ) -> list[LocalCommunity]:
         """Return active local communities for one Discord guild by slug."""
+        # MULTIPLATFORM_STAGE01_TEMP: Discord-only community placement lookup delegates to connector-scoped channel surfaces.
         with self.session() as session:
             return list(
                 session.scalars(
-                    select(LocalCommunity)
+                    discord_claim_query(LocalCommunity, "local_community_id")
                     .where(
-                        LocalCommunity.discord_guild_id == discord_guild_id,
+                        ChannelSurface.external_guild_id == str(discord_guild_id),
                         LocalCommunity.status == "active",
                     )
                     .order_by(LocalCommunity.slug, LocalCommunity.id)
@@ -177,12 +194,13 @@ class LocalCommunityRepository(BaseRepository):
         created_by_discord_user_id: str,
     ) -> list[LocalCommunity]:
         """Return active guild communities owned by one Discord user id."""
+        # MULTIPLATFORM_STAGE01_TEMP: Discord-only community placement lookup delegates to connector-scoped channel surfaces.
         with self.session() as session:
             return list(
                 session.scalars(
-                    select(LocalCommunity)
+                    discord_claim_query(LocalCommunity, "local_community_id")
                     .where(
-                        LocalCommunity.discord_guild_id == discord_guild_id,
+                        ChannelSurface.external_guild_id == str(discord_guild_id),
                         LocalCommunity.created_by_discord_user_id
                         == created_by_discord_user_id,
                         LocalCommunity.status == "active",
@@ -206,12 +224,13 @@ class LocalCommunityRepository(BaseRepository):
         self, *, discord_guild_id: int
     ) -> list[LocalCommunity]:
         """Return active and disabled local communities for one guild by slug."""
+        # MULTIPLATFORM_STAGE01_TEMP: Discord-only community placement lookup delegates to connector-scoped channel surfaces.
         with self.session() as session:
             return list(
                 session.scalars(
-                    select(LocalCommunity)
+                    discord_claim_query(LocalCommunity, "local_community_id")
                     .where(
-                        LocalCommunity.discord_guild_id == discord_guild_id,
+                        ChannelSurface.external_guild_id == str(discord_guild_id),
                         LocalCommunity.status.in_(["active", "disabled"]),
                     )
                     .order_by(LocalCommunity.slug, LocalCommunity.id)
@@ -225,12 +244,13 @@ class LocalCommunityRepository(BaseRepository):
         created_by_discord_user_id: str,
     ) -> list[LocalCommunity]:
         """Return owned active and disabled guild communities for management UI."""
+        # MULTIPLATFORM_STAGE01_TEMP: Discord-only community placement lookup delegates to connector-scoped channel surfaces.
         with self.session() as session:
             return list(
                 session.scalars(
-                    select(LocalCommunity)
+                    discord_claim_query(LocalCommunity, "local_community_id")
                     .where(
-                        LocalCommunity.discord_guild_id == discord_guild_id,
+                        ChannelSurface.external_guild_id == str(discord_guild_id),
                         LocalCommunity.created_by_discord_user_id
                         == created_by_discord_user_id,
                         LocalCommunity.status.in_(["active", "disabled"]),

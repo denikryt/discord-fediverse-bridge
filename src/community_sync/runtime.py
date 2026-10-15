@@ -165,7 +165,7 @@ class CommunityRuntime:
 
         # Resolve sibling subscriptions: all accepted subscriptions for the same
         # community except the source channel.
-        all_subs = self.database.remote_subscriptions.get_subscriptions_by_community(
+        all_subs = self.database.remote_subscriptions.list_discord_accepted_subscriptions_for_community(
             subscription.lemmy_community_actor_id
         )
         sibling_channel_ids = [
@@ -267,6 +267,9 @@ class CommunityRuntime:
             discord_thread_id=thread.id,
             discord_message_id=message.id,
             role="source",
+            parent_discord_message_id=getattr(
+                getattr(message, "reference", None), "message_id", None
+            ),
         )
 
         # Fan out to sibling mirror threads with per-thread Discord references.
@@ -286,6 +289,7 @@ class CommunityRuntime:
                     discord_thread_id=mirror.thread_id,
                     discord_message_id=mirror.message_id,
                     role="mirror",
+                    parent_discord_message_id=mirror.parent_message_id,
                 )
 
         return result
@@ -526,9 +530,19 @@ class CommunityRuntime:
 
         from ..bridge_lemmy_to_discord import _send_inbound_comment
 
-        thread_deliveries = self.database.discord_fanout_groups.get_thread_deliveries(
-            thread_group.id
-        )
+        eligible = {
+            s.discord_channel_id
+            for s in get_accepted_subscriptions(self.database, event.community_actor_id)
+        }
+        # Historical copies remain queryable; their presence does not grant
+        # a current subscription permission to receive a new comment.
+        thread_deliveries = [
+            d
+            for d in self.database.discord_fanout_groups.get_thread_deliveries(
+                thread_group.id
+            )
+            if d.discord_channel_id in eligible
+        ]
         for thread_delivery in thread_deliveries:
             thread = await bot.get_thread_by_id(thread_delivery.discord_thread_id)
             # Resolve the per-thread Discord reply reference. Returns None when the
@@ -547,6 +561,9 @@ class CommunityRuntime:
                 discord_thread_id=thread_delivery.discord_thread_id,
                 discord_message_id=message.id,
                 role="inbound",
+                parent_discord_message_id=(
+                    reference.message_id if reference is not None else None
+                ),
             )
 
         logger.info(
@@ -560,7 +577,6 @@ class CommunityRuntime:
             detail="comment created",
         )
 
-
     def _require_mutation_context(
         self, *, mutation_context: DiscordMutationContext | None, runtime: object | None
     ) -> DiscordMutationContext:
@@ -573,7 +589,9 @@ class CommunityRuntime:
         # older runtime-path tests focused on behavior while call sites migrate.
         return DiscordMutationContext(
             bridge_policy_service=getattr(runtime, "bridge_policy_service"),
-            user_actor_delivery_service=getattr(runtime, "user_actor_delivery_service", None),
+            user_actor_delivery_service=getattr(
+                runtime, "user_actor_delivery_service", None
+            ),
             user_actor_delivery_wake=getattr(
                 runtime, "user_actor_delivery_worker", _NoopWake()
             ),

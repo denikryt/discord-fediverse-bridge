@@ -31,10 +31,16 @@ def can_manage_local_community(
 
 
 def is_same_guild(
-    *, discord_guild_id: int | None, local_community: LocalCommunity
+    *, discord_guild_id: int | None, host_placement: object | None
 ) -> bool:
     """Return whether the command guild matches the community's owning guild."""
-    return discord_guild_id == getattr(local_community, "discord_guild_id", None)
+    return (
+        host_placement is not None
+        and getattr(host_placement, "connector_key") == "discord-primary"
+        and getattr(host_placement, "platform") == "discord"
+        and discord_guild_id is not None
+        and str(discord_guild_id) == getattr(host_placement, "external_guild_id")
+    )
 
 
 def can_access_local_community_from_guild(
@@ -42,6 +48,7 @@ def can_access_local_community_from_guild(
     discord_user_id: str,
     discord_guild_id: int | None,
     local_community: LocalCommunity,
+    host_placement: object | None,
     policy_snapshot: BridgePolicySnapshot,
     include_disabled: bool = False,
 ) -> bool:
@@ -55,5 +62,5 @@ def can_access_local_community_from_guild(
     if is_super_admin(policy_snapshot=policy_snapshot, discord_user_id=discord_user_id):
         return True
     return is_same_guild(
-        discord_guild_id=discord_guild_id, local_community=local_community
+        discord_guild_id=discord_guild_id, host_placement=host_placement
     )

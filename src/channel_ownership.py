@@ -8,7 +8,8 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from .models import (
-    ChannelCommunitySubscription,
+    ChannelSurface,
+    PlatformConnector,
     LocalCommunity,
     LocalSubscriber,
     PersonalFeedBinding,
@@ -27,36 +28,36 @@ class ChannelOwner:
 
 def resolve_channel_owner(session: Session, channel_id: int) -> ChannelOwner | None:
     """Return the first durable owner for a channel across current bridge domains."""
-    queries = (
-        (
-            "remote_subscription",
-            ChannelCommunitySubscription,
-            ChannelCommunitySubscription.discord_channel_id,
-            ChannelCommunitySubscription.discord_guild_id,
-        ),
-        (
-            "local_community_host",
-            LocalCommunity,
-            LocalCommunity.discord_forum_channel_id,
-            LocalCommunity.discord_guild_id,
-        ),
-        (
-            "local_subscriber",
-            LocalSubscriber,
-            LocalSubscriber.discord_channel_id,
-            LocalSubscriber.discord_guild_id,
-        ),
-        (
-            "personal_feed",
-            PersonalFeedBinding,
-            PersonalFeedBinding.discord_channel_id,
-            PersonalFeedBinding.discord_guild_id,
-        ),
+    if type(channel_id) is not int or channel_id <= 0:
+        return None
+    surface = session.scalar(
+        select(ChannelSurface)
+        .join(PlatformConnector)
+        .where(
+            PlatformConnector.connector_key == "discord-primary",
+            PlatformConnector.platform == "discord",
+            ChannelSurface.external_channel_id == str(channel_id),
+        )
     )
-    for kind, model, channel_column, guild_column in queries:
-        row = session.scalar(select(model).where(channel_column == channel_id))
-        if row is not None:
+    if surface is None or surface.role is None:
+        return None
+    # Typed FK is authoritative even for pending/failed remote owners.
+    for field, kind in [
+        ("remote_subscription_id", "remote_subscription"),
+        ("local_community_id", "local_community_host"),
+        ("local_subscriber_id", "local_subscriber"),
+        ("personal_feed_binding_id", "personal_feed"),
+    ]:
+        row_id = getattr(surface, field)
+        if row_id is not None:
             return ChannelOwner(
-                kind, row.id, channel_id, getattr(row, guild_column.key)
+                kind,
+                row_id,
+                channel_id,
+                (
+                    int(surface.external_guild_id)
+                    if surface.external_guild_id is not None
+                    else None
+                ),
             )
     return None

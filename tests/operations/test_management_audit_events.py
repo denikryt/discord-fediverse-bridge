@@ -92,33 +92,34 @@ def _rows_after_setup(database: Database) -> list[ManagementAuditEvent]:
     return _audit_rows(database)[1:]
 
 
-def test_clean_database_and_migration_create_management_audit_table(
+def test_clean_database_has_audit_and_corrupt_current_database_is_rejected(
     tmp_path: Path,
 ) -> None:
-    """Clean schema and migration-only paths both create the audit table."""
+    """Startup does not silently recreate a missing versioned audit table."""
     clean = build_database(tmp_path, "audit-clean.db")
     existing = build_database(tmp_path, "audit-existing.db")
     with existing.session() as session:
         session.execute(text("DROP TABLE management_audit_events"))
-    existing.migrate()
-
+    with pytest.raises(RuntimeError, match="Incomplete"):
+        existing.migrate()
     with clean.session() as session:
-        clean_tables = {
-            row[0]
-            for row in session.execute(
-                text("SELECT name FROM sqlite_master WHERE type='table'")
-            )
-        }
+        assert (
+            session.execute(
+                text(
+                    "SELECT name FROM sqlite_master WHERE name='management_audit_events'"
+                )
+            ).first()
+            is not None
+        )
     with existing.session() as session:
-        migrated_tables = {
-            row[0]
-            for row in session.execute(
-                text("SELECT name FROM sqlite_master WHERE type='table'")
-            )
-        }
-
-    assert "management_audit_events" in clean_tables
-    assert "management_audit_events" in migrated_tables
+        assert (
+            session.execute(
+                text(
+                    "SELECT name FROM sqlite_master WHERE name='management_audit_events'"
+                )
+            ).first()
+            is None
+        )
 
 
 def test_repository_stores_canonical_json_and_rejects_invalid_vocabulary(

@@ -138,6 +138,7 @@ async def test_edit_modal_submit_delegates_to_operation_and_responds_ephemeral(
     )
     database.management_actions.update_local_community_settings.return_value = (
         SimpleNamespace(
+            id=1,
             slug="cats",
             display_name="New Cats",
             summary=None,
@@ -188,10 +189,18 @@ async def test_edit_community_autocomplete_matches_management_scope(
     )
     database.local_communities.list_manageable_local_communities_owned_by_user_in_guild.return_value = [
         SimpleNamespace(
-            slug="cats", display_name="Cats", discord_guild_id=99999, status="active"
+            id=2,
+            slug="cats",
+            display_name="Cats",
+            discord_guild_id=99999,
+            status="active",
         ),
         SimpleNamespace(
-            slug="dogs", display_name="Dogs", discord_guild_id=99999, status="disabled"
+            id=3,
+            slug="dogs",
+            display_name="Dogs",
+            discord_guild_id=99999,
+            status="disabled",
         ),
     ]
 
@@ -218,10 +227,14 @@ async def test_edit_community_autocomplete_super_admin_sees_all_guilds(
     )
     database.local_communities.list_manageable_local_communities.return_value = [
         SimpleNamespace(
-            slug="cats", display_name="Cats", discord_guild_id=10, status="active"
+            id=4, slug="cats", display_name="Cats", discord_guild_id=10, status="active"
         ),
         SimpleNamespace(
-            slug="dogs", display_name="Dogs", discord_guild_id=20, status="disabled"
+            id=5,
+            slug="dogs",
+            display_name="Dogs",
+            discord_guild_id=20,
+            status="disabled",
         ),
     ]
 

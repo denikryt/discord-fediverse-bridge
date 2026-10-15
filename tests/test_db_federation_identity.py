@@ -16,7 +16,7 @@ from tests_constants import (
 def _database(tmp_path: Path) -> Database:
     """Create a real SQLite-backed repository for scenario-style DB tests."""
     database = Database(f"sqlite:///{tmp_path / 'bridge-stage2.db'}")
-    database.create_all()
+    database.migrate()
     return database
 
 

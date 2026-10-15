@@ -30,7 +30,6 @@ def test_complete_backup_restores_matching_database_and_media_generation(
     database_path = data / "bridge.db"
     media_root = data / "profile-media"
     database = Database(f"sqlite:///{database_path}")
-    database.create_all()
     database.migrate()
     user = database.users.create_user(
         discord_user_id="1",
@@ -169,7 +168,6 @@ def test_legacy_restore_rejects_snapshot_with_profile_media_references(
     database_path = data / "bridge.db"
     media_root = data / "profile-media"
     database = Database(f"sqlite:///{database_path}")
-    database.create_all()
     database.migrate()
     user = database.users.create_user(
         discord_user_id="1",
@@ -359,7 +357,6 @@ def _archive_with_media(tmp_path: Path) -> tuple[Path, Path, Path]:
     database_path = data / "bridge.db"
     media_root = data / "profile-media"
     database = Database(f"sqlite:///{database_path}")
-    database.create_all()
     database.migrate()
     user = database.users.create_user(
         discord_user_id="1",

@@ -153,7 +153,6 @@ async def test_metadata_modal_replaces_ordered_rows_atomically_with_multiline_va
     from src.user_profiles import UserProfileService
 
     database = Database(f"sqlite:///{tmp_path / 'profile.db'}")
-    database.create_all()
     database.migrate()
     user = database.users.create_user(
         discord_user_id="7",
@@ -219,7 +218,6 @@ async def test_metadata_modal_partial_row_rejects_whole_replacement(
     from src.user_profiles import UserProfileService
 
     database = Database(f"sqlite:///{tmp_path / 'profile.db'}")
-    database.create_all()
     database.migrate()
     user = database.users.create_user(
         discord_user_id="7",
@@ -433,7 +431,6 @@ async def test_feed_view_callback_reports_unbound_and_bound_state(
     from src.personal_feeds import PersonalFeedService
 
     database = Database(f"sqlite:///{tmp_path / 'bridge.sqlite3'}")
-    database.create_all()
     database.migrate()
     with database.session() as session:
         session.add(

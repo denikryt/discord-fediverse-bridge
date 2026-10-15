@@ -72,7 +72,7 @@ _AP_TEXT_POST_DOC = {
 def _database(tmp_path: Path) -> Database:
     """Create one real SQLite DB for backfill behavior scenarios."""
     db = Database(f"sqlite:///{tmp_path / 'backfill.db'}")
-    db.create_all()
+    db.migrate()
     return db
 
 

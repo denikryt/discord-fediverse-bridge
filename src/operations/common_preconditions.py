@@ -125,6 +125,11 @@ def is_scoped_local_community_accessible(value: OptionalCommunityScopeInput) -> 
         discord_user_id=value.discord_user_id,
         discord_guild_id=value.discord_guild_id,
         local_community=community,
+        host_placement=(
+            value.database.platform_surfaces.get_discord_host_placement(community.id)
+            if community is not None
+            else None
+        ),
         include_disabled=True,
     )
 
@@ -168,6 +173,11 @@ def is_required_local_community_accessible(
         discord_user_id=value.discord_user_id,
         discord_guild_id=value.discord_guild_id,
         local_community=community,
+        host_placement=(
+            value.database.platform_surfaces.get_discord_host_placement(community.id)
+            if community is not None
+            else None
+        ),
         include_disabled=True,
     )
 

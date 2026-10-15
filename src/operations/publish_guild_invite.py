@@ -62,7 +62,12 @@ class PublishGuildInviteInput:
         # The repository order makes automatic selection deterministic. Missing
         # cache entries and channels without invite support are simply skipped.
         for community in self.get_active_communities():
-            channel = self.guild.get_channel(int(community.discord_forum_channel_id))
+            placement = self.database.platform_surfaces.get_discord_host_placement(
+                community.id
+            )
+            if placement is None:
+                continue
+            channel = self.guild.get_channel(int(placement.external_channel_id))
             if channel is None or not callable(getattr(channel, "create_invite", None)):
                 continue
             permissions = channel.permissions_for(self.guild.me)

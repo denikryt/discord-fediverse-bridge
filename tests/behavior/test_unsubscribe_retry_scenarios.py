@@ -17,7 +17,7 @@ from tests_constants import BRIDGE_EXAMPLE_DOMAIN, LEMMY_EXAMPLE_DOMAIN
 def _database(tmp_path: Path) -> Database:
     """Create one real SQLite repository for unsubscribe retry scenarios."""
     database = Database(f"sqlite:///{tmp_path / 'unsubscribe-retry.db'}")
-    database.create_all()
+    database.migrate()
     return database
 
 

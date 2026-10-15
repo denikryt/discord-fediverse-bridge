@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from .platform_surfaces import PlatformSurfaceRepository, discord_copy_query
+
 from sqlalchemy import select
 
 from ...models import (
@@ -9,7 +11,6 @@ from ...models import (
     CommunityThreadGroupDelivery,
 )
 from .base import BaseRepository
-
 
 """Discord fanout group and delivery persistence."""
 
@@ -34,6 +35,16 @@ class DiscordFanoutGroupRepository(BaseRepository):
         """
         with self.session() as session:
             group = CommunityThreadGroup(
+                **(
+                    PlatformSurfaceRepository.discord_source_location(
+                        session, source_channel_id
+                    )
+                    if source_channel_id is not None
+                    else {}
+                ),
+                source_external_thread_id=(
+                    str(source_thread_id) if source_thread_id is not None else None
+                ),
                 community_actor_id=community_actor_id,
                 source_channel_id=source_channel_id,
                 source_thread_id=source_thread_id,
@@ -51,7 +62,7 @@ class DiscordFanoutGroupRepository(BaseRepository):
         """Load the thread group that owns one source Discord thread."""
         with self.session() as session:
             return session.scalar(
-                select(CommunityThreadGroup).where(
+                discord_copy_query(CommunityThreadGroup, source=True).where(
                     CommunityThreadGroup.source_thread_id == source_thread_id
                 )
             )
@@ -87,7 +98,7 @@ class DiscordFanoutGroupRepository(BaseRepository):
         """
         with self.session() as session:
             delivery = session.scalar(
-                select(CommunityThreadGroupDelivery).where(
+                discord_copy_query(CommunityThreadGroupDelivery).where(
                     CommunityThreadGroupDelivery.discord_thread_id == discord_thread_id
                 )
             )
@@ -111,6 +122,11 @@ class DiscordFanoutGroupRepository(BaseRepository):
         """Record one per-channel thread delivery for a CommunityThreadGroup."""
         with self.session() as session:
             delivery = CommunityThreadGroupDelivery(
+                **PlatformSurfaceRepository.discord_copy_location(
+                    session, discord_channel_id
+                ),
+                external_thread_id=str(discord_thread_id),
+                external_starter_message_id=str(discord_starter_message_id),
                 thread_group_id=thread_group_id,
                 discord_channel_id=discord_channel_id,
                 discord_thread_id=discord_thread_id,
@@ -130,7 +146,7 @@ class DiscordFanoutGroupRepository(BaseRepository):
         with self.session() as session:
             return list(
                 session.scalars(
-                    select(CommunityThreadGroupDelivery).where(
+                    discord_copy_query(CommunityThreadGroupDelivery).where(
                         CommunityThreadGroupDelivery.thread_group_id == thread_group_id
                     )
                 )
@@ -142,7 +158,7 @@ class DiscordFanoutGroupRepository(BaseRepository):
         """Load the delivery row for one Discord thread ID."""
         with self.session() as session:
             return session.scalar(
-                select(CommunityThreadGroupDelivery).where(
+                discord_copy_query(CommunityThreadGroupDelivery).where(
                     CommunityThreadGroupDelivery.discord_thread_id == discord_thread_id
                 )
             )
@@ -166,6 +182,16 @@ class DiscordFanoutGroupRepository(BaseRepository):
         """
         with self.session() as session:
             group = CommunityMessageGroup(
+                **(
+                    PlatformSurfaceRepository.discord_source_location(
+                        session, source_channel_id
+                    )
+                    if source_channel_id is not None
+                    else {}
+                ),
+                source_external_message_id=(
+                    str(source_message_id) if source_message_id is not None else None
+                ),
                 community_actor_id=community_actor_id,
                 thread_group_id=thread_group_id,
                 source_channel_id=source_channel_id,
@@ -192,7 +218,7 @@ class DiscordFanoutGroupRepository(BaseRepository):
         """Load the message group that owns one source Discord message."""
         with self.session() as session:
             return session.scalar(
-                select(CommunityMessageGroup).where(
+                discord_copy_query(CommunityMessageGroup, source=True).where(
                     CommunityMessageGroup.source_message_id == source_message_id
                 )
             )
@@ -218,7 +244,7 @@ class DiscordFanoutGroupRepository(BaseRepository):
         # Discord message ID so the parent AP object ID can be resolved.
         with self.session() as session:
             delivery = session.scalar(
-                select(CommunityMessageGroupDelivery).where(
+                discord_copy_query(CommunityMessageGroupDelivery).where(
                     CommunityMessageGroupDelivery.discord_message_id
                     == discord_message_id
                 )
@@ -239,10 +265,21 @@ class DiscordFanoutGroupRepository(BaseRepository):
         discord_thread_id: int,
         discord_message_id: int,
         role: str,
+        parent_discord_message_id: int | None = None,
     ) -> CommunityMessageGroupDelivery:
         """Record one per-channel message delivery for a CommunityMessageGroup."""
         with self.session() as session:
             delivery = CommunityMessageGroupDelivery(
+                **PlatformSurfaceRepository.discord_copy_location(
+                    session, discord_channel_id
+                ),
+                external_thread_id=str(discord_thread_id),
+                external_message_id=str(discord_message_id),
+                external_parent_message_id=(
+                    str(parent_discord_message_id)
+                    if parent_discord_message_id is not None
+                    else None
+                ),
                 message_group_id=message_group_id,
                 discord_channel_id=discord_channel_id,
                 discord_thread_id=discord_thread_id,
@@ -264,7 +301,7 @@ class DiscordFanoutGroupRepository(BaseRepository):
         """
         with self.session() as session:
             return session.scalar(
-                select(CommunityMessageGroupDelivery).where(
+                discord_copy_query(CommunityMessageGroupDelivery).where(
                     CommunityMessageGroupDelivery.discord_message_id
                     == discord_message_id
                 )
@@ -277,7 +314,7 @@ class DiscordFanoutGroupRepository(BaseRepository):
         with self.session() as session:
             return list(
                 session.scalars(
-                    select(CommunityMessageGroupDelivery).where(
+                    discord_copy_query(CommunityMessageGroupDelivery).where(
                         CommunityMessageGroupDelivery.message_group_id
                         == message_group_id
                     )
@@ -292,7 +329,7 @@ class DiscordFanoutGroupRepository(BaseRepository):
         # received this message before attempting a duplicate delivery.
         with self.session() as session:
             return session.scalar(
-                select(CommunityMessageGroupDelivery).where(
+                discord_copy_query(CommunityMessageGroupDelivery).where(
                     CommunityMessageGroupDelivery.message_group_id == message_group_id,
                     CommunityMessageGroupDelivery.discord_thread_id
                     == discord_thread_id,

@@ -90,9 +90,11 @@ async def dispatch_activitypub_event(
             )
         return HandlerResult(
             status="processed",
-            outcome=InboundActivityOutcome.APPLIED
-            if result.reason not in {"duplicate", "stale"}
-            else InboundActivityOutcome.IGNORED_ALREADY_APPLIED,
+            outcome=(
+                InboundActivityOutcome.APPLIED
+                if result.reason not in {"duplicate", "stale"}
+                else InboundActivityOutcome.IGNORED_ALREADY_APPLIED
+            ),
             detail=result.reason,
         )
 
@@ -367,7 +369,7 @@ async def handle_follow_accepted(
     # get_pending_channel_subscriptions_for_community must be called BEFORE
     # mark_bridge_actor_follow_accepted so we capture the pending rows that need DMs.
     community_actor_id = bridge_follow.community_actor_id
-    pending_subs = runtime.database.remote_subscriptions.get_pending_channel_subscriptions_for_community(
+    pending_subs = runtime.database.remote_subscriptions.list_discord_pending_subscriptions_for_notification(
         community_actor_id
     )
     runtime.database.bridge_actor_follows.mark_bridge_actor_follow_accepted(
@@ -407,7 +409,7 @@ async def _maybe_implicit_accept(community_actor_id: str, runtime: Runtime) -> N
     )
 
     # Capture pending subs before marking accepted so DMs can be sent.
-    pending_subs = runtime.database.remote_subscriptions.get_pending_channel_subscriptions_for_community(
+    pending_subs = runtime.database.remote_subscriptions.list_discord_pending_subscriptions_for_notification(
         community_actor_id
     )
     runtime.database.bridge_actor_follows.mark_bridge_actor_follow_accepted(

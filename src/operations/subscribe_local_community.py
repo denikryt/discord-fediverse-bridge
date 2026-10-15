@@ -127,9 +127,16 @@ def _is_target_channel_not_host_forum(
 ) -> bool:
     """Return whether the target channel is not the selected community host forum."""
     community = operation_input.get_local_community()
+    placement = (
+        operation_input.database.platform_surfaces.get_discord_host_placement(
+            community.id
+        )
+        if community is not None
+        else None
+    )
     return (
-        getattr(community, "discord_forum_channel_id", None)
-        != operation_input.channel_id
+        placement is None
+        or int(placement.external_channel_id) != operation_input.channel_id
     )
 
 

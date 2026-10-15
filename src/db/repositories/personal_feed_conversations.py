@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from .platform_surfaces import PlatformSurfaceRepository, discord_copy_query
+
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from hashlib import sha256
@@ -83,7 +85,7 @@ class PersonalFeedConversationRepository:
             if root is None:
                 raise LookupError("personal-feed root not found")
             existing = session.scalar(
-                select(PersonalFeedThreadMapping).where(
+                discord_copy_query(PersonalFeedThreadMapping).where(
                     PersonalFeedThreadMapping.root_published_object_id == root.id
                 )
             )
@@ -92,6 +94,9 @@ class PersonalFeedConversationRepository:
                     raise ValueError("root already owns a different Discord thread")
                 return existing
             row = PersonalFeedThreadMapping(
+                **PlatformSurfaceRepository.discord_copy_location(session, channel_id),
+                external_thread_id=str(thread_id),
+                external_starter_message_id=str(root_message_id),
                 root_published_object_id=root.id,
                 root_discord_channel_id=channel_id,
                 root_discord_message_id=root_message_id,
@@ -107,7 +112,7 @@ class PersonalFeedConversationRepository:
         """Resolve a Discord thread to its personal-feed root mapping."""
         with self.session() as session:
             return session.scalar(
-                select(PersonalFeedThreadMapping).where(
+                discord_copy_query(PersonalFeedThreadMapping).where(
                     PersonalFeedThreadMapping.thread_id == thread_id
                 )
             )
@@ -226,6 +231,9 @@ class PersonalFeedConversationRepository:
             session.add(row)
             session.flush()
             delivery = InboundDiscordDelivery(
+                **PlatformSurfaceRepository.discord_copy_location(
+                    session, destination_channel_id
+                ),
                 inbound_object_id=row.id,
                 root_published_object_id=root.id,
                 destination_channel_id=destination_channel_id,
@@ -466,6 +474,7 @@ class PersonalFeedConversationRepository:
             row = session.get(InboundDiscordDelivery, delivery_id)
             if row is not None:
                 row.destination_thread_id = thread_id
+                row.external_thread_id = str(thread_id)
 
     def recover_dispatching(self) -> int:
         """Make interrupted side-effect claims retryable after process restart."""
@@ -502,6 +511,7 @@ class PersonalFeedConversationRepository:
                 row.state = "delivered"
                 if discord_message_id is not None:
                     row.discord_message_id = discord_message_id
+                    row.external_message_id = str(discord_message_id)
                 row.next_attempt_at = None
                 row.last_error = None
             elif row.attempt_count >= 3:

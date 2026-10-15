@@ -52,7 +52,12 @@ def test_user_action_edits_local_community_metadata_end_to_end(tmp_path: Path) -
     assert reloaded.display_name == "Updated Cats"
     assert reloaded.summary == "Updated summary"
     assert reloaded.slug == "cats"
-    assert reloaded.discord_forum_channel_id == 100
+    assert (
+        database.platform_surfaces.get_discord_host_placement(
+            reloaded.id
+        ).external_channel_id
+        == "100"
+    )
     assert reloaded.actor_url == "https://bridge.example/actors/communities/cats"
 
 

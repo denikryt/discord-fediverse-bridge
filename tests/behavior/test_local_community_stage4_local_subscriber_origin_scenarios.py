@@ -603,14 +603,21 @@ async def test_remote_subscription_forum_with_bad_local_subscriber_row_stays_rem
     """Mixed-state forums should not silently become local-subscriber sources."""
     database, local_runtime = _runtime(tmp_path)
     local_community = _local_community(database)
-    database.local_subscribers.create_local_subscriber(
-        local_community_id=local_community.id,
-        discord_guild_id=10,
-        discord_channel_id=200,
-        initiated_by_discord_user_id="999",
-        status="active",
-    )
     add_accepted_subscription(database, channel_id=200)
+    from src.models import LocalSubscriber
+
+    # Deliberately bypass the writer to model a stale scalar projection. It
+    # must not acquire routing eligibility without the matching typed claim.
+    with database.session() as session:
+        session.add(
+            LocalSubscriber(
+                local_community_id=local_community.id,
+                discord_guild_id=10,
+                discord_channel_id=200,
+                initiated_by_discord_user_id="999",
+                status="active",
+            )
+        )
     remote_runtime = AsyncMock()
     router = DiscordEventRouter(
         database=database,

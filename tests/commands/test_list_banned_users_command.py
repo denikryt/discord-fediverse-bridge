@@ -54,8 +54,8 @@ async def test_list_banned_users_community_autocomplete_shows_current_guild_acti
 ) -> None:
     """Public list autocomplete includes all current-guild active communities."""
     database.local_communities.list_active_local_communities_by_guild.return_value = [
-        SimpleNamespace(slug="cats", display_name="Cats"),
-        SimpleNamespace(slug="dogs", display_name="Dogs"),
+        SimpleNamespace(id=1, slug="cats", display_name="Cats"),
+        SimpleNamespace(id=2, slug="dogs", display_name="Dogs"),
     ]
 
     choices = await list_banned_users._list_community_autocomplete(
@@ -97,7 +97,7 @@ async def test_list_banned_users_community_autocomplete_caps_at_twenty_five(
     """The public community autocomplete respects Discord's choice cap."""
     database.local_communities.list_active_local_communities_by_guild.return_value = [
         SimpleNamespace(
-            slug=f"community{index:02d}", display_name=f"Community {index:02d}"
+            id=3, slug=f"community{index:02d}", display_name=f"Community {index:02d}"
         )
         for index in range(30)
     ]

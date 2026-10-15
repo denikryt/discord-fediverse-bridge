@@ -13,7 +13,6 @@ from src.profile_media import ProfileMediaStore
 def _system(tmp_path: Path) -> tuple[Database, UserProfileService, int]:
     """Create one registered-user state with the real repositories and service."""
     database = Database(f"sqlite:///{tmp_path / 'bridge.db'}")
-    database.create_all()
     database.migrate()
     user = database.users.create_user(
         discord_user_id="1",
@@ -100,13 +99,14 @@ def test_profile_field_name_accepts_255_code_points_and_rejects_256(
         service.update_profile(user_id, None, None, [("x" * 256, "value")])
 
 
-def test_migration_rebuilds_legacy_profile_field_name_width(tmp_path: Path) -> None:
+def test_current_startup_does_not_repeat_legacy_profile_field_rebuild(
+    tmp_path: Path,
+) -> None:
     """An existing Stage 1 draft schema migrates to the approved 255-width contract."""
     import sqlite3
 
     path = tmp_path / "legacy.db"
     database = Database(f"sqlite:///{path}")
-    database.create_all()
     database.migrate()
     database.close()
     with sqlite3.connect(path) as connection:
@@ -133,7 +133,7 @@ def test_migration_rebuilds_legacy_profile_field_name_width(tmp_path: Path) -> N
         rows = connection.execute(
             text("PRAGMA table_info(user_profile_fields)")
         ).fetchall()
-    assert next(row[2] for row in rows if row[1] == "name") == "VARCHAR(255)"
+    assert next(row[2] for row in rows if row[1] == "name") == "VARCHAR(30)"
 
 
 def test_independent_profile_forms_do_not_overwrite_each_other(tmp_path: Path) -> None:

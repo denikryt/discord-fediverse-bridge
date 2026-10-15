@@ -27,7 +27,6 @@ def _png(width: int = 8, height: int = 8) -> BytesIO:
 def _system(tmp_path: Path):
     """Build the real database/store/service graph for one user."""
     database = Database(f"sqlite:///{tmp_path / 'bridge.db'}")
-    database.create_all()
     database.migrate()
     user = database.users.create_user(
         discord_user_id="1",

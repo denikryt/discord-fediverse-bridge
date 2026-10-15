@@ -26,15 +26,17 @@ def _choice_label(label: str) -> str:
     return label if len(label) <= 100 else f"{label[:97]}..."
 
 
-def _community_label(community: object, *, include_guild: bool) -> str:
+def _community_label(
+    community: object, *, include_guild: bool, host_placement: object | None = None
+) -> str:
     """Build a short label for one `/ban-user community` choice."""
     slug = getattr(community, "slug")
     display_name = getattr(community, "display_name", None)
     pieces = [slug]
     if display_name and display_name != slug:
         pieces.append(display_name)
-    if include_guild:
-        pieces.append(f"guild {getattr(community, 'discord_guild_id', '')}")
+    if include_guild and host_placement is not None:
+        pieces.append(f"guild {getattr(host_placement, 'external_guild_id', '')}")
     return _choice_label(" — ".join(str(piece) for piece in pieces if piece))
 
 
@@ -93,7 +95,13 @@ def _ban_community_autocomplete(
                 # only in the label for super-admin readability.
                 choices.append(
                     app_commands.Choice(
-                        name=_community_label(community, include_guild=include_guild),
+                        name=_community_label(
+                            community,
+                            include_guild=include_guild,
+                            host_placement=database.platform_surfaces.get_discord_host_placement(
+                                community.id
+                            ),
+                        ),
                         value=slug,
                     )
                 )

@@ -19,7 +19,7 @@ from tests_constants import BRIDGE_EXAMPLE_DOMAIN, LEMMY_EXAMPLE_DOMAIN
 def _database(tmp_path: Path) -> Database:
     """Create a real SQLite-backed repository for allowlist handler tests."""
     db = Database(f"sqlite:///{tmp_path / 'bridge-allowlist.db'}")
-    db.create_all()
+    db.migrate()
     return db
 
 

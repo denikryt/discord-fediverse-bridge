@@ -129,3 +129,9 @@ This document explains the major runtime traces through the bridge: user/platfor
 3. The service acquires SQLite's writer reservation, rechecks user/guild/channel uniqueness and cross-mode channel ownership, then inserts or compare-and-set moves the single binding.
 4. `/account-settings feed-view` reads the durable assignment; `feed-unbind` removes only the caller's current assignment. Historical publication/thread/message mappings are not modified.
 5. `BridgeBot.on_message` recognizes owner-authored root messages in an active ordinary text-channel or announcement-channel binding before existing forum routing. Non-owner roots, stale bindings, threads, DMs, and unrelated channels do not classify as personal-feed roots.
+
+## Versioned startup and channel claims
+
+Startup rejects nonempty unversioned files and unknown versions. Empty files bootstrap v2 atomically. A registered v1 upgrade reserves a dedicated connection, disables FK enforcement before `BEGIN IMMEDIATE`, and rechecks the version under the writer lock. It rebuilds the published-object parent with original IDs, verifies preserved dependent rows, actual FK definitions, `foreign_key_check` and `integrity_check`, then stamps v2 and commits. Rollback restores the old schema/data; enforcement is restored and verified in `finally`. Current v2 startup validates the schema without legacy repair helpers.
+
+Subscribe resolves policy and performs gateway work outside the writer transaction. Persistence rechecks the typed channel owner and updates only the expected failed subscription in place; replacement or concurrent claims fail closed. Shared ActivityPub Follow state is global. Discord fanout selects accepted/active current primary claims, while history lookups use scoped copy locations independently of current ownership. Personal-feed move releases the old claim and claims the new location in one writer transaction.

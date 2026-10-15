@@ -11,7 +11,8 @@ from ...models import (
     LocalCommunityThreadSurface,
 )
 from .base import BaseRepository
-
+from .platform_surfaces import discord_copy_query
+from ...models import ChannelSurface, PlatformConnector
 
 """Canonical local-community thread and message persistence."""
 
@@ -52,10 +53,25 @@ class LocalCommunityContentRepository(BaseRepository):
                 raise RuntimeError(
                     f"Missing LocalCommunity {local_community_id} while creating host thread surface"
                 )
+            placement = session.scalar(
+                select(ChannelSurface)
+                .join(PlatformConnector)
+                .where(
+                    ChannelSurface.local_community_id == local_community_id,
+                    PlatformConnector.connector_key == "discord-primary",
+                    PlatformConnector.platform == "discord",
+                )
+            )
+            if placement is None:
+                raise ValueError("Local community has no current Discord host")
             session.add(
                 LocalCommunityThreadSurface(
+                    connector_id=placement.connector_id,
+                    channel_surface_id=placement.id,
+                    external_thread_id=str(discord_thread_id),
+                    external_starter_message_id=str(discord_starter_message_id),
                     local_community_thread_id=thread.id,
-                    discord_forum_channel_id=local_community.discord_forum_channel_id,
+                    discord_forum_channel_id=int(placement.external_channel_id),
                     discord_thread_id=discord_thread_id,
                     discord_starter_message_id=discord_starter_message_id,
                     role="host",
@@ -138,6 +154,14 @@ class LocalCommunityContentRepository(BaseRepository):
                 )
             session.add(
                 LocalCommunityMessageSurface(
+                    connector_id=thread_surface.connector_id,
+                    channel_surface_id=thread_surface.channel_surface_id,
+                    external_message_id=str(discord_message_id),
+                    external_parent_message_id=(
+                        str(parent_discord_message_id)
+                        if parent_discord_message_id is not None
+                        else None
+                    ),
                     local_community_message_id=message.id,
                     local_community_thread_surface_id=thread_surface.id,
                     discord_forum_channel_id=thread_surface.discord_forum_channel_id,

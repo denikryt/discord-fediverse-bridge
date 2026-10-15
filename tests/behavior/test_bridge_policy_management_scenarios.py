@@ -32,7 +32,6 @@ def _settings(**overrides: str) -> Settings:
 def _database(tmp_path: Path) -> Database:
     """Create one migrated SQLite database for observable persistence checks."""
     database = Database(f"sqlite:///{tmp_path / 'bridge.db'}")
-    database.create_all()
     database.migrate()
     return database
 

@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from .platform_surfaces import PlatformSurfaceRepository, discord_copy_query
+
 
 from sqlalchemy import select
 
@@ -10,7 +12,6 @@ from ...models import (
     LocalCommunityThreadSurface,
 )
 from .base import BaseRepository
-
 
 """Discord surface persistence for local-community content."""
 
@@ -31,6 +32,11 @@ class LocalCommunitySurfaceRepository(BaseRepository):
         """Persist one explicit Discord thread surface for a canonical thread."""
         with self.session() as session:
             surface = LocalCommunityThreadSurface(
+                **PlatformSurfaceRepository.discord_copy_location(
+                    session, discord_forum_channel_id
+                ),
+                external_thread_id=str(discord_thread_id),
+                external_starter_message_id=str(discord_starter_message_id),
                 local_community_thread_id=local_community_thread_id,
                 discord_forum_channel_id=discord_forum_channel_id,
                 discord_thread_id=discord_thread_id,
@@ -48,7 +54,7 @@ class LocalCommunitySurfaceRepository(BaseRepository):
         """Return one thread surface for a canonical thread and forum target."""
         with self.session() as session:
             return session.scalar(
-                select(LocalCommunityThreadSurface).where(
+                discord_copy_query(LocalCommunityThreadSurface).where(
                     LocalCommunityThreadSurface.local_community_thread_id
                     == local_community_thread_id,
                     LocalCommunityThreadSurface.discord_forum_channel_id
@@ -62,7 +68,7 @@ class LocalCommunitySurfaceRepository(BaseRepository):
         """Load the thread surface row for one Discord thread id."""
         with self.session() as session:
             return session.scalar(
-                select(LocalCommunityThreadSurface).where(
+                discord_copy_query(LocalCommunityThreadSurface).where(
                     LocalCommunityThreadSurface.discord_thread_id == discord_thread_id
                 )
             )
@@ -73,7 +79,7 @@ class LocalCommunitySurfaceRepository(BaseRepository):
         """Load the thread surface row for one Discord starter message id."""
         with self.session() as session:
             return session.scalar(
-                select(LocalCommunityThreadSurface).where(
+                discord_copy_query(LocalCommunityThreadSurface).where(
                     LocalCommunityThreadSurface.discord_starter_message_id
                     == discord_starter_message_id
                 )
@@ -86,7 +92,7 @@ class LocalCommunitySurfaceRepository(BaseRepository):
         with self.session() as session:
             return list(
                 session.scalars(
-                    select(LocalCommunityThreadSurface)
+                    discord_copy_query(LocalCommunityThreadSurface)
                     .where(
                         LocalCommunityThreadSurface.local_community_thread_id
                         == local_community_thread_id
@@ -104,7 +110,7 @@ class LocalCommunitySurfaceRepository(BaseRepository):
         """Return the host forum thread surface for one canonical thread."""
         with self.session() as session:
             return session.scalar(
-                select(LocalCommunityThreadSurface).where(
+                discord_copy_query(LocalCommunityThreadSurface).where(
                     LocalCommunityThreadSurface.local_community_thread_id
                     == local_community_thread_id,
                     LocalCommunityThreadSurface.role == "host",
@@ -124,7 +130,28 @@ class LocalCommunitySurfaceRepository(BaseRepository):
     ) -> LocalCommunityMessageSurface:
         """Persist one explicit Discord message surface for a canonical comment."""
         with self.session() as session:
+            thread_surface = session.get(
+                LocalCommunityThreadSurface, local_community_thread_surface_id
+            )
+            if thread_surface is None:
+                raise ValueError("Missing parent thread surface")
+            location = PlatformSurfaceRepository.discord_copy_location(
+                session, discord_forum_channel_id
+            )
+            if (
+                location["channel_surface_id"] != thread_surface.channel_surface_id
+                or location["connector_id"] != thread_surface.connector_id
+            ):
+                raise ValueError("Message and parent thread must share their channel")
             surface = LocalCommunityMessageSurface(
+                connector_id=thread_surface.connector_id,
+                channel_surface_id=thread_surface.channel_surface_id,
+                external_message_id=str(discord_message_id),
+                external_parent_message_id=(
+                    str(parent_discord_message_id)
+                    if parent_discord_message_id is not None
+                    else None
+                ),
                 local_community_message_id=local_community_message_id,
                 local_community_thread_surface_id=local_community_thread_surface_id,
                 discord_forum_channel_id=discord_forum_channel_id,
@@ -143,7 +170,7 @@ class LocalCommunitySurfaceRepository(BaseRepository):
         """Return one message surface for a canonical comment and thread surface."""
         with self.session() as session:
             return session.scalar(
-                select(LocalCommunityMessageSurface).where(
+                discord_copy_query(LocalCommunityMessageSurface).where(
                     LocalCommunityMessageSurface.local_community_message_id
                     == local_community_message_id,
                     LocalCommunityMessageSurface.local_community_thread_surface_id
@@ -157,7 +184,7 @@ class LocalCommunitySurfaceRepository(BaseRepository):
         """Load the message surface row for one Discord message id."""
         with self.session() as session:
             return session.scalar(
-                select(LocalCommunityMessageSurface).where(
+                discord_copy_query(LocalCommunityMessageSurface).where(
                     LocalCommunityMessageSurface.discord_message_id
                     == discord_message_id
                 )
@@ -170,7 +197,7 @@ class LocalCommunitySurfaceRepository(BaseRepository):
         with self.session() as session:
             return list(
                 session.scalars(
-                    select(LocalCommunityMessageSurface)
+                    discord_copy_query(LocalCommunityMessageSurface)
                     .where(
                         LocalCommunityMessageSurface.local_community_message_id
                         == local_community_message_id
@@ -188,7 +215,7 @@ class LocalCommunitySurfaceRepository(BaseRepository):
         """Return the host forum message surface for one canonical comment."""
         with self.session() as session:
             return session.scalar(
-                select(LocalCommunityMessageSurface).where(
+                discord_copy_query(LocalCommunityMessageSurface).where(
                     LocalCommunityMessageSurface.local_community_message_id
                     == local_community_message_id,
                     LocalCommunityMessageSurface.role == "host",
@@ -228,4 +255,40 @@ class LocalCommunitySurfaceRepository(BaseRepository):
                 return None
             return session.get(
                 LocalCommunityMessage, surface.local_community_message_id
+            )
+
+    def get_thread_surface_by_external_id(self, connector_key, external_thread_id):
+        """Lookup a historical thread copy using its complete connector identity."""
+        from ...models import PlatformConnector
+
+        with self.session() as session:
+            return session.scalar(
+                select(LocalCommunityThreadSurface)
+                .join(
+                    PlatformConnector,
+                    PlatformConnector.id == LocalCommunityThreadSurface.connector_id,
+                )
+                .where(
+                    PlatformConnector.connector_key == connector_key,
+                    LocalCommunityThreadSurface.external_thread_id
+                    == external_thread_id,
+                )
+            )
+
+    def get_message_surface_by_external_id(self, connector_key, external_message_id):
+        """Lookup a historical message independently of current channel ownership."""
+        from ...models import PlatformConnector
+
+        with self.session() as session:
+            return session.scalar(
+                select(LocalCommunityMessageSurface)
+                .join(
+                    PlatformConnector,
+                    PlatformConnector.id == LocalCommunityMessageSurface.connector_id,
+                )
+                .where(
+                    PlatformConnector.connector_key == connector_key,
+                    LocalCommunityMessageSurface.external_message_id
+                    == external_message_id,
+                )
             )

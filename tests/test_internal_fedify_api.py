@@ -15,7 +15,7 @@ from src.http_api import create_http_app
 def _runtime(tmp_path: Path) -> tuple[SimpleNamespace, Database]:
     """Create one real SQLite database and the minimal HTTP runtime around it."""
     database = Database(f"sqlite:///{tmp_path / 'internal-fedify.db'}")
-    database.create_all()
+    database.migrate()
     settings = SimpleNamespace(
         fedify_shared_secret="internal-secret",
         normalized_fedify_origin="https://bridge.example",

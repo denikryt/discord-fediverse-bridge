@@ -22,7 +22,7 @@ from tests_constants import BRIDGE_HOST_DOMAIN, LEMMY_EXAMPLE_DOMAIN
 def _database(tmp_path: Path) -> Database:
     """Create one real SQLite repository for inbound behavior scenarios."""
     database = Database(f"sqlite:///{tmp_path / 'behavior-inbound.db'}")
-    database.create_all()
+    database.migrate()
     return database
 
 

@@ -129,3 +129,13 @@ Start with the **Behavior** files for user-visible bridge behavior, then check *
 ## User profile/media Stage 1
 
 Behavior coverage lives in `test_user_profile_persistence_scenarios.py`, `test_profile_media_scenarios.py`, and `test_profile_media_backup_scenarios.py`. It covers fallback defaults, atomic metadata validation, SQLite invariants, canonical image publication, DB-backed HTTP delivery, and complete DB-plus-media backup/restore.
+
+## Platform model Stage 01
+
+- Personal Feed service/repository agreement on physical claims and target-local parent resolution during upgrade — [`tests/test_stage01_simplicity_regressions.py`](../../tests/test_stage01_simplicity_regressions.py).
+
+- Generated roles, owner exclusivity, scoped identity, parent-channel FKs, recipient selection, and retry CAS — [`tests/test_platform_data_model.py`](../../tests/test_platform_data_model.py).
+- Claim kind admission for all owner types on both connectors, schema-only `create_all()` and explicit application bootstrap — [`tests/test_stage01_review_regressions.py`](../../tests/test_stage01_review_regressions.py).
+- Immutable v1 fixture upgrade, fresh/upgraded schema parity, populated cascade preservation, failures during rebuild, concurrent migration runners, and FK enforcement after commit — [`tests/test_platform_data_model_migration_stage01.py`](../../tests/test_platform_data_model_migration_stage01.py).
+- Mixed Discord/Fluxer post/comment routing, explicit/implicit Accept with global status promotion and Discord-only DMs, local publish fanout, HTTP dashboard, guild/guildless subscription lists, and Personal Feed view/mutation isolation — [`tests/behavior/test_platform_data_model_stage01.py`](../../tests/behavior/test_platform_data_model_stage01.py).
+- `tests/fixtures/platform_v1_schema.sql` and `tests/fixtures/platform_v1_models.py` preserve the independent v1 baseline; current ORM metadata must not generate the upgrade fixture.

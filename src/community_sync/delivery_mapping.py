@@ -58,12 +58,22 @@ def get_sibling_thread_deliveries(
     source_thread_id: int,
 ) -> list[object]:
     """Return every mapped thread delivery except the originating thread."""
+    group = database.discord_fanout_groups.get_thread_group_by_id(thread_group_id)
+    if group is None:
+        return []
+    eligible = {
+        s.discord_channel_id
+        for s in database.remote_subscriptions.list_discord_accepted_subscriptions_for_community(
+            group.community_actor_id
+        )
+    }
     return [
         delivery
         for delivery in database.discord_fanout_groups.get_thread_deliveries(
             thread_group_id
         )
         if delivery.discord_thread_id != source_thread_id
+        and delivery.discord_channel_id in eligible
     ]
 
 

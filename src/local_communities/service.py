@@ -139,6 +139,12 @@ class LocalCommunityService:
             public_key_pem=public_key_pem,
             private_key_pem=private_key_pem,
         )
+        placement = self.database.platform_surfaces.get_discord_host_placement(
+            created.id
+        )
+        if placement is None or placement.external_guild_id is None:
+            raise LocalCommunityError("Created community has no Discord host placement")
+        # MULTIPLATFORM_STAGE01_TEMP: Discord creation result projects host placement for the current slash-command contract.
         return CreatedLocalCommunity(
             slug=created.slug,
             display_name=created.display_name,
@@ -147,8 +153,8 @@ class LocalCommunityService:
             inbox_url=created.inbox_url,
             outbox_url=created.outbox_url,
             followers_url=created.followers_url,
-            discord_forum_channel_id=created.discord_forum_channel_id,
-            discord_guild_id=created.discord_guild_id,
+            discord_forum_channel_id=int(placement.external_channel_id),
+            discord_guild_id=int(placement.external_guild_id),
         )
 
     def validate_slug(self, slug: str) -> None:

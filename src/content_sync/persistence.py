@@ -2,6 +2,11 @@
 
 from __future__ import annotations
 
+from ..db.repositories.platform_surfaces import (
+    PlatformSurfaceRepository,
+    discord_copy_query,
+)
+
 from dataclasses import dataclass
 from datetime import datetime
 
@@ -10,6 +15,8 @@ from sqlalchemy.exc import IntegrityError
 
 from ..models import (
     MessageMapping,
+    ChannelSurface,
+    PlatformConnector,
     PublishedActivityObject,
     User,
     UserActorOutboundSource,
@@ -56,6 +63,29 @@ def _matches(
     )
 
 
+def _scope_matches(session, mapping, channel_id):
+    """Reject duplicate publications belonging to another physical connector."""
+    if mapping.source_connector_id is None:
+        return False
+    connector = session.get(PlatformConnector, mapping.source_connector_id)
+    if (
+        connector is None
+        or connector.connector_key != "discord-primary"
+        or connector.platform != "discord"
+    ):
+        return False
+    if channel_id is None:
+        return mapping.source_channel_surface_id is None
+    if mapping.source_channel_surface_id is None:
+        return False
+    surface = session.get(ChannelSurface, mapping.source_channel_surface_id)
+    return (
+        surface is not None
+        and surface.connector_id == connector.id
+        and surface.external_channel_id == str(channel_id)
+    )
+
+
 def _existing_result(
     session: object,
     mapping: MessageMapping,
@@ -86,7 +116,9 @@ def _existing_result(
             "mapping exists without canonical published object"
         )
     expected_published = (
-        published.actor_url == actor_url
+        published.source_connector_id == mapping.source_connector_id
+        and published.source_channel_surface_id == mapping.source_channel_surface_id
+        and published.actor_url == actor_url
         and published.publication_context == publication_context
         and published.community_actor_url == community_actor_url
         and published.discord_guild_id == discord_guild_id
@@ -163,14 +195,16 @@ def inspect_publish_artifacts(
     )
     with database.session() as session:
         mapping = session.scalar(
-            select(MessageMapping).where(
+            discord_copy_query(MessageMapping, source=True).where(
                 MessageMapping.source_platform == "discord",
                 MessageMapping.source_id == source_id,
             )
         )
         if mapping is None:
             return None
-        if not _matches(mapping, **expected):
+        if not _matches(mapping, **expected) or not _scope_matches(
+            session, mapping, discord_channel_id
+        ):
             raise PublicationConflictError(
                 "Discord source is already mapped to incompatible canonical identity"
             )
@@ -239,13 +273,15 @@ def persist_publish_artifacts(
                     "canonical actor does not match a registered User Actor"
                 )
             existing = session.scalar(
-                select(MessageMapping).where(
+                discord_copy_query(MessageMapping, source=True).where(
                     MessageMapping.source_platform == "discord",
                     MessageMapping.source_id == source_id,
                 )
             )
             if existing is not None:
-                if not _matches(existing, **expected):
+                if not _matches(existing, **expected) or not _scope_matches(
+                    session, existing, discord_channel_id
+                ):
                     raise PublicationConflictError(
                         "Discord source is already mapped to incompatible canonical identity"
                     )
@@ -267,6 +303,9 @@ def persist_publish_artifacts(
                 )
 
             mapping = MessageMapping(
+                **PlatformSurfaceRepository.discord_source_location(
+                    session, discord_channel_id, discord_guild_id
+                ),
                 source_platform="discord",
                 source_id=source_id,
                 activity_id=activity_id,
@@ -279,6 +318,10 @@ def persist_publish_artifacts(
                 discord_message_id=discord_message_id,
             )
             published = PublishedActivityObject(
+                **PlatformSurfaceRepository.discord_source_location(
+                    session, discord_channel_id, discord_guild_id
+                ),
+                source_external_message_id=str(discord_message_id),
                 actor_username=actor_username,
                 actor_url=actor_url,
                 publication_context=publication_context,
@@ -332,12 +375,23 @@ def persist_publish_artifacts(
                             & (MessageMapping.source_id == source_id),
                             MessageMapping.activity_id == activity_id,
                             MessageMapping.object_id == object_id,
-                            MessageMapping.discord_message_id == discord_message_id,
+                            (MessageMapping.discord_message_id == discord_message_id)
+                            & MessageMapping.source_connector_id.in_(
+                                select(PlatformConnector.id).where(
+                                    PlatformConnector.connector_key
+                                    == "discord-primary",
+                                    PlatformConnector.platform == "discord",
+                                )
+                            ),
                         )
                     )
                 )
             )
-            if len(mappings) == 1 and _matches(mappings[0], **expected):
+            if (
+                len(mappings) == 1
+                and _matches(mappings[0], **expected)
+                and _scope_matches(session, mappings[0], discord_channel_id)
+            ):
                 return _existing_result(
                     session,
                     mappings[0],

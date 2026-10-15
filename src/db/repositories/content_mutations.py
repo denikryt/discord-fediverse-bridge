@@ -10,6 +10,7 @@ from datetime import datetime, timedelta, timezone
 from urllib.parse import urlsplit
 
 from sqlalchemy import and_, or_, select
+from .platform_surfaces import discord_copy_query
 
 from ...models import (
     PublishedActivityObject,
@@ -202,7 +203,9 @@ class ContentMutationRepository(BaseRepository):
         # activity ids; persistence must not reintroduce retired /users URLs.
         actor_parts = urlsplit(published.actor_url)
         public_origin = f"{actor_parts.scheme}://{actor_parts.netloc}"
-        is_comment = "/comments/" in published.object_id or "/comment/" in published.object_id
+        is_comment = (
+            "/comments/" in published.object_id or "/comment/" in published.object_id
+        )
         if kind == "content_delete":
             activity_id = (
                 build_user_delete_comment_activity_id(
@@ -554,9 +557,9 @@ class ContentMutationRepository(BaseRepository):
                 snapshot={
                     "schemaVersion": 1,
                     "objectId": published.object_id,
-                    "activityType": "Delete"
-                    if mutation.kind == "content_delete"
-                    else "Update",
+                    "activityType": (
+                        "Delete" if mutation.kind == "content_delete" else "Update"
+                    ),
                     "contentRevision": mutation.next_revision,
                 },
                 followers=followers,
@@ -588,7 +591,7 @@ class ContentMutationRepository(BaseRepository):
         """Durably request current Discord message-state reconciliation."""
         with self._immediate_session_provider() as session:
             published = session.scalar(
-                select(PublishedActivityObject).where(
+                discord_copy_query(PublishedActivityObject, source=True).where(
                     PublishedActivityObject.discord_channel_id == channel_id,
                     PublishedActivityObject.discord_message_id == message_id,
                 )

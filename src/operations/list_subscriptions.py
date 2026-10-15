@@ -35,7 +35,7 @@ class ListSubscriptionsInput:
                 )
             else:
                 self._remote_subscriptions = (
-                    self.database.remote_subscriptions.get_all_subscriptions()
+                    self.database.remote_subscriptions.list_discord_subscriptions()
                 )
         return self._remote_subscriptions
 

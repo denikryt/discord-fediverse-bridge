@@ -18,7 +18,7 @@ from src.local_communities.service import LocalCommunityService
 def _database(tmp_path: Path) -> Database:
     """Create one real SQLite repository for dashboard behavior tests."""
     database = Database(f"sqlite:///{tmp_path / 'dashboard.db'}")
-    database.create_all()
+    database.migrate()
     return database
 
 

@@ -153,153 +153,202 @@ def _has_no_pending_channel_subscription(operation_input: SubscribeInput) -> boo
     return _channel_sub_status(operation_input) != "pending"
 
 
+def _persist_follow_result(
+    operation_input,
+    expected_subscription,
+    expected_surface,
+    expected_follow,
+    *,
+    actor_id,
+    follow_id,
+    inbox_url,
+    status,
+):
+    """CAS channel and shared Follow state together after any network wait ends."""
+    from sqlalchemy import select
+    from ..models import BridgeActorFollow
+    from ..db.repositories.platform_surfaces import PlatformSurfaceRepository
+
+    with operation_input.database.immediate_session() as session:
+        surface = PlatformSurfaceRepository.discord_channel(
+            session, operation_input.channel_id, operation_input.guild_id, "forum"
+        )
+        # A retry may not reclaim a deleted/reassigned channel, even if its
+        # physical location survived and now appears unbound again.
+        if expected_subscription is not None:
+            if expected_surface is None or surface.id != expected_surface.id:
+                raise ValueError("Subscription surface changed during retry")
+            operation_input.database.remote_subscriptions.upsert_retry_state(
+                session,
+                expected_subscription_id=expected_subscription.id,
+                surface_id=surface.id,
+                expected_actor_id=expected_subscription.lemmy_community_actor_id,
+                expected_follow_activity_id=expected_subscription.follow_activity_id,
+                expected_created_at=expected_subscription.created_at,
+                expected_updated_at=expected_subscription.updated_at,
+                discord_guild_id=(
+                    int(surface.external_guild_id)
+                    if surface.external_guild_id is not None
+                    else None
+                ),
+                lemmy_community_actor_id=actor_id,
+                lemmy_community_name=operation_input.community_name,
+                lemmy_community_id=operation_input.numeric_id,
+                community_handle=operation_input.community_handle,
+                community_inbox_url=inbox_url,
+                follow_activity_id=follow_id,
+                initiated_by_discord_user_id=operation_input.discord_user_id,
+                status=status,
+            )
+        else:
+            operation_input.database.remote_subscriptions.add_subscription(
+                session,
+                surface.id,
+                lemmy_community_actor_id=actor_id,
+                lemmy_community_name=operation_input.community_name,
+                lemmy_community_id=operation_input.numeric_id,
+                community_handle=operation_input.community_handle,
+                community_inbox_url=inbox_url,
+                follow_activity_id=follow_id,
+                initiated_by_discord_user_id=operation_input.discord_user_id,
+                status=status,
+            )
+        target_follow = session.scalar(
+            select(BridgeActorFollow).where(
+                BridgeActorFollow.community_actor_id == actor_id
+            )
+        )
+        if expected_follow is not None:
+            current = session.get(BridgeActorFollow, expected_follow.id)
+            if (
+                current is None
+                or current.status != expected_follow.status
+                or current.follow_activity_id != expected_follow.follow_activity_id
+                or current.community_actor_id != expected_follow.community_actor_id
+            ):
+                raise ValueError("Shared Follow changed during subscription attempt")
+            if target_follow is not None and target_follow.id != current.id:
+                raise ValueError("Canonical community already owns another Follow")
+            if status != "failed":
+                # Dispatch failure never erases another channel's failed Follow
+                # metadata. Successful retry is the only in-place transition.
+                current.community_actor_id = actor_id
+                current.status = status
+                current.follow_activity_id = follow_id
+                current.community_inbox_url = inbox_url
+        else:
+            if target_follow is not None:
+                raise ValueError("Shared Follow appeared during subscription attempt")
+            session.add(
+                BridgeActorFollow(
+                    community_actor_id=actor_id,
+                    follow_activity_id=follow_id,
+                    community_inbox_url=inbox_url,
+                    status=status,
+                )
+            )
+        session.flush()
+
+
 async def _body(operation_input: SubscribeInput) -> OperationResult:
-    """Dispatch one bridge follow and persist the resulting lifecycle state.
+    """Retry in place, reserve ownership at commit, and never await under writer lock."""
+    from sqlalchemy.exc import IntegrityError
 
-    Preconditions already blocked the accepted and pending channel-level
-    cases. The body handles three remaining paths:
-
-    1. Bridge follow accepted for another channel → create channel row as
-       accepted immediately (bridge actor already federated).
-    2. Bridge follow pending for another channel → piggyback; create channel
-       row as pending so it activates when the shared Accept arrives.
-    3. No bridge follow (or failed) → send Follow, persist both rows.
-    """
     existing_channel_sub = operation_input.get_existing_subscription()
-    if existing_channel_sub is not None and existing_channel_sub.status == "failed":
-        # Failed rows are retriable. Delete the stale channel row first so the
-        # UNIQUE constraint on discord_channel_id allows the replacement insert.
-        operation_input.database.remote_subscriptions.delete_subscription(
-            operation_input.channel_id
-        )
-
     existing_follow = operation_input.get_bridge_actor_follow()
-
-    if existing_follow is not None and existing_follow.status == "accepted":
-        # Another channel already established the AP-level follow and it was
-        # accepted. Create the new channel row immediately as accepted.
-        operation_input.database.remote_subscriptions.create_subscription(
-            discord_channel_id=operation_input.channel_id,
-            discord_guild_id=operation_input.guild_id,
-            lemmy_community_actor_id=operation_input.actor_id,
-            lemmy_community_name=operation_input.community_name,
-            lemmy_community_id=operation_input.numeric_id,
-            community_handle=operation_input.community_handle,
-            community_inbox_url=existing_follow.community_inbox_url,
-            follow_activity_id=existing_follow.follow_activity_id,
-            initiated_by_discord_user_id=operation_input.discord_user_id,
-            status="accepted",
-        )
-        return OperationResult(
-            applied=True,
-            message=(
-                f"Subscribed {operation_input.channel_mention} to "
-                f"**{_requested_community_label(operation_input)}**."
-            ),
-        )
-
-    if existing_follow is not None and existing_follow.status == "pending":
-        # A Follow is already in flight — piggyback on it. Create a pending
-        # channel row so this channel activates when the shared Accept arrives.
-        operation_input.database.remote_subscriptions.create_subscription(
-            discord_channel_id=operation_input.channel_id,
-            discord_guild_id=operation_input.guild_id,
-            lemmy_community_actor_id=operation_input.actor_id,
-            lemmy_community_name=operation_input.community_name,
-            lemmy_community_id=operation_input.numeric_id,
-            community_handle=operation_input.community_handle,
-            community_inbox_url=existing_follow.community_inbox_url,
-            follow_activity_id=existing_follow.follow_activity_id,
-            initiated_by_discord_user_id=operation_input.discord_user_id,
-            status="pending",
-        )
-        return OperationResult(
-            applied=True,
-            message=(
-                f"Sent a bridge follow for {operation_input.channel_mention} -> "
-                f"**{_requested_community_label(operation_input)}**. Waiting for federation acceptance."
-            ),
-        )
-
-    # No existing bridge follow (or failed) — send a fresh Follow.
-    if existing_follow is not None and existing_follow.status == "failed":
-        # Remove the stale failed bridge follow row before creating a fresh one.
-        operation_input.database.bridge_actor_follows.delete_bridge_actor_follow(
-            operation_input.actor_id
-        )
-
-    decision = operation_input.policy_service.federation_decision(
-        operation_input.actor_id
+    expected_surface = operation_input.database.platform_surfaces.resolve_channel(
+        "discord-primary", str(operation_input.channel_id)
     )
-    if not decision.allowed:
-        return OperationResult(
-            applied=False,
-            message=(
-                f"Could not subscribe {operation_input.channel_mention} to "
-                f"**{_requested_community_label(operation_input)}** because federation policy denies the instance."
-            ),
-            reason="federation_policy_denied",
+    actor_id = operation_input.actor_id
+    inbox_url = None
+    follow_id = None
+    status = "pending"
+    if existing_follow is not None and existing_follow.status in {
+        "accepted",
+        "pending",
+    }:
+        # Shared AP state may be reused across connectors. No additional policy
+        # gate or outbound request is introduced for an established Follow.
+        status, inbox_url, follow_id = (
+            existing_follow.status,
+            existing_follow.community_inbox_url,
+            existing_follow.follow_activity_id,
         )
-
+    else:
+        decision = operation_input.policy_service.federation_decision(actor_id)
+        if not decision.allowed:
+            return OperationResult(
+                applied=False,
+                reason="federation_policy_denied",
+                message=(
+                    f"Could not subscribe {operation_input.channel_mention} to **{_requested_community_label(operation_input)}** because federation policy denies the instance."
+                ),
+            )
+        try:
+            follow_result = await operation_input.fedify_gateway.follow_community(
+                actor_id
+            )
+            actor_id, inbox_url, follow_id = (
+                follow_result.community_actor_url,
+                follow_result.community_inbox_url,
+                follow_result.follow_activity_id,
+            )
+        except Exception:
+            # An existing failed owner and Follow must survive dispatch failure
+            # byte-for-byte. Only a first attempt records new visible failure.
+            if existing_channel_sub is None:
+                try:
+                    _persist_follow_result(
+                        operation_input,
+                        None,
+                        expected_surface,
+                        existing_follow,
+                        actor_id=actor_id,
+                        follow_id=None,
+                        inbox_url=None,
+                        status="failed",
+                    )
+                except (ValueError, IntegrityError):
+                    return OperationResult(
+                        applied=False,
+                        reason="channel_binding_conflict",
+                        message="Channel binding changed during subscription attempt.",
+                    )
+            return OperationResult(
+                applied=False,
+                reason="follow_dispatch_failed",
+                message=(
+                    f"Could not subscribe {operation_input.channel_mention} to **{_requested_community_label(operation_input)}** because the bridge Follow request failed."
+                ),
+            )
     try:
-        follow_result = await operation_input.fedify_gateway.follow_community(
-            operation_input.actor_id
+        _persist_follow_result(
+            operation_input,
+            existing_channel_sub,
+            expected_surface,
+            existing_follow,
+            actor_id=actor_id,
+            follow_id=follow_id,
+            inbox_url=inbox_url,
+            status=status,
         )
-    except Exception:
-        # Follow dispatch failures must be durable local state so moderators can
-        # see an explicit failed attempt instead of a fake pending row.
-        operation_input.database.bridge_actor_follows.create_bridge_actor_follow(
-            community_actor_id=operation_input.actor_id,
-            follow_activity_id=None,
-            community_inbox_url=None,
-            status="failed",
-        )
-        operation_input.database.remote_subscriptions.create_subscription(
-            discord_channel_id=operation_input.channel_id,
-            discord_guild_id=operation_input.guild_id,
-            lemmy_community_actor_id=operation_input.actor_id,
-            lemmy_community_name=operation_input.community_name,
-            lemmy_community_id=operation_input.numeric_id,
-            community_handle=operation_input.community_handle,
-            community_inbox_url=None,
-            follow_activity_id=None,
-            status="failed",
-        )
+    except (ValueError, IntegrityError):
         return OperationResult(
             applied=False,
-            message=(
-                f"Could not subscribe {operation_input.channel_mention} to "
-                f"**{_requested_community_label(operation_input)}** because the bridge Follow request failed."
-            ),
-            reason="follow_dispatch_failed",
+            reason="channel_binding_conflict",
+            message="Channel binding changed during subscription attempt.",
         )
-
-    # Persist the bridge-actor follow row first, then the channel subscription.
-    # The follow row is the AP-level source of truth; the channel row is the
-    # Discord-facing routing record.
-    operation_input.database.bridge_actor_follows.create_bridge_actor_follow(
-        community_actor_id=follow_result.community_actor_url,
-        follow_activity_id=follow_result.follow_activity_id,
-        community_inbox_url=follow_result.community_inbox_url,
-        status="pending",
-    )
-    operation_input.database.remote_subscriptions.create_subscription(
-        discord_channel_id=operation_input.channel_id,
-        discord_guild_id=operation_input.guild_id,
-        lemmy_community_actor_id=follow_result.community_actor_url,
-        lemmy_community_name=operation_input.community_name,
-        lemmy_community_id=operation_input.numeric_id,
-        community_handle=operation_input.community_handle,
-        community_inbox_url=follow_result.community_inbox_url,
-        follow_activity_id=follow_result.follow_activity_id,
-        initiated_by_discord_user_id=operation_input.discord_user_id,
-        status="pending",
-    )
+    if status == "accepted":
+        return OperationResult(
+            applied=True,
+            message=(
+                f"Subscribed {operation_input.channel_mention} to **{_requested_community_label(operation_input)}**."
+            ),
+        )
     return OperationResult(
         applied=True,
         message=(
-            f"Sent a bridge follow for {operation_input.channel_mention} -> "
-            f"**{_requested_community_label(operation_input)}**. Waiting for federation acceptance."
+            f"Sent a bridge follow for {operation_input.channel_mention} -> **{_requested_community_label(operation_input)}**. Waiting for federation acceptance."
         ),
     )
 

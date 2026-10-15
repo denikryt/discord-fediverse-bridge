@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from .platform_surfaces import PlatformSurfaceRepository, discord_copy_query
+
 from sqlalchemy import select
 
 from ...models import (
@@ -7,7 +9,6 @@ from ...models import (
     PostLink,
 )
 from .base import BaseRepository
-
 
 """Legacy Lemmy post/comment mapping persistence."""
 
@@ -19,7 +20,7 @@ class LegacyLemmyMappingRepository(BaseRepository):
         """Load the post-link row for one Discord thread, if it exists."""
         with self.session() as session:
             return session.scalar(
-                select(PostLink).where(
+                discord_copy_query(PostLink).where(
                     PostLink.discord_forum_thread_id == discord_thread_id
                 )
             )
@@ -28,7 +29,9 @@ class LegacyLemmyMappingRepository(BaseRepository):
         """Load the post-link row for one numeric Lemmy post ID."""
         with self.session() as session:
             return session.scalar(
-                select(PostLink).where(PostLink.lemmy_post_id == lemmy_post_id)
+                discord_copy_query(PostLink).where(
+                    PostLink.lemmy_post_id == lemmy_post_id
+                )
             )
 
     def get_post_link_by_lemmy_post_ap_id(
@@ -42,7 +45,9 @@ class LegacyLemmyMappingRepository(BaseRepository):
         """
         with self.session() as session:
             return session.scalar(
-                select(PostLink).where(PostLink.lemmy_post_ap_id == lemmy_post_ap_id)
+                discord_copy_query(PostLink).where(
+                    PostLink.lemmy_post_ap_id == lemmy_post_ap_id
+                )
             )
 
     def get_post_links_by_lemmy_post_ap_id(
@@ -54,7 +59,7 @@ class LegacyLemmyMappingRepository(BaseRepository):
         with self.session() as session:
             return list(
                 session.scalars(
-                    select(PostLink).where(
+                    discord_copy_query(PostLink).where(
                         PostLink.lemmy_post_ap_id == lemmy_post_ap_id
                     )
                 )
@@ -70,7 +75,7 @@ class LegacyLemmyMappingRepository(BaseRepository):
         # target channel already received the remote post.
         with self.session() as session:
             return session.scalar(
-                select(PostLink).where(
+                discord_copy_query(PostLink).where(
                     PostLink.lemmy_post_ap_id == lemmy_post_ap_id,
                     PostLink.discord_forum_channel_id == discord_forum_channel_id,
                 )
@@ -89,6 +94,15 @@ class LegacyLemmyMappingRepository(BaseRepository):
         """Persist the thread-level mapping created by the existing bridge."""
         with self.session() as session:
             link = PostLink(
+                **PlatformSurfaceRepository.discord_copy_location(
+                    session, discord_forum_channel_id
+                ),
+                external_thread_id=str(discord_forum_thread_id),
+                external_starter_message_id=(
+                    str(discord_starter_message_id)
+                    if discord_starter_message_id is not None
+                    else None
+                ),
                 lemmy_post_id=lemmy_post_id,
                 lemmy_post_ap_id=lemmy_post_ap_id,
                 discord_forum_channel_id=discord_forum_channel_id,
@@ -135,7 +149,7 @@ class LegacyLemmyMappingRepository(BaseRepository):
         """
         with self.session() as session:
             return session.scalar(
-                select(CommentLink).where(
+                discord_copy_query(CommentLink).where(
                     CommentLink.lemmy_comment_ap_id == lemmy_comment_ap_id
                 )
             )
@@ -149,7 +163,7 @@ class LegacyLemmyMappingRepository(BaseRepository):
         with self.session() as session:
             return list(
                 session.scalars(
-                    select(CommentLink).where(
+                    discord_copy_query(CommentLink).where(
                         CommentLink.lemmy_comment_ap_id == lemmy_comment_ap_id
                     )
                 )
@@ -161,7 +175,7 @@ class LegacyLemmyMappingRepository(BaseRepository):
         """Load the comment-link row for one Discord message ID."""
         with self.session() as session:
             return session.scalar(
-                select(CommentLink).where(
+                discord_copy_query(CommentLink).where(
                     CommentLink.discord_message_id == discord_message_id
                 )
             )
@@ -180,6 +194,14 @@ class LegacyLemmyMappingRepository(BaseRepository):
         """Persist the message-level mapping created by the existing bridge."""
         with self.session() as session:
             link = CommentLink(
+                **PlatformSurfaceRepository.discord_copy_location(
+                    session,
+                    PlatformSurfaceRepository.discord_thread_channel(
+                        session, discord_forum_thread_id
+                    ),
+                ),
+                external_thread_id=str(discord_forum_thread_id),
+                external_message_id=str(discord_message_id),
                 lemmy_comment_id=lemmy_comment_id,
                 lemmy_comment_ap_id=lemmy_comment_ap_id,
                 lemmy_parent_comment_ap_id=lemmy_parent_comment_ap_id,

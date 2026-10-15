@@ -36,7 +36,6 @@ def test_migration_creates_personal_feed_table_and_restart_restores_binding(
     """An additive migration must persist the current binding across DB reopen."""
     path = tmp_path / "bridge.sqlite3"
     database = Database(f"sqlite:///{path}")
-    database.create_all()
     database.migrate()
     with database.session() as session:
         session.add(_user("10", "alice"))
@@ -57,17 +56,16 @@ def test_migration_creates_personal_feed_table_and_restart_restores_binding(
 def test_move_conflict_preserves_previous_binding(tmp_path) -> None:
     """A target owned by another bridge mode cannot destroy the caller's old feed."""
     database = Database(f"sqlite:///{tmp_path / 'bridge.sqlite3'}")
-    database.create_all()
     database.migrate()
     with database.session() as session:
         session.add(_user("10", "alice"))
-        session.add(
-            ChannelCommunitySubscription(
-                discord_channel_id=300,
-                discord_guild_id=3000,
-                lemmy_community_actor_id="https://remote.test/c/group",
-            )
-        )
+    database.remote_subscriptions.create_subscription(
+        discord_channel_id=300,
+        discord_guild_id=3000,
+        lemmy_community_actor_id="https://remote.test/c/group",
+        lemmy_community_name="group",
+        lemmy_community_id=None,
+    )
     service = PersonalFeedService(database)
     assert service.bind_or_move("10", 1000, 200).status == "bound"
 
@@ -82,7 +80,6 @@ def test_move_conflict_preserves_previous_binding(tmp_path) -> None:
 def test_one_binding_per_guild_and_idempotent_unbind(tmp_path) -> None:
     """The guild invariant rejects a second owner and unbind remains repeat-safe."""
     database = Database(f"sqlite:///{tmp_path / 'bridge.sqlite3'}")
-    database.create_all()
     database.migrate()
     with database.session() as session:
         session.add_all([_user("10", "alice"), _user("20", "bob")])
@@ -122,7 +119,6 @@ def test_repository_lookups_and_active_binding_survive_move_unbind_and_reopen(
 
     path = tmp_path / "bridge.sqlite3"
     database = Database(f"sqlite:///{path}")
-    database.create_all()
     database.migrate()
     with database.session() as session:
         session.add(_user("10", "alice"))
@@ -224,7 +220,6 @@ def test_concurrent_first_binds_one_user_two_guilds_report_one_success(
     """A stale concurrent first-bind cannot silently become an intentional move."""
     path = tmp_path / "bridge.sqlite3"
     database = Database(f"sqlite:///{path}")
-    database.create_all()
     database.migrate()
     with database.session() as session:
         session.add(_user("10", "alice"))
@@ -242,7 +237,6 @@ def test_concurrent_first_binds_two_users_same_guild_report_one_success(
     """The DB-backed guild invariant gives one winner across service instances."""
     path = tmp_path / "bridge.sqlite3"
     database = Database(f"sqlite:///{path}")
-    database.create_all()
     database.migrate()
     with database.session() as session:
         session.add_all([_user("10", "alice"), _user("20", "bob")])
@@ -269,7 +263,6 @@ def test_concurrent_first_binds_two_users_same_channel_report_one_success(
     """The DB-backed channel invariant gives one winner across service instances."""
     path = tmp_path / "bridge.sqlite3"
     database = Database(f"sqlite:///{path}")
-    database.create_all()
     database.migrate()
     with database.session() as session:
         session.add_all([_user("10", "alice"), _user("20", "bob")])

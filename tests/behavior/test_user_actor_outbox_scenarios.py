@@ -2,7 +2,9 @@
 
 from __future__ import annotations
 
+
 import sqlite3
+import pytest
 import threading
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
@@ -16,7 +18,6 @@ from src.models import PublishedActivityObject
 def _database(tmp_path: Path) -> tuple[Database, object]:
     """Create one registered user in the real file-backed database."""
     database = Database(f"sqlite:///{tmp_path / 'bridge.db'}")
-    database.create_all()
     database.migrate()
     user = database.users.create_user(
         discord_user_id="1",
@@ -99,11 +100,11 @@ def test_outbox_query_plan_uses_stage9_composite_index(tmp_path: Path) -> None:
     assert any("ix_published_objects_user_outbox" in str(row) for row in plan)
 
 
-def test_stage8_schema_upgrade_installs_outbox_index(tmp_path: Path) -> None:
-    """An existing current-schema table gains the Stage 9 index without data loss."""
+def test_current_missing_outbox_index_is_not_silently_repaired(tmp_path: Path) -> None:
+    """A damaged current schema is rejected without recreating indexes or losing rows."""
     path = tmp_path / "legacy.db"
     database = Database(f"sqlite:///{path}")
-    database.create_all()
+    database.migrate()
     with database.engine.begin() as connection:
         connection.execute(text("DROP INDEX ix_published_objects_user_outbox"))
         connection.execute(
@@ -118,16 +119,22 @@ def test_stage8_schema_upgrade_installs_outbox_index(tmp_path: Path) -> None:
                 "1, 'none', 0, 0, '2026-01-01', '2026-01-01')"
             )
         )
-    database.migrate()
+    with pytest.raises(RuntimeError, match="schema objects"):
+        database.migrate()
     with database.engine.connect() as migrated:
-        indexes = migrated.execute(
-            text("PRAGMA index_list('published_activity_objects')")
-        ).all()
-        count = migrated.execute(
-            text("SELECT count(*) FROM published_activity_objects")
-        ).scalar_one()
-    assert any(row[1] == "ix_published_objects_user_outbox" for row in indexes)
-    assert count == 1
+        assert migrated.exec_driver_sql("PRAGMA user_version").scalar_one() == 2
+        assert (
+            migrated.exec_driver_sql(
+                "SELECT count(*) FROM published_activity_objects"
+            ).scalar_one()
+            == 1
+        )
+        assert not any(
+            row[1] == "ix_published_objects_user_outbox"
+            for row in migrated.exec_driver_sql(
+                "PRAGMA index_list(published_activity_objects)"
+            )
+        )
 
 
 def _assert_rollback_writer_waits_for_reader(tmp_path: Path, mutation: str) -> None:

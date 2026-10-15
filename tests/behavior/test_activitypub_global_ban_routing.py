@@ -36,7 +36,6 @@ def _event(*, target_kind: str = "user") -> LocalFollowRequestEvent:
 
 def _runtime(tmp_path) -> SimpleNamespace:
     database = Database(f"sqlite:///{tmp_path / 'bridge.db'}")
-    database.create_all()
     database.migrate()
     database.community_actor_bans.create_active_ban(
         local_community_id=None,
@@ -96,7 +95,6 @@ async def test_global_ban_blocks_community_follow_before_community_service(
 async def test_community_scoped_ban_does_not_block_user_actor_follow(tmp_path) -> None:
     """A community policy must not leak into a User Actor relationship."""
     database = Database(f"sqlite:///{tmp_path / 'scoped.db'}")
-    database.create_all()
     database.migrate()
     LocalCommunityService(
         database=database,

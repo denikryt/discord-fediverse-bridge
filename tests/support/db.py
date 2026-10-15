@@ -25,7 +25,7 @@ COMMUNITY_ACTOR_URL = f"https://{LEMMY_EXAMPLE_DOMAIN}/c/hackers"
 def build_database(tmp_path: Path, name: str) -> Database:
     """Create one isolated SQLite database for a single test scenario."""
     database = Database(f"sqlite:///{tmp_path / name}")
-    database.create_all()
+    database.migrate()
     return database
 
 

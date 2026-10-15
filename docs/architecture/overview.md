@@ -97,3 +97,7 @@ Stage 7 adds a dedicated `PersonalFeedPublisher` between Discord routing and the
 ### User Actor authored timeline
 
 The gateway renders User Actor outboxes from a fixed-size internal DTO. Python owns eligibility, count, ordering, and the single read transaction; the gateway owns ActivityStreams rendering and canonical navigation links. Operational delivery metadata remains local CLI-only.
+
+## Platform persistence boundary
+
+Stage 01 separates domain actors from physical connector/channel locations. `src/db/repositories/platform_surfaces.py` owns placement resolution and typed claim mutations. Discord routing uses current `discord-primary` claims; connector-scoped historical copies survive release and rebinding. Fluxer rows are persistence-only at this stage. SQLite 3.31+ is required for stored generated roles; PostgreSQL 12+ DDL compatibility does not imply a PostgreSQL runtime migration implementation.

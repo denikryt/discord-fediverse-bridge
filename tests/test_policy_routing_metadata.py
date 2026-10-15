@@ -157,7 +157,7 @@ class _LocalSubscribers:
         self.rows = rows
         self.by_channel = by_channel or {}
 
-    def list_local_subscribers(self, _: int) -> list[object]:
+    def list_discord_active_subscribers(self, _: int) -> list[object]:
         return self.rows
 
     def get_local_subscriber_by_channel(self, channel_id: int) -> object | None:
@@ -203,6 +203,7 @@ async def test_local_thread_fanout_skips_invalid_target_and_continues_healthy_ta
         ),
         local_communities=_LocalCommunities(),
         local_community_surfaces=surfaces,
+        platform_surfaces=SimpleNamespace(get_discord_host_placement=lambda _: None),
     )
     fanout = LocalCommunityDiscordFanout(
         database=database, bot=bot, policy_service=_Policy()
@@ -262,7 +263,7 @@ async def test_local_subscriber_listing_failure_propagates_before_discord_side_e
     None
 ):
     class _FailingSubscribers:
-        def list_local_subscribers(self, _: int) -> list[object]:
+        def list_discord_active_subscribers(self, _: int) -> list[object]:
             raise RuntimeError("repository unavailable")
 
     bot = _RemoteBot()
@@ -270,6 +271,7 @@ async def test_local_subscriber_listing_failure_propagates_before_discord_side_e
         local_subscribers=_FailingSubscribers(),
         local_communities=_LocalCommunities(),
         local_community_surfaces=_LocalSurfaces(),
+        platform_surfaces=SimpleNamespace(get_discord_host_placement=lambda _: None),
     )
     fanout = LocalCommunityDiscordFanout(
         database=database, bot=bot, policy_service=_Policy()

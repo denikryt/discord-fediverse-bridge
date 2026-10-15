@@ -19,9 +19,9 @@ class SubscriptionExpected:
     reason: str | None
     follow_calls: int = 0
     unfollow_calls: int = 0
-    create_channel_calls: int = 0
-    delete_channel_calls: int = 0
-    delete_follow_calls: int = 0
+    created_channel_rows: int = 0
+    deleted_channel_rows: int = 0
+    deleted_follow_rows: int = 0
 
 
 @dataclass(frozen=True, slots=True)
@@ -90,7 +90,7 @@ SUBSCRIPTION_CASES = (
             applied=True,
             reason=None,
             follow_calls=1,
-            create_channel_calls=1,
+            created_channel_rows=1,
         ),
     ),
     SubscriptionCase(
@@ -104,7 +104,7 @@ SUBSCRIPTION_CASES = (
         expected=SubscriptionExpected(
             applied=True,
             reason=None,
-            create_channel_calls=1,
+            created_channel_rows=1,
         ),
     ),
     SubscriptionCase(
@@ -118,7 +118,7 @@ SUBSCRIPTION_CASES = (
         expected=SubscriptionExpected(
             applied=True,
             reason=None,
-            create_channel_calls=1,
+            created_channel_rows=1,
         ),
     ),
     SubscriptionCase(
@@ -145,7 +145,7 @@ SUBSCRIPTION_CASES = (
         expected=SubscriptionExpected(
             applied=True,
             reason=None,
-            delete_channel_calls=1,
+            deleted_channel_rows=1,
         ),
     ),
     SubscriptionCase(
@@ -160,8 +160,8 @@ SUBSCRIPTION_CASES = (
             applied=True,
             reason=None,
             unfollow_calls=1,
-            delete_channel_calls=1,
-            delete_follow_calls=1,
+            deleted_channel_rows=1,
+            deleted_follow_rows=1,
         ),
     ),
     SubscriptionCase(
@@ -176,7 +176,7 @@ SUBSCRIPTION_CASES = (
             applied=False,
             reason="remote_unfollow_failed",
             unfollow_calls=1,
-            delete_channel_calls=1,
+            deleted_channel_rows=1,
         ),
     ),
     SubscriptionCase(

@@ -42,7 +42,7 @@ class FakeDiscordOAuthClient:
 def _database(tmp_path: Path) -> Database:
     """Create a real SQLite-backed repository for registration flow tests."""
     database = Database(f"sqlite:///{tmp_path / 'bridge-stage5.db'}")
-    database.create_all()
+    database.migrate()
     return database
 
 

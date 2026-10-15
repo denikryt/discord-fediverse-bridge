@@ -99,7 +99,7 @@ async def test_ban_community_autocomplete_owner_sees_owned_current_guild(
         discord_guild_allowlist=[], bridge_super_admin_user_ids=[]
     )
     database.local_communities.list_active_local_communities_owned_by_user_in_guild.return_value = [
-        SimpleNamespace(slug="cats", display_name="Cats", discord_guild_id=99999),
+        SimpleNamespace(id=1, slug="cats", display_name="Cats", discord_guild_id=99999),
     ]
 
     choices = await ban_user._ban_community_autocomplete(
@@ -125,8 +125,8 @@ async def test_ban_community_autocomplete_super_admin_sees_all_guilds(
         discord_guild_allowlist=[], bridge_super_admin_user_ids=["1234567890"]
     )
     database.local_communities.list_active_local_communities.return_value = [
-        SimpleNamespace(slug="cats", display_name="Cats", discord_guild_id=10),
-        SimpleNamespace(slug="dogs", display_name="Dogs", discord_guild_id=20),
+        SimpleNamespace(id=2, slug="cats", display_name="Cats", discord_guild_id=10),
+        SimpleNamespace(id=3, slug="dogs", display_name="Dogs", discord_guild_id=20),
     ]
 
     choices = await ban_user._ban_community_autocomplete(
@@ -149,11 +149,11 @@ async def test_ban_community_autocomplete_filters_by_slug_or_display_name(
         discord_guild_allowlist=[], bridge_super_admin_user_ids=[]
     )
     database.local_communities.list_active_local_communities_owned_by_user_in_guild.return_value = [
-        SimpleNamespace(slug="cats", display_name="Cats", discord_guild_id=99999),
+        SimpleNamespace(id=4, slug="cats", display_name="Cats", discord_guild_id=99999),
         SimpleNamespace(
-            slug="bird-watch", display_name="Bird Watch", discord_guild_id=99999
+            id=5, slug="bird-watch", display_name="Bird Watch", discord_guild_id=99999
         ),
-        SimpleNamespace(slug="dogs", display_name="Dogs", discord_guild_id=99999),
+        SimpleNamespace(id=6, slug="dogs", display_name="Dogs", discord_guild_id=99999),
     ]
 
     choices = await ban_user._ban_community_autocomplete(
@@ -175,6 +175,7 @@ async def test_ban_community_autocomplete_caps_at_twenty_five(
     )
     database.local_communities.list_active_local_communities.return_value = [
         SimpleNamespace(
+            id=7,
             slug=f"community-{index:02d}",
             display_name=f"Community {index:02d}",
             discord_guild_id=99999,
@@ -220,7 +221,7 @@ async def test_ban_community_autocomplete_supports_guildless_super_admin(
     )
     interaction.guild_id = None
     database.local_communities.list_active_local_communities.return_value = [
-        SimpleNamespace(slug="cats", display_name="Cats", discord_guild_id=10),
+        SimpleNamespace(id=8, slug="cats", display_name="Cats", discord_guild_id=10),
     ]
 
     choices = await ban_user._ban_community_autocomplete(

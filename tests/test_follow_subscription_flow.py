@@ -19,7 +19,7 @@ from tests_constants import BRIDGE_EXAMPLE_DOMAIN, LEMMY_EXAMPLE_DOMAIN
 def _database(tmp_path: Path) -> Database:
     """Create a real SQLite-backed repository for follow lifecycle tests."""
     database = Database(f"sqlite:///{tmp_path / 'bridge-stage4.db'}")
-    database.create_all()
+    database.migrate()
     return database
 
 

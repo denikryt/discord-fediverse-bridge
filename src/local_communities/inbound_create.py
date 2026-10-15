@@ -46,9 +46,7 @@ class LocalCommunityInboundCreateHandler:
         self.federation_fanout = federation_fanout
         self._discord_client_provider = discord_client_provider
 
-    async def handle_post(
-        self, event: object, runtime: object
-    ) -> HandlerResult:
+    async def handle_post(self, event: object, runtime: object) -> HandlerResult:
         """Mirror one remote top-level post into a new Discord forum thread."""
         from ..activitypub_handlers import HandlerResult as _HandlerResult
 
@@ -99,6 +97,15 @@ class LocalCommunityInboundCreateHandler:
                 outcome=InboundActivityOutcome.IGNORED_ACTOR_NOT_SUBSCRIBER,
                 detail="remote actor is not an accepted remote subscriber",
             )
+        placement = self.database.platform_surfaces.get_discord_host_placement(
+            getattr(local_community, "id")
+        )
+        if placement is None:
+            return _HandlerResult(
+                status="skipped",
+                outcome=InboundActivityOutcome.IGNORED_UNMAPPED_CONTEXT,
+                detail="local community has no Discord host placement",
+            )
         bot = self._discord_client_provider()
         if bot is None:
             raise RuntimeError(
@@ -107,7 +114,7 @@ class LocalCommunityInboundCreateHandler:
 
         await bot.wait_until_bridge_ready()
         forum_channel = await bot.fetch_forum_channel(
-            getattr(local_community, "discord_forum_channel_id")
+            int(placement.external_channel_id)
         )
         thread_title = (
             getattr(getattr(event, "object"), "title", None) or "Untitled remote post"
@@ -147,9 +154,7 @@ class LocalCommunityInboundCreateHandler:
             detail="remote post created thread",
         )
 
-    async def handle_comment(
-        self, event: object, runtime: object
-    ) -> HandlerResult:
+    async def handle_comment(self, event: object, runtime: object) -> HandlerResult:
         """Mirror one remote comment into the mapped Discord thread."""
         from ..activitypub_handlers import HandlerResult as _HandlerResult
 

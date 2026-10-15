@@ -140,276 +140,59 @@ async def test_subscribe_operation_rejects_pending_subscription() -> None:
 
 
 @pytest.mark.asyncio
-async def test_subscribe_creates_bridge_follow_when_none_exists() -> None:
-    """First subscription for a community sends Follow and creates bridge_actor_follows row."""
-    community_actor_url = f"https://{LEMMY_EXAMPLE_DOMAIN}/c/hackers"
-    database = Mock()
-    database.bridge_policy_entries.list_all_active.return_value = []
-    database.users.get_user_by_discord_user_id.return_value = SimpleNamespace(id=1)
-    database.remote_subscriptions.get_subscription_by_channel.return_value = None
-    # No existing bridge-actor follow for this community.
-    database.bridge_actor_follows.get_bridge_actor_follow.return_value = None
-    fedify_gateway = AsyncMock()
-    fedify_gateway.follow_community.return_value = SimpleNamespace(
-        community_actor_url=community_actor_url,
-        community_inbox_url=f"{community_actor_url}/inbox",
-        follow_activity_id=f"https://{BRIDGE_EXAMPLE_DOMAIN}/activities/follow/1",
-    )
+@pytest.mark.parametrize("follow_status", [None, "accepted", "pending", "failed"])
+async def test_subscribe_persists_domain_and_claim_with_shared_follow(
+    tmp_path, follow_status
+):
+    """A moderator subscribes once; existing AP state is reused or retried in place."""
+    from src.db import Database
 
-    result = await run_operation_definition_async(
-        subscribe_operation,
-        SubscribeInput(
-            database=database,
-            fedify_gateway=fedify_gateway,
-            discord_user_id="1234567890",
-            channel_id=123,
-            channel_mention="<#123>",
-            actor_id=community_actor_url,
-            community_name="hackers",
-            numeric_id=777,
-            community_handle=f"!hackers@{LEMMY_EXAMPLE_DOMAIN}",
-            policy_service=BridgePolicyService(
-                settings=SimpleNamespace(), repository=database.bridge_policy_entries
-            ),
-        ),
+    database = Database(f"sqlite:///{tmp_path / 'subscribe.db'}")
+    database.migrate()
+    actor = f"https://{LEMMY_EXAMPLE_DOMAIN}/c/hackers"
+    user_actor = f"https://{BRIDGE_EXAMPLE_DOMAIN}/actors/users/moderator"
+    database.users.create_user(
+        discord_user_id="1234567890",
+        activitypub_username="moderator",
+        actor_url=user_actor,
+        inbox_url=user_actor + "/inbox",
+        outbox_url=user_actor + "/outbox",
+        followers_url=user_actor + "/followers",
+        public_key_pem="public",
+        private_key_pem="private",
     )
-
-    assert result.applied is True
-    assert "Waiting for federation acceptance" in result.message
-    fedify_gateway.follow_community.assert_awaited_once_with(community_actor_url)
-    # Both the bridge follow row and the channel subscription row must be created.
-    database.bridge_actor_follows.create_bridge_actor_follow.assert_called_once_with(
-        community_actor_id=community_actor_url,
-        follow_activity_id=f"https://{BRIDGE_EXAMPLE_DOMAIN}/activities/follow/1",
-        community_inbox_url=f"{community_actor_url}/inbox",
-        status="pending",
-    )
-    database.remote_subscriptions.create_subscription.assert_called_once_with(
-        discord_channel_id=123,
-        discord_guild_id=None,
-        lemmy_community_actor_id=community_actor_url,
-        lemmy_community_name="hackers",
-        lemmy_community_id=777,
-        community_handle=f"!hackers@{LEMMY_EXAMPLE_DOMAIN}",
-        community_inbox_url=f"{community_actor_url}/inbox",
-        follow_activity_id=f"https://{BRIDGE_EXAMPLE_DOMAIN}/activities/follow/1",
-        initiated_by_discord_user_id="1234567890",
-        status="pending",
-    )
-
-
-@pytest.mark.asyncio
-async def test_subscribe_reuses_existing_bridge_follow_when_accepted() -> None:
-    """Second channel subscribing to an already-accepted community skips Follow."""
-    community_actor_url = f"https://{LEMMY_EXAMPLE_DOMAIN}/c/hackers"
-    database = Mock()
-    database.bridge_policy_entries.list_all_active.return_value = []
-    database.users.get_user_by_discord_user_id.return_value = SimpleNamespace(id=1)
-    # No channel subscription for this specific channel yet.
-    database.remote_subscriptions.get_subscription_by_channel.return_value = None
-    # Bridge-actor follow already accepted for this community.
-    database.bridge_actor_follows.get_bridge_actor_follow.return_value = (
-        SimpleNamespace(
-            community_actor_id=community_actor_url,
-            status="accepted",
-            follow_activity_id=f"https://{BRIDGE_EXAMPLE_DOMAIN}/activities/follow/1",
-            community_inbox_url=f"{community_actor_url}/inbox",
+    old_follow = None
+    old_subscription = None
+    if follow_status is not None:
+        old_follow = database.bridge_actor_follows.create_bridge_actor_follow(
+            community_actor_id=actor,
+            follow_activity_id="https://bridge.test/follow/original",
+            community_inbox_url=actor + "/inbox",
+            status=follow_status,
         )
-    )
-    fedify_gateway = AsyncMock()
-
-    result = await run_operation_definition_async(
-        subscribe_operation,
-        SubscribeInput(
-            database=database,
-            fedify_gateway=fedify_gateway,
-            discord_user_id="1234567890",
-            channel_id=456,
-            channel_mention="<#456>",
-            actor_id=community_actor_url,
-            community_name="hackers",
-            numeric_id=777,
-            community_handle=f"!hackers@{LEMMY_EXAMPLE_DOMAIN}",
-            policy_service=BridgePolicyService(
-                settings=SimpleNamespace(), repository=database.bridge_policy_entries
-            ),
-        ),
-    )
-
-    assert result.applied is True
-    # No new Follow should be sent — bridge is already federated.
-    fedify_gateway.follow_community.assert_not_awaited()
-    # No new bridge_actor_follows row — existing one is reused.
-    database.bridge_actor_follows.create_bridge_actor_follow.assert_not_called()
-    # Only a channel subscription row is created, already as accepted.
-    database.remote_subscriptions.create_subscription.assert_called_once_with(
-        discord_channel_id=456,
-        discord_guild_id=None,
-        lemmy_community_actor_id=community_actor_url,
-        lemmy_community_name="hackers",
-        lemmy_community_id=777,
-        community_handle=f"!hackers@{LEMMY_EXAMPLE_DOMAIN}",
-        community_inbox_url=f"{community_actor_url}/inbox",
-        follow_activity_id=f"https://{BRIDGE_EXAMPLE_DOMAIN}/activities/follow/1",
-        initiated_by_discord_user_id="1234567890",
-        status="accepted",
-    )
-
-
-@pytest.mark.asyncio
-async def test_subscribe_reuses_existing_bridge_follow_when_pending() -> None:
-    """Second channel subscribing to a pending-follow community also waits for Accept."""
-    community_actor_url = f"https://{LEMMY_EXAMPLE_DOMAIN}/c/hackers"
-    database = Mock()
-    database.bridge_policy_entries.list_all_active.return_value = []
-    database.users.get_user_by_discord_user_id.return_value = SimpleNamespace(id=1)
-    database.remote_subscriptions.get_subscription_by_channel.return_value = None
-    # Bridge-actor follow is still pending for this community.
-    database.bridge_actor_follows.get_bridge_actor_follow.return_value = (
-        SimpleNamespace(
-            community_actor_id=community_actor_url,
-            status="pending",
-            follow_activity_id=f"https://{BRIDGE_EXAMPLE_DOMAIN}/activities/follow/1",
-            community_inbox_url=f"{community_actor_url}/inbox",
-        )
-    )
-    fedify_gateway = AsyncMock()
-
-    result = await run_operation_definition_async(
-        subscribe_operation,
-        SubscribeInput(
-            database=database,
-            fedify_gateway=fedify_gateway,
-            discord_user_id="9999",
-            channel_id=789,
-            channel_mention="<#789>",
-            actor_id=community_actor_url,
-            community_name="hackers",
-            numeric_id=777,
-            community_handle=f"!hackers@{LEMMY_EXAMPLE_DOMAIN}",
-            policy_service=BridgePolicyService(
-                settings=SimpleNamespace(), repository=database.bridge_policy_entries
-            ),
-        ),
-    )
-
-    assert result.applied is True
-    assert "Waiting for federation acceptance" in result.message
-    # No second Follow dispatched — the in-flight one is shared.
-    fedify_gateway.follow_community.assert_not_awaited()
-    database.bridge_actor_follows.create_bridge_actor_follow.assert_not_called()
-    # Channel subscription is created as pending — it will activate when Accept arrives.
-    database.remote_subscriptions.create_subscription.assert_called_once_with(
-        discord_channel_id=789,
-        discord_guild_id=None,
-        lemmy_community_actor_id=community_actor_url,
-        lemmy_community_name="hackers",
-        lemmy_community_id=777,
-        community_handle=f"!hackers@{LEMMY_EXAMPLE_DOMAIN}",
-        community_inbox_url=f"{community_actor_url}/inbox",
-        follow_activity_id=f"https://{BRIDGE_EXAMPLE_DOMAIN}/activities/follow/1",
-        initiated_by_discord_user_id="9999",
-        status="pending",
-    )
-
-
-@pytest.mark.asyncio
-async def test_subscribe_operation_marks_failed_when_follow_dispatch_fails() -> None:
-    """Gateway follow failures become explicit failed rows for moderator retries."""
-    community_actor_url = f"https://{LEMMY_EXAMPLE_DOMAIN}/c/hackers"
-    database = Mock()
-    database.bridge_policy_entries.list_all_active.return_value = []
-    database.users.get_user_by_discord_user_id.return_value = SimpleNamespace(id=1)
-    database.remote_subscriptions.get_subscription_by_channel.return_value = None
-    database.bridge_actor_follows.get_bridge_actor_follow.return_value = None
-    fedify_gateway = AsyncMock()
-    fedify_gateway.follow_community.side_effect = RuntimeError("boom")
-
-    result = await run_operation_definition_async(
-        subscribe_operation,
-        SubscribeInput(
-            database=database,
-            fedify_gateway=fedify_gateway,
-            discord_user_id="1234567890",
-            channel_id=123,
-            channel_mention="<#123>",
-            actor_id=community_actor_url,
-            community_name="hackers",
-            numeric_id=777,
-            community_handle=f"!hackers@{LEMMY_EXAMPLE_DOMAIN}",
-            policy_service=BridgePolicyService(
-                settings=SimpleNamespace(), repository=database.bridge_policy_entries
-            ),
-        ),
-    )
-
-    assert result.applied is False
-    assert result.reason == "follow_dispatch_failed"
-    assert (
-        result.message
-        == "Could not subscribe <#123> to **hackers** because the bridge Follow request failed."
-    )
-    # Both a failed bridge follow row and a failed channel subscription row are written.
-    database.bridge_actor_follows.create_bridge_actor_follow.assert_called_once_with(
-        community_actor_id=community_actor_url,
-        follow_activity_id=None,
-        community_inbox_url=None,
-        status="failed",
-    )
-    database.remote_subscriptions.create_subscription.assert_called_once_with(
-        discord_channel_id=123,
-        discord_guild_id=None,
-        lemmy_community_actor_id=community_actor_url,
-        lemmy_community_name="hackers",
-        lemmy_community_id=777,
-        community_handle=f"!hackers@{LEMMY_EXAMPLE_DOMAIN}",
-        community_inbox_url=None,
-        follow_activity_id=None,
-        status="failed",
-    )
-
-
-@pytest.mark.asyncio
-async def test_subscribe_operation_retries_failed_subscription() -> None:
-    """Failed rows are deleted before a new pending follow attempt is written."""
-    community_actor_url = f"https://{LEMMY_EXAMPLE_DOMAIN}/c/hackers"
-    database = Mock()
-    database.bridge_policy_entries.list_all_active.return_value = []
-    database.users.get_user_by_discord_user_id.return_value = SimpleNamespace(id=1)
-    # The channel has an existing failed subscription.
-    database.remote_subscriptions.get_subscription_by_channel.return_value = (
-        SimpleNamespace(
-            status="failed",
-            community_handle=f"!hackers@{LEMMY_EXAMPLE_DOMAIN}",
+    if follow_status == "failed":
+        old_subscription = database.remote_subscriptions.create_subscription(
+            discord_channel_id=123,
+            lemmy_community_actor_id=actor,
             lemmy_community_name="hackers",
-            lemmy_community_actor_id=community_actor_url,
-        )
-    )
-    # The bridge follow is also failed.
-    database.bridge_actor_follows.get_bridge_actor_follow.return_value = (
-        SimpleNamespace(
-            community_actor_id=community_actor_url,
+            lemmy_community_id=777,
             status="failed",
-            follow_activity_id=None,
-            community_inbox_url=None,
         )
+    gateway = AsyncMock()
+    gateway.follow_community.return_value = SimpleNamespace(
+        community_actor_url=actor,
+        community_inbox_url=actor + "/inbox",
+        follow_activity_id="https://bridge.test/follow/new",
     )
-    fedify_gateway = AsyncMock()
-    fedify_gateway.follow_community.return_value = SimpleNamespace(
-        community_actor_url=community_actor_url,
-        community_inbox_url=f"{community_actor_url}/inbox",
-        follow_activity_id=f"https://{BRIDGE_EXAMPLE_DOMAIN}/activities/follow/2",
-    )
-
     result = await run_operation_definition_async(
         subscribe_operation,
         SubscribeInput(
             database=database,
-            fedify_gateway=fedify_gateway,
+            fedify_gateway=gateway,
             discord_user_id="1234567890",
             channel_id=123,
             channel_mention="<#123>",
-            actor_id=community_actor_url,
+            actor_id=actor,
             community_name="hackers",
             numeric_id=777,
             community_handle=f"!hackers@{LEMMY_EXAMPLE_DOMAIN}",
@@ -418,29 +201,81 @@ async def test_subscribe_operation_retries_failed_subscription() -> None:
             ),
         ),
     )
-
     assert result.applied is True
-    # Both stale rows must be cleared.
-    database.remote_subscriptions.delete_subscription.assert_called_once_with(123)
-    database.bridge_actor_follows.delete_bridge_actor_follow.assert_called_once_with(
-        community_actor_url
+    subscription = database.remote_subscriptions.get_subscription_by_channel(123)
+    follow = database.bridge_actor_follows.get_bridge_actor_follow(actor)
+    assert subscription.status == (
+        "accepted" if follow_status == "accepted" else "pending"
     )
-    # Fresh bridge follow and channel subscription rows are created.
-    database.bridge_actor_follows.create_bridge_actor_follow.assert_called_once_with(
-        community_actor_id=community_actor_url,
-        follow_activity_id=f"https://{BRIDGE_EXAMPLE_DOMAIN}/activities/follow/2",
-        community_inbox_url=f"{community_actor_url}/inbox",
-        status="pending",
+    assert subscription.follow_activity_id == follow.follow_activity_id
+    assert (
+        database.platform_surfaces.resolve_claim(
+            "discord-primary", "123"
+        ).remote_subscription_id
+        == subscription.id
     )
-    database.remote_subscriptions.create_subscription.assert_called_once_with(
-        discord_channel_id=123,
-        discord_guild_id=None,
-        lemmy_community_actor_id=community_actor_url,
-        lemmy_community_name="hackers",
-        lemmy_community_id=777,
-        community_handle=f"!hackers@{LEMMY_EXAMPLE_DOMAIN}",
-        community_inbox_url=f"{community_actor_url}/inbox",
-        follow_activity_id=f"https://{BRIDGE_EXAMPLE_DOMAIN}/activities/follow/2",
-        initiated_by_discord_user_id="1234567890",
-        status="pending",
+    assert len(database.remote_subscriptions.list_subscriptions()) == 1
+    assert len(database.bridge_actor_follows.list_bridge_actor_follows()) == 1
+    if old_follow is not None:
+        assert follow.id == old_follow.id
+    if old_subscription is not None:
+        assert subscription.id == old_subscription.id
+    if follow_status in {"accepted", "pending"}:
+        gateway.follow_community.assert_not_awaited()
+    else:
+        gateway.follow_community.assert_awaited_once_with(actor)
+    database.close()
+
+
+@pytest.mark.asyncio
+async def test_first_failed_dispatch_records_one_owned_failed_subscription(tmp_path):
+    """Network failure on a first subscription leaves one durable occupied forum."""
+    from src.db import Database
+
+    database = Database(f"sqlite:///{tmp_path / 'failed.db'}")
+    database.migrate()
+    actor = f"https://{LEMMY_EXAMPLE_DOMAIN}/c/hackers"
+    user_actor = f"https://{BRIDGE_EXAMPLE_DOMAIN}/actors/users/moderator"
+    database.users.create_user(
+        discord_user_id="1234567890",
+        activitypub_username="moderator",
+        actor_url=user_actor,
+        inbox_url=user_actor + "/inbox",
+        outbox_url=user_actor + "/outbox",
+        followers_url=user_actor + "/followers",
+        public_key_pem="public",
+        private_key_pem="private",
     )
+    gateway = AsyncMock()
+    gateway.follow_community.side_effect = RuntimeError("network failure")
+    result = await run_operation_definition_async(
+        subscribe_operation,
+        SubscribeInput(
+            database=database,
+            fedify_gateway=gateway,
+            discord_user_id="1234567890",
+            channel_id=123,
+            channel_mention="<#123>",
+            actor_id=actor,
+            community_name="hackers",
+            numeric_id=777,
+            community_handle=f"!hackers@{LEMMY_EXAMPLE_DOMAIN}",
+            policy_service=BridgePolicyService(
+                settings=SimpleNamespace(), repository=database.bridge_policy_entries
+            ),
+        ),
+    )
+    assert result.applied is False and result.reason == "follow_dispatch_failed"
+    subscription = database.remote_subscriptions.get_subscription_by_channel(123)
+    assert subscription.status == "failed"
+    assert (
+        database.platform_surfaces.resolve_claim(
+            "discord-primary", "123"
+        ).remote_subscription_id
+        == subscription.id
+    )
+    assert (
+        database.bridge_actor_follows.get_bridge_actor_follow(actor).status == "failed"
+    )
+    assert len(database.remote_subscriptions.list_subscriptions()) == 1
+    database.close()

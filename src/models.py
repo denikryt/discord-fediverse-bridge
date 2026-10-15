@@ -7,6 +7,8 @@ from datetime import datetime, timezone
 from sqlalchemy import (
     Boolean,
     CheckConstraint,
+    Computed,
+    ForeignKeyConstraint,
     Index,
     DateTime,
     ForeignKey,
@@ -28,6 +30,86 @@ class Base(DeclarativeBase):
     """Base class for all ORM models used by the bridge."""
 
     pass
+
+
+class PlatformConnector(Base):
+    """Persist immutable connection identity without credentials or routing state."""
+
+    __tablename__ = "platform_connectors"
+    __table_args__ = (
+        UniqueConstraint("connector_key"),
+        CheckConstraint(
+            "platform IN ('discord', 'fluxer')", name="ck_connector_platform"
+        ),
+        CheckConstraint(
+            "(platform = 'discord' AND instance_origin IS NULL) OR (platform = 'fluxer' AND instance_origin IS NOT NULL AND length(trim(instance_origin)) > 0)",
+            name="ck_connector_origin",
+        ),
+    )
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    connector_key: Mapped[str] = mapped_column(String(255), nullable=False)
+    platform: Mapped[str] = mapped_column(String(32), nullable=False)
+    instance_origin: Mapped[str | None] = mapped_column(String(512), nullable=True)
+
+
+class ChannelSurface(Base):
+    """Keep a durable physical channel and at most one typed current owner.
+
+    Content references survive release. Only owner FKs change claim state;
+    SQLite/PostgreSQL compute the SQL-readable role without synchronization.
+    """
+
+    __tablename__ = "platform_channel_surfaces"
+    __table_args__ = (
+        UniqueConstraint("connector_id", "external_channel_id"),
+        UniqueConstraint("connector_id", "id"),
+        UniqueConstraint("local_community_id"),
+        UniqueConstraint("local_subscriber_id"),
+        UniqueConstraint("remote_subscription_id"),
+        UniqueConstraint("personal_feed_binding_id"),
+        CheckConstraint(
+            "kind IN ('forum','text','announcement','unknown')", name="ck_surface_kind"
+        ),
+        # Integer CASE is total-valued and portable; Boolean addition is not.
+        CheckConstraint(
+            "(CASE WHEN local_community_id IS NOT NULL THEN 1 ELSE 0 END) + (CASE WHEN local_subscriber_id IS NOT NULL THEN 1 ELSE 0 END) + (CASE WHEN remote_subscription_id IS NOT NULL THEN 1 ELSE 0 END) + (CASE WHEN personal_feed_binding_id IS NOT NULL THEN 1 ELSE 0 END) <= 1",
+            name="ck_surface_one_owner",
+        ),
+    )
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    connector_id: Mapped[int] = mapped_column(
+        ForeignKey("platform_connectors.id", ondelete="RESTRICT"), nullable=False
+    )
+    external_channel_id: Mapped[str] = mapped_column(Text, nullable=False)
+    external_guild_id: Mapped[str | None] = mapped_column(Text, nullable=True)
+    kind: Mapped[str] = mapped_column(String(32), nullable=False)
+    local_community_id: Mapped[int | None] = mapped_column(
+        ForeignKey("local_communities.id", ondelete="RESTRICT"), nullable=True
+    )
+    local_subscriber_id: Mapped[int | None] = mapped_column(
+        ForeignKey("local_subscribers.id", ondelete="RESTRICT"), nullable=True
+    )
+    remote_subscription_id: Mapped[int | None] = mapped_column(
+        ForeignKey("channel_community_subscriptions.id", ondelete="RESTRICT"),
+        nullable=True,
+    )
+    personal_feed_binding_id: Mapped[int | None] = mapped_column(
+        ForeignKey("personal_feed_bindings.id", ondelete="RESTRICT"), nullable=True
+    )
+    role: Mapped[str | None] = mapped_column(
+        String(32),
+        Computed(
+            "CASE WHEN local_community_id IS NOT NULL THEN 'local_host' WHEN local_subscriber_id IS NOT NULL THEN 'local_subscriber' WHEN remote_subscription_id IS NOT NULL THEN 'remote_subscription' WHEN personal_feed_binding_id IS NOT NULL THEN 'personal_feed' ELSE NULL END",
+            persisted=True,
+        ),
+        nullable=True,
+    )
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=utcnow, nullable=False
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=utcnow, onupdate=utcnow, nullable=False
+    )
 
 
 class BridgeActorKey(Base):
@@ -70,15 +152,31 @@ class PostLink(Base):
     # one Lemmy post can now own several PostLink rows at once.
     __tablename__ = "post_links"
     __table_args__ = (
+        ForeignKeyConstraint(
+            ["connector_id", "channel_surface_id"],
+            ["platform_channel_surfaces.connector_id", "platform_channel_surfaces.id"],
+            ondelete="RESTRICT",
+            onupdate="RESTRICT",
+        ),
+        UniqueConstraint("connector_id", "external_thread_id"),
+        UniqueConstraint("connector_id", "external_starter_message_id"),
+        UniqueConstraint("lemmy_post_id", "channel_surface_id"),
         UniqueConstraint("lemmy_post_id", "discord_forum_channel_id"),
-        UniqueConstraint("discord_forum_thread_id"),
     )
+
+    connector_id: Mapped[int] = mapped_column(
+        ForeignKey("platform_connectors.id", ondelete="RESTRICT"), nullable=False
+    )
+    channel_surface_id: Mapped[int] = mapped_column(Integer, nullable=False)
+    external_thread_id: Mapped[str] = mapped_column(Text, nullable=False)
+    external_starter_message_id: Mapped[str | None] = mapped_column(Text, nullable=True)
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
     lemmy_post_id: Mapped[int] = mapped_column(Integer, nullable=False)
     lemmy_post_ap_id: Mapped[str | None] = mapped_column(String(512), nullable=True)
+    # MULTIPLATFORM_STAGE01_TEMP: Discord content ID columns remain only for pre-adapter callers; scoped IDs are authoritative.
     discord_forum_channel_id: Mapped[int | None] = mapped_column(Integer, nullable=True)
-    discord_forum_thread_id: Mapped[int] = mapped_column(Integer, nullable=False)
+    discord_forum_thread_id: Mapped[int | None] = mapped_column(Integer, nullable=True)
     discord_starter_message_id: Mapped[int | None] = mapped_column(
         Integer, nullable=True
     )
@@ -96,9 +194,23 @@ class CommentLink(Base):
     # several Discord threads, so uniqueness is per target thread/message.
     __tablename__ = "comment_links"
     __table_args__ = (
+        ForeignKeyConstraint(
+            ["connector_id", "channel_surface_id"],
+            ["platform_channel_surfaces.connector_id", "platform_channel_surfaces.id"],
+            ondelete="RESTRICT",
+            onupdate="RESTRICT",
+        ),
+        UniqueConstraint("connector_id", "external_message_id"),
         UniqueConstraint("lemmy_comment_id", "discord_forum_thread_id"),
-        UniqueConstraint("discord_message_id"),
     )
+
+    connector_id: Mapped[int] = mapped_column(
+        ForeignKey("platform_connectors.id", ondelete="RESTRICT"), nullable=False
+    )
+    channel_surface_id: Mapped[int] = mapped_column(Integer, nullable=False)
+    external_thread_id: Mapped[str] = mapped_column(Text, nullable=False)
+    external_message_id: Mapped[str] = mapped_column(Text, nullable=False)
+    external_parent_message_id: Mapped[str | None] = mapped_column(Text, nullable=True)
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
     lemmy_comment_id: Mapped[int] = mapped_column(Integer, nullable=False)
@@ -107,8 +219,9 @@ class CommentLink(Base):
         String(512), nullable=True
     )
     lemmy_post_id: Mapped[int] = mapped_column(Integer, nullable=False)
-    discord_forum_thread_id: Mapped[int] = mapped_column(Integer, nullable=False)
-    discord_message_id: Mapped[int] = mapped_column(Integer, nullable=False)
+    # MULTIPLATFORM_STAGE01_TEMP: Discord content ID columns remain only for pre-adapter callers; scoped IDs are authoritative.
+    discord_forum_thread_id: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    discord_message_id: Mapped[int | None] = mapped_column(Integer, nullable=True)
     direction: Mapped[str] = mapped_column(String(32), nullable=False)
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), default=utcnow, nullable=False
@@ -188,8 +301,9 @@ class ChannelCommunitySubscription(Base):
     __tablename__ = "channel_community_subscriptions"
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
-    discord_channel_id: Mapped[int] = mapped_column(
-        Integer, nullable=False, unique=True
+    # MULTIPLATFORM_STAGE01_TEMP: Nullable Discord subscription location projection is for the legacy Discord runtime only.
+    discord_channel_id: Mapped[int | None] = mapped_column(
+        Integer, nullable=True, unique=True
     )
     discord_guild_id: Mapped[int | None] = mapped_column(Integer, nullable=True)
     lemmy_community_actor_id: Mapped[str] = mapped_column(String(512), nullable=False)
@@ -282,6 +396,10 @@ class PersonalFeedBinding(Base):
 
     __tablename__ = "personal_feed_bindings"
     __table_args__ = (
+        CheckConstraint(
+            "CASE WHEN discord_guild_id IS NULL AND discord_channel_id IS NULL THEN 1 WHEN discord_guild_id IS NOT NULL AND discord_channel_id IS NOT NULL THEN 1 ELSE 0 END",
+            name="ck_personal_feed_location_pair",
+        ),
         UniqueConstraint("user_id"),
         UniqueConstraint("discord_guild_id"),
         UniqueConstraint("discord_channel_id"),
@@ -295,8 +413,9 @@ class PersonalFeedBinding(Base):
     user_id: Mapped[int] = mapped_column(
         ForeignKey("users.id", ondelete="CASCADE"), nullable=False
     )
-    discord_guild_id: Mapped[int] = mapped_column(Integer, nullable=False)
-    discord_channel_id: Mapped[int] = mapped_column(Integer, nullable=False)
+    # MULTIPLATFORM_STAGE01_TEMP: Discord location projection remains for existing publication and personal-feed contracts.
+    discord_guild_id: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    discord_channel_id: Mapped[int | None] = mapped_column(Integer, nullable=True)
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), default=utcnow, nullable=False
     )
@@ -602,10 +721,19 @@ class MessageMapping(Base):
     # echo loops once user-authored ActivityPub publishes are added.
     __tablename__ = "message_mappings"
     __table_args__ = (
-        UniqueConstraint("source_platform", "source_id"),
+        ForeignKeyConstraint(
+            ["source_connector_id", "source_channel_surface_id"],
+            ["platform_channel_surfaces.connector_id", "platform_channel_surfaces.id"],
+            ondelete="RESTRICT",
+            onupdate="RESTRICT",
+        ),
+        CheckConstraint(
+            "source_channel_surface_id IS NULL OR source_connector_id IS NOT NULL",
+            name="ck_messagemapping_source_pair",
+        ),
+        UniqueConstraint("source_connector_id", "source_id"),
         UniqueConstraint("activity_id"),
         UniqueConstraint("object_id"),
-        UniqueConstraint("discord_message_id"),
         CheckConstraint(
             "(publication_context = 'community' AND community_actor_url IS NOT NULL) OR "
             "(publication_context = 'personal_feed' AND community_actor_url IS NULL "
@@ -615,7 +743,15 @@ class MessageMapping(Base):
         ),
     )
 
+    source_connector_id: Mapped[int | None] = mapped_column(
+        ForeignKey("platform_connectors.id", ondelete="RESTRICT"), nullable=True
+    )
+    source_channel_surface_id: Mapped[int | None] = mapped_column(
+        Integer, nullable=True
+    )
+
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    # MULTIPLATFORM_STAGE01_TEMP: Discord location projection remains for existing publication and personal-feed contracts.
     source_platform: Mapped[str] = mapped_column(String(32), nullable=False)
     source_id: Mapped[str] = mapped_column(String(255), nullable=False)
     activity_id: Mapped[str] = mapped_column(String(512), nullable=False)
@@ -641,6 +777,16 @@ class PublishedActivityObject(Base):
     # this table instead of transient in-memory caches.
     __tablename__ = "published_activity_objects"
     __table_args__ = (
+        ForeignKeyConstraint(
+            ["source_connector_id", "source_channel_surface_id"],
+            ["platform_channel_surfaces.connector_id", "platform_channel_surfaces.id"],
+            ondelete="RESTRICT",
+            onupdate="RESTRICT",
+        ),
+        CheckConstraint(
+            "source_channel_surface_id IS NULL OR source_connector_id IS NOT NULL",
+            name="ck_publishedactivityobject_source_pair",
+        ),
         UniqueConstraint("activity_id"),
         UniqueConstraint("object_id"),
         CheckConstraint(
@@ -660,6 +806,14 @@ class PublishedActivityObject(Base):
         ),
     )
 
+    source_connector_id: Mapped[int | None] = mapped_column(
+        ForeignKey("platform_connectors.id", ondelete="RESTRICT"), nullable=True
+    )
+    source_channel_surface_id: Mapped[int | None] = mapped_column(
+        Integer, nullable=True
+    )
+    source_external_message_id: Mapped[str | None] = mapped_column(Text, nullable=True)
+
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
     actor_username: Mapped[str] = mapped_column(String(255), nullable=False)
     actor_url: Mapped[str] = mapped_column(String(512), nullable=False)
@@ -678,6 +832,7 @@ class PublishedActivityObject(Base):
     conversation_root_object_id: Mapped[str | None] = mapped_column(
         String(512), nullable=True, index=True
     )
+    # MULTIPLATFORM_STAGE01_TEMP: Discord location projection remains for existing publication and personal-feed contracts.
     discord_guild_id: Mapped[int | None] = mapped_column(Integer, nullable=True)
     discord_channel_id: Mapped[int | None] = mapped_column(Integer, nullable=True)
     discord_message_id: Mapped[int | None] = mapped_column(Integer, nullable=True)
@@ -719,21 +874,36 @@ class PersonalFeedThreadMapping(Base):
 
     __tablename__ = "personal_feed_thread_mappings"
     __table_args__ = (
+        ForeignKeyConstraint(
+            ["connector_id", "channel_surface_id"],
+            ["platform_channel_surfaces.connector_id", "platform_channel_surfaces.id"],
+            ondelete="RESTRICT",
+            onupdate="RESTRICT",
+        ),
+        UniqueConstraint("connector_id", "external_thread_id"),
+        UniqueConstraint("connector_id", "external_starter_message_id"),
         UniqueConstraint("root_published_object_id"),
-        UniqueConstraint("thread_id"),
         CheckConstraint(
             "thread_id = root_discord_message_id",
             name="ck_personal_feed_thread_identity",
         ),
     )
 
+    connector_id: Mapped[int] = mapped_column(
+        ForeignKey("platform_connectors.id", ondelete="RESTRICT"), nullable=False
+    )
+    channel_surface_id: Mapped[int] = mapped_column(Integer, nullable=False)
+    external_thread_id: Mapped[str] = mapped_column(Text, nullable=False)
+    external_starter_message_id: Mapped[str | None] = mapped_column(Text, nullable=True)
+
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
     root_published_object_id: Mapped[int] = mapped_column(
         ForeignKey("published_activity_objects.id", ondelete="CASCADE"), nullable=False
     )
-    root_discord_channel_id: Mapped[int] = mapped_column(Integer, nullable=False)
-    root_discord_message_id: Mapped[int] = mapped_column(Integer, nullable=False)
-    thread_id: Mapped[int] = mapped_column(Integer, nullable=False)
+    # MULTIPLATFORM_STAGE01_TEMP: Discord location projection remains for existing publication and personal-feed contracts.
+    root_discord_channel_id: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    root_discord_message_id: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    thread_id: Mapped[int | None] = mapped_column(Integer, nullable=True)
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), default=utcnow, nullable=False
     )
@@ -793,8 +963,14 @@ class InboundDiscordDelivery(Base):
 
     __tablename__ = "inbound_discord_deliveries"
     __table_args__ = (
+        ForeignKeyConstraint(
+            ["connector_id", "channel_surface_id"],
+            ["platform_channel_surfaces.connector_id", "platform_channel_surfaces.id"],
+            ondelete="RESTRICT",
+            onupdate="RESTRICT",
+        ),
+        UniqueConstraint("connector_id", "external_message_id"),
         UniqueConstraint("inbound_object_id", "root_published_object_id"),
-        UniqueConstraint("discord_message_id"),
         CheckConstraint(
             "state IN ('pending_parent','pending_thread','ready','dispatching','delivered','suppressed','failed')",
             name="ck_inbound_discord_delivery_state",
@@ -806,6 +982,14 @@ class InboundDiscordDelivery(Base):
         Index("ix_inbound_discord_due", "state", "next_attempt_at", "id"),
     )
 
+    connector_id: Mapped[int] = mapped_column(
+        ForeignKey("platform_connectors.id", ondelete="RESTRICT"), nullable=False
+    )
+    channel_surface_id: Mapped[int] = mapped_column(Integer, nullable=False)
+    external_thread_id: Mapped[str | None] = mapped_column(Text, nullable=True)
+    external_message_id: Mapped[str | None] = mapped_column(Text, nullable=True)
+    external_parent_message_id: Mapped[str | None] = mapped_column(Text, nullable=True)
+
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
     inbound_object_id: Mapped[int] = mapped_column(
         ForeignKey("inbound_conversation_objects.id", ondelete="CASCADE"),
@@ -814,7 +998,8 @@ class InboundDiscordDelivery(Base):
     root_published_object_id: Mapped[int] = mapped_column(
         ForeignKey("published_activity_objects.id", ondelete="CASCADE"), nullable=False
     )
-    destination_channel_id: Mapped[int] = mapped_column(Integer, nullable=False)
+    # MULTIPLATFORM_STAGE01_TEMP: Discord location projection remains for existing publication and personal-feed contracts.
+    destination_channel_id: Mapped[int | None] = mapped_column(Integer, nullable=True)
     destination_thread_id: Mapped[int | None] = mapped_column(Integer, nullable=True)
     discord_message_id: Mapped[int | None] = mapped_column(Integer, nullable=True)
     state: Mapped[str] = mapped_column(String(32), nullable=False)
@@ -904,13 +1089,33 @@ class CommunityThreadGroup(Base):
     # source_* fields are nullable to accommodate inbound AP events, which have
     # no source Discord channel — threads are created in all subscribed channels.
     __tablename__ = "community_thread_groups"
+    __table_args__ = (
+        ForeignKeyConstraint(
+            ["source_connector_id", "source_channel_surface_id"],
+            ["platform_channel_surfaces.connector_id", "platform_channel_surfaces.id"],
+            ondelete="RESTRICT",
+            onupdate="RESTRICT",
+        ),
+        CheckConstraint(
+            "source_channel_surface_id IS NULL OR source_connector_id IS NOT NULL",
+            name="ck_communitythreadgroup_source_pair",
+        ),
+        UniqueConstraint("source_connector_id", "source_external_thread_id"),
+    )
+
+    source_connector_id: Mapped[int | None] = mapped_column(
+        ForeignKey("platform_connectors.id", ondelete="RESTRICT"), nullable=True
+    )
+    source_channel_surface_id: Mapped[int | None] = mapped_column(
+        Integer, nullable=True
+    )
+    source_external_thread_id: Mapped[str | None] = mapped_column(Text, nullable=True)
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
     community_actor_id: Mapped[str] = mapped_column(String(512), nullable=False)
+    # MULTIPLATFORM_STAGE01_TEMP: Discord content ID columns remain only for pre-adapter callers; scoped IDs are authoritative.
     source_channel_id: Mapped[int | None] = mapped_column(Integer, nullable=True)
-    source_thread_id: Mapped[int | None] = mapped_column(
-        Integer, nullable=True, unique=True
-    )
+    source_thread_id: Mapped[int | None] = mapped_column(Integer, nullable=True)
     source_starter_message_id: Mapped[int | None] = mapped_column(
         Integer, nullable=True
     )
@@ -929,15 +1134,33 @@ class CommunityThreadGroupDelivery(Base):
     # UNIQUE(thread_group_id, discord_channel_id) ensures one delivery per channel per group.
     __tablename__ = "community_thread_group_deliveries"
     __table_args__ = (
+        ForeignKeyConstraint(
+            ["connector_id", "channel_surface_id"],
+            ["platform_channel_surfaces.connector_id", "platform_channel_surfaces.id"],
+            ondelete="RESTRICT",
+            onupdate="RESTRICT",
+        ),
+        UniqueConstraint("connector_id", "external_thread_id"),
+        UniqueConstraint("connector_id", "external_starter_message_id"),
+        UniqueConstraint("thread_group_id", "channel_surface_id"),
         UniqueConstraint("thread_group_id", "discord_channel_id"),
-        UniqueConstraint("discord_thread_id"),
     )
+
+    connector_id: Mapped[int] = mapped_column(
+        ForeignKey("platform_connectors.id", ondelete="RESTRICT"), nullable=False
+    )
+    channel_surface_id: Mapped[int] = mapped_column(Integer, nullable=False)
+    external_thread_id: Mapped[str] = mapped_column(Text, nullable=False)
+    external_starter_message_id: Mapped[str] = mapped_column(Text, nullable=False)
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
     thread_group_id: Mapped[int] = mapped_column(Integer, nullable=False)
-    discord_channel_id: Mapped[int] = mapped_column(Integer, nullable=False)
-    discord_thread_id: Mapped[int] = mapped_column(Integer, nullable=False)
-    discord_starter_message_id: Mapped[int] = mapped_column(Integer, nullable=False)
+    # MULTIPLATFORM_STAGE01_TEMP: Discord content ID columns remain only for pre-adapter callers; scoped IDs are authoritative.
+    discord_channel_id: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    discord_thread_id: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    discord_starter_message_id: Mapped[int | None] = mapped_column(
+        Integer, nullable=True
+    )
     # "source" for the originating channel; "mirror" for fanout delivery targets.
     role: Mapped[str] = mapped_column(String(32), nullable=False)
 
@@ -951,10 +1174,32 @@ class CommunityMessageGroup(Base):
     # source_* fields are nullable to accommodate inbound AP events, which have
     # no source Discord message — the message is created in all subscribed threads.
     __tablename__ = "community_message_groups"
+    __table_args__ = (
+        ForeignKeyConstraint(
+            ["source_connector_id", "source_channel_surface_id"],
+            ["platform_channel_surfaces.connector_id", "platform_channel_surfaces.id"],
+            ondelete="RESTRICT",
+            onupdate="RESTRICT",
+        ),
+        CheckConstraint(
+            "source_channel_surface_id IS NULL OR source_connector_id IS NOT NULL",
+            name="ck_communitymessagegroup_source_pair",
+        ),
+        UniqueConstraint("source_connector_id", "source_external_message_id"),
+    )
+
+    source_connector_id: Mapped[int | None] = mapped_column(
+        ForeignKey("platform_connectors.id", ondelete="RESTRICT"), nullable=True
+    )
+    source_channel_surface_id: Mapped[int | None] = mapped_column(
+        Integer, nullable=True
+    )
+    source_external_message_id: Mapped[str | None] = mapped_column(Text, nullable=True)
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
     community_actor_id: Mapped[str] = mapped_column(String(512), nullable=False)
     thread_group_id: Mapped[int] = mapped_column(Integer, nullable=False)
+    # MULTIPLATFORM_STAGE01_TEMP: Discord content ID columns remain only for pre-adapter callers; scoped IDs are authoritative.
     source_channel_id: Mapped[int | None] = mapped_column(Integer, nullable=True)
     source_thread_id: Mapped[int | None] = mapped_column(Integer, nullable=True)
     source_message_id: Mapped[int | None] = mapped_column(Integer, nullable=True)
@@ -975,15 +1220,31 @@ class CommunityMessageGroupDelivery(Base):
     # UNIQUE(message_group_id, discord_channel_id) ensures one delivery per channel per group.
     __tablename__ = "community_message_group_deliveries"
     __table_args__ = (
+        ForeignKeyConstraint(
+            ["connector_id", "channel_surface_id"],
+            ["platform_channel_surfaces.connector_id", "platform_channel_surfaces.id"],
+            ondelete="RESTRICT",
+            onupdate="RESTRICT",
+        ),
+        UniqueConstraint("connector_id", "external_message_id"),
+        UniqueConstraint("message_group_id", "channel_surface_id"),
         UniqueConstraint("message_group_id", "discord_channel_id"),
-        UniqueConstraint("discord_message_id"),
     )
+
+    connector_id: Mapped[int] = mapped_column(
+        ForeignKey("platform_connectors.id", ondelete="RESTRICT"), nullable=False
+    )
+    channel_surface_id: Mapped[int] = mapped_column(Integer, nullable=False)
+    external_thread_id: Mapped[str] = mapped_column(Text, nullable=False)
+    external_message_id: Mapped[str] = mapped_column(Text, nullable=False)
+    external_parent_message_id: Mapped[str | None] = mapped_column(Text, nullable=True)
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
     message_group_id: Mapped[int] = mapped_column(Integer, nullable=False)
-    discord_channel_id: Mapped[int] = mapped_column(Integer, nullable=False)
-    discord_thread_id: Mapped[int] = mapped_column(Integer, nullable=False)
-    discord_message_id: Mapped[int] = mapped_column(Integer, nullable=False)
+    # MULTIPLATFORM_STAGE01_TEMP: Discord content ID columns remain only for pre-adapter callers; scoped IDs are authoritative.
+    discord_channel_id: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    discord_thread_id: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    discord_message_id: Mapped[int | None] = mapped_column(Integer, nullable=True)
     # "source" for the originating channel; "mirror" for fanout delivery targets.
     role: Mapped[str] = mapped_column(String(32), nullable=False)
 
@@ -1046,25 +1307,22 @@ class RemoteActor(Base):
 
 
 class LocalCommunity(Base):
-    """Persist one Discord forum exposed as a local federated community.
+    """Persist one stable federated community independently of host placement.
 
     LocalCommunity is the Python-owned source of truth for the community actor
-    metadata that the gateway exposes publicly. The row binds one Discord forum
-    channel to one stable actor URL and one stable keypair. Creator ownership is
+    metadata that the gateway exposes publicly. The row owns one stable actor URL and one stable keypair; its host
+    placement is held by a typed ChannelSurface claim. Creator ownership is
     stored as a Discord user id for local bridge management commands only; it is
     not an ActivityPub identity.
     """
 
     __tablename__ = "local_communities"
     __table_args__ = (
-        UniqueConstraint("discord_forum_channel_id"),
         UniqueConstraint("slug"),
         UniqueConstraint("actor_url"),
     )
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
-    discord_guild_id: Mapped[int] = mapped_column(Integer, nullable=False)
-    discord_forum_channel_id: Mapped[int] = mapped_column(Integer, nullable=False)
     slug: Mapped[str] = mapped_column(String(255), nullable=False)
     display_name: Mapped[str] = mapped_column(String(255), nullable=False)
     summary: Mapped[str | None] = mapped_column(String, nullable=True)
@@ -1246,7 +1504,8 @@ class LocalSubscriber(Base):
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
     local_community_id: Mapped[int] = mapped_column(Integer, nullable=False)
     discord_guild_id: Mapped[int | None] = mapped_column(Integer, nullable=True)
-    discord_channel_id: Mapped[int] = mapped_column(Integer, nullable=False)
+    # MULTIPLATFORM_STAGE01_TEMP: Nullable Discord subscription location projection is for the legacy Discord runtime only.
+    discord_channel_id: Mapped[int | None] = mapped_column(Integer, nullable=True)
     initiated_by_discord_user_id: Mapped[str | None] = mapped_column(
         String(64), nullable=True
     )
@@ -1393,16 +1652,34 @@ class LocalCommunityThreadSurface(Base):
 
     __tablename__ = "local_community_thread_surfaces"
     __table_args__ = (
+        ForeignKeyConstraint(
+            ["connector_id", "channel_surface_id"],
+            ["platform_channel_surfaces.connector_id", "platform_channel_surfaces.id"],
+            ondelete="RESTRICT",
+            onupdate="RESTRICT",
+        ),
+        UniqueConstraint("connector_id", "external_thread_id"),
+        UniqueConstraint("connector_id", "external_starter_message_id"),
+        UniqueConstraint("local_community_thread_id", "channel_surface_id"),
+        UniqueConstraint("id", "channel_surface_id"),
         UniqueConstraint("local_community_thread_id", "discord_forum_channel_id"),
-        UniqueConstraint("discord_thread_id"),
-        UniqueConstraint("discord_starter_message_id"),
     )
+
+    connector_id: Mapped[int] = mapped_column(
+        ForeignKey("platform_connectors.id", ondelete="RESTRICT"), nullable=False
+    )
+    channel_surface_id: Mapped[int] = mapped_column(Integer, nullable=False)
+    external_thread_id: Mapped[str] = mapped_column(Text, nullable=False)
+    external_starter_message_id: Mapped[str] = mapped_column(Text, nullable=False)
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
     local_community_thread_id: Mapped[int] = mapped_column(Integer, nullable=False)
-    discord_forum_channel_id: Mapped[int] = mapped_column(Integer, nullable=False)
-    discord_thread_id: Mapped[int] = mapped_column(Integer, nullable=False)
-    discord_starter_message_id: Mapped[int] = mapped_column(Integer, nullable=False)
+    # MULTIPLATFORM_STAGE01_TEMP: Discord content ID columns remain only for pre-adapter callers; scoped IDs are authoritative.
+    discord_forum_channel_id: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    discord_thread_id: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    discord_starter_message_id: Mapped[int | None] = mapped_column(
+        Integer, nullable=True
+    )
     # Host surfaces keep this empty. Local-subscriber surfaces store the row
     # that selected the target forum, preserving historical target identity.
     local_subscriber_id: Mapped[int | None] = mapped_column(Integer, nullable=True)
@@ -1422,19 +1699,42 @@ class LocalCommunityMessageSurface(Base):
 
     __tablename__ = "local_community_message_surfaces"
     __table_args__ = (
+        ForeignKeyConstraint(
+            ["connector_id", "channel_surface_id"],
+            ["platform_channel_surfaces.connector_id", "platform_channel_surfaces.id"],
+            ondelete="RESTRICT",
+            onupdate="RESTRICT",
+        ),
+        UniqueConstraint("connector_id", "external_message_id"),
+        ForeignKeyConstraint(
+            ["local_community_thread_surface_id", "channel_surface_id"],
+            [
+                "local_community_thread_surfaces.id",
+                "local_community_thread_surfaces.channel_surface_id",
+            ],
+            ondelete="RESTRICT",
+            onupdate="RESTRICT",
+        ),
         UniqueConstraint(
             "local_community_message_id", "local_community_thread_surface_id"
         ),
-        UniqueConstraint("discord_message_id"),
     )
+
+    connector_id: Mapped[int] = mapped_column(
+        ForeignKey("platform_connectors.id", ondelete="RESTRICT"), nullable=False
+    )
+    channel_surface_id: Mapped[int] = mapped_column(Integer, nullable=False)
+    external_message_id: Mapped[str] = mapped_column(Text, nullable=False)
+    external_parent_message_id: Mapped[str | None] = mapped_column(Text, nullable=True)
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
     local_community_message_id: Mapped[int] = mapped_column(Integer, nullable=False)
     local_community_thread_surface_id: Mapped[int] = mapped_column(
         Integer, nullable=False
     )
-    discord_forum_channel_id: Mapped[int] = mapped_column(Integer, nullable=False)
-    discord_message_id: Mapped[int] = mapped_column(Integer, nullable=False)
+    # MULTIPLATFORM_STAGE01_TEMP: Discord content ID columns remain only for pre-adapter callers; scoped IDs are authoritative.
+    discord_forum_channel_id: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    discord_message_id: Mapped[int | None] = mapped_column(Integer, nullable=True)
     parent_discord_message_id: Mapped[int | None] = mapped_column(
         Integer, nullable=True
     )

@@ -11,6 +11,7 @@ from sqlalchemy.orm import Session, sessionmaker
 from ..management_actions import ManagementActions
 from ..management_audit_recorder import ManagementAuditRecorder
 from . import migrations, schema
+from .repositories.platform_surfaces import PlatformSurfaceRepository
 from .repositories import (
     ActivityPubObjectRepository,
     BridgeActorKeyRepository,
@@ -64,17 +65,24 @@ class Database:
         self.session_factory = sessionmaker(
             self.engine, expire_on_commit=False, class_=Session
         )
+        self.platform_surfaces = PlatformSurfaceRepository(self.session)
         self.bridge_actor_keys = BridgeActorKeyRepository(self.session)
-        self.local_communities = LocalCommunityRepository(self.session)
+        self.local_communities = LocalCommunityRepository(
+            self.session, self.immediate_session
+        )
         self.community_actor_bans = CommunityActorBanRepository(self.session)
         self.management_audit_events = ManagementAuditEventRepository(self.session)
         self.management_audit = ManagementAuditRecorder(self.management_audit_events)
         self.remote_subscribers = RemoteSubscriberRepository(self.session)
-        self.local_subscribers = LocalSubscriberRepository(self.session)
+        self.local_subscribers = LocalSubscriberRepository(
+            self.session, self.immediate_session
+        )
         self.local_community_content = LocalCommunityContentRepository(self.session)
         self.local_community_surfaces = LocalCommunitySurfaceRepository(self.session)
         self.local_community_relay = LocalCommunityRelayRepository(self.session)
-        self.remote_subscriptions = RemoteSubscriptionRepository(self.session)
+        self.remote_subscriptions = RemoteSubscriptionRepository(
+            self.session, self.immediate_session
+        )
         self.bridge_actor_follows = BridgeActorFollowRepository(self.session)
         self.bridge_policy_entries = BridgePolicyEntryRepository(self.session)
         self.event_receipts = EventReceiptRepository(self.session)
@@ -102,6 +110,7 @@ class Database:
         self.guild_invite_publications = GuildInvitePublicationRepository(self.session)
         self.management_actions = ManagementActions(
             session_factory=self.session,
+            immediate_session_factory=self.immediate_session,
             local_communities=self.local_communities,
             community_actor_bans=self.community_actor_bans,
             management_audit=self.management_audit,
@@ -110,25 +119,26 @@ class Database:
         )
 
     def create_all(self) -> None:
-        """Create the full clean-schema set required by the current codebase."""
-        schema.create_all(self.engine)
+        """Create model schema only, without seeding or versioning an app database."""
+        # Explicit schema tooling must not adopt a DB as initialized. Production
+        # startup and ready-to-use test fixtures initialize through migrate().
+        with self.engine.begin() as conn:
+            if conn.dialect.name == "sqlite":
+                migrations._require_sqlite_model_support(conn)
+            schema.create_all(conn)
 
     def migrate(self) -> None:
         """Preflight and initialize SQLite without rewriting federation identities.
 
         Existing versioned databases upgrade before metadata sees new tables.
-        Fresh databases bootstrap current models; only the baseline release
-        accepts nonempty unversioned development databases without a manual step.
+        Fresh databases bootstrap current models and version together. Nonempty
+        unversioned files require an explicitly prepared versioned baseline.
         """
         version, _empty = migrations.read_database_state(self.engine)
         if version:
             migrations.run_pending_migrations(self.engine)
-        # These retained operations are deliberately outside upgrade atomicity.
-        # New schema/data changes belong in registered migration functions.
-        self.create_all()
-        migrations.run_legacy_schema_helpers(self.engine)
-        if version == 0:
-            migrations.stamp_initial_version(self.engine)
+        elif _empty:
+            migrations.bootstrap_current_schema_v2(self.engine)
 
     @contextmanager
     def immediate_session(self) -> Iterator[Session]:

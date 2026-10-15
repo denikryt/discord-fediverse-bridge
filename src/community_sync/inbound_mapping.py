@@ -12,8 +12,10 @@ def get_accepted_subscriptions(
     database: object, community_actor_id: str
 ) -> list[object]:
     """Return accepted subscriptions for one community actor id."""
-    subscriptions = database.remote_subscriptions.get_subscriptions_by_community(
-        community_actor_id
+    subscriptions = (
+        database.remote_subscriptions.list_discord_accepted_subscriptions_for_community(
+            community_actor_id
+        )
     )
     return [
         subscription

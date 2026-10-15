@@ -27,7 +27,7 @@ def _settings(**overrides: object) -> Settings:
 def test_bootstrap_imports_legacy_jwk_once(tmp_path) -> None:
     """An existing deployment imports its exact JWK text and never overwrites it."""
     database = Database(f"sqlite:///{tmp_path / 'bridge.db'}")
-    database.create_all()
+    database.migrate()
     private = json.dumps({"kty": "RSA", "d": "private"})
     public = json.dumps({"kty": "RSA", "n": "public"})
     imported = BridgeActorKeyBootstrap(
@@ -52,7 +52,7 @@ def test_bootstrap_imports_legacy_jwk_once(tmp_path) -> None:
 def test_bootstrap_rejects_partial_or_invalid_legacy_pair(tmp_path) -> None:
     """Partial or malformed compatibility input must not create split identity."""
     database = Database(f"sqlite:///{tmp_path / 'bridge.db'}")
-    database.create_all()
+    database.migrate()
     with pytest.raises(RuntimeError, match="Both legacy"):
         BridgeActorKeyBootstrap(
             database=database,
@@ -72,7 +72,7 @@ def test_bootstrap_rejects_partial_or_invalid_legacy_pair(tmp_path) -> None:
 def test_new_deployment_generates_persistent_pem_key(tmp_path) -> None:
     """A new deployment generates one DB-backed key and reuses it on restart."""
     database = Database(f"sqlite:///{tmp_path / 'bridge.db'}")
-    database.create_all()
+    database.migrate()
     first = BridgeActorKeyBootstrap(database=database, settings=_settings()).ensure()
     second = BridgeActorKeyBootstrap(database=database, settings=_settings()).ensure()
     assert first.id == second.id
@@ -85,7 +85,7 @@ def test_new_deployment_generates_persistent_pem_key(tmp_path) -> None:
 def test_actor_key_service_preserves_owner_specific_storage(tmp_path) -> None:
     """The facade resolves keys without moving user/community domain columns."""
     database = Database(f"sqlite:///{tmp_path / 'bridge.db'}")
-    database.create_all()
+    database.migrate()
     BridgeActorKeyBootstrap(database=database, settings=_settings()).ensure()
     user = database.users.create_user(
         discord_user_id="1",

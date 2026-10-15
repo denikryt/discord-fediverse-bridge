@@ -58,6 +58,7 @@ class MirrorMessageResult:
     channel_id: int
     thread_id: int
     message_id: int
+    parent_message_id: int | None = None
 
 
 def _make_discord_reference(
@@ -285,6 +286,9 @@ class DiscordFanout:
                         channel_id=delivery.discord_channel_id,
                         thread_id=delivery.discord_thread_id,
                         message_id=sent.id,
+                        parent_message_id=(
+                            reference.message_id if reference is not None else None
+                        ),
                     )
                 )
                 logger.info(

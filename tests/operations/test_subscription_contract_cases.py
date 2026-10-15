@@ -25,60 +25,57 @@ CHANNEL_MENTION = "<#123>"
 COMMUNITY_HANDLE = "!hackers@lemmy.example"
 
 
-def _subscription_row(case: SubscriptionCase) -> SimpleNamespace | None:
-    """Build the existing channel-subscription row described by the case."""
+def _database(case: SubscriptionCase, tmp_path):
+    """Persist each declared precondition through real transactional repositories."""
+    from src.db import Database
 
-    if case.channel_state == "missing":
-        return None
-
-    return SimpleNamespace(
-        status=case.channel_state,
-        community_handle=COMMUNITY_HANDLE,
-        lemmy_community_name="hackers",
-        lemmy_community_actor_id=ACTOR_ID,
-    )
-
-
-def _follow_row(case: SubscriptionCase) -> SimpleNamespace | None:
-    """Build the shared Follow row described by the case."""
-
-    if case.follow_state == "missing":
-        return None
-
-    status = (
-        "accepted"
-        if case.follow_state in {"accepted", "missing_id"}
-        else case.follow_state
-    )
-    follow_activity_id = (
-        None if case.follow_state == "missing_id" else FOLLOW_ACTIVITY_ID
-    )
-    return SimpleNamespace(
-        status=status,
-        community_actor_id=ACTOR_ID,
-        community_inbox_url=f"{ACTOR_ID}/inbox",
-        follow_activity_id=follow_activity_id,
-    )
-
-
-def _database(case: SubscriptionCase) -> Mock:
-    """Configure the repository facade for one subscription contract case."""
-
-    database = Mock()
-    database.bridge_policy_entries.list_all_active.return_value = []
-    database.users.get_user_by_discord_user_id.return_value = (
-        SimpleNamespace(id=1) if case.registered else None
-    )
-    database.remote_subscriptions.get_subscription_by_channel.return_value = (
-        _subscription_row(case)
-    )
-    database.remote_subscriptions.count_subscriptions_for_community.return_value = (
-        case.subscription_count
-    )
-    database.bridge_actor_follows.get_bridge_actor_follow.return_value = _follow_row(
-        case
-    )
-    database.remote_subscriptions.delete_subscription.return_value = True
+    database = Database(f"sqlite:///{tmp_path / 'contract.db'}")
+    database.migrate()
+    if case.registered:
+        user_actor = "https://bridge.example/actors/users/moderator"
+        database.users.create_user(
+            discord_user_id=str(CHANNEL_ID),
+            activitypub_username="moderator",
+            actor_url=user_actor,
+            inbox_url=user_actor + "/inbox",
+            outbox_url=user_actor + "/outbox",
+            followers_url=user_actor + "/followers",
+            public_key_pem="public",
+            private_key_pem="private",
+        )
+    if case.follow_state != "missing":
+        database.bridge_actor_follows.create_bridge_actor_follow(
+            community_actor_id=ACTOR_ID,
+            follow_activity_id=(
+                None if case.follow_state == "missing_id" else FOLLOW_ACTIVITY_ID
+            ),
+            community_inbox_url=ACTOR_ID + "/inbox",
+            status=(
+                "accepted" if case.follow_state == "missing_id" else case.follow_state
+            ),
+        )
+    if case.channel_state != "missing":
+        database.remote_subscriptions.create_subscription(
+            discord_channel_id=CHANNEL_ID,
+            lemmy_community_actor_id=ACTOR_ID,
+            lemmy_community_name="hackers",
+            lemmy_community_id=42,
+            community_handle=COMMUNITY_HANDLE,
+            follow_activity_id=(
+                None if case.follow_state == "missing_id" else FOLLOW_ACTIVITY_ID
+            ),
+            status=case.channel_state,
+        )
+    count = database.remote_subscriptions.count_subscriptions_for_community(ACTOR_ID)
+    for offset in range(case.subscription_count - count):
+        database.remote_subscriptions.create_subscription(
+            discord_channel_id=CHANNEL_ID + 1 + offset,
+            lemmy_community_actor_id=ACTOR_ID,
+            lemmy_community_name="hackers",
+            lemmy_community_id=42,
+            follow_activity_id=FOLLOW_ACTIVITY_ID,
+            status="accepted",
+        )
     return database
 
 
@@ -140,41 +137,45 @@ async def _execute_case(
     )
 
 
-def _assert_effects(
-    case: SubscriptionCase,
-    result: object,
-    database: Mock,
-    gateway: AsyncMock,
-) -> None:
-    """Assert the complete observable operation and persistence effects."""
-
+def _assert_effects(case, result, database, gateway, before):
+    """Compare actual durable row changes and external requests, not DAO call counts."""
     expected = case.expected
-    assert result.applied is expected.applied
-    assert result.reason == expected.reason
+    assert result.applied is expected.applied and result.reason == expected.reason
     assert gateway.follow_community.await_count == expected.follow_calls
     assert gateway.unfollow_community.await_count == expected.unfollow_calls
+    after_channel = len(database.remote_subscriptions.list_subscriptions())
+    after_follow = len(database.bridge_actor_follows.list_bridge_actor_follows())
     assert (
-        database.remote_subscriptions.create_subscription.call_count
-        == expected.create_channel_calls
+        after_channel - before[0]
+        == expected.created_channel_rows - expected.deleted_channel_rows
     )
-    assert (
-        database.remote_subscriptions.delete_subscription.call_count
-        == expected.delete_channel_calls
-    )
-    assert (
-        database.bridge_actor_follows.delete_bridge_actor_follow.call_count
-        == expected.delete_follow_calls
-    )
+    if expected.deleted_follow_rows:
+        assert before[1] - after_follow == expected.deleted_follow_rows
+    if case.action == "subscribe" and result.applied:
+        row = database.remote_subscriptions.get_subscription_by_channel(CHANNEL_ID)
+        assert (
+            database.platform_surfaces.resolve_claim(
+                "discord-primary", str(CHANNEL_ID)
+            ).remote_subscription_id
+            == row.id
+        )
+    with database.engine.connect() as connection:
+        assert connection.exec_driver_sql("PRAGMA foreign_key_check").all() == []
 
 
 @pytest.mark.parametrize("case", SUBSCRIPTION_CASES, ids=lambda case: case.id)
 @pytest.mark.asyncio
-async def test_subscription_contract(case: SubscriptionCase) -> None:
+async def test_subscription_contract(case: SubscriptionCase, tmp_path) -> None:
     """Execute one declared subscription lifecycle contract."""
 
-    database = _database(case)
+    database = _database(case, tmp_path)
     gateway = _gateway(case)
 
+    before = (
+        len(database.remote_subscriptions.list_subscriptions()),
+        len(database.bridge_actor_follows.list_bridge_actor_follows()),
+    )
     result = await _execute_case(case, database, gateway)
 
-    _assert_effects(case, result, database, gateway)
+    _assert_effects(case, result, database, gateway, before)
+    database.close()

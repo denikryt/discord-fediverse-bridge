@@ -289,6 +289,14 @@ class SubscribeCommunityCommandHandler:
             handle=resolved.handle,
             actor_id=resolved.actor_id,
         )
+        retry = (
+            self.database.remote_subscriptions.get_subscription_by_channel(
+                int(request.channel.id)
+            )
+            if request.channel is not None
+            else None
+        )
+        retry_id = retry.id if retry is not None and retry.status == "failed" else None
         try:
             return await resolve_optional_forum_channel(
                 database=self.database,
@@ -296,7 +304,7 @@ class SubscribeCommunityCommandHandler:
                 selected_channel=request.channel,
                 desired_name=desired_name,
                 command_name="subscribe-community",
-                remote_subscription_blocking_statuses={"pending", "accepted"},
+                retry_subscription_id=retry_id,
             )
         except ForumPlacementError as error:
             await request.interaction.response.send_message(

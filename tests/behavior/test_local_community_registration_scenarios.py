@@ -2,6 +2,10 @@
 
 from __future__ import annotations
 
+import sqlite3
+import pytest
+
+
 from pathlib import Path
 
 from sqlalchemy import create_engine, text
@@ -269,14 +273,14 @@ def test_create_local_community_rejects_too_long_description(tmp_path: Path) -> 
     assert database.local_communities.list_local_communities() == []
 
 
-def test_existing_database_migration_adds_nullable_owner_column(tmp_path: Path) -> None:
+def test_existing_database_unversioned_startup_preserves_nullable_owner_column(
+    tmp_path: Path,
+) -> None:
     """Migration adds creator ownership to existing local-community tables."""
     db_path = tmp_path / "legacy-local-communities.db"
     engine = create_engine(f"sqlite:///{db_path}", future=True)
     with engine.begin() as conn:
-        conn.execute(
-            text(
-                """
+        conn.execute(text("""
                 CREATE TABLE channel_community_subscriptions (
                     id INTEGER PRIMARY KEY AUTOINCREMENT,
                     discord_channel_id INTEGER NOT NULL,
@@ -291,12 +295,8 @@ def test_existing_database_migration_adds_nullable_owner_column(tmp_path: Path) 
                     created_at DATETIME NOT NULL,
                     updated_at DATETIME NOT NULL
                 )
-                """
-            )
-        )
-        conn.execute(
-            text(
-                """
+                """))
+        conn.execute(text("""
                 CREATE TABLE local_communities (
                     id INTEGER PRIMARY KEY AUTOINCREMENT,
                     discord_guild_id INTEGER NOT NULL,
@@ -314,9 +314,7 @@ def test_existing_database_migration_adds_nullable_owner_column(tmp_path: Path) 
                     created_at DATETIME NOT NULL,
                     updated_at DATETIME NOT NULL
                 )
-                """
-            )
-        )
+                """))
 
         conn.execute(
             text(
@@ -328,9 +326,7 @@ def test_existing_database_migration_adds_nullable_owner_column(tmp_path: Path) 
                 "CREATE TABLE local_community_messages (id INTEGER PRIMARY KEY AUTOINCREMENT)"
             )
         )
-        conn.execute(
-            text(
-                """
+        conn.execute(text("""
                 INSERT INTO local_communities (
                     discord_guild_id,
                     discord_forum_channel_id,
@@ -362,34 +358,45 @@ def test_existing_database_migration_adds_nullable_owner_column(tmp_path: Path) 
                     '2026-01-01 00:00:00',
                     '2026-01-01 00:00:00'
                 )
-                """
-            )
-        )
+                """))
     engine.dispose()
 
     database = Database(f"sqlite:///{db_path}")
-    database.migrate()
-    migrated = database.local_communities.get_local_community_by_slug("cats")
-
-    assert migrated is not None
-    assert migrated.created_by_discord_user_id is None
-    assert migrated.display_name == "Cats"
-    with database.engine.connect() as conn:
-        summary_column = [
-            row
-            for row in conn.execute(
-                text("PRAGMA table_info(local_communities)")
-            ).fetchall()
-            if row[1] == "summary"
-        ][0]
-    assert summary_column[3] == 0
+    with database.engine.connect() as connection:
+        schema_before = connection.exec_driver_sql(
+            "SELECT type,name,sql FROM sqlite_master WHERE name NOT GLOB 'sqlite_*' ORDER BY type,name"
+        ).all()
+        names = [row[1] for row in schema_before if row[0] == "table"]
+        rows_before = {
+            name: connection.exec_driver_sql(
+                f'SELECT * FROM "{name}" ORDER BY rowid'
+            ).all()
+            for name in names
+        }
+    with pytest.raises(RuntimeError, match="baseline"):
+        database.migrate()
+    with database.engine.connect() as connection:
+        assert connection.exec_driver_sql("PRAGMA user_version").scalar_one() == 0
+        assert (
+            connection.exec_driver_sql(
+                "SELECT type,name,sql FROM sqlite_master WHERE name NOT GLOB 'sqlite_*' ORDER BY type,name"
+            ).all()
+            == schema_before
+        )
+        for name in names:
+            assert (
+                connection.exec_driver_sql(
+                    f'SELECT * FROM "{name}" ORDER BY rowid'
+                ).all()
+                == rows_before[name]
+            )
+    database.close()
 
 
 def test_owner_column_migration_is_idempotent(tmp_path: Path) -> None:
     """Running migration repeatedly must preserve data and avoid duplicate columns."""
     db_path = tmp_path / "idempotent-local-communities.db"
     database = Database(f"sqlite:///{db_path}")
-    database.create_all()
     database.migrate()
     database.migrate()
 
@@ -400,7 +407,7 @@ def test_owner_column_migration_is_idempotent(tmp_path: Path) -> None:
     assert len(owner_columns) == 1
 
 
-def test_summary_nullable_migration_preserves_unique_constraints(
+def test_summary_nullable_unversioned_startup_preserves_constraints(
     tmp_path: Path,
 ) -> None:
     """Rebuilt local_communities table must keep identity uniqueness constraints."""
@@ -417,9 +424,7 @@ def test_summary_nullable_migration_preserves_unique_constraints(
                 "CREATE TABLE local_community_messages (id INTEGER PRIMARY KEY AUTOINCREMENT)"
             )
         )
-        conn.execute(
-            text(
-                """
+        conn.execute(text("""
                 CREATE TABLE channel_community_subscriptions (
                     id INTEGER PRIMARY KEY AUTOINCREMENT,
                     discord_channel_id INTEGER NOT NULL,
@@ -428,12 +433,8 @@ def test_summary_nullable_migration_preserves_unique_constraints(
                     created_at DATETIME NOT NULL,
                     updated_at DATETIME NOT NULL
                 )
-                """
-            )
-        )
-        conn.execute(
-            text(
-                """
+                """))
+        conn.execute(text("""
                 CREATE TABLE local_communities (
                     id INTEGER PRIMARY KEY AUTOINCREMENT,
                     discord_guild_id INTEGER NOT NULL,
@@ -451,12 +452,8 @@ def test_summary_nullable_migration_preserves_unique_constraints(
                     created_at DATETIME NOT NULL,
                     updated_at DATETIME NOT NULL
                 )
-                """
-            )
-        )
-        conn.execute(
-            text(
-                """
+                """))
+        conn.execute(text("""
                 INSERT INTO local_communities (
                     discord_guild_id, discord_forum_channel_id, slug, display_name, summary,
                     actor_url, inbox_url, outbox_url, followers_url, public_key_pem, private_key_pem,
@@ -469,57 +466,39 @@ def test_summary_nullable_migration_preserves_unique_constraints(
                     'https://bridge.example/actors/communities/cats/followers',
                     'public-key', 'private-key', 'active', '2026-01-01 00:00:00', '2026-01-01 00:00:00'
                 )
-                """
-            )
-        )
+                """))
     engine.dispose()
 
     database = Database(f"sqlite:///{db_path}")
-    database.migrate()
-
-    with database.engine.begin() as conn:
-        summary_column = [
-            row
-            for row in conn.execute(
-                text("PRAGMA table_info(local_communities)")
-            ).fetchall()
-            if row[1] == "summary"
-        ][0]
-        assert summary_column[3] == 0
-        for duplicate_sql in (
-            """
-            INSERT INTO local_communities (
-                discord_guild_id, discord_forum_channel_id, slug, display_name, summary,
-                actor_url, inbox_url, outbox_url, followers_url, public_key_pem, private_key_pem,
-                status, created_at, updated_at
-            ) VALUES (10, 100, 'dogs', 'Dogs', NULL, 'https://bridge.example/actors/communities/dogs',
-                'i', 'o', 'f', 'public', 'private', 'active', '2026-01-01', '2026-01-01')
-            """,
-            """
-            INSERT INTO local_communities (
-                discord_guild_id, discord_forum_channel_id, slug, display_name, summary,
-                actor_url, inbox_url, outbox_url, followers_url, public_key_pem, private_key_pem,
-                status, created_at, updated_at
-            ) VALUES (10, 101, 'cats', 'Cats 2', NULL, 'https://bridge.example/actors/communities/cats-2',
-                'i', 'o', 'f', 'public', 'private', 'active', '2026-01-01', '2026-01-01')
-            """,
-            """
-            INSERT INTO local_communities (
-                discord_guild_id, discord_forum_channel_id, slug, display_name, summary,
-                actor_url, inbox_url, outbox_url, followers_url, public_key_pem, private_key_pem,
-                status, created_at, updated_at
-            ) VALUES (10, 102, 'birds', 'Birds', NULL, 'https://bridge.example/actors/communities/cats',
-                'i', 'o', 'f', 'public', 'private', 'active', '2026-01-01', '2026-01-01')
-            """,
-        ):
-            try:
-                conn.execute(text(duplicate_sql))
-            except Exception as exc:
-                assert "UNIQUE" in str(exc).upper()
-            else:
-                raise AssertionError(
-                    "Expected migrated unique constraint to reject duplicate identity"
-                )
+    with database.engine.connect() as connection:
+        schema_before = connection.exec_driver_sql(
+            "SELECT type,name,sql FROM sqlite_master WHERE name NOT GLOB 'sqlite_*' ORDER BY type,name"
+        ).all()
+        names = [row[1] for row in schema_before if row[0] == "table"]
+        rows_before = {
+            name: connection.exec_driver_sql(
+                f'SELECT * FROM "{name}" ORDER BY rowid'
+            ).all()
+            for name in names
+        }
+    with pytest.raises(RuntimeError, match="baseline"):
+        database.migrate()
+    with database.engine.connect() as connection:
+        assert connection.exec_driver_sql("PRAGMA user_version").scalar_one() == 0
+        assert (
+            connection.exec_driver_sql(
+                "SELECT type,name,sql FROM sqlite_master WHERE name NOT GLOB 'sqlite_*' ORDER BY type,name"
+            ).all()
+            == schema_before
+        )
+        for name in names:
+            assert (
+                connection.exec_driver_sql(
+                    f'SELECT * FROM "{name}" ORDER BY rowid'
+                ).all()
+                == rows_before[name]
+            )
+    database.close()
 
 
 def test_fresh_database_local_community_summary_is_nullable(tmp_path: Path) -> None:

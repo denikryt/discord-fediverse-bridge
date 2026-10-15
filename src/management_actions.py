@@ -32,6 +32,7 @@ class ManagementActions:
         self,
         *,
         session_factory: Callable[[], Iterator[Session]],
+        immediate_session_factory: Callable[[], Iterator[Session]],
         local_communities: LocalCommunityRepository,
         community_actor_bans: CommunityActorBanRepository,
         management_audit: ManagementAuditRecorder,
@@ -40,6 +41,7 @@ class ManagementActions:
     ) -> None:
         """Initialise the service with repositories and an audit recorder."""
         self._session_factory = session_factory
+        self._immediate_session_factory = immediate_session_factory
         self._local_communities = local_communities
         self._community_actor_bans = community_actor_bans
         self._audit = management_audit
@@ -64,7 +66,8 @@ class ManagementActions:
         status: str = "active",
     ) -> LocalCommunity:
         """Create a local-community row and its creation audit row atomically."""
-        with self._session_factory() as session:
+        # Reserve the writer before allocating the actor and its exclusive host.
+        with self._immediate_session_factory() as session:
             community = self._local_communities.add_local_community(
                 session,
                 discord_guild_id=discord_guild_id,

@@ -68,7 +68,7 @@ async def test_unban_community_autocomplete_owner_sees_only_owned_current_guild(
         discord_guild_allowlist=[], bridge_super_admin_user_ids=[]
     )
     database.local_communities.list_active_local_communities_owned_by_user_in_guild.return_value = [
-        SimpleNamespace(slug="cats", display_name="Cats", discord_guild_id=99999),
+        SimpleNamespace(id=1, slug="cats", display_name="Cats", discord_guild_id=99999),
     ]
 
     choices = await unban_user._unban_community_autocomplete(
@@ -93,8 +93,8 @@ async def test_unban_community_autocomplete_super_admin_sees_all_guilds(
         discord_guild_allowlist=[], bridge_super_admin_user_ids=["1234567890"]
     )
     database.local_communities.list_active_local_communities.return_value = [
-        SimpleNamespace(slug="cats", display_name="Cats", discord_guild_id=10),
-        SimpleNamespace(slug="dogs", display_name="Dogs", discord_guild_id=20),
+        SimpleNamespace(id=2, slug="cats", display_name="Cats", discord_guild_id=10),
+        SimpleNamespace(id=3, slug="dogs", display_name="Dogs", discord_guild_id=20),
     ]
 
     choices = await unban_user._unban_community_autocomplete(
