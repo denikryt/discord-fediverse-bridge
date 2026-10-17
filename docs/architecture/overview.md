@@ -24,6 +24,8 @@ Remote ActivityPub server
   -> Discord or relay fanout
 ```
 
+Stage 02 defines an **inactive** connector-scoped [Platform API](platform-api.md) (SDK-independent references, event shapes, lookup/delivery/permission ports, and a non-owning adapter registry). Stage 01 physical identities live in SQLite; Discord Gateway ingress and fanout **still execute the existing Discord-specific paths** until the Stage 03/04 cutover. A configured Fluxer connector row does not start an adapter or Gateway client.
+
 The Python bridge is the orchestration and persistence process. It starts the Discord bot, exposes registration and private gateway intake routes, owns SQLite state through SQLAlchemy, routes Discord events, and decides which runtime handles a bridge action.
 
 The Fedify gateway is the ActivityPub/WebFinger edge. It owns public actor/object routes, WebFinger discovery, inbound ActivityPub normalization, signed outbound delivery, and the internal HTTP actions that Python calls when it needs federation work performed. Route handler bodies live under `fedify-gateway/src/routes/*`, while `server.ts` remains the composition and route-registration root.

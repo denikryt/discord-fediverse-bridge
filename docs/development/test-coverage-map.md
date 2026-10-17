@@ -130,6 +130,12 @@ Start with the **Behavior** files for user-visible bridge behavior, then check *
 
 Behavior coverage lives in `test_user_profile_persistence_scenarios.py`, `test_profile_media_scenarios.py`, and `test_profile_media_backup_scenarios.py`. It covers fallback defaults, atomic metadata validation, SQLite invariants, canonical image publication, DB-backed HTTP delivery, and complete DB-plus-media backup/restore.
 
+## Platform API Stage 02 (inactive contract)
+
+- Identity/hash invariants, conflicting inbound kind/guild detection, aware timestamp validation, raw update/delete representability, partial content, attempt and receipt scope, SDK-free event DTOs — [`tests/test_platform_types.py`](../../tests/test_platform_types.py).
+- Two-connector registry and real SQLite physical-claim state; forum starter/replies, wrong-parent thread lookup/send rejection, root-anchored Personal Feed recovery, negative ACL/capabilities, and uncertain delivery without blind retry — [`tests/behavior/test_platform_api_stage02.py`](../../tests/behavior/test_platform_api_stage02.py).
+- Existing production behavior remains covered by the Discord, local-community, Personal Feed, ActivityPub, and Stage 01 tests listed above and below; Stage 02 does not activate a second event pipeline.
+
 ## Platform model Stage 01
 
 - Personal Feed service/repository agreement on physical claims and target-local parent resolution during upgrade — [`tests/test_stage01_simplicity_regressions.py`](../../tests/test_stage01_simplicity_regressions.py).

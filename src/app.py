@@ -222,6 +222,7 @@ def _build_live_runtime(settings: Settings, deployment_lease: FileLock) -> Runti
             mutation_context_provider=lambda: mutation_context,
         )
         bot.set_message_mutation_handler(message_mutation_handler)
+        # MULTIPLATFORM_STAGE02_TEMP: Production still binds BridgeBot directly into Discord fanout and runtimes; Stage 03/04 must register a real DiscordAdapter and replace these binds without a default-Discord fallback.
         discord_fanout = DiscordFanout(
             bot=bot,
             mutation_tracker=message_mutation_handler,

@@ -127,6 +127,16 @@ Discord OAuth boundary code consumes `Settings.resolved_discord_oauth_redirect_u
 
 1. `src/bridge_policy.py` for effective policy reads and narrow evaluator methods; 2. `docs/architecture/bridge-policy.md` for command, Discord event, ActivityPub event, dashboard, and fanout read ownership; 3. operation input classes in `src/operations/` for memoized command-action snapshots.
 
+## Platform API Stage 02 (contract only)
+
+1. `docs/architecture/platform-api.md` — contract, invariants, failure semantics, and future cutover boundaries.
+2. `src/platform_types.py` — connector-scoped physical IDs, content/provenance, creation receipts, and six immutable inbound event shapes.
+3. `src/runtime_ports.py` — existing narrow Discord ports **plus** core-facing platform lookup/delivery/permission/sink protocols.
+4. `src/platform_adapters.py` — non-owning registry keyed exclusively by connector key.
+5. `src/db/repositories/platform_surfaces.py` — Stage 01 authoritative persisted connectors, physical channel metadata and typed claims.
+6. `tests/test_platform_types.py`; `tests/behavior/test_platform_api_stage02.py` — value validation and stateful transport/real-SQLite boundary scenarios.
+7. `src/discord_bot.py`; `src/app.py`; `src/discord_event_router.py` — **unchanged production Discord flow**, retained until Stages 03/04 (no parallel ingress).
+
 ## Platform model and versioned migrations
 
 1. `src/models.py` — connector/channel identities, generated role, scoped copy/source constraints.

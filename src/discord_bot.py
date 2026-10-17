@@ -167,6 +167,7 @@ class BridgeBot(discord.Client):
         await self.fedify_gateway.close()
         await super().close()
 
+    # MULTIPLATFORM_STAGE02_TEMP: BridgeBot callbacks still forward Discord SDK objects directly; Stage 03 must emit normalized PlatformInboundEvent values and retire this legacy ingress after regression tests.
     async def on_thread_create(self, thread: discord.Thread) -> None:
         # Only threads in subscribed channels should be forwarded to Lemmy.
         # Threads created by the bot itself are skipped to break the echo loop.

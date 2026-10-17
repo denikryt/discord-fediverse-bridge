@@ -32,3 +32,23 @@ threads, or comments in a replacement Discord channel.
 - Migration parent delivery lookup uses snapshot indexes keyed by group ID and exact target channel/thread; missing parents still abort and roll back the upgrade.
 
 - Migration diagnostics now provide SQL operation/table/check context with chained causes and hidden bound parameters. Conflict errors expose selected IDs only; phase logs report transaction outcomes without row bodies, keys or tracebacks. Historical v1 target pinning is tracked before any v2 ORM change.
+
+## Stage 02 implementation review (resolved)
+
+- `validate_created_receipt()` now rejects conflicting known forum kind/guild
+  metadata independently of physical `ChannelRef` equality. Missing metadata
+  may still be enriched without changing the channel identity.
+- The Stage 02 stateful test transport now assigns distinct, deterministic
+  thread/starter IDs for independent forum posts and does not replace an
+  already observed thread. This was a fake-only defect, not live Discord routing.
+
+## Stage 02 adversarial checks (resolved)
+
+- Normalized inbound message events now reject contradictory known kind/guild
+  observations between parent and thread contexts. The explicit event guild is
+  checked against all available contexts, not only the first.
+- The Stage 02 stateful test adapter checks the actual thread parent during
+  fetch/send, so a thread ID cannot be used through a different forum.
+- Message edit timestamps and all inbound receipt times must be timezone-aware
+  datetimes when supplied; missing optional edit time remains `None`.
+  `THREAD_STARTER_MESSAGE` cross-container references remain representable.

@@ -8,9 +8,91 @@ constructor injection without recreating the bot/router/runtime cycle.
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Protocol
+from typing import Protocol, runtime_checkable
+
+from .platform_types import (
+    AuthorRef, ChannelRef, ChannelView, ConnectorRef, ContentDocument,
+    CreateAttempt, CreatedMessage, CreatedThread, DeliveryPresentation,
+    MessageRef, MessageView, PlatformAction, PlatformCapabilities,
+    PlatformInboundEvent, PermissionResult, ThreadRef, ThreadView,
+)
 
 
+@runtime_checkable
+class PlatformLookupPort(Protocol):
+    """SDK-free metadata/ACL reads and read-only attempt reconciliation."""
+
+    async def fetch_channel(self, channel: ChannelRef) -> ChannelView:
+        """Return actual channel metadata, never a bridge ownership claim."""
+
+    async def fetch_thread(self, thread: ThreadRef) -> ThreadView:
+        """Return thread metadata with the observed starter ID or None."""
+
+    async def fetch_message(self, message: MessageRef) -> MessageView:
+        """Resolve exact content after a partial Gateway update if accessible."""
+
+    async def reconcile_create(
+        self, attempt: CreateAttempt
+    ) -> CreatedThread | ThreadRef | CreatedMessage | None:
+        """Read a proven receipt or unresolved None; never create or retry."""
+
+    async def check_permissions(
+        self, principal: AuthorRef, channel: ChannelRef,
+        actions: frozenset[PlatformAction],
+    ) -> dict[PlatformAction, PermissionResult]:
+        """Report unknown/unsupported distinctly; checks grant no permission."""
+
+    async def capabilities(self, channel: ChannelRef) -> PlatformCapabilities:
+        """Return platform feature support independently of member ACLs."""
+
+
+@runtime_checkable
+class PlatformDeliveryPort(Protocol):
+    """Physical copy writes; canonical AP state and retry intents belong to core."""
+
+    async def create_forum_thread(
+        self, forum: ChannelRef, content: ContentDocument, *, title: str,
+        presentation: DeliveryPresentation, attempt: CreateAttempt,
+    ) -> CreatedThread:
+        """Create a forum post and return observed thread/starter IDs."""
+
+    async def create_reply_thread(
+        self, root: MessageRef, *, title: str, attempt: CreateAttempt,
+    ) -> ThreadRef:
+        """Create or adopt a verified unique root-anchored message thread."""
+
+    async def send_message(
+        self, destination: ThreadRef | ChannelRef, content: ContentDocument, *,
+        reply_to: MessageRef | None, presentation: DeliveryPresentation,
+        attempt: CreateAttempt,
+    ) -> CreatedMessage:
+        """Send in one immediate container; forbid implicit cross-parent fallback."""
+
+    async def edit_message(self, message: MessageRef, content: ContentDocument) -> None:
+        """Edit a physical copy/starter, not a canonical object or thread name."""
+
+    async def delete_message(self, message: MessageRef) -> None:
+        """Delete a physical copy/starter, not its containing physical thread."""
+
+
+@runtime_checkable
+class PlatformAdapterPort(PlatformLookupPort, PlatformDeliveryPort, Protocol):
+    """One connector's combined read/write transport without SDK ownership."""
+
+    @property
+    def connector(self) -> ConnectorRef:
+        """Return immutable canonical connector metadata, without secrets."""
+
+
+@runtime_checkable
+class PlatformInboundSinkPort(Protocol):
+    """Single future Gateway ingress for normalized connector-scoped events."""
+
+    async def handle_platform_event(self, event: PlatformInboundEvent) -> None:
+        """Accept a typed notice; actual routing will be wired in Stage 03."""
+
+
+# MULTIPLATFORM_STAGE02_TEMP: Legacy Discord-only runtime ports stay until Stage 03/04 replaces direct Discord delivery binds with PlatformAdapterPort; remove after all affected callers use the new port.
 class DiscordDeliveryClientPort(Protocol):
     """Expose only Discord delivery operations used by community runtimes."""
 
