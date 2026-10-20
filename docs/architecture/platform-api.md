@@ -53,3 +53,20 @@ Stage 03 will wrap the existing Discord transport, translate the six events atom
 Regression contracts: `tests/test_platform_types.py` for type/identity/admission semantics; `tests/behavior/test_platform_api_stage02.py` for realistic physical copy actions against stateful transport fakes and Stage 01 claims; existing Discord/Personal Feed/ActivityPub suites for *unchanged* live behavior. Stage 02 adds no SQL schema, ActivityPub URL change, SDK client, webhook worker or new background task.
 
 References: [Python Protocol specification](https://typing.python.org/en/latest/spec/protocol.html); [Discord Gateway events](https://github.com/discord/discord-api-docs/blob/main/developers/events/gateway-events.mdx); [Discord Channel API (forum creation, thread from message)](https://github.com/discord/discord-api-docs/blob/main/developers/resources/channel.mdx); [Discord Message API (nonce, allowed mentions)](https://github.com/discord/discord-api-docs/blob/main/developers/resources/message.mdx); [ActivityPub W3C](https://www.w3.org/TR/activitypub/).
+
+## Stage 03 transport cutover (in progress)
+
+`src/discord_adapter.py` implements the physical Discord side of this contract.
+A borrowed SDK client resolves exact channels, parent-validated threads and
+messages, and checks current bot permissions before writes. Forum creation
+uses separate observed thread and starter message IDs; message sends suppress
+mentions. Webhook presentation and attachment uploads are explicitly refused,
+not silently replaced by bot/plain-text sends.
+
+Each connector-scoped `CreateAttempt` key is admitted through a process-local
+singleflight ledger. Matching concurrent calls share one receipt; a changed
+request is rejected, an uncertain result is retained without physical replay,
+and receipt capacity fails closed rather than evicting evidence. This registry
+is not a durable retry queue or a cross-restart deduplicator; that remains the
+Stage 04 boundary. Routing the existing domain runtimes through the adapter is
+not yet complete.

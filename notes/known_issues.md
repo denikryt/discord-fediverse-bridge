@@ -98,3 +98,14 @@ negative contract scenarios. Production bot callbacks are **not** yet wired to
 it, so historical direct SDK routing remains active until the DiscordAdapter
 and one normalized ingress replace it. These tests are contract checks, not
 live Discord Gateway integration.
+
+## Stage 03 Discord physical transport (in progress)
+
+- `DiscordAdapter` now implements the Stage 02 physical operations with strict
+  connector/parent validation, preflight ACL, bot-only presentation, and one
+  retained process-local CreateAttempt receipt per immutable request. Stateful
+  fake SDK tests cover duplicate POST prevention and actual forum/message effects.
+- The actual `BridgeBot` event handlers and domain fanout/workers have not yet
+  switched to the new adapter. SDK-dependent integration remains unverified
+  without installed `discord.py`; a process-local receipt ledger cannot provide
+  cross-process or cross-restart exactly-once delivery (Stage 04).

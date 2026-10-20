@@ -1,0 +1,567 @@
+"""Discord physical transport implementing the connector-scoped Stage 02 port.
+
+The SDK client is borrowed from BridgeBot, not owned here. Process-local create
+receipts prevent concurrent duplicate POSTs but are not a durable outbox.
+"""
+
+from __future__ import annotations
+
+import asyncio
+from dataclasses import dataclass
+from typing import Awaitable, Callable
+
+from .platform_types import (
+    AuthorRef, ChannelRef, ChannelView, ConnectorRef, ContentDocument, CreateAttempt,
+    CreatedMessage, CreatedThread, DeliveryPresentation, MessageRef, MessageView,
+    PlatformAction, PlatformCapabilities, PlatformOperationError, PermissionResult,
+    ThreadRef, ThreadView, validate_create_attempt, validate_created_receipt,
+    validate_message_reply,
+)
+
+
+@dataclass
+class _CreateFlight:
+    """An immutable request signature plus its one possibly executing attempt."""
+
+    fingerprint: tuple[object, ...]
+    future: asyncio.Future[object]
+
+
+def _physical_identity(value: object) -> object:
+    """Retain known channel metadata hidden by ChannelRef equality semantics."""
+    if isinstance(value, ChannelRef):
+        return (value.connector_key, value.external_channel_id, value.kind,
+                value.external_guild_id)
+    if isinstance(value, ThreadRef):
+        return (_physical_identity(value.channel), value.external_thread_id)
+    if isinstance(value, MessageRef):
+        return (value.connector_key, value.external_container_id,
+                value.external_message_id)
+    return value
+
+
+class DiscordAdapter:
+    """Own all physical Discord reads/writes, with no canonical federation state."""
+
+    def __init__(self, *, connector: ConnectorRef, bot: object,
+                 max_create_attempts: int = 100_000) -> None:
+        """Borrow a Discord client and retain attempts for the process lifetime."""
+        if connector.platform != 'discord' or not 0 < max_create_attempts:
+            raise ValueError('DiscordAdapter requires a Discord connector and a positive capacity')
+        self._connector = connector
+        self._bot = bot
+        self._max_create_attempts = max_create_attempts
+        self._create_lock = asyncio.Lock()
+        self._creates: dict[tuple[str, str], _CreateFlight] = {}
+        self._io_admission_open = True
+        self._ingress_admission_open = True
+        self._ingress_tasks: set[asyncio.Task] = set()
+
+    @property
+    def connector(self) -> ConnectorRef:
+        """Return the immutable physical connector, not an ActivityPub identity."""
+        return self._connector
+
+    def _check_connector(self, connector_key: str) -> None:
+        """Reject cross-connector identity before looking up any SDK object."""
+        if connector_key != self.connector.key:
+            raise PlatformOperationError('invalid_request', 'wrong physical connector')
+
+    @staticmethod
+    def _validate_outbound_content(content: ContentDocument) -> None:
+        """Reject uploads and invalid message sizes without silently dropping data."""
+        if not isinstance(content, ContentDocument):
+            raise PlatformOperationError('invalid_request', 'expected neutral content')
+        if content.attachments:
+            # MULTIPLATFORM_STAGE03_TEMP_ATTACHMENTS: Preserve an explicit refusal for unsupported attachment delivery; remove only when verified Discord upload/download and size/SSRF policy exists at the adapter boundary.
+            raise PlatformOperationError('unsupported', 'Discord attachment transport is not verified')
+        if not content.body:
+            raise PlatformOperationError('invalid_request', 'empty Discord message body')
+        if len(content.body) > 2000:
+            raise PlatformOperationError('invalid_request', 'Discord message exceeds limit')
+
+    @staticmethod
+    def _validate_presentation(presentation: DeliveryPresentation) -> None:
+        """Reject a presentation mode this adapter cannot physically honour."""
+        if not isinstance(presentation, DeliveryPresentation):
+            raise PlatformOperationError('invalid_request', 'invalid presentation')
+        if presentation.mode == 'webhook':
+            # MULTIPLATFORM_STAGE03_TEMP_NO_WEBHOOK: Discord physical delivery is bot-only until a verified webhook send/edit/delete implementation can preserve explicit requested delivery mode without downgrade.
+            raise PlatformOperationError('unsupported', 'Discord webhook send not implemented')
+
+    async def _begin_create_attempt(
+        self, attempt: CreateAttempt, *, operation: str,
+        destination: ChannelRef | ThreadRef | MessageRef,
+        content: ContentDocument | None, presentation: DeliveryPresentation | None,
+        title: str | None, reply_to: MessageRef | None,
+        send: Callable[[], Awaitable[CreatedMessage | CreatedThread | ThreadRef]],
+    ) -> CreatedMessage | CreatedThread | ThreadRef:
+        """Share one physical POST and its verified/ambiguous outcome by immutable key.
+
+        Owner cancellation leaves an unknown outcome; a waiting caller can be
+        cancelled without cancelling the owner or discarding its receipt.
+        """
+        validate_create_attempt(attempt, operation, destination)
+        self._check_connector(attempt.connector_key)
+        signature = (attempt.connector_key, operation, _physical_identity(destination),
+                     title, content, _physical_identity(reply_to), presentation)
+        key = (attempt.connector_key, attempt.key)
+        async with self._create_lock:
+            existing = self._creates.get(key)
+            if existing is not None:
+                if existing.fingerprint != signature:
+                    raise PlatformOperationError('invalid_request', 'create attempt payload changed')
+                owner = False
+                flight = existing
+            else:
+                if not self._io_admission_open:
+                    raise PlatformOperationError('unavailable', 'adapter is closing')
+                if len(self._creates) >= self._max_create_attempts:
+                    # MULTIPLATFORM_STAGE03_TEMP_CREATE_ATTEMPT_CAPACITY: Fail closed when process-local verified or unknown create receipts fill the bounded registry; Stage 04 must replace this with durable keyed intent and receipt lookup before permitting more creates.
+                    raise PlatformOperationError('unavailable', 'create receipt registry full')
+                flight = _CreateFlight(signature, asyncio.get_running_loop().create_future())
+                self._creates[key] = flight
+                owner = True
+        if not owner:
+            outcome = await asyncio.shield(flight.future)
+            if isinstance(outcome, PlatformOperationError):
+                raise outcome
+            return outcome
+        try:
+            receipt = await send()
+            validate_created_receipt(attempt, receipt, presentation=presentation)
+        except asyncio.CancelledError:
+            # The SDK POST may already have committed. Never interpret task
+            # cancellation as proof that Discord did not create the copy.
+            flight.future.set_result(PlatformOperationError('unknown_delivery'))
+            raise
+        except PlatformOperationError as exc:
+            if exc.reason in ('invalid_request', 'forbidden', 'not_found', 'unsupported'):
+                # Only explicit pre-send failures may be retried with this key.
+                # Physical send helpers map ambiguous HTTP failures to unknown.
+                async with self._create_lock:
+                    self._creates.pop(key, None)
+            flight.future.set_result(exc)
+            raise
+        except Exception as exc:
+            unknown = PlatformOperationError('unknown_delivery', str(exc))
+            flight.future.set_result(unknown)
+            raise unknown from exc
+        else:
+            flight.future.set_result(receipt)
+            return receipt
+
+    async def reconcile_create(
+        self, attempt: CreateAttempt,
+    ) -> CreatedThread | ThreadRef | CreatedMessage | None:
+        """Return only receipts proven by this process; never perform a POST."""
+        self._check_connector(attempt.connector_key)
+        async with self._create_lock:
+            flight = self._creates.get((attempt.connector_key, attempt.key))
+        if flight is not None:
+            if not flight.future.done():
+                return None
+            outcome = flight.future.result()
+            if not isinstance(outcome, PlatformOperationError):
+                return outcome
+        # MULTIPLATFORM_STAGE03_TEMP_UNKNOWN_CREATE: Discord has no verified durable receipt lookup for these attempts; return unresolved without replay until Stage 04 owns durable intents and receipt reconciliation.
+        return None
+
+    @staticmethod
+    def _sdk() -> object:
+        """Import discord.py solely at the transport boundary, not in core."""
+        import discord  # pylint: disable=import-outside-toplevel
+        return discord
+
+    @staticmethod
+    def _id(value: str) -> int:
+        """Resolve the Discord-only snowflake representation without guessing IDs."""
+        if not value.isdecimal() or int(value) <= 0:
+            raise PlatformOperationError('invalid_request', 'invalid Discord snowflake')
+        return int(value)
+
+    @staticmethod
+    def _read_error(exc: Exception) -> PlatformOperationError:
+        """Translate SDK read exceptions without leaking transport-specific types."""
+        kind = type(exc).__name__
+        if kind == 'NotFound':
+            return PlatformOperationError('not_found', str(exc))
+        if kind == 'Forbidden':
+            return PlatformOperationError('forbidden', str(exc))
+        if getattr(exc, 'status', None) == 429:
+            return PlatformOperationError('rate_limited', str(exc))
+        return PlatformOperationError('unavailable', str(exc))
+
+    def _validate_channel(self, expected: ChannelRef, physical: object) -> ChannelRef:
+        """Check ID, guild and channel kind against independently observed SDK data."""
+        self._check_connector(expected.connector_key)
+        if str(getattr(physical, 'id', '')) != expected.external_channel_id:
+            raise PlatformOperationError('invalid_request', 'fetched channel identity mismatch')
+        discord = self._sdk()
+        if isinstance(physical, discord.ForumChannel):
+            kind = 'forum'
+        elif isinstance(physical, discord.TextChannel):
+            kind = 'announcement' if physical.is_news() else 'text'
+        else:
+            raise PlatformOperationError('unsupported', 'unsupported Discord channel kind')
+        guild = getattr(physical, 'guild', None)
+        guild_id = str(guild.id) if guild is not None else None
+        if (expected.kind not in ('unknown', kind) or
+            expected.external_guild_id is not None and expected.external_guild_id != guild_id):
+            raise PlatformOperationError('invalid_request', 'Discord channel metadata conflicts')
+        return ChannelRef(self.connector.key, str(physical.id), kind, guild_id)
+
+    async def _get_sdk_channel(self, channel: ChannelRef) -> object:
+        """Resolve exact physical channel using cache then fetch with read-only checks."""
+        self._check_connector(channel.connector_key)
+        channel_id = self._id(channel.external_channel_id)
+        try:
+            target = self._bot.get_channel(channel_id)
+            if target is None:
+                target = await self._bot.fetch_channel(channel_id)
+        except Exception as exc:
+            raise self._read_error(exc) from exc
+        self._validate_channel(channel, target)
+        return target
+
+    async def fetch_channel(self, channel: ChannelRef) -> ChannelView:
+        """Expose verified neutral channel metadata without DB ownership claims."""
+        sdk_channel = await self._get_sdk_channel(channel)
+        return ChannelView(self._validate_channel(channel, sdk_channel),
+                           getattr(sdk_channel, 'name', None))
+
+    async def _get_sdk_thread(self, thread: ThreadRef) -> object:
+        """Reject a same-ID thread under the wrong parent or guild."""
+        self._check_connector(thread.connector_key)
+        target_id = self._id(thread.external_thread_id)
+        try:
+            target = self._bot.get_channel(target_id)
+            if target is None:
+                target = await self._bot.fetch_channel(target_id)
+        except Exception as exc:
+            raise self._read_error(exc) from exc
+        discord = self._sdk()
+        if not isinstance(target, discord.Thread):
+            raise PlatformOperationError('invalid_request', 'destination is not a Discord thread')
+        if str(getattr(target, 'parent_id', '')) != thread.channel.external_channel_id:
+            raise PlatformOperationError('invalid_request', 'thread under a different parent')
+        # Resolve the parent independently: a stale Thread.parent cache alone
+        # cannot authorize sending through an unrelated community surface.
+        await self._get_sdk_channel(thread.channel)
+        guild = getattr(target, 'guild', None)
+        if (thread.channel.external_guild_id is not None and
+            (guild is None or str(guild.id) != thread.channel.external_guild_id)):
+            raise PlatformOperationError('invalid_request', 'thread guild does not match')
+        return target
+
+    async def fetch_thread(self, thread: ThreadRef) -> ThreadView:
+        """Return verified parent and only independently observed starter identity."""
+        sdk_thread = await self._get_sdk_thread(thread)
+        parent = self._validate_channel(thread.channel, await self._get_sdk_channel(thread.channel))
+        actual_thread = ThreadRef(parent, str(sdk_thread.id))
+        starter = getattr(sdk_thread, 'starter_message', None)
+        observed = (MessageRef(self.connector.key, str(sdk_thread.id), str(starter.id))
+                    if starter is not None and getattr(starter, 'id', None) is not None else None)
+        return ThreadView(actual_thread, getattr(sdk_thread, 'name', None), observed,
+                          'forum' if parent.kind == 'forum' else 'message')
+
+    async def _get_message(self, message: MessageRef) -> object:
+        """Read one exact message from its immediate container, never its forum."""
+        self._check_connector(message.connector_key)
+        container_id = self._id(message.external_container_id)
+        message_id = self._id(message.external_message_id)
+        try:
+            container = self._bot.get_channel(container_id)
+            if container is None:
+                container = await self._bot.fetch_channel(container_id)
+            if isinstance(container, self._sdk().Thread):
+                # A physical thread must still have an independently resolvable parent.
+                parent_id = getattr(container, 'parent_id', None)
+                if parent_id is None:
+                    raise PlatformOperationError('invalid_request', 'thread has no parent')
+                await self._get_sdk_thread(ThreadRef(
+                    ChannelRef(self.connector.key, str(parent_id)), str(container_id)))
+            else:
+                self._validate_channel(ChannelRef(self.connector.key, str(container_id)), container)
+            return await container.fetch_message(message_id)
+        except PlatformOperationError:
+            raise
+        except Exception as exc:
+            raise self._read_error(exc) from exc
+
+    def _author(self, physical: object) -> AuthorRef | None:
+        """Translate observed Discord author without fabricating bridge ownership."""
+        user = getattr(physical, 'author', None)
+        if user is None or getattr(user, 'id', None) is None:
+            return None
+        is_webhook = getattr(physical, 'webhook_id', None) is not None
+        is_bot = bool(getattr(user, 'bot', False))
+        owned = (getattr(getattr(self._bot, 'user', None), 'id', None) == user.id
+                 and not is_webhook)
+        return AuthorRef(self.connector.key, str(user.id),
+                         'webhook' if is_webhook else 'bot' if is_bot else 'human',
+                         getattr(user, 'display_name', '') or '', bool(owned and is_bot))
+
+    async def fetch_message(self, message: MessageRef) -> MessageView:
+        """Resolve actual physical content and author for missing Gateway fields."""
+        physical = await self._get_message(message)
+        edited_at = getattr(physical, 'edited_at', None)
+        return MessageView(message, self._author(physical),
+                           ContentDocument(str(getattr(physical, 'content', ''))), edited_at)
+
+    async def capabilities(self, channel: ChannelRef) -> PlatformCapabilities:
+        """Report platform features independently of current member permissions."""
+        actual = (await self.fetch_channel(channel)).channel
+        return PlatformCapabilities(forum_posts=actual.kind == 'forum',
+                                    message_threads=actual.kind in ('text', 'announcement'),
+                                    thread_replies=actual.kind in ('text', 'announcement', 'forum'),
+                                    message_edit_delete=True)
+
+    async def check_permissions(
+        self, principal: AuthorRef, channel: ChannelRef,
+        actions: frozenset[PlatformAction],
+    ) -> dict[PlatformAction, PermissionResult]:
+        """Return unknown for unverified principals, not a false ACL grant."""
+        self._check_connector(principal.connector_key)
+        target = await self._get_sdk_channel(channel)
+        result: dict[PlatformAction, PermissionResult] = {}
+        guild = getattr(target, 'guild', None)
+        member = (guild.get_member(self._id(principal.external_actor_id))
+                  if guild is not None and principal.external_actor_id is not None else None)
+        permissions = target.permissions_for(member) if member is not None else None
+        mapping = {
+            'view_channel': 'view_channel', 'read_history': 'read_message_history',
+            'create_forum_post': 'send_messages',
+            'start_message_thread': 'create_public_threads',
+            'send_message': 'send_messages',
+            'edit_message': 'manage_messages', 'delete_message': 'manage_messages',
+        }
+        for action in actions:
+            permission = mapping.get(action)
+            if permission is None:
+                result[action] = 'unsupported'
+            elif ((action == 'create_forum_post' and channel.kind != 'forum') or
+                  (action == 'start_message_thread' and channel.kind == 'forum')):
+                result[action] = 'unsupported'
+            elif permissions is None:
+                result[action] = 'unknown'
+            else:
+                result[action] = ('allowed' if bool(getattr(permissions, permission, False))
+                                  else 'denied')
+        return result
+
+    def _bot_principal(self) -> AuthorRef:
+        """Identify the authenticated bot for write preflight without impersonation."""
+        user = getattr(self._bot, 'user', None)
+        if user is None or getattr(user, 'id', None) is None:
+            raise PlatformOperationError('unavailable', 'Discord bot identity not ready')
+        return AuthorRef(self.connector.key, str(user.id), 'bot',
+                         getattr(user, 'display_name', '') or '', True)
+
+    async def _require_bot_permission(self, channel: ChannelRef, action: PlatformAction,
+                                      *, sdk_target: object | None = None) -> None:
+        """Prove current bot permissions before transmitting a physical write."""
+        bot = self._bot_principal()
+        target = sdk_target or await self._get_sdk_channel(channel)
+        guild = getattr(target, 'guild', None)
+        member = guild.get_member(self._id(bot.external_actor_id)) if guild is not None else None
+        if member is None:
+            raise PlatformOperationError('forbidden', 'bot guild membership unresolved')
+        permissions = target.permissions_for(member)
+        flag = {'create_forum_post': 'send_messages',
+                'start_message_thread': 'create_public_threads',
+                'send_message': 'send_messages_in_threads' if hasattr(target, 'parent_id') else 'send_messages',
+                'edit_message': 'manage_messages', 'delete_message': 'manage_messages'}[action]
+        if not getattr(permissions, flag, False):
+            raise PlatformOperationError('forbidden', f'Discord permission missing: {flag}')
+
+    async def create_forum_thread(
+        self, forum: ChannelRef, content: ContentDocument, *, title: str,
+        presentation: DeliveryPresentation, attempt: CreateAttempt,
+    ) -> CreatedThread:
+        """Create one forum post and return observed, distinct thread/starter IDs."""
+        validate_create_attempt(attempt, 'forum_thread', forum)
+        self._validate_outbound_content(content)
+        self._validate_presentation(presentation)
+        if not title.strip() or len(title) > 100:
+            raise PlatformOperationError('invalid_request', 'invalid Discord forum title')
+
+        async def physical() -> CreatedThread:
+            """Resolve and authorize the forum before the sole HTTP write."""
+            channel = await self._get_sdk_channel(forum)
+            actual = self._validate_channel(forum, channel)
+            if actual.kind != 'forum':
+                raise PlatformOperationError('unsupported', 'not a forum')
+            await self._require_bot_permission(actual, 'create_forum_post', sdk_target=channel)
+            if bool(getattr(channel, 'flags', None) and getattr(channel.flags, 'require_tag', False)):
+                raise PlatformOperationError('invalid_request', 'forum requires an explicit tag')
+            try:
+                discord = self._sdk()
+                response = await channel.create_thread(
+                    name=title, content=content.body, allowed_mentions=discord.AllowedMentions.none())
+            except Exception as exc:
+                raise PlatformOperationError('unknown_delivery', str(exc)) from exc
+            thread = getattr(response, 'thread', None) or (response[0] if isinstance(response, tuple) else None)
+            starter = getattr(response, 'message', None) or (response[1] if isinstance(response, tuple) and len(response) > 1 else None)
+            if thread is None or starter is None or getattr(starter, 'id', None) is None:
+                raise PlatformOperationError('unknown_delivery', 'Discord omitted thread/starter receipt')
+            if str(getattr(thread, 'parent_id', '')) != actual.external_channel_id:
+                raise PlatformOperationError('unknown_delivery', 'Discord forum thread parent mismatch')
+            return CreatedThread(ThreadRef(actual, str(thread.id)),
+                                 MessageRef(self.connector.key, str(thread.id), str(starter.id)), 'bot')
+
+        return await self._begin_create_attempt(
+            attempt, operation='forum_thread', destination=forum,
+            content=content, presentation=presentation, title=title, reply_to=None,
+            send=physical,
+        )
+
+    async def create_reply_thread(self, root: MessageRef, *, title: str,
+                                  attempt: CreateAttempt) -> ThreadRef:
+        """Start a thread attached to an exact text/announcement root message."""
+        validate_create_attempt(attempt, 'reply_thread', root)
+        if not title.strip():
+            raise PlatformOperationError('invalid_request', 'thread title is empty')
+
+        async def physical() -> ThreadRef:
+            """Only adopt a root-anchored reply thread with a verified parent."""
+            channel = ChannelRef(self.connector.key, root.external_container_id)
+            view = await self.fetch_channel(channel)
+            if view.channel.kind not in ('text', 'announcement'):
+                raise PlatformOperationError('unsupported', 'root is not a text channel')
+            sdk_root = await self._get_message(root)
+            await self._require_bot_permission(view.channel, 'start_message_thread')
+            try:
+                thread = await sdk_root.create_thread(name=title[:90].replace('@', '@\u200b'))
+            except Exception as exc:
+                # A failed create may have succeeded on Discord. Never guess by
+                # a thread name or send a second POST from this error path.
+                raise PlatformOperationError('unknown_delivery', str(exc)) from exc
+            if (str(getattr(thread, 'parent_id', '')) != view.channel.external_channel_id
+                or str(getattr(thread, 'id', '')) != root.external_message_id):
+                raise PlatformOperationError('unknown_delivery', 'unverified root/thread association')
+            return ThreadRef(view.channel, str(thread.id))
+
+        return await self._begin_create_attempt(
+            attempt, operation='reply_thread', destination=root, content=None,
+            presentation=None, title=title, reply_to=None, send=physical,
+        )
+
+    async def send_message(
+        self, destination: ThreadRef | ChannelRef, content: ContentDocument, *,
+        reply_to: MessageRef | None, presentation: DeliveryPresentation,
+        attempt: CreateAttempt,
+    ) -> CreatedMessage:
+        """Send a single physical message without implicit reply-parent fallback."""
+        validate_create_attempt(attempt, 'message', destination)
+        validate_message_reply(destination, reply_to)
+        self._validate_outbound_content(content)
+        self._validate_presentation(presentation)
+
+        async def physical() -> CreatedMessage:
+            """Preflight exact channel/thread, membership and reference before POST."""
+            if isinstance(destination, ThreadRef):
+                sdk_target = await self._get_sdk_thread(destination)
+                parent = destination.channel
+            else:
+                sdk_target = await self._get_sdk_channel(destination)
+                parent = destination
+            await self._require_bot_permission(parent, 'send_message', sdk_target=sdk_target)
+            discord = self._sdk()
+            kwargs: dict[str, object] = {
+                'content': content.body,
+                'allowed_mentions': discord.AllowedMentions.none(),
+            }
+            if reply_to is not None:
+                kwargs['reference'] = discord.MessageReference(
+                    message_id=self._id(reply_to.external_message_id),
+                    channel_id=self._id(reply_to.external_container_id), fail_if_not_exists=True)
+            try:
+                created = await sdk_target.send(**kwargs)
+            except Exception as exc:
+                raise PlatformOperationError('unknown_delivery', str(exc)) from exc
+            container = (destination.external_thread_id if isinstance(destination, ThreadRef)
+                         else destination.external_channel_id)
+            if str(getattr(getattr(created, 'channel', None), 'id', '')) != container:
+                raise PlatformOperationError('unknown_delivery', 'Discord returned a different container')
+            return CreatedMessage(MessageRef(self.connector.key, container, str(created.id)), 'bot')
+
+        return await self._begin_create_attempt(
+            attempt, operation='message', destination=destination,
+            content=content, presentation=presentation, title=None,
+            reply_to=reply_to, send=physical,
+        )
+
+    async def _require_message_mutation_permission(self, message: MessageRef, sdk_message: object) -> None:
+        """Verify bot ownership or an explicit manage-messages grant before mutation."""
+        bot = self._bot_principal()
+        author = getattr(sdk_message, 'author', None)
+        if author is not None and str(getattr(author, 'id', '')) == bot.external_actor_id:
+            return
+        container = getattr(sdk_message, 'channel', None)
+        guild = getattr(container, 'guild', None)
+        member = guild.get_member(self._id(bot.external_actor_id)) if guild is not None else None
+        perms = container.permissions_for(member) if member is not None else None
+        if perms is None or not bool(getattr(perms, 'manage_messages', False)):
+            raise PlatformOperationError('forbidden', 'message is not bot-owned and manage_messages is missing')
+
+    async def edit_message(self, message: MessageRef, content: ContentDocument) -> None:
+        """Edit an exact physical message; never mutate its containing thread."""
+        self._validate_outbound_content(content)
+        sdk_message = await self._get_message(message)
+        await self._require_message_mutation_permission(message, sdk_message)
+        try:
+            discord = self._sdk()
+            await sdk_message.edit(content=content.body, allowed_mentions=discord.AllowedMentions.none())
+        except Exception as exc:
+            raise self._read_error(exc) from exc
+
+    async def delete_message(self, message: MessageRef) -> None:
+        """Delete an exact physical message, not a thread or canonical object."""
+        sdk_message = await self._get_message(message)
+        await self._require_message_mutation_permission(message, sdk_message)
+        try:
+            await sdk_message.delete()
+        except Exception as exc:
+            raise self._read_error(exc) from exc
+
+    def enter_ingress(self) -> bool:
+        """Register a callback task synchronously before it touches shared state."""
+        if not self._ingress_admission_open:
+            return False
+        task = asyncio.current_task()
+        if task is None:
+            raise RuntimeError('Gateway ingress must execute within an asyncio Task')
+        self._ingress_tasks.add(task)
+        return True
+
+    def leave_ingress(self) -> None:
+        """Unregister the current callback even when it was cancelled."""
+        task = asyncio.current_task()
+        if task is not None:
+            self._ingress_tasks.discard(task)
+
+    def close_ingress_admission(self) -> None:
+        """Reject callbacks scheduled after shutdown, including late on_ready."""
+        self._ingress_admission_open = False
+
+    async def drain_ingress(self) -> None:
+        """Await all independently spawned Gateway tasks before runtime closes."""
+        self.close_ingress_admission()
+        current = asyncio.current_task()
+        tasks = [task for task in self._ingress_tasks if task is not current and not task.done()]
+        for task in tasks:
+            task.cancel()
+        if tasks:
+            await asyncio.gather(*tasks, return_exceptions=True)
+
+    async def quiesce(self) -> None:
+        """Close physical create admission after Gateway ingress was drained."""
+        if self._ingress_admission_open or any(not t.done() for t in self._ingress_tasks):
+            raise RuntimeError('drain Gateway ingress before Discord SDK I/O')
+        self._io_admission_open = False
+        # Any remaining owner creates are part of the caller-owned runtime and
+        # must complete/cancel before the borrowed SDK client is destroyed.
+        pending = [entry.future for entry in self._creates.values() if not entry.future.done()]
+        if pending:
+            await asyncio.gather(*(asyncio.shield(f) for f in pending))
