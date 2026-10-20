@@ -15,6 +15,11 @@ This document is a short, feature-oriented index of the test suite. It helps mai
 - SQLite UTC roundtrip, sequential ActivityPub Updates and invalid naive timestamp admission — `tests/behavior/test_personal_feed_stage8_conversations.py`.
 - Static Compose gateway process secret allowlist — `fedify-gateway/src/test-docker-contract.ts`.
 
+## Stage 03 Personal Feed root create ingress (Checkpoint 21)
+
+- A bound owner text-channel Create traverses adapter -> `PlatformEventIngress` -> `DiscordEventRouter` -> real SQLite publication, with deterministic AP identity and original timestamp. Wrong connector, unknown author, moved binding, absent source time, forum Create and unsupported attachments have no canonical publish side effect — `tests/test_stage03_personal_feed_created_ingress.py`.
+- Existing Stage 7 duplicate-root and announcement-channel tests remain the behavioral regression references — `tests/behavior/test_personal_feed_stage7_root_publication.py`.
+
 ## Stage 03 Gateway ingress transition
 
 - Normalized raw edit/delete -> single domain-mutation sink, foreign-connector rejection, thread mutation no-op, unbound create rejection and real adapter admission — `tests/test_stage03_platform_event_ingress.py`.

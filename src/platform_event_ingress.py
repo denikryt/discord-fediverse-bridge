@@ -8,12 +8,19 @@ neutral DTOs; an unbound create must not be acknowledged or silently dropped.
 from __future__ import annotations
 
 import logging
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Protocol
 
 from .platform_types import (
     MessageCreated, MessageDeleted, MessageUpdated, PlatformInboundEvent,
     PlatformOperationError, ThreadCreated, ThreadDeleted, ThreadUpdated,
 )
+
+class PlatformCreateRouter(Protocol):
+    """Consume neutral authored Create events through existing domain services."""
+
+    async def handle_platform_message_create(self, event: MessageCreated) -> object:
+        """Route a trusted, typed root to the owning canonical publisher."""
+
 
 if TYPE_CHECKING:
     from .runtime_ports import PlatformAdapterPort
@@ -33,10 +40,12 @@ class PlatformEventIngress:
     def __init__(
         self, *, adapter: PlatformAdapterPort,
         mutations: DiscordMessageMutationHandler,
+        creates: PlatformCreateRouter | None = None,
     ) -> None:
         """Bind one physical connector to one owner of message mutation effects."""
         self.adapter = adapter
         self.mutations = mutations
+        self.creates = creates
 
     async def handle_platform_event(self, event: PlatformInboundEvent) -> None:
         """Reject foreign events before routing or reading persisted mappings."""
@@ -59,7 +68,9 @@ class PlatformEventIngress:
                 'Gateway %s for thread %s has no canonical mutation owner',
                 type(event).__name__, event.thread.external_thread_id,
             )
+        elif isinstance(event, MessageCreated) and self.creates is not None:
+            await self.creates.handle_platform_message_create(event)
         else:
-            # There must be no silent Create loss while the canonical post and
-            # comment handlers still consume SDK objects in the old path.
+            # Thread and reply Create still require explicit typed domain
+            # bindings: never silently acknowledge an unpublished Create.
             raise RuntimeError('normalized create ingress is not bound')

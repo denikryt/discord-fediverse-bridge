@@ -12,6 +12,7 @@ from .content_sync.persistence import (
     persist_publish_artifacts,
 )
 from .fedify_gateway_client import RenderPersonalFeedRequest
+from .platform_types import MessageCreated, PlatformOperationError
 from .activitypub_identity_urls import (
     build_user_create_post_activity_id,
     build_user_post_object_id,
@@ -55,10 +56,61 @@ class PersonalFeedPublisher:
         self, *, message: object, binding: object
     ) -> PersonalFeedPublishResult:
         """Publish one currently bound owner-authored ordinary text-channel root."""
-        guild_id = getattr(getattr(message, "guild", None), "id", None)
-        channel_id = getattr(getattr(message, "channel", None), "id", None)
-        message_id = getattr(message, "id", None)
-        author_id = str(getattr(getattr(message, "author", None), "id", ""))
+        return await self._publish_root_fields(
+            guild_id=getattr(getattr(message, "guild", None), "id", None),
+            channel_id=getattr(getattr(message, "channel", None), "id", None),
+            message_id=getattr(message, "id", None),
+            author_id=str(getattr(getattr(message, "author", None), "id", "")),
+            body=str(getattr(message, "content", "")),
+            created_at=getattr(message, "created_at", None),
+            binding=binding,
+        )
+
+    async def publish_normalized_root(
+        self, *, event: MessageCreated, binding: object,
+    ) -> PersonalFeedPublishResult:
+        """Publish a verified physical root without passing Discord SDK into domain logic.
+
+        This conversion is intentionally strict: legacy integer persistence
+        belongs only to discord-primary, never to another connector with a
+        coincidentally numeric external ID.
+        """
+        if event.connector_key != 'discord-primary':
+            raise PlatformOperationError('invalid_request', 'personal feed requires Discord connector')
+        if (event.parent_channel is None or event.parent_channel.kind not in ('text', 'announcement')
+            or event.thread_context is not None
+            or event.message.external_container_id != event.parent_channel.external_channel_id):
+            return PersonalFeedPublishResult('ignored', 'not_root_text_channel')
+        if event.author.kind != 'human' or event.author.external_actor_id is None:
+            return PersonalFeedPublishResult('ignored', 'not_human_author')
+        if event.external_guild_id is None:
+            return PersonalFeedPublishResult('ignored', 'missing_guild')
+        # This is the one Discord-to-legacy projection at the normalized
+        # Personal Feed entrance. Never accept ambiguous or foreign IDs.
+        from .discord_legacy_projection import discord_id_to_legacy_int
+        try:
+            guild_id = int(event.external_guild_id)
+            if guild_id <= 0 or not event.external_guild_id.isdecimal():
+                raise ValueError('invalid guild ID')
+            channel_id = discord_id_to_legacy_int(event.parent_channel)
+            message_id = discord_id_to_legacy_int(event.message)
+        except (ValueError, PlatformOperationError):
+            return PersonalFeedPublishResult('ignored', 'invalid_discord_identity')
+        if event.created_at is None:
+            # received_at is a diagnostic clock, not the source published time.
+            return PersonalFeedPublishResult('ignored', 'missing_source_timestamp')
+        return await self._publish_root_fields(
+            guild_id=guild_id, channel_id=channel_id, message_id=message_id,
+            author_id=event.author.external_actor_id,
+            body=event.content.body, created_at=event.created_at, binding=binding,
+        )
+
+    async def _publish_root_fields(
+        self, *, guild_id: int | None, channel_id: int | None,
+        message_id: int | None, author_id: str, body: str,
+        created_at: object, binding: object,
+    ) -> PersonalFeedPublishResult:
+        """Apply owner authorization and deterministic persistence to one source root."""
         if not all(
             isinstance(value, int) and value > 0
             for value in (guild_id, channel_id, message_id)
@@ -69,7 +121,6 @@ class PersonalFeedPublisher:
             return PersonalFeedPublishResult("ignored", "binding_changed")
         if author_id != str(current.discord_user_id):
             return PersonalFeedPublishResult("ignored", "not_owner")
-        body = str(getattr(message, "content", ""))
         if body.strip() == "":
             return PersonalFeedPublishResult("ignored", "empty_content")
         user = self.database.users.get_user_by_discord_user_id(author_id)
@@ -92,7 +143,9 @@ class PersonalFeedPublisher:
         activity_id = build_user_create_post_activity_id(
             origin=self.fedify_origin, username=username, activity_id=operation_id
         )
-        created_at = getattr(message, "created_at").astimezone(timezone.utc)
+        if created_at is None or getattr(created_at, 'tzinfo', None) is None or created_at.utcoffset() is None:
+            return PersonalFeedPublishResult('ignored', 'missing_source_timestamp')
+        created_at = created_at.astimezone(timezone.utc)
         published_at = created_at.isoformat(timespec="milliseconds").replace(
             "+00:00", "Z"
         )

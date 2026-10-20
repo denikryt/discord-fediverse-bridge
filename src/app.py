@@ -262,6 +262,7 @@ def _build_live_runtime(settings: Settings, deployment_lease: FileLock) -> Runti
         bot.set_message_mutation_handler(message_mutation_handler)
         discord_adapter.bind_ingress_sink(PlatformEventIngress(
             adapter=discord_adapter, mutations=message_mutation_handler,
+            creates=event_router,
         ))
         # MULTIPLATFORM_STAGE02_TEMP: Production still binds BridgeBot directly into Discord fanout and runtimes; Stage 03/04 must register a real DiscordAdapter and replace these binds without a default-Discord fallback.
         discord_fanout = DiscordFanout(

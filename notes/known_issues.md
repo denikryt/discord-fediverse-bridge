@@ -222,3 +222,8 @@ cutover has yet been performed. Two targeted positive/negative tests pass.
 - Definitive Personal Feed Discord preflight errors (`invalid_request`,
   `unsupported`) now stop retries using existing failed state; transient
   `unavailable` still schedules recovery.
+
+## Stage 03 Personal Feed root DTO ingress (Checkpoint 21, 2026-10-19)
+
+- Bound text/announcement roots now pass through DiscordAdapter, the single typed ingress and the owner-verified PersonalFeedPublisher. Production forum starters and thread replies still use legacy SDK-shaped create routes; submitting those through typed ingress fails visibly. The legacy `publish_root(message=SDK, binding=...)` entry remains for tests and other direct callers until the remaining Create cutover is complete; it shares the same persistent publish core.
+- Original Discord source timestamp and owner binding remain required. Unsupported attachments are rejected explicitly. Focused real SQLite tests pass, while full installed-SDK tests remain blocked by missing dependencies.

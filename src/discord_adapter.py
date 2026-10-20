@@ -126,6 +126,27 @@ class DiscordAdapter:
             self.connector.key, owned_bot_id=str(actor) if actor is not None else None,
         )
 
+    async def ingest_message_created(self, message: object) -> None:
+        """Admit a verified text/announcement root through one normalized sink.
+
+        A genuine parentless Discord root must have an observed channel kind;
+        a cached thread with missing parent is never guessed to be a root.
+        """
+        if self._sink is None:
+            raise RuntimeError('Discord normalized ingress is not bound')
+        # Root publication currently supports text only; dropping attached
+        # media on conversion would silently change the author's payload.
+        if getattr(message, 'attachments', ()):
+            raise PlatformOperationError('unsupported', 'Discord root attachments require supported transport')
+        physical = getattr(message, 'channel', None)
+        channel = ChannelRef(self.connector.key, str(getattr(physical, 'id', '')))
+        verified = self._validate_channel(channel, physical)
+        if verified.kind not in ('text', 'announcement'):
+            raise PlatformOperationError('invalid_request', 'not a Discord root text channel')
+        event = self._normalizer().message_created(message, channel_kind=verified.kind)
+        if event is not None:
+            await self._sink.handle_platform_event(event)
+
     async def ingest_raw_message_edit(self, payload: object) -> None:
         """Normalize one raw edit and deliver it exactly once to typed ingress."""
         if self._sink is None:

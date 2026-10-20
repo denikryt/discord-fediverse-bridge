@@ -316,9 +316,15 @@ class BridgeBot(discord.Client):
             if binding is not None:
                 # Personal-feed channels are exclusive routing surfaces. The
                 # publisher performs a second durable binding/owner check.
-                await self.event_router.handle_personal_feed_root(
-                    message=message, binding=binding
-                )
+                # Production uses the verified SDK -> neutral event boundary.
+                # Legacy direct-test bot instances are still constructed without
+                # an adapter while the other Create routes are being cut over.
+                if getattr(self, 'discord_adapter', None) is not None:
+                    await self._require_discord_adapter().ingest_message_created(message)
+                else:
+                    await self.event_router.handle_personal_feed_root(
+                        message=message, binding=binding
+                    )
                 return
         if not isinstance(message.channel, discord.Thread):
             return

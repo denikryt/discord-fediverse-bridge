@@ -15,6 +15,8 @@ from .local_communities.participant_routing import (
     resolve_local_community_source_for_forum,
 )
 from .personal_feeds import PersonalFeedBindingView, PersonalFeedService
+from .platform_types import MessageCreated, PlatformOperationError
+from .discord_legacy_projection import discord_id_to_legacy_int
 from .runtime_ports import DiscordMutationContext
 
 
@@ -65,6 +67,41 @@ class DiscordEventRouter:
             return None
         return await self.personal_feed_publisher.publish_root(
             message=message, binding=binding
+        )
+
+    async def handle_platform_message_create(self, event: MessageCreated) -> object:
+        """Admit one authored root via neutral identity and current Personal Feed binding.
+
+        Other Create types are not routed here until their canonical runtimes
+        consume DTOs; callers must not treat those as successfully published.
+        """
+        if event.connector_key != 'discord-primary':
+            raise PlatformOperationError('invalid_request', 'Discord root connector mismatch')
+        if (event.parent_channel is None or event.parent_channel.kind not in ('text', 'announcement')
+            or event.thread_context is not None):
+            # Forum starters and thread replies have not yet migrated to the
+            # normalized Create route. A caller must not count them delivered.
+            raise RuntimeError('normalized community create ingress is not bound')
+        if event.content.attachments:
+            raise PlatformOperationError('unsupported', 'personal feed attachment publication is not supported')
+        if (event.author.kind != 'human'
+            or event.author.external_actor_id is None
+            or event.external_guild_id is None
+            or event.created_at is None):
+            return None
+        try:
+            if not event.external_guild_id.isdecimal() or int(event.external_guild_id) <= 0:
+                return None
+            guild_id = int(event.external_guild_id)
+            channel_id = discord_id_to_legacy_int(event.parent_channel)
+        except PlatformOperationError:
+            return None
+        binding = self.resolve_personal_feed_root(guild_id, channel_id)
+        if binding is None or self.personal_feed_publisher is None:
+            return None
+        # Publisher rechecks current binding and author before any AP render.
+        return await self.personal_feed_publisher.publish_normalized_root(
+            event=event, binding=binding,
         )
 
     def is_personal_feed_thread(self, thread_id: int | None) -> bool:

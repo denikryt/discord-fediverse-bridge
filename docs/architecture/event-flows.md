@@ -23,6 +23,14 @@ This document explains the major runtime traces through the bridge: user/platfor
 3. If it was the last channel for the community, Python calls gateway `/unfollow-community`.
 4. The bridge follow row is removed or preserved according to Undo(Follow) delivery outcome.
 
+## Discord Personal Feed root -> ActivityPub Create (Stage 03)
+
+1. A bound text/announcement-channel `on_message` passes the synchronous Gateway admission gate and checks the current root binding. Bot-authored messages remain excluded.
+2. `DiscordAdapter.ingest_message_created()` confirms the physical text/announcement kind, refuses unsupported attachments, and converts the SDK message to `MessageCreated` with original `created_at` and connector-scoped IDs.
+3. `PlatformEventIngress` rejects another connector before `DiscordEventRouter.handle_platform_message_create()` verifies the root placement, source guild, human author and current binding. Forum/thread creates are not acknowledged by this partial route.
+4. `PersonalFeedPublisher.publish_normalized_root()` rechecks the current owner binding, registered User Actor, ban/guild policy and source timestamp. It preserves the prior deterministic ActivityPub identity and persists once; duplicate Gateway replay does not render again.
+5. Other thread/message Create callbacks still use their prior SDK-shaped domain path until the remaining typed create cutover. No duplicate publication route is active for bound Personal Feed roots.
+
 ## Discord thread -> remote Lemmy community publish flow
 
 1. `src/discord_bot.py` receives a Discord event.
