@@ -8,15 +8,7 @@ shape; target selection, persistence, retry policy, and transport stay outside.
 from __future__ import annotations
 
 from copy import deepcopy
-from datetime import datetime, timezone
 from html import escape
-from uuid import uuid4
-from urllib.parse import urlsplit
-
-from src.activitypub_identity_urls import (
-    build_community_announce_comment_activity_id,
-    build_community_announce_post_activity_id,
-)
 
 PUBLIC_COLLECTION = "https://www.w3.org/ns/activitystreams#Public"
 SUPPORTED_DELIVERY_PROFILES = {
@@ -33,6 +25,7 @@ def render_local_community_relay_activity(
     community_actor_url: str,
     community_slug: str,
     delivery_profile: str,
+    relay_activity_id: str,
     object_kind: str | None = None,
 ) -> dict:
     """Render one outbound community Announce for a target delivery profile.
@@ -53,18 +46,19 @@ def render_local_community_relay_activity(
             normalized_event=normalized_event,
             community_actor_url=community_actor_url,
             community_slug=community_slug,
+            relay_activity_id=relay_activity_id,
             object_kind=object_kind or "comment",
         )
 
     if delivery_profile == "threadiverse_group":
         return _render_announce(
-            source_activity_json, community_actor_url, community_slug, object_kind
+            source_activity_json, community_actor_url, relay_activity_id
         )
     if delivery_profile == "mastodon_compat":
         return _render_announce(
-            source_activity_json, community_actor_url, community_slug, object_kind
+            source_activity_json, community_actor_url, relay_activity_id
         )
-    return _render_announce(source_activity_json, community_actor_url, community_slug, object_kind)
+    return _render_announce(source_activity_json, community_actor_url, relay_activity_id)
 
 
 def _is_create_note(activity: dict) -> bool:
@@ -130,6 +124,7 @@ def _render_threadiverse_note_announce(
     normalized_event: object,
     community_actor_url: str,
     community_slug: str,
+    relay_activity_id: str,
     object_kind: str | None = None,
 ) -> dict:
     """Render a Lemmy-compatible community Announce for a non-threadiverse Create(Note)."""
@@ -179,7 +174,7 @@ def _render_threadiverse_note_announce(
         "cc": [community_actor_url, actor_id],
         "object": note,
     }
-    return _render_announce(create, community_actor_url, community_slug, object_kind or "comment")
+    return _render_announce(create, community_actor_url, relay_activity_id)
 
 
 
@@ -216,30 +211,22 @@ def _isoformat_activitypub(value: object) -> str:
 def _render_announce(
     source_activity_json: dict,
     community_actor_url: str,
-    community_slug: str,
-    object_kind: str | None = None,
+    relay_activity_id: str,
 ) -> dict:
-    """Build a community-owned Announce without mutating the source activity."""
-    # Deep-copying protects the persisted source JSON from accidental renderer
-    # mutation while preserving the original actor and object attribution.
+    """Sign one immutable source-level Announce identity reserved in SQLite.
+
+    No renderer may invent a public activity ID; that would defeat remote
+    deduplication after lost HTTP responses or fanout to sibling followers.
+    """
+    if not isinstance(relay_activity_id, str) or not relay_activity_id.startswith(
+        f"{community_actor_url.rstrip('/')}/activities/announce/"
+    ):
+        raise ValueError("relay Announce ID must belong to the signing community")
     source_activity = deepcopy(source_activity_json)
-    operation_id = f"{datetime.now(timezone.utc).timestamp():.6f}-{uuid4().hex}"
-    origin_parts = urlsplit(community_actor_url)
-    origin = f"{origin_parts.scheme}://{origin_parts.netloc}"
-    resolved_kind = object_kind or _infer_announce_object_kind(source_activity)
-    announce_id = (
-        build_community_announce_comment_activity_id(
-            origin=origin, slug=community_slug, activity_id=operation_id
-        )
-        if resolved_kind == "comment"
-        else build_community_announce_post_activity_id(
-            origin=origin, slug=community_slug, activity_id=operation_id
-        )
-    )
     followers_url = f"{community_actor_url.rstrip('/')}/followers"
     return {
         "@context": "https://www.w3.org/ns/activitystreams",
-        "id": announce_id,
+        "id": relay_activity_id,
         "type": "Announce",
         "actor": community_actor_url,
         "to": [PUBLIC_COLLECTION],

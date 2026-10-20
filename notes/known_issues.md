@@ -69,3 +69,13 @@ threads, or comments in a replacement Discord channel.
   Fedify security upgrade/origin verification, relay identity/routing and SSRF
   gates are still **not implemented or release-tested**. Stage 03 must not be
   treated as complete based on the focused tests of the partial changes.
+
+## Stage 03 relay transaction changes (partial, 2026-10-19)
+
+Source-level Announce ID reservation and per-attempt inbox/generation persistence
+are implemented. Eight isolated file-SQLite regression scenarios pass without
+Discord SDK; a direct fake-gateway fanout exercise confirms two recipients share
+an ID and a duplicate Create does not re-send. Existing complete relay/runtime
+regressions remain unverified because `discord.py` and `hypothesis` are missing.
+The historical mixed-ID conflict is intentionally blocked for reconciliation,
+not silently re-keyed. Dependency/security and adapter migration remain open.

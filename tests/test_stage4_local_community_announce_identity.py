@@ -20,6 +20,7 @@ def test_local_community_relay_announce_uses_canonical_post_grammar() -> None:
         community_slug="python",
         delivery_profile="threadiverse_group",
         object_kind="post",
+        relay_activity_id="https://bridge.example/actors/communities/python/activities/announce/posts/reserved",
     )
 
     assert activity["id"].startswith(
@@ -61,6 +62,7 @@ def test_local_community_relay_announce_uses_canonical_comment_grammar() -> None
         community_slug="python",
         delivery_profile="threadiverse_group",
         object_kind="comment",
+        relay_activity_id="https://bridge.example/actors/communities/python/activities/announce/comments/reserved",
     )
 
     assert activity["id"].startswith(

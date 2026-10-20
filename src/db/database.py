@@ -79,7 +79,9 @@ class Database:
         )
         self.local_community_content = LocalCommunityContentRepository(self.session)
         self.local_community_surfaces = LocalCommunitySurfaceRepository(self.session)
-        self.local_community_relay = LocalCommunityRelayRepository(self.session)
+        self.local_community_relay = LocalCommunityRelayRepository(
+            self.session, self.immediate_session
+        )
         self.remote_subscriptions = RemoteSubscriptionRepository(
             self.session, self.immediate_session
         )

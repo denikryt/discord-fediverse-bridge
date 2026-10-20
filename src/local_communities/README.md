@@ -27,3 +27,15 @@ Stage 5 makes active local subscriber forums create/edit/delete-capable communit
 ## User moderation boundary
 
 Local-community host and active local-subscriber sources apply global bans first and then the canonical community-scoped ban before ActivityPub publishing, canonical-row creation, or Discord fanout. Rejection reasons remain on the source Discord surface. Registered local authors are attributed by their stable `user@bridge-authority` handle across all participant surfaces.
+
+## Source-level relay identity and retry admission (Stage 03)
+
+One inbound relay source owns one immutable community `Announce.id`, shared by all
+recipient delivery rows. Before transport, each non-delivered target attempts an
+atomic `BEGIN IMMEDIATE` admission which checks the current accepted subscriber,
+endpoint and federation policy, reserves the shared ID, and advances an attempt
+generation. The physical HTTP request uses a frozen inbox snapshot; a callback
+must match both that snapshot and the admitted generation before persisting a
+result. Historical conflicting source IDs halt retries without rewriting
+already published identities. Successful targets never replay solely because
+an Actor's inbox changes.
