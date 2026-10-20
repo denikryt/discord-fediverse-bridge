@@ -332,6 +332,13 @@ async def handle_comment_created(
             outcome=InboundActivityOutcome.IGNORED_NO_SUBSCRIPTION,
             detail="no subscriptions for this community",
         )
+    # Production comment delivery uses one typed path, including missing-post
+    # backfill. The SDK-only entry point remains for isolated legacy callers.
+    adapter = getattr(runtime, 'discord_adapter', None)
+    if adapter is not None:
+        return await runtime.community_runtime.handle_normalized_inbound_comment_with_backfill(
+            event, adapter=adapter,
+        )
     return await runtime.community_runtime.handle_inbound_comment(event, runtime)
 
 

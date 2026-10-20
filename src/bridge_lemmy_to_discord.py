@@ -4,7 +4,6 @@ import logging
 from datetime import datetime, timezone
 
 import aiohttp
-import discord
 
 from .activitypub_models import ActivityPubEvent
 from .formatting import (
@@ -120,6 +119,8 @@ async def _create_inbound_discord_thread(
     Returns (thread_id, starter_message_id). No DB writes — the caller
     (CommunityRuntime.handle_inbound_post) persists the delivery rows.
     """
+    import discord  # Only the legacy physical writer needs discord.py.
+
     post = event.object
     title = format_thread_title_for_discord(post.title or "Untitled Lemmy Post")
     body = format_lemmy_post_for_discord(

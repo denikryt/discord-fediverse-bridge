@@ -118,3 +118,10 @@ Fedify-native security integration remains blocked by missing dependencies.
 - `CommunityRuntime.handle_normalized_inbound_comment()` now has a typed SDK-free delivery path for already fully mapped Remote Community post/thread groups. Real SQLite tests verify per-recipient reply references and reject foreign canonical parent/foreign physical receipt, revoked subscription and missing mapping.
 - This method is **not** wired into the ActivityPub HTTP dispatcher. An out-of-order comment still requires existing remote post backfill; activating the typed method globally before its migration would reject otherwise recoverable events.
 - Remaining SDK release blockers and durable uncertain-creation recovery are unchanged from Checkpoint 33.
+
+## 2026-10-19 — Stage 03 Checkpoint 35 remote inbound comment backfill
+
+- Production Remote Community comment delivery now selects the typed adapter path if present; this path invokes the typed parent-post backfill first for missing/partial canonical post mappings. Recovery preserves previously confirmed forum/thread/starter receipts and creates only currently authorized missing deliveries. Incorrect fetched object identity or a bad physical receipt cannot permit child message delivery.
+- Existing direct SDK compatibility entry points remain until final dependency cleanup. Full pytest is blocked by missing `hypothesis`; real Discord/Fedify behavior is not yet exercised.
+- **Open release blocker:** the inherited Python `_fetch_ap_object` still does a direct `aiohttp` GET and lacks complete DNS pinning/redirect SSRF verification. The implementation reuses this existing fetcher; it is not evidence of a secure outgoing GET. Finish R7-F2 before release.
+- **Open Stage 04 limitation:** durable reconciliation of a Create that may have completed physically without a confirmed receipt remains out of scope. Do not blindly resend an uncertain Discord Create after restart.
