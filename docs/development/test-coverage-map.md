@@ -32,6 +32,11 @@ This document is a short, feature-oriented index of the test suite. It helps mai
 - Existing Stage 8 direct-caller regression tests remain required until the forum SDK-shaped callback cutover is complete.
 - The production `BridgeBot._on_message_admitted` gate admits an unadopted but published Personal Feed root before `THREAD_CREATE`; unrelated text threads are ignored and subscribed forum replies retain their legacy routing — `tests/test_stage03_bot_personal_reply_cutover.py` (SDK import-only stub where discord.py is unavailable).
 
+## Stage 03 typed forum starter publisher preparation (Checkpoint 25)
+
+- A neutral `ThreadCreated` + `MessageView` uses the existing canonical post publication core with distinct starter/message IDs. Invalid connector, kind, guild, starter identity, source snowflakes, unknown content and bot author fail before the gateway; registration notice failures and ban-check uncertainty cannot authorize publication — `tests/test_stage03_typed_community_publish.py` (real SQLite, fake gateway/transport).
+- The production forum callback still uses the legacy path; only the SDK-free publisher is prepared. Full runtime cutover and sibling fanout require later verified bindings.
+
 ## Stage 03 Gateway ingress transition
 
 - Normalized raw edit/delete -> single domain-mutation sink, foreign-connector rejection, thread mutation no-op, unbound create rejection and real adapter admission — `tests/test_stage03_platform_event_ingress.py`.

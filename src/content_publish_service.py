@@ -15,6 +15,11 @@ from typing import Awaitable, Callable
 from .config import Settings
 from .bridge_policy import BridgePolicyService
 from .user_bans import UserBanService, canonical_local_user_handle, render_ban_message
+from .discord_legacy_projection import discord_id_to_legacy_int
+from .platform_types import (
+    ContentDocument, CreateAttempt, DeliveryPresentation, MessageView,
+    PlatformOperationError, ThreadCreated,
+)
 
 from .content_sync.outbound_publish import (
     build_discord_comment_body,
@@ -178,6 +183,79 @@ class ContentPublishService:
             target_inbox_urls=self._allowed_local_follower_inboxes(community_actor_url),
         )
 
+    async def publish_normalized_post_to_community(
+        self, *, event: ThreadCreated, starter: MessageView,
+        community_actor_url: str, publish_call: Callable[[object], Awaitable[object]],
+        target_inbox_urls: list[str] | None = None,
+        notice_adapter: object | None = None,
+    ) -> PublishResult:
+        """Publish a verified Discord forum starter without SDK-shaped domain input.
+
+        The caller owns subscription/community selection and canonical thread
+        deduplication. This boundary checks the complete physical starter
+        snapshot before a gateway call or persisted mapping can be created.
+        """
+        if (event.connector_key != 'discord-primary'
+            or event.thread.connector_key != event.connector_key
+            or event.thread.channel.kind != 'forum'
+            or not event.external_guild_id
+            or event.thread.channel.external_guild_id != event.external_guild_id
+            or event.starter is None or starter.message != event.starter
+            or starter.message.external_container_id != event.thread.external_thread_id
+            or starter.author is None or starter.author.kind != 'human'
+            or starter.author.external_actor_id is None
+            or starter.author.connector_key != event.connector_key
+            or starter.content is None or starter.content.format != 'plain'
+            or starter.content.attachments):
+            raise PlatformOperationError('invalid_request', 'unverified Discord forum starter')
+        # The historic message mapping schema has Discord integer columns.
+        # The checked projection rejects zero, malformed, and foreign connector
+        # IDs at this boundary instead of accepting a lucky numeric collision.
+        thread_id = discord_id_to_legacy_int(event.thread)
+        forum_id = discord_id_to_legacy_int(event.thread, component='parent')
+        starter_id = discord_id_to_legacy_int(starter.message)
+        if not event.external_guild_id.isdecimal() or int(event.external_guild_id) <= 0:
+            raise PlatformOperationError('invalid_request', 'invalid Discord guild ID')
+        actor_id = starter.author.external_actor_id
+        user = self.database.users.get_user_by_discord_user_id(actor_id)
+        if user is None:
+            # Registration notices are best effort and cannot authorize AP
+            # publication. One immutable key ensures no second live POST if
+            # the remote message was created but its response was lost.
+            if notice_adapter is not None:
+                try:
+                    await notice_adapter.send_message(
+                        event.thread, ContentDocument(UNREGISTERED_REPLY),
+                        reply_to=starter.message, presentation=DeliveryPresentation(),
+                        attempt=CreateAttempt(
+                            f'community-registration-notice:{event.connector_key}:'
+                            f'{event.thread.external_thread_id}:{starter.message.external_message_id}',
+                            event.connector_key, 'message', event.thread,
+                        ),
+                    )
+                except Exception:
+                    logger.exception('Could not deliver community registration notice')
+            return PublishResult('ignored', 'unregistered_user')
+        if self.user_ban_service is not None:
+            try:
+                community = self.database.local_communities.get_local_community_by_actor_url(
+                    community_actor_url)
+                decision = self.user_ban_service.check_discord_user(
+                    discord_user_id=actor_id, local_community=community)
+            except Exception:
+                logger.exception('Could not verify normalized forum author moderation')
+                return PublishResult('rejected', 'ban_check_failed')
+            if decision.banned:
+                return PublishResult('rejected', 'user_banned')
+        return await self._publish_post_fields(
+            user=user, author_name=starter.author.display_name,
+            content=starter.content.body, thread_name=event.name,
+            forum_channel_id=forum_id, source_thread_id=thread_id,
+            starter_message_id=starter_id,
+            community_actor_url=community_actor_url, publish_call=publish_call,
+            target_inbox_urls=target_inbox_urls,
+        )
+
     async def publish_post_to_community(
         self,
         *,
@@ -196,54 +274,56 @@ class ContentPublishService:
         if rejection is not None:
             return rejection
 
-        author_name = self._author_name(getattr(starter_message, "author"))
-        body = build_discord_comment_body(
-            author_name=author_name,
+        return await self._publish_post_fields(
+            user=user, author_name=self._author_name(getattr(starter_message, "author")),
             content=getattr(starter_message, "content"),
-            bridge_prefix=self.bridge_prefix,
+            thread_name=getattr(thread, "name"),
+            forum_channel_id=getattr(thread, "parent_id", None),
+            source_thread_id=getattr(thread, "id"),
+            starter_message_id=getattr(starter_message, "id"),
+            community_actor_url=community_actor_url, publish_call=publish_call,
+            target_inbox_urls=target_inbox_urls,
         )
-        title = build_discord_post_title(thread_name=getattr(thread, "name"))
+
+    async def _publish_post_fields(
+        self, *, user: object, author_name: str, content: str,
+        thread_name: str, forum_channel_id: int | None,
+        source_thread_id: int, starter_message_id: int,
+        community_actor_url: str, publish_call: Callable[[object], Awaitable[object]],
+        target_inbox_urls: list[str] | None,
+    ) -> PublishResult:
+        """Share one canonical AP render/persistence contract across both ingress paths."""
+        body = build_discord_comment_body(
+            author_name=author_name, content=content, bridge_prefix=self.bridge_prefix,
+        )
+        title = build_discord_post_title(thread_name=thread_name)
         publish_result = await publish_call(
             self._build_publish_request(
                 actor_username=user.activitypub_username,
                 community_actor_url=community_actor_url,
-                kind="post",
-                title=title,
-                body_markdown=body,
-                in_reply_to_object_id=None,
-                target_inbox_urls=target_inbox_urls,
+                kind="post", title=title, body_markdown=body,
+                in_reply_to_object_id=None, target_inbox_urls=target_inbox_urls,
             )
         )
-
         persisted = persist_publish_artifacts(
-            self.database,
-            source_id=str(getattr(starter_message, "id")),
-            actor_username=user.activitypub_username,
-            actor_url=user.actor_url,
+            self.database, source_id=str(starter_message_id),
+            actor_username=user.activitypub_username, actor_url=user.actor_url,
             community_actor_url=community_actor_url,
-            activity_id=publish_result.activity_id,
-            object_id=publish_result.object_id,
+            activity_id=publish_result.activity_id, object_id=publish_result.object_id,
             activity_json=getattr(publish_result, "activity_json", {}),
-            kind="post",
-            title=title,
-            body_markdown=body,
-            in_reply_to_object_id=None,
-            discord_channel_id=getattr(thread, "parent_id", None),
-            discord_message_id=getattr(starter_message, "id"),
+            kind="post", title=title, body_markdown=body,
+            in_reply_to_object_id=None, discord_channel_id=forum_channel_id,
+            discord_message_id=starter_message_id,
         )
         if self.delivery_worker is not None and persisted.created:
             self.delivery_worker.wake()
         logger.info(
             "Published Discord thread %s starter %s via AP actor %s",
-            getattr(thread, "id"),
-            getattr(starter_message, "id"),
-            user.activitypub_username,
+            source_thread_id, starter_message_id, user.activitypub_username,
         )
         return PublishResult(
-            status="published",
-            reason="published",
-            activity_id=publish_result.activity_id,
-            object_id=publish_result.object_id,
+            status="published", reason="published",
+            activity_id=publish_result.activity_id, object_id=publish_result.object_id,
         )
 
     async def publish_comment_to_community(
