@@ -253,3 +253,9 @@ cutover has yet been performed. Two targeted positive/negative tests pass.
 
 - `ContentPublishService.publish_normalized_comment_to_community()` now requires verified forum parent and same-thread reply references, checks author registration/moderation, and delegates ActivityPub comment rendering/persistence to the same existing fields-based canonical core. A failure to send rejection notices cannot federate the comment. Real SQLite positive/negative tests pass alongside legacy post/comment publishing tests.
 - The new API takes an AP parent object ID selected by the owning runtime. It is **not** a replacement for canonical thread/reply-group ownership validation; no production community callback has been switched, and Community/Local Community fanout remains SDK-shaped.
+
+## Stage 03 neutral sibling fanout preparation (Checkpoint 27, 2026-10-19)
+
+- `DiscordFanout` can now send typed mirrored forum threads/replies through `PlatformDeliveryPort` with accepted-subscription/guild checks, deterministic per-target attempt keys, real starter/thread receipts, per-target reply reference and partial failure isolation. Eight SQLite-backed regression tests pass.
+- Production Community/Local Community routes still call their SDK-backed fanout until canonical source/recipient and mapping ownership are cut over together. The new methods are not a second live publication path.
+- No durable retry/receipt recovery for previously unknown physical copies is added; Stage 04 retains that separate task.

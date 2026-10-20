@@ -17,6 +17,13 @@ import discord
 
 from ..bridge_policy import BridgePolicyService
 from ..db import Database
+from ..discord_legacy_projection import discord_id_to_legacy_int
+from ..platform_types import (
+    ChannelRef, ContentDocument, CreateAttempt, DeliveryPresentation,
+    MessageCreated, MessageRef, MessageView, ThreadCreated, ThreadRef,
+    PlatformOperationError,
+)
+from ..runtime_ports import PlatformDeliveryPort
 
 if TYPE_CHECKING:
     from ..models import CommunityMessageGroupDelivery, CommunityThreadGroupDelivery
@@ -175,6 +182,139 @@ class DiscordFanout:
                 channel_id,
             )
             return False
+
+    def _normalized_target(self, channel_id: int, community_actor_id: str) -> ChannelRef | None:
+        """Authorize one sibling using its current accepted SQLite claim and guild."""
+        try:
+            subscription = self.database.remote_subscriptions.get_subscription_by_channel(channel_id)
+            if (subscription is None or subscription.status != 'accepted'
+                or subscription.lemmy_community_actor_id != community_actor_id):
+                return None
+            guild_id = _valid_discord_guild_id(subscription.discord_guild_id)
+            if guild_id is None or not self.policy_service.is_discord_guild_allowed(guild_id):
+                return None
+            return ChannelRef('discord-primary', str(channel_id), 'forum', str(guild_id))
+        except Exception:
+            # A broken subscriber lookup must not send to an unverified endpoint.
+            logger.exception('Could not authorize community sibling forum %s', channel_id)
+            return None
+
+    @staticmethod
+    def _normalized_body(author_name: str, body: str) -> ContentDocument:
+        """Preserve the historical attributed source-body formatting."""
+        return ContentDocument(f'`{author_name}`\n\n{body}')
+
+    async def mirror_normalized_thread_to_siblings(
+        self, *, adapter: PlatformDeliveryPort, source: ThreadCreated,
+        starter: MessageView, community_actor_id: str, sibling_channel_ids: list[int],
+    ) -> list[MirrorResult]:
+        """Mirror one verified source starter using typed transport and independent receipts.
+
+        A failed or ineligible sibling cannot prevent writes to the other targets.
+        Canonical state and source/mirror row ownership remain with CommunityRuntime.
+        """
+        if (source.connector_key != 'discord-primary'
+            or source.thread.channel.kind != 'forum'
+            or source.starter is None or starter.message != source.starter
+            or starter.message.external_container_id != source.thread.external_thread_id
+            or starter.author is None or starter.author.kind != 'human'
+            or starter.author.connector_key != source.connector_key
+            or starter.content is None or starter.content.format != 'plain'
+            or starter.content.attachments):
+            raise PlatformOperationError('invalid_request', 'unverified source forum starter')
+        source_id = discord_id_to_legacy_int(source.thread)
+        source_forum = discord_id_to_legacy_int(source.thread, component='parent')
+        # Receipt correlation is source+target stable even when one POST response is lost.
+        body = self._normalized_body(starter.author.display_name, starter.content.body)
+        copies: list[MirrorResult] = []
+        seen: set[int] = set()
+        for channel_id in sibling_channel_ids:
+            if channel_id in seen or channel_id == source_forum:
+                continue
+            seen.add(channel_id)
+            forum = self._normalized_target(channel_id, community_actor_id)
+            if forum is None:
+                continue
+            try:
+                attempt = CreateAttempt(
+                    f'community-mirror-thread:{source_id}:{channel_id}',
+                    'discord-primary', 'forum_thread', forum,
+                )
+                receipt = await adapter.create_forum_thread(
+                    forum, body, title=source.name, presentation=DeliveryPresentation(),
+                    attempt=attempt,
+                )
+                if (receipt.thread.channel != forum
+                    or receipt.thread.channel.kind != forum.kind
+                    or receipt.thread.channel.external_guild_id != forum.external_guild_id
+                    or receipt.starter.connector_key != forum.connector_key
+                    or receipt.starter.external_container_id != receipt.thread.external_thread_id):
+                    raise PlatformOperationError('unknown_delivery', 'mirror receipt destination mismatch')
+                copies.append(MirrorResult(
+                    channel_id, discord_id_to_legacy_int(receipt.thread),
+                    discord_id_to_legacy_int(receipt.starter),
+                ))
+            except Exception:
+                logger.exception('Could not mirror source thread %s to forum %s', source_id, channel_id)
+        return copies
+
+    async def mirror_normalized_message_to_siblings(
+        self, *, adapter: PlatformDeliveryPort, source: MessageCreated,
+        community_actor_id: str, sibling_thread_deliveries: list[CommunityThreadGroupDelivery],
+        reply_context: object,
+    ) -> list[MirrorMessageResult]:
+        """Send verified replies with per-sibling parent references using the adapter."""
+        if (source.connector_key != 'discord-primary'
+            or source.thread_context is None or source.parent_channel is None
+            or source.parent_channel.kind != 'forum'
+            or source.thread_context.channel != source.parent_channel
+            or source.message.external_container_id != source.thread_context.external_thread_id
+            or source.author.kind != 'human'
+            or source.content.format != 'plain' or source.content.attachments):
+            raise PlatformOperationError('invalid_request', 'unverified source forum reply')
+        source_id = discord_id_to_legacy_int(source.message)
+        if source.reply_to is not None:
+            # Do not fan out an asserted parent outside this source thread.
+            if (source.reply_to.connector_key != source.connector_key
+                or source.reply_to.external_container_id != source.message.external_container_id):
+                raise PlatformOperationError('invalid_request', 'cross-thread source reply')
+            discord_id_to_legacy_int(source.reply_to)
+        source_thread = discord_id_to_legacy_int(source.thread_context)
+        body = self._normalized_body(source.author.display_name, source.content.body)
+        copies: list[MirrorMessageResult] = []
+        seen: set[int] = set()
+        for delivery in sibling_thread_deliveries:
+            channel_id, thread_id = delivery.discord_channel_id, delivery.discord_thread_id
+            if thread_id in seen or thread_id == source_thread:
+                continue
+            seen.add(thread_id)
+            forum = self._normalized_target(channel_id, community_actor_id)
+            if forum is None:
+                continue
+            try:
+                destination = ThreadRef(forum, str(thread_id))
+                parent_id = reply_context.get_reference_for_thread(thread_id)
+                reply_to = (MessageRef('discord-primary', str(thread_id), str(parent_id))
+                            if parent_id is not None else None)
+                if reply_to is not None:
+                    discord_id_to_legacy_int(reply_to)
+                attempt = CreateAttempt(
+                    f'community-mirror-message:{source_id}:{thread_id}',
+                    'discord-primary', 'message', destination,
+                )
+                receipt = await adapter.send_message(
+                    destination, body, reply_to=reply_to,
+                    presentation=DeliveryPresentation(), attempt=attempt,
+                )
+                if (receipt.message.connector_key != 'discord-primary'
+                    or receipt.message.external_container_id != str(thread_id)):
+                    raise PlatformOperationError('unknown_delivery', 'mirror message receipt destination mismatch')
+                copies.append(MirrorMessageResult(
+                    channel_id, thread_id, discord_id_to_legacy_int(receipt.message), parent_id,
+                ))
+            except Exception:
+                logger.exception('Could not mirror source message %s to thread %s', source_id, thread_id)
+        return copies
 
     def _author_label(self, message: object) -> str | None:
         """Resolve a registered local handle through the bot's shared services."""
