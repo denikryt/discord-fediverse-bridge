@@ -41,7 +41,13 @@ from .inbound_mapping import (
     get_parent_message_group,
     needs_backfill,
 )
-from .reply_mapping import resolve_inbound_reference, resolve_reply_context
+from .reply_mapping import (
+    resolve_inbound_reference, resolve_normalized_reply_context, resolve_reply_context,
+)
+from ..discord_legacy_projection import discord_id_to_legacy_int
+from ..platform_types import (
+    MessageCreated, MessageView, PlatformOperationError, ThreadCreated,
+)
 from ..runtime_ports import DiscordDeliveryClientPort, DiscordMutationContext
 
 if TYPE_CHECKING:
@@ -51,6 +57,7 @@ if TYPE_CHECKING:
     from ..content_publish_service import ContentPublishService, PublishResult
     from ..runtime import Runtime
     from .discord_fanout import DiscordFanout
+    from ..runtime_ports import PlatformDeliveryPort
 
 logger = logging.getLogger(__name__)
 
@@ -106,6 +113,182 @@ class CommunityRuntime:
         if self.bot is not None:
             raise RuntimeError("CommunityRuntime Discord client is already configured")
         self.bot = bot
+
+    def _authorized_normalized_source(self, *, forum_id: int, guild_id: str | None) -> object | None:
+        """Authorize a physical Discord source using its current accepted forum claim.
+
+        An untrusted DTO cannot choose a federation community or bypass an
+        updated subscription/guild policy. The author is checked by the shared
+        ContentPublishService at its own publication boundary.
+        """
+        if guild_id is None or not guild_id.isdecimal() or int(guild_id) <= 0:
+            return None
+        subscription = self.database.remote_subscriptions.get_subscription_by_channel(forum_id)
+        if (subscription is None or subscription.status != 'accepted'
+            or subscription.discord_guild_id != int(guild_id)):
+            return None
+        policy = self.content_publish_service.bridge_policy_service
+        if (not policy.is_discord_guild_allowed(int(guild_id))
+            or not policy.federation_decision(subscription.lemmy_community_actor_id).allowed):
+            return None
+        return subscription
+
+    async def handle_normalized_thread_create(
+        self, event: ThreadCreated, starter: MessageView, *, adapter: PlatformDeliveryPort,
+    ) -> PublishResult:
+        """Publish one verified remote-community forum starter and persist all receipts.
+
+        Source/mirror ownership remains the existing CommunityThreadGroup
+        schema; physical sends use only the typed adapter. The legacy SDK path
+        stays unbound until the complete forum ingress cutover.
+        """
+        if (event.connector_key != 'discord-primary'
+            or event.thread.channel.kind != 'forum'
+            or event.starter is None or starter.message != event.starter
+            or starter.message.external_container_id != event.thread.external_thread_id
+            or event.thread.channel.external_guild_id != event.external_guild_id):
+            raise PlatformOperationError('invalid_request', 'unverified Community forum starter')
+        thread_id = discord_id_to_legacy_int(event.thread)
+        forum_id = discord_id_to_legacy_int(event.thread, component='parent')
+        discord_id_to_legacy_int(starter.message)
+        subscription = self._authorized_normalized_source(
+            forum_id=forum_id, guild_id=event.external_guild_id,
+        )
+        if subscription is None:
+            return _ignored_result('no_active_subscription_or_policy')
+        # The group lookup includes mirror/inbound deliveries: a duplicate
+        # thread notice must not republish an existing physical mirror.
+        if get_thread_group_for_any_thread(self.database, thread_id) is not None:
+            return _ignored_result('duplicate_discord_thread')
+        result = await self.content_publish_service.publish_normalized_post_to_community(
+            event=event, starter=starter,
+            community_actor_url=subscription.lemmy_community_actor_id,
+            publish_call=self.content_publish_service.fedify_gateway.publish_content,
+            notice_adapter=adapter,
+        )
+        if result.status != 'published':
+            return result
+        group = self.database.discord_fanout_groups.create_thread_group(
+            community_actor_id=subscription.lemmy_community_actor_id,
+            source_channel_id=forum_id, source_thread_id=thread_id,
+            source_starter_message_id=discord_id_to_legacy_int(starter.message),
+            ap_activity_id=result.activity_id, ap_object_id=result.object_id,
+        )
+        self.database.discord_fanout_groups.add_thread_delivery(
+            thread_group_id=group.id, discord_channel_id=forum_id,
+            discord_thread_id=thread_id,
+            discord_starter_message_id=discord_id_to_legacy_int(starter.message),
+            role='source',
+        )
+        if self.discord_fanout is not None:
+            siblings = [row.discord_channel_id for row in
+                        self.database.remote_subscriptions.list_discord_accepted_subscriptions_for_community(
+                            subscription.lemmy_community_actor_id)
+                        if row.discord_channel_id != forum_id]
+            copies = await self.discord_fanout.mirror_normalized_thread_to_siblings(
+                adapter=adapter, source=event, starter=starter,
+                community_actor_id=subscription.lemmy_community_actor_id,
+                sibling_channel_ids=siblings,
+            )
+            for copy in copies:
+                # Persist confirmed physical receipts; a failed sibling cannot
+                # corrupt the source group or other successfully delivered rows.
+                self.database.discord_fanout_groups.add_thread_delivery(
+                    thread_group_id=group.id, discord_channel_id=copy.channel_id,
+                    discord_thread_id=copy.thread_id,
+                    discord_starter_message_id=copy.starter_message_id,
+                    role='mirror',
+                )
+        return result
+
+    async def handle_normalized_message_create(
+        self, event: MessageCreated, *, adapter: PlatformDeliveryPort,
+    ) -> PublishResult:
+        """Publish a typed forum reply with canonical ownership and per-target references.
+
+        New authored messages in a mirrored forum are permitted; a message
+        already recorded as a delivery is an echo and never republished.
+        """
+        thread = event.thread_context
+        if (event.connector_key != 'discord-primary' or thread is None
+            or event.parent_channel is None or event.parent_channel.kind != 'forum'
+            or thread.channel != event.parent_channel
+            or thread.channel.external_guild_id != event.external_guild_id
+            or event.message.external_container_id != thread.external_thread_id):
+            raise PlatformOperationError('invalid_request', 'unverified Community forum reply')
+        message_id = discord_id_to_legacy_int(event.message)
+        thread_id = discord_id_to_legacy_int(thread)
+        forum_id = discord_id_to_legacy_int(thread, component='parent')
+        subscription = self._authorized_normalized_source(
+            forum_id=forum_id, guild_id=event.external_guild_id,
+        )
+        if subscription is None:
+            return _ignored_result('no_active_subscription_or_policy')
+        if get_message_group_for_delivered_message(self.database, message_id) is not None:
+            return _ignored_result('duplicate_discord_message')
+        group = get_thread_group_for_any_thread(self.database, thread_id)
+        if group is None or group.ap_object_id is None:
+            return _ignored_result('no_post_context')
+        if group.community_actor_id != subscription.lemmy_community_actor_id:
+            raise PlatformOperationError('invalid_request', 'source forum belongs to another community')
+        physical = self.database.discord_fanout_groups.get_thread_delivery_by_thread(thread_id)
+        if (physical is None or physical.thread_group_id != group.id
+            or physical.discord_channel_id != forum_id):
+            raise PlatformOperationError('invalid_request', 'source thread physical ownership mismatch')
+        # An opening/starter message already belongs to its parent post,
+        # independent of whether the source has the canonical 'source' role.
+        if physical.discord_starter_message_id == message_id:
+            return _ignored_result('starter_message_already_handled')
+        siblings = get_sibling_thread_deliveries(
+            self.database, thread_group_id=group.id, source_thread_id=thread_id,
+        )
+        context = resolve_normalized_reply_context(self.database, event, group, siblings)
+        target = group.ap_object_id
+        if context.parent_message_group_id is not None:
+            parent = self.database.discord_fanout_groups.get_message_group_by_id(
+                context.parent_message_group_id
+            )
+            if parent is not None and parent.ap_object_id is not None:
+                target = parent.ap_object_id
+        result = await self.content_publish_service.publish_normalized_comment_to_community(
+            event=event, community_actor_url=subscription.lemmy_community_actor_id,
+            parent_object_id=target,
+            publish_call=self.content_publish_service.fedify_gateway.publish_content,
+            notice_adapter=adapter,
+        )
+        if result.status != 'published':
+            return result
+        message_group = self.database.discord_fanout_groups.create_message_group(
+            community_actor_id=group.community_actor_id, thread_group_id=group.id,
+            source_channel_id=forum_id, source_thread_id=thread_id,
+            source_message_id=message_id,
+            ap_activity_id=result.activity_id, ap_object_id=result.object_id,
+            parent_message_group_id=context.parent_message_group_id,
+        )
+        self.database.discord_fanout_groups.add_message_delivery(
+            message_group_id=message_group.id, discord_channel_id=forum_id,
+            discord_thread_id=thread_id, discord_message_id=message_id,
+            role='source',
+            parent_discord_message_id=(
+                discord_id_to_legacy_int(event.reply_to)
+                if event.reply_to is not None else None
+            ),
+        )
+        if self.discord_fanout is not None and siblings:
+            copies = await self.discord_fanout.mirror_normalized_message_to_siblings(
+                adapter=adapter, source=event,
+                community_actor_id=group.community_actor_id,
+                sibling_thread_deliveries=siblings, reply_context=context,
+            )
+            for copy in copies:
+                self.database.discord_fanout_groups.add_message_delivery(
+                    message_group_id=message_group.id,
+                    discord_channel_id=copy.channel_id,
+                    discord_thread_id=copy.thread_id,
+                    discord_message_id=copy.message_id,
+                    role='mirror', parent_discord_message_id=copy.parent_message_id,
+                )
+        return result
 
     async def handle_discord_thread_create(
         self,

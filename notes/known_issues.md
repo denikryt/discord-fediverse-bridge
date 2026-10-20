@@ -1,266 +1,80 @@
-# Known issues
+# Platform API (Stage 02 contract)
 
-- Stage 01 review fixes: typed claims reject incompatible channel kinds before
-  owner FK updates; `create_all()` remains schema-only and app fixtures use
-  `migrate()`. Mixed Accept, local fanout, dashboard, listing and Personal Feed
-  workflows have runtime regressions. Personal Feed channel admission also
-  checks the requested user, preventing cross-user channel collisions.
+This document owns the SDK-independent transport boundary between Bridge Core and physical platforms. Stage 02 **defines** the contract and stateful test fakes; it does **not** activate a Discord adapter, a Fluxer connector, a second Gateway receiver, a new database migration or a new delivery queue. The deployed path still uses `BridgeBot`, `DiscordEventRouter` and existing fanout/Personal Feed workers directly; the exact temporary boundaries are marked `MULTIPLATFORM_STAGE02_TEMP` in `src/runtime_ports.py`, `src/discord_bot.py` and `src/app.py`.
 
-- Current-v1 admission compares the complete generated-role column definition with model DDL. Appended expressions and wrappers are rejected; STORED mode remains required.
-- Current startup upgrades the recognized v0.1.0 release schema directly from 0 to 1 in one transaction. Unknown release variants and unpublished development schemas are rejected unchanged; the actual deployment database has not been supplied for recognition. Released actor/object namespaces now cut over inside that transition, with only affected federation confirmations reset. Discord bindings/local subscribers and signing material are preserved; missing identity settings or unsafe signed-payload edits fail closed. Source collection/key ownership and canonical local content grammar are validated before writes; foreign metadata, unknown local formats and canonical IDs contradicting an explicit publication/outgoing-mapping/relay owner abort unchanged. Incoming relay actors and thread/group community context are not treated as object authors. The unused alternate schema helper mechanism has been removed. Plan 147 replaces internal Stage 00 reconstruction with SQL TEMP staging and a single ORM target creation. Narrow identity/relationship evidence excludes bodies, keys and untouched audit data; native SQL preservation covers all staged values. Advisory preflight/post-change validation remain separate. Targeted cleanup removes the historical migration probe/model fixture. Supported-release scenarios execute production migration; current-only descendant restart/cascade checks run on v1. The renamed Stage 00 SQL fixture is used only to assert rejection. Native reference-schema comparison replaces manual model/column/CHECK parsing, and released scalar links/channel inventory are explicit SQL.
-- Bridge-local bans leave existing remote subscriber rows unchanged and do not emit ActivityPub moderation activities.
-- Remote handle resolution is string-only; WebFinger and actor fetch resolution are not implemented.
-- A globally banned super-admin cannot unban themselves through Discord commands. Recovery requires another non-banned super-admin or direct database intervention.
+**Stage 03 incremental activation:** production raw message edit/delete and raw thread update/delete callbacks pass through `DiscordAdapter` normalization and `PlatformEventIngress`. Bound text/announcement Personal Feed roots now use `MessageCreated` and the same sink; the publisher rechecks persisted ownership, retains the source `created_at`, and never receives a raw SDK object on this path. Manual Personal Feed discussion threads from the published root also use `ThreadCreated` and a checked root/channel mapping, without fetching arbitrary starter history. The adapter independently verifies and normalizes thread messages (`ingest_thread_message_created`), including an authoritative parent lookup on a cold SDK cache. Personal Feed discussion-thread replies now use that production typed path, an exact-root SQLite check, and the existing deterministic User Actor Create publisher. Registration notices are best-effort adapter sends with stable attempt keys. Subscribed and local-community forum starters/replies **still use legacy SDK-shaped domain handlers** until their separate typed cutover; forum Create submitted to the neutral route fails explicitly. A preparatory `ContentPublishService.publish_normalized_post_to_community()` accepts a verified forum `ThreadCreated` with an independently observed `MessageView` starter, checks separate thread/starter IDs and author provenance, and delegates to the **same** canonical AP render/persistence code as the old publisher. A companion `publish_normalized_comment_to_community()` validates forum reply containment (`reply_to` must reference the same physical thread), author registration and moderation before the same shared canonical comment persistence. For both typed paths, unregistered/banned/moderation-unavailable rejection notices use an adapter-only best-effort send with a stable attempt key. Neither method is yet wired to production Gateway callbacks or forum fanout; no second live publication route has been enabled. The existing `DiscordFanout` now also exposes preparatory neutral sibling thread/message delivery through `PlatformDeliveryPort`: each destination must have a current accepted SQLite subscription for the same community and allowed guild, physical writes carry stable per-target `CreateAttempt` keys, and returned thread/starter IDs remain distinct. For replies, per-target parent references are resolved by the owning runtime. The preparation now also includes `community_sync.reply_mapping.resolve_normalized_reply_context()`: it obtains canonical parent-group and sibling-reference IDs from existing SQLite delivery rows using `MessageCreated.reply_to`, verifies source thread membership in the same group, and refuses forged cross-thread references. Missing parent mappings preserve the existing intentional flat-send fallback. Legacy SDK reference resolution remains in place only for the currently active production route. The old SDK-backed fanout remains the sole active route until the forum runtime/ingress cutover; the typed fanout does not claim to implement durable Stage 04 receipt recovery. Root attachments are explicitly unsupported, not silently removed from the ActivityPub body. Uncached message deletion remains ID-only; physical thread rename/delete remains a no-op. Stage 03 is not complete.
 
-## Local-community relay outcome persistence is not atomic
+## Ownership and identities
 
-Gateway outcomes are applied one row at a time through repository methods that open
-separate sessions. If persistence fails after one outcome is committed, earlier
-rows remain updated while later rows remain pending. Pending rows are retryable,
-but the fanout call itself raises and does not return a complete summary.
+Stage 01's `PlatformConnector` and `ChannelSurface` rows are authoritative for connector metadata and physical channel claims. A `ConnectorRef(key, platform, instance_origin)` is only a non-secret process snapshot; Fluxer origins must be the canonical value stored by the repository. `PlatformAdapterRegistry` requires an explicit set of allowed connectors and registers one matching adapter per key. `get` and `get_for_channel` never fall back to Discord, bind channels, write mapping rows or close SDK clients. Composition owns each adapter's client lifecycle. Connector presence alone is **not** authorization or a running Fluxer Gateway.
 
-## Personal-feed history is not replayed after rebinding
+A `ChannelRef` is physically identified by `(connector_key, external_channel_id)`: its `kind` (`forum`, `text`, `announcement`, `unknown`) and `external_guild_id` are metadata excluded from equality/hash. Confirmed metadata can enrich a reference without creating a new identity. `ThreadRef(channel, external_thread_id)` inherits the parent identity; a forum thread does not imply its starter-message ID. `MessageRef(connector_key, external_container_id, external_message_id)` uses the **immediate** message container: a thread for a reply/starter, a text/announcement channel for a root. It can be constructed from raw `MESSAGE_DELETE(id, channel_id)` without fetching the parent forum. External identifiers stay opaque strings; two connectors can legitimately use the same values.
 
-Inbound personal-feed comments remain durable when the active binding is removed,
-moved, or Discord delivery reaches its three-attempt terminal failure. The bridge
-suppresses delivery to stale channels but does not reconstruct retained roots,
-threads, or comments in a replacement Discord channel.
+`ChannelView` provides verified physical kind, `ThreadView.starter` is the **actual** starter `MessageRef` when observable and otherwise `None`, and `MessageView` can provide content for partial edit reconciliation. A lookup does not establish a `ChannelSurface` claim or authorize publishing. The stateful contract fake rejects a thread lookup or send when the requested parent channel differs from the stored physical thread parent, even if the thread ID itself exists. Known conflicting guild/kind claims must fail before a privileged operation; unknown metadata is not a permission grant. Core/persistence owns claim resolution, canonical ActivityPub object IDs, copies, source/mirror roles, policy checks and fanout.
 
-## Stage 01 simplicity review
+## Ports and boundary validation
 
-- Personal Feed service lookups now share `discord_claim_query()` with the repository; mismatched guild/channel projections are excluded consistently.
-- Migration parent delivery lookup uses snapshot indexes keyed by group ID and exact target channel/thread; missing parents still abort and roll back the upgrade.
+`src/runtime_ports.py` is the **only** core-facing protocol location. Structural `PlatformLookupPort` provides `fetch_channel`, `fetch_thread`, `fetch_message`, `check_permissions`, `capabilities`, and read-only `reconcile_create`. `PlatformDeliveryPort` provides `create_forum_thread`, `create_reply_thread`, `send_message`, `edit_message`, `delete_message`. `PlatformAdapterPort` combines them with immutable `.connector`; `PlatformInboundSinkPort` accepts one normalized event. The Stage 03 `src/discord_legacy_projection.py` is the temporary checked boundary for mapping `discord-primary` references to Discord-only integer repository IDs (including explicit thread-parent and message-container selection); this is not a global ID conversion for Fluxer or other connectors. No generic outbound physical thread edit/delete or channel-management operation exists in this stage. Incoming thread update/delete events remain supported.
 
-- Migration diagnostics now provide SQL operation/table/check context with chained causes and hidden bound parameters. Conflict errors expose selected IDs only; phase logs report transaction outcomes without row bodies, keys or tracebacks. Historical v1 target pinning is tracked before any v2 ORM change.
+Examples (SDK imports and integer conversion are deliberately absent):
 
-## Stage 02 implementation review (resolved)
+```python
+forum = ChannelRef('discord-primary', '900', 'forum', '1')
+created = CreatedThread(
+    ThreadRef(forum, '111'),
+    MessageRef('discord-primary', '111', '222'),  # actual starter != thread id
+    'bot',
+)
+reply = MessageRef('discord-primary', '111', '333')
+raw_delete = MessageDeleted('discord-primary', reply)  # no parent lookup required
+attempt = CreateAttempt('durable-copy-key', 'discord-primary', 'message', created.thread)
+```
 
-- `validate_created_receipt()` now rejects conflicting known forum kind/guild
-  metadata independently of physical `ChannelRef` equality. Missing metadata
-  may still be enriched without changing the channel identity.
-- The Stage 02 stateful test transport now assigns distinct, deterministic
-  thread/starter IDs for independent forum posts and does not replace an
-  already observed thread. This was a fake-only defect, not live Discord routing.
+Before a create, the concrete adapter calls `validate_create_attempt(attempt, operation, destination)` and checks the verified channel kind, capability and current permissions **before network I/O**. `validate_message_reply` rejects a parent outside the exact connector and immediate container; the caller explicitly elects a flat send with `reply_to=None` when policy permits it. Successful create receipts are checked with `validate_created_receipt` before admission to core mapping storage. A forum receipt must not contradict the requested channel’s **known** kind or guild: `ChannelRef` equality intentionally compares physical IDs only, so receipt validation separately compares known metadata while allowing unknown values to be refined. A created forum post returns **both** real thread and starter message IDs; edits/deletes mutate physical message/starter copies only. The adapter rechecks permissions at the actual write, regardless of stale preflight results. Capability booleans are not per-account ACL outcomes; `PermissionResult` distinguishes `allowed`, `denied`, `unknown`, `unsupported`.
 
-## Stage 02 adversarial checks (resolved)
+`ContentDocument` is neutral body/portable Markdown, optional title/link and `AttachmentRef` URL metadata, not an SDK File/native reply reference. The adapter renders links, mentions and supported attachments, handles platform size/tags/uploads, and disables unsolicited mention pings on mirrored content. `DeliveryPresentation('bot'|'webhook')` asks for one actual send mode; unsupported webhook mode must fail explicitly, never silently fall back to bot. Visual webhook labels are not ActivityPub author identities.
 
-- Normalized inbound message events now reject contradictory known kind/guild
-  observations between parent and thread contexts. The explicit event guild is
-  checked against all available contexts, not only the first.
-- The Stage 02 stateful test adapter checks the actual thread parent during
-  fetch/send, so a thread ID cannot be used through a different forum.
-- Message edit timestamps and all inbound receipt times must be timezone-aware
-  datetimes when supplied; missing optional edit time remains `None`.
-  `THREAD_STARTER_MESSAGE` cross-container references remain representable.
+## Inbound Gateway event family
 
-## Stage 03 partial implementation validation (2026-10-19)
+`ThreadCreated`, `ThreadUpdated`, `ThreadDeleted`, `MessageCreated`, `MessageUpdated`, `MessageDeleted` are frozen, connector-scoped platform events; they are **not** Fedify/ActivityPub events. Each has diagnostic, timezone-aware `received_at` and optional `external_guild_id`; the API rejects naive or non-datetime timestamps. `MessageUpdated.edited_at` and `MessageView.edited_at` require timezone-aware `datetime` when known, with `None` meaning an unknown edit time. Stage 03 extends `MessageCreated.created_at` to preserve the actual source message creation instant separately from diagnostic `received_at`; its optional absence keeps generic transport fakes valid, but Discord publication must obtain the source timestamp. `MessageUpdated.author` is optional best-effort `AuthorRef` metadata, rejected if its connector differs from the edited message; a missing author is not inferred from a raw cache-less edit. A resolved `thread_context` must share the message's immediate container, and any accompanying `parent_channel` must identify the same physical channel without contradicting its known kind/guild metadata. Event `external_guild_id` is checked against **both** available channel contexts, even when the first has unknown metadata. A reply reference may point into another container for Discord `THREAD_STARTER_MESSAGE`; this is not an outbound reply permission. Raw message updates/deletes require no parent channel, cache or network fetch. Missing `MessageUpdated.content is None` is **not** empty content; `ContentDocument(body='')` means explicit empty content. `ThreadCreated.newly_created=None` and `MessageCreated.is_starter=None` mean unknown, not false.
 
-- The baseline full pytest invocation stops in `tests/conftest.py`: `hypothesis` is missing;
-  `uv sync --frozen --all-groups` cannot reach the configured package registry.
-  `discord.py` and local Fedify Node dependencies are not installed.
-- The Stage 03 Compose gateway secret allowlist is in place and checked statically
-  with Node. A live Docker Compose environment-key check remains unverified.
-- Normalized source timestamps and edit author metadata are added to Platform API.
-  Personal Feed timestamp ordering now normalizes aware incoming timestamps to
-  UTC, rejects naive values with `invalid_timestamp`, and interprets SQLite
-  naive stored values as UTC. Historical values originally persisted with an
-  unknown non-UTC offset remain ambiguous; no inferred migration is applied.
-- The live DiscordAdapter ingress/cutover, revision-safe worker operations,
-  Fedify security upgrade/origin verification, relay identity/routing and SSRF
-  gates are still **not implemented or release-tested**. Stage 03 must not be
-  treated as complete based on the focused tests of the partial changes.
+`AuthorRef.kind` distinguishes `human`, `bot`, `webhook`, `unknown`; `is_bridge_owned` may be asserted only for an authenticated owned bot/webhook, never from a display name or text marker. Neither provenance nor a Gateway event alone establishes a canonical source mutation. Stage 03 will translate Discord events once at ingress; Stage 04 must combine source/mirror mapping, policy, dedup, reconnect replay and out-of-order receipts without activating parallel raw/normalized callbacks.
 
-## Stage 03 relay transaction changes (partial, 2026-10-19)
+**Stage 03 Checkpoint 29 (pre-cutover):** `CommunityRuntime.handle_normalized_thread_create()` and `handle_normalized_message_create()` now connect normalized forum publication with the existing canonical `CommunityThreadGroup`/`CommunityMessageGroup` SQLite mappings, `resolve_normalized_reply_context()` and typed sibling fan-out. Both require current accepted source subscription/guild policy and preserve distinct thread/starter IDs, echo suppression, nested-parent mapping and partial-target isolation. They are intentionally not yet dispatched from production Gateway callbacks; local-community normalized ownership and the coordinated cutover are outstanding.
 
-Source-level Announce ID reservation and per-attempt inbox/generation persistence
-are implemented. Eight isolated file-SQLite regression scenarios pass without
-Discord SDK; a direct fake-gateway fanout exercise confirms two recipients share
-an ID and a duplicate Create does not re-send. Existing complete relay/runtime
-regressions remain unverified because `discord.py` and `hypothesis` are missing.
-The historical mixed-ID conflict is intentionally blocked for reconciliation,
-not silently re-keyed. Dependency/security and adapter migration remain open.
+## Unknown create results and reconciliation
 
-## Stage 03 Personal Feed claimed-revision and create recovery (partial, 2026-10-19)
+All three create operations take a core-generated `CreateAttempt(key, connector_key, operation, destination)`. It identifies **one desired physical copy**, not each HTTP retry. Stage 04 will persist the key, the complete immutable request (including content/title/presentation/target), and delivery state **before** sending. Reusing a key with changed data is invalid. Adapter-local correlation must also reject altered requests it has seen. The DTO has no timestamp and no retry-deadline state.
 
-The repository now compares the actual claimed revision/deleted flag on every
-physical completion. An uncertain ID-less first send remains parked across
-restart, Update, Delete and binding suppression until a verified receipt exists.
-Five dedicated SQLite scenarios pass; 19 Personal Feed scenarios also pass when
-an isolated fake `discord` module stands in for the unavailable SDK import.
-The **live** worker still uses discord.py directly and must be cut over to
-DiscordAdapter before this Stage can be called complete; real Discord HTTP
-errors and cancellation need SDK-backed regression tests.
+`PlatformOperationError(reason='unknown_delivery')` is the **only** uncertain-create classification; other reasons are `not_found`, `forbidden`, `unsupported`, `invalid_request`, `rate_limited`, `unavailable`. A response may have been lost after the remote object was committed. `reconcile_create(attempt)` is a side-effect-free read that returns a verified `CreatedThread` (forum), `CreatedMessage` (message), `ThreadRef` (reply thread), or `None` (**unresolved**, not confirmed non-delivery). A known receipt must match connector, target and operation. For forum/message creates it additionally needs a provable link to the exact attempt; matching title/body/timestamps or a negative history scan is not proof. Discord message `nonce`/`enforce_nonce` is time-limited and does not give a documented safe retry deadline; forum creation has no matching documented uniqueness contract. `None` never triggers blind create replay. No Stage 02 fake claims to implement Stage 04's durable recovery workflow.
 
-## Stage 03 Gateway normalization (partial, 2026-10-19)
+**Personal Feed exception:** Discord threads created *from* an existing text/announcement-channel root message share its ID; there can be only one. A verified existing `ThreadRef` with the root ID, correct parent connector/channel and compatible thread kind can be adopted even when it predates the attempt. This is proof of the intended **target**, not proof the current attempt created it. `create_reply_thread` may return such a preexisting thread rather than issuing a second create; `reconcile_create` may return it when verified with a network/platform lookup. The exception never extends to forum posts or arbitrary messages, nor does it authorize sending a reply without permissions. Other platforms must verify any equivalent guarantee rather than assuming Discord semantics.
 
-A pure SDK-free normalizer for six Discord event types now has eight positive/
-negative contract scenarios. Production bot callbacks are **not** yet wired to
-it, so historical direct SDK routing remains active until the DiscordAdapter
-and one normalized ingress replace it. These tests are contract checks, not
-live Discord Gateway integration.
+## Activation boundaries and coverage
 
-## Stage 03 Discord physical transport (in progress)
+Stage 03 will wrap the existing Discord transport, translate the six events atomically at Gateway ingress, and keep text/announcement Personal Feed behavior. Stage 04 will implement durable delivery intents, claim/source ownership, cross-forum routing, dedup, target-specific parent lookup, verified receipt adoption, and unresolved deliveries. Stage 05 verifies Fluxer APIs/permissions/endpoint discovery against a real instance; Stage 06 connects heterogeneous communities. The old Discord ports are deliberately retained until their last live consumers are migrated.
 
-- `DiscordAdapter` now implements the Stage 02 physical operations with strict
-  connector/parent validation, preflight ACL, bot-only presentation, and one
-  retained process-local CreateAttempt receipt per immutable request. Stateful
-  fake SDK tests cover duplicate POST prevention and actual forum/message effects.
-- The actual `BridgeBot` event handlers and domain fanout/workers have not yet
-  switched to the new adapter. SDK-dependent integration remains unverified
-  without installed `discord.py`; a process-local receipt ledger cannot provide
-  cross-process or cross-restart exactly-once delivery (Stage 04).
+Regression contracts: `tests/test_platform_types.py` for type/identity/admission semantics; `tests/behavior/test_platform_api_stage02.py` for realistic physical copy actions against stateful transport fakes and Stage 01 claims; existing Discord/Personal Feed/ActivityPub suites for *unchanged* live behavior. Stage 02 adds no SQL schema, ActivityPub URL change, SDK client, webhook worker or new background task.
 
-## Stage 03 Gateway callback lifetime (partial, 2026-10-19)
+References: [Python Protocol specification](https://typing.python.org/en/latest/spec/protocol.html); [Discord Gateway events](https://github.com/discord/discord-api-docs/blob/main/developers/events/gateway-events.mdx); [Discord Channel API (forum creation, thread from message)](https://github.com/discord/discord-api-docs/blob/main/developers/resources/channel.mdx); [Discord Message API (nonce, allowed mentions)](https://github.com/discord/discord-api-docs/blob/main/developers/resources/message.mdx); [ActivityPub W3C](https://www.w3.org/TR/activitypub/).
 
-The live Discord adapter is now constructed/registered from `app.py` and
-attached to `BridgeBot`. Existing Gateway callbacks enter one task admission
-gate before DB/Fedify access; `run_bot` drains those tasks and stops the
-Discord delivery worker inside the SDK context before SDK shutdown. Runtime
-alone closes Fedify. The existing SDK-object domain ingress has not been
-replaced with `PlatformEventIngress`, and application-command callbacks need
-additional lifetime admission review before calling this fully complete.
+## Stage 03 transport cutover (in progress)
 
-## Stage 03 idempotent canonical receipt persistence (partial, 2026-10-19)
+`src/discord_adapter.py` implements the physical Discord side of this contract.
+A borrowed SDK client resolves exact channels, parent-validated threads and
+messages, and checks current bot permissions before writes. Forum creation
+uses separate observed thread and starter message IDs; message sends suppress
+mentions. Webhook presentation and attachment uploads are explicitly refused,
+not silently replaced by bot/plain-text sends.
 
-The existing local-community repository now serializes canonical host thread and
-message receipt persistence through `BEGIN IMMEDIATE`. An identical concurrent
-receipt returns the original row and a changed AP/physical identity fails
-without overwriting it. Generic AP comment mappings and sibling Discord thread/message surfaces
-also compare exact identity under the writer reservation, recovering after a partial handler
-failure. Early duplicate ingress now checks current subscription, persisted canonical
-identity and available source evidence before fanout/relay; comment replay can
-repair a lost generic mapping from the saved host receipt. The R5-F1 Fedify
-nested-Create source authentication gate is not implemented, so stored raw
-source JSON cannot yet be treated as cryptographic author proof. Runtime adapter routing and all mutation/SDK-specific ingress checks also remain
-incomplete. Physical adapter SDK I/O now tracks task lifetimes for reads, edits,
-deletes and creates; quiesce cancels and joins them after inbound callbacks drain,
-but this does not prove command/interaction callback lifetime safety.
+Each connector-scoped `CreateAttempt` key is admitted through a process-local
+singleflight ledger. Matching concurrent calls share one receipt; a changed
+request is rejected, an uncertain result is retained without physical replay,
+and receipt capacity fails closed rather than evicting evidence. This registry
+is not a durable retry queue or a cross-restart deduplicator; that remains the
+Stage 04 boundary. Routing the existing domain runtimes through the adapter is
+not yet complete.
 
-## Stage 03 outbound signed JSON egress hardening (checkpoint 12, partial)
+## Stage 03 Checkpoint 29 — typed remote-community orchestration (pre-cutover)
 
-Custom signed ActivityPub POST now admits the HTTPS URL before signing,
-validates every DNS result at the actual TLS connection lookup and rejects
-private/special-use IPs. The Node HTTPS transport does not follow redirects,
-uses a fresh socket and bounds response size/time. Three standalone Node tests
-and isolated TypeScript checking pass. The Fedify-native `sendActivity` path
-and unrestricted remote Actor fetch are **not** covered by this change; the
-Fedify dependency lockfile remains at 2.2.0 because the package registry is
-unreachable. This is not completion of the R7-F2 security release gate.
-
-## Stage 03 remote Actor GET hardening (checkpoint 13, partial)
-
-Remote community Actor resolution now uses Fedify `ctx.lookupObject` with
-`crossOrigin: 'throw'` and validates exact Actor ID and public HTTPS inbox.
-The previous unrestricted `fetch()` in `outbound/remote-actor.ts` is removed;
-all Follow/publish/mutation call sites pass their federation context. Three
-positive/negative Node tests pass without Fedify dependencies. Full Fedify
-runtime and dependency-version checking remains blocked by unavailable npm;
-this is not final R7-F2 integration verification.
-
-## Stage 03 forwarded ActivityPub origin gate (checkpoint 14, not release-certified)
-
-Wrapped Announce(Create/Update/Delete) now compares cached outer identity to
-Fedify's typed accepted Announce and dereferences the exact original activity
-via its origin-checked lookup before normalization. Python receives only the
-independently verified payload. Direct activities check typed Fedify actor vs
-embedded author. Eight pure security scenario tests pass. This gateway path has
-**not** run with installed Fedify, and the `package-lock.json` still pins
-vulnerable Fedify 2.2.0. Legitimate non-dereferenceable forwarded mutations
-are explicitly fail-closed under T9. Real Lemmy federation and DNS/redirect
-integration are mandatory release gates.
-
-## Stage 03 checkpoint 14 focused regression verification
-
-With global `conftest.py` disabled solely to avoid baseline missing `hypothesis`,
-51 Stage 03 standalone Python scenarios pass (SQLite/fake SDK). Four standalone
-Node source modules typecheck with global Node types, and 14 Node security
-scenarios pass. Full pytest, Fedify TypeScript suite and live Discord/Fedify
-integration are not verified, and the vulnerable Fedify dependency remains a
-release blocker.
-
-## Stage 03 typed message mutation admission (Checkpoint 16, 2026-10-19)
-
-The existing mutation handler now supports typed edit/delete events with connector
-validation before Discord-ID DB lookup, no SDK message objects in the typed
-path, echo/role admission, and adapter-only reconciliation for partial edits.
-The production bot remains on its legacy callback path until the full one-ingress
-cutover can switch thread/message creation and mutations atomically. Five
-focused positive/negative tests plus eleven existing mutation-handler tests pass
-using an import-only `discord` test stub; this does not verify the real SDK.
-
-## Stage 03 checked legacy ID projection (Checkpoint 17, 2026-10-19)
-
-`discord_id_to_legacy_int()` now accepts only `discord-primary` platform
-references, rejects zero/invalid snowflakes, and distinguishes thread/parent
-and message/container IDs. Typed edit/delete admission uses this boundary
-instead of direct integer parsing. Nine positive/negative projection tests pass;
-remaining community runtimes still require the same cutover in Stage 03.
-
-## Stage 03 uncached thread-parent normalization (Checkpoint 18, 2026-10-19)
-
-The Gateway normalizer rejects a message with a physical `parent_id` but no
-verified parent object, avoiding accidental Personal Feed root publication.
-A real SDK caller must fetch/verify the parent before normalizing; no callback
-cutover has yet been performed. Two targeted positive/negative tests pass.
-
-## Stage 03 Gateway ingress activation (partial)
-
-- Raw Discord message edits/deletes and raw thread updates/deletes now use one
-  adapter-normalized ingress; the old raw mutation entry points are no longer
-  called from production Gateway callbacks. Message/thread creation is still on
-  SDK-object handlers until the single typed Create cutover is complete.
-- Full pytest remains blocked by missing `hypothesis` and `discord.py`; the
-  installed Fedify dependency and native SSRF transport remain unverified.
-
-## Stage 03 worker shutdown order (verified focused tests)
-
-- `app._run_bot_lifetime()` now stops Personal Feed and User Actor workers
-  before Discord SDK close; one worker stop error cannot skip the other.
-  Adapter callback/SDK-task drain and both worker stops join cooperative async
-  finalizers even after a second cancellation. Full installed-SDK shutdown and
-  uncooperative network integration tests remain unverified.
-- Definitive Personal Feed Discord preflight errors (`invalid_request`,
-  `unsupported`) now stop retries using existing failed state; transient
-  `unavailable` still schedules recovery.
-
-## Stage 03 Personal Feed root DTO ingress (Checkpoint 21, 2026-10-19)
-
-- Bound text/announcement roots now pass through DiscordAdapter, the single typed ingress and the owner-verified PersonalFeedPublisher. Production forum starters and thread replies still use legacy SDK-shaped create routes; submitting those through typed ingress fails visibly. The legacy `publish_root(message=SDK, binding=...)` entry remains for tests and other direct callers until the remaining Create cutover is complete; it shares the same persistent publish core.
-- Original Discord source timestamp and owner binding remain required. Unsupported attachments are rejected explicitly. Focused real SQLite tests pass, while full installed-SDK tests remain blocked by missing dependencies.
-
-## Stage 03 Personal Feed typed discussion-thread adoption (Checkpoint 22, 2026-10-19)
-
-- The live manual text/announcement discussion-thread path now normalizes `ThreadCreated`, checks the persisted Personal Feed root identity and exact parent, and adopts using the existing repository. A verified forum `ThreadCreated` cannot silently pass the incomplete typed Create path. Missing/wrong parent or guild is rejected at adapter boundary; no starter history guess is made for Personal Feed.
-- Generic forum thread and local/remote community message Create remain SDK-shaped. Full installed-SDK and multi-service integration tests remain unavailable; focused normalized runtime/SQLite tests passed.
-
-## Stage 03 verified thread message boundary (Checkpoint 23, 2026-10-19)
-
-- Adapter now verifies observed thread parent and three guild identities before normalizing a reply into `MessageCreated`; synthetic starter events and unsupported attachments cannot publish through that boundary.
-- Production `on_message` remains on SDK-shaped forum/Personal Feed reply handlers until typed domain routes can be switched without duplicate publication.
-
-## Stage 03 Personal Feed typed replies (Checkpoint 24, 2026-10-19)
-
-- Production Personal Feed reply Create now uses `DiscordAdapter` → normalized ingress → canonical SQLite publication, including out-of-order root adoption and nested-parent validation. Legacy direct `publish_local_reply(message=...)` remains for existing non-production callers until the remaining forum cutover.
-- Cold-cache thread parent resolves through an exact adapter channel lookup. If the lookup fails, ingress rejects the event without fabricating a parent.
-- Community/local forum Create and fanout are still SDK-shaped. Full installed-Discord/Fedify integration tests and patched Fedify native SSRF validation remain blocked by missing dependencies.
-
-## Stage 03 normalized forum starter publisher preparation (Checkpoint 25, 2026-10-19)
-
-- `ContentPublishService` now has an SDK-free forum-starter publication entry that checks a verified `ThreadCreated` and `MessageView`, registration, moderation and distinct thread/starter IDs before calling the unchanged AP publication/persistence core. Real SQLite positive/negative scenarios pass with fake external transports.
-- This is **not** a production cutover: subscribed/local community forum callbacks, ownership, sibling fanout and starter acquisition still use existing SDK-shaped handlers. Do not activate a second publish path until those boundaries move together.
-
-## Stage 03 normalized forum comment publisher preparation (Checkpoint 26, 2026-10-19)
-
-- `ContentPublishService.publish_normalized_comment_to_community()` now requires verified forum parent and same-thread reply references, checks author registration/moderation, and delegates ActivityPub comment rendering/persistence to the same existing fields-based canonical core. A failure to send rejection notices cannot federate the comment. Real SQLite positive/negative tests pass alongside legacy post/comment publishing tests.
-- The new API takes an AP parent object ID selected by the owning runtime. It is **not** a replacement for canonical thread/reply-group ownership validation; no production community callback has been switched, and Community/Local Community fanout remains SDK-shaped.
-
-## Stage 03 neutral sibling fanout preparation (Checkpoint 27, 2026-10-19)
-
-- `DiscordFanout` can now send typed mirrored forum threads/replies through `PlatformDeliveryPort` with accepted-subscription/guild checks, deterministic per-target attempt keys, real starter/thread receipts, per-target reply reference and partial failure isolation. Eight SQLite-backed regression tests pass.
-- Production Community/Local Community routes still call their SDK-backed fanout until canonical source/recipient and mapping ownership are cut over together. The new methods are not a second live publication path.
-- No durable retry/receipt recovery for previously unknown physical copies is added; Stage 04 retains that separate task.
-
-## Stage 03 normalized Community reply-chain resolution (Checkpoint 28, 2026-10-19)
-
-- `resolve_normalized_reply_context()` resolves typed `MessageCreated.reply_to` under the source canonical thread-group and physical delivery, returning the existing per-thread `ReplyContext` without constructing SDK reference objects. Unknown/stale parent mappings preserve flat-send fallback; foreign group, source thread and reply container cannot authorize parent relationships.
-- This is a pre-cutover mechanism. The old SDK route remains production-owned until Community create routing, adapter fanout and source/mirror mapping preservation are switched together.
+`CommunityRuntime` now has typed forum starter/reply paths using real SQLite group/delivery receipts, checked subscriber/guild policy, the existing publisher and neutral sibling fan-out. Eight new end-to-end SQLite scenarios and 47 related focused regressions passed with an import-only `discord` stub. Production forum callbacks and local-community routes are still SDK-based and have not been switched; no parallel live publisher was added. Full pytest and installed Fedify/Discord integration remain blocked by unavailable dependencies.

@@ -41,6 +41,14 @@ This document explains the major runtime traces through the bridge: user/platfor
 2. The adapter refuses unsupported attachments instead of discarding them and emits one `MessageCreated` with its immediate thread container, parent channel kind, reply reference, actual author and original timestamp. Discord's synthetic `THREAD_STARTER_MESSAGE` emits nothing.
 3. The production Personal Feed reply callback now uses this neutral event; subscribed/local community forum replies still call their existing SDK-shaped runtime. The physical parent may be fetched via the adapter when absent from the SDK cache; a failed/conflicting lookup does not guess the parent or convert the message into a root.
 
+## Remote community forum publication through typed runtime (Stage 03 pre-cutover)
+
+1. A verified forum `ThreadCreated` plus separately verified starter `MessageView` enters `CommunityRuntime.handle_normalized_thread_create()` (preparatory route, not yet bound to production callbacks). The runtime checks the current accepted source subscription, persisted guild and federation policy before any ActivityPub publish.
+2. The canonical `ContentPublishService.publish_normalized_post_to_community()` verifies the author and publishes using the existing gateway and persistence. The runtime records the actual thread ID and distinct starter ID in `CommunityThreadGroup` and the source delivery row; each current accepted sibling is sent via `DiscordFanout.mirror_normalized_thread_to_siblings()` and `PlatformDeliveryPort`.
+3. A verified `MessageCreated` inside any mapped subscribed forum enters `handle_normalized_message_create()`. Existing physical deliveries and original starters cannot be republished; new authored messages in either a source or mirror thread can become canonical comments.
+4. `resolve_normalized_reply_context()` validates source physical thread membership and maps a source starter or persisted parent comment to the correct target-specific parent references. Unknown referenced messages retain the legacy flat-send policy; cross-thread or cross-connector references fail before federation.
+5. The shared content publisher creates one ActivityPub comment; message-group and per-target SQLite receipts preserve source/mirror mapping. Each target failure is isolated. **These functions are not wired to the Gateway yet:** local-community routing and forum production callbacks still require their coordinated cutover, to avoid two active publication paths.
+
 ## Discord thread -> remote Lemmy community publish flow
 
 1. `src/discord_bot.py` receives a Discord event.
