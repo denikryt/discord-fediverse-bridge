@@ -119,3 +119,118 @@ async def test_runtime_close_normal_completion_releases_every_owner():
     )
     await _close_method()(world)
     assert steps == ['admission', 'ingress', 'feed', 'user', 'io', 'oauth', 'fedify', 'database', 'lease']
+
+
+@pytest.mark.asyncio
+async def test_runtime_close_reports_primary_and_secondary_failures_in_order():
+    """A failing lease cleanup cannot overwrite the earlier worker-stop failure."""
+    steps = []
+
+    class Owner:
+        """Simulate two independent failures amid the production shutdown order."""
+
+        def __init__(self, stage):
+            """Keep the named lifecycle phase for assertions."""
+            self.stage = stage
+
+        def close_ingress_admission(self):
+            """Close the admission gate even when later steps fail."""
+            steps.append('admission')
+
+        async def drain_ingress(self):
+            """Drain accepted callbacks before either worker."""
+            steps.append('ingress')
+
+        async def stop(self):
+            """Fail exactly the first worker after its join completes."""
+            steps.append(self.stage)
+            if self.stage == 'feed':
+                raise RuntimeError('first feed failure')
+
+        async def quiesce(self):
+            """Quiesce SDK I/O after worker stop attempts."""
+            steps.append('io')
+
+        async def close(self):
+            """Close an async owned client."""
+            steps.append(self.stage)
+
+    class SyncOwner(Owner):
+        """Exercise synchronous DB and lease release boundaries."""
+
+        def close(self):
+            """Raise on the last cleanup to test preservation of the first error."""
+            steps.append(self.stage)
+            if self.stage == 'lease':
+                raise RuntimeError('final lease failure')
+
+    world = SimpleNamespace(
+        discord_adapter=Owner('adapter'),
+        personal_feed_discord_delivery_worker=Owner('feed'),
+        user_actor_delivery_worker=Owner('user'),
+        discord_oauth_client=Owner('oauth'), fedify_gateway=Owner('fedify'),
+        database=SyncOwner('database'), deployment_state_lease=SyncOwner('lease'),
+    )
+    with pytest.raises(ExceptionGroup) as raised:
+        await _close_method()(world)
+    assert [str(error) for error in raised.value.exceptions] == [
+        'first feed failure', 'final lease failure',
+    ]
+    assert steps == ['admission', 'ingress', 'feed', 'user', 'io', 'oauth', 'fedify', 'database', 'lease']
+
+
+@pytest.mark.asyncio
+async def test_runtime_close_retains_cancellation_and_secondary_error():
+    """Cancellation during shutdown is not replaced by a late release failure."""
+    steps = []
+
+    class Owner:
+        """Represent one named close owner with deterministic async failure."""
+
+        def __init__(self, stage):
+            """Remember the owning stage for the shutdown ordering assertions."""
+            self.stage = stage
+
+        def close_ingress_admission(self):
+            """Close callback admission before any awaited operation."""
+            steps.append('admission')
+
+        async def drain_ingress(self):
+            """Complete callback draining."""
+            steps.append('ingress')
+
+        async def stop(self):
+            """Model a cancelled stop after the worker has been joined."""
+            steps.append(self.stage)
+            if self.stage == 'feed':
+                raise asyncio.CancelledError()
+
+        async def quiesce(self):
+            """Complete SDK I/O teardown."""
+            steps.append('io')
+
+        async def close(self):
+            """Complete client teardown."""
+            steps.append(self.stage)
+
+    class SyncOwner(Owner):
+        """Represent database and deployment lease release."""
+
+        def close(self):
+            """Inject a later cleanup error without overwriting cancellation."""
+            steps.append(self.stage)
+            if self.stage == 'lease':
+                raise RuntimeError('lease failure')
+
+    world = SimpleNamespace(
+        discord_adapter=Owner('adapter'),
+        personal_feed_discord_delivery_worker=Owner('feed'),
+        user_actor_delivery_worker=Owner('user'),
+        discord_oauth_client=Owner('oauth'), fedify_gateway=Owner('fedify'),
+        database=SyncOwner('database'), deployment_state_lease=SyncOwner('lease'),
+    )
+    with pytest.raises(BaseExceptionGroup) as raised:
+        await _close_method()(world)
+    assert isinstance(raised.value.exceptions[0], asyncio.CancelledError)
+    assert str(raised.value.exceptions[1]) == 'lease failure'
+    assert steps == ['admission', 'ingress', 'feed', 'user', 'io', 'oauth', 'fedify', 'database', 'lease']

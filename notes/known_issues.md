@@ -222,3 +222,10 @@ Fedify-native security integration remains blocked by missing dependencies.
   groups remain eligible for first-send backfill. Definite failed recipients
   also remain conservatively unrecovered without durable negative evidence.
   Legacy unbound SDK helper still needs deletion during Stage 03 cutover.
+
+- **Stage 03 Checkpoint 51:** `Runtime.close()` now retains the first
+  shutdown exception and separately reports subsequent exceptions through an
+  ordered `ExceptionGroup`/`BaseExceptionGroup`; all owners receive their
+  cleanup attempt. Real worker task joining remains the worker's contract.
+  Discord command/interaction task lifetime and second-cancellation cleanup
+  under the native SDK still require integration validation.
