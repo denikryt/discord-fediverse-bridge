@@ -18,6 +18,17 @@ Keep these values set:
 - `BRIDGE_BIND_HOST` / `BRIDGE_BIND_PORT` — local bridge bind defaults for direct runs
 - `BRIDGE_GATEWAY_URL` — bridge-side CLI target used by operator commands
 
+Production Compose does not pass the entire root `.env` to the gateway: it
+interpolates only `PUBLIC_BASE_URL`, `FEDIFY_SHARED_SECRET`, optional
+`FEDIFY_ACTOR_*` display values and `LOG_LEVEL`, plus fixed routing/port values.
+For manual Compose startup use `docker compose --env-file .env ...`, or
+`--env-file .env.dev` for the development instance. The deployment helper
+already selects the proper file. A service-level `env_file` for the Python bridge
+does not select the file for Compose `${...}` interpolation.
+
+Direct `npm run start` and `npm run dev` intentionally still read `../.env` and
+therefore are **not** covered by the production Compose secret allowlist.
+
 The gateway derives its bridge API base from `BRIDGE_EVENTS_URL` when Compose provides it. Otherwise it falls back to `BRIDGE_BIND_HOST` / `BRIDGE_BIND_PORT`.
 
 ## Signing Keys

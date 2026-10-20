@@ -28,9 +28,15 @@ services:
   fedify-gateway:
     image: ${GATEWAY_IMAGE:-discord-fediverse-bridge-fedify-gateway}:${BRIDGE_VERSION:?BRIDGE_VERSION is required}
     restart: unless-stopped
-    env_file:
-      - ${COMPOSE_ENV_FILE:-.env}
+    # The public ActivityPub gateway must not receive Discord/OAuth credentials.
+    # Compose interpolation uses the selected --env-file, not the bridge env_file.
     environment:
+      PUBLIC_BASE_URL: ${PUBLIC_BASE_URL:?required}
+      FEDIFY_SHARED_SECRET: ${FEDIFY_SHARED_SECRET:?required}
+      FEDIFY_ACTOR_IDENTIFIER: ${FEDIFY_ACTOR_IDENTIFIER:-bridge}
+      FEDIFY_ACTOR_NAME: ${FEDIFY_ACTOR_NAME:-Discord Lemmy Bridge Gateway}
+      FEDIFY_ACTOR_SUMMARY: ${FEDIFY_ACTOR_SUMMARY:-Receives ActivityPub activities from Lemmy and forwards normalized events to the Python bridge.}
+      LOG_LEVEL: ${LOG_LEVEL:-INFO}
       GATEWAY_BIND_PORT: 3000
       BRIDGE_EVENTS_URL: http://bridge:8080/internal/activitypub/events
     ports:
