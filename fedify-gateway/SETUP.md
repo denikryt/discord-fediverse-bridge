@@ -82,3 +82,24 @@ Use `nginx-setup.sh --name INSTANCE --env-file PATH` so production and developme
 npm run check
 npm test
 ```
+
+## Stage 03 federation security gates (not yet release-certified)
+
+The Stage 03 gateway now rejects relayed `Announce(Create/Update/Delete)`
+when it cannot independently obtain the exact original activity from its
+claimed author's HTTPS origin. A signature on the relayer's outer `Announce`
+is not evidence of nested authorship. Non-dereferenceable nested mutations are
+intentionally rejected (`MULTIPLATFORM_STAGE03_TEMP_FORWARDED_MUTATION_PROOF`)
+until a separately verified author proof is implemented.
+
+Signed JSON POST uses public-only DNS/socket admission and never follows a
+redirect. Remote Actor resolution must use Fedify `lookupObject` with
+origin validation, not an unrestricted HTTP GET. This does **not** attest the
+Fedify-native `sendActivity` transport: the release must install a patched
+Fedify (2.2.19+ on the 2.2 line), verify its actual locked dependency tree,
+and run live private-address, redirect and DNS-rebinding tests. The existing
+2.2.0 lockfile and missing npm dependencies currently **block deployment**.
+
+The Node-only security boundary unit scenarios are runnable without installing
+Fedify: `npm run test:security-boundaries`. They do not replace `npm test` or
+real-instance interoperability checks.

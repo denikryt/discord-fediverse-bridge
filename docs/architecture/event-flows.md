@@ -37,14 +37,14 @@ This document explains the major runtime traces through the bridge: user/platfor
 
 ## Remote ActivityPub post -> Discord fanout flow
 
-1. Gateway `/inbox` receives and normalizes ActivityPub to `post.created`.
+1. Gateway `/inbox` receives ActivityPub. A wrapped `Announce(Create)` must pass the origin-author verification gate before normalization to `post.created`; a direct Create must match its Fedify-authenticated actor and embedded object author.
 2. `src/activitypub_handlers.py` validates idempotency and routes to remote subscription runtime.
 3. If no accepted subscription and no existing mapped thread context exists, Python skips the event locally while gateway delivery remains acknowledged.
 4. Otherwise Discord threads are created and group/delivery rows are recorded.
 
 ## Remote ActivityPub comment -> Discord fanout flow
 
-1. Gateway normalizes inbound comment ActivityPub to `comment.created`.
+1. Gateway validates direct/forwarded ActivityPub author provenance before normalizing a comment to `comment.created`; failed origin proof has no Python-side effects.
 2. Python validates the event and checks accepted subscription or already mapped parent/post context.
 3. Unsubscribed comments without mapped context are skipped before backfill or Discord fanout.
 4. Runtime creates Discord messages in mapped thread deliveries and records message group rows.

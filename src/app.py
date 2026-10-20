@@ -221,7 +221,7 @@ def _build_live_runtime(settings: Settings, deployment_lease: FileLock) -> Runti
         adapter_registry.register(discord_adapter)
         bot.bind_discord_adapter(discord_adapter)
         personal_feed_discord_delivery_worker = PersonalFeedDiscordDeliveryWorker(
-            database=database, bot=bot, personal_feed_service=personal_feed_service
+            database=database, adapter=discord_adapter, personal_feed_service=personal_feed_service
         )
         personal_feed_conversation_runtime.bind_delivery_wake(
             personal_feed_discord_delivery_worker

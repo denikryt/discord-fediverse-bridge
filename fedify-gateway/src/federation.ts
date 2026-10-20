@@ -6,6 +6,7 @@ import {
 import { Accept, Announce, Create, Delete, Follow, Undo, Update } from "@fedify/vocab";
 
 import { getRawActivity } from "./activitypub-raw-cache.js";
+import { verifyDirectSourceAttribution, verifyForwardedSourceRecord } from "./verified-forwarded-source.js";
 import {
   buildBridgeServiceActor,
   buildLocalCommunityGroupActor,
@@ -135,6 +136,10 @@ export function createGatewayFederation(
         // Direct Create handling is the happy path when the remote server does
         // not wrap local objects inside Announce. Errors must be logged here
         // because the inbox already returns 202 before async processing finishes.
+        const sourceActivityJson = verifyDirectSourceAttribution(
+          { id: activity.id?.href ?? null, actorId: activity.actorId?.href ?? null },
+          await activity.toJsonLd(),
+        );
         const event = await normalizeCreateActivity(activity, {
           pythonBridgeClient: getPythonBridgeClient(config),
         });
@@ -143,7 +148,6 @@ export function createGatewayFederation(
           return;
         }
 
-        const sourceActivityJson = await activity.toJsonLd() as Record<string, unknown>;
         event.source_activity_json = sourceActivityJson;
         event.source_activity_id = typeof sourceActivityJson.id === "string" ? sourceActivityJson.id : event.delivery_id;
         event.source_announce_id = null;
@@ -183,20 +187,21 @@ export function createGatewayFederation(
 
         const createRecord = extractCreateRecord(announceEnvelope.rawRecord);
         if (createRecord != null) {
-          const event = await normalizeCreateActivityFromJson(createRecord, {
+          const verifiedRecord = await verifyForwardedActivityOrigin(ctx, activity, announceEnvelope.rawRecord, createRecord);
+          const event = await normalizeCreateActivityFromJson(verifiedRecord, {
             pythonBridgeClient: getPythonBridgeClient(config),
           });
           if (event == null) {
             logDebug(isDebug, "normalizeCreateActivityFromJson returned null");
             return;
           }
-          const nestedObject = asRecord(createRecord.object);
-          event.source_activity_json = createRecord;
-          event.source_activity_id = asString(createRecord.id) ?? event.delivery_id;
+          const nestedObject = asRecord(verifiedRecord.object);
+          event.source_activity_json = verifiedRecord;
+          event.source_activity_id = asString(verifiedRecord.id) ?? event.delivery_id;
           event.source_announce_id = announceEnvelope.announceId;
           await deliverNormalizedEvent(config, event, {
             announceId: announceEnvelope.announceId,
-            createId: asString(createRecord.id) ?? event.delivery_id,
+            createId: asString(verifiedRecord.id) ?? event.delivery_id,
             eventType: event.event_type,
             kind: event.object.kind,
             objectId: asString(nestedObject?.id) ?? event.object.ap_id,
@@ -206,19 +211,20 @@ export function createGatewayFederation(
 
         const updateRecord = extractUpdateRecord(announceEnvelope.rawRecord);
         if (updateRecord != null) {
-          const event = await normalizeUpdateActivityFromJson(updateRecord, {
+          const verifiedRecord = await verifyForwardedActivityOrigin(ctx, activity, announceEnvelope.rawRecord, updateRecord);
+          const event = await normalizeUpdateActivityFromJson(verifiedRecord, {
             pythonBridgeClient: getPythonBridgeClient(config),
           });
           if (event == null) {
             logDebug(isDebug, "normalizeUpdateActivityFromJson returned null");
             return;
           }
-          event.source_activity_json = updateRecord;
-          event.source_activity_id = asString(updateRecord.id) ?? event.delivery_id;
+          event.source_activity_json = verifiedRecord;
+          event.source_activity_id = asString(verifiedRecord.id) ?? event.delivery_id;
           event.source_announce_id = announceEnvelope.announceId;
           await deliverNormalizedEvent(config, event, {
             announceId: announceEnvelope.announceId,
-            updateId: asString(updateRecord.id) ?? event.delivery_id,
+            updateId: asString(verifiedRecord.id) ?? event.delivery_id,
             eventType: event.event_type,
             objectId: event.object.ap_id,
           });
@@ -227,17 +233,18 @@ export function createGatewayFederation(
 
         const deleteRecord = extractDeleteRecord(announceEnvelope.rawRecord);
         if (deleteRecord != null) {
-          const event = await normalizeDeleteActivityFromJson(deleteRecord, { pythonBridgeClient: getPythonBridgeClient(config) });
+          const verifiedRecord = await verifyForwardedActivityOrigin(ctx, activity, announceEnvelope.rawRecord, deleteRecord);
+          const event = await normalizeDeleteActivityFromJson(verifiedRecord, { pythonBridgeClient: getPythonBridgeClient(config) });
           if (event == null) {
             logDebug(isDebug, "normalizeDeleteActivityFromJson returned null");
             return;
           }
-          event.source_activity_json = deleteRecord;
-          event.source_activity_id = asString(deleteRecord.id) ?? event.delivery_id;
+          event.source_activity_json = verifiedRecord;
+          event.source_activity_id = asString(verifiedRecord.id) ?? event.delivery_id;
           event.source_announce_id = announceEnvelope.announceId;
           await deliverNormalizedEvent(config, event, {
             announceId: announceEnvelope.announceId,
-            deleteId: asString(deleteRecord.id) ?? event.delivery_id,
+            deleteId: asString(verifiedRecord.id) ?? event.delivery_id,
             eventType: event.event_type,
             objectId: event.object.ap_id,
           });
@@ -336,7 +343,10 @@ export async function deliverDirectUpdateActivity(
   isDebug = false,
 ): Promise<void> {
   /** Normalize one direct Update and deliver it to the Python bridge. */
-  const sourceActivityJson = await activity.toJsonLd() as Record<string, unknown>;
+  const sourceActivityJson = verifyDirectSourceAttribution(
+    { id: activity.id?.href ?? null, actorId: activity.actorId?.href ?? null },
+    await activity.toJsonLd(),
+  );
   const event = await normalizeUpdateActivityFromJson(sourceActivityJson, {
     pythonBridgeClient: getPythonBridgeClient(config),
   });
@@ -360,7 +370,10 @@ export async function deliverDirectDeleteActivity(
   isDebug = false,
 ): Promise<void> {
   /** Normalize one direct Delete and deliver it to the Python bridge. */
-  const sourceActivityJson = await activity.toJsonLd() as Record<string, unknown>;
+  const sourceActivityJson = verifyDirectSourceAttribution(
+    { id: activity.id?.href ?? null, actorId: activity.actorId?.href ?? null },
+    await activity.toJsonLd(),
+  );
   const event = await normalizeDeleteActivityFromJson(sourceActivityJson, { pythonBridgeClient: getPythonBridgeClient(config) });
   if (event == null) {
     logDebug(isDebug, "normalizeDeleteActivityFromJson returned null for direct Delete");
@@ -374,6 +387,44 @@ export async function deliverDirectDeleteActivity(
     eventType: event.event_type,
     objectId: event.object.ap_id,
   });
+}
+
+
+/** Verify an Announce's nested authorship using a separate origin dereference. */
+async function verifyForwardedActivityOrigin(
+  ctx: {
+    lookupObject(identifier: string, options?: { crossOrigin?: "throw" }): Promise<unknown>;
+  },
+  announce: Announce,
+  envelope: Record<string, unknown> | null,
+  nested: Record<string, unknown>,
+): Promise<Record<string, unknown>> {
+  // The typed Announce comes from Fedify's authenticated listener. Never use
+  // cached HTTP-body actor assertions as proof of the nested author's claim.
+  try {
+    return await verifyForwardedSourceRecord(
+      { id: announce.id?.href ?? null, actorId: announce.actorId?.href ?? null },
+      envelope,
+      nested,
+      async (activityId) => {
+        // The patched Fedify document loader is the SSRF and origin authority.
+        // crossOrigin=throw rejects a returned resource with a different origin.
+        const source = await ctx.lookupObject(activityId, { crossOrigin: "throw" });
+        if (source == null || typeof source !== "object" ||
+            !("toJsonLd" in source) || typeof source.toJsonLd !== "function") {
+          return null;
+        }
+        return await source.toJsonLd();
+      },
+    );
+  } catch (error) {
+    if ((nested.type === "Update" || nested.type === "Delete") &&
+        error instanceof Error && /unverifiable/i.test(error.message)) {
+      // MULTIPLATFORM_STAGE03_TEMP_FORWARDED_MUTATION_PROOF: A relayed Update/Delete without independently provable original author is rejected; remove only when a verified author-signature or origin lookup mechanism safely supports non-dereferenceable mutations.
+      throw new Error("forwarded mutation origin_unverifiable", { cause: error });
+    }
+    throw error;
+  }
 }
 
 function getAnnounceEnvelope(

@@ -156,3 +156,15 @@ all Follow/publish/mutation call sites pass their federation context. Three
 positive/negative Node tests pass without Fedify dependencies. Full Fedify
 runtime and dependency-version checking remains blocked by unavailable npm;
 this is not final R7-F2 integration verification.
+
+## Stage 03 forwarded ActivityPub origin gate (checkpoint 14, not release-certified)
+
+Wrapped Announce(Create/Update/Delete) now compares cached outer identity to
+Fedify's typed accepted Announce and dereferences the exact original activity
+via its origin-checked lookup before normalization. Python receives only the
+independently verified payload. Direct activities check typed Fedify actor vs
+embedded author. Eight pure security scenario tests pass. This gateway path has
+**not** run with installed Fedify, and the `package-lock.json` still pins
+vulnerable Fedify 2.2.0. Legitimate non-dereferenceable forwarded mutations
+are explicitly fail-closed under T9. Real Lemmy federation and DNS/redirect
+integration are mandatory release gates.

@@ -5,9 +5,11 @@ from __future__ import annotations
 import asyncio
 import logging
 
-import discord
-
-from .runtime_ports import DiscordChannelLookupPort
+from .platform_types import (
+    ChannelRef, ContentDocument, CreateAttempt, DeliveryPresentation, MessageRef,
+    PlatformOperationError, ThreadRef,
+)
+from .runtime_ports import PlatformAdapterPort
 
 logger = logging.getLogger(__name__)
 
@@ -16,11 +18,11 @@ class PersonalFeedDiscordDeliveryWorker:
     """Own retry scheduling and Discord side effects for retained inbound comments."""
 
     def __init__(
-        self, *, database: object, bot: DiscordChannelLookupPort, personal_feed_service: object
+        self, *, database: object, adapter: PlatformAdapterPort, personal_feed_service: object
     ) -> None:
-        """Bind durable state, Discord adapter, and active-binding resolver."""
+        """Bind canonical state, a typed physical adapter, and active binding."""
         self.database = database
-        self.bot = bot
+        self.adapter = adapter
         self.personal_feed_service = personal_feed_service
         self._wake = asyncio.Event()
         self._task: asyncio.Task[None] | None = None
@@ -76,102 +78,167 @@ class PersonalFeedDiscordDeliveryWorker:
                 await self._deliver(claim)
 
     async def _deliver(self, claim: object) -> None:
-        """Create, revise, or remove one retained Discord comment."""
+        """Apply one immutable inbound AP revision to an exact Discord receipt.
+
+        SDK I/O and its uncertainty are owned by the adapter; the repository
+        owns the durable pre-create intent, revision and retry transitions.
+        """
         root_user = self.database.users.get_user_by_actor_url(claim.root_actor_url)
         if not self._is_active(root_user, claim):
             self.database.personal_feed_conversations.suppress_delivery(
                 claim.delivery_id, "inactive personal-feed binding"
             )
             return
+        connector = self.adapter.connector.key
+        channel_ref = ChannelRef(connector, str(claim.root_channel_id))
+        root_ref = MessageRef(
+            connector, str(claim.root_channel_id), str(claim.root_message_id)
+        )
         first_send_started = False
         try:
-            thread = self.bot.get_channel(claim.root_message_id)
             if claim.discord_message_id is not None:
-                if thread is None:
-                    thread = await self.bot.fetch_channel(claim.root_message_id)
+                # A confirmed physical ID is the only authority for later
+                # edits/deletes. Never submit another Create for this object.
+                message_ref = MessageRef(
+                    connector, str(claim.root_message_id),
+                    str(claim.discord_message_id),
+                )
+                await self.adapter.fetch_message(message_ref)
                 if not self._is_active(root_user, claim):
                     self.database.personal_feed_conversations.suppress_delivery(
                         claim.delivery_id, "inactive personal-feed binding"
                     )
                     return
-                message = await thread.fetch_message(claim.discord_message_id)
                 if claim.deleted:
-                    await message.delete()
-                    result_message_id = claim.discord_message_id
+                    await self.adapter.delete_message(message_ref)
                 else:
-                    prefix = f"**{claim.actor_name or 'Remote user'}:** "
-                    await message.edit(
-                        content=prefix + claim.content_markdown,
-                        allowed_mentions=discord.AllowedMentions.none(),
+                    await self.adapter.edit_message(
+                        message_ref, ContentDocument(
+                            f"**{claim.actor_name or 'Remote user'}:** "
+                            + claim.content_markdown,
+                            format="portable_markdown",
+                        ),
                     )
-                    result_message_id = claim.discord_message_id
+                result_message_id = claim.discord_message_id
             else:
                 if claim.deleted:
                     self.database.personal_feed_conversations.suppress_delivery(
                         claim.delivery_id, "deleted before Discord render"
                     )
                     return
-                if thread is None:
-                    channel = self.bot.get_channel(
-                        claim.root_channel_id
-                    ) or await self.bot.fetch_channel(claim.root_channel_id)
-                    root_message = await channel.fetch_message(claim.root_message_id)
-                    try:
-                        thread = await root_message.create_thread(
-                            name=self._thread_name(claim.content_markdown)
-                        )
-                    except discord.HTTPException:
-                        thread = self.bot.get_channel(
-                            claim.root_message_id
-                        ) or await self.bot.fetch_channel(claim.root_message_id)
-                    self.database.personal_feed_conversations.adopt_thread(
-                        root_object_id=claim.root_object_id,
-                        channel_id=claim.root_channel_id,
-                        root_message_id=claim.root_message_id,
-                        thread_id=claim.root_message_id,
+                # Personal Feed roots live in text/announcement channels only.
+                # Adapter metadata, not a numeric Discord ID, proves its kind.
+                channel_view = await self.adapter.fetch_channel(channel_ref)
+                if channel_view.channel.kind not in ("text", "announcement"):
+                    raise PlatformOperationError(
+                        "invalid_request", "personal feed root is not a text channel"
                     )
+                if not self._is_active(root_user, claim):
+                    self.database.personal_feed_conversations.suppress_delivery(
+                        claim.delivery_id, "inactive personal-feed binding"
+                    )
+                    return
+                requested_thread = ThreadRef(
+                    channel_view.channel, str(claim.root_message_id)
+                )
+                try:
+                    thread_view = await self.adapter.fetch_thread(requested_thread)
+                    destination = thread_view.thread
+                except PlatformOperationError as exc:
+                    if exc.reason != "not_found":
+                        raise
+                    # An ordinary absence allows a first anchored thread
+                    # Create; unknown delivery never becomes permission to
+                    # guess or create an unrelated forum/thread copy.
+                    thread_attempt = CreateAttempt(
+                        key=f"personal-feed-root-thread:{claim.root_object_id}",
+                        connector_key=connector,
+                        operation="reply_thread",
+                        destination=root_ref,
+                    )
+                    destination = await self.adapter.create_reply_thread(
+                        root_ref, title=self._thread_name(claim.content_markdown),
+                        attempt=thread_attempt,
+                    )
+                if (destination.connector_key != connector
+                    or destination.external_thread_id != str(claim.root_message_id)
+                    or destination.channel.external_channel_id != str(claim.root_channel_id)):
+                    raise PlatformOperationError(
+                        "invalid_request", "root-anchored thread receipt mismatch"
+                    )
+                self.database.personal_feed_conversations.adopt_thread(
+                    root_object_id=claim.root_object_id,
+                    channel_id=claim.root_channel_id,
+                    root_message_id=claim.root_message_id,
+                    thread_id=int(destination.external_thread_id),
+                )
                 self.database.personal_feed_conversations.set_delivery_thread(
-                    claim.delivery_id, claim.root_message_id
+                    claim.delivery_id, int(destination.external_thread_id)
                 )
                 if not self._is_active(root_user, claim):
                     self.database.personal_feed_conversations.suppress_delivery(
                         claim.delivery_id, "inactive personal-feed binding"
                     )
                     return
-                prefix = f"**{claim.actor_name or 'Remote user'}:** "
                 # MULTIPLATFORM_STAGE03_TEMP_PERSONAL_FEED_SEND_GUARD: Persist possible first-send intent before Discord HTTP send; Stage 04 must replace this guard with durable generic delivery intent reconciliation.
                 if not self.database.personal_feed_conversations.mark_create_started(
                     claim.delivery_id
                 ):
                     return
                 first_send_started = True
-                message = await thread.send(
-                    prefix + claim.content_markdown,
-                    allowed_mentions=discord.AllowedMentions.none(),
+                attempt = CreateAttempt(
+                    key=f"personal-feed-comment:{claim.object_id}",
+                    connector_key=connector,
+                    operation="message",
+                    destination=destination,
                 )
-                result_message_id = int(message.id)
+                receipt = await self.adapter.send_message(
+                    destination,
+                    ContentDocument(
+                        f"**{claim.actor_name or 'Remote user'}:** "
+                        + claim.content_markdown,
+                        format="portable_markdown",
+                    ),
+                    reply_to=None,
+                    presentation=DeliveryPresentation("bot"),
+                    attempt=attempt,
+                )
+                result_message_id = int(receipt.message.external_message_id)
         except asyncio.CancelledError:
-            # Cancellation is lifecycle control, not a Discord failure.  Do not
-            # increment the attempt budget or convert the durable claim into an
-            # error outcome; stop() recovers dispatching rows for restart.
+            # Stop/cancellation cannot prove that the Discord POST failed.
+            # recover_dispatching() parks a marked first Create on restart.
             raise
-        except Exception as exc:
+        except PlatformOperationError as exc:
             logger.warning(
-                "Personal-feed Discord delivery failed object=%s", claim.object_id
+                "Personal-feed Discord operation failed object=%s reason=%s",
+                claim.object_id, exc.reason,
             )
-            if first_send_started and not isinstance(exc, (discord.Forbidden, discord.NotFound)):
-                # A timeout/transport error after Discord create cannot prove
-                # the message was not physically committed. Keep it parked.
+            if first_send_started and exc.reason == "unknown_delivery":
                 self.database.personal_feed_conversations.mark_uncertain_create(
                     claim.delivery_id
                 )
             else:
                 self.database.personal_feed_conversations.record_discord_attempt(
-                    claim.delivery_id,
-                    success=False,
+                    claim.delivery_id, success=False,
+                    claimed_revision_fingerprint=claim.claimed_revision_fingerprint,
+                    claimed_deleted=claim.deleted, error=exc.reason,
+                )
+            return
+        except Exception:
+            logger.exception(
+                "Personal-feed Discord operation has an unknown result object=%s",
+                claim.object_id,
+            )
+            if first_send_started:
+                self.database.personal_feed_conversations.mark_uncertain_create(
+                    claim.delivery_id
+                )
+            else:
+                self.database.personal_feed_conversations.record_discord_attempt(
+                    claim.delivery_id, success=False,
                     claimed_revision_fingerprint=claim.claimed_revision_fingerprint,
                     claimed_deleted=claim.deleted,
-                    error=str(exc),
+                    error="Discord operation failed before message Create",
                 )
             return
         self.database.personal_feed_conversations.record_discord_attempt(
