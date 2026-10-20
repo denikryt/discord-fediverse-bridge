@@ -65,6 +65,7 @@ class PlatformEventIngress:
         elif isinstance(event, MessageDeleted):
             await self.mutations.handle_platform_message_delete(event, self.adapter)
         elif isinstance(event, (ThreadUpdated, ThreadDeleted)):
+            # MULTIPLATFORM_STAGE03_TEMP_THREAD_MUTATIONS: Physical thread update/delete notices are normalized but not canonical AP mutations; Stage 04 must resolve source/copy ownership before enabling any propagation.
             # No existing domain runtime owns a physical thread rename/delete
             # as an AP mutation. Keep this an observable no-op, never an edit.
             logger.info(

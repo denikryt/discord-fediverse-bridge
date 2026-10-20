@@ -53,6 +53,8 @@ The Fedify gateway is the ActivityPub/WebFinger edge. It owns public actor/objec
 
 ## Runtime composition and cleanup
 
+`src/app.py` loads the migrated `discord-primary` connector from SQLite and refuses absent/incompatible metadata before the Gateway starts. Its registry binds exactly one live `DiscordAdapter` for that persisted identity. `Runtime.close()` attempts callback drain, both worker stops, SDK I/O quiesce, OAuth/Fedify close, DB close and deployment lease release in order even if an earlier cleanup step raises; it does not assume successful worker shutdown before releasing the final lease.
+
 `src/app.py` is the only production composition root. It opens live owners in startup order, completes the remaining Discord/runtime cycles through named one-time bind methods, validates the graph before returning `Runtime`, and closes already-opened resources in reverse order if any later constructor, bind, or validation step fails. `Runtime.close()` remains the successful-startup shutdown owner. Raw Discord edit/delete paths receive `DiscordMutationContext` from `src/runtime_ports.py` rather than a broad `Runtime` or `BridgeBot` reference.
 
 ## Bridge modes

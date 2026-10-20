@@ -181,3 +181,11 @@ Fedify-native security integration remains blocked by missing dependencies.
   mode webhook receipts would persist as mirrors; now only healthy targets are
   recorded. Uncertain physical creates, the remaining SDK-only entry points,
   Fedify security upgrade and full dependency-backed integration remain open.
+
+- **Stage 03 Checkpoint 46:** Production Discord connector selection now reads
+  the exact migrated SQLite row and refuses missing, non-Discord or origin-bearing
+  `discord-primary` metadata before adapter registration. `Runtime.close()`
+  attempts all ordered resource releases even after one shutdown exception;
+  a second concurrent cancellation and command-task lifetime still need
+  SDK-backed integration checks. T5 thread-mutation no-op is now explicitly
+  marked. Fedify pinned SDK and fan-out partial-target recovery remain open.

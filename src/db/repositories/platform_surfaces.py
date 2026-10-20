@@ -6,6 +6,7 @@ from urllib.parse import urlsplit, urlunsplit
 from sqlalchemy import select, update, String
 from sqlalchemy.orm import Session
 
+from ...platform_types import ConnectorRef
 from ...models import (
     ChannelSurface,
     PlatformConnector,
@@ -88,6 +89,21 @@ def discord_copy_query(model, *, source=False):
 
 class PlatformSurfaceRepository(BaseRepository):
     """Resolve immutable locations and mutate claims only in caller-owned transactions."""
+
+
+    def get_discord_primary_connector(self) -> ConnectorRef:
+        """Read the persisted Discord transport identity or fail before Gateway startup.
+
+        Stage 01 migration owns creation of the connector row. Runtime must
+        never construct an adapter from an assumed row that was not verified.
+        """
+        with self.session() as session:
+            row = session.scalar(select(PlatformConnector).where(
+                PlatformConnector.connector_key == 'discord-primary'
+            ))
+            if row is None or row.platform != 'discord' or row.instance_origin is not None:
+                raise RuntimeError('discord-primary connector metadata is missing or incompatible')
+            return ConnectorRef(row.connector_key, row.platform, row.instance_origin)
 
     @staticmethod
     def canonical_origin(origin: str) -> str:

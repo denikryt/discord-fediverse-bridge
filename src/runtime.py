@@ -10,6 +10,7 @@ from .config import Settings
 from .db import Database
 from .discord_bot import BridgeBot
 from .discord_adapter import DiscordAdapter
+from .platform_adapters import PlatformAdapterRegistry
 from .discord_oauth_client import DiscordOAuthClient
 from .content_publish_service import ContentPublishService
 from .fedify_gateway_client import FedifyGatewayClient
@@ -43,6 +44,7 @@ class Runtime:
     bridge_policy_service: BridgePolicyService
     bot: BridgeBot
     discord_adapter: DiscordAdapter
+    adapter_registry: PlatformAdapterRegistry
     community_runtime: CommunityRuntime
     local_community_runtime: LocalCommunityRuntime
     profile_media_store: ProfileMediaStore
@@ -61,11 +63,27 @@ class Runtime:
         # If startup failed before run_bot entered its SDK context, runtime
         # still closes callback admission before shared resources disappear.
         self.discord_adapter.close_ingress_admission()
-        await self.discord_adapter.drain_ingress()
-        await self.personal_feed_discord_delivery_worker.stop()
-        await self.user_actor_delivery_worker.stop()
-        await self.discord_adapter.quiesce()
-        await self.discord_oauth_client.close()
-        await self.fedify_gateway.close()
-        self.database.close()
-        self.deployment_state_lease.close()
+        # Every owner must get its close attempt even when an earlier owner
+        # raises or is cancelled; no worker may retain DB/Fedify after release.
+        try:
+            await self.discord_adapter.drain_ingress()
+        finally:
+            try:
+                await self.personal_feed_discord_delivery_worker.stop()
+            finally:
+                try:
+                    await self.user_actor_delivery_worker.stop()
+                finally:
+                    try:
+                        await self.discord_adapter.quiesce()
+                    finally:
+                        try:
+                            await self.discord_oauth_client.close()
+                        finally:
+                            try:
+                                await self.fedify_gateway.close()
+                            finally:
+                                try:
+                                    self.database.close()
+                                finally:
+                                    self.deployment_state_lease.close()

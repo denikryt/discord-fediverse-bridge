@@ -18,7 +18,6 @@ from .config import Settings
 from .db import Database
 from .discord_bot import BridgeBot
 from .discord_adapter import DiscordAdapter
-from .platform_types import ConnectorRef
 from .platform_event_ingress import PlatformEventIngress
 from .platform_adapters import PlatformAdapterRegistry
 from .discord_event_router import DiscordEventRouter
@@ -235,7 +234,7 @@ def _build_live_runtime(settings: Settings, deployment_lease: FileLock) -> Runti
         )
         # Physical adapter borrows BridgeBot: Runtime owns its admission/drain,
         # while the bot's async context alone closes the Discord SDK.
-        connector = ConnectorRef('discord-primary', 'discord')
+        connector = database.platform_surfaces.get_discord_primary_connector()
         adapter_registry = PlatformAdapterRegistry((connector,))
         discord_adapter = DiscordAdapter(connector=connector, bot=bot)
         adapter_registry.register(discord_adapter)
@@ -293,6 +292,7 @@ def _build_live_runtime(settings: Settings, deployment_lease: FileLock) -> Runti
             bridge_policy_service=bridge_policy_service,
             bot=bot,
             discord_adapter=discord_adapter,
+            adapter_registry=adapter_registry,
             community_runtime=community_runtime,
             local_community_runtime=local_community_runtime,
             profile_media_store=media_store,
@@ -325,6 +325,8 @@ def _validate_runtime_graph(runtime: Runtime) -> None:
     runtime.bot._require_message_mutation_handler()
     if runtime.bot.discord_adapter is not runtime.discord_adapter:
         raise RuntimeError("Runtime Discord adapter is not bound to BridgeBot")
+    if runtime.adapter_registry.get(runtime.discord_adapter.connector.key) is not runtime.discord_adapter:
+        raise RuntimeError('Live Discord adapter is not registered for persisted connector')
     if runtime.discord_adapter._sink is None:
         raise RuntimeError("Discord normalized ingress is not configured")
     runtime.bot._require_personal_feed_delivery_worker()
