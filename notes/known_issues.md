@@ -268,3 +268,16 @@ Fedify-native security integration remains blocked by missing dependencies.
   plus the sticky unknown-post control. Physical Discord SDK and Fedify
   release integration remain outstanding; process-local recovery is not a
   durable local subscriber participation delivery intent.
+
+- **Discord Adapter verification (2026-10-20):** Updated the gateway's Fedify
+  packages to 2.2.19. A pre-authentication raw Announce cache collision could
+  substitute a different origin-verifiable nested Create/Update/Delete under
+  an accepted outer ID; the gateway now checks the nested ID against Fedify's
+  accepted `Announce.objectId` before dereferencing. Local regression tests
+  cover all three activity types. Signed inbox, dial-level SSRF/TLS, and live
+  Discord SDK integration remain unverified; the full baseline suite had 24
+  Python and seven Node test-file failures before this change.
+  After the Fedify update, three additional isolated Node fixture files fail:
+  two signed Follow workflows receive no Python event and one actor route now
+  returns 406 rather than 404. Public-peer compatibility remains unverified.
+  `npm audit --omit=dev` also reports five separate Hono/OpenTelemetry findings.

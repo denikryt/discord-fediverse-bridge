@@ -6,10 +6,16 @@
  * before the gateway may normalize that source into a Python event.
  */
 
-/** Minimal Fedify-vetted outer identity; never sourced from the raw cache. */
-export interface AcceptedAnnounceIdentity {
+/** Minimal Fedify-vetted activity identity; never sourced from the raw cache. */
+export interface AcceptedActivityIdentity {
   id: string | null;
   actorId: string | null;
+}
+
+/** Outer Announce identity also includes its signed nested activity ID. */
+export interface AcceptedAnnounceIdentity extends AcceptedActivityIdentity {
+  /** Nested activity ID observed on the authenticated, typed Announce. */
+  objectId: string | null;
 }
 
 /** Fail closed if an embedded Create/Update/Delete cannot be authenticated at origin. */
@@ -19,10 +25,12 @@ export async function verifyForwardedSourceRecord(
   rawNested: Record<string, unknown>,
   loadOriginActivity: (activityId: string) => Promise<unknown>,
 ): Promise<Record<string, unknown>> {
-  // Cache lookup is not a signature. Bind *all* candidate envelope identifiers
-  // to the Announce object that Fedify accepted, before any network dereference.
+  // Raw capture precedes signature verification and is keyed only by the
+  // caller-supplied Announce ID. Bind its nested ID to Fedify's accepted typed
+  // object before origin lookup; another inbox POST may replace the cache row.
   const raw = record(envelope);
-  if (accepted.id == null || accepted.actorId == null || raw?.type !== "Announce" ||
+  if (accepted.id == null || accepted.actorId == null || accepted.objectId == null ||
+      raw?.type !== "Announce" || rawNested.id !== accepted.objectId ||
       raw.id !== accepted.id || raw.actor !== accepted.actorId ||
       stableJson(raw.object) !== stableJson(rawNested)) {
     throw new Error("ActivityPub Announce cache identity mismatch");
@@ -121,7 +129,7 @@ function comparable(value: unknown): string {
 
 /** Check direct Fedify-authenticated activity fields before domain normalization. */
 export function verifyDirectSourceAttribution(
-  accepted: AcceptedAnnounceIdentity,
+  accepted: AcceptedActivityIdentity,
   raw: unknown,
 ): Record<string, unknown> {
   // Fedify's patched inbox validation authenticates the *direct* actor;

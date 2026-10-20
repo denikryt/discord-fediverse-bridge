@@ -17,9 +17,9 @@
     "test:bridge-key-store": "./node_modules/.bin/tsx tests/verify-bridge-actor-key-store.ts"
   },
   "dependencies": {
-    "@fedify/fedify": "^2.2.0",
-    "@fedify/hono": "^2.2.0",
-    "@fedify/vocab": "^2.2.0",
+    "@fedify/fedify": "2.2.19",
+    "@fedify/hono": "2.2.19",
+    "@fedify/vocab": "2.2.19",
     "@hono/node-server": "^1.19.6",
     "hono": "^4.12.16"
   },

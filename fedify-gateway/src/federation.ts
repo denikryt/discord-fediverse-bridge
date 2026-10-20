@@ -403,7 +403,13 @@ async function verifyForwardedActivityOrigin(
   // cached HTTP-body actor assertions as proof of the nested author's claim.
   try {
     return await verifyForwardedSourceRecord(
-      { id: announce.id?.href ?? null, actorId: announce.actorId?.href ?? null },
+      {
+        id: announce.id?.href ?? null,
+        actorId: announce.actorId?.href ?? null,
+        // Fedify derived this ID from the accepted activity, independently of
+        // the mutable raw-body cache used for nested payload recovery.
+        objectId: announce.objectId?.href ?? null,
+      },
       envelope,
       nested,
       async (activityId) => {
