@@ -381,9 +381,13 @@ class DiscordAdapter:
             flight.future.set_result(PlatformOperationError('unknown_delivery'))
             raise
         except PlatformOperationError as exc:
-            if exc.reason in ('invalid_request', 'forbidden', 'not_found', 'unsupported', 'rate_limited'):
-                # Only explicit pre-send failures may be retried with this key.
-                # Physical send helpers map ambiguous HTTP failures to unknown.
+            if exc.reason in ('invalid_request', 'forbidden', 'not_found', 'unsupported',
+                              'rate_limited', 'unavailable'):
+                # These errors are raised before any POST, or represent a
+                # definitive HTTP refusal. Physical send helpers convert
+                # ambiguous post-transmission failures to unknown_delivery.
+                # In particular, a transient preflight read cannot pin an
+                # unsent attempt key for the entire adapter lifetime.
                 async with self._create_lock:
                     self._creates.pop(key, None)
             flight.future.set_result(exc)
@@ -435,9 +439,23 @@ class DiscordAdapter:
                 if channel.kind not in ('text', 'announcement'):
                     return None
                 await self._get_message(root)
-                return await self._verified_root_thread(root, channel)
+                verified = await self._verified_root_thread(root, channel)
             except PlatformOperationError:
                 return None
+            if verified is not None and flight is not None:
+                # The completed unknown Future is immutable. Publish a
+                # verified result to later same-key callers under the lock,
+                # keeping the exact original immutable request fingerprint.
+                # Waiters that already observed uncertainty may retry safely.
+                validate_created_receipt(attempt, verified)
+                async with self._create_lock:
+                    if self._creates.get((attempt.connector_key, attempt.key)) is flight:
+                        resolved = asyncio.get_running_loop().create_future()
+                        resolved.set_result(verified)
+                        self._creates[(attempt.connector_key, attempt.key)] = _CreateFlight(
+                            flight.fingerprint, resolved,
+                        )
+            return verified
         # MULTIPLATFORM_STAGE03_TEMP_UNKNOWN_CREATE: Discord has no verified durable receipt lookup for these attempts; return unresolved without replay until Stage 04 owns durable intents and receipt reconciliation.
         return None
 
@@ -803,12 +821,14 @@ class DiscordAdapter:
             if view.channel.kind not in ('text', 'announcement'):
                 raise PlatformOperationError('unsupported', 'root is not a text channel')
             sdk_root = await self._get_message(root)
-            await self._require_bot_permission(view.channel, 'start_message_thread')
             existing = await self._verified_root_thread(root, view.channel)
             if existing is not None:
                 # An already existing exact root thread is a unique physical
                 # target; creating a new thread is neither needed nor safe.
                 return existing
+            # Adoption is read-only and does not require create privileges;
+            # only an actual new POST needs CREATE_PUBLIC_THREADS.
+            await self._require_bot_permission(view.channel, 'start_message_thread')
             try:
                 thread = await sdk_root.create_thread(name=title[:90].replace('@', '@\u200b'))
             except Exception as exc:

@@ -248,3 +248,12 @@ Fedify-native security integration remains blocked by missing dependencies.
   confirmed HTTP refusal remains retryable. This does not provide durable
   general Discord message/forum create recovery (Stage 04). Native SDK-backed
   integration tests remain unavailable in this environment.
+
+- **Stage 03 Checkpoint 54:** Fixed three CP53 root-thread regressions:
+  transient pre-POST lookup failures no longer poison a `CreateAttempt` key;
+  independently reconciled late physical thread receipts replace the sticky
+  unknown outcome for later same-key callers; and adoption of a verified
+  preexisting thread works without `CREATE_PUBLIC_THREADS`. Unverified or
+  wrong-parent lookups remain fail-closed, while a new Create requires that
+  permission. The SDK-backed integration and Fedify security release gates
+  remain outstanding.

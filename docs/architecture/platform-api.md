@@ -153,3 +153,16 @@ under an already remembered attempt key. An unavailable lookup or mismatched
 thread is not proof of non-delivery and cannot authorize another POST. This
 exception does not apply to forum threads or arbitrary message sends; their
 cross-restart recovery remains Stage 04.
+
+
+**Stage 03 Checkpoint 54 — root-thread retry and adoption corrections:**
+A transient preflight channel/root/thread read that fails *before* a physical
+Create does not permanently reserve the `CreateAttempt` key. Concurrent
+waiters still receive that failed attempt's outcome; a subsequent caller can
+retry safely. After a potentially transmitted Create, `unknown_delivery`
+remains sticky unless `reconcile_create()` independently proves the unique
+root-anchored thread. That proof replaces the in-process terminal outcome for
+subsequent equal-key callers without enabling another POST or changing the
+immutable request fingerprint. Adoption needs an actual verified root/thread,
+not `CREATE_PUBLIC_THREADS`; the permission is checked immediately before a
+new physical Create. Actual sends still require their own current ACL.

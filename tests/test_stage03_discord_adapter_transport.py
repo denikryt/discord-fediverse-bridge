@@ -388,3 +388,97 @@ async def test_reconcile_cannot_use_other_destination_under_remembered_attempt_k
     with pytest.raises(PlatformOperationError) as caught:
         await transport.reconcile_create(incorrect)
     assert caught.value.reason == 'invalid_request'
+
+@pytest.mark.asyncio
+async def test_reply_thread_transient_preflight_failure_allows_same_key_retry():
+    """An unavailable root read before POST cannot poison a safe CreateAttempt retry."""
+    channel = FakeChannel()
+    root = FakeMessage(1234, channel)
+    channel._messages[root.id] = root
+    transport = adapter(channel)
+    ref = MessageRef('discord-primary', '100', '1234')
+    attempt = CreateAttempt('preflight-read-retry', 'discord-primary', 'reply_thread', ref)
+    original_read = channel.fetch_message
+    reads = 0
+
+    async def failed_once(message_id):
+        """Make the first physical preflight read unavailable, then restore it."""
+        nonlocal reads
+        reads += 1
+        if reads == 1:
+            raise TimeoutError('root read unavailable before POST')
+        return await original_read(message_id)
+
+    channel.fetch_message = failed_once
+    with pytest.raises(PlatformOperationError) as failure:
+        await transport.create_reply_thread(ref, title='Replies', attempt=attempt)
+    assert failure.value.reason == 'unavailable'
+    assert root.edits == []
+    receipt = await transport.create_reply_thread(ref, title='Replies', attempt=attempt)
+    assert receipt.external_thread_id == '1234'
+    assert len(root.edits) == 1
+    assert await transport.create_reply_thread(ref, title='Replies', attempt=attempt) == receipt
+    assert len(root.edits) == 1
+
+
+@pytest.mark.asyncio
+async def test_late_reconciled_reply_thread_receipt_replaces_unknown_for_same_key():
+    """An independently proved late receipt supersedes sticky unknown without POST replay."""
+    channel = FakeChannel()
+    root = FakeMessage(1234, channel)
+    channel._messages[root.id] = root
+    transport = adapter(channel)
+    ref = MessageRef('discord-primary', '100', '1234')
+    attempt = CreateAttempt('late-root-receipt', 'discord-primary', 'reply_thread', ref)
+    physical_sends = 0
+
+    async def lost_response(**kwargs):
+        """The remote creation may have succeeded despite the missing response."""
+        nonlocal physical_sends
+        physical_sends += 1
+        raise TimeoutError('lost create response')
+
+    root.create_thread = lost_response
+    with pytest.raises(PlatformOperationError) as failure:
+        await transport.create_reply_thread(ref, title='Replies', attempt=attempt)
+    assert failure.value.reason == 'unknown_delivery'
+    assert await transport.reconcile_create(attempt) is None
+    transport._bot.channels[root.id] = FakeThread(root.id, parent_id=channel.id, guild_id=channel.guild.id)
+    proved = await transport.reconcile_create(attempt)
+    assert isinstance(proved, ThreadRef)
+    assert proved.external_thread_id == '1234'
+    assert await transport.create_reply_thread(ref, title='Replies', attempt=attempt) == proved
+    with pytest.raises(PlatformOperationError) as conflict:
+        await transport.create_reply_thread(ref, title='Different title', attempt=attempt)
+    assert conflict.value.reason == 'invalid_request'
+    assert physical_sends == 1
+
+
+@pytest.mark.asyncio
+async def test_existing_reply_thread_adopts_without_create_permission_but_new_one_does_not():
+    """Adoption needs identity proof; a new POST still requires CREATE_PUBLIC_THREADS."""
+    channel = FakeChannel()
+    root = FakeMessage(1234, channel)
+    channel._messages[root.id] = root
+    transport = adapter(channel)
+    ref = MessageRef('discord-primary', '100', '1234')
+    channel.permissions_for = lambda _member: SimpleNamespace(
+        send_messages=True, send_messages_in_threads=True,
+        create_public_threads=False, manage_messages=True,
+    )
+    transport._bot.channels[root.id] = FakeThread(root.id, parent_id=channel.id, guild_id=channel.guild.id)
+    adopted = await transport.create_reply_thread(
+        ref, title='Replies', attempt=CreateAttempt('read-only-adoption', 'discord-primary', 'reply_thread', ref),
+    )
+    assert adopted.external_thread_id == '1234'
+    assert root.edits == []
+
+    # A different root with no existing thread cannot bypass write permissions.
+    new_root = FakeMessage(1235, channel)
+    channel._messages[new_root.id] = new_root
+    new_ref = MessageRef('discord-primary', '100', '1235')
+    attempt = CreateAttempt('new-thread-permission', 'discord-primary', 'reply_thread', new_ref)
+    with pytest.raises(PlatformOperationError) as denied:
+        await transport.create_reply_thread(new_ref, title='Replies', attempt=attempt)
+    assert denied.value.reason == 'forbidden'
+    assert new_root.edits == []
