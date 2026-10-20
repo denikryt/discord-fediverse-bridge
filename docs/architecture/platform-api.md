@@ -126,3 +126,13 @@ not just absence of contradictions. An unverified receipt after a possible HTTP
 send is classified `unknown_delivery` and is not mapped or automatically
 resent. Existing SDK-only direct-call compatibility and Stage 04 durable
 receipt recovery remain unfinished; no new schema or adapter API was added.
+
+**Stage 03 Checkpoint 44 — Local Community sibling receipt admission:**
+Every adapter-backed local-subscriber forum thread or reply receipt is checked
+against the original `CreateAttempt` and requested bot presentation **before**
+persisting its per-recipient SQLite surface. A forum thread receipt must also
+positively identify the expected forum kind and guild. A mismatched reply mode
+or physical destination may indicate an already transmitted create, so that
+target fails as `unknown_delivery` without claiming a confirmed copy; healthy
+sibling targets proceed independently. This is the existing Stage 03 typed
+transport contract, not a durable uncertain-delivery recovery mechanism.

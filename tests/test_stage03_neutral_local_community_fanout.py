@@ -357,3 +357,96 @@ async def test_same_forum_wrong_guild_receipt_is_rejected(tmp_path):
             ) is None
     finally:
         db.close()
+
+@pytest.mark.asyncio
+async def test_sibling_thread_mode_receipt_requires_requested_bot_mode(tmp_path):
+    """A fabricated webhook result cannot claim the bot-created subscriber thread."""
+    db, community, subscribers, post, fanout = world(tmp_path)
+
+    class MismatchedMode(PhysicalPort):
+        """Simulate a transport returning a different actual presentation mode."""
+
+        async def create_forum_thread(self, forum, content, *, title, presentation, attempt):
+            """Corrupt only the first subscriber's receipt after a physical send."""
+            receipt = await super().create_forum_thread(
+                forum, content, title=title, presentation=presentation, attempt=attempt,
+            )
+            if forum.external_channel_id == '200':
+                return CreatedThread(receipt.thread, receipt.starter, 'webhook')
+            return receipt
+
+    try:
+        port = MismatchedMode()
+        result = await fanout.fanout_normalized_thread(
+            adapter=port, local_community=community, thread_row=post,
+            title='Topic', content='Body', author_display_name='Alice',
+            source_forum_channel_id=100, include_host=False,
+        )
+        assert (result.attempted, result.delivered, result.failed) == (2, 1, 1)
+        assert db.local_community_surfaces.get_local_community_thread_surface(
+            local_community_thread_id=post.id, discord_forum_channel_id=200,
+        ) is None
+        valid = db.local_community_surfaces.get_local_community_thread_surface(
+            local_community_thread_id=post.id, discord_forum_channel_id=300,
+        )
+        assert valid is not None and valid.discord_starter_message_id == 2300
+    finally:
+        db.close()
+
+
+@pytest.mark.asyncio
+async def test_sibling_comment_mode_receipt_requires_requested_bot_mode(tmp_path):
+    """A mismatched reply mode cannot claim a copy while another target succeeds."""
+    db, community, _, post, fanout = world(tmp_path)
+
+    class MismatchedMode(PhysicalPort):
+        """Return an incorrectly declared delivery mode for one sent comment."""
+
+        async def send_message(self, destination, content, *, reply_to, presentation, attempt):
+            """Keep physical container IDs genuine so mode is the sole failure."""
+            receipt = await super().send_message(
+                destination, content, reply_to=reply_to,
+                presentation=presentation, attempt=attempt,
+            )
+            if destination.channel.external_channel_id == '200':
+                return CreatedMessage(receipt.message, 'webhook')
+            return receipt
+
+    try:
+        await fanout.fanout_normalized_thread(
+            adapter=PhysicalPort(), local_community=community, thread_row=post,
+            title='Topic', content='Body', author_display_name='Alice',
+            source_forum_channel_id=100, include_host=False,
+        )
+        comment = db.local_community_content.create_local_community_message(
+            local_community_thread_id=post.id, discord_message_id=1200,
+            ap_activity_id='https://bridge.example/create/comment/44',
+            ap_object_id='https://bridge.example/comment/44',
+            parent_ap_object_id=post.ap_object_id, parent_discord_message_id=1101,
+            direction='discord_to_ap',
+        )
+        port = MismatchedMode()
+        result = await fanout.fanout_normalized_message(
+            adapter=port, local_community=community, thread_row=post,
+            message_row=comment, content='reply', author_display_name='Alice',
+            source_forum_channel_id=100, include_host=False,
+        )
+        assert (result.attempted, result.delivered, result.failed) == (2, 1, 1)
+        target200 = db.local_community_surfaces.get_local_community_thread_surface(
+            local_community_thread_id=post.id, discord_forum_channel_id=200,
+        )
+        target300 = db.local_community_surfaces.get_local_community_thread_surface(
+            local_community_thread_id=post.id, discord_forum_channel_id=300,
+        )
+        assert db.local_community_surfaces.get_local_community_message_surface(
+            local_community_message_id=comment.id,
+            local_community_thread_surface_id=target200.id,
+        ) is None
+        valid = db.local_community_surfaces.get_local_community_message_surface(
+            local_community_message_id=comment.id,
+            local_community_thread_surface_id=target300.id,
+        )
+        assert valid is not None
+        assert valid.parent_discord_message_id == target300.discord_starter_message_id
+    finally:
+        db.close()

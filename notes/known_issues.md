@@ -164,3 +164,12 @@ Fedify-native security integration remains blocked by missing dependencies.
   and nested replies, missing-parent eventual recovery, forged modes and
   stale/cross-owner refusals. Legacy unbound SDK paths, unavailable full-suite
   dependencies and pinned Fedify upgrade remain open.
+
+- **Stage 03 Checkpoint 44:** Local Community subscriber forum and comment
+  Create receipts now verify the full typed attempt, requested bot/webhook
+  presentation and (for forums) affirmatively known guild/kind before SQLite
+  mapping. Fake-network/real-SQLite tests confirmed a forged webhook receipt
+  previously persisted as delivered; after correction it fails independently
+  while a healthy sibling still succeeds. An unverified possibly transmitted
+  physical create is not automatically retried or adopted after restart;
+  Stage 04 remains responsible for durable unknown-create reconciliation.
