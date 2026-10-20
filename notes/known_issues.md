@@ -168,3 +168,12 @@ embedded author. Eight pure security scenario tests pass. This gateway path has
 vulnerable Fedify 2.2.0. Legitimate non-dereferenceable forwarded mutations
 are explicitly fail-closed under T9. Real Lemmy federation and DNS/redirect
 integration are mandatory release gates.
+
+## Stage 03 checkpoint 14 focused regression verification
+
+With global `conftest.py` disabled solely to avoid baseline missing `hypothesis`,
+51 Stage 03 standalone Python scenarios pass (SQLite/fake SDK). Four standalone
+Node source modules typecheck with global Node types, and 14 Node security
+scenarios pass. Full pytest, Fedify TypeScript suite and live Discord/Fedify
+integration are not verified, and the vulnerable Fedify dependency remains a
+release blocker.
