@@ -248,3 +248,8 @@ cutover has yet been performed. Two targeted positive/negative tests pass.
 
 - `ContentPublishService` now has an SDK-free forum-starter publication entry that checks a verified `ThreadCreated` and `MessageView`, registration, moderation and distinct thread/starter IDs before calling the unchanged AP publication/persistence core. Real SQLite positive/negative scenarios pass with fake external transports.
 - This is **not** a production cutover: subscribed/local community forum callbacks, ownership, sibling fanout and starter acquisition still use existing SDK-shaped handlers. Do not activate a second publish path until those boundaries move together.
+
+## Stage 03 normalized forum comment publisher preparation (Checkpoint 26, 2026-10-19)
+
+- `ContentPublishService.publish_normalized_comment_to_community()` now requires verified forum parent and same-thread reply references, checks author registration/moderation, and delegates ActivityPub comment rendering/persistence to the same existing fields-based canonical core. A failure to send rejection notices cannot federate the comment. Real SQLite positive/negative tests pass alongside legacy post/comment publishing tests.
+- The new API takes an AP parent object ID selected by the owning runtime. It is **not** a replacement for canonical thread/reply-group ownership validation; no production community callback has been switched, and Community/Local Community fanout remains SDK-shaped.

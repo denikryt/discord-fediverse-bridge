@@ -11,7 +11,8 @@ from src.content_publish_service import ContentPublishService
 from src.db import Database
 from src.fedify_gateway_client import PublishContentResult
 from src.platform_types import (AuthorRef, ChannelRef, ContentDocument, MessageRef,
-                                MessageView, ThreadCreated, ThreadRef, PlatformOperationError)
+                                MessageView, MessageCreated, ThreadCreated, ThreadRef,
+                                PlatformOperationError)
 
 COMMUNITY = 'https://remote.example/c/hackers'
 ACTOR = 'https://bridge.example/actors/users/alice'
@@ -139,7 +140,7 @@ async def test_ban_or_unknown_ban_state_fails_closed_before_ap(tmp_path, ban_err
         if ban_error:
             moderation = SimpleNamespace(check_discord_user=lambda **_: (_ for _ in ()).throw(RuntimeError('db unavailable')))
         else:
-            moderation = SimpleNamespace(check_discord_user=lambda **_: SimpleNamespace(banned=True))
+            moderation = SimpleNamespace(check_discord_user=lambda **_: SimpleNamespace(banned=True, scope="global", reason_text="spam"))
         service.user_ban_service = moderation
         result = await service.publish_normalized_post_to_community(
             event=event, starter=starter, community_actor_url=COMMUNITY,
@@ -163,5 +164,121 @@ async def test_zero_snowflake_never_reaches_gateway(tmp_path):
                 event=event, starter=starter, community_actor_url=COMMUNITY,
                 publish_call=gateway.publish_content)
         gateway.publish_content.assert_not_awaited()
+    finally:
+        db.close()
+
+
+
+def comment_event(*, connector='discord-primary', author_id='123', kind='human',
+                  thread_id='200', parent_id='100', reference='301'):
+    """Model one independently verified forum reply into an existing mapped thread."""
+    forum = ChannelRef(connector, parent_id, 'forum', '1')
+    thread = ThreadRef(forum, thread_id)
+    return MessageCreated(
+        connector, MessageRef(connector, thread_id, '402'),
+        AuthorRef(connector, author_id, kind, 'Alice'),
+        ContentDocument('reply body'),
+        reply_to=(MessageRef(connector, thread_id, reference) if reference else None),
+        parent_channel=forum, thread_context=thread,
+        external_guild_id='1',
+    )
+
+
+@pytest.mark.asyncio
+async def test_verified_comment_persists_reply_to_approved_parent(tmp_path):
+    """The canonical comment mapping uses the original reply ID and approved AP parent."""
+    db, gateway, service = world(tmp_path)
+    try:
+        gateway.publish_content.return_value = PublishContentResult(
+            activity_id=f'{ACTOR}/activities/create/comments/2',
+            object_id=f'{ACTOR}/objects/comments/2', community_actor_url=COMMUNITY)
+        result = await service.publish_normalized_comment_to_community(
+            event=comment_event(), community_actor_url=COMMUNITY,
+            parent_object_id='https://bridge.example/objects/comments/parent',
+            publish_call=gateway.publish_content)
+        assert result.status == 'published'
+        mapping = db.message_mappings.get_message_mapping_by_discord_message_id(402)
+        assert mapping is not None and mapping.discord_channel_id == 100
+        stored = db.activitypub_objects.get_published_activity_object_by_object_id(result.object_id)
+        assert stored.in_reply_to_object_id == 'https://bridge.example/objects/comments/parent'
+        request = gateway.publish_content.await_args.args[0]
+        assert request.body_markdown.endswith('reply body')
+        assert request.kind == 'comment'
+    finally:
+        db.close()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize('change', ['bot', 'other_connector', 'cross_thread_reply', 'wrong_parent_kind', 'zero_message'])
+async def test_invalid_normalized_comment_does_not_federate(tmp_path, change):
+    """Invalid source, author or reply containment fails before any AP gateway call."""
+    db, gateway, service = world(tmp_path)
+    try:
+        event = comment_event(kind='bot' if change == 'bot' else 'human',
+            connector='fluxer-a' if change == 'other_connector' else 'discord-primary',
+            reference=None if change == 'cross_thread_reply' else '301')
+        from dataclasses import replace
+        if change == 'cross_thread_reply':
+            event = replace(event, reply_to=MessageRef('discord-primary', '201', '301'))
+        if change == 'wrong_parent_kind':
+            forum = ChannelRef('discord-primary', '100', 'text', '1')
+            event = replace(event, parent_channel=forum, thread_context=ThreadRef(forum, '200'))
+        if change == 'zero_message':
+            event = replace(event, message=MessageRef('discord-primary', '200', '0'))
+        with pytest.raises(PlatformOperationError):
+            await service.publish_normalized_comment_to_community(
+                event=event, community_actor_url=COMMUNITY,
+                parent_object_id='https://bridge.example/objects/posts/1',
+                publish_call=gateway.publish_content)
+        gateway.publish_content.assert_not_awaited()
+        assert db.message_mappings.get_message_mapping_by_discord_message_id(402) is None
+    finally:
+        db.close()
+
+
+@pytest.mark.asyncio
+async def test_unregistered_forum_reply_never_publishes_with_failed_notice(tmp_path):
+    """A failed registration notice cannot turn an unauthorized reply into AP Create."""
+    db, gateway, service = world(tmp_path)
+    try:
+        event = comment_event(author_id='999')
+        notice = SimpleNamespace(send_message=AsyncMock(side_effect=RuntimeError('offline')))
+        result = await service.publish_normalized_comment_to_community(
+            event=event, community_actor_url=COMMUNITY,
+            parent_object_id='https://bridge.example/objects/posts/1',
+            publish_call=gateway.publish_content, notice_adapter=notice)
+        assert result.reason == 'unregistered_user'
+        gateway.publish_content.assert_not_awaited()
+        args, kwargs = notice.send_message.await_args
+        assert args[0] == event.thread_context
+        assert kwargs['reply_to'] == event.message
+        assert kwargs['attempt'].key.endswith(':200:402')
+    finally:
+        db.close()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize('ban_error', [False, True])
+async def test_blocked_forum_reply_gets_notice_but_no_canonical_comment(tmp_path, ban_error):
+    """A ban or an unavailable moderation lookup cannot produce an AP comment."""
+    db, gateway, service = world(tmp_path)
+    try:
+        event = comment_event()
+        if ban_error:
+            moderator = SimpleNamespace(check_discord_user=lambda **_: (_ for _ in ()).throw(RuntimeError('db')))
+        else:
+            moderator = SimpleNamespace(check_discord_user=lambda **_: SimpleNamespace(
+                banned=True, reason_text='spam', expires_at=None, scope='global'))
+        service.user_ban_service = moderator
+        notice = SimpleNamespace(send_message=AsyncMock())
+        result = await service.publish_normalized_comment_to_community(
+            event=event, community_actor_url=COMMUNITY,
+            parent_object_id='https://bridge.example/objects/posts/1',
+            publish_call=gateway.publish_content, notice_adapter=notice)
+        assert result.status == 'rejected'
+        assert result.reason == ('ban_check_failed' if ban_error else 'user_banned')
+        gateway.publish_content.assert_not_awaited()
+        notice.send_message.assert_awaited_once()
+        assert notice.send_message.await_args.kwargs['attempt'].key.endswith(':200:402')
     finally:
         db.close()

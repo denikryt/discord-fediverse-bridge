@@ -35,7 +35,8 @@ This document is a short, feature-oriented index of the test suite. It helps mai
 ## Stage 03 typed forum starter publisher preparation (Checkpoint 25)
 
 - A neutral `ThreadCreated` + `MessageView` uses the existing canonical post publication core with distinct starter/message IDs. Invalid connector, kind, guild, starter identity, source snowflakes, unknown content and bot author fail before the gateway; registration notice failures and ban-check uncertainty cannot authorize publication — `tests/test_stage03_typed_community_publish.py` (real SQLite, fake gateway/transport).
-- The production forum callback still uses the legacy path; only the SDK-free publisher is prepared. Full runtime cutover and sibling fanout require later verified bindings.
+- The companion normalized comment publisher rejects bot/cross-connector/cross-thread/wrong-parent/invalid snowflake messages, reuses the unchanged canonical SQLite comment mapping, and delivers best-effort registration/ban notices without changing the refusal decision — `tests/test_stage03_typed_community_publish.py` (Checkpoint 26).
+- Production forum callbacks still use the legacy path; only the SDK-free post/comment publisher is prepared. Full runtime cutover and sibling fanout require later verified bindings.
 
 ## Stage 03 Gateway ingress transition
 

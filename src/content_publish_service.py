@@ -17,8 +17,9 @@ from .bridge_policy import BridgePolicyService
 from .user_bans import UserBanService, canonical_local_user_handle, render_ban_message
 from .discord_legacy_projection import discord_id_to_legacy_int
 from .platform_types import (
-    ContentDocument, CreateAttempt, DeliveryPresentation, MessageView,
-    PlatformOperationError, ThreadCreated,
+    AuthorRef, ContentDocument, CreateAttempt, DeliveryPresentation,
+    MessageCreated, MessageRef, MessageView, PlatformOperationError,
+    ThreadCreated, ThreadRef, validate_message_reply,
 )
 
 from .content_sync.outbound_publish import (
@@ -216,37 +217,13 @@ class ContentPublishService:
         starter_id = discord_id_to_legacy_int(starter.message)
         if not event.external_guild_id.isdecimal() or int(event.external_guild_id) <= 0:
             raise PlatformOperationError('invalid_request', 'invalid Discord guild ID')
-        actor_id = starter.author.external_actor_id
-        user = self.database.users.get_user_by_discord_user_id(actor_id)
-        if user is None:
-            # Registration notices are best effort and cannot authorize AP
-            # publication. One immutable key ensures no second live POST if
-            # the remote message was created but its response was lost.
-            if notice_adapter is not None:
-                try:
-                    await notice_adapter.send_message(
-                        event.thread, ContentDocument(UNREGISTERED_REPLY),
-                        reply_to=starter.message, presentation=DeliveryPresentation(),
-                        attempt=CreateAttempt(
-                            f'community-registration-notice:{event.connector_key}:'
-                            f'{event.thread.external_thread_id}:{starter.message.external_message_id}',
-                            event.connector_key, 'message', event.thread,
-                        ),
-                    )
-                except Exception:
-                    logger.exception('Could not deliver community registration notice')
-            return PublishResult('ignored', 'unregistered_user')
-        if self.user_ban_service is not None:
-            try:
-                community = self.database.local_communities.get_local_community_by_actor_url(
-                    community_actor_url)
-                decision = self.user_ban_service.check_discord_user(
-                    discord_user_id=actor_id, local_community=community)
-            except Exception:
-                logger.exception('Could not verify normalized forum author moderation')
-                return PublishResult('rejected', 'ban_check_failed')
-            if decision.banned:
-                return PublishResult('rejected', 'user_banned')
+        user, rejection = await self._resolve_normalized_author(
+            author=starter.author, source_message=starter.message,
+            destination=event.thread, community_actor_url=community_actor_url,
+            notice_adapter=notice_adapter,
+        )
+        if rejection is not None:
+            return rejection
         return await self._publish_post_fields(
             user=user, author_name=starter.author.display_name,
             content=starter.content.body, thread_name=event.name,
@@ -255,6 +232,119 @@ class ContentPublishService:
             community_actor_url=community_actor_url, publish_call=publish_call,
             target_inbox_urls=target_inbox_urls,
         )
+
+    async def publish_normalized_comment_to_community(
+        self, *, event: MessageCreated, community_actor_url: str,
+        parent_object_id: str,
+        publish_call: Callable[[object], Awaitable[object]],
+        target_inbox_urls: list[str] | None = None,
+        notice_adapter: object | None = None,
+    ) -> PublishResult:
+        """Publish one authorized forum reply without exposing Discord SDK objects.
+
+        The owning runtime must resolve `parent_object_id` from its persisted
+        canonical thread/message mapping, never from untrusted reply text.
+        """
+        thread = event.thread_context
+        if (event.connector_key != 'discord-primary'
+            or thread is None or thread.connector_key != event.connector_key
+            or event.parent_channel is None or event.parent_channel.kind != 'forum'
+            or thread.channel.kind != 'forum'
+            or event.parent_channel != thread.channel
+            or event.parent_channel.external_guild_id != event.external_guild_id
+            or not event.external_guild_id
+            or event.message.external_container_id != thread.external_thread_id
+            or event.author.kind != 'human'
+            or event.author.external_actor_id is None
+            or event.author.connector_key != event.connector_key
+            or event.content.format != 'plain' or event.content.attachments):
+            raise PlatformOperationError('invalid_request', 'unverified Discord forum reply')
+        validate_message_reply(thread, event.reply_to)
+        # The existing Discord-only SQLite mapping columns must not accept
+        # foreign connector identities or a zero-valued snowflake.
+        source_id = discord_id_to_legacy_int(event.message)
+        forum_id = discord_id_to_legacy_int(thread, component='parent')
+        thread_id = discord_id_to_legacy_int(thread)
+        if not event.external_guild_id.isdecimal() or int(event.external_guild_id) <= 0:
+            raise PlatformOperationError('invalid_request', 'invalid Discord guild ID')
+        user, rejection = await self._resolve_normalized_author(
+            author=event.author, source_message=event.message, destination=thread,
+            community_actor_url=community_actor_url, notice_adapter=notice_adapter,
+        )
+        if rejection is not None:
+            return rejection
+        return await self._publish_comment_fields(
+            user=user, author_name=event.author.display_name,
+            content=event.content.body, source_message_id=source_id,
+            source_thread_id=thread_id, forum_channel_id=forum_id,
+            community_actor_url=community_actor_url,
+            parent_object_id=parent_object_id, publish_call=publish_call,
+            target_inbox_urls=target_inbox_urls,
+        )
+
+    async def _resolve_normalized_author(
+        self, *, author: AuthorRef, source_message: MessageRef,
+        destination: ThreadRef, community_actor_url: str,
+        notice_adapter: object | None,
+    ) -> tuple[object | None, PublishResult | None]:
+        """Resolve source registration and moderation without an SDK reply API."""
+        discord_user_id = author.external_actor_id
+        if discord_user_id is None or author.kind != 'human':
+            raise PlatformOperationError('invalid_request', 'unverified community author')
+        user = self.database.users.get_user_by_discord_user_id(discord_user_id)
+        if user is None:
+            await self._send_normalized_notice(
+                adapter=notice_adapter, destination=destination,
+                source_message=source_message, body=UNREGISTERED_REPLY,
+                reason='unregistered',
+            )
+            return None, PublishResult('ignored', 'unregistered_user')
+        if self.user_ban_service is not None:
+            try:
+                community = self.database.local_communities.get_local_community_by_actor_url(
+                    community_actor_url)
+                decision = self.user_ban_service.check_discord_user(
+                    discord_user_id=discord_user_id, local_community=community)
+            except Exception:
+                logger.exception('Could not verify normalized community author moderation')
+                await self._send_normalized_notice(
+                    adapter=notice_adapter, destination=destination,
+                    source_message=source_message,
+                    body='The bridge could not verify publishing access. Please try again later.',
+                    reason='moderation-unavailable',
+                )
+                return None, PublishResult('rejected', 'ban_check_failed')
+            if decision.banned:
+                await self._send_normalized_notice(
+                    adapter=notice_adapter, destination=destination,
+                    source_message=source_message,
+                    body=render_ban_message(decision), reason='banned',
+                )
+                return None, PublishResult('rejected', 'user_banned')
+        return user, None
+
+    @staticmethod
+    async def _send_normalized_notice(
+        *, adapter: object | None, destination: ThreadRef,
+        source_message: MessageRef, body: str, reason: str,
+    ) -> None:
+        """Send a best-effort rejection without allowing notices to authorize AP Create."""
+        if adapter is None:
+            return
+        try:
+            await adapter.send_message(
+                destination, ContentDocument(body), reply_to=source_message,
+                presentation=DeliveryPresentation(),
+                attempt=CreateAttempt(
+                    f'community-{reason}-notice:{destination.connector_key}:'
+                    f'{destination.external_thread_id}:{source_message.external_message_id}',
+                    destination.connector_key, 'message', destination,
+                ),
+            )
+        except Exception:
+            # A missing or uncertain Discord notice cannot authorize delivery
+            # of a canonical ActivityPub Create from a rejected author.
+            logger.exception('Could not deliver community %s notice', reason)
 
     async def publish_post_to_community(
         self,
@@ -344,52 +434,57 @@ class ContentPublishService:
         )
         if rejection is not None:
             return rejection
-
-        author_name = self._author_name(getattr(message, "author"))
-        body = build_discord_comment_body(
-            author_name=author_name,
+        return await self._publish_comment_fields(
+            user=user, author_name=self._author_name(getattr(message, "author")),
             content=getattr(message, "content"),
-            bridge_prefix=self.bridge_prefix,
+            source_message_id=getattr(message, "id"),
+            source_thread_id=getattr(thread, "id"),
+            forum_channel_id=getattr(thread, "parent_id", None),
+            community_actor_url=community_actor_url,
+            parent_object_id=parent_object_id, publish_call=publish_call,
+            target_inbox_urls=target_inbox_urls,
+        )
+
+    async def _publish_comment_fields(
+        self, *, user: object, author_name: str, content: str,
+        source_message_id: int, source_thread_id: int,
+        forum_channel_id: int | None,
+        community_actor_url: str, parent_object_id: str,
+        publish_call: Callable[[object], Awaitable[object]],
+        target_inbox_urls: list[str] | None,
+    ) -> PublishResult:
+        """Render and persist one canonical comment for SDK or typed callers."""
+        body = build_discord_comment_body(
+            author_name=author_name, content=content, bridge_prefix=self.bridge_prefix,
         )
         publish_result = await publish_call(
             self._build_publish_request(
                 actor_username=user.activitypub_username,
                 community_actor_url=community_actor_url,
-                kind="comment",
-                title=None,
-                body_markdown=body,
+                kind="comment", title=None, body_markdown=body,
                 in_reply_to_object_id=parent_object_id,
                 target_inbox_urls=target_inbox_urls,
             )
         )
-
         persist_publish_artifacts(
-            self.database,
-            source_id=str(getattr(message, "id")),
-            actor_username=user.activitypub_username,
-            actor_url=user.actor_url,
+            self.database, source_id=str(source_message_id),
+            actor_username=user.activitypub_username, actor_url=user.actor_url,
             community_actor_url=community_actor_url,
-            activity_id=publish_result.activity_id,
-            object_id=publish_result.object_id,
+            activity_id=publish_result.activity_id, object_id=publish_result.object_id,
             activity_json=getattr(publish_result, "activity_json", {}),
-            kind="comment",
-            title=None,
-            body_markdown=body,
+            kind="comment", title=None, body_markdown=body,
             in_reply_to_object_id=parent_object_id,
-            discord_channel_id=getattr(thread, "parent_id", None),
-            discord_message_id=getattr(message, "id"),
+            discord_channel_id=forum_channel_id,
+            discord_message_id=source_message_id,
         )
         if self.delivery_worker is not None:
             self.delivery_worker.wake()
         logger.info(
             "Published Discord message %s in thread %s via AP actor %s",
-            getattr(message, "id"),
-            getattr(thread, "id"),
-            user.activitypub_username,
+            source_message_id, source_thread_id, user.activitypub_username,
         )
         return PublishResult(
-            status="published",
-            reason="published",
+            status="published", reason="published",
             activity_id=publish_result.activity_id,
             object_id=publish_result.object_id,
         )
