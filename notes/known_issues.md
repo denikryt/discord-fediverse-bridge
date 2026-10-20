@@ -109,3 +109,13 @@ live Discord Gateway integration.
   switched to the new adapter. SDK-dependent integration remains unverified
   without installed `discord.py`; a process-local receipt ledger cannot provide
   cross-process or cross-restart exactly-once delivery (Stage 04).
+
+## Stage 03 Gateway callback lifetime (partial, 2026-10-19)
+
+The live Discord adapter is now constructed/registered from `app.py` and
+attached to `BridgeBot`. Existing Gateway callbacks enter one task admission
+gate before DB/Fedify access; `run_bot` drains those tasks and stops the
+Discord delivery worker inside the SDK context before SDK shutdown. Runtime
+alone closes Fedify. The existing SDK-object domain ingress has not been
+replaced with `PlatformEventIngress`, and application-command callbacks need
+additional lifetime admission review before calling this fully complete.

@@ -156,3 +156,15 @@ Startup recognizes released v0.1.0 schema at version 0 and validates the complet
 Subscribe resolves policy and performs gateway work outside the writer transaction. Persistence rechecks the typed channel owner and updates only the expected failed subscription in place; replacement or concurrent claims fail closed. Shared ActivityPub Follow state is global. Discord fanout selects accepted/active current primary claims, while history lookups use scoped copy locations independently of current ownership. Personal-feed move releases the old claim and claims the new location in one writer transaction.
 
 During released identity cutover only relationships of renamed actors lose confirmation: changed communities lose incoming remote_subscribers; changed service/local target relations keep their Follow/channel rows as failed with cleared Follow IDs. Local subscribers and claims survive. Normal subscribe retry sends a new Follow after commit; migration performs no delivery itself.
+
+## Stage 03 live callback shutdown (partial)
+
+Production composition now creates one `DiscordAdapter` borrowing `BridgeBot`.
+`BridgeBot` callbacks enter its process-local admission gate before touching
+shared persistence or the federation gateway, and unregister in `finally`.
+When the bot stops, `app.py` closes admission, cancels/joins outstanding
+Gateway callback tasks and stops the Personal Feed worker **inside** the
+Discord SDK context. The SDK closes next; `Runtime.close()` subsequently closes
+Fedify and the database. `BridgeBot.close()` must not close the shared gateway.
+This is a callback-lifecycle change only: Stage 03's normalized-domain ingress
+and transport cutover of community fanout are still in progress.

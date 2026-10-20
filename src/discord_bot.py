@@ -12,6 +12,7 @@ from .config import Settings
 from .bridge_policy import BridgePolicyService
 from .db import Database
 from .discord_event_router import DiscordEventRouter
+from .discord_adapter import DiscordAdapter
 from .discord_message_mutations import DiscordMessageMutationHandler
 from .fedify_gateway_client import FedifyGatewayClient
 from .discord_directory import refresh_discord_directory_from_bot
@@ -75,6 +76,7 @@ class BridgeBot(discord.Client):
         # binds instead of raw attribute writes from the composition root.
         self._message_mutation_handler: DiscordMessageMutationHandler | None = None
         self._personal_feed_delivery_worker: object | None = None
+        self.discord_adapter: DiscordAdapter | None = None
 
     async def setup_hook(self) -> None:
         # setup_hook runs before the bot connects, making it the right place to
@@ -150,7 +152,7 @@ class BridgeBot(discord.Client):
             )
         await self.tree.sync()
 
-    async def on_ready(self) -> None:
+    async def _on_ready_admitted(self) -> None:
         # Signal inbound event handlers that the bot is connected and Discord
         # API calls (thread/message creation) can proceed.
         self.bridge_ready.set()
@@ -164,11 +166,75 @@ class BridgeBot(discord.Client):
         logger.info("Bridge bot is ready as %s", self.user)
 
     async def close(self) -> None:
-        await self.fedify_gateway.close()
+        """Close only the borrowed SDK; Runtime alone owns the Fedify gateway."""
         await super().close()
 
-    # MULTIPLATFORM_STAGE02_TEMP: BridgeBot callbacks still forward Discord SDK objects directly; Stage 03 must emit normalized PlatformInboundEvent values and retire this legacy ingress after regression tests.
+    def bind_discord_adapter(self, adapter: DiscordAdapter) -> None:
+        """Attach the one SDK-owning transport after construction, before Gateway start."""
+        if self.discord_adapter is not None or adapter.connector.key != 'discord-primary':
+            raise RuntimeError('Discord adapter already configured or wrong connector')
+        self.discord_adapter = adapter
+
+    def _enter_gateway_callback(self) -> bool:
+        """Reject late SDK event tasks synchronously before accessing database state."""
+        adapter = self.discord_adapter
+        if adapter is None:
+            # Legacy test constructors are SDK-only until Stage 03 cutover.
+            return True
+        return adapter.enter_ingress()
+
+    def _leave_gateway_callback(self) -> None:
+        """Ensure active ingress is unregistered in success/error/cancellation paths."""
+        if self.discord_adapter is not None:
+            self.discord_adapter.leave_ingress()
+
+    async def on_ready(self) -> None:
+        """Gate worker startup on the same callback lifetime as other Gateway work."""
+        if not self._enter_gateway_callback():
+            return
+        try:
+            await self._on_ready_admitted()
+        finally:
+            self._leave_gateway_callback()
+
     async def on_thread_create(self, thread: discord.Thread) -> None:
+        """Admit one thread event before dereferencing database or Fedify state."""
+        if not self._enter_gateway_callback():
+            return
+        try:
+            await self._on_thread_create_admitted(thread)
+        finally:
+            self._leave_gateway_callback()
+
+    async def on_message(self, message: discord.Message) -> None:
+        """Admit one message callback before durable domain routing."""
+        if not self._enter_gateway_callback():
+            return
+        try:
+            await self._on_message_admitted(message)
+        finally:
+            self._leave_gateway_callback()
+
+    async def on_raw_message_edit(self, payload: discord.RawMessageUpdateEvent) -> None:
+        """Drain a raw edit even if its reconciler is blocked on Fedify."""
+        if not self._enter_gateway_callback():
+            return
+        try:
+            await self._on_raw_message_edit_admitted(payload)
+        finally:
+            self._leave_gateway_callback()
+
+    async def on_raw_message_delete(self, payload: discord.RawMessageDeleteEvent) -> None:
+        """Drain an ID-only raw delete independently of Discord SDK I/O."""
+        if not self._enter_gateway_callback():
+            return
+        try:
+            await self._on_raw_message_delete_admitted(payload)
+        finally:
+            self._leave_gateway_callback()
+
+    # MULTIPLATFORM_STAGE02_TEMP: BridgeBot callbacks still forward Discord SDK objects directly; Stage 03 must emit normalized PlatformInboundEvent values and retire this legacy ingress after regression tests.
+    async def _on_thread_create_admitted(self, thread: discord.Thread) -> None:
         # Only threads in subscribed channels should be forwarded to Lemmy.
         # Threads created by the bot itself are skipped to break the echo loop.
         if thread.parent_id is None:
@@ -227,7 +293,7 @@ class BridgeBot(discord.Client):
             if result.status == "published":
                 self._synced_threads.add(thread.id)
 
-    async def on_message(self, message: discord.Message) -> None:
+    async def _on_message_admitted(self, message: discord.Message) -> None:
         # Only messages in threads inside subscribed channels are forwarded.
         # The subscription check guards against channels with no active mapping.
         if self.user and message.author.id == self.user.id:
@@ -283,11 +349,11 @@ class BridgeBot(discord.Client):
             message=message,
         )
 
-    async def on_raw_message_edit(self, payload: discord.RawMessageUpdateEvent) -> None:
+    async def _on_raw_message_edit_admitted(self, payload: discord.RawMessageUpdateEvent) -> None:
         """Delegate raw Discord edit orchestration to the mutation handler."""
         await self._require_message_mutation_handler().handle_raw_message_edit(payload)
 
-    async def on_raw_message_delete(
+    async def _on_raw_message_delete_admitted(
         self, payload: discord.RawMessageDeleteEvent
     ) -> None:
         """Delegate raw Discord delete orchestration to the mutation handler."""

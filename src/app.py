@@ -17,6 +17,9 @@ from .community_sync.runtime import CommunityRuntime
 from .config import Settings
 from .db import Database
 from .discord_bot import BridgeBot
+from .discord_adapter import DiscordAdapter
+from .platform_types import ConnectorRef
+from .platform_adapters import PlatformAdapterRegistry
 from .discord_event_router import DiscordEventRouter
 from .discord_message_mutations import DiscordMessageMutationHandler
 from .discord_oauth_client import DiscordOAuthClient
@@ -65,7 +68,15 @@ async def main() -> None:
     async def run_bot() -> None:
         # The Discord client owns connection startup/shutdown through its async context.
         async with bot:
-            await bot.start(settings.discord_token)
+            try:
+                await bot.start(settings.discord_token)
+            finally:
+                # discord.py dispatches independent callback Tasks. The shared
+                # DB/Fedify must outlive each one, even on TaskGroup cancellation.
+                runtime.discord_adapter.close_ingress_admission()
+                await runtime.discord_adapter.drain_ingress()
+                await runtime.personal_feed_discord_delivery_worker.stop()
+                await runtime.discord_adapter.quiesce()
 
     async def run_http_server() -> None:
         await http_server.serve()
@@ -202,6 +213,13 @@ def _build_live_runtime(settings: Settings, deployment_lease: FileLock) -> Runti
             personal_feed_service=personal_feed_service,
             user_ban_service=user_ban_service,
         )
+        # Physical adapter borrows BridgeBot: Runtime owns its admission/drain,
+        # while the bot's async context alone closes the Discord SDK.
+        connector = ConnectorRef('discord-primary', 'discord')
+        adapter_registry = PlatformAdapterRegistry((connector,))
+        discord_adapter = DiscordAdapter(connector=connector, bot=bot)
+        adapter_registry.register(discord_adapter)
+        bot.bind_discord_adapter(discord_adapter)
         personal_feed_discord_delivery_worker = PersonalFeedDiscordDeliveryWorker(
             database=database, bot=bot, personal_feed_service=personal_feed_service
         )
@@ -245,6 +263,7 @@ def _build_live_runtime(settings: Settings, deployment_lease: FileLock) -> Runti
             registration_service=registration_service,
             bridge_policy_service=bridge_policy_service,
             bot=bot,
+            discord_adapter=discord_adapter,
             community_runtime=community_runtime,
             local_community_runtime=local_community_runtime,
             profile_media_store=media_store,
@@ -275,6 +294,8 @@ def _validate_runtime_graph(runtime: Runtime) -> None:
     # These guards are local and non-I/O: they prove the remaining true cycles
     # were completed by named bind methods rather than raw app-level mutation.
     runtime.bot._require_message_mutation_handler()
+    if runtime.bot.discord_adapter is not runtime.discord_adapter:
+        raise RuntimeError("Runtime Discord adapter is not bound to BridgeBot")
     runtime.bot._require_personal_feed_delivery_worker()
     if runtime.community_runtime.discord_fanout is None:
         raise RuntimeError("CommunityRuntime Discord fanout is not configured")

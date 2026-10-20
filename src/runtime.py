@@ -9,6 +9,7 @@ from .bridge_policy import BridgePolicyService
 from .config import Settings
 from .db import Database
 from .discord_bot import BridgeBot
+from .discord_adapter import DiscordAdapter
 from .discord_oauth_client import DiscordOAuthClient
 from .content_publish_service import ContentPublishService
 from .fedify_gateway_client import FedifyGatewayClient
@@ -41,6 +42,7 @@ class Runtime:
     registration_service: RegistrationService
     bridge_policy_service: BridgePolicyService
     bot: BridgeBot
+    discord_adapter: DiscordAdapter
     community_runtime: CommunityRuntime
     local_community_runtime: LocalCommunityRuntime
     profile_media_store: ProfileMediaStore
@@ -56,8 +58,13 @@ class Runtime:
         """Close live-state owners before releasing the deployment generation lease."""
         # The ordering prevents restore from replacing DB/media paths while a
         # client, pooled connection, or HTTP reader can still use them.
+        # If startup failed before run_bot entered its SDK context, runtime
+        # still closes callback admission before shared resources disappear.
+        self.discord_adapter.close_ingress_admission()
+        await self.discord_adapter.drain_ingress()
         await self.personal_feed_discord_delivery_worker.stop()
         await self.user_actor_delivery_worker.stop()
+        await self.discord_adapter.quiesce()
         await self.discord_oauth_client.close()
         await self.fedify_gateway.close()
         self.database.close()
