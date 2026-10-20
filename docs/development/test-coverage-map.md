@@ -20,6 +20,11 @@ This document is a short, feature-oriented index of the test suite. It helps mai
 - A bound owner text-channel Create traverses adapter -> `PlatformEventIngress` -> `DiscordEventRouter` -> real SQLite publication, with deterministic AP identity and original timestamp. A user-created text/announcement discussion thread is then adopted through typed `ThreadCreated` against the published root; a wrong parent cannot rebind it. Wrong connector, unknown author, moved binding, absent source time, forum Create and unsupported attachments have no canonical publish side effect — `tests/test_stage03_personal_feed_created_ingress.py`.
 - Existing Stage 7 duplicate-root and announcement-channel tests remain the behavioral regression references — `tests/behavior/test_personal_feed_stage7_root_publication.py`.
 
+## Stage 03 verified thread message transport (Checkpoint 23)
+
+- Forum thread reply normalization preserves its exact container, verified parent, author, reply target and timestamp. Parent/guild mismatches fail before ingress; synthetic starter and unsupported attachments cause no canonical Create — `tests/test_stage03_thread_message_ingress.py`.
+- Production forum and personal-feed reply Create cutover remains pending; these are transport-boundary tests, not a claim of completed end-to-end publication.
+
 ## Stage 03 Gateway ingress transition
 
 - Normalized raw edit/delete -> single domain-mutation sink, foreign-connector rejection, thread mutation no-op, unbound create rejection and real adapter admission — `tests/test_stage03_platform_event_ingress.py`.

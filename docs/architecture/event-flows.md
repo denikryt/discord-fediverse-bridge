@@ -32,6 +32,12 @@ This document explains the major runtime traces through the bridge: user/platfor
 5. A later `on_thread_create` for the published text/announcement root enters `DiscordAdapter.ingest_thread_created()` and the same typed sink. `DiscordEventRouter.handle_platform_thread_create()` adopts the exact root/thread ID only when the original publication and parent channel agree. No guessed forum starter or history fallback is needed.
 6. Other community forum-thread and reply Create callbacks still use their SDK-shaped domain path until their own typed cutover. No duplicate publication route is active for bound Personal Feed roots.
 
+## Discord thread message observation (Stage 03 preparatory boundary)
+
+1. `DiscordAdapter.ingest_thread_message_created()` verifies a physical `discord.Thread`, its independently observed parent, and matching message/thread/parent guild IDs; ambiguous metadata fails before domain admission.
+2. The adapter refuses unsupported attachments instead of discarding them and emits one `MessageCreated` with its immediate thread container, parent channel kind, reply reference, actual author and original timestamp. Discord's synthetic `THREAD_STARTER_MESSAGE` emits nothing.
+3. This is a transport-facing capability only in Checkpoint 23: production `on_message` still calls legacy SDK-shaped forum and Personal Feed reply routes. The typed domain Create cutover must happen before this adapter method is called from those callbacks, so only one route publishes each message.
+
 ## Discord thread -> remote Lemmy community publish flow
 
 1. `src/discord_bot.py` receives a Discord event.

@@ -147,6 +147,46 @@ class DiscordAdapter:
         if event is not None:
             await self._sink.handle_platform_event(event)
 
+    async def ingest_thread_message_created(self, message: object) -> None:
+        """Admit a message inside a verified physical thread without SDK leaks.
+
+        The domain router decides whether this container belongs to a Personal
+        Feed or a community. The adapter must not infer parent, guild, starter
+        identity, or silently discard attachments during normalization.
+        """
+        if self._sink is None:
+            raise RuntimeError('Discord normalized ingress is not bound')
+        if getattr(message, 'attachments', ()):
+            raise PlatformOperationError(
+                'unsupported', 'Discord thread message attachments require supported transport',
+            )
+        container = getattr(message, 'channel', None)
+        if not isinstance(container, self._sdk().Thread):
+            raise PlatformOperationError('invalid_request', 'expected Discord thread container')
+        parent = getattr(container, 'parent', None)
+        parent_id = getattr(container, 'parent_id', None)
+        if (parent is None or parent_id is None
+            or str(getattr(parent, 'id', '')) != str(parent_id)):
+            raise PlatformOperationError('invalid_request', 'thread parent not verified')
+        # All three independently observed guild references must agree. A
+        # mismatched cached parent cannot authorize community publication.
+        observed_guilds = (
+            getattr(getattr(message, 'guild', None), 'id', None),
+            getattr(getattr(container, 'guild', None), 'id', None),
+            getattr(getattr(parent, 'guild', None), 'id', None),
+        )
+        if any(value is None for value in observed_guilds) or len(set(map(str, observed_guilds))) != 1:
+            raise PlatformOperationError('invalid_request', 'thread message guild not verified')
+        verified = self._validate_channel(
+            ChannelRef(self.connector.key, str(parent_id), external_guild_id=str(observed_guilds[0])),
+            parent,
+        )
+        event = self._normalizer().message_created(
+            message, channel_kind='unknown', parent_kind=verified.kind,
+        )
+        if event is not None:
+            await self._sink.handle_platform_event(event)
+
     async def ingest_thread_created(self, thread: object) -> None:
         """Normalize a verified physical thread without guessing its starter ID."""
         if self._sink is None:

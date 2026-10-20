@@ -232,3 +232,8 @@ cutover has yet been performed. Two targeted positive/negative tests pass.
 
 - The live manual text/announcement discussion-thread path now normalizes `ThreadCreated`, checks the persisted Personal Feed root identity and exact parent, and adopts using the existing repository. A verified forum `ThreadCreated` cannot silently pass the incomplete typed Create path. Missing/wrong parent or guild is rejected at adapter boundary; no starter history guess is made for Personal Feed.
 - Generic forum thread and local/remote community message Create remain SDK-shaped. Full installed-SDK and multi-service integration tests remain unavailable; focused normalized runtime/SQLite tests passed.
+
+## Stage 03 verified thread message boundary (Checkpoint 23, 2026-10-19)
+
+- Adapter now verifies observed thread parent and three guild identities before normalizing a reply into `MessageCreated`; synthetic starter events and unsupported attachments cannot publish through that boundary.
+- Production `on_message` remains on SDK-shaped forum/Personal Feed reply handlers until typed domain routes can be switched without duplicate publication.
