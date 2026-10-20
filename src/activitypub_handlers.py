@@ -286,6 +286,14 @@ async def handle_post_created(
             outcome=InboundActivityOutcome.IGNORED_NO_SUBSCRIPTION,
             detail="no subscriptions for this community",
         )
+    # Production has one registered Discord transport. The old SDK delivery
+    # entry point remains for isolated legacy tests until the Stage 03 graph
+    # audit removes the remaining SDK-dependent callers.
+    adapter = getattr(runtime, 'discord_adapter', None)
+    if adapter is not None:
+        return await runtime.community_runtime.handle_normalized_inbound_post(
+            event, adapter=adapter,
+        )
     return await runtime.community_runtime.handle_inbound_post(event, runtime)
 
 

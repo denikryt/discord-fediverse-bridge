@@ -66,7 +66,8 @@ This document explains the major runtime traces through the bridge: user/platfor
 1. Gateway `/inbox` receives ActivityPub. A wrapped `Announce(Create)` must pass the origin-author verification gate before normalization to `post.created`; a direct Create must match its Fedify-authenticated actor and embedded object author.
 2. `src/activitypub_handlers.py` validates idempotency and routes to remote subscription runtime.
 3. If no accepted subscription and no existing mapped thread context exists, Python skips the event locally while gateway delivery remains acknowledged.
-4. Otherwise Discord threads are created and group/delivery rows are recorded.
+4. In production `CommunityRuntime.handle_normalized_inbound_post()` obtains current accepted subscription targets and checked guild metadata before creating Discord forum threads through `PlatformDeliveryPort.create_forum_thread()`. Each destination gets one stable `CreateAttempt`; the adapter owns the physical Discord permission check and POST. The canonical `CommunityThreadGroup` and per-destination delivery rows record the verified **separate** thread and starter IDs. A repeated mapped event never submits another create.
+5. A missing guild, revoked subscription, or mismatched transport receipt cannot authorize a persisted physical copy. The legacy SDK path remains only for isolated compatibility tests while the remaining inbound comment/backfill paths await Stage 03 migration.
 
 ## Remote ActivityPub comment -> Discord fanout flow
 

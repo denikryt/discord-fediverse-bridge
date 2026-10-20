@@ -46,9 +46,10 @@ from .reply_mapping import (
 )
 from ..discord_legacy_projection import discord_id_to_legacy_int
 from ..platform_types import (
+    ChannelRef, ContentDocument, CreateAttempt, DeliveryPresentation,
     MessageCreated, MessageView, PlatformOperationError, ThreadCreated,
 )
-from ..runtime_ports import DiscordDeliveryClientPort, DiscordMutationContext
+from ..runtime_ports import DiscordDeliveryClientPort, DiscordMutationContext, PlatformDeliveryPort
 
 if TYPE_CHECKING:
     from ..activitypub_handlers import HandlerResult
@@ -57,7 +58,6 @@ if TYPE_CHECKING:
     from ..content_publish_service import ContentPublishService, PublishResult
     from ..runtime import Runtime
     from .discord_fanout import DiscordFanout
-    from ..runtime_ports import PlatformDeliveryPort
 
 logger = logging.getLogger(__name__)
 
@@ -476,6 +476,100 @@ class CommunityRuntime:
                 )
 
         return result
+
+    async def handle_normalized_inbound_post(
+        self, event: ActivityPubEvent, *, adapter: PlatformDeliveryPort,
+    ) -> HandlerResult:
+        """Deliver one remote AP post via the typed port, preserving shared groups.
+
+        The existing repository remains the canonical mapping owner; each
+        physical result is checked against the subscribed forum before the
+        actual Discord thread and starter IDs cross the legacy integer boundary.
+        """
+        from ..activitypub_handlers import HandlerResult as _HandlerResult
+        from ..formatting import (
+            format_lemmy_post_for_discord, format_thread_title_for_discord,
+            normalize_text,
+        )
+
+        if get_thread_group_for_ap_object(self.database, event.object.ap_id) is not None:
+            return _HandlerResult(
+                status='skipped', outcome=InboundActivityOutcome.IGNORED_ALREADY_APPLIED,
+                detail='post already mapped',
+            )
+
+        subscriptions = get_accepted_subscriptions(self.database, event.community_actor_id)
+        if not subscriptions:
+            return _HandlerResult(
+                status='skipped', outcome=InboundActivityOutcome.IGNORED_NO_SUBSCRIPTION,
+                detail='no subscriptions for this community',
+            )
+
+        # A historical subscription with no verified guild cannot authorize
+        # a new physical copy; do not manufacture guild identity from its ID.
+        allowed = [s for s in subscriptions if (
+            type(s.discord_guild_id) is int and s.discord_guild_id > 0
+        )]
+        if not allowed:
+            return _HandlerResult(
+                status='skipped', outcome=InboundActivityOutcome.IGNORED_UNMAPPED_CONTEXT,
+                detail='no subscriptions with verified Discord guilds',
+            )
+
+        group = self.database.discord_fanout_groups.create_thread_group(
+            community_actor_id=event.community_actor_id,
+            source_channel_id=None, source_thread_id=None,
+            source_starter_message_id=None,
+            ap_activity_id=event.delivery_id, ap_object_id=event.object.ap_id,
+        )
+        title = format_thread_title_for_discord(event.object.title or 'Untitled Lemmy Post')
+        body = ContentDocument(format_lemmy_post_for_discord(
+            event.object.author_name, event.object.title or 'Untitled Lemmy Post',
+            normalize_text(event.object.body_markdown), event.object.url,
+            actor_id=event.actor_id,
+        ))
+        delivered = 0
+        for subscription in allowed:
+            # Follow/Undo and channel claims are mutable; recheck their current
+            # mapping immediately before each physical create attempt.
+            current = self.database.remote_subscriptions.get_subscription_by_channel(
+                subscription.discord_channel_id
+            )
+            if (current is None or current.status != 'accepted'
+                or current.lemmy_community_actor_id != event.community_actor_id
+                or current.discord_guild_id != subscription.discord_guild_id):
+                continue
+            forum = ChannelRef('discord-primary', str(subscription.discord_channel_id),
+                               'forum', str(subscription.discord_guild_id))
+            attempt = CreateAttempt(
+                key=f'inbound-ap:post:{event.object.ap_id}:discord-primary:{subscription.discord_channel_id}',
+                connector_key='discord-primary', operation='forum_thread', destination=forum,
+            )
+            # The adapter owns ACL and the physical POST. An unknown receipt is
+            # never guessed from the thread title or an arbitrary SDK message.
+            created = await adapter.create_forum_thread(
+                forum, body, title=title, presentation=DeliveryPresentation(),
+                attempt=attempt,
+            )
+            if (created.thread.channel != forum
+                or created.thread.channel.external_guild_id != forum.external_guild_id
+                or created.starter.external_container_id != created.thread.external_thread_id
+                or created.starter.connector_key != forum.connector_key):
+                raise PlatformOperationError('unknown_delivery', 'inbound thread receipt does not match forum')
+            self.database.discord_fanout_groups.add_thread_delivery(
+                thread_group_id=group.id,
+                discord_channel_id=discord_id_to_legacy_int(forum),
+                discord_thread_id=discord_id_to_legacy_int(created.thread),
+                discord_starter_message_id=discord_id_to_legacy_int(created.starter),
+                role='inbound',
+            )
+            delivered += 1
+
+        logger.info('Delivered inbound post %s to %d Discord forums', event.object.ap_id, delivered)
+        return _HandlerResult(
+            status='processed', outcome=InboundActivityOutcome.APPLIED,
+            detail='post created',
+        )
 
     async def handle_inbound_post(
         self,

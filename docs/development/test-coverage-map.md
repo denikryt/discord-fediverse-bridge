@@ -85,6 +85,8 @@ This document is a short, feature-oriented index of the test suite. It helps mai
 
 ## Fediverse to Discord inbound delivery
 
+- Stage 03 Remote Community typed inbound post, verified separate thread/starter IDs, replay, revoked subscription and foreign receipt rejection on real SQLite — `tests/test_stage03_normalized_inbound_remote_posts.py`.
+
 - Inbound posts/comments, fanout, dedup, deferred delivery, and partial failure — [`tests/behavior/test_inbound_scenarios.py`](../../tests/behavior/test_inbound_scenarios.py)
 - Comment-before-post backfill and retry — [`tests/behavior/test_inbound_comment_backfill.py`](../../tests/behavior/test_inbound_comment_backfill.py)
 - Shared Discord thread/message groups for inbound ActivityPub — [`tests/test_phase5_inbound_ap_shared_groups.py`](../../tests/test_phase5_inbound_ap_shared_groups.py)

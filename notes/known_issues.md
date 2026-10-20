@@ -105,3 +105,10 @@ Fedify-native security integration remains blocked by missing dependencies.
   remain unavailable; native Fedify transport/SSRF acceptance is also pending.
 - Remaining migration: ActivityPub inbound physical SDK fan-out, mutations,
   User Actor SDK reads and command lifecycle audit. No Stage 04 outbox added.
+
+## 2026-10-19 — Stage 03 Checkpoint 33 remote inbound post transport
+
+- Remote ActivityPub post creation now uses typed `PlatformDeliveryPort` in the live dispatcher when `Runtime.discord_adapter` is present; original legacy direct-entry tests retain their old SDK path until shared inbound comment/backfill and SDK dependency cleanup are complete.
+- Exact per-target thread/starter receipts, checked guild claims and active subscriptions are regression-tested with real SQLite. Duplicate AP post events make no additional typed create call.
+- Existing shared `CommunityThreadGroup` dedup still prevents a failed/uncertain partially delivered inbound post from automatically recovering a missing target after a crash. Durable per-target recovery belongs to Stage 04; no blind second POST was introduced.
+- Full SDK-backed and Fedify-native integration remains blocked by unavailable dependencies.
