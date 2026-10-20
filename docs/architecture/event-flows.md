@@ -49,6 +49,17 @@ This document explains the major runtime traces through the bridge: user/platfor
 3. Unsubscribed comments without mapped context are skipped before backfill or Discord fanout.
 4. Runtime creates Discord messages in mapped thread deliveries and records message group rows.
 
+## Inbound local-community replay admission (Stage 03)
+
+When an incoming Create matches a previously stored local-community post or
+comment, `src/local_communities/inbound_create.py` checks current Follow state,
+canonical identity and retained immutable source **before** running a new
+Discord sibling fanout or ActivityPub relay. A changed activity, parent, author
+or source rejects the replay. Historical rows without stored origin proof skip
+recovery; a verified comment may recreate its missing generic AP mapping only
+from an existing host receipt. The Fedify gateway must independently validate
+the claimed ActivityPub author before these checks count as authentication.
+
 ## Discord edit/delete -> ActivityPub update/delete flow
 
 1. Discord edit/delete enters `src/discord_bot.py`, which delegates raw admission, echo suppression, and partial edit reconciliation to `src/discord_message_mutations.py`.

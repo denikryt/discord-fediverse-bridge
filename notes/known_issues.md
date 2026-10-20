@@ -127,5 +127,9 @@ message receipt persistence through `BEGIN IMMEDIATE`. An identical concurrent
 receipt returns the original row and a changed AP/physical identity fails
 without overwriting it. Generic AP comment mappings also compare both unique
 identity keys under the writer reservation, recovering after a partial handler
-failure. Source/mirror fanout and early duplicate ingress still require the
-separate Stage 03 routing and provenance checks before side effects.
+failure. Early duplicate ingress now checks current subscription, persisted canonical
+identity and available source evidence before fanout/relay; comment replay can
+repair a lost generic mapping from the saved host receipt. The R5-F1 Fedify
+nested-Create source authentication gate is not implemented, so stored raw
+source JSON cannot yet be treated as cryptographic author proof. Runtime adapter
+routing and all mutation/SDK-specific ingress checks also remain incomplete.

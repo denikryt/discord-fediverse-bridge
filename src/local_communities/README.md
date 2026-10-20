@@ -50,3 +50,15 @@ identity. Generic inbound comment mappings follow the same receipt identity
 rule, permitting recovery when an earlier handler committed its canonical
 message but stopped before generic mapping persistence. The domain ingress
 must still verify actor provenance **before** invoking sibling fanout/relay.
+
+## Inbound duplicate admission (Stage 03, partial)
+
+Before an already mapped remote post/comment can trigger Discord sibling
+fanout or ActivityPub relay, the inbound handler verifies the current accepted
+remote subscriber, canonical AP activity/object/community/parent identity and
+the previously retained immutable source. Legacy messages without a retained
+source take the searchable T8 fail-closed branch. Only an identical verified
+comment can restore a missing generic AP mapping from its persisted host
+Discord receipt. **Raw source JSON is not author authentication**: the
+independent nested-Create verification at the Fedify boundary remains a release
+blocker; tests here establish database replay consistency, not HTTP authorship.

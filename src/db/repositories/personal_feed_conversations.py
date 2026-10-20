@@ -284,6 +284,23 @@ class PersonalFeedConversationRepository:
             if existing is not None:
                 if existing.actor_id != actor_id:
                     return InboundAdmission("actor_mismatch", existing.id)
+                # Legacy rows without independently retained source evidence
+                # cannot have their identity reconstructed from a new Create.
+                # The trusted gateway must validate new events separately.
+                if existing.source_activity_json is None or source_activity is None:
+                    return InboundAdmission("unverified_duplicate", existing.id)
+                if (existing.publication_context != "community"
+                    or existing.activity_id != activity_id
+                    or existing.conversation_root_object_id != root_object_id
+                    or existing.parent_object_id != parent_object_id
+                    or existing.actor_name != actor_name
+                    or existing.revision_fingerprint != fingerprint
+                    or existing.source_activity_json != self._bounded_source(source_activity)
+                    or existing.published_at is None and published_at is not None
+                    or existing.published_at is not None and published_at is None
+                    or existing.published_at is not None and published_at is not None
+                       and self._utc_stored(existing.published_at) != published_at):
+                    return InboundAdmission("identity_conflict", existing.id)
                 return InboundAdmission("duplicate", existing.id)
             row = InboundConversationObject(
                 object_id=object_id,
