@@ -173,3 +173,11 @@ Fedify-native security integration remains blocked by missing dependencies.
   while a healthy sibling still succeeds. An unverified possibly transmitted
   physical create is not automatically retried or adopted after restart;
   Stage 04 remains responsible for durable unknown-create reconciliation.
+
+- **Stage 03 Checkpoint 45:** Adapter-backed Remote Community sibling forum
+  and comment receipts now validate `CreateAttempt`, bot delivery mode and
+  (for forums) affirmative kind/guild before writing group delivery rows.
+  Real SQLite runtime regressions demonstrated that previously accepted wrong-
+  mode webhook receipts would persist as mirrors; now only healthy targets are
+  recorded. Uncertain physical creates, the remaining SDK-only entry points,
+  Fedify security upgrade and full dependency-backed integration remain open.

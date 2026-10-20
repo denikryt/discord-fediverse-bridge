@@ -63,3 +63,15 @@ hostname and JSON bodies have a 1 MiB bound. Canonical ID/type validation
 remains in `backfill_normalized_post_as_thread_group()`. This is not an Actor
 author-authentication mechanism. Other SDK-shaped inbound operations remain
 subject to the final Stage 03 dependency audit.
+
+## Stage 03 Checkpoint 45 — verified physical Remote Community receipts
+
+Adapter-backed Remote Community sibling thread and reply fan-out validates the
+full typed `CreateAttempt` and requested bot presentation **before** the
+runtime persists a physical mirror in the existing SQLite delivery group.
+Forum receipts also require positive expected kind/guild metadata; separate
+real thread and starter IDs are retained. An unusable receipt after a
+potentially transmitted request is treated as `unknown_delivery` and does
+not claim a delivered mirror, while another eligible sibling can succeed.
+This does not authorize a blind Create retry or provide Stage 04 durable
+receipt recovery. The direct-call SDK fallback remains pending migration.

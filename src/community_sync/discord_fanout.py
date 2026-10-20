@@ -21,7 +21,7 @@ from ..discord_legacy_projection import discord_id_to_legacy_int
 from ..platform_types import (
     ChannelRef, ContentDocument, CreateAttempt, DeliveryPresentation,
     MessageCreated, MessageRef, MessageView, ThreadCreated, ThreadRef,
-    PlatformOperationError,
+    PlatformOperationError, validate_created_receipt,
 )
 from ..runtime_ports import PlatformAdapterPort, PlatformDeliveryPort
 
@@ -244,16 +244,23 @@ class DiscordFanout:
                     f'community-mirror-thread:{source_id}:{channel_id}',
                     'discord-primary', 'forum_thread', forum,
                 )
+                presentation = DeliveryPresentation()
                 receipt = await adapter.create_forum_thread(
-                    forum, body, title=source.name, presentation=DeliveryPresentation(),
+                    forum, body, title=source.name, presentation=presentation,
                     attempt=attempt,
                 )
-                if (receipt.thread.channel != forum
-                    or receipt.thread.channel.kind != forum.kind
-                    or receipt.thread.channel.external_guild_id != forum.external_guild_id
-                    or receipt.starter.connector_key != forum.connector_key
-                    or receipt.starter.external_container_id != receipt.thread.external_thread_id):
-                    raise PlatformOperationError('unknown_delivery', 'mirror receipt destination mismatch')
+                try:
+                    # A sibling receipt proves an actual bot-mode physical copy
+                    # only when it matches the requested CreateAttempt and
+                    # positively verifies this forum's guild and kind.
+                    validate_created_receipt(attempt, receipt, presentation=presentation)
+                    if (receipt.thread.channel.kind != 'forum'
+                        or receipt.thread.channel.external_guild_id != forum.external_guild_id):
+                        raise PlatformOperationError('invalid_request', 'unverified community mirror forum')
+                except (PlatformOperationError, ValueError, TypeError, AttributeError) as exc:
+                    # A mismatch after transport might still represent a sent
+                    # Discord object; refuse persistence but never infer non-send.
+                    raise PlatformOperationError('unknown_delivery', 'community mirror thread receipt mismatch') from exc
                 copies.append(MirrorResult(
                     channel_id, discord_id_to_legacy_int(receipt.thread),
                     discord_id_to_legacy_int(receipt.starter),
@@ -306,13 +313,18 @@ class DiscordFanout:
                     f'community-mirror-message:{source_id}:{thread_id}',
                     'discord-primary', 'message', destination,
                 )
+                presentation = DeliveryPresentation()
                 receipt = await adapter.send_message(
                     destination, body, reply_to=reply_to,
-                    presentation=DeliveryPresentation(), attempt=attempt,
+                    presentation=presentation, attempt=attempt,
                 )
-                if (receipt.message.connector_key != 'discord-primary'
-                    or receipt.message.external_container_id != str(thread_id)):
-                    raise PlatformOperationError('unknown_delivery', 'mirror message receipt destination mismatch')
+                try:
+                    # A correct thread ID is insufficient if the transport
+                    # returned a different delivery mode or receipt operation.
+                    validate_created_receipt(attempt, receipt, presentation=presentation)
+                except (PlatformOperationError, ValueError, TypeError, AttributeError) as exc:
+                    # Avoid claiming delivery without a verified physical result.
+                    raise PlatformOperationError('unknown_delivery', 'community mirror message receipt mismatch') from exc
                 copies.append(MirrorMessageResult(
                     channel_id, thread_id, discord_id_to_legacy_int(receipt.message), parent_id,
                 ))

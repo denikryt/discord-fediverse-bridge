@@ -262,3 +262,73 @@ async def test_unregistered_source_author_cannot_publish_or_create_group(tmp_pat
         assert db.discord_fanout_groups.get_thread_group_by_any_thread(200) is None
     finally:
         db.close()
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize('reported_mode,expected_channels', [
+    ('bot', [100, 101, 102]),
+    ('webhook', [100, 102]),
+])
+async def test_remote_community_thread_receipt_mode_controls_durable_mirror(tmp_path, reported_mode, expected_channels):
+    """Only a true bot Create receipt may become a Remote Community mirror copy."""
+    db, runtime, gateway, adapter = world(tmp_path)
+    original_create = adapter.create_forum_thread
+
+    async def returned_thread(forum, content, *, title, presentation, attempt):
+        """Simulate an incorrect physical mode while leaving the forum IDs genuine."""
+        receipt = await original_create(
+            forum, content, title=title, presentation=presentation, attempt=attempt,
+        )
+        if forum.external_channel_id == '101':
+            return CreatedThread(receipt.thread, receipt.starter, reported_mode)
+        return receipt
+
+    adapter.create_forum_thread = returned_thread
+    try:
+        event, opening = starter()
+        result = await runtime.handle_normalized_thread_create(event, opening, adapter=adapter)
+        assert result.status == 'published'
+        assert len(gateway.requests) == 1 and len(adapter.posts) == 2
+        group = db.discord_fanout_groups.get_thread_group_by_source_thread(200)
+        deliveries = db.discord_fanout_groups.get_thread_deliveries(group.id)
+        assert sorted(row.discord_channel_id for row in deliveries) == expected_channels
+        assert next(row.discord_starter_message_id for row in deliveries
+                    if row.discord_channel_id == 102) == 2102
+    finally:
+        db.close()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize('reported_mode,expected_channels', [
+    ('bot', [100, 101, 102]),
+    ('webhook', [100, 102]),
+])
+async def test_remote_community_reply_receipt_mode_controls_durable_mirror(tmp_path, reported_mode, expected_channels):
+    """A mirror reply retains its verified parent but never adopts a wrong-mode receipt."""
+    db, runtime, gateway, adapter = world(tmp_path)
+    try:
+        event, opening = starter()
+        await runtime.handle_normalized_thread_create(event, opening, adapter=adapter)
+        original_send = adapter.send_message
+
+        async def returned_reply(destination, content, *, reply_to, presentation, attempt):
+            """Misreport one sibling reply mode without changing physical IDs."""
+            receipt = await original_send(
+                destination, content, reply_to=reply_to,
+                presentation=presentation, attempt=attempt,
+            )
+            if destination.channel.external_channel_id == '101':
+                return CreatedMessage(receipt.message, reported_mode)
+            return receipt
+
+        adapter.send_message = returned_reply
+        result = await runtime.handle_normalized_message_create(reply(), adapter=adapter)
+        assert result.status == 'published'
+        assert len(gateway.requests) == 2 and len(adapter.replies) == 2
+        group = db.discord_fanout_groups.get_message_group_by_source_message(400)
+        deliveries = db.discord_fanout_groups.get_message_deliveries(group.id)
+        assert sorted(row.discord_channel_id for row in deliveries) == expected_channels
+        assert next(row.discord_message_id for row in deliveries
+                    if row.discord_channel_id == 102) == 4102
+        assert adapter.replies[1][1].external_message_id == '2102'
+    finally:
+        db.close()
