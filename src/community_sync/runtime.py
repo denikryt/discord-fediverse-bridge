@@ -13,8 +13,6 @@ from __future__ import annotations
 import logging
 from typing import TYPE_CHECKING
 
-import discord
-
 from ..inbound_activity_outcomes import InboundActivityOutcome
 from .backfill import backfill_post_as_thread_group
 from .delivery_mapping import (
@@ -52,6 +50,7 @@ from ..platform_types import (
 from ..runtime_ports import DiscordDeliveryClientPort, DiscordMutationContext, PlatformDeliveryPort
 
 if TYPE_CHECKING:
+    import discord  # Only legacy SDK-shaped annotations; typed paths need no SDK.
     from ..activitypub_handlers import HandlerResult
     from ..activitypub_models import ActivityPubEvent
     from ..db import Database

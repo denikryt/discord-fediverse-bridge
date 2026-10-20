@@ -51,3 +51,15 @@ thread or message. User-authored source comments remain excluded from remote
 comment mutation fan-out. One failed physical edit does not block other copies.
 Legacy direct-runtime test entry points continue to use the SDK helper when no
 adapter is registered; production chooses only the adapter path.
+
+## Stage 03 Checkpoint 41 — guarded parent-post dereference
+
+The shared `bridge_lemmy_to_discord._fetch_ap_object()` now delegates to
+`activitypub_safe_fetch.fetch_public_ap_object()`. Before backfill can
+reconstruct an unknown parent Page/Article, the HTTPS target must be
+credential-free, its A/AAAA set public-only, and its actual socket destination
+rechecked. Redirects and implicit proxies are disabled; TLS keeps the original
+hostname and JSON bodies have a 1 MiB bound. Canonical ID/type validation
+remains in `backfill_normalized_post_as_thread_group()`. This is not an Actor
+author-authentication mechanism. Other SDK-shaped inbound operations remain
+subject to the final Stage 03 dependency audit.

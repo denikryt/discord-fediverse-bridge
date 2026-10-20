@@ -3,8 +3,6 @@ from __future__ import annotations
 import logging
 from datetime import datetime, timezone
 
-import aiohttp
-
 from .activitypub_models import ActivityPubEvent
 from .formatting import (
     format_lemmy_comment_for_discord,
@@ -23,14 +21,11 @@ async def _fetch_ap_object(url: str) -> dict:
     HTTP status codes or non-JSON response bodies. Callers treat any
     exception as a fetch failure and fall back to the deferred path.
     """
-    headers = {"Accept": "application/activity+json"}
-    async with aiohttp.ClientSession() as session:
-        async with session.get(
-            url, headers=headers, timeout=aiohttp.ClientTimeout(total=10)
-        ) as resp:
-            if resp.status >= 400:
-                raise RuntimeError(f"HTTP {resp.status} fetching AP object {url}")
-            return await resp.json(content_type=None)
+    from .activitypub_safe_fetch import fetch_public_ap_object
+
+    # Backfill IDs originate from inbound ActivityPub data, never a trusted
+    # local route. Enforce a public-only socket before dereferencing them.
+    return await fetch_public_ap_object(url)
 
 
 def _build_post_event_from_ap_doc(

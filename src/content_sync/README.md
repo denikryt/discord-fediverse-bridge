@@ -19,3 +19,11 @@ Runtime selection, Discord delivery, gateway routes, or ActivityPub signing.
 ## Important tables or payloads
 
 `message_mappings`, `published_activity_objects`, community group tables, and gateway publish/update/delete payloads.
+
+## Stage 03 dependency audit
+
+Legacy `inbound_references.build_message_reference()` defers loading
+`discord.py` until a legacy physical send actually requests an SDK reference.
+Importing reusable content helpers and CommunityRuntime no longer loads the
+Discord SDK. The remaining legacy SDK-based reference/edit/delete operations
+must be removed after their callers are migrated; they are not Platform API.
