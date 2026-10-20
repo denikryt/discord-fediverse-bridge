@@ -201,7 +201,7 @@ export async function updateContent(
   }
 
   const ctx = federation.createContext(new URL(config.fedifyOrigin), config);
-  const { communityId, inboxUrl } = await fetchRemoteCommunity(request.communityActorUrl);
+  const { communityId, inboxUrl } = await fetchRemoteCommunity(ctx, request.communityActorUrl);
 
   console.log("[Update] Sending Update activity:", {
     actorUsername: request.actorUsername,
@@ -260,7 +260,7 @@ export async function deleteContent(
   }
 
   const ctx = federation.createContext(new URL(config.fedifyOrigin), config);
-  const { communityId, inboxUrl } = await fetchRemoteCommunity(request.communityActorUrl);
+  const { communityId, inboxUrl } = await fetchRemoteCommunity(ctx, request.communityActorUrl);
 
   console.log("[Delete] Sending Delete activity:", {
     actorUsername: request.actorUsername,

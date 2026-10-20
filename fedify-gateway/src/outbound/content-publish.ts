@@ -27,7 +27,7 @@ export async function publishContent(
   const ctx = federation.createContext(new URL(config.fedifyOrigin), config);
   const actorUri = buildUserActorUri(config, request.actorUsername);
   const { communityId, inboxUrl } = await fetchRemoteCommunity(
-    request.communityActorUrl,
+    ctx, request.communityActorUrl,
   );
   const builtCreate = buildPublishCreateActivity(config, request, communityId);
   const activity = builtCreate.activity;

@@ -36,7 +36,7 @@ export async function followCommunity(
 
   // Fetch the remote actor first because Follow delivery needs both the actor
   // id and its concrete inbox endpoint.
-  const { communityId, inboxUrl } = await fetchRemoteCommunity(communityActorUrl);
+  const { communityId, inboxUrl } = await fetchRemoteCommunity(ctx, communityActorUrl);
 
   // Build a unique Follow id locally so retries and remote logs can refer to a
   // concrete outbound activity URL.
@@ -93,7 +93,7 @@ export async function unfollowCommunity(
   const serviceActorTail = `services/${config.actorIdentifier}`;
   const actorUri = ctx.getActorUri(serviceActorTail);
 
-  const { communityId, inboxUrl } = await fetchRemoteCommunity(communityActorUrl);
+  const { communityId, inboxUrl } = await fetchRemoteCommunity(ctx, communityActorUrl);
 
   const undo = buildLemmyCompatibleUnfollowActivity(
     config,

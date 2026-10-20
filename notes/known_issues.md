@@ -131,8 +131,10 @@ failure. Early duplicate ingress now checks current subscription, persisted cano
 identity and available source evidence before fanout/relay; comment replay can
 repair a lost generic mapping from the saved host receipt. The R5-F1 Fedify
 nested-Create source authentication gate is not implemented, so stored raw
-source JSON cannot yet be treated as cryptographic author proof. Runtime adapter
-routing and all mutation/SDK-specific ingress checks also remain incomplete.
+source JSON cannot yet be treated as cryptographic author proof. Runtime adapter routing and all mutation/SDK-specific ingress checks also remain
+incomplete. Physical adapter SDK I/O now tracks task lifetimes for reads, edits,
+deletes and creates; quiesce cancels and joins them after inbound callbacks drain,
+but this does not prove command/interaction callback lifetime safety.
 
 ## Stage 03 outbound signed JSON egress hardening (checkpoint 12, partial)
 
@@ -144,3 +146,13 @@ and isolated TypeScript checking pass. The Fedify-native `sendActivity` path
 and unrestricted remote Actor fetch are **not** covered by this change; the
 Fedify dependency lockfile remains at 2.2.0 because the package registry is
 unreachable. This is not completion of the R7-F2 security release gate.
+
+## Stage 03 remote Actor GET hardening (checkpoint 13, partial)
+
+Remote community Actor resolution now uses Fedify `ctx.lookupObject` with
+`crossOrigin: 'throw'` and validates exact Actor ID and public HTTPS inbox.
+The previous unrestricted `fetch()` in `outbound/remote-actor.ts` is removed;
+all Follow/publish/mutation call sites pass their federation context. Three
+positive/negative Node tests pass without Fedify dependencies. Full Fedify
+runtime and dependency-version checking remains blocked by unavailable npm;
+this is not final R7-F2 integration verification.
