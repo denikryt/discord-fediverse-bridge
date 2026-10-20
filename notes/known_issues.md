@@ -79,3 +79,14 @@ an ID and a duplicate Create does not re-send. Existing complete relay/runtime
 regressions remain unverified because `discord.py` and `hypothesis` are missing.
 The historical mixed-ID conflict is intentionally blocked for reconciliation,
 not silently re-keyed. Dependency/security and adapter migration remain open.
+
+## Stage 03 Personal Feed claimed-revision and create recovery (partial, 2026-10-19)
+
+The repository now compares the actual claimed revision/deleted flag on every
+physical completion. An uncertain ID-less first send remains parked across
+restart, Update, Delete and binding suppression until a verified receipt exists.
+Five dedicated SQLite scenarios pass; 19 Personal Feed scenarios also pass when
+an isolated fake `discord` module stands in for the unavailable SDK import.
+The **live** worker still uses discord.py directly and must be cut over to
+DiscordAdapter before this Stage can be called complete; real Discord HTTP
+errors and cancellation need SDK-backed regression tests.

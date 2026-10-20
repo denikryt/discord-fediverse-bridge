@@ -192,24 +192,18 @@ def test_only_actual_discord_calls_exhaust_three_attempt_budget() -> None:
         parent_known=True,
     )
 
-    assert (
-        database.personal_feed_conversations.record_discord_attempt(
-            created.delivery_id, success=False, error="one"
-        )
-        == "ready"
-    )
-    assert (
-        database.personal_feed_conversations.record_discord_attempt(
-            created.delivery_id, success=False, error="two"
-        )
-        == "ready"
-    )
-    assert (
-        database.personal_feed_conversations.record_discord_attempt(
-            created.delivery_id, success=False, error="three"
-        )
-        == "failed"
-    )
+    # Each outbound HTTP failure must complete an actual immutable due claim.
+    # Force the test clock past backoff instead of bypassing claim admission.
+    for n, expected in (("one", "ready"), ("two", "ready"), ("three", "failed")):
+        with database.immediate_session() as session:
+            row = session.get(InboundDiscordDelivery, created.delivery_id)
+            row.next_attempt_at = datetime.now(timezone.utc) - timedelta(seconds=1)
+        claim, = database.personal_feed_conversations.claim_due()
+        assert database.personal_feed_conversations.record_discord_attempt(
+            created.delivery_id, success=False, error=n,
+            claimed_revision_fingerprint=claim.claimed_revision_fingerprint,
+            claimed_deleted=claim.deleted,
+        ) == expected
     with database.session() as session:
         delivery = session.get(InboundDiscordDelivery, created.delivery_id)
         assert delivery.attempt_count == 3
@@ -234,8 +228,11 @@ def test_delivered_update_reuses_discord_message_and_delete_becomes_due() -> Non
         destination_channel_id=10,
         parent_known=True,
     )
+    initial_claim, = database.personal_feed_conversations.claim_due()
     database.personal_feed_conversations.record_discord_attempt(
-        created.delivery_id, success=True, discord_message_id=501
+        created.delivery_id, success=True, discord_message_id=501,
+        claimed_revision_fingerprint=initial_claim.claimed_revision_fingerprint,
+        claimed_deleted=initial_claim.deleted,
     )
 
     updated = database.personal_feed_conversations.admit_update(
@@ -251,7 +248,9 @@ def test_delivered_update_reuses_discord_message_and_delete_becomes_due() -> Non
     assert claim.discord_message_id == 501
     assert claim.deleted is False
     database.personal_feed_conversations.record_discord_attempt(
-        claim.delivery_id, success=True, discord_message_id=501
+        claim.delivery_id, success=True, discord_message_id=501,
+        claimed_revision_fingerprint=claim.claimed_revision_fingerprint,
+        claimed_deleted=claim.deleted,
     )
 
     deleted = database.personal_feed_conversations.admit_delete(

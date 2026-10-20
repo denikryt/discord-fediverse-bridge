@@ -130,6 +130,14 @@ This document explains the major runtime traces through the bridge: user/platfor
 4. `/account-settings feed-view` reads the durable assignment; `feed-unbind` removes only the caller's current assignment. Historical publication/thread/message mappings are not modified.
 5. `BridgeBot.on_message` recognizes owner-authored root messages in an active ordinary text-channel or announcement-channel binding before existing forum routing. Non-owner roots, stale bindings, threads, DMs, and unrelated channels do not classify as personal-feed roots.
 
+## Stage 03 Personal Feed inbound Discord delivery safety
+
+1. An authorized remote Create, Update or Delete mutates the canonical inbound conversation object under `BEGIN IMMEDIATE`; each due claim captures the exact revision fingerprint and deleted flag before physical Discord work.
+2. The Personal Feed worker rechecks the active binding. Before the first unknown-ID message send, it durably marks `CREATE_STARTED_DISCORD_SENTINEL`; the network call runs outside the SQLite transaction.
+3. An interrupted or ambiguous first Create is parked with `UNCERTAIN_DISCORD_CREATE_ERROR`, not retried blindly. Later ActivityPub Update/Delete changes the canonical object but cannot clear this marker or trigger another Create.
+4. On a verified Discord receipt, `record_discord_attempt` saves the physical ID and compares the completed claim to the current canonical revision. A superseded edit/create schedules the latest **edit/delete using that existing ID**; it cannot acknowledge an obsolete revision as delivered.
+5. A known-ID edit/delete failure uses the bounded three-attempt policy only for its claimed revision. Restart recovery preserves parked unknown first Creates but safely reclaims unrelated interrupted work.
+
 ## Versioned startup and channel claims
 
 Startup recognizes released v0.1.0 schema at version 0 and validates the complete current schema at version 1. Empty files bootstrap current v1 atomically. The sole registered v0→v1 step reserves a dedicated connection, suspends FK enforcement before `BEGIN IMMEDIATE`, and rechecks header and inventory under the writer lock. All 30 released tables are staged in SQL TEMP before any DROP; the 45-table current ORM target is created once. Native INSERT/SELECT and JOIN build scoped locations and typed claims, followed by the planned one-time AP identity deltas. Published objects retain their source IDs; features absent from released v0 stay empty. No Stage 00 schema or internal version is created. Target definitions, every original row, `foreign_key_check` and `integrity_check` are verified before the sole version-1 stamp and commit. Errors restore original schema/data and header; FK enforcement is restored and verified in `finally`, with unsafe connections invalidated. Current v1 startup is read-only and never repairs a partial schema.

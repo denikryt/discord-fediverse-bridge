@@ -13,6 +13,10 @@ from typing import Callable, ContextManager
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
+UNCERTAIN_DISCORD_CREATE_ERROR = "uncertain Discord create; Stage 04 reconciliation required"
+CREATE_STARTED_DISCORD_SENTINEL = "Discord create started; outcome may be unknown"
+
+
 from ...models import (
     InboundConversationObject,
     InboundDiscordDelivery,
@@ -38,6 +42,7 @@ class DueDiscordDelivery:
     destination_thread_id: int | None
     discord_message_id: int | None
     deleted: bool
+    claimed_revision_fingerprint: str
 
 
 @dataclass(frozen=True, slots=True)
@@ -245,7 +250,7 @@ class PersonalFeedConversationRepository:
                 state="ready" if parent_known else "pending_parent",
                 attempt_count=0,
                 next_attempt_at=utcnow() if parent_known else None,
-                last_applied_revision=fingerprint,
+                last_applied_revision=None,
             )
             session.add(delivery)
             session.flush()
@@ -344,15 +349,21 @@ class PersonalFeedConversationRepository:
                 )
             )
             if delivery is not None:
-                delivery.last_applied_revision = fingerprint
-                if delivery.discord_message_id is not None:
-                    delivery.state = "ready"
-                    delivery.attempt_count = 0
-                    delivery.next_attempt_at = utcnow()
+                # A canonical Update cannot steal a claimed in-flight edit or
+                # create. Its current version is queued only after completion.
+                if delivery.state == "dispatching":
+                    pass
+                elif delivery.discord_message_id is not None:
+                    if delivery.state != "suppressed":
+                        delivery.state = "ready"
+                        delivery.attempt_count = 0
+                        delivery.next_attempt_at = utcnow()
                 elif delivery.state == "failed":
-                    delivery.state = "ready"
-                    delivery.attempt_count = 0
-                    delivery.next_attempt_at = utcnow()
+                    # MULTIPLATFORM_STAGE03_TEMP_PERSONAL_FEED_UNCERTAIN_TRANSITION: An ID-less Discord create may be parked uncertain or still in flight; preserve canonical Update/Delete without enabling a second send or discarding a possible receipt until Stage 04 reconciliation.
+                    if delivery.last_error != UNCERTAIN_DISCORD_CREATE_ERROR:
+                        delivery.state = "ready"
+                        delivery.attempt_count = 0
+                        delivery.next_attempt_at = utcnow()
             return InboundAdmission(
                 "accepted", row.id, delivery.id if delivery else None
             )
@@ -380,10 +391,16 @@ class PersonalFeedConversationRepository:
                 )
             )
             if delivery is not None:
-                if delivery.discord_message_id is None:
-                    delivery.state = "suppressed"
-                    delivery.next_attempt_at = None
-                else:
+                # A current Create/edit may still finish after this Delete;
+                # preserve its receipt so the physical target can be removed.
+                if delivery.state == "dispatching":
+                    pass
+                elif delivery.discord_message_id is None:
+                    # MULTIPLATFORM_STAGE03_TEMP_PERSONAL_FEED_UNCERTAIN_TRANSITION: An ID-less Discord create may be parked uncertain or still in flight; preserve canonical Update/Delete without enabling a second send or discarding a possible receipt until Stage 04 reconciliation.
+                    if delivery.last_error != UNCERTAIN_DISCORD_CREATE_ERROR:
+                        delivery.state = "suppressed"
+                        delivery.next_attempt_at = None
+                elif delivery.state != "suppressed":
                     delivery.state = "ready"
                     delivery.attempt_count = 0
                     delivery.next_attempt_at = utcnow()
@@ -460,6 +477,7 @@ class PersonalFeedConversationRepository:
                         destination_thread_id=delivery.destination_thread_id,
                         discord_message_id=delivery.discord_message_id,
                         deleted=obj.deleted_at is not None,
+                        claimed_revision_fingerprint=obj.revision_fingerprint,
                     )
                 )
         return claims
@@ -477,6 +495,13 @@ class PersonalFeedConversationRepository:
         with self.immediate_session() as session:
             row = session.get(InboundDiscordDelivery, delivery_id)
             if row is not None:
+                # Never lose the only durable evidence of an unknown first
+                # Create when an inactive personal binding is detected.
+                if (row.discord_message_id is None
+                    and row.last_error in {
+                        CREATE_STARTED_DISCORD_SENTINEL, UNCERTAIN_DISCORD_CREATE_ERROR
+                    }):
+                    return
                 row.state = "suppressed"
                 row.next_attempt_at = None
                 row.last_error = reason[:512]
@@ -489,19 +514,54 @@ class PersonalFeedConversationRepository:
                 row.destination_thread_id = thread_id
                 row.external_thread_id = str(thread_id)
 
-    def recover_dispatching(self) -> int:
-        """Make interrupted side-effect claims retryable after process restart."""
+    def mark_create_started(self, delivery_id: int) -> bool:
+        """Durably distinguish a possibly transmitted first Create from a claim."""
         with self.immediate_session() as session:
-            rows = list(
-                session.scalars(
-                    select(InboundDiscordDelivery).where(
-                        InboundDiscordDelivery.state == "dispatching"
-                    )
-                )
-            )
+            row = session.get(InboundDiscordDelivery, delivery_id)
+            if (row is None or row.state != "dispatching"
+                or row.discord_message_id is not None
+                or row.last_error in {
+                    UNCERTAIN_DISCORD_CREATE_ERROR, CREATE_STARTED_DISCORD_SENTINEL
+                }):
+                return False
+            # MULTIPLATFORM_STAGE03_TEMP_PERSONAL_FEED_CREATE_STARTED: Mark a claimed first Discord message create before network I/O so interrupted sends cannot be replayed blindly; replace with Stage 04 durable send-intent state.
+            row.last_error = CREATE_STARTED_DISCORD_SENTINEL
+            return True
+
+    def mark_uncertain_create(self, delivery_id: int) -> bool:
+        """Park an ID-less Discord send whose HTTP outcome cannot be proved."""
+        with self.immediate_session() as session:
+            row = session.get(InboundDiscordDelivery, delivery_id)
+            if (row is None or row.discord_message_id is not None
+                or row.last_error not in {
+                    CREATE_STARTED_DISCORD_SENTINEL, UNCERTAIN_DISCORD_CREATE_ERROR
+                }):
+                return False
+            # MULTIPLATFORM_STAGE03_TEMP_PERSONAL_FEED_UNCERTAIN: Park an ambiguously sent Discord message without another create; Stage 04 must give it explicit unresolved delivery state and verified recovery.
+            row.state = "failed"
+            if row.last_error == CREATE_STARTED_DISCORD_SENTINEL:
+                row.attempt_count = min(3, row.attempt_count + 1)
+            row.last_error = UNCERTAIN_DISCORD_CREATE_ERROR
+            row.next_attempt_at = None
+            return True
+
+    def recover_dispatching(self) -> int:
+        """Recover unstarted claims, but park first Creates that may have been sent."""
+        with self.immediate_session() as session:
+            rows = list(session.scalars(select(InboundDiscordDelivery).where(
+                InboundDiscordDelivery.state == "dispatching"
+            )))
             for row in rows:
-                row.state = "ready"
-                row.next_attempt_at = utcnow()
+                # MULTIPLATFORM_STAGE03_TEMP_PERSONAL_FEED_RECOVERY: A dispatching row marked create-started may already exist on Discord; park rather than automatically retry until Stage 04 can reconcile the physical receipt.
+                if (row.discord_message_id is None
+                    and row.last_error == CREATE_STARTED_DISCORD_SENTINEL):
+                    row.state = "failed"
+                    row.attempt_count = min(3, row.attempt_count + 1)
+                    row.last_error = UNCERTAIN_DISCORD_CREATE_ERROR
+                    row.next_attempt_at = None
+                else:
+                    row.state = "ready"
+                    row.next_attempt_at = utcnow()
             return len(rows)
 
     def record_discord_attempt(
@@ -509,22 +569,72 @@ class PersonalFeedConversationRepository:
         delivery_id: int,
         *,
         success: bool,
+        claimed_revision_fingerprint: str,
+        claimed_deleted: bool,
         discord_message_id: int | None = None,
         error: str | None = None,
     ) -> str:
-        """Count only an actual Discord API call and enforce the three-attempt ceiling."""
+        """Complete only the claimed physical operation and canonical revision."""
         with self.immediate_session() as session:
             row = session.get(InboundDiscordDelivery, delivery_id)
             if row is None:
                 raise LookupError("delivery not found")
-            if row.state in {"suppressed", "failed", "delivered"}:
+            previously_parked = row.state == "failed" and row.last_error == UNCERTAIN_DISCORD_CREATE_ERROR
+            if row.state != "dispatching":
+                # A late verified receipt can reconcile a parked first Create;
+                # a failure or unverified ID cannot unpark an uncertain send.
+                if not (row.state == "failed"
+                        and row.last_error == UNCERTAIN_DISCORD_CREATE_ERROR
+                        and success and discord_message_id is not None):
+                    return row.state
+            canonical = session.get(InboundConversationObject, row.inbound_object_id)
+            if canonical is None:
+                raise LookupError("canonical conversation object missing")
+            if discord_message_id is not None and success:
+                # A verified first receipt is still useful after concurrent
+                # Update/Delete, and must never be discarded as stale data.
+                if (row.discord_message_id is not None
+                    and row.discord_message_id != discord_message_id):
+                    raise ValueError("Discord receipt conflicts with existing mapping")
+                row.discord_message_id = discord_message_id
+                row.external_message_id = str(discord_message_id)
+            changed = (
+                canonical.revision_fingerprint != claimed_revision_fingerprint
+                or (canonical.deleted_at is not None) != claimed_deleted
+            )
+            if changed:
+                if row.discord_message_id is not None:
+                    # The later canonical edit/delete uses the actual ID;
+                    # the obsolete completion cannot acknowledge its version.
+                    row.state = "ready"
+                    row.next_attempt_at = utcnow()
+                    row.attempt_count = 0
+                    row.last_error = None
+                elif success:
+                    # A success lacking a verified receipt is an uncertain
+                    # Create, not a reason to reissue a second physical POST.
+                    row.state = "failed"
+                    row.next_attempt_at = None
+                    row.last_error = UNCERTAIN_DISCORD_CREATE_ERROR
+                elif canonical.deleted_at is not None:
+                    row.state = "suppressed"
+                    row.next_attempt_at = None
+                else:
+                    row.state = "ready"
+                    row.next_attempt_at = utcnow()
+                    row.attempt_count = 0
+                    row.last_error = None
                 return row.state
-            row.attempt_count += 1
-            if success:
+            if not previously_parked:
+                row.attempt_count += 1
+            if success and row.discord_message_id is None:
+                # Receipt-free success cannot identify the physical copy.
+                row.state = "failed"
+                row.next_attempt_at = None
+                row.last_error = UNCERTAIN_DISCORD_CREATE_ERROR
+            elif success:
                 row.state = "delivered"
-                if discord_message_id is not None:
-                    row.discord_message_id = discord_message_id
-                    row.external_message_id = str(discord_message_id)
+                row.last_applied_revision = claimed_revision_fingerprint
                 row.next_attempt_at = None
                 row.last_error = None
             elif row.attempt_count >= 3:
@@ -534,9 +644,7 @@ class PersonalFeedConversationRepository:
             else:
                 row.state = "ready"
                 delay = 10 if row.attempt_count == 1 else 30
-                row.next_attempt_at = datetime.now(timezone.utc) + timedelta(
-                    seconds=delay
-                )
+                row.next_attempt_at = datetime.now(timezone.utc) + timedelta(seconds=delay)
                 row.last_error = (error or "discord delivery failed")[:512]
             return row.state
 

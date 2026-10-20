@@ -83,6 +83,7 @@ class PersonalFeedDiscordDeliveryWorker:
                 claim.delivery_id, "inactive personal-feed binding"
             )
             return
+        first_send_started = False
         try:
             thread = self.bot.get_channel(claim.root_message_id)
             if claim.discord_message_id is not None:
@@ -138,6 +139,12 @@ class PersonalFeedDiscordDeliveryWorker:
                     )
                     return
                 prefix = f"**{claim.actor_name or 'Remote user'}:** "
+                # MULTIPLATFORM_STAGE03_TEMP_PERSONAL_FEED_SEND_GUARD: Persist possible first-send intent before Discord HTTP send; Stage 04 must replace this guard with durable generic delivery intent reconciliation.
+                if not self.database.personal_feed_conversations.mark_create_started(
+                    claim.delivery_id
+                ):
+                    return
+                first_send_started = True
                 message = await thread.send(
                     prefix + claim.content_markdown,
                     allowed_mentions=discord.AllowedMentions.none(),
@@ -152,13 +159,26 @@ class PersonalFeedDiscordDeliveryWorker:
             logger.warning(
                 "Personal-feed Discord delivery failed object=%s", claim.object_id
             )
-            self.database.personal_feed_conversations.record_discord_attempt(
-                claim.delivery_id, success=False, error=str(exc)
-            )
+            if first_send_started and not isinstance(exc, (discord.Forbidden, discord.NotFound)):
+                # A timeout/transport error after Discord create cannot prove
+                # the message was not physically committed. Keep it parked.
+                self.database.personal_feed_conversations.mark_uncertain_create(
+                    claim.delivery_id
+                )
+            else:
+                self.database.personal_feed_conversations.record_discord_attempt(
+                    claim.delivery_id,
+                    success=False,
+                    claimed_revision_fingerprint=claim.claimed_revision_fingerprint,
+                    claimed_deleted=claim.deleted,
+                    error=str(exc),
+                )
             return
         self.database.personal_feed_conversations.record_discord_attempt(
             claim.delivery_id,
             success=True,
+            claimed_revision_fingerprint=claim.claimed_revision_fingerprint,
+            claimed_deleted=claim.deleted,
             discord_message_id=result_message_id,
         )
 
