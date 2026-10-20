@@ -43,6 +43,12 @@ This document is a short, feature-oriented index of the test suite. It helps mai
 - Real-SQLite host/local-subscriber physical thread copies, separate thread/starter IDs, idempotent replay, subscriber revocation, invalid-guild/destination receipts, per-target failure isolation, subscriber-to-host fan-out and nested per-destination parent preservation — `tests/test_stage03_neutral_local_community_fanout.py`.
 - Previous SDK-backed Stage 3/4 Local Community behavior remains the regression reference; typed operations are preparatory and not yet wired into the live Gateway router.
 
+## Stage 03 Discord-originated Community mirror mutations (Checkpoint 38)
+
+- Real SQLite source, mirror and inbound delivery ownership, exact normalized message edit/delete, preserved attribution, per-target failure isolation, raw-event echo tracking and source exclusion — `tests/test_stage03_community_source_mutations.py`.
+- Revoked/rebound forum subscriptions, invalid guild metadata, mismatched fetched physical identity and adapter failure are rejected without a second SDK operation — `tests/test_stage03_community_source_mutations.py`.
+- Legacy outbound and inbound mutation semantic regressions remain covered by `tests/test_phase8_edit_delete_sync.py` when the Discord SDK dependencies are available.
+
 ## Stage 03 Gateway ingress transition
 
 - Normalized raw edit/delete -> single domain-mutation sink, foreign-connector rejection, thread mutation no-op, unbound create rejection and real adapter admission — `tests/test_stage03_platform_event_ingress.py`.

@@ -1111,6 +1111,7 @@ class CommunityRuntime:
                 mirror_deliveries=mirror_deliveries,
                 new_content=new_content,
                 author_display_name=author_display_name,
+                community_actor_id=message_group.community_actor_id,
             )
 
         # Send the AP Update if the message group has an AP object and community actor.
@@ -1178,7 +1179,8 @@ class CommunityRuntime:
 
         if self.discord_fanout is not None and mirror_deliveries:
             await self.discord_fanout.propagate_delete(
-                mirror_deliveries=mirror_deliveries
+                mirror_deliveries=mirror_deliveries,
+                community_actor_id=message_group.community_actor_id,
             )
 
         if message_group.ap_object_id and message_group.community_actor_id:

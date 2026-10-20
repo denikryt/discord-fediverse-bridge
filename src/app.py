@@ -271,6 +271,7 @@ def _build_live_runtime(settings: Settings, deployment_lease: FileLock) -> Runti
             mutation_tracker=message_mutation_handler,
             database=database,
             policy_service=bridge_policy_service,
+            adapter=discord_adapter,
         )
         community_runtime.bind_discord_fanout(discord_fanout)
         community_runtime.bind_discord_client(bot)

@@ -23,7 +23,7 @@ from ..platform_types import (
     MessageCreated, MessageRef, MessageView, ThreadCreated, ThreadRef,
     PlatformOperationError,
 )
-from ..runtime_ports import PlatformDeliveryPort
+from ..runtime_ports import PlatformAdapterPort, PlatformDeliveryPort
 
 if TYPE_CHECKING:
     from ..models import CommunityMessageGroupDelivery, CommunityThreadGroupDelivery
@@ -144,12 +144,16 @@ class DiscordFanout:
         mutation_tracker: DiscordMutationTracker,
         database: Database,
         policy_service: BridgePolicyService,
+        adapter: PlatformAdapterPort | None = None,
     ) -> None:
         """Initialise fanout with explicit Discord API and mutation-tracking dependencies."""
         self.bot = bot
         self.mutation_tracker = mutation_tracker
         self.database = database
         self.policy_service = policy_service
+        # Physical Community mutations use this typed boundary in production.
+        # The SDK path remains only for direct legacy callers during Stage 03.
+        self.adapter = adapter
 
     def _channel_is_allowed(self, channel_id: int) -> bool:
         """Fail closed when a target channel cannot be tied to an allowed guild."""
@@ -451,6 +455,7 @@ class DiscordFanout:
         mirror_deliveries: list[CommunityMessageGroupDelivery],
         new_content: str,
         author_display_name: str = "",
+        community_actor_id: str | None = None,
     ) -> None:
         """Edit all mirror Discord messages concurrently with the new content.
 
@@ -465,6 +470,32 @@ class DiscordFanout:
         """
 
         async def _edit_one(delivery: CommunityMessageGroupDelivery) -> None:
+            if self.adapter is not None:
+                # Re-authorize the current subscription, not just the historical
+                # delivery row: a copied channel may have changed community.
+                forum = (self._normalized_target(delivery.discord_channel_id, community_actor_id)
+                         if community_actor_id is not None else None)
+                if forum is None:
+                    return
+                try:
+                    from ..formatting import apply_edit_to_discord_message
+
+                    ref = MessageRef('discord-primary', str(delivery.discord_thread_id),
+                                     str(delivery.discord_message_id))
+                    discord_id_to_legacy_int(ref)
+                    observed = await self.adapter.fetch_message(ref)
+                    if (observed.message != ref or observed.content is None
+                        or observed.content.format != 'plain'):
+                        raise PlatformOperationError('unknown_delivery', 'mirror read identity mismatch')
+                    content = apply_edit_to_discord_message(
+                        observed.content.body, new_content, fallback_header=author_display_name,
+                    )
+                    await self.adapter.edit_message(ref, ContentDocument(content))
+                    self.mutation_tracker.track_message_edit(delivery.discord_message_id)
+                except Exception:
+                    # Never fall back to a second SDK edit after adapter failure.
+                    logger.exception('Failed typed mirror edit for %s', delivery.discord_message_id)
+                return
             if not self._channel_is_allowed(delivery.discord_channel_id):
                 return
             try:
@@ -506,6 +537,7 @@ class DiscordFanout:
         self,
         *,
         mirror_deliveries: list[CommunityMessageGroupDelivery],
+        community_actor_id: str | None = None,
     ) -> None:
         """Delete all mirror Discord messages concurrently.
 
@@ -516,6 +548,22 @@ class DiscordFanout:
         """
 
         async def _delete_one(delivery: CommunityMessageGroupDelivery) -> None:
+            if self.adapter is not None:
+                # Keep deletion scoped to the current accepted community claim.
+                forum = (self._normalized_target(delivery.discord_channel_id, community_actor_id)
+                         if community_actor_id is not None else None)
+                if forum is None:
+                    return
+                try:
+                    ref = MessageRef('discord-primary', str(delivery.discord_thread_id),
+                                     str(delivery.discord_message_id))
+                    discord_id_to_legacy_int(ref)
+                    await self.adapter.delete_message(ref)
+                    self.mutation_tracker.track_message_delete(delivery.discord_message_id)
+                except Exception:
+                    # A failed typed delete must not trigger another physical SDK call.
+                    logger.exception('Failed typed mirror delete for %s', delivery.discord_message_id)
+                return
             if not self._channel_is_allowed(delivery.discord_channel_id):
                 return
             try:
