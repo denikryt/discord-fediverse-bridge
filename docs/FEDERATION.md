@@ -100,11 +100,12 @@ Supported inbound activity patterns include:
 | `Undo(Follow)` targeting a local community `Group` | Remote actor unfollows a Discord-backed local community. |
 | `Accept(Follow)` | Remote instance accepted a bridge actor follow request. |
 
-For wrapped `Announce(Create/Update/Delete)`, the gateway binds the raw nested
-activity ID to the object ID in Fedify's accepted outer activity before
-dereferencing the author's origin. This prevents a later inbox request with
-the same outer ID from substituting a different nested activity in the raw
-payload cache. The fetched original must still match the claimed author,
+For wrapped `Announce(Create/Update/Delete)`, the gateway processes the payload
+attached to the Fedify-accepted delivery, rather than a shared raw cache entry
+indexed by the outer ID. It checks the complete nested content against the
+typed accepted `Announce` and its object ID before dereferencing the author's
+origin. A later inbox request with the same outer and nested IDs cannot replace
+the signed content. The fetched original must still match the claimed author,
 object identity, recipients, and supported content fields.
 
 The project does not provide generic inbox processing for every ActivityStreams activity type.

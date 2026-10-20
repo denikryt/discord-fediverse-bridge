@@ -1,4 +1,5 @@
 import process from "node:process";
+import type { AuthenticatedDocumentLoaderFactory, DocumentLoaderFactory } from "@fedify/vocab-runtime";
 
 export interface GatewayConfig {
   // GatewayConfig is the runtime contract between the Node gateway process and
@@ -12,6 +13,12 @@ export interface GatewayConfig {
   pythonBridgeSharedSecret: string;
   logLevel: "info" | "debug";
   skipSignatureVerificationForTests?: boolean;
+  /** Supply synthetic remote documents only in isolated tests; production uses Fedify's validated loader. */
+  documentLoaderFactoryForTests?: DocumentLoaderFactory;
+  /** Keep actor-specific inbox key fetches inside the same synthetic test boundary. */
+  authenticatedDocumentLoaderFactoryForTests?: AuthenticatedDocumentLoaderFactory;
+  /** Hold queued inbox jobs in a deterministic ingress regression test. */
+  manuallyStartQueueForTests?: boolean;
 }
 
 export interface GatewayContextData extends GatewayConfig {

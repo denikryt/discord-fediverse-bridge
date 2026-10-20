@@ -47,9 +47,11 @@ import { registerPublicActivityPubRoutes, type PublicRouteConfig } from "./route
 import { registerPublicDiscoveryRoutes } from "./routes/public-discovery.js";
 import { buildWebFingerDocument } from "./webfinger.js";
 
-/** Build the Hono gateway application with route modules mounted in order. */
-export function createGatewayApp(config: GatewayConfig): Hono {
-  const fedify = createGatewayFederation(config);
+/** Build ordered Hono routes, optionally sharing a test-controlled Fedify queue. */
+export function createGatewayApp(
+  config: GatewayConfig,
+  fedify = createGatewayFederation(config),
+): Hono {
   const app = new Hono();
   const isDebug = config.logLevel === "debug";
   const debugLogPath = initializeDebugFileLog(config);

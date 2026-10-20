@@ -16,6 +16,7 @@ import { preloadedContexts } from "@fedify/vocab-runtime";
 import type { GatewayConfig } from "../src/config.js";
 import { createGatewayApp } from "../src/server.js";
 import { importFixedRsaKeyPair } from "./support/python-bridge-fixture.js";
+import { fixtureAuthenticatedDocumentLoaderFactory, fixtureDocumentLoaderFactory } from "./support/fixture-document-loader.js";
 
 const ORIGIN = "https://bridge.example/";
 const PYTHON_ACTOR = `${ORIGIN}actors/communities/python`;
@@ -108,7 +109,7 @@ async function assertSignedFollowReachesTypedCommunityInbox(
     `${BOB_ACTOR}#main-key`,
     "/actors/communities/python/inbox",
   ));
-  assert.ok([202, 204].includes(response.status), `signed community Follow should be accepted, got ${response.status}`);
+  assert.ok([202, 204].includes(response.status), `signed community Follow should be accepted, got ${response.status}: ${await response.text()}`);
 
   const event = await waitForEvent(python, "local.follow_requested", 1);
   assert.equal(event.target_actor_kind, "community");
@@ -408,7 +409,8 @@ function buildConfig(pythonBridgeInternalUrl: string): GatewayConfig {
     pythonBridgeInternalUrl,
     pythonBridgeSharedSecret: "secret",
     logLevel: "info",
-    skipSignatureVerificationForTests: true,
+    documentLoaderFactoryForTests: fixtureDocumentLoaderFactory,
+    authenticatedDocumentLoaderFactoryForTests: fixtureAuthenticatedDocumentLoaderFactory,
   };
 }
 

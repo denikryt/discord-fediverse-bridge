@@ -49,7 +49,16 @@ export function createGatewayFederation(
     origin: config.fedifyOrigin,
     kv: new MemoryKvStore(),
     queue: new InProcessMessageQueue(),
+    manuallyStartQueue: config.manuallyStartQueueForTests === true,
     skipSignatureVerification: config.skipSignatureVerificationForTests === true,
+    // Fixture loaders model public peers without requiring real DNS; loadConfig
+    // never supplies one, so production retains Fedify's validated loader.
+    ...(config.documentLoaderFactoryForTests == null
+      ? {}
+      : { documentLoaderFactory: config.documentLoaderFactoryForTests }),
+    ...(config.authenticatedDocumentLoaderFactoryForTests == null
+      ? {}
+      : { authenticatedDocumentLoaderFactory: config.authenticatedDocumentLoaderFactoryForTests }),
   });
 
   federation
@@ -180,14 +189,15 @@ export function createGatewayFederation(
     .on(Announce, async (ctx, activity) => {
       try {
         // Lemmy wraps Create, Update, and Delete inside Announce.
-        // Try each type in turn using the cached raw inbox payload.
-        const announceEnvelope = getAnnounceEnvelope(ctx, activity.id?.href ?? null);
+        // Use the payload bound to this accepted Fedify delivery. A shared
+        // raw cache can be replaced by a later request with the same ID.
+        const announceEnvelope = await getAnnounceEnvelope(ctx, activity);
 
         logAnnounceDebug(isDebug, announceEnvelope);
 
         const createRecord = extractCreateRecord(announceEnvelope.rawRecord);
         if (createRecord != null) {
-          const verifiedRecord = await verifyForwardedActivityOrigin(ctx, activity, announceEnvelope.rawRecord, createRecord);
+          const verifiedRecord = await verifyForwardedActivityOrigin(ctx, activity, announceEnvelope.rawRecord, createRecord, announceEnvelope.acceptedObject);
           const event = await normalizeCreateActivityFromJson(verifiedRecord, {
             pythonBridgeClient: getPythonBridgeClient(config),
           });
@@ -211,7 +221,7 @@ export function createGatewayFederation(
 
         const updateRecord = extractUpdateRecord(announceEnvelope.rawRecord);
         if (updateRecord != null) {
-          const verifiedRecord = await verifyForwardedActivityOrigin(ctx, activity, announceEnvelope.rawRecord, updateRecord);
+          const verifiedRecord = await verifyForwardedActivityOrigin(ctx, activity, announceEnvelope.rawRecord, updateRecord, announceEnvelope.acceptedObject);
           const event = await normalizeUpdateActivityFromJson(verifiedRecord, {
             pythonBridgeClient: getPythonBridgeClient(config),
           });
@@ -233,7 +243,7 @@ export function createGatewayFederation(
 
         const deleteRecord = extractDeleteRecord(announceEnvelope.rawRecord);
         if (deleteRecord != null) {
-          const verifiedRecord = await verifyForwardedActivityOrigin(ctx, activity, announceEnvelope.rawRecord, deleteRecord);
+          const verifiedRecord = await verifyForwardedActivityOrigin(ctx, activity, announceEnvelope.rawRecord, deleteRecord, announceEnvelope.acceptedObject);
           const event = await normalizeDeleteActivityFromJson(verifiedRecord, { pythonBridgeClient: getPythonBridgeClient(config) });
           if (event == null) {
             logDebug(isDebug, "normalizeDeleteActivityFromJson returned null");
@@ -398,6 +408,7 @@ async function verifyForwardedActivityOrigin(
   announce: Announce,
   envelope: Record<string, unknown> | null,
   nested: Record<string, unknown>,
+  acceptedObject: unknown,
 ): Promise<Record<string, unknown>> {
   // The typed Announce comes from Fedify's authenticated listener. Never use
   // cached HTTP-body actor assertions as proof of the nested author's claim.
@@ -409,6 +420,7 @@ async function verifyForwardedActivityOrigin(
         // Fedify derived this ID from the accepted activity, independently of
         // the mutable raw-body cache used for nested payload recovery.
         objectId: announce.objectId?.href ?? null,
+        objectPayload: acceptedObject,
       },
       envelope,
       nested,
@@ -433,23 +445,26 @@ async function verifyForwardedActivityOrigin(
   }
 }
 
-function getAnnounceEnvelope(
+async function getAnnounceEnvelope(
   ctx: { data: GatewayContextData },
-  announceId: string | null,
-): {
+  announce: Announce,
+): Promise<{
   announceId: string | null;
   rawRecord: Record<string, unknown> | null;
   rawBodySha256: string | undefined;
-} {
-  // Prefer the payload stored at HTTP-ingest time because queued handler
-  // execution may no longer have the original request-local body attached.
-  const cachedRaw = announceId ? getRawActivity(announceId) : null;
-  const rawJson = cachedRaw?.rawJson ?? ctx.data.activitypubRawJson;
+  acceptedObject: unknown;
+}> {
+  // Fedify 2.2.19 retains the original accepted payload on its inbox context.
+  // Its typed Announce is an independent content check and a safe fallback if
+  // the internal context field changes in a later pinned Fedify version.
+  const acceptedJson = asRecord(await announce.toJsonLd());
+  const receivedJson = asRecord((ctx as { activity?: unknown }).activity);
+  const rawJson = receivedJson ?? acceptedJson;
   return {
-    announceId,
+    announceId: announce.id?.href ?? null,
     rawRecord: asRecord(rawJson),
-    rawBodySha256:
-      cachedRaw?.rawBodySha256 ?? ctx.data.activitypubRawBodySha256,
+    rawBodySha256: ctx.data.activitypubRawBodySha256,
+    acceptedObject: acceptedJson?.object,
   };
 }
 

@@ -27,9 +27,13 @@ async function main(): Promise<void> {
 
   await assertCanonicalUserActor(app, "/actors/users/alice");
 
-  const oldActorResponse = await app.request("/actors/alice");
+  // Request ActivityPub explicitly: Fedify 2.2.18+ correctly returns 406 for
+  // unmatched federation routes when the client does not accept ActivityPub.
+  // These assertions protect the removed legacy actor URLs, not negotiation.
+  const activityPubHeaders = { Accept: "application/activity+json" };
+  const oldActorResponse = await app.request("/actors/alice", { headers: activityPubHeaders });
   assert.equal(oldActorResponse.status, 404);
-  const oldUserResponse = await app.request("/users/alice");
+  const oldUserResponse = await app.request("/users/alice", { headers: activityPubHeaders });
   assert.equal(oldUserResponse.status, 404);
 
   console.log("verify:user-canonical-actor passed");

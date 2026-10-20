@@ -17,6 +17,7 @@ import { preloadedContexts } from "@fedify/vocab-runtime";
 import type { GatewayConfig } from "../src/config.js";
 import { createGatewayApp } from "../src/server.js";
 import { importFixedRsaKeyPair } from "./support/python-bridge-fixture.js";
+import { fixtureAuthenticatedDocumentLoaderFactory, fixtureDocumentLoaderFactory } from "./support/fixture-document-loader.js";
 
 const ORIGIN = "https://bridge.example/";
 const ALICE_ACTOR = `${ORIGIN}actors/users/alice`;
@@ -457,7 +458,8 @@ function buildConfig(pythonBridgeInternalUrl: string): GatewayConfig {
     pythonBridgeInternalUrl,
     pythonBridgeSharedSecret: "secret",
     logLevel: "info",
-    skipSignatureVerificationForTests: true,
+    documentLoaderFactoryForTests: fixtureDocumentLoaderFactory,
+    authenticatedDocumentLoaderFactoryForTests: fixtureAuthenticatedDocumentLoaderFactory,
   };
 }
 

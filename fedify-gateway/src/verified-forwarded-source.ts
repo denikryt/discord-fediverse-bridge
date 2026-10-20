@@ -16,6 +16,8 @@ export interface AcceptedActivityIdentity {
 export interface AcceptedAnnounceIdentity extends AcceptedActivityIdentity {
   /** Nested activity ID observed on the authenticated, typed Announce. */
   objectId: string | null;
+  /** Complete nested payload serialized from Fedify's authenticated Announce. */
+  objectPayload: unknown;
 }
 
 /** Fail closed if an embedded Create/Update/Delete cannot be authenticated at origin. */
@@ -26,13 +28,15 @@ export async function verifyForwardedSourceRecord(
   loadOriginActivity: (activityId: string) => Promise<unknown>,
 ): Promise<Record<string, unknown>> {
   // Raw capture precedes signature verification and is keyed only by the
-  // caller-supplied Announce ID. Bind its nested ID to Fedify's accepted typed
-  // object before origin lookup; another inbox POST may replace the cache row.
+  // caller-supplied Announce ID. Match the complete nested payload against
+  // Fedify's accepted activity; equal IDs cannot prove equal signed content.
   const raw = record(envelope);
   if (accepted.id == null || accepted.actorId == null || accepted.objectId == null ||
       raw?.type !== "Announce" || rawNested.id !== accepted.objectId ||
       raw.id !== accepted.id || raw.actor !== accepted.actorId ||
-      stableJson(raw.object) !== stableJson(rawNested)) {
+      stableJson(raw.object) !== stableJson(rawNested) ||
+      accepted.objectPayload == null ||
+      stableJson(rawNested) !== stableJson(accepted.objectPayload)) {
     throw new Error("ActivityPub Announce cache identity mismatch");
   }
 

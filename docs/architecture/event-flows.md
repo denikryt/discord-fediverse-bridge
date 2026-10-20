@@ -79,7 +79,7 @@ This document explains the major runtime traces through the bridge: user/platfor
 
 ## Remote ActivityPub post -> Discord fanout flow
 
-1. Gateway `/inbox` receives ActivityPub. A wrapped `Announce(Create)` must bind its cached nested activity ID to the object ID of the Fedify-accepted outer activity, then pass origin-author verification before normalization to `post.created`; a direct Create must match its Fedify-authenticated actor and embedded object author.
+1. Gateway `/inbox` receives ActivityPub. A wrapped `Announce(Create)` uses the accepted delivery payload and checks its entire nested activity against Fedify's typed outer activity before origin-author verification and normalization to `post.created`; a direct Create must match its Fedify-authenticated actor and embedded object author.
 2. `src/activitypub_handlers.py` validates idempotency and routes to remote subscription runtime.
 3. If no accepted subscription and no existing mapped thread context exists, Python skips the event locally while gateway delivery remains acknowledged.
 4. In production `CommunityRuntime.handle_normalized_inbound_post()` obtains current accepted subscription targets and checked guild metadata before creating Discord forum threads through `PlatformDeliveryPort.create_forum_thread()`. Each destination gets one stable `CreateAttempt`; the adapter owns the physical Discord permission check and POST. The canonical `CommunityThreadGroup` and per-destination delivery rows record the verified **separate** thread and starter IDs. A repeated mapped event never submits another create.
@@ -140,7 +140,7 @@ the claimed ActivityPub author before these checks count as authentication.
 
 ## Remote ActivityPub Follow -> local community remote-subscriber flow
 
-1. Gateway receives Follow to a local community actor and emits `local.follow_requested`.
+1. Gateway verifies the signed Follow to a local community actor, queues it, and dereferences the remote actor through Fedify's validated document loader. Only a matching actor document with admitted delivery endpoints emits `local.follow_requested`; HTTP 202 alone confirms queue admission, not this event.
 2. Python stores `remote_subscribers` and asks gateway to send Accept(Follow).
 
 ## Accept local community follow flow

@@ -15,7 +15,7 @@ const create = {
     to:['https://www.w3.org/ns/activitystreams#Public']},
 };
 const wrapper = {type:'Announce', id:'https://relay.example/announce/1', actor:'https://relay.example/c/one', object:create};
-const observed = {id:wrapper.id, actorId:wrapper.actor, objectId:create.id};
+const observed = {id:wrapper.id, actorId:wrapper.actor, objectId:create.id, objectPayload:create};
 const lookup = async id => id === create.id ? structuredClone(create) : null;
 
 test('a different relayer may forward a byte-equivalent author-hosted Create', async () => {
@@ -52,8 +52,9 @@ test('the installed Fedify parser preserves the accepted nested activity ID', as
     '@context':'https://www.w3.org/ns/activitystreams', ...wrapper,
   });
   assert.equal(typed.objectId?.href, create.id);
+  const acceptedJson = await typed.toJsonLd();
   const accepted = {id:typed.id?.href, actorId:typed.actorId?.href,
-    objectId:typed.objectId?.href};
+    objectId:typed.objectId?.href, objectPayload:acceptedJson.object};
   assert.deepEqual(await verifyForwardedSourceRecord(accepted, wrapper, create, lookup), create);
   await assert.rejects(() => verifyForwardedSourceRecord(
     {...accepted, objectId:null}, wrapper, create, lookup,
@@ -89,6 +90,19 @@ test('cache ID collision or mismatched envelope author is rejected before derefe
   ];
   for (const raw of variants) await assert.rejects(() => verifyForwardedSourceRecord(observed, raw, create, checked));
   assert.equal(reads, 0);
+});
+
+test('same-ID cache replacement cannot change the Fedify-accepted nested content', async () => {
+  // A later request may reuse both outer and nested IDs, so comparing IDs
+  // alone cannot establish which Create body the signed request contained.
+  const substituted = {...create, object:{...create.object, content:'replacement'}};
+  let originReads = 0;
+  await assert.rejects(() => verifyForwardedSourceRecord(
+    {...observed, objectPayload:create},
+    {...wrapper, object:substituted}, substituted,
+    async () => { originReads++; return substituted; },
+  ), /accepted|signed|payload|mismatch/i);
+  assert.equal(originReads, 0);
 });
 
 test('a later unsigned inbox body cannot substitute a different Create under an accepted Announce ID', async () => {
@@ -140,16 +154,16 @@ test('origin-verified Update cannot be substituted with an old Create', async ()
     object:{...create.object, content:'revised', updated:'2026-10-19T01:00:00Z'}};
   const envelope = {...wrapper, object:update};
   const fetched = async () => structuredClone(update);
-  assert.deepEqual(await verifyForwardedSourceRecord({...observed, objectId:update.id}, envelope, update, fetched), update);
-  await assert.rejects(() => verifyForwardedSourceRecord({...observed, objectId:update.id}, envelope, update, async()=>structuredClone(create)));
+  assert.deepEqual(await verifyForwardedSourceRecord({...observed, objectId:update.id, objectPayload:update}, envelope, update, fetched), update);
+  await assert.rejects(() => verifyForwardedSourceRecord({...observed, objectId:update.id, objectPayload:update}, envelope, update, async()=>structuredClone(create)));
 });
 
 test('wrapped Delete requires its own original mutation, not proof of Create', async () => {
   const del = {type:'Delete', id:'https://author.example/activities/delete-1', actor,
     object:'https://author.example/notes/1'};
   const envelope = {...wrapper, object:del};
-  assert.deepEqual(await verifyForwardedSourceRecord({...observed, objectId:del.id}, envelope, del, async()=>del), del);
-  await assert.rejects(() => verifyForwardedSourceRecord({...observed, objectId:del.id}, envelope, del, lookup));
+  assert.deepEqual(await verifyForwardedSourceRecord({...observed, objectId:del.id, objectPayload:del}, envelope, del, async()=>del), del);
+  await assert.rejects(() => verifyForwardedSourceRecord({...observed, objectId:del.id, objectPayload:del}, envelope, del, lookup));
 });
 
 const { verifyDirectSourceAttribution } = await import('../src/verified-forwarded-source.ts');
