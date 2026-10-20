@@ -198,3 +198,10 @@ Fedify-native security integration remains blocked by missing dependencies.
   a missing post target using its existing canonical group. Automatic
   durable comment/unknown-create recovery remains Stage 04; native Fedify
   security gates are still release-blocked.
+
+- **Stage 03 Checkpoint 48:** DiscordAdapter classifies explicit HTTP
+  Forbidden/NotFound/429 Create responses as definite non-delivery, permitting
+  a later policy-directed retry with the same key. Network timeout and
+  unclassified errors remain `unknown_delivery` and sticky to prevent blind
+  duplicate POSTs; physical receipt/restart uncertainty remains Stage 04.
+  Integration against actual pinned discord.py exceptions is still outstanding.

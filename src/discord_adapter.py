@@ -382,7 +382,7 @@ class DiscordAdapter:
             flight.future.set_result(PlatformOperationError('unknown_delivery'))
             raise
         except PlatformOperationError as exc:
-            if exc.reason in ('invalid_request', 'forbidden', 'not_found', 'unsupported'):
+            if exc.reason in ('invalid_request', 'forbidden', 'not_found', 'unsupported', 'rate_limited'):
                 # Only explicit pre-send failures may be retried with this key.
                 # Physical send helpers map ambiguous HTTP failures to unknown.
                 async with self._create_lock:
@@ -438,6 +438,19 @@ class DiscordAdapter:
         if getattr(exc, 'status', None) == 429:
             return PlatformOperationError('rate_limited', str(exc))
         return PlatformOperationError('unavailable', str(exc))
+
+    @staticmethod
+    def _create_error(exc: Exception) -> PlatformOperationError:
+        """Classify only definite SDK API rejections; keep ambiguous writes parked.
+
+        Discord 403/404/429 responses mean this HTTP Create was not accepted.
+        Timeouts, socket failures and unrecognized exceptions may happen after
+        transmission and must retain unknown_delivery for the attempt key.
+        """
+        classified = DiscordAdapter._read_error(exc)
+        if classified.reason in ('forbidden', 'not_found', 'rate_limited'):
+            return classified
+        return PlatformOperationError('unknown_delivery', str(exc))
 
     def _validate_channel(self, expected: ChannelRef, physical: object) -> ChannelRef:
         """Check ID, guild and channel kind against independently observed SDK data."""
@@ -602,7 +615,7 @@ class DiscordAdapter:
         try:
             await user.send(content, allowed_mentions=self._sdk().AllowedMentions.none())
         except Exception as exc:
-            raise PlatformOperationError('unknown_delivery', str(exc)) from exc
+            raise self._create_error(exc) from exc
 
     @_tracked_io
     async def fetch_message(self, message: MessageRef) -> MessageView:
@@ -708,7 +721,7 @@ class DiscordAdapter:
                 response = await channel.create_thread(
                     name=title, content=content.body, allowed_mentions=discord.AllowedMentions.none())
             except Exception as exc:
-                raise PlatformOperationError('unknown_delivery', str(exc)) from exc
+                raise self._create_error(exc) from exc
             thread = getattr(response, 'thread', None) or (response[0] if isinstance(response, tuple) else None)
             starter = getattr(response, 'message', None) or (response[1] if isinstance(response, tuple) and len(response) > 1 else None)
             if thread is None or starter is None or getattr(starter, 'id', None) is None:
@@ -745,7 +758,7 @@ class DiscordAdapter:
             except Exception as exc:
                 # A failed create may have succeeded on Discord. Never guess by
                 # a thread name or send a second POST from this error path.
-                raise PlatformOperationError('unknown_delivery', str(exc)) from exc
+                raise self._create_error(exc) from exc
             if (str(getattr(thread, 'parent_id', '')) != view.channel.external_channel_id
                 or str(getattr(thread, 'id', '')) != root.external_message_id):
                 raise PlatformOperationError('unknown_delivery', 'unverified root/thread association')
@@ -789,7 +802,7 @@ class DiscordAdapter:
             try:
                 created = await sdk_target.send(**kwargs)
             except Exception as exc:
-                raise PlatformOperationError('unknown_delivery', str(exc)) from exc
+                raise self._create_error(exc) from exc
             container = (destination.external_thread_id if isinstance(destination, ThreadRef)
                          else destination.external_channel_id)
             if str(getattr(getattr(created, 'channel', None), 'id', '')) != container:
