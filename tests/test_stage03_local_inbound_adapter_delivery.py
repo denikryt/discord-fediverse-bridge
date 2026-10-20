@@ -320,3 +320,191 @@ async def test_nested_comment_uses_each_destinations_actual_parent_receipt(tmp_p
         assert ('comment', '500', '800') in adapter.writes
     finally:
         db.close()
+
+@pytest.mark.asyncio
+async def test_foreign_nested_parent_rejected_before_durable_comment_admission(tmp_path):
+    """Cross-thread AP parent cannot leave a durable inbound object or physical copy."""
+    db, runtime, adapter, relays = setup(tmp_path)
+    try:
+        await runtime.handle_inbound_post(_post(), SimpleNamespace())
+        community = db.local_communities.get_local_community_by_slug('hackers')
+        other = db.local_community_content.create_local_community_thread(
+            local_community_id=community.id, discord_thread_id=910,
+            discord_starter_message_id=911,
+            ap_activity_id='https://remote.test/create/another-post',
+            ap_object_id='https://remote.test/another-post',
+            direction='ap_to_discord', origin_kind='remote_follower',
+        )
+        db.local_community_content.create_local_community_message(
+            local_community_thread_id=other.id, discord_message_id=912,
+            ap_activity_id='https://remote.test/create/another-reply',
+            ap_object_id='https://remote.test/another-reply',
+            parent_ap_object_id=other.ap_object_id, parent_discord_message_id=911,
+            direction='ap_to_discord',
+        )
+        before = list(adapter.writes)
+        result = await runtime.handle_inbound_comment(
+            comment(parent='https://remote.test/another-reply'), SimpleNamespace(),
+        )
+        assert result.status == 'skipped' and adapter.writes == before
+        assert db.personal_feed_conversations.get_inbound_object('https://remote.test/comment') is None
+        assert db.local_community_content.get_local_community_message_by_ap_object_id('https://remote.test/comment') is None
+        assert relays == ['post']
+    finally:
+        db.close()
+
+
+@pytest.mark.asyncio
+async def test_unmapped_nested_parent_waits_for_verified_host_mapping(tmp_path):
+    """A missing nested parent cannot be flattened and can be retried later."""
+    db, runtime, adapter, relays = setup(tmp_path)
+    try:
+        await runtime.handle_inbound_post(_post(), SimpleNamespace())
+        pending = comment(parent='https://remote.test/missing', obj='https://remote.test/pending')
+        pending.delivery_id = 'https://remote.test/create/pending'
+        pending.source_activity_id = pending.delivery_id
+        pending.source_activity_json = {'id': pending.delivery_id, 'type': 'Create',
+                                        'actor': pending.actor_id, 'object': {'id': pending.object.ap_id}}
+        before = list(adapter.writes)
+        result = await runtime.handle_inbound_comment(pending, SimpleNamespace())
+        assert result.status == 'skipped' and adapter.writes == before
+        assert db.personal_feed_conversations.get_inbound_object('https://remote.test/pending') is None
+        parent = comment(obj='https://remote.test/missing')
+        parent.delivery_id = 'https://remote.test/create/missing'
+        parent.source_activity_id = parent.delivery_id
+        parent.source_activity_json = {'id': parent.delivery_id, 'type': 'Create',
+                                       'actor': parent.actor_id, 'object': {'id': parent.object.ap_id}}
+        assert (await runtime.handle_inbound_comment(parent, SimpleNamespace())).status == 'processed'
+        assert (await runtime.handle_inbound_comment(pending, SimpleNamespace())).status == 'processed'
+        assert ('comment', '400', '700') in adapter.writes
+    finally:
+        db.close()
+
+
+@pytest.mark.asyncio
+async def test_stale_host_surface_rejected_before_durable_comment_admission(tmp_path):
+    """Host rebinding cannot strand an accepted comment without a physical copy."""
+    db, runtime, adapter, relays = setup(tmp_path)
+    try:
+        await runtime.handle_inbound_post(_post(), SimpleNamespace())
+        from sqlalchemy import select
+        from src.models import ChannelSurface
+        with db.session() as session:
+            host = session.scalar(select(ChannelSurface).where(ChannelSurface.external_channel_id == '300'))
+            host.external_channel_id = '301'
+        before = list(adapter.writes)
+        result = await runtime.handle_inbound_comment(comment(), SimpleNamespace())
+        assert result.status == 'skipped' and adapter.writes == before
+        assert db.personal_feed_conversations.get_inbound_object('https://remote.test/comment') is None
+        assert db.local_community_content.get_local_community_message_by_ap_object_id('https://remote.test/comment') is None
+    finally:
+        db.close()
+
+
+@pytest.mark.asyncio
+async def test_receipt_delivery_mode_must_match_requested_bot_presentation(tmp_path):
+    """A misreported webhook receipt cannot claim a bot-mode physical surface."""
+    db, runtime, adapter, relays = setup(tmp_path)
+    try:
+        original_post = adapter.create_forum_thread
+        async def forged_post(forum, content, *, title, presentation, attempt):
+            """Pretend the remote platform created a webhook instead of a bot post."""
+            receipt = await original_post(forum, content, title=title,
+                                          presentation=presentation, attempt=attempt)
+            return CreatedThread(receipt.thread, receipt.starter, 'webhook')
+        adapter.create_forum_thread = forged_post
+        from src.platform_types import PlatformOperationError
+        with pytest.raises(PlatformOperationError):
+            await runtime.handle_inbound_post(_post(), SimpleNamespace())
+        assert db.local_community_content.get_local_community_thread_by_ap_object_id('https://remote.test/post') is None
+        assert relays == []
+    finally:
+        db.close()
+
+
+@pytest.mark.asyncio
+async def test_comment_receipt_delivery_mode_must_match_requested_bot_presentation(tmp_path):
+    """A wrong physical send mode cannot be durably mislabeled as bot delivery."""
+    db, runtime, adapter, relays = setup(tmp_path)
+    try:
+        await runtime.handle_inbound_post(_post(), SimpleNamespace())
+        original_send = adapter.send_message
+        async def forged_send(destination, content, *, reply_to, presentation, attempt):
+            """Return a structurally valid message from the wrong delivery mode."""
+            receipt = await original_send(destination, content, reply_to=reply_to,
+                                          presentation=presentation, attempt=attempt)
+            return CreatedMessage(receipt.message, 'webhook')
+        adapter.send_message = forged_send
+        from src.platform_types import PlatformOperationError
+        with pytest.raises(PlatformOperationError):
+            await runtime.handle_inbound_comment(comment(), SimpleNamespace())
+        assert db.local_community_content.get_local_community_message_by_ap_object_id('https://remote.test/comment') is None
+        assert relays == ['post']
+    finally:
+        db.close()
+
+@pytest.mark.asyncio
+async def test_foreign_community_post_cannot_own_local_reply(tmp_path):
+    """A mapped post in another local community is not this community's parent."""
+    db, runtime, adapter, relays = setup(tmp_path)
+    try:
+        from sqlalchemy import select
+        from src.models import ChannelSurface, LocalCommunity, PlatformConnector
+        with db.immediate_session() as session:
+            connector = session.scalar(select(PlatformConnector).where(
+                PlatformConnector.connector_key == 'discord-primary'))
+            foreign = LocalCommunity(
+                slug='other', display_name='Other', actor_url='https://bridge.test/c/other',
+                inbox_url='https://bridge.test/c/other/inbox',
+                outbox_url='https://bridge.test/c/other/outbox',
+                followers_url='https://bridge.test/c/other/followers',
+                public_key_pem='public', private_key_pem='private',
+            )
+            session.add(foreign)
+            session.flush()
+            foreign_id = foreign.id
+            session.add(ChannelSurface(connector_id=connector.id, external_channel_id='302',
+                                       external_guild_id='10', kind='forum',
+                                       local_community_id=foreign_id))
+        db.local_community_content.create_local_community_thread(
+            local_community_id=foreign_id, discord_thread_id=950,
+            discord_starter_message_id=951,
+            ap_activity_id='https://remote.test/create/foreign-post',
+            ap_object_id='https://remote.test/foreign-post',
+            direction='ap_to_discord', origin_kind='remote_follower',
+        )
+        reply = comment(parent='https://remote.test/foreign-post',
+                        obj='https://remote.test/wrong-community')
+        reply.object.post_ap_id = 'https://remote.test/foreign-post'
+        reply.delivery_id = 'https://remote.test/create/wrong-community'
+        reply.source_activity_id = reply.delivery_id
+        reply.source_activity_json = {'id': reply.delivery_id, 'type': 'Create',
+                                      'actor': reply.actor_id, 'object': {'id': reply.object.ap_id}}
+        outcome = await runtime.handle_inbound_comment(reply, SimpleNamespace())
+        assert outcome.status == 'skipped' and adapter.writes == [] and relays == []
+        assert db.personal_feed_conversations.get_inbound_object(reply.object.ap_id) is None
+    finally:
+        db.close()
+
+
+@pytest.mark.asyncio
+async def test_unknown_forum_metadata_never_becomes_a_host_receipt(tmp_path):
+    """A reply cannot adopt a purported forum thread with unverified guild/kind."""
+    db, runtime, adapter, relays = setup(tmp_path)
+    try:
+        original_post = adapter.create_forum_thread
+        async def unverified_post(forum, content, *, title, presentation, attempt):
+            """Drop verified parent kind/guild while preserving physical forum ID."""
+            receipt = await original_post(forum, content, title=title,
+                                          presentation=presentation, attempt=attempt)
+            return CreatedThread(ThreadRef(ChannelRef('discord-primary', forum.external_channel_id,
+                                                     'unknown', None), receipt.thread.external_thread_id),
+                                 receipt.starter, 'bot')
+        adapter.create_forum_thread = unverified_post
+        from src.platform_types import PlatformOperationError
+        with pytest.raises(PlatformOperationError):
+            await runtime.handle_inbound_post(_post(), SimpleNamespace())
+        assert db.local_community_content.get_local_community_thread_by_ap_object_id('https://remote.test/post') is None
+        assert relays == []
+    finally:
+        db.close()

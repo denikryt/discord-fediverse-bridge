@@ -14,7 +14,8 @@ from typing import TYPE_CHECKING
 from ..content_sync.inbound_references import build_message_reference
 from ..discord_legacy_projection import discord_id_to_legacy_int
 from ..platform_types import (ChannelRef, ContentDocument, CreateAttempt,
-                              DeliveryPresentation, MessageRef, PlatformOperationError, ThreadRef)
+                              DeliveryPresentation, MessageRef, PlatformOperationError, ThreadRef,
+                              validate_created_receipt)
 from ..runtime_ports import PlatformAdapterPort
 from .discord_fanout import LocalCommunityDiscordFanout
 from ..db import Database
@@ -225,15 +226,25 @@ class LocalCommunityInboundCreateHandler:
                 f"local-community-inbound-post:{local_community.id}:{event.object.ap_id}",
                 'discord-primary', 'forum_thread', forum,
             )
+            presentation = DeliveryPresentation()
             receipt = await self._adapter.create_forum_thread(
                 forum, ContentDocument(format_inbound_post_body(event)),
-                title=thread_title, presentation=DeliveryPresentation(), attempt=attempt,
+                title=thread_title, presentation=presentation, attempt=attempt,
             )
-            if (receipt.thread.channel.connector_key != forum.connector_key
-                or receipt.thread.channel.external_channel_id != forum.external_channel_id
-                or receipt.thread.channel.kind != 'forum'
-                or receipt.thread.channel.external_guild_id != forum.external_guild_id):
-                raise PlatformOperationError('unknown_delivery', 'inbound host forum receipt mismatch')
+            try:
+                # Only a request-matched bot receipt can be committed. The
+                # DTO also proves the starter belongs to this physical thread.
+                validate_created_receipt(attempt, receipt, presentation=presentation)
+                # Shared validation intentionally permits unknown refinable
+                # channel metadata. A *host* receipt cannot: it must positively
+                # verify this forum's kind and guild before SQLite adoption.
+                if (receipt.thread.channel.kind != 'forum'
+                    or receipt.thread.channel.external_guild_id != forum.external_guild_id):
+                    raise PlatformOperationError('invalid_request', 'unverified host forum metadata')
+            except (PlatformOperationError, ValueError, AttributeError, TypeError) as exc:
+                # The POST may already have succeeded; a false receipt must
+                # never authorize either SQLite mapping or a blind retry.
+                raise PlatformOperationError('unknown_delivery', 'inbound host forum receipt mismatch') from exc
             discord_thread_id = discord_id_to_legacy_int(receipt.thread)
             starter_message_id = discord_id_to_legacy_int(receipt.starter)
             if not self._host_unchanged(local_community, forum):
@@ -381,6 +392,64 @@ class LocalCommunityInboundCreateHandler:
                 return _HandlerResult(status="skipped", outcome=InboundActivityOutcome.IGNORED_UNMAPPED_CONTEXT,
                                       detail="local community host is not an allowed Discord forum")
 
+        # Authorize the owning canonical thread and actual host placement
+        # before retaining any durable AP comment. An invalid nested parent
+        # must not poison idempotent re-admission when its mapping appears.
+        if thread_row.local_community_id != local_community.id:
+            return _HandlerResult(
+                status="skipped", outcome=InboundActivityOutcome.IGNORED_UNMAPPED_CONTEXT,
+                detail="comment post belongs to another local community",
+            )
+        host_thread_surface = self.database.local_community_surfaces.get_host_local_community_thread_surface(
+            getattr(thread_row, "id")
+        )
+        if host_thread_surface is None:
+            return _HandlerResult(
+                status="skipped", outcome=InboundActivityOutcome.IGNORED_UNMAPPED_CONTEXT,
+                detail="comment thread host surface not mapped",
+            )
+        if self._adapter is not None:
+            if host_thread_surface.discord_forum_channel_id != int(forum.external_channel_id):
+                return _HandlerResult(
+                    status="skipped", outcome=InboundActivityOutcome.IGNORED_UNMAPPED_CONTEXT,
+                    detail="host surface no longer matches placement",
+                )
+            parent_ap_id = getattr(event.object, 'parent_ap_id')
+            if parent_ap_id is None or parent_ap_id == thread_row.ap_object_id:
+                parent_discord_message_id = host_thread_surface.discord_starter_message_id
+            else:
+                parent_row = self.database.local_community_content.get_local_community_message_by_ap_object_id(
+                    parent_ap_id
+                )
+                if parent_row is None or parent_row.local_community_thread_id != thread_row.id:
+                    return _HandlerResult(
+                        status="skipped", outcome=InboundActivityOutcome.IGNORED_UNMAPPED_CONTEXT,
+                        detail="nested reply parent is absent or belongs to another thread",
+                    )
+                parent_surface = self.database.local_community_surfaces.get_local_community_message_surface(
+                    local_community_message_id=parent_row.id,
+                    local_community_thread_surface_id=host_thread_surface.id,
+                )
+                if parent_surface is None or parent_surface.role != 'host':
+                    return _HandlerResult(
+                        status="skipped", outcome=InboundActivityOutcome.IGNORED_UNMAPPED_CONTEXT,
+                        detail="nested reply parent has no verified host surface",
+                    )
+                parent_discord_message_id = parent_surface.discord_message_id
+            if parent_discord_message_id is None or parent_discord_message_id <= 0:
+                return _HandlerResult(
+                    status="skipped", outcome=InboundActivityOutcome.IGNORED_UNMAPPED_CONTEXT,
+                    detail="host parent physical message is unresolved",
+                )
+        else:
+            # Historical direct-call tests still use the SDK projection;
+            # Stage 03 cleanup will migrate these consumers to the adapter.
+            parent_discord_message_id = resolve_inbound_reply_target(
+                database=self.database,
+                parent_ap_object_id=getattr(event.object, 'parent_ap_id'),
+                thread_row=thread_row,
+            )
+
         admission = self.database.personal_feed_conversations.retain_community_create(
             activity_id=getattr(event, "source_activity_id", None)
             or getattr(event, "delivery_id"),
@@ -401,32 +470,7 @@ class LocalCommunityInboundCreateHandler:
                 detail=admission.status,
             )
 
-        host_thread_surface = self.database.local_community_surfaces.get_host_local_community_thread_surface(
-            getattr(thread_row, "id")
-        )
-        if host_thread_surface is None:
-            return _HandlerResult(
-                status="skipped",
-                outcome=InboundActivityOutcome.IGNORED_UNMAPPED_CONTEXT,
-                detail="comment thread host surface not mapped",
-            )
-        parent_discord_message_id = resolve_inbound_reply_target(
-            database=self.database,
-            parent_ap_object_id=getattr(event.object, 'parent_ap_id'),
-            thread_row=thread_row,
-        )
         if self._adapter is not None:
-            # The host surface is a stored receipt, not permission to send to
-            # a former host when its channel has been rebound.
-            if host_thread_surface.discord_forum_channel_id != int(forum.external_channel_id):
-                return _HandlerResult(status="skipped", outcome=InboundActivityOutcome.IGNORED_UNMAPPED_CONTEXT,
-                                      detail="host surface no longer matches placement")
-            parent_ap_id = getattr(event.object, 'parent_ap_id')
-            if parent_ap_id not in (None, thread_row.ap_object_id):
-                parent_row = self.database.local_community_content.get_local_community_message_by_ap_object_id(parent_ap_id)
-                if parent_row is not None and parent_row.local_community_thread_id != thread_row.id:
-                    return _HandlerResult(status="skipped", outcome=InboundActivityOutcome.IGNORED_UNMAPPED_CONTEXT,
-                                          detail="reply parent belongs to another thread")
             destination = ThreadRef(forum, str(host_thread_surface.discord_thread_id))
             reply = (MessageRef('discord-primary', destination.external_thread_id,
                                 str(parent_discord_message_id))
@@ -435,13 +479,16 @@ class LocalCommunityInboundCreateHandler:
                 f"local-community-inbound-comment:{local_community.id}:{event.object.ap_id}",
                 'discord-primary', 'message', destination,
             )
+            presentation = DeliveryPresentation()
             receipt = await self._adapter.send_message(
                 destination, ContentDocument(format_inbound_comment_body(event)),
-                reply_to=reply, presentation=DeliveryPresentation(), attempt=attempt,
+                reply_to=reply, presentation=presentation, attempt=attempt,
             )
-            if (receipt.message.connector_key != destination.connector_key
-                or receipt.message.external_container_id != destination.external_thread_id):
-                raise PlatformOperationError('unknown_delivery', 'inbound host message receipt mismatch')
+            try:
+                validate_created_receipt(attempt, receipt, presentation=presentation)
+            except (PlatformOperationError, ValueError, AttributeError, TypeError) as exc:
+                # A successful but unverified response may have sent already.
+                raise PlatformOperationError('unknown_delivery', 'inbound host message receipt mismatch') from exc
             discord_message_id = discord_id_to_legacy_int(receipt.message)
             if not self._host_unchanged(local_community, forum):
                 raise PlatformOperationError('unknown_delivery', 'local community host changed during reply')

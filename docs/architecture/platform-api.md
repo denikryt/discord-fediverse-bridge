@@ -111,3 +111,18 @@ remaining sibling/federation side effects, and a host placement change during
 HTTP prevents adoption of the old receipt. Production composition already
 registers this adapter. SDK-shaped compatibility entry points for unbound
 legacy tests and Stage 04 unknown-create reconciliation remain unfinished.
+
+**Stage 03 Checkpoint 43 — Local Community inbound reply admission and receipt hardening:**
+The adapter-bound AP→Discord handler validates that an inbound comment belongs
+to the current local community and that its nested parent has a physical
+*host* message surface inside that same canonical thread **before** retaining
+the canonical inbound conversation object. Missing nested parents are safely
+skipped rather than delivered as flat replies, so they can be admitted once
+the authoritative parent mapping arrives. A host surface bound to an obsolete
+forum cannot admit a new comment. Both host thread and message Create receipts
+are validated against their stable `CreateAttempt` and bot presentation; host
+thread receipts additionally require positively observed forum/guild metadata,
+not just absence of contradictions. An unverified receipt after a possible HTTP
+send is classified `unknown_delivery` and is not mapped or automatically
+resent. Existing SDK-only direct-call compatibility and Stage 04 durable
+receipt recovery remain unfinished; no new schema or adapter API was added.

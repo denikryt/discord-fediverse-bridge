@@ -154,3 +154,13 @@ Fedify-native security integration remains blocked by missing dependencies.
   vulnerable version, native `sendActivity()` SSRF and remote signed activity
   ingress are not verified with installed dependencies, and the full pytest
   suite cannot collect without `hypothesis`/`discord.py` in this environment.
+
+- **Stage 03 Checkpoint 43:** Corrected adapter-bound Local Community inbound
+  comment admission so foreign/missing nested parents, cross-community post
+  ownership and stale host surfaces do not leave an inbound conversation row
+  before rejection. Physical host Create receipts now validate request/mode
+  and require affirmative forum/guild metadata; unverified possibly sent
+  outcomes remain `unknown_delivery`. Real SQLite tests cover successful root
+  and nested replies, missing-parent eventual recovery, forged modes and
+  stale/cross-owner refusals. Legacy unbound SDK paths, unavailable full-suite
+  dependencies and pinned Fedify upgrade remain open.
