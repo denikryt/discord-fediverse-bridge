@@ -288,3 +288,12 @@ Fedify-native security integration remains blocked by missing dependencies.
   the typed Undo. The signed HTTP ingress regression preserves alpha. Fedify's
   internal inbox-context activity field remains a compatibility point to
   recheck when upgrading beyond the pinned 2.2.19 release.
+
+- **Accept(Follow) ownership and same-ID cache substitution fixed (2026-10-21):**
+  Python rejects an Accept actor that does not own the stored bridge Follow.
+  A signed Accept with an embedded Follow lacking an ID previously borrowed
+  an ID from a later invalid-signature same-ID request and emitted a false
+  acceptance event. The gateway now reads only Fedify's accepted typed
+  activity and requires an identifiable outbound bridge Follow. Signed HTTP
+  ingress, URL-form compatibility, and SQLite-backed ownership regressions
+  pass locally. The seven pre-existing Node failures remain unresolved.

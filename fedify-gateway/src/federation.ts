@@ -304,23 +304,12 @@ export function createGatewayFederation(
         followActivityId: event.object.follow_activity_id,
       });
     })
-    .on(Accept, async (ctx, activity) => {
-      const activityId = activity.id?.href ?? null;
-      const rawJson = ctx.data.activitypubRawJson;
-      console.log("[Fedify][debug] Accept received", {
-        activityId,
-        actorId: activity.actorId?.href,
-        objectId: activity.objectId?.href,
-        rawObject: (rawJson as Record<string, unknown>)?.object,
-      });
-      const event = buildFollowAcceptedEvent(
-        activity,
-        ctx.data,
-        activityId,
-      );
+    .on(Accept, async (_ctx, activity) => {
+      // A queued Accept must be interpreted only from Fedify's authenticated
+      // activity. The shared raw cache can contain an unsigned same-ID body.
+      const event = await buildFollowAcceptedEvent(activity, config);
       if (event == null) {
-        logDebug(isDebug, "Accept did not contain a follow activity id");
-        console.log("[Fedify][debug] Accept null event — raw activity:", JSON.stringify(rawJson, null, 2));
+        logDebug(isDebug, "Accept did not reference a valid bridge Follow");
         return;
       }
 
@@ -576,35 +565,37 @@ function logDebug(isDebug: boolean, message: string): void {
   }
 }
 
-export function buildFollowAcceptedEvent(
+/** Convert a typed Accept of our outbound Follow into a lifecycle event. */
+export async function buildFollowAcceptedEvent(
   activity: Accept,
-  data: GatewayContextData,
-  fallbackDeliveryId: string | null,
-): FollowAcceptedEvent | null {
-  // The typed Accept activity is the source of truth for follow lifecycle
-  // events. Raw JSON exists only as a fallback because Hono/Fedify request
-  // body handling can be unavailable when the internal queue re-dispatches.
-  const rawJson = data.activitypubRawJson
-    ?? (fallbackDeliveryId != null ? getRawActivity(fallbackDeliveryId)?.rawJson : undefined);
-  const rawRecord = asRecord(rawJson);
-  const actorId = activity.actorId?.href ?? asString(rawRecord?.actor);
-  const objectValue = rawRecord?.object;
-  const objectRecord = asRecord(objectValue);
-  const followActivityId =
-    activity.objectId?.href
-    ?? asString(objectValue)
-    ?? asString(objectRecord?.id);
+  config: GatewayContextData,
+): Promise<FollowAcceptedEvent | null> {
+  const actorId = activity.actorId?.href;
+  const followActivityId = activity.objectId?.href;
   if (actorId == null || followActivityId == null) {
     return null;
   }
+
+  const typed = asRecord(await activity.toJsonLd());
+  const objectValue = typed?.object;
+  if (typed?.type !== "Accept" || typed.actor !== actorId) return null;
+  if (typeof objectValue === "string") {
+    // A URL reference is sufficient only because Python checks this exact ID
+    // against a previously sent Follow owned by the Accept actor.
+    if (objectValue !== followActivityId) return null;
+  } else {
+    const follow = asRecord(objectValue);
+    const bridgeActorId = getBridgeActorIdentity(config).actorId.href;
+    // An embedded activity must actually be our Follow to this community;
+    // another activity with the same ID is not an Accept(Follow).
+    if (follow?.type !== "Follow" || follow.id !== followActivityId ||
+        follow.actor !== bridgeActorId || follow.object !== actorId) return null;
+  }
+
   return {
     actor_id: actorId,
     community_actor_id: actorId,
-    delivery_id:
-      activity.id?.href
-      ?? asString(rawRecord?.id)
-      ?? fallbackDeliveryId
-      ?? `follow-accepted:${followActivityId}`,
+    delivery_id: activity.id?.href ?? `follow-accepted:${followActivityId}`,
     event_type: "follow.accepted",
     object: {
       follow_activity_id: followActivityId,

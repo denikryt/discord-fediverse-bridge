@@ -23,6 +23,12 @@ This document explains the major runtime traces through the bridge: user/platfor
 4. `src/fedify_gateway_client.py` calls gateway `/follow-community`; gateway sends the Follow.
 5. Accept returns through gateway `/inbox`, `src/http_api.py`, and `src/activitypub_handlers.py`.
 
+Fedify authenticates and queues the inbound `Accept(Follow)`. The gateway
+extracts a Follow ID only from that accepted activity; a missing ID or
+unrelated embedded activity produces no Python event. Python then matches the
+ID and Accept actor to the stored pending bridge Follow before marking channel
+subscriptions accepted.
+
 ## Remote /unsubscribe-channel flow
 
 1. `src/commands/unsubscribe.py` calls `src/operations/unsubscribe.py`.

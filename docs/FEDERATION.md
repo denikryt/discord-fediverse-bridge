@@ -114,6 +114,14 @@ that the accepted outer Undo and embedded Follow IDs, actor, and target match
 Fedify's typed activity. A later request reusing the Undo ID cannot change
 the local actor whose subscription is removed.
 
+Inbound `Accept(Follow)` is accepted for bridge subscription state only when
+its authenticated object identifies an outbound Follow. A URL reference is
+matched to the stored Follow ID by Python. An embedded activity must be a
+Follow by the bridge service actor targeting the Accept actor; an embedded
+Follow without an ID is ignored. The gateway does not fill a missing ID from
+the shared raw request cache. Python also requires the Accept actor to own
+the stored pending Follow before activating subscriptions.
+
 The project does not provide generic inbox processing for every ActivityStreams activity type.
 
 Unsupported or out-of-scope inbound behavior includes, unless explicitly added by a future plan:
