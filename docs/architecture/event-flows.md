@@ -130,6 +130,17 @@ This document explains the major runtime traces through the bridge: user/platfor
 4. `/account-settings feed-view` reads the durable assignment; `feed-unbind` removes only the caller's current assignment. Historical publication/thread/message mappings are not modified.
 5. `BridgeBot.on_message` recognizes owner-authored root messages in an active ordinary text-channel or announcement-channel binding before existing forum routing. Non-owner roots, stale bindings, threads, DMs, and unrelated channels do not classify as personal-feed roots.
 
+## Stage 03 normalized Discord Gateway event boundary (in progress)
+
+`src/discord_gateway_events.py` converts observed SDK callbacks into the frozen
+`ThreadCreated`/`ThreadUpdated`/`ThreadDeleted` and `MessageCreated`/`MessageUpdated`/
+`MessageDeleted` platform types. It keeps the immediate message container and
+source timestamp. An absent raw edit body or missing starter evidence stays
+unknown; raw delete never needs cache access. Proven bot/webhook identities and
+guild/channel metadata are checked before any domain publication. The live
+`BridgeBot` to `PlatformEventIngress` cutover remains pending, so these DTO
+conversions are not yet the deployed callback path.
+
 ## Stage 03 Personal Feed inbound Discord delivery safety
 
 1. An authorized remote Create, Update or Delete mutates the canonical inbound conversation object under `BEGIN IMMEDIATE`; each due claim captures the exact revision fingerprint and deleted flag before physical Discord work.

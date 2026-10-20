@@ -90,3 +90,11 @@ an isolated fake `discord` module stands in for the unavailable SDK import.
 The **live** worker still uses discord.py directly and must be cut over to
 DiscordAdapter before this Stage can be called complete; real Discord HTTP
 errors and cancellation need SDK-backed regression tests.
+
+## Stage 03 Gateway normalization (partial, 2026-10-19)
+
+A pure SDK-free normalizer for six Discord event types now has eight positive/
+negative contract scenarios. Production bot callbacks are **not** yet wired to
+it, so historical direct SDK routing remains active until the DiscordAdapter
+and one normalized ingress replace it. These tests are contract checks, not
+live Discord Gateway integration.
