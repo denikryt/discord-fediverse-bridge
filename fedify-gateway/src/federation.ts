@@ -285,9 +285,9 @@ export function createGatewayFederation(
       });
     })
     .on(Undo, async (ctx, activity) => {
-      const activityId = activity.id?.href;
-      const cachedRaw = activityId == null ? null : getRawActivity(activityId);
-      const rawForUndo = asRecord(cachedRaw?.rawJson ?? ctx.data.activitypubRawJson);
+      // The inbox context and typed activity belong to this authenticated
+      // delivery. An ID-keyed raw cache can be replaced before the queue runs.
+      const rawForUndo = await getAcceptedUndoRecord(ctx, activity);
       const event = await buildLocalUnfollowRequestedEvent(
         ctx.data,
         activity,
@@ -332,6 +332,34 @@ export function createGatewayFederation(
     });
 
   return federation;
+}
+
+/** Bind the Follow used for an unfollow to this accepted Fedify Undo. */
+async function getAcceptedUndoRecord(
+  ctx: object,
+  undo: Undo,
+): Promise<Record<string, unknown> | null> {
+  const typed = asRecord(await undo.toJsonLd());
+  const received = asRecord((ctx as { activity?: unknown }).activity);
+  if (typed == null) return null;
+  if (received == null) return typed;
+
+  const typedFollow = asRecord(typed.object);
+  const receivedFollow = asRecord(received.object);
+  // Only fields that determine the resulting unfollow are accepted. Fedify's
+  // typed representation independently proves what the authenticated listener
+  // parsed; comparing it prevents a context/body mismatch from changing the
+  // Follow ID, actor, or local target.
+  if (typed.type !== "Undo" || received.type !== "Undo" ||
+      typed.id !== undo.id?.href || received.id !== typed.id ||
+      typed.actor !== undo.actorId?.href || received.actor !== typed.actor ||
+      typedFollow?.type !== "Follow" || receivedFollow?.type !== "Follow" ||
+      typedFollow.id !== receivedFollow.id ||
+      typedFollow.actor !== receivedFollow.actor ||
+      typedFollow.object !== receivedFollow.object) {
+    return null;
+  }
+  return received;
 }
 
 async function deliverNormalizedEvent(

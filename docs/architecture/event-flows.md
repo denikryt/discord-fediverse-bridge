@@ -167,8 +167,8 @@ the claimed ActivityPub author before these checks count as authentication.
 
 ## Remote ActivityPub Undo(Follow) -> local community unfollow flow
 
-1. Gateway receives embedded Undo(Follow) addressed to a local community actor.
-2. Gateway emits `local.unfollow_requested` when the target actor is owned by this bridge.
+1. Gateway receives a signed embedded Undo(Follow), then Fedify queues its authenticated payload. The listener uses that accepted payload and checks the embedded Follow ID, actor, and target against Fedify's typed Undo; a later same-ID request cannot replace it through the raw cache.
+2. Gateway emits `local.unfollow_requested` when the verified target actor is owned by this bridge.
 3. Python removes the remote actor from `remote_subscribers`.
 4. Future create, update, and delete fanout uses current accepted remote subscribers and excludes the removed actor.
 

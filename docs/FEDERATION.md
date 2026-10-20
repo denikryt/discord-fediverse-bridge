@@ -108,6 +108,12 @@ origin. A later inbox request with the same outer and nested IDs cannot replace
 the signed content. The fetched original must still match the claimed author,
 object identity, recipients, and supported content fields.
 
+Inbound `Undo(Follow)` also uses the payload attached to its authenticated
+Fedify delivery. Before producing a local unfollow event, the gateway checks
+that the accepted outer Undo and embedded Follow IDs, actor, and target match
+Fedify's typed activity. A later request reusing the Undo ID cannot change
+the local actor whose subscription is removed.
+
 The project does not provide generic inbox processing for every ActivityStreams activity type.
 
 Unsupported or out-of-scope inbound behavior includes, unless explicitly added by a future plan:

@@ -280,3 +280,11 @@ Fedify-native security integration remains blocked by missing dependencies.
   fail. The earlier full Python run had the same 24 baseline failures.
   Public-peer HTTPS/TLS and live Discord SDK integration remain unverified.
   `npm audit --omit=dev` reported five separate Hono/OpenTelemetry findings.
+
+- **Undo(Follow) same-ID cache substitution fixed (2026-10-21):** A signed
+  Undo for community alpha queued before an invalid-signature same-ID Undo for
+  beta previously emitted an unfollow for beta. The listener now derives its
+  event from the accepted Fedify delivery and checks the nested Follow against
+  the typed Undo. The signed HTTP ingress regression preserves alpha. Fedify's
+  internal inbox-context activity field remains a compatibility point to
+  recheck when upgrading beyond the pinned 2.2.19 release.
