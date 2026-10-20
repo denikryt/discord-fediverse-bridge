@@ -47,7 +47,7 @@ from .reply_mapping import (
 from ..discord_legacy_projection import discord_id_to_legacy_int
 from ..platform_types import (
     ChannelRef, ContentDocument, CreateAttempt, DeliveryPresentation,
-    MessageCreated, MessageView, PlatformOperationError, ThreadCreated,
+    MessageCreated, MessageRef, MessageView, PlatformOperationError, ThreadCreated, ThreadRef,
 )
 from ..runtime_ports import DiscordDeliveryClientPort, DiscordMutationContext, PlatformDeliveryPort
 
@@ -666,6 +666,127 @@ class CommunityRuntime:
             outcome=InboundActivityOutcome.APPLIED,
             detail="post created",
         )
+
+    async def handle_normalized_inbound_comment(
+        self, event: ActivityPubEvent, *, adapter: PlatformDeliveryPort,
+    ) -> HandlerResult:
+        """Deliver a mapped remote comment through neutral per-thread message sends.
+
+        Parent-post discovery/backfill is a separate Stage 03 step. Until its
+        adapter conversion, an unmapped or incomplete canonical thread remains
+        deferred rather than guessing a destination from an ActivityPub URL.
+        """
+        from ..activitypub_handlers import HandlerResult as _HandlerResult
+        from ..formatting import format_lemmy_comment_for_discord, normalize_text
+
+        if get_message_group_for_ap_object(self.database, event.object.ap_id) is not None:
+            return _HandlerResult(
+                'skipped', InboundActivityOutcome.IGNORED_ALREADY_APPLIED,
+                'comment already mapped',
+            )
+        post_id = event.object.post_ap_id or ''
+        thread_group = get_thread_group_for_ap_object(self.database, post_id)
+        if thread_group is None or needs_backfill(
+            thread_group=thread_group, community_actor_id=event.community_actor_id,
+            database=self.database,
+        ):
+            return _HandlerResult(
+                'deferred', InboundActivityOutcome.DEFERRED_MISSING_DEPENDENCY,
+                'parent post not completely mapped; backfill required',
+            )
+        if thread_group.community_actor_id != event.community_actor_id:
+            return _HandlerResult(
+                'skipped', InboundActivityOutcome.IGNORED_UNMAPPED_CONTEXT,
+                'parent post community mismatch',
+            )
+        parent_group = get_parent_message_group(self.database, event.object.parent_ap_id)
+        if parent_group is not None and parent_group.thread_group_id != thread_group.id:
+            # Do not reinterpret a known foreign canonical comment as an
+            # unknown parent and silently flatten the forged reply.
+            return _HandlerResult(
+                'skipped', InboundActivityOutcome.IGNORED_UNMAPPED_CONTEXT,
+                'comment parent belongs to another canonical post',
+            )
+        # Record the provenance before any physical POST, as the established
+        # inbound admission path does. A source mismatch cannot authorize send.
+        admission = self.database.personal_feed_conversations.retain_community_create(
+            activity_id=event.source_activity_id or event.delivery_id,
+            object_id=event.object.ap_id,
+            root_object_id=post_id,
+            parent_object_id=event.object.parent_ap_id,
+            actor_id=event.actor_id,
+            actor_name=event.object.author_name,
+            content_markdown=event.object.body_markdown or '',
+            published_at=event.object.published_at,
+            source_activity=event.source_activity_json,
+        )
+        if admission.status not in ('created', 'duplicate'):
+            return _HandlerResult(
+                'skipped', InboundActivityOutcome.IGNORED_UNMAPPED_CONTEXT,
+                f'comment provenance: {admission.status}',
+            )
+        msg_group = self.database.discord_fanout_groups.create_message_group(
+            community_actor_id=event.community_actor_id,
+            thread_group_id=thread_group.id,
+            source_channel_id=None, source_thread_id=None, source_message_id=None,
+            ap_activity_id=event.delivery_id, ap_object_id=event.object.ap_id,
+            parent_message_group_id=parent_group.id if parent_group is not None else None,
+        )
+        content = ContentDocument(format_lemmy_comment_for_discord(
+            event.object.author_name, normalize_text(event.object.body_markdown),
+            event.object.url, actor_id=event.actor_id,
+        ))
+        eligible = {
+            sub.discord_channel_id: sub
+            for sub in get_accepted_subscriptions(self.database, event.community_actor_id)
+        }
+        delivered = 0
+        for physical in self.database.discord_fanout_groups.get_thread_deliveries(thread_group.id):
+            current = self.database.remote_subscriptions.get_subscription_by_channel(
+                physical.discord_channel_id
+            )
+            expected = eligible.get(physical.discord_channel_id)
+            if (expected is None or current is None or current.status != 'accepted'
+                or current.lemmy_community_actor_id != event.community_actor_id
+                or type(current.discord_guild_id) is not int or current.discord_guild_id <= 0
+                or current.discord_guild_id != expected.discord_guild_id):
+                continue
+            forum = ChannelRef('discord-primary', str(physical.discord_channel_id),
+                               'forum', str(current.discord_guild_id))
+            thread = ThreadRef(forum, str(physical.discord_thread_id))
+            parent_id = None
+            if parent_group is not None:
+                parent_delivery = self.database.discord_fanout_groups.get_message_delivery_in_thread(
+                    parent_group.id, physical.discord_thread_id,
+                )
+                if parent_delivery is not None:
+                    parent_id = parent_delivery.discord_message_id
+            reply_to = (
+                MessageRef('discord-primary', str(physical.discord_thread_id), str(parent_id))
+                if parent_id is not None else None
+            )
+            attempt = CreateAttempt(
+                key=f'inbound-ap:comment:{event.object.ap_id}:discord-primary:'
+                    f'{physical.discord_channel_id}:{physical.discord_thread_id}',
+                connector_key='discord-primary', operation='message', destination=thread,
+            )
+            created = await adapter.send_message(
+                thread, content, reply_to=reply_to,
+                presentation=DeliveryPresentation(), attempt=attempt,
+            )
+            if (created.message.connector_key != forum.connector_key
+                or created.message.external_container_id != thread.external_thread_id):
+                raise PlatformOperationError('unknown_delivery', 'inbound comment receipt thread mismatch')
+            self.database.discord_fanout_groups.add_message_delivery(
+                message_group_id=msg_group.id,
+                discord_channel_id=discord_id_to_legacy_int(forum),
+                discord_thread_id=discord_id_to_legacy_int(thread),
+                discord_message_id=discord_id_to_legacy_int(created.message),
+                role='inbound', parent_discord_message_id=parent_id,
+            )
+            delivered += 1
+        logger.info('Delivered inbound comment %s to %d mapped threads', event.object.ap_id, delivered)
+        return _HandlerResult('processed', InboundActivityOutcome.APPLIED, 'comment created')
 
     async def handle_inbound_comment(
         self,

@@ -112,3 +112,9 @@ Fedify-native security integration remains blocked by missing dependencies.
 - Exact per-target thread/starter receipts, checked guild claims and active subscriptions are regression-tested with real SQLite. Duplicate AP post events make no additional typed create call.
 - Existing shared `CommunityThreadGroup` dedup still prevents a failed/uncertain partially delivered inbound post from automatically recovering a missing target after a crash. Durable per-target recovery belongs to Stage 04; no blind second POST was introduced.
 - Full SDK-backed and Fedify-native integration remains blocked by unavailable dependencies.
+
+## 2026-10-19 — Stage 03 Checkpoint 34 mapped inbound comment transport
+
+- `CommunityRuntime.handle_normalized_inbound_comment()` now has a typed SDK-free delivery path for already fully mapped Remote Community post/thread groups. Real SQLite tests verify per-recipient reply references and reject foreign canonical parent/foreign physical receipt, revoked subscription and missing mapping.
+- This method is **not** wired into the ActivityPub HTTP dispatcher. An out-of-order comment still requires existing remote post backfill; activating the typed method globally before its migration would reject otherwise recoverable events.
+- Remaining SDK release blockers and durable uncertain-creation recovery are unchanged from Checkpoint 33.

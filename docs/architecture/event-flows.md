@@ -74,7 +74,8 @@ This document explains the major runtime traces through the bridge: user/platfor
 1. Gateway validates direct/forwarded ActivityPub author provenance before normalizing a comment to `comment.created`; failed origin proof has no Python-side effects.
 2. Python validates the event and checks accepted subscription or already mapped parent/post context.
 3. Unsubscribed comments without mapped context are skipped before backfill or Discord fanout.
-4. Runtime creates Discord messages in mapped thread deliveries and records message group rows.
+4. The prepared `CommunityRuntime.handle_normalized_inbound_comment()` uses `PlatformDeliveryPort.send_message()` for **already fully mapped** parent-post groups. It checks current accepted subscriptions and each destination-specific parent delivery, records canonical message-group and physical receipt IDs in existing SQLite tables, and rejects references to a known comment under a different canonical post. Unknown parent comments preserve the legacy flat-send policy. Unmapped/incomplete posts return deferred instead of guessing a Discord destination.
+5. The typed comment path is **not yet bound in production**. The existing ActivityPub dispatcher continues to call the legacy `handle_inbound_comment()` until remote post backfill is migrated; this avoids dropping valid out-of-order comments. No event is dispatched down both paths.
 
 ## Inbound local-community replay admission (Stage 03)
 
