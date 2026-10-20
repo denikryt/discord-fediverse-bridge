@@ -125,11 +125,22 @@ additional lifetime admission review before calling this fully complete.
 The existing local-community repository now serializes canonical host thread and
 message receipt persistence through `BEGIN IMMEDIATE`. An identical concurrent
 receipt returns the original row and a changed AP/physical identity fails
-without overwriting it. Generic AP comment mappings also compare both unique
-identity keys under the writer reservation, recovering after a partial handler
+without overwriting it. Generic AP comment mappings and sibling Discord thread/message surfaces
+also compare exact identity under the writer reservation, recovering after a partial handler
 failure. Early duplicate ingress now checks current subscription, persisted canonical
 identity and available source evidence before fanout/relay; comment replay can
 repair a lost generic mapping from the saved host receipt. The R5-F1 Fedify
 nested-Create source authentication gate is not implemented, so stored raw
 source JSON cannot yet be treated as cryptographic author proof. Runtime adapter
 routing and all mutation/SDK-specific ingress checks also remain incomplete.
+
+## Stage 03 outbound signed JSON egress hardening (checkpoint 12, partial)
+
+Custom signed ActivityPub POST now admits the HTTPS URL before signing,
+validates every DNS result at the actual TLS connection lookup and rejects
+private/special-use IPs. The Node HTTPS transport does not follow redirects,
+uses a fresh socket and bounds response size/time. Three standalone Node tests
+and isolated TypeScript checking pass. The Fedify-native `sendActivity` path
+and unrestricted remote Actor fetch are **not** covered by this change; the
+Fedify dependency lockfile remains at 2.2.0 because the package registry is
+unreachable. This is not completion of the R7-F2 security release gate.

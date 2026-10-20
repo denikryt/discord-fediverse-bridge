@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import asyncio
 from dataclasses import dataclass
+from functools import wraps
 from typing import Awaitable, Callable
 
 from .platform_types import (
@@ -40,6 +41,32 @@ def _physical_identity(value: object) -> object:
     return value
 
 
+def _tracked_io(operation: Callable) -> Callable:
+    """Register one outer SDK operation before its first await, including reads.
+
+    Nested port calls use the outer task's existing admission; quiesce can
+    cancel and join every SDK user before its borrowed client is destroyed.
+    """
+    @wraps(operation)
+    async def call(self, *args, **kwargs):
+        """Keep SDK I/O task ownership until all awaited child calls complete."""
+        task = asyncio.current_task()
+        if task is None:
+            raise RuntimeError('Discord SDK I/O requires an asyncio Task')
+        nested = task in self._io_tasks
+        if not nested:
+            if not self._io_admission_open:
+                raise PlatformOperationError('unavailable', 'adapter SDK I/O is closing')
+            self._io_tasks.add(task)
+        try:
+            return await operation(self, *args, **kwargs)
+        finally:
+            if not nested:
+                self._io_tasks.discard(task)
+
+    return call
+
+
 class DiscordAdapter:
     """Own all physical Discord reads/writes, with no canonical federation state."""
 
@@ -54,6 +81,7 @@ class DiscordAdapter:
         self._create_lock = asyncio.Lock()
         self._creates: dict[tuple[str, str], _CreateFlight] = {}
         self._io_admission_open = True
+        self._io_tasks: set[asyncio.Task] = set()
         self._ingress_admission_open = True
         self._ingress_tasks: set[asyncio.Task] = set()
 
@@ -151,6 +179,7 @@ class DiscordAdapter:
             flight.future.set_result(receipt)
             return receipt
 
+    @_tracked_io
     async def reconcile_create(
         self, attempt: CreateAttempt,
     ) -> CreatedThread | ThreadRef | CreatedMessage | None:
@@ -224,6 +253,7 @@ class DiscordAdapter:
         self._validate_channel(channel, target)
         return target
 
+    @_tracked_io
     async def fetch_channel(self, channel: ChannelRef) -> ChannelView:
         """Expose verified neutral channel metadata without DB ownership claims."""
         sdk_channel = await self._get_sdk_channel(channel)
@@ -254,6 +284,7 @@ class DiscordAdapter:
             raise PlatformOperationError('invalid_request', 'thread guild does not match')
         return target
 
+    @_tracked_io
     async def fetch_thread(self, thread: ThreadRef) -> ThreadView:
         """Return verified parent and only independently observed starter identity."""
         sdk_thread = await self._get_sdk_thread(thread)
@@ -302,6 +333,7 @@ class DiscordAdapter:
                          'webhook' if is_webhook else 'bot' if is_bot else 'human',
                          getattr(user, 'display_name', '') or '', bool(owned and is_bot))
 
+    @_tracked_io
     async def fetch_message(self, message: MessageRef) -> MessageView:
         """Resolve actual physical content and author for missing Gateway fields."""
         physical = await self._get_message(message)
@@ -309,6 +341,7 @@ class DiscordAdapter:
         return MessageView(message, self._author(physical),
                            ContentDocument(str(getattr(physical, 'content', ''))), edited_at)
 
+    @_tracked_io
     async def capabilities(self, channel: ChannelRef) -> PlatformCapabilities:
         """Report platform features independently of current member permissions."""
         actual = (await self.fetch_channel(channel)).channel
@@ -317,6 +350,7 @@ class DiscordAdapter:
                                     thread_replies=actual.kind in ('text', 'announcement', 'forum'),
                                     message_edit_delete=True)
 
+    @_tracked_io
     async def check_permissions(
         self, principal: AuthorRef, channel: ChannelRef,
         actions: frozenset[PlatformAction],
@@ -375,6 +409,7 @@ class DiscordAdapter:
         if not getattr(permissions, flag, False):
             raise PlatformOperationError('forbidden', f'Discord permission missing: {flag}')
 
+    @_tracked_io
     async def create_forum_thread(
         self, forum: ChannelRef, content: ContentDocument, *, title: str,
         presentation: DeliveryPresentation, attempt: CreateAttempt,
@@ -416,6 +451,7 @@ class DiscordAdapter:
             send=physical,
         )
 
+    @_tracked_io
     async def create_reply_thread(self, root: MessageRef, *, title: str,
                                   attempt: CreateAttempt) -> ThreadRef:
         """Start a thread attached to an exact text/announcement root message."""
@@ -447,6 +483,7 @@ class DiscordAdapter:
             presentation=None, title=title, reply_to=None, send=physical,
         )
 
+    @_tracked_io
     async def send_message(
         self, destination: ThreadRef | ChannelRef, content: ContentDocument, *,
         reply_to: MessageRef | None, presentation: DeliveryPresentation,
@@ -505,6 +542,7 @@ class DiscordAdapter:
         if perms is None or not bool(getattr(perms, 'manage_messages', False)):
             raise PlatformOperationError('forbidden', 'message is not bot-owned and manage_messages is missing')
 
+    @_tracked_io
     async def edit_message(self, message: MessageRef, content: ContentDocument) -> None:
         """Edit an exact physical message; never mutate its containing thread."""
         self._validate_outbound_content(content)
@@ -516,6 +554,7 @@ class DiscordAdapter:
         except Exception as exc:
             raise self._read_error(exc) from exc
 
+    @_tracked_io
     async def delete_message(self, message: MessageRef) -> None:
         """Delete an exact physical message, not a thread or canonical object."""
         sdk_message = await self._get_message(message)
@@ -560,8 +599,16 @@ class DiscordAdapter:
         if self._ingress_admission_open or any(not t.done() for t in self._ingress_tasks):
             raise RuntimeError('drain Gateway ingress before Discord SDK I/O')
         self._io_admission_open = False
-        # Any remaining owner creates are part of the caller-owned runtime and
-        # must complete/cancel before the borrowed SDK client is destroyed.
+        # Read/edit/delete operations have no CreateAttempt future, so drain
+        # their owning tasks as well as Create owners before closing the SDK.
+        current = asyncio.current_task()
+        tasks = [task for task in self._io_tasks if task is not current and not task.done()]
+        for task in tasks:
+            task.cancel()
+        if tasks:
+            await asyncio.gather(*tasks, return_exceptions=True)
+        # Create cancellation records an unknown receipt, never proof of no
+        # physical Discord POST; nothing can safely replay such an attempt.
         pending = [entry.future for entry in self._creates.values() if not entry.future.done()]
         if pending:
             await asyncio.gather(*(asyncio.shield(f) for f in pending))

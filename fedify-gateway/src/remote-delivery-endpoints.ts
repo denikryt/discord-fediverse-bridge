@@ -7,7 +7,8 @@
  * or otherwise non-routable targets. Test fixtures may explicitly allow HTTP
  * loopback without weakening the production default.
  */
-import { isIP } from "node:net";
+import { lookup as dnsLookup, type LookupAddress } from "node:dns";
+import { BlockList, isIP, type LookupFunction } from "node:net";
 
 export interface RemoteEndpointAdmissionOptions {
   /** Local bridge origin that must never be used as a remote delivery target. */
@@ -70,8 +71,7 @@ function normalizeHostname(hostname: string): string {
 }
 
 function isBlockedRemoteHostname(hostname: string): boolean {
-  const classified = classifyRemoteHostname(hostname);
-  return classified.kind !== "public";
+  return classifyRemoteHostname(hostname).kind !== "public";
 }
 
 function isLoopbackHostname(hostname: string): boolean {
@@ -90,37 +90,13 @@ function classifyRemoteHostname(hostname: string): RemoteHostnameClassification 
 
   const mappedIpv4 = parseIpv4MappedIpv6(hostname);
   if (mappedIpv4 != null) {
-    return classifyIpv4(mappedIpv4);
+    return isPublicRemoteAddress(mappedIpv4) ? { kind: "public" } : { kind: "blocked" };
   }
 
   const ipVersion = isIP(hostname);
   if (ipVersion === 0) return { kind: "public" };
-  return ipVersion === 4 ? classifyIpv4(hostname) : classifyIpv6(hostname);
-}
-
-function classifyIpv4(hostname: string): RemoteHostnameClassification {
-  const octets = hostname.split(".").map((part) => Number.parseInt(part, 10));
-  if (octets.length !== 4 || octets.some((part) => !Number.isInteger(part) || part < 0 || part > 255)) {
-    return { kind: "blocked" };
-  }
-  const [a, b] = octets;
-  if (a === 127) return { kind: "loopback" };
-  if (a === 0 || a === 10) return { kind: "blocked" };
-  if (a === 169 && b === 254) return { kind: "blocked" };
-  if (a === 172 && b >= 16 && b <= 31) return { kind: "blocked" };
-  if (a === 192 && b === 168) return { kind: "blocked" };
-  if (a === 100 && b >= 64 && b <= 127) return { kind: "blocked" };
-  return { kind: "public" };
-}
-
-function classifyIpv6(hostname: string): RemoteHostnameClassification {
-  const value = hostname.toLowerCase();
-  if (value === "::1") return { kind: "loopback" };
-  if (value === "::") return { kind: "blocked" };
-  if (value.startsWith("fe80:") || value.startsWith("fc") || value.startsWith("fd")) {
-    return { kind: "blocked" };
-  }
-  return { kind: "public" };
+  if (hostname === "127.0.0.1" || hostname === "::1") return { kind: "loopback" };
+  return isPublicRemoteAddress(hostname) ? { kind: "public" } : { kind: "blocked" };
 }
 
 function parseIpv4MappedIpv6(hostname: string): string | null {
@@ -136,4 +112,78 @@ function parseIpv4MappedIpv6(hostname: string): string | null {
     return null;
   }
   return `${(high >> 8) & 0xff}.${high & 0xff}.${(low >> 8) & 0xff}.${low & 0xff}`;
+}
+
+
+/** Public-only socket resolver used by outbound HTTPS, not merely URL admission. */
+export const publicOnlyLookup: LookupFunction = (hostname, options, callback) => {
+  // The socket connects to the exact address returned by this callback, which
+  // closes the DNS-rebinding gap between preliminary validation and TLS dial.
+  dnsLookup(hostname, { all: true, verbatim: true }, (error, addresses) => {
+    if (error) {
+      callback(error, "", 0);
+      return;
+    }
+    try {
+      // Respect socket family selection without accepting any private answer.
+      validateResolvedRemoteAddresses(addresses);
+      const admitted = addresses.filter((item) => !options.family || item.family === options.family);
+      if (admitted.length === 0) throw new Error("no resolved address matches required socket family");
+      if (options.all) {
+        callback(null, admitted);
+      } else {
+        callback(null, admitted[0].address, admitted[0].family);
+      }
+    } catch (cause) {
+      callback(Object.assign(new Error("remote address is not publicly routable"), {
+        code: "EADDRNOTAVAIL", cause,
+      }), "", 0);
+    }
+  });
+};
+
+// IANA special-use IPv4 and special-purpose IPv6 addresses are not valid
+// federation egress targets. Restrict IPv6 to global unicast and remove
+// documentation, translation and tunneling ranges that could hide local IPs.
+const blockedIpv4 = new BlockList();
+for (const [network, prefix] of [
+  ["0.0.0.0", 8], ["10.0.0.0", 8], ["100.64.0.0", 10],
+  ["127.0.0.0", 8], ["169.254.0.0", 16], ["172.16.0.0", 12],
+  ["192.0.0.0", 24], ["192.0.2.0", 24], ["192.88.99.0", 24],
+  ["192.168.0.0", 16], ["198.18.0.0", 15], ["198.51.100.0", 24],
+  ["203.0.113.0", 24], ["224.0.0.0", 4], ["240.0.0.0", 4],
+] as const) blockedIpv4.addSubnet(network, prefix, "ipv4");
+
+const blockedIpv6 = new BlockList();
+for (const [network, prefix] of [
+  ["2001::", 23], ["2001:db8::", 32], ["2002::", 16],
+] as const) blockedIpv6.addSubnet(network, prefix, "ipv6");
+
+/** Reject a mixed DNS answer rather than choosing a public result among private IPs. */
+export function validateResolvedRemoteAddresses(
+  addresses: readonly Pick<LookupAddress, "address" | "family">[],
+): { address: string; family: 4 | 6 } {
+  if (addresses.length === 0) {
+    throw new Error("remote destination DNS lookup returned no addresses");
+  }
+  for (const address of addresses) {
+    if (isIP(address.address) !== address.family || !isPublicRemoteAddress(address.address)) {
+      throw new Error("remote destination DNS result contains a non-public address");
+    }
+  }
+  const chosen = addresses[0];
+  return { address: chosen.address, family: chosen.family === 6 ? 6 : 4 };
+}
+
+/** Admit only globally routable address families after DNS resolution. */
+function isPublicRemoteAddress(address: string): boolean {
+  const version = isIP(address);
+  if (version === 4) return !blockedIpv4.check(address, "ipv4");
+  if (version !== 6) return false;
+
+  const mapped = parseIpv4MappedIpv6(address);
+  if (mapped != null) return isPublicRemoteAddress(mapped);
+  const firstGroup = Number.parseInt(address.split(":", 1)[0], 16);
+  if (!Number.isInteger(firstGroup) || firstGroup < 0x2000 || firstGroup > 0x3fff) return false;
+  return !blockedIpv6.check(address, "ipv6");
 }

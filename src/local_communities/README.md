@@ -62,3 +62,13 @@ comment can restore a missing generic AP mapping from its persisted host
 Discord receipt. **Raw source JSON is not author authentication**: the
 independent nested-Create verification at the Fedify boundary remains a release
 blocker; tests here establish database replay consistency, not HTTP authorship.
+
+### Sibling Discord receipts (Stage 03)
+
+Sibling forum-thread and comment surfaces now use the same SQLite
+`BEGIN IMMEDIATE` writer boundary as canonical host receipts. Concurrent
+handlers may reuse an identical physical receipt, but a different thread,
+starter, comment, parent, forum, subscriber owner or role fails before a
+mapping can be overwritten. A message surface must also belong to the
+canonical parent thread carried by its parent physical surface. There is no
+new queue or database schema.
