@@ -1238,10 +1238,12 @@ class CommunityRuntime:
                 detail="no thread deliveries",
             )
 
-        bot = self.bot or runtime.bot
+        adapter = getattr(runtime, 'discord_adapter', None)
+        bot = None if adapter is not None else (self.bot or runtime.bot)
         new_content = event.object.body_markdown or ""
 
         await propagate_inbound_post_update(
+            adapter=adapter,
             bot=bot, thread_deliveries=thread_deliveries, new_content=new_content
         )
 
@@ -1280,9 +1282,11 @@ class CommunityRuntime:
             thread_group.id
         )
 
-        bot = self.bot or runtime.bot
+        adapter = getattr(runtime, 'discord_adapter', None)
+        bot = None if adapter is not None else (self.bot or runtime.bot)
 
         await propagate_inbound_post_delete(
+            adapter=adapter,
             bot=bot, thread_deliveries=thread_deliveries
         )
 
@@ -1332,10 +1336,12 @@ class CommunityRuntime:
                 detail="no message deliveries",
             )
 
-        bot = self.bot or runtime.bot
+        adapter = getattr(runtime, 'discord_adapter', None)
+        bot = None if adapter is not None else (self.bot or runtime.bot)
         new_content = event.object.body_markdown or ""
 
         await propagate_inbound_comment_update(
+            adapter=adapter,
             bot=bot, deliveries=deliveries, new_content=new_content
         )
 
@@ -1378,9 +1384,11 @@ class CommunityRuntime:
         # Only edit messages the bot itself wrote — source messages are user-authored.
         deliveries = get_inbound_comment_edit_deliveries(all_deliveries)
 
-        bot = self.bot or runtime.bot
-
-        await propagate_inbound_comment_delete(bot=bot, deliveries=deliveries)
+        adapter = getattr(runtime, 'discord_adapter', None)
+        await propagate_inbound_comment_delete(
+            adapter=adapter, bot=None if adapter is not None else (self.bot or runtime.bot),
+            deliveries=deliveries,
+        )
 
         return _HandlerResult(
             status="processed",

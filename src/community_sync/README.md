@@ -38,3 +38,16 @@ thread/message groups remain the durable deduplication boundary. Concurrent
 `THREAD_CREATE` callbacks for one connector/thread are serialized through
 the AP publish and SQLite receipt boundary; a failed first callback does not
 poison a process-local seen cache.
+
+## Stage 03 inbound ActivityPub mutations (Checkpoint 36)
+
+Remote Community `post.updated` / `post.deleted` and `comment.updated` /
+`comment.deleted` now edit the persisted per-destination Discord copies through
+`Runtime.discord_adapter` and connector-scoped `MessageRef` identities. Post
+edits replace the starter body; comment edits first fetch the exact physical
+message to preserve its attribution header. Deletes continue to write the
+visible `*deleted by creator*` tombstone rather than physically deleting a
+thread or message. User-authored source comments remain excluded from remote
+comment mutation fan-out. One failed physical edit does not block other copies.
+Legacy direct-runtime test entry points continue to use the SDK helper when no
+adapter is registered; production chooses only the adapter path.

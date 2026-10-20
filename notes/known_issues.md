@@ -125,3 +125,8 @@ Fedify-native security integration remains blocked by missing dependencies.
 - Existing direct SDK compatibility entry points remain until final dependency cleanup. Full pytest is blocked by missing `hypothesis`; real Discord/Fedify behavior is not yet exercised.
 - **Open release blocker:** the inherited Python `_fetch_ap_object` still does a direct `aiohttp` GET and lacks complete DNS pinning/redirect SSRF verification. The implementation reuses this existing fetcher; it is not evidence of a secure outgoing GET. Finish R7-F2 before release.
 - **Open Stage 04 limitation:** durable reconciliation of a Create that may have completed physically without a confirmed receipt remains out of scope. Do not blindly resend an uncertain Discord Create after restart.
+
+## 2026-10-19 — Stage 03 Checkpoint 36 Remote Community AP mutations
+
+- Production inbound Remote Community post/comment Update/Delete now edits exact persisted physical Discord message IDs through `Runtime.discord_adapter`. Comment Updates verify the current message and preserve its attribution header; a bad read or individual target failure does not overwrite another message or stop sibling edits. Real SQLite scenario tests cover these boundaries.
+- Legacy direct-call SDK mutation compatibility remains while the rest of the Stage 03 dependency audit proceeds. Local Community inbound mutations, User Actor, native Fedify SSRF validation and the Python backfill GET release blocker remain open.

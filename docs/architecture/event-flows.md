@@ -250,3 +250,22 @@ and transport cutover of community fanout are still in progress.
    ID; incomplete nested delivery does not fall back to an unrelated starter.
 5. These methods are available to scenario tests but are **not** invoked by
    the production forum Gateway callbacks until the coordinated Stage 03 cutover.
+
+## Remote ActivityPub Update/Delete -> Discord copies (Stage 03 Checkpoint 36)
+
+1. The existing ActivityPub dispatcher resolves a persisted Remote Community
+   post or comment group by the canonical AP object ID. Missing groups produce
+   an unmapped result without Discord I/O.
+2. For posts, every recorded thread delivery supplies its own physical starter
+   message ID. For comments, only bot-authored `inbound` and `mirror` message
+   deliveries are eligible; `source` rows remain untouched.
+3. In production, `CommunityRuntime` passes the registered `DiscordAdapter` to
+   `community_sync/edit_delete.py`. Each destination uses an exact
+   connector-scoped `MessageRef` instead of `BridgeBot.get_thread_by_id()`.
+4. A post Update replaces the starter content. A comment Update reads the
+   exact message first and preserves its attribution header; mismatched or
+   unavailable reads do not cause an unverified overwrite. Delete writes
+   `*deleted by creator*`, preserving the physical conversation structure.
+5. Failures are logged per target and do not suppress edits to healthy targets.
+   Compatibility callers without an adapter still use the preexisting SDK path
+   until its final removal during the Stage 03 dependency audit.
