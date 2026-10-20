@@ -12,7 +12,7 @@ A `ChannelRef` is physically identified by `(connector_key, external_channel_id)
 
 ## Ports and boundary validation
 
-`src/runtime_ports.py` is the **only** core-facing protocol location. Structural `PlatformLookupPort` provides `fetch_channel`, `fetch_thread`, `fetch_message`, `check_permissions`, `capabilities`, and read-only `reconcile_create`. `PlatformDeliveryPort` provides `create_forum_thread`, `create_reply_thread`, `send_message`, `edit_message`, `delete_message`. `PlatformAdapterPort` combines them with immutable `.connector`; `PlatformInboundSinkPort` accepts one normalized event. No generic outbound physical thread edit/delete or channel-management operation exists in this stage. Incoming thread update/delete events remain supported.
+`src/runtime_ports.py` is the **only** core-facing protocol location. Structural `PlatformLookupPort` provides `fetch_channel`, `fetch_thread`, `fetch_message`, `check_permissions`, `capabilities`, and read-only `reconcile_create`. `PlatformDeliveryPort` provides `create_forum_thread`, `create_reply_thread`, `send_message`, `edit_message`, `delete_message`. `PlatformAdapterPort` combines them with immutable `.connector`; `PlatformInboundSinkPort` accepts one normalized event. The Stage 03 `src/discord_legacy_projection.py` is the temporary checked boundary for mapping `discord-primary` references to Discord-only integer repository IDs (including explicit thread-parent and message-container selection); this is not a global ID conversion for Fluxer or other connectors. No generic outbound physical thread edit/delete or channel-management operation exists in this stage. Incoming thread update/delete events remain supported.
 
 Examples (SDK imports and integer conversion are deliberately absent):
 

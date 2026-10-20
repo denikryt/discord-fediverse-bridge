@@ -187,3 +187,11 @@ The production bot remains on its legacy callback path until the full one-ingres
 cutover can switch thread/message creation and mutations atomically. Five
 focused positive/negative tests plus eleven existing mutation-handler tests pass
 using an import-only `discord` test stub; this does not verify the real SDK.
+
+## Stage 03 checked legacy ID projection (Checkpoint 17, 2026-10-19)
+
+`discord_id_to_legacy_int()` now accepts only `discord-primary` platform
+references, rejects zero/invalid snowflakes, and distinguishes thread/parent
+and message/container IDs. Typed edit/delete admission uses this boundary
+instead of direct integer parsing. Nine positive/negative projection tests pass;
+remaining community runtimes still require the same cutover in Stage 03.

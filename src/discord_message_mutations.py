@@ -19,6 +19,7 @@ from .db import Database
 from .discord_event_router import DiscordEventRouter
 from .runtime_ports import DiscordMutationContext, PlatformAdapterPort
 from .platform_types import MessageDeleted, MessageUpdated, PlatformOperationError
+from .discord_legacy_projection import discord_id_to_legacy_int
 
 logger = logging.getLogger(__name__)
 
@@ -84,11 +85,8 @@ class DiscordMessageMutationHandler:
         if event.connector_key != reader.connector.key or event.connector_key != "discord-primary":
             raise PlatformOperationError("invalid_request", "Discord mutation connector mismatch")
         ref = event.message
-        if not (ref.external_container_id.isdecimal() and ref.external_message_id.isdecimal()):
-            raise PlatformOperationError("invalid_request", "non-numeric Discord mutation identity")
-        container_id, message_id = int(ref.external_container_id), int(ref.external_message_id)
-        if container_id <= 0 or message_id <= 0:
-            raise PlatformOperationError("invalid_request", "invalid Discord mutation snowflake")
+        container_id = discord_id_to_legacy_int(ref, component='container')
+        message_id = discord_id_to_legacy_int(ref)
         guild_id = event.external_guild_id
         if guild_id is not None and (not guild_id.isdecimal() or int(guild_id) <= 0):
             raise PlatformOperationError("invalid_request", "invalid Discord mutation guild")
