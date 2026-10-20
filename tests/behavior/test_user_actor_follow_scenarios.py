@@ -45,9 +45,9 @@ class _Bot:
     def __init__(self) -> None:
         self.user = _DiscordUser()
 
-    async def fetch_user(self, _user_id: int) -> _DiscordUser:
-        """Return the stable fake Discord owner."""
-        return self.user
+    async def send_owner_notice(self, _user_id: int, content: str) -> None:
+        """Observe one Discord-only DM attempt after durable notification claim."""
+        await self.user.send(content)
 
 
 @pytest.fixture
@@ -70,7 +70,7 @@ def follow_runtime(tmp_path):
     service = UserActorFollowService(
         database=database,
         fedify_gateway=gateway,
-        bot=bot,
+        discord_notices=bot,
     )
     runtime = SimpleNamespace(
         database=database,

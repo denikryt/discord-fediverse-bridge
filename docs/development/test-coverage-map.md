@@ -9,6 +9,11 @@ This document is a short, feature-oriented index of the test suite. It helps mai
 - **Command** — Discord adapter behavior such as inputs, ephemeral responses, and autocomplete.
 - **Contract / infrastructure** — persistence, protocol, configuration, migration, and integration contracts.
 
+## Stage 03 User Actor Discord auxiliary edges (Checkpoint 40)
+
+- Accepted Follow owner notices use a durable at-most-once SQLite claim before one adapter-backed DM. Real follower lifecycle scenarios retain unchanged Accept/Undo/refollow semantics, while the new fake outer SDK transport verifies exact target ID, mention suppression, and loss of HTTP response without duplicate notification — `tests/behavior/test_user_actor_follow_scenarios.py`, `tests/test_stage03_user_actor_adapter_edges.py`.
+- Durable partial Discord mutation reconciliation uses the actual `UserActorDeliveryService` and SQLite publication rows, a neutral adapter state snapshot, and rejects a wrong physical receipt or transient Discord GET without publishing an unintended Delete — `tests/test_stage03_user_actor_adapter_edges.py`, `tests/behavior/test_user_actor_content_fanout_scenarios.py`.
+
 ## Stage 03 contract and Personal Feed timestamp regressions
 
 - Source creation timestamps and optional edit author validation — `tests/test_platform_types.py`.

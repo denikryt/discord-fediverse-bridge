@@ -106,8 +106,11 @@ class DiscordDeliveryClientPort(Protocol):
         """Return a Discord thread by snowflake id when it is still reachable."""
 
 
-class DiscordUserLookupPort(Protocol):
-    """Expose only the user fetch needed for User Actor follow notifications."""
+class DiscordOwnerNoticePort(Protocol):
+    """Discord-only owner DM transport, deliberately absent from Platform API."""
+
+    async def send_owner_notice(self, discord_user_id: int, content: str) -> None:
+        """Attempt one mention-safe Discord DM; no implicit retry on failure."""
 
     async def fetch_user(self, user_id: int) -> object:
         """Fetch one Discord user by snowflake id."""

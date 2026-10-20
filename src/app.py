@@ -280,9 +280,9 @@ def _build_live_runtime(settings: Settings, deployment_lease: FileLock) -> Runti
         # to an SDK bot when the typed transport returns an uncertain result.
         local_community_runtime.bind_discord_adapter(discord_adapter)
         user_actor_follow_service = UserActorFollowService(
-            database=database, fedify_gateway=fedify_gateway, bot=bot
+            database=database, fedify_gateway=fedify_gateway, discord_notices=discord_adapter
         )
-        user_actor_delivery_service.bind_discord_message_reader(bot)
+        user_actor_delivery_service.bind_discord_message_reader(discord_adapter)
         runtime = Runtime(
             settings=settings,
             database=database,
@@ -336,8 +336,10 @@ def _validate_runtime_graph(runtime: Runtime) -> None:
         raise RuntimeError("LocalCommunityRuntime Discord client is not configured")
     if runtime.personal_feed_conversation_runtime.delivery_worker is None:
         raise RuntimeError("Personal-feed conversation delivery wake is not configured")
-    if runtime.user_actor_delivery_service.discord_message_reader is None:
-        raise RuntimeError("User actor delivery Discord reader is not configured")
+    if runtime.user_actor_follow_service.discord_notices is not runtime.discord_adapter:
+        raise RuntimeError("User Actor owner notices must use DiscordAdapter")
+    if runtime.user_actor_delivery_service.discord_message_reader is not runtime.discord_adapter:
+        raise RuntimeError("User Actor reconciliation must use DiscordAdapter")
 
 
 def _close_partial_resource(resource: object) -> None:

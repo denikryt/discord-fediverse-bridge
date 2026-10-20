@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import asyncio
 from dataclasses import dataclass
+from datetime import datetime
 from functools import wraps
 from typing import Awaitable, Callable
 
@@ -45,6 +46,14 @@ async def _cancel_and_join(tasks: list[asyncio.Task]) -> None:
             interrupted = True
     if interrupted:
         raise asyncio.CancelledError
+
+
+@dataclass(frozen=True, slots=True)
+class DiscordReconciliationMessage:
+    """SDK-free authoritative Discord state for a durable User Actor mutation."""
+
+    content: str
+    edited_at: datetime | None
 
 
 @dataclass
@@ -541,6 +550,59 @@ class DiscordAdapter:
         return AuthorRef(self.connector.key, str(user.id),
                          'webhook' if is_webhook else 'bot' if is_bot else 'human',
                          getattr(user, 'display_name', '') or '', bool(owned and is_bot))
+
+    @_tracked_io
+    async def fetch_message_state(
+        self, channel_id: int, message_id: int,
+    ) -> tuple[str, DiscordReconciliationMessage | None]:
+        """Read an exact persisted Discord message for User Actor recovery.
+
+        A verified 404 is a deletion signal; an inconsistent receipt, unreadable
+        payload or transient transport failure must never synthesize a Delete.
+        """
+        container = self._id(str(channel_id))
+        identifier = self._id(str(message_id))
+        ref = MessageRef(self.connector.key, str(container), str(identifier))
+        try:
+            physical = await self._get_message(ref)
+        except PlatformOperationError as exc:
+            if exc.reason == 'not_found':
+                return 'missing', None
+            raise
+        # The durable reconciliation can rewrite an ActivityPub object. Check
+        # the *physical* receipt before it crosses into canonical state.
+        actual_channel = getattr(getattr(physical, 'channel', None), 'id', None)
+        if (str(getattr(physical, 'id', '')) != ref.external_message_id
+            or str(actual_channel) != ref.external_container_id):
+            raise PlatformOperationError('invalid_request', 'Discord reconciliation receipt mismatch')
+        content = getattr(physical, 'content', None)
+        if not isinstance(content, str) or getattr(physical, 'attachments', ()):
+            raise PlatformOperationError('unsupported', 'Discord reconciliation requires plain text')
+        edited_at = getattr(physical, 'edited_at', None)
+        if edited_at is not None and not isinstance(edited_at, datetime):
+            raise PlatformOperationError('invalid_request', 'Discord edited timestamp is invalid')
+        return 'present', DiscordReconciliationMessage(content, edited_at)
+
+    @_tracked_io
+    async def send_owner_notice(self, discord_user_id: int, content: str) -> None:
+        """Send one Discord-only registered User Actor owner notice without retry.
+
+        The caller owns the durable at-most-once claim. A lost HTTP response
+        may mean Discord already created the DM: never retry in this method.
+        """
+        user_id = self._id(str(discord_user_id))
+        if not isinstance(content, str) or not content or len(content) > 2000:
+            raise PlatformOperationError('invalid_request', 'invalid Discord notice content')
+        try:
+            user = await self._bot.fetch_user(user_id)
+        except Exception as exc:
+            raise self._read_error(exc) from exc
+        if str(getattr(user, 'id', '')) != str(user_id):
+            raise PlatformOperationError('invalid_request', 'Discord user lookup identity mismatch')
+        try:
+            await user.send(content, allowed_mentions=self._sdk().AllowedMentions.none())
+        except Exception as exc:
+            raise PlatformOperationError('unknown_delivery', str(exc)) from exc
 
     @_tracked_io
     async def fetch_message(self, message: MessageRef) -> MessageView:

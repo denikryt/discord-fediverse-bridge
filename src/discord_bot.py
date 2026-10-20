@@ -387,18 +387,6 @@ class BridgeBot(discord.Client):
             raise RuntimeError("Personal-feed Discord delivery worker is not configured")
         return worker
 
-    async def fetch_message_state(
-        self, channel_id: int, message_id: int
-    ) -> tuple[str, object | None]:
-        """Fetch authoritative Discord message state for durable reconciliation."""
-        try:
-            channel = self.get_channel(channel_id) or await self.fetch_channel(
-                channel_id
-            )
-            return "present", await channel.fetch_message(message_id)
-        except discord.NotFound:
-            return "missing", None
-
     async def wait_until_bridge_ready(self) -> None:
         await self.bridge_ready.wait()
 

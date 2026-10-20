@@ -49,6 +49,12 @@ Before a create, the concrete adapter calls `validate_create_attempt(attempt, op
 
 **Stage 03 Checkpoint 29 (pre-cutover):** `CommunityRuntime.handle_normalized_thread_create()` and `handle_normalized_message_create()` now connect normalized forum publication with the existing canonical `CommunityThreadGroup`/`CommunityMessageGroup` SQLite mappings, `resolve_normalized_reply_context()` and typed sibling fan-out. Both require current accepted source subscription/guild policy and preserve distinct thread/starter IDs, echo suppression, nested-parent mapping and partial-target isolation. Both runtimes now receive forum events from the single production normalized ingress; Local Community ownership takes precedence over Remote Community on an overlapping forum claim.
 
+## Discord-only User Actor auxiliary transport (Stage 03 Checkpoint 40)
+
+`UserActorFollowService` sends one registered-owner notification through `DiscordAdapter.send_owner_notice()`, after the existing durable at-most-once notification claim. This operation is deliberately **not** part of `PlatformDeliveryPort`: a Discord user ID is the current destination until Stage 07 account linking. The adapter resolves the exact Discord user, disables mentions, and never automatically repeats a possibly delivered DM.
+
+`UserActorDeliveryService` uses `DiscordAdapter.fetch_message_state(channel_id, message_id)` for its existing SQLite-backed partial-update reconciliation. The adapter validates the returned physical message/container identity and gives core an immutable SDK-free body/edited-time snapshot or a verified missing result. Transport failures and unverified receipts remain retryable reconciliation failures rather than being treated as deletion. These auxiliary methods use the same SDK admission/drain as normal adapter operations.
+
 ## Unknown create results and reconciliation
 
 All three create operations take a core-generated `CreateAttempt(key, connector_key, operation, destination)`. It identifies **one desired physical copy**, not each HTTP retry. Stage 04 will persist the key, the complete immutable request (including content/title/presentation/target), and delivery state **before** sending. Reusing a key with changed data is invalid. Adapter-local correlation must also reject altered requests it has seen. The DTO has no timestamp and no retry-deadline state.

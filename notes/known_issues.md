@@ -137,3 +137,5 @@ Fedify-native security integration remains blocked by missing dependencies.
   mutation failure remains best-effort without Stage 04 durable reconciliation.
 
 - Stage 03 Checkpoint 39: Local Community persisted mutation surface receipts were insufficient for authorization after a subscriber was removed. Fixed by verifying current host/subscriber ownership and policy at each physical edit/delete boundary. Real SQLite regressions cover host/subscriber origins, revoked subscribers and transport failures; full SDK integration remains unverified.
+
+- **Stage 03 Checkpoint 40:** User Actor owner DM and partial Discord mutation reconciliation now use the live DiscordAdapter, not BridgeBot's direct SDK methods. At-most-once notification claim and durable reconciliation remain in existing services; file-backed SQLite tests cover response loss, verified missing, wrong receipt and transient GET. Real discord.py integration still required before Stage 03 release.

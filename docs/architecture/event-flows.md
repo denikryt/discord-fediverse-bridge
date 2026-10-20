@@ -8,6 +8,13 @@ This document explains the major runtime traces through the bridge: user/platfor
 2. Discord OAuth state is stored through `src/registration_service.py`.
 3. Successful completion creates a `users` row with stable local actor URLs and key material.
 
+## User Actor Follow notice and Discord mutation reconciliation (Stage 03 Checkpoint 40)
+
+1. An accepted ActivityPub Follow to a registered User Actor is persisted through `UserActorFollowService`; the signed Accept is sent through Fedify. The follower repository claims the owner notification **before** attempting Discord I/O, preserving at-most-once delivery even if the HTTP response is lost.
+2. The service calls `DiscordAdapter.send_owner_notice(discord_user_id, content)`, not `BridgeBot.fetch_user()` or a generic `PlatformDeliveryPort` DM operation. The adapter verifies the target user ID and disables mention parsing. DM failures are logged; they do not undo the accepted Follow or re-enable a notification retry.
+3. For a durable partial Discord edit, `UserActorDeliveryService.drain_reconciliations()` calls `DiscordAdapter.fetch_message_state(channel_id, message_id)`. The adapter verifies the actual physical message/container IDs and returns an SDK-free content/timestamp snapshot. A verified 404 represents deletion; malformed receipts, attachments and transient reads remain reconciliation failures, never invented ActivityPub Deletes.
+4. Both operations join the adapter's SDK I/O drain before its borrowed Discord client is closed. This does not change Service→Community Follow ownership or add generic platform DMs.
+
 ## Remote /subscribe-community flow
 
 1. `src/commands/subscribe.py` calls `src/operations/subscribe.py`.
