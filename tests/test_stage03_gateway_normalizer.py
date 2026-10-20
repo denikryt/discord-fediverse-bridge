@@ -116,3 +116,27 @@ def test_guild_mismatch_is_rejected_at_gateway_conversion():
     raw.channel.guild = SimpleNamespace(id=123)
     with pytest.raises(ValueError, match="guild"):
         normalizer.message_created(raw, channel_kind="text")
+
+
+def test_thread_message_without_cached_parent_is_not_misclassified_as_root():
+    """An unresolved thread parent never turns a forum reply into a feed root."""
+    normalizer = DiscordGatewayNormalizer('discord-primary', owned_bot_id='42')
+    raw = _raw_message()
+    # discord.py may know parent_id without caching the parent object.
+    raw.channel.parent_id = 4242
+    raw.channel.parent = None
+    with pytest.raises(ValueError, match='parent'):
+        normalizer.message_created(raw, channel_kind='text')
+
+
+def test_message_in_verified_thread_retains_exact_immediate_container():
+    """An observed parent produces a typed thread with the actual forum ID."""
+    normalizer = DiscordGatewayNormalizer('discord-primary', owned_bot_id='42')
+    raw = _raw_message(channel_id=100)
+    raw.channel.parent = SimpleNamespace(id=4242)
+    raw.channel.parent_id = 4242
+    event = normalizer.message_created(raw, channel_kind='unknown', parent_kind='forum')
+    assert event.message.external_container_id == '100'
+    assert event.thread_context.external_thread_id == '100'
+    assert event.parent_channel.external_channel_id == '4242'
+    assert event.parent_channel.kind == 'forum'

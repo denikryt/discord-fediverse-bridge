@@ -92,6 +92,11 @@ class DiscordGatewayNormalizer:
             raise ValueError("Discord message guild contradicts observed channel")
         parent = getattr(container, "parent", None)
         if parent is None:
+            # A thread may retain parent_id after its parent object falls out
+            # of the SDK cache. Never misclassify it as a root text channel;
+            # the adapter must resolve the parent before this conversion.
+            if getattr(container, "parent_id", None) is not None:
+                raise ValueError("Discord thread parent is not verified")
             channel = self._channel(getattr(container, "id", None), channel_kind, guild_id)
             thread_context = None
         else:

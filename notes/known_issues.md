@@ -195,3 +195,10 @@ references, rejects zero/invalid snowflakes, and distinguishes thread/parent
 and message/container IDs. Typed edit/delete admission uses this boundary
 instead of direct integer parsing. Nine positive/negative projection tests pass;
 remaining community runtimes still require the same cutover in Stage 03.
+
+## Stage 03 uncached thread-parent normalization (Checkpoint 18, 2026-10-19)
+
+The Gateway normalizer rejects a message with a physical `parent_id` but no
+verified parent object, avoiding accidental Personal Feed root publication.
+A real SDK caller must fetch/verify the parent before normalizing; no callback
+cutover has yet been performed. Two targeted positive/negative tests pass.

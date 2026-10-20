@@ -147,7 +147,9 @@ the claimed ActivityPub author before these checks count as authentication.
 `ThreadCreated`/`ThreadUpdated`/`ThreadDeleted` and `MessageCreated`/`MessageUpdated`/
 `MessageDeleted` platform types. It keeps the immediate message container and
 source timestamp. An absent raw edit body or missing starter evidence stays
-unknown; raw delete never needs cache access. Proven bot/webhook identities and
+unknown; raw delete never needs cache access. A message with a known
+thread `parent_id` but an uncached parent is rejected for later verified
+resolution, never reclassified as a root text-channel message. Proven bot/webhook identities and
 guild/channel metadata are checked before any domain publication. The live
 `BridgeBot` to `PlatformEventIngress` cutover remains pending, so these DTO
 conversions are not yet the deployed callback path.
