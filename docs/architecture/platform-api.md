@@ -99,3 +99,15 @@ which independently rechecks subscription, role and canonical ownership and
 uses persisted SQLite dedup rather than a volatile bot seen-set. This switches
 only **Gateway-originated forum Create**; ActivityPub inbound SDK-bound physical
 deliveries and some edit/delete paths remain pending later Stage 03 work.
+
+**Stage 03 Checkpoint 42 — Local Community incoming ActivityPub Create:**
+`LocalCommunityRuntime.bind_discord_adapter()` now also binds the physical
+`LocalCommunityInboundCreateHandler`. Incoming AP host posts and replies use
+`PlatformDeliveryPort.create_forum_thread`/`send_message` with stable
+`CreateAttempt` identities, source and current-host admission, and checked
+physical receipts; accepted duplicate events use the same typed subscriber
+fan-out without repeating confirmed copies. A late Undo(Follow) suppresses
+remaining sibling/federation side effects, and a host placement change during
+HTTP prevents adoption of the old receipt. Production composition already
+registers this adapter. SDK-shaped compatibility entry points for unbound
+legacy tests and Stage 04 unknown-create reconciliation remain unfinished.

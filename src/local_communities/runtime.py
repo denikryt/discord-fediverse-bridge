@@ -52,6 +52,7 @@ class LocalCommunityRuntime:
         self.bridge_prefix = bridge_prefix
         self.bridge_policy_service = bridge_policy_service
         self.bot = bot
+        self.discord_adapter: PlatformAdapterPort | None = None
         self.federation_fanout = LocalCommunityFederationFanout(
             database=database,
             fedify_gateway=fedify_gateway,
@@ -95,6 +96,8 @@ class LocalCommunityRuntime:
 
     def bind_discord_adapter(self, adapter: PlatformAdapterPort) -> None:
         """Bind typed Discord physical mutations without changing canonical routing."""
+        self.discord_adapter = adapter
+        self.inbound_create_handler.bind_discord_adapter(adapter)
         self.mutation_handler.bind_discord_adapter(adapter)
 
     def _disabled_result_if_needed(

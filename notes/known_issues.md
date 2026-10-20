@@ -142,3 +142,15 @@ Fedify-native security integration remains blocked by missing dependencies.
 
 - **Stage 03 Checkpoint 41 (security hardening):** Python AP parent backfill no longer performs unrestricted aiohttp GET. `activitypub_safe_fetch` requires public HTTPS DNS/socket, disables redirects/proxies, bounds JSON; isolated 16-case security regression suite passed. Complete end-to-end Fedify/Discord dial-level validation is still open.
 - **Stage 03 Checkpoint 41 (dependency audit):** core `CommunityRuntime` and shared `content_sync` can be imported without `discord.py`; remaining legacy physical SDK call paths in `community_sync/discord_fanout.py`, `local_communities/inbound_create.py`, `local_communities/discord_fanout.py`, `content_sync/edit_delete.py`, and raw reference construction remain to be removed once all live consumers are cut over.
+
+- **Stage 03 Checkpoint 42:** Production Local Community AP→Discord host post,
+  host comment and local-subscriber fan-out now use the registered `DiscordAdapter`
+  instead of direct SDK writes. File-backed SQLite regressions cover author
+  admission, physical receipts, duplicate replay, nested per-destination
+  parents, failed targets, Follow revocation and host rebinding. The unbound
+  legacy SDK branch is still present for direct-call tests; removal and
+  independent integration validation remain open.
+- **Stage 03 release blockers:** The Fedify lockfile still pins the historical
+  vulnerable version, native `sendActivity()` SSRF and remote signed activity
+  ingress are not verified with installed dependencies, and the full pytest
+  suite cannot collect without `hypothesis`/`discord.py` in this environment.

@@ -32,3 +32,17 @@ A registered local User Actor may own one Discord guild channel assignment for a
 The binding is a separate bridge mode, not a remote subscription, local community, local subscriber, or token-linked channel. Database uniqueness enforces one binding per user, guild, and channel. Bind and move operations require the invoking registered user to have Discord Manage Server permission in the target guild, require an ordinary protocol `GUILD_TEXT` channel, and reject channels already owned by another supported bridge mode. Unbind and move preserve historical publication and message mappings for later stages.
 
 `src/personal_feeds.py` owns binding mutations and active-binding lookup. `src/discord_event_router.py` exposes classification and current-channel comparison without publishing, replying, editing, deleting, or creating threads.
+
+**Stage 03 Local Community inbound transport:** When `LocalCommunityRuntime` is
+bound to the production `DiscordAdapter`, an authorized remote ActivityPub
+Create creates the host forum thread or host reply through `PlatformDeliveryPort`
+and uses the same typed fan-out for active local subscriber forums. Source
+provenance and the remote actor's accepted Follow are checked before duplicate
+recovery; a current host placement and guild policy are checked before each
+host create. Host receipt validation preserves the separate Discord thread and
+starter IDs, and nested replies resolve the actual parent receipt per forum.
+The runtime checks host ownership again after outbound I/O and suppresses
+subsequent fan-out/relay if the origin Follow was revoked in flight. Old
+SDK-based direct-call branches remain for existing tests pending Stage 03
+legacy entry-point removal. This change does not implement Stage 04 durable
+recovery for unknown Discord create results.

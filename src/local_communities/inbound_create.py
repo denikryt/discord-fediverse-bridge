@@ -12,6 +12,11 @@ from collections.abc import Callable
 from typing import TYPE_CHECKING
 
 from ..content_sync.inbound_references import build_message_reference
+from ..discord_legacy_projection import discord_id_to_legacy_int
+from ..platform_types import (ChannelRef, ContentDocument, CreateAttempt,
+                              DeliveryPresentation, MessageRef, PlatformOperationError, ThreadRef)
+from ..runtime_ports import PlatformAdapterPort
+from .discord_fanout import LocalCommunityDiscordFanout
 from ..db import Database
 from ..inbound_activity_outcomes import InboundActivityOutcome
 from ..runtime_ports import DiscordDeliveryClientPort
@@ -45,6 +50,79 @@ class LocalCommunityInboundCreateHandler:
         self.surface_fanout = surface_fanout
         self.federation_fanout = federation_fanout
         self._discord_client_provider = discord_client_provider
+        self._adapter: PlatformAdapterPort | None = None
+
+    def bind_discord_adapter(self, adapter: PlatformAdapterPort) -> None:
+        """Use the registered connector for production AP-originated physical delivery."""
+        self._adapter = adapter
+
+    def _host_forum(self, local_community: object) -> ChannelRef | None:
+        """Authorize current host placement and guild before an outbound Discord POST.
+
+        Old persisted surfaces and untrusted AP payloads cannot authorize writes.
+        """
+        placement = self.database.platform_surfaces.get_discord_host_placement(local_community.id)
+        if placement is None or not placement.external_guild_id:
+            return None
+        try:
+            guild_id = int(placement.external_guild_id)
+            channel_id = int(placement.external_channel_id)
+            if guild_id <= 0 or channel_id <= 0 or not self.surface_fanout.policy_service.is_discord_guild_allowed(guild_id):
+                return None
+        except (TypeError, ValueError, AttributeError, RuntimeError):
+            return None
+        return ChannelRef('discord-primary', str(channel_id), 'forum', str(guild_id))
+
+    def _host_unchanged(self, local_community: object, original: ChannelRef) -> bool:
+        """Recheck host authority after a potentially slow physical API call."""
+        current = self._host_forum(local_community)
+        return (current is not None
+                and current.external_channel_id == original.external_channel_id
+                and current.external_guild_id == original.external_guild_id)
+
+    def _origin_still_accepted(self, local_community: object, event: object) -> bool:
+        """Prevent later sibling delivery or AP relay after a concurrent Undo(Follow)."""
+        current = self.database.remote_subscribers.get_remote_subscriber(
+            local_community_id=local_community.id, remote_actor_id=event.actor_id,
+        )
+        return current is not None and current.status == 'accepted'
+
+    def _typed_fanout(self) -> LocalCommunityDiscordFanout:
+        """Construct the existing physical fanout with no access to Discord SDK."""
+        return LocalCommunityDiscordFanout(
+            database=self.database, bot=None, policy_service=self.surface_fanout.policy_service,
+        )
+
+    async def _fanout_post(self, *, local_community: object, thread_row: object,
+                           title: str, content: str) -> None:
+        """Mirror a verified AP post to active subscribers through the selected transport."""
+        if self._adapter is None:
+            await self.surface_fanout.fanout_thread_to_local_subscribers(
+                local_community=local_community, thread_row=thread_row, title=title,
+                content=content, author_display_name=None, source_forum_channel_id=None,
+            )
+        else:
+            await self._typed_fanout().fanout_normalized_thread(
+                adapter=self._adapter, local_community=local_community, thread_row=thread_row,
+                title=title, content=content, author_display_name=None,
+                source_forum_channel_id=None, include_host=False,
+            )
+
+    async def _fanout_comment(self, *, local_community: object, thread_row: object,
+                              message_row: object, content: str) -> None:
+        """Mirror a verified AP reply using a target-specific parent receipt."""
+        if self._adapter is None:
+            await self.surface_fanout.fanout_message_to_local_subscribers(
+                local_community=local_community, thread_row=thread_row,
+                message_row=message_row, content=content,
+                author_display_name=None, source_forum_channel_id=None,
+            )
+        else:
+            await self._typed_fanout().fanout_normalized_message(
+                adapter=self._adapter, local_community=local_community, thread_row=thread_row,
+                message_row=message_row, content=content, author_display_name=None,
+                source_forum_channel_id=None, include_host=False,
+            )
 
     async def handle_post(self, event: object, runtime: object) -> HandlerResult:
         """Mirror one remote top-level post into a new Discord forum thread."""
@@ -84,14 +162,10 @@ class LocalCommunityInboundCreateHandler:
                     outcome=InboundActivityOutcome.IGNORED_UNMAPPED_CONTEXT,
                     detail=conflict,
                 )
-            await self.surface_fanout.fanout_thread_to_local_subscribers(
-                local_community=local_community,
-                thread_row=existing,
-                title=getattr(getattr(event, "object"), "title", None)
-                or "Untitled remote post",
+            await self._fanout_post(
+                local_community=local_community, thread_row=existing,
+                title=getattr(event.object, "title", None) or "Untitled remote post",
                 content=format_inbound_post_body(event),
-                author_display_name=None,
-                source_forum_channel_id=None,
             )
             await self.federation_fanout.relay_create(
                 event=event,
@@ -112,11 +186,17 @@ class LocalCommunityInboundCreateHandler:
                 outcome=InboundActivityOutcome.IGNORED_UNMAPPED_CONTEXT,
                 detail="local community has no Discord host placement",
             )
-        bot = self._discord_client_provider()
-        if bot is None:
-            raise RuntimeError(
-                "LocalCommunityRuntime requires bot for inbound Discord delivery"
-            )
+        if self._adapter is None:
+            bot = self._discord_client_provider()
+            if bot is None:
+                raise RuntimeError("LocalCommunityRuntime requires bot for inbound Discord delivery")
+        else:
+            forum = self._host_forum(local_community)
+            if forum is None:
+                return _HandlerResult(
+                    status="skipped", outcome=InboundActivityOutcome.IGNORED_UNMAPPED_CONTEXT,
+                    detail="local community host is not an allowed Discord forum",
+                )
 
         # Persist canonical source identity before a Discord POST: a process
         # crash after the POST must not leave a post with no origin snapshot.
@@ -137,36 +217,55 @@ class LocalCommunityInboundCreateHandler:
             origin_remote_actor_id=event.actor_id,
             source_activity_json=event.source_activity_json,
         )
-        await bot.wait_until_bridge_ready()
-        forum_channel = await bot.fetch_forum_channel(
-            int(placement.external_channel_id)
-        )
-        thread_title = (
-            getattr(getattr(event, "object"), "title", None) or "Untitled remote post"
-        )
-        created = await forum_channel.create_thread(
-            name=thread_title,
-            content=format_inbound_post_body(event),
-        )
-        created_thread, starter_message = unpack_created_thread(created)
+        thread_title = getattr(event.object, "title", None) or "Untitled remote post"
+        if self._adapter is not None:
+            # A physical receipt is evidence only when its destination matches
+            # the current host placement, including known guild metadata.
+            attempt = CreateAttempt(
+                f"local-community-inbound-post:{local_community.id}:{event.object.ap_id}",
+                'discord-primary', 'forum_thread', forum,
+            )
+            receipt = await self._adapter.create_forum_thread(
+                forum, ContentDocument(format_inbound_post_body(event)),
+                title=thread_title, presentation=DeliveryPresentation(), attempt=attempt,
+            )
+            if (receipt.thread.channel.connector_key != forum.connector_key
+                or receipt.thread.channel.external_channel_id != forum.external_channel_id
+                or receipt.thread.channel.kind != 'forum'
+                or receipt.thread.channel.external_guild_id != forum.external_guild_id):
+                raise PlatformOperationError('unknown_delivery', 'inbound host forum receipt mismatch')
+            discord_thread_id = discord_id_to_legacy_int(receipt.thread)
+            starter_message_id = discord_id_to_legacy_int(receipt.starter)
+            if not self._host_unchanged(local_community, forum):
+                raise PlatformOperationError('unknown_delivery', 'local community host changed during Create')
+        else:
+            await bot.wait_until_bridge_ready()
+            forum_channel = await bot.fetch_forum_channel(int(placement.external_channel_id))
+            created = await forum_channel.create_thread(
+                name=thread_title, content=format_inbound_post_body(event),
+            )
+            created_thread, starter_message = unpack_created_thread(created)
+            discord_thread_id = getattr(created_thread, 'id')
+            starter_message_id = getattr(starter_message, 'id')
         thread_row = (
             self.database.local_community_content.create_local_community_thread(
                 local_community_id=getattr(local_community, "id"),
-                discord_thread_id=getattr(created_thread, "id"),
-                discord_starter_message_id=getattr(starter_message, "id"),
+                discord_thread_id=discord_thread_id,
+                discord_starter_message_id=starter_message_id,
                 ap_activity_id=getattr(event, "delivery_id"),
                 ap_object_id=getattr(getattr(event, "object"), "ap_id"),
                 direction="ap_to_discord",
                 origin_kind="remote_follower",
             )
         )
-        await self.surface_fanout.fanout_thread_to_local_subscribers(
-            local_community=local_community,
-            thread_row=thread_row,
-            title=thread_title,
-            content=format_inbound_post_body(event),
-            author_display_name=None,
-            source_forum_channel_id=None,
+        if not self._origin_still_accepted(local_community, event):
+            # Preserve the verified physical receipt, but suppress *new* side
+            # effects if the accepted subscription disappeared during HTTP.
+            return _HandlerResult(status="skipped", outcome=InboundActivityOutcome.IGNORED_ACTOR_NOT_SUBSCRIBER,
+                                  detail="remote subscriber was revoked during delivery")
+        await self._fanout_post(
+            local_community=local_community, thread_row=thread_row,
+            title=thread_title, content=format_inbound_post_body(event),
         )
         await self.federation_fanout.relay_create(
             event=event,
@@ -248,13 +347,9 @@ class LocalCommunityInboundCreateHandler:
                     outcome=InboundActivityOutcome.IGNORED_UNMAPPED_CONTEXT,
                     detail="mapping_conflict",
                 )
-            await self.surface_fanout.fanout_message_to_local_subscribers(
-                local_community=local_community,
-                thread_row=existing_thread,
-                message_row=existing_message,
-                content=format_inbound_comment_body(event),
-                author_display_name=None,
-                source_forum_channel_id=None,
+            await self._fanout_comment(
+                local_community=local_community, thread_row=existing_thread,
+                message_row=existing_message, content=format_inbound_comment_body(event),
             )
             await self.federation_fanout.relay_create(
                 event=event,
@@ -276,11 +371,15 @@ class LocalCommunityInboundCreateHandler:
                 outcome=InboundActivityOutcome.IGNORED_UNMAPPED_CONTEXT,
                 detail="comment parent post is not mapped",
             )
-        bot = self._discord_client_provider()
-        if bot is None:
-            raise RuntimeError(
-                "LocalCommunityRuntime requires bot for inbound Discord delivery"
-            )
+        if self._adapter is None:
+            bot = self._discord_client_provider()
+            if bot is None:
+                raise RuntimeError("LocalCommunityRuntime requires bot for inbound Discord delivery")
+        else:
+            forum = self._host_forum(local_community)
+            if forum is None:
+                return _HandlerResult(status="skipped", outcome=InboundActivityOutcome.IGNORED_UNMAPPED_CONTEXT,
+                                      detail="local community host is not an allowed Discord forum")
 
         admission = self.database.personal_feed_conversations.retain_community_create(
             activity_id=getattr(event, "source_activity_id", None)
@@ -311,29 +410,58 @@ class LocalCommunityInboundCreateHandler:
                 outcome=InboundActivityOutcome.IGNORED_UNMAPPED_CONTEXT,
                 detail="comment thread host surface not mapped",
             )
-        discord_thread = await bot.get_thread_by_id(
-            getattr(host_thread_surface, "discord_thread_id")
-        )
         parent_discord_message_id = resolve_inbound_reply_target(
             database=self.database,
-            parent_ap_object_id=getattr(getattr(event, "object"), "parent_ap_id"),
+            parent_ap_object_id=getattr(event.object, 'parent_ap_id'),
             thread_row=thread_row,
         )
-        send_kwargs: dict[str, object] = {}
-        if parent_discord_message_id is not None:
-            # The shared helper keeps the reference contract identical to the
-            # remote-subscription mode and avoids duck-typed reply objects.
-            send_kwargs["reference"] = build_message_reference(
-                discord_thread=discord_thread,
-                message_id=parent_discord_message_id,
+        if self._adapter is not None:
+            # The host surface is a stored receipt, not permission to send to
+            # a former host when its channel has been rebound.
+            if host_thread_surface.discord_forum_channel_id != int(forum.external_channel_id):
+                return _HandlerResult(status="skipped", outcome=InboundActivityOutcome.IGNORED_UNMAPPED_CONTEXT,
+                                      detail="host surface no longer matches placement")
+            parent_ap_id = getattr(event.object, 'parent_ap_id')
+            if parent_ap_id not in (None, thread_row.ap_object_id):
+                parent_row = self.database.local_community_content.get_local_community_message_by_ap_object_id(parent_ap_id)
+                if parent_row is not None and parent_row.local_community_thread_id != thread_row.id:
+                    return _HandlerResult(status="skipped", outcome=InboundActivityOutcome.IGNORED_UNMAPPED_CONTEXT,
+                                          detail="reply parent belongs to another thread")
+            destination = ThreadRef(forum, str(host_thread_surface.discord_thread_id))
+            reply = (MessageRef('discord-primary', destination.external_thread_id,
+                                str(parent_discord_message_id))
+                     if parent_discord_message_id is not None else None)
+            attempt = CreateAttempt(
+                f"local-community-inbound-comment:{local_community.id}:{event.object.ap_id}",
+                'discord-primary', 'message', destination,
             )
-        created_message = await discord_thread.send(
-            format_inbound_comment_body(event), **send_kwargs
-        )
+            receipt = await self._adapter.send_message(
+                destination, ContentDocument(format_inbound_comment_body(event)),
+                reply_to=reply, presentation=DeliveryPresentation(), attempt=attempt,
+            )
+            if (receipt.message.connector_key != destination.connector_key
+                or receipt.message.external_container_id != destination.external_thread_id):
+                raise PlatformOperationError('unknown_delivery', 'inbound host message receipt mismatch')
+            discord_message_id = discord_id_to_legacy_int(receipt.message)
+            if not self._host_unchanged(local_community, forum):
+                raise PlatformOperationError('unknown_delivery', 'local community host changed during reply')
+            discord_thread_id = host_thread_surface.discord_thread_id
+        else:
+            discord_thread = await bot.get_thread_by_id(host_thread_surface.discord_thread_id)
+            send_kwargs: dict[str, object] = {}
+            if parent_discord_message_id is not None:
+                send_kwargs['reference'] = build_message_reference(
+                    discord_thread=discord_thread, message_id=parent_discord_message_id,
+                )
+            created_message = await discord_thread.send(
+                format_inbound_comment_body(event), **send_kwargs,
+            )
+            discord_message_id = getattr(created_message, 'id')
+            discord_thread_id = getattr(discord_thread, 'id')
         message_row = (
             self.database.local_community_content.create_local_community_message(
                 local_community_thread_id=getattr(thread_row, "id"),
-                discord_message_id=getattr(created_message, "id"),
+                discord_message_id=discord_message_id,
                 ap_activity_id=getattr(event, "delivery_id"),
                 ap_object_id=getattr(getattr(event, "object"), "ap_id"),
                 parent_ap_object_id=getattr(getattr(event, "object"), "parent_ap_id"),
@@ -343,16 +471,17 @@ class LocalCommunityInboundCreateHandler:
         )
         self._persist_inbound_activitypub_message_mapping(
             event=event,
-            discord_thread_id=getattr(discord_thread, "id"),
-            discord_message_id=getattr(created_message, "id"),
+            discord_thread_id=discord_thread_id,
+            discord_message_id=discord_message_id,
         )
-        await self.surface_fanout.fanout_message_to_local_subscribers(
-            local_community=local_community,
-            thread_row=thread_row,
-            message_row=message_row,
-            content=format_inbound_comment_body(event),
-            author_display_name=None,
-            source_forum_channel_id=None,
+        if not self._origin_still_accepted(local_community, event):
+            # A confirmed host message remains mapped, but revoked authors do
+            # not authorize further subscriber copies or federation relay.
+            return _HandlerResult(status="skipped", outcome=InboundActivityOutcome.IGNORED_ACTOR_NOT_SUBSCRIBER,
+                                  detail="remote subscriber was revoked during delivery")
+        await self._fanout_comment(
+            local_community=local_community, thread_row=thread_row,
+            message_row=message_row, content=format_inbound_comment_body(event),
         )
         await self.federation_fanout.relay_create(
             event=event,
