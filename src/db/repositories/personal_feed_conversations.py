@@ -654,6 +654,13 @@ class PersonalFeedConversationRepository:
                 row.last_applied_revision = claimed_revision_fingerprint
                 row.next_attempt_at = None
                 row.last_error = None
+            elif error in ("invalid_request", "unsupported"):
+                # A verified preflight rejection is not a transient HTTP error.
+                # Do not burn two extra retries on an impossible target/content;
+                # a later changed canonical revision can still be admitted.
+                row.state = "failed"
+                row.next_attempt_at = None
+                row.last_error = error
             elif row.attempt_count >= 3:
                 row.state = "failed"
                 row.next_attempt_at = None

@@ -186,3 +186,38 @@ async def test_shutdown_cancellation_of_create_keeps_one_ambiguous_receipt(monke
         await publish()
     assert error.value.reason == 'unavailable'
     assert len(forum.sends) == 1
+
+@pytest.mark.asyncio
+async def test_second_shutdown_cancellation_cannot_abandon_gateway_callback():
+    """Two independent cancellations still join the gateway task before SDK close."""
+    transport = adapter()
+    entered = asyncio.Event()
+    cancelling = asyncio.Event()
+    release = asyncio.Event()
+
+    async def callback():
+        """Simulate a Fedify operation requiring async cleanup after cancellation."""
+        assert transport.enter_ingress()
+        try:
+            entered.set()
+            await asyncio.Event().wait()
+        except asyncio.CancelledError:
+            cancelling.set()
+            await release.wait()
+            raise
+        finally:
+            transport.leave_ingress()
+
+    pending = asyncio.create_task(callback())
+    await entered.wait()
+    transport.close_ingress_admission()
+    drainer = asyncio.create_task(transport.drain_ingress())
+    await cancelling.wait()
+    drainer.cancel()
+    await asyncio.sleep(0.01)
+    assert not drainer.done(), 'drain must wait for callback cleanup before SDK close'
+    release.set()
+    with pytest.raises(asyncio.CancelledError):
+        await drainer
+    assert pending.done() and not transport._ingress_tasks
+    await transport.quiesce()

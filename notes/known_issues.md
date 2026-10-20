@@ -211,3 +211,14 @@ cutover has yet been performed. Two targeted positive/negative tests pass.
   SDK-object handlers until the single typed Create cutover is complete.
 - Full pytest remains blocked by missing `hypothesis` and `discord.py`; the
   installed Fedify dependency and native SSRF transport remain unverified.
+
+## Stage 03 worker shutdown order (verified focused tests)
+
+- `app._run_bot_lifetime()` now stops Personal Feed and User Actor workers
+  before Discord SDK close; one worker stop error cannot skip the other.
+  Adapter callback/SDK-task drain and both worker stops join cooperative async
+  finalizers even after a second cancellation. Full installed-SDK shutdown and
+  uncooperative network integration tests remain unverified.
+- Definitive Personal Feed Discord preflight errors (`invalid_request`,
+  `unsupported`) now stop retries using existing failed state; transient
+  `unavailable` still schedules recovery.

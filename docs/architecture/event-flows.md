@@ -72,6 +72,10 @@ the claimed ActivityPub author before these checks count as authentication.
 
 `BridgeBot.on_raw_thread_update` / `on_raw_thread_delete` enters the same tracked Gateway callback lifetime. `DiscordAdapter` preserves raw identity through `ThreadUpdated` / `ThreadDeleted`; `PlatformEventIngress` logs an explicit no-op. A physical thread rename or removal is **not** automatically an ActivityPub Update/Delete because no current canonical thread-mutation handler owns it. Source thread/message creation is still on the legacy SDK path pending the atomic typed Create cutover.
 
+## Discord Gateway shutdown ordering (Stage 03)
+
+`src/app.py::_run_bot_lifetime()` keeps the SDK context open while it closes Gateway callback admission, joins independently scheduled ingress callbacks, stops Personal Feed Discord delivery and User Actor delivery workers, and drains physical Discord adapter I/O. Only then does `BridgeBot.close()` close the Discord SDK. `Runtime.close()` owns Fedify/OAuth/database shutdown afterward; its idempotent worker-stop paths cover partially started processes. Cancellation during ingress drain or either worker stop is propagated **after** the underlying async task finalizers have completed, not by abandoning work against resources about to be closed.
+
 ## /create_community flow
 
 1. `src/commands/create_community.py` calls `src/operations/create_community.py`.

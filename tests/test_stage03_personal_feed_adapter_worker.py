@@ -170,3 +170,18 @@ async def test_forum_destination_cannot_become_personal_feed_root(tmp_path):
     assert not adapter.threads and not adapter.sent
     assert _state(db, delivery_id).state == 'failed'
     db.close()
+
+@pytest.mark.asyncio
+async def test_temporary_platform_unavailable_remains_retriable(tmp_path):
+    """Temporary Discord failure keeps an unchanged physical attempt eligible for retry."""
+    db, repo, delivery_id, service = world(tmp_path)
+    adapter = RecordingAdapter()
+    async def unavailable(_channel):
+        """Model a transport read rejected before any Discord POST."""
+        raise PlatformOperationError('unavailable', 'network interrupted')
+    adapter.fetch_channel = unavailable
+    worker = PersonalFeedDiscordDeliveryWorker(database=db, adapter=adapter, personal_feed_service=service)
+    await worker._deliver(repo.claim_due()[0])
+    assert _state(db, delivery_id).state == 'ready'
+    assert len(adapter.sent) == 0
+    db.close()

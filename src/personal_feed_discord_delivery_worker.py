@@ -43,25 +43,38 @@ class PersonalFeedDiscordDeliveryWorker:
         self._wake.set()
 
     async def stop(self) -> None:
-        """Cancel in-flight Discord work and leave claimed rows restart-recoverable."""
+        """Cancel and join Discord delivery before resetting dispatching claims.
+
+        A second shutdown cancellation must not detach a delivery while SDK/DB
+        owners are about to close. Preserve the cancellation after the task's
+        async cleanup and recovery of non-terminal claims have both completed.
+        """
         self._stopping = True
         self._wake.set()
         task = self._task
-        self._task = None
         if task is None:
             return
-        # Discord API awaits can stall indefinitely during network loss.  The
-        # scheduler owns those awaits, so shutdown must cancel that task before
-        # the bot and database it depends on are closed.
         task.cancel()
+        interrupted = False
         try:
-            await task
-        except asyncio.CancelledError:
-            pass
-        # A cancelled delivery may have been claimed but not attempted.  Reset
-        # process-local dispatching state while the database is still open so a
-        # restarted worker can resume it without consuming retry budget.
-        self.database.personal_feed_conversations.recover_dispatching()
+            while not task.done():
+                try:
+                    await asyncio.shield(task)
+                except asyncio.CancelledError:
+                    # A stopped worker normally ends with CancelledError, but
+                    # a cancellation of *this* stop task must still join it.
+                    if not task.done():
+                        interrupted = True
+            if not task.cancelled():
+                task.result()
+        finally:
+            # Release the worker reference only once its physical task really
+            # finished. Otherwise Runtime.close() could miss a live SDK user.
+            if task.done():
+                self._task = None
+                self.database.personal_feed_conversations.recover_dispatching()
+        if interrupted:
+            raise asyncio.CancelledError
 
     async def _run(self) -> None:
         """Drain due rows while keeping Discord calls outside DB transactions."""

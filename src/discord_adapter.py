@@ -9,7 +9,7 @@ from __future__ import annotations
 import asyncio
 from dataclasses import dataclass
 from functools import wraps
-from typing import Awaitable, Callable, TYPE_CHECKING
+from typing import Awaitable, Callable
 
 from .discord_gateway_events import DiscordGatewayNormalizer
 from .runtime_ports import PlatformInboundSinkPort
@@ -21,6 +21,30 @@ from .platform_types import (
     ThreadRef, ThreadView, validate_create_attempt, validate_created_receipt,
     validate_message_reply,
 )
+
+
+async def _cancel_and_join(tasks: list[asyncio.Task]) -> None:
+    """Cancel SDK/ingress tasks and join their finalizers even if drain is cancelled.
+
+    TaskGroup may cancel the shutdown task twice. Shielding the gather prevents
+    the second cancellation from turning an outstanding callback into a
+    detached user of the soon-to-be-closed database or Discord client.
+    The caller still observes cancellation once every callback has finished.
+    """
+    if not tasks:
+        return
+    for task in tasks:
+        task.cancel()
+    completion = asyncio.gather(*tasks, return_exceptions=True)
+    interrupted = False
+    while not completion.done():
+        try:
+            await asyncio.shield(completion)
+        except asyncio.CancelledError:
+            # Cancellation of *this* shutdown task must not cancel the join.
+            interrupted = True
+    if interrupted:
+        raise asyncio.CancelledError
 
 
 @dataclass
@@ -630,10 +654,7 @@ class DiscordAdapter:
         self.close_ingress_admission()
         current = asyncio.current_task()
         tasks = [task for task in self._ingress_tasks if task is not current and not task.done()]
-        for task in tasks:
-            task.cancel()
-        if tasks:
-            await asyncio.gather(*tasks, return_exceptions=True)
+        await _cancel_and_join(tasks)
 
     async def quiesce(self) -> None:
         """Close physical create admission after Gateway ingress was drained."""
@@ -644,10 +665,7 @@ class DiscordAdapter:
         # their owning tasks as well as Create owners before closing the SDK.
         current = asyncio.current_task()
         tasks = [task for task in self._io_tasks if task is not current and not task.done()]
-        for task in tasks:
-            task.cancel()
-        if tasks:
-            await asyncio.gather(*tasks, return_exceptions=True)
+        await _cancel_and_join(tasks)
         # Create cancellation records an unknown receipt, never proof of no
         # physical Discord POST; nothing can safely replay such an attempt.
         pending = [entry.future for entry in self._creates.values() if not entry.future.done()]

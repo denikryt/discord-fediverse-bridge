@@ -20,6 +20,9 @@ This document is a short, feature-oriented index of the test suite. It helps mai
 - Normalized raw edit/delete -> single domain-mutation sink, foreign-connector rejection, thread mutation no-op, unbound create rejection and real adapter admission — `tests/test_stage03_platform_event_ingress.py`.
 - Typed mutation source/mirror ownership and partial-read reconciliation — `tests/test_stage03_typed_message_mutations.py`.
 - Gateway shutdown admission and callback drain — `tests/test_stage03_discord_adapter_lifecycle.py`.
+- Discord SDK lifetime vs both workers (normal exit, failure, TaskGroup cancellation), repeated cancellation of a callback drain — `tests/test_stage03_bot_shutdown_order.py`, `tests/test_stage03_discord_adapter_lifecycle.py`.
+- Repeated cancellation while Personal Feed/User Actor recovery workers complete their own finalizers — `tests/test_stage03_worker_shutdown_cancellation.py`.
+- Definitively invalid Personal Feed destination fails without another identical POST; temporary `unavailable` remains retryable — `tests/test_stage03_personal_feed_adapter_worker.py`.
 
 ## Registration and user identity
 

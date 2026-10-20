@@ -48,6 +48,34 @@ from .db.backup import recover_incomplete_restore
 logger = logging.getLogger(__name__)
 
 
+async def _run_bot_lifetime(runtime: Runtime, discord_token: str) -> None:
+    """Keep both delivery workers and Gateway tasks inside the SDK lifetime.
+
+    Discord's callback tasks are not implicitly joined by Client.close(). The
+    order here is owned by the existing run_bot process task, not a new manager.
+    Each cleanup step runs even when the prior worker stop raises.
+    """
+    async with runtime.bot:
+        try:
+            await runtime.bot.start(discord_token)
+        finally:
+            # The gate must close before the first shutdown await: a delayed
+            # on_ready must not restart a worker while other tasks are draining.
+            runtime.discord_adapter.close_ingress_admission()
+            try:
+                await runtime.discord_adapter.drain_ingress()
+            finally:
+                try:
+                    await runtime.personal_feed_discord_delivery_worker.stop()
+                finally:
+                    try:
+                        await runtime.user_actor_delivery_worker.stop()
+                    finally:
+                        # SDK transport must outlive both in-flight workers;
+                        # only Runtime.close() owns Fedify and the database.
+                        await runtime.discord_adapter.quiesce()
+
+
 async def main() -> None:
     # Build the full runtime once and then run both long-lived entry points
     # against the same shared state.
@@ -67,17 +95,8 @@ async def main() -> None:
     )
 
     async def run_bot() -> None:
-        # The Discord client owns connection startup/shutdown through its async context.
-        async with bot:
-            try:
-                await bot.start(settings.discord_token)
-            finally:
-                # discord.py dispatches independent callback Tasks. The shared
-                # DB/Fedify must outlive each one, even on TaskGroup cancellation.
-                runtime.discord_adapter.close_ingress_admission()
-                await runtime.discord_adapter.drain_ingress()
-                await runtime.personal_feed_discord_delivery_worker.stop()
-                await runtime.discord_adapter.quiesce()
+        """Run the existing Gateway task under its ordered shutdown contract."""
+        await _run_bot_lifetime(runtime, settings.discord_token)
 
     async def run_http_server() -> None:
         await http_server.serve()
