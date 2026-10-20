@@ -188,7 +188,10 @@ class PersonalFeedConversationRepository:
         if activity_actor_id != attributed_to_actor_id:
             return InboundAdmission("actor_mismatch")
         # Incoming AP timestamps must identify UTC instants, not local wall time.
-        published_at = self._utc_incoming(published_at)
+        try:
+            published_at = self._utc_incoming(published_at)
+        except ValueError:
+            return InboundAdmission("invalid_timestamp")
         fingerprint = self._fingerprint(content_markdown, published_at, False)
         source_json = self._bounded_source(source_activity)
         with self.immediate_session() as session:
@@ -262,7 +265,10 @@ class PersonalFeedConversationRepository:
         source_activity: dict | None,
     ) -> InboundAdmission:
         """Persist a canonical community comment before its existing Discord fanout."""
-        published_at = self._utc_incoming(published_at)
+        try:
+            published_at = self._utc_incoming(published_at)
+        except ValueError:
+            return InboundAdmission("invalid_timestamp")
         fingerprint = self._fingerprint(content_markdown, published_at, False)
         with self.immediate_session() as session:
             existing = session.scalar(
@@ -304,7 +310,10 @@ class PersonalFeedConversationRepository:
         """Atomically enforce object ownership and ordering before accepting a remote Update."""
         if activity_actor_id != attributed_to_actor_id:
             return InboundAdmission("actor_mismatch")
-        updated_at = self._utc_incoming(updated_at)
+        try:
+            updated_at = self._utc_incoming(updated_at)
+        except ValueError:
+            return InboundAdmission("invalid_timestamp")
         fingerprint = self._fingerprint(content_markdown, updated_at, False)
         with self.immediate_session() as session:
             row = session.scalar(

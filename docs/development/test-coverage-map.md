@@ -9,6 +9,12 @@ This document is a short, feature-oriented index of the test suite. It helps mai
 - **Command** — Discord adapter behavior such as inputs, ephemeral responses, and autocomplete.
 - **Contract / infrastructure** — persistence, protocol, configuration, migration, and integration contracts.
 
+## Stage 03 contract and Personal Feed timestamp regressions
+
+- Source creation timestamps and optional edit author validation — `tests/test_platform_types.py`.
+- SQLite UTC roundtrip, sequential ActivityPub Updates and invalid naive timestamp admission — `tests/behavior/test_personal_feed_stage8_conversations.py`.
+- Static Compose gateway process secret allowlist — `fedify-gateway/src/test-docker-contract.ts`.
+
 ## Registration and user identity
 
 - Registration scenarios, duplicate handling, and user-facing registration outcomes — [`tests/behavior/test_registration_scenarios.py`](../../tests/behavior/test_registration_scenarios.py)

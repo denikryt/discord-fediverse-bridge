@@ -606,10 +606,36 @@ def test_naive_incoming_update_is_rejected_before_canonical_write() -> None:
         actor_name='Alice', content_markdown='original', published_at=None,
         source_activity={'type': 'Create'}, destination_channel_id=10, parent_known=True,
     )
-    with pytest.raises(ValueError, match='timezone'):
-        database.personal_feed_conversations.admit_update(
-            object_id=object_id, activity_actor_id=actor, attributed_to_actor_id=actor,
-            content_markdown='unsafe', updated_at=datetime(2026, 10, 18, 21),
-            source_activity={'type':'Update'},
-        )
+    assert database.personal_feed_conversations.admit_update(
+        object_id=object_id, activity_actor_id=actor, attributed_to_actor_id=actor,
+        content_markdown='unsafe', updated_at=datetime(2026, 10, 18, 21),
+        source_activity={'type':'Update'},
+    ).status == 'invalid_timestamp'
     assert database.personal_feed_conversations.get_inbound_object(object_id).content_markdown == 'original'
+
+
+def test_incoming_create_timestamp_refusal_and_utc_fingerprint() -> None:
+    """New AP source records reject naive time, but accept equivalent offsets."""
+    database = _database()
+    _root(database)
+    object_id = 'https://remote.example/o/source-time'
+    actor = 'https://remote.example/users/alice'
+    attrs = dict(
+        activity_id='https://remote.example/a/source-time', object_id=object_id,
+        root_object_id='https://bridge.example/o/root',
+        parent_object_id='https://bridge.example/o/root',
+        activity_actor_id=actor, attributed_to_actor_id=actor,
+        actor_name='Alice', content_markdown='created',
+        source_activity={'type':'Create'}, destination_channel_id=10, parent_known=True,
+    )
+    assert database.personal_feed_conversations.admit_create(
+        published_at=datetime(2026, 10, 18), **attrs,
+    ).status == 'invalid_timestamp'
+    assert database.personal_feed_conversations.get_inbound_object(object_id) is None
+    first = datetime(2026, 10, 18, 19, tzinfo=timezone.utc)
+    assert database.personal_feed_conversations.admit_create(
+        published_at=first.astimezone(timezone(timedelta(hours=3))), **attrs,
+    ).status == 'created'
+    assert database.personal_feed_conversations.get_inbound_object(object_id).revision_fingerprint == (
+        database.personal_feed_conversations._fingerprint('created', first, False)
+    )

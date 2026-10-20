@@ -52,3 +52,20 @@ threads, or comments in a replacement Discord channel.
 - Message edit timestamps and all inbound receipt times must be timezone-aware
   datetimes when supplied; missing optional edit time remains `None`.
   `THREAD_STARTER_MESSAGE` cross-container references remain representable.
+
+## Stage 03 partial implementation validation (2026-10-19)
+
+- The baseline full pytest invocation stops in `tests/conftest.py`: `hypothesis` is missing;
+  `uv sync --frozen --all-groups` cannot reach the configured package registry.
+  `discord.py` and local Fedify Node dependencies are not installed.
+- The Stage 03 Compose gateway secret allowlist is in place and checked statically
+  with Node. A live Docker Compose environment-key check remains unverified.
+- Normalized source timestamps and edit author metadata are added to Platform API.
+  Personal Feed timestamp ordering now normalizes aware incoming timestamps to
+  UTC, rejects naive values with `invalid_timestamp`, and interprets SQLite
+  naive stored values as UTC. Historical values originally persisted with an
+  unknown non-UTC offset remain ambiguous; no inferred migration is applied.
+- The live DiscordAdapter ingress/cutover, revision-safe worker operations,
+  Fedify security upgrade/origin verification, relay identity/routing and SSRF
+  gates are still **not implemented or release-tested**. Stage 03 must not be
+  treated as complete based on the focused tests of the partial changes.
