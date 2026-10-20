@@ -2,6 +2,8 @@
 
 This document owns the SDK-independent transport boundary between Bridge Core and physical platforms. Stage 02 **defines** the contract and stateful test fakes; it does **not** activate a Discord adapter, a Fluxer connector, a second Gateway receiver, a new database migration or a new delivery queue. The deployed path still uses `BridgeBot`, `DiscordEventRouter` and existing fanout/Personal Feed workers directly; the exact temporary boundaries are marked `MULTIPLATFORM_STAGE02_TEMP` in `src/runtime_ports.py`, `src/discord_bot.py` and `src/app.py`.
 
+**Stage 03 incremental activation:** production raw message edit/delete and raw thread update/delete callbacks now pass through `DiscordAdapter` normalization and the single `PlatformEventIngress` typed mutation route. Uncached message deletion remains ID-only. Thread rename/delete has an observable no-op branch; it is not a canonical ActivityPub mutation. Message/thread **creation still uses the legacy SDK-object route** until its full typed domain cutover, so Stage 03 is not complete. There is no second active edit/delete callback route.
+
 ## Ownership and identities
 
 Stage 01's `PlatformConnector` and `ChannelSurface` rows are authoritative for connector metadata and physical channel claims. A `ConnectorRef(key, platform, instance_origin)` is only a non-secret process snapshot; Fluxer origins must be the canonical value stored by the repository. `PlatformAdapterRegistry` requires an explicit set of allowed connectors and registers one matching adapter per key. `get` and `get_for_channel` never fall back to Discord, bind channels, write mapping rows or close SDK clients. Composition owns each adapter's client lifecycle. Connector presence alone is **not** authorization or a running Fluxer Gateway.

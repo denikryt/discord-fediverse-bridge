@@ -9,7 +9,10 @@ from __future__ import annotations
 import asyncio
 from dataclasses import dataclass
 from functools import wraps
-from typing import Awaitable, Callable
+from typing import Awaitable, Callable, TYPE_CHECKING
+
+from .discord_gateway_events import DiscordGatewayNormalizer
+from .runtime_ports import PlatformInboundSinkPort
 
 from .platform_types import (
     AuthorRef, ChannelRef, ChannelView, ConnectorRef, ContentDocument, CreateAttempt,
@@ -84,6 +87,44 @@ class DiscordAdapter:
         self._io_tasks: set[asyncio.Task] = set()
         self._ingress_admission_open = True
         self._ingress_tasks: set[asyncio.Task] = set()
+        self._sink: PlatformInboundSinkPort | None = None
+
+    def bind_ingress_sink(self, sink: PlatformInboundSinkPort) -> None:
+        """Bind the only normalized event consumer before Gateway startup."""
+        if self._sink is not None or not isinstance(sink, PlatformInboundSinkPort):
+            raise RuntimeError('Discord normalized ingress is already bound or invalid')
+        self._sink = sink
+
+    def _normalizer(self) -> DiscordGatewayNormalizer:
+        """Read the SDK's currently authenticated bot identity for provenance."""
+        actor = getattr(getattr(self._bot, 'user', None), 'id', None)
+        return DiscordGatewayNormalizer(
+            self.connector.key, owned_bot_id=str(actor) if actor is not None else None,
+        )
+
+    async def ingest_raw_message_edit(self, payload: object) -> None:
+        """Normalize one raw edit and deliver it exactly once to typed ingress."""
+        if self._sink is None:
+            raise RuntimeError('Discord normalized ingress is not bound')
+        await self._sink.handle_platform_event(self._normalizer().raw_message_updated(payload))
+
+    async def ingest_raw_message_delete(self, payload: object) -> None:
+        """Normalize one cache-independent delete without a physical lookup."""
+        if self._sink is None:
+            raise RuntimeError('Discord normalized ingress is not bound')
+        await self._sink.handle_platform_event(self._normalizer().raw_message_deleted(payload))
+
+    async def ingest_raw_thread_update(self, payload: object) -> None:
+        """Report one raw thread metadata change, without canonical AP mutation."""
+        if self._sink is None:
+            raise RuntimeError('Discord normalized ingress is not bound')
+        await self._sink.handle_platform_event(self._normalizer().raw_thread_updated(payload))
+
+    async def ingest_raw_thread_delete(self, payload: object) -> None:
+        """Report a raw thread removal without assuming it deletes an AP post."""
+        if self._sink is None:
+            raise RuntimeError('Discord normalized ingress is not bound')
+        await self._sink.handle_platform_event(self._normalizer().raw_thread_deleted(payload))
 
     @property
     def connector(self) -> ConnectorRef:

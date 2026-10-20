@@ -202,3 +202,12 @@ The Gateway normalizer rejects a message with a physical `parent_id` but no
 verified parent object, avoiding accidental Personal Feed root publication.
 A real SDK caller must fetch/verify the parent before normalizing; no callback
 cutover has yet been performed. Two targeted positive/negative tests pass.
+
+## Stage 03 Gateway ingress activation (partial)
+
+- Raw Discord message edits/deletes and raw thread updates/deletes now use one
+  adapter-normalized ingress; the old raw mutation entry points are no longer
+  called from production Gateway callbacks. Message/thread creation is still on
+  SDK-object handlers until the single typed Create cutover is complete.
+- Full pytest remains blocked by missing `hypothesis` and `discord.py`; the
+  installed Fedify dependency and native SSRF transport remain unverified.

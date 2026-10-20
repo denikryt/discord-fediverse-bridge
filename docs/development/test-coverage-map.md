@@ -15,6 +15,12 @@ This document is a short, feature-oriented index of the test suite. It helps mai
 - SQLite UTC roundtrip, sequential ActivityPub Updates and invalid naive timestamp admission — `tests/behavior/test_personal_feed_stage8_conversations.py`.
 - Static Compose gateway process secret allowlist — `fedify-gateway/src/test-docker-contract.ts`.
 
+## Stage 03 Gateway ingress transition
+
+- Normalized raw edit/delete -> single domain-mutation sink, foreign-connector rejection, thread mutation no-op, unbound create rejection and real adapter admission — `tests/test_stage03_platform_event_ingress.py`.
+- Typed mutation source/mirror ownership and partial-read reconciliation — `tests/test_stage03_typed_message_mutations.py`.
+- Gateway shutdown admission and callback drain — `tests/test_stage03_discord_adapter_lifecycle.py`.
+
 ## Registration and user identity
 
 - Registration scenarios, duplicate handling, and user-facing registration outcomes — [`tests/behavior/test_registration_scenarios.py`](../../tests/behavior/test_registration_scenarios.py)

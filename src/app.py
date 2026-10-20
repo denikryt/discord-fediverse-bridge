@@ -19,6 +19,7 @@ from .db import Database
 from .discord_bot import BridgeBot
 from .discord_adapter import DiscordAdapter
 from .platform_types import ConnectorRef
+from .platform_event_ingress import PlatformEventIngress
 from .platform_adapters import PlatformAdapterRegistry
 from .discord_event_router import DiscordEventRouter
 from .discord_message_mutations import DiscordMessageMutationHandler
@@ -240,6 +241,9 @@ def _build_live_runtime(settings: Settings, deployment_lease: FileLock) -> Runti
             mutation_context_provider=lambda: mutation_context,
         )
         bot.set_message_mutation_handler(message_mutation_handler)
+        discord_adapter.bind_ingress_sink(PlatformEventIngress(
+            adapter=discord_adapter, mutations=message_mutation_handler,
+        ))
         # MULTIPLATFORM_STAGE02_TEMP: Production still binds BridgeBot directly into Discord fanout and runtimes; Stage 03/04 must register a real DiscordAdapter and replace these binds without a default-Discord fallback.
         discord_fanout = DiscordFanout(
             bot=bot,
@@ -296,6 +300,8 @@ def _validate_runtime_graph(runtime: Runtime) -> None:
     runtime.bot._require_message_mutation_handler()
     if runtime.bot.discord_adapter is not runtime.discord_adapter:
         raise RuntimeError("Runtime Discord adapter is not bound to BridgeBot")
+    if runtime.discord_adapter._sink is None:
+        raise RuntimeError("Discord normalized ingress is not configured")
     runtime.bot._require_personal_feed_delivery_worker()
     if runtime.community_runtime.discord_fanout is None:
         raise RuntimeError("CommunityRuntime Discord fanout is not configured")

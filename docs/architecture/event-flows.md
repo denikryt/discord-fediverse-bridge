@@ -62,11 +62,15 @@ the claimed ActivityPub author before these checks count as authentication.
 
 ## Discord edit/delete -> ActivityPub update/delete flow
 
-1. Discord edit/delete enters `src/discord_bot.py`, which delegates raw admission, echo suppression, and partial edit reconciliation to `src/discord_message_mutations.py`.
-2. `src/discord_message_mutations.py` routes admitted mutations through `src/discord_event_router.py` with the startup-owned `DiscordMutationContext`; the raw path does not pull a broad `Runtime` out of the bot.
+1. `BridgeBot.on_raw_message_edit` / `on_raw_message_delete` enters the tracked Gateway callback lifetime, and `DiscordAdapter` normalizes the SDK payload once into `MessageUpdated` / `MessageDeleted`.
+2. `src/platform_event_ingress.py` checks connector scope before delegating to the **typed** methods in `src/discord_message_mutations.py`. The mutation handler retains echo suppression, partial-read reconciliation through `DiscordAdapter.fetch_message()`, and the existing `DiscordMutationContext`. The old raw handler is not invoked by production callbacks.
 3. The selected runtime resolves persisted ActivityPub object ids through `src/db/database.py` and uses the context's narrow delivery wake/gateway capabilities for outbound Update/Delete.
 4. `src/content_sync/edit_delete.py` prepares the request.
 5. Gateway `/update` or `/delete` signs and sends the ActivityPub operation.
+
+## Discord raw thread mutation notices (Stage 03)
+
+`BridgeBot.on_raw_thread_update` / `on_raw_thread_delete` enters the same tracked Gateway callback lifetime. `DiscordAdapter` preserves raw identity through `ThreadUpdated` / `ThreadDeleted`; `PlatformEventIngress` logs an explicit no-op. A physical thread rename or removal is **not** automatically an ActivityPub Update/Delete because no current canonical thread-mutation handler owns it. Source thread/message creation is still on the legacy SDK path pending the atomic typed Create cutover.
 
 ## /create_community flow
 

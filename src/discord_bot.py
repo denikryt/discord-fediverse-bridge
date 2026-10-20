@@ -220,7 +220,7 @@ class BridgeBot(discord.Client):
         if not self._enter_gateway_callback():
             return
         try:
-            await self._on_raw_message_edit_admitted(payload)
+            await self._require_discord_adapter().ingest_raw_message_edit(payload)
         finally:
             self._leave_gateway_callback()
 
@@ -229,7 +229,7 @@ class BridgeBot(discord.Client):
         if not self._enter_gateway_callback():
             return
         try:
-            await self._on_raw_message_delete_admitted(payload)
+            await self._require_discord_adapter().ingest_raw_message_delete(payload)
         finally:
             self._leave_gateway_callback()
 
@@ -349,15 +349,29 @@ class BridgeBot(discord.Client):
             message=message,
         )
 
-    async def _on_raw_message_edit_admitted(self, payload: discord.RawMessageUpdateEvent) -> None:
-        """Delegate raw Discord edit orchestration to the mutation handler."""
-        await self._require_message_mutation_handler().handle_raw_message_edit(payload)
+    async def on_raw_thread_update(self, payload: object) -> None:
+        """Normalize an uncached thread update under the Gateway shutdown gate."""
+        if not self._enter_gateway_callback():
+            return
+        try:
+            await self._require_discord_adapter().ingest_raw_thread_update(payload)
+        finally:
+            self._leave_gateway_callback()
 
-    async def _on_raw_message_delete_admitted(
-        self, payload: discord.RawMessageDeleteEvent
-    ) -> None:
-        """Delegate raw Discord delete orchestration to the mutation handler."""
-        await self._require_message_mutation_handler().handle_raw_message_delete(payload)
+    async def on_raw_thread_delete(self, payload: object) -> None:
+        """Normalize an uncached thread deletion without inventing an AP Delete."""
+        if not self._enter_gateway_callback():
+            return
+        try:
+            await self._require_discord_adapter().ingest_raw_thread_delete(payload)
+        finally:
+            self._leave_gateway_callback()
+
+    def _require_discord_adapter(self) -> DiscordAdapter:
+        """Reject an incomplete production bind instead of using a raw fallback."""
+        if self.discord_adapter is None:
+            raise RuntimeError('Discord Adapter is not bound')
+        return self.discord_adapter
 
     def set_message_mutation_handler(
         self, handler: DiscordMessageMutationHandler
