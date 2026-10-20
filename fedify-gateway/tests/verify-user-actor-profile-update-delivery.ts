@@ -1,3 +1,4 @@
+/** Verify local profile delivery outcomes through the signed HTTPS transport. */
 import assert from "node:assert/strict";
 import { webcrypto } from "node:crypto";
 import { mkdtemp, writeFile } from "node:fs/promises";
@@ -5,6 +6,7 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 
 import { exportJwk } from "@fedify/fedify";
+import { installSignedJsonSocketFixture } from "./support/signed-json-socket-fixture.js";
 
 import type { GatewayConfig } from "../src/config.js";
 import { createGatewayApp } from "../src/server.js";
@@ -90,24 +92,12 @@ async function main(): Promise<void> {
   });
   assert.equal(duplicateEndpoint.status, 400);
 
-  const originalFetch = globalThis.fetch;
-  globalThis.fetch = async (input, init) => {
-    const url = input instanceof URL
-      ? input.href
-      : typeof input === "string"
-        ? input
-        : input.url;
-    if (url.startsWith(config.pythonBridgeInternalUrl)) {
-      return originalFetch(input, init);
-    }
-    if (url === "https://healthy.example/inbox") {
-      return new Response("accepted", { status: 202 });
-    }
-    if (url === "https://failed.example/inbox") {
-      return new Response("SECRET_RESPONSE_BODY", { status: 503 });
-    }
-    throw new Error(`unexpected fetch ${url}`);
-  };
+  // The delivery code uses native HTTPS; keep the Python fixture on real local fetch.
+  const restoreHttps = installSignedJsonSocketFixture((request) => {
+    if (request.url === "https://healthy.example/inbox") return { status: 202, body: "accepted" };
+    if (request.url === "https://failed.example/inbox") return { status: 503, body: "SECRET_RESPONSE_BODY" };
+    throw new Error(`unexpected HTTPS request ${request.url}`);
+  });
   try {
     const deliveryResponse = await app.request("/send-user-actor-deliveries", {
       method: "POST",
@@ -145,7 +135,7 @@ async function main(): Promise<void> {
       false,
     );
   } finally {
-    globalThis.fetch = originalFetch;
+    restoreHttps();
   }
 
   console.log("verify:user-actor-profile-update-delivery passed");

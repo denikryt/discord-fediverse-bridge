@@ -296,4 +296,6 @@ Fedify-native security integration remains blocked by missing dependencies.
   acceptance event. The gateway now reads only Fedify's accepted typed
   activity and requires an identifiable outbound bridge Follow. Signed HTTP
   ingress, URL-form compatibility, and SQLite-backed ownership regressions
-  pass locally. The seven pre-existing Node failures remain unresolved.
+  pass locally. The seven pre-existing Node failures are fixed by test fixture
+  updates: Follow lookup, ActivityPub Accept, and native HTTPS delivery capture.
+  All 52 Node files and 20 security tests pass with Fedify 2.2.19.

@@ -11,14 +11,8 @@ import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
 
 import { importFixedRsaKeyPair } from "./support/python-bridge-fixture.js";
+import { installSignedJsonSocketFixture, type CapturedSignedRequest } from "./support/signed-json-socket-fixture.js";
 import { sendSignedJsonActivity } from "../src/outbound/signed-json-delivery.js";
-
-interface CapturedRequest {
-  url: string;
-  method: string | undefined;
-  body: string;
-  headers: Record<string, string>;
-}
 
 /** Run the transport contract scenarios. */
 async function main(): Promise<void> {
@@ -40,9 +34,12 @@ async function testSignedJsonHeadersAndRequestTarget(): Promise<void> {
     id: "https://bridge.example/actors/users/alice/activities/create/posts/1",
     actor: "https://bridge.example/actors/users/alice",
   };
-  const captured: CapturedRequest[] = [];
+  const captured: CapturedSignedRequest[] = [];
   const rawLogs: unknown[][] = [];
-  const restoreFetch = installFetch(captured, () => new Response("accepted", { status: 202 }));
+  const restoreFetch = installSignedJsonSocketFixture((request) => {
+    captured.push(request);
+    return { status: 202, body: "accepted" };
+  });
   const restoreConsole = captureConsoleLog(rawLogs);
 
   try {
@@ -93,7 +90,7 @@ async function testSignedJsonHeadersAndRequestTarget(): Promise<void> {
  */
 async function testHttpFailureRedactsResponseBodyWhenDisabled(): Promise<void> {
   const keyPair = await importFixedRsaKeyPair();
-  const restoreFetch = installFetch([], () => new Response("SECRET_RESPONSE_BODY", { status: 503 }));
+  const restoreFetch = installSignedJsonSocketFixture(() => ({ status: 503, body: "SECRET_RESPONSE_BODY" }));
   const rawLogs: unknown[][] = [];
   const restoreConsole = captureConsoleLog(rawLogs);
 
@@ -124,27 +121,6 @@ async function testHttpFailureRedactsResponseBodyWhenDisabled(): Promise<void> {
     rawLogs.some((entry) => JSON.stringify(entry).includes("SECRET_RESPONSE_BODY")),
     false,
   );
-}
-
-/** Install a fetch fake that records the transport-visible request. */
-function installFetch(
-  captured: CapturedRequest[],
-  responseFactory: () => Response,
-): () => void {
-  const originalFetch = globalThis.fetch;
-  globalThis.fetch = async (input, init) => {
-    const url = input instanceof URL ? input.href : typeof input === "string" ? input : input.url;
-    captured.push({
-      url,
-      method: init?.method,
-      body: String(init?.body ?? ""),
-      headers: init?.headers as Record<string, string>,
-    });
-    return responseFactory();
-  };
-  return () => {
-    globalThis.fetch = originalFetch;
-  };
 }
 
 await main();

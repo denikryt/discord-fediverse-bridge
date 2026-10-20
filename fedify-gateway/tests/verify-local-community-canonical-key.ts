@@ -16,6 +16,7 @@ import { webcrypto } from "node:crypto";
 import { exportJwk } from "@fedify/fedify";
 import initSqlJs, { seedBridgeActorJwk } from "./support/sqlite-fixture.js";
 import { closeAllPythonBridgeFixtures, importFixedRsaKeyPair, startPythonBridgeFixture } from "./support/python-bridge-fixture.js";
+import { installSignedJsonSocketFixture, lowercaseSignedHeaders } from "./support/signed-json-socket-fixture.js";
 
 import { buildLocalCommunityGroupActor } from "../src/actors.js";
 import { loadLocalCommunityIdentity } from "../src/actor-store.js";
@@ -165,25 +166,19 @@ async function testRelaySignsWithCanonicalCommunityKey(config: GatewayConfig): P
   assert.match(deliveries[0]?.headers.signature ?? "", /keyId="https:\/\/discord-bridge.example.com\/actors\/communities\/hackers#main-key"/);
 }
 
+/** Record the exact relay POST while leaving local fixture HTTP requests intact. */
 function installFetchRecorder(
   deliveries: Array<{ inboxId: string; payload: Record<string, unknown>; headers: Record<string, string> }>,
 ): () => void {
-  /** Capture signed JSON relay delivery so key identity is verified at the HTTP signature boundary. */
-  const originalFetch = globalThis.fetch;
-  globalThis.fetch = async (input: RequestInfo | URL, init?: RequestInit): Promise<Response> => {
-    const target = input instanceof URL ? input.href : String(input);
-    if (target.startsWith("http://127.0.0.1:")) return await originalFetch(input, init);
-    const headers = new Headers(init?.headers);
+  /** Capture the native HTTPS transport used by signed relay delivery. */
+  return installSignedJsonSocketFixture((request) => {
     deliveries.push({
-      inboxId: input instanceof URL ? input.href : String(input),
-      payload: JSON.parse(String(init?.body ?? "{}")) as Record<string, unknown>,
-      headers: Object.fromEntries(headers.entries()),
+      inboxId: request.url,
+      payload: JSON.parse(request.body) as Record<string, unknown>,
+      headers: lowercaseSignedHeaders(request.headers),
     });
-    return new Response("", { status: 202, statusText: "Accepted" });
-  };
-  return () => {
-    globalThis.fetch = originalFetch;
-  };
+    return { status: 202 };
+  });
 }
 
 function buildFakeFederation(

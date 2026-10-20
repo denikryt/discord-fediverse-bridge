@@ -14,6 +14,7 @@ import path from "node:path";
 import { exportJwk } from "@fedify/fedify";
 import initSqlJs, { seedBridgeActorJwk } from "./support/sqlite-fixture.js";
 import { closeAllPythonBridgeFixtures, importFixedRsaKeyPair, startPythonBridgeFixture } from "./support/python-bridge-fixture.js";
+import { installSignedJsonSocketFixture } from "./support/signed-json-socket-fixture.js";
 
 import { deleteContent, updateContent } from "../src/federation-outbound.js";
 import type { GatewayConfig } from "../src/config.js";
@@ -106,21 +107,16 @@ async function testLocalCommunityDeleteFansOutToAcceptedRemoteSubscribers(): Pro
   }
 }
 
+/** Record signed Update/Delete fanout requests at the transport boundary. */
 function installFetchRecorder(deliveries: DeliveryRecord[]): () => void {
-  /** Capture exact signed JSON deliveries without external network dependency. */
-  const originalFetch = globalThis.fetch;
-  globalThis.fetch = async (input: RequestInfo | URL, init?: RequestInit): Promise<Response> => {
-    const targetUrl = input instanceof URL ? input.href : String(input);
-    if (targetUrl.startsWith("http://127.0.0.1:")) return await originalFetch(input, init);
+  /** Capture Update/Delete fanout without opening external sockets. */
+  return installSignedJsonSocketFixture((request) => {
     deliveries.push({
-      inboxId: input instanceof URL ? input.href : String(input),
-      payload: JSON.parse(String(init?.body ?? "{}")) as Record<string, unknown>,
+      inboxId: request.url,
+      payload: JSON.parse(request.body) as Record<string, unknown>,
     });
-    return new Response("", { status: 202, statusText: "Accepted" });
-  };
-  return () => {
-    globalThis.fetch = originalFetch;
-  };
+    return { status: 202 };
+  });
 }
 
 async function buildConfig(): Promise<GatewayConfig> {
