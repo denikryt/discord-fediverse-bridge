@@ -11,6 +11,8 @@ from .content_sync.persistence import (
     persist_publish_artifacts,
 )
 from .fedify_gateway_client import RenderPersonalFeedRequest
+from .platform_types import ThreadCreated, PlatformOperationError
+from .discord_legacy_projection import discord_id_to_legacy_int
 from .activitypub_identity_urls import (
     build_user_comment_object_id,
     build_user_create_comment_activity_id,
@@ -56,10 +58,30 @@ class PersonalFeedConversationRuntime:
             raise RuntimeError("Personal-feed conversation delivery wake is already configured")
         self.delivery_worker = delivery_worker
 
+    def adopt_normalized_thread(self, event: ThreadCreated) -> PersonalFeedConversationResult:
+        """Adopt a root-anchored personal discussion from verified platform identity."""
+        if event.connector_key != 'discord-primary':
+            raise PlatformOperationError('invalid_request', 'wrong Personal Feed thread connector')
+        if (event.thread.channel.kind not in ('text', 'announcement')
+            or event.external_guild_id is None):
+            return PersonalFeedConversationResult('ignored', 'not_personal_feed_channel')
+        # Both root and parent use Stage 03 checked legacy projections. Never
+        # infer a parent from the thread ID or a guessed starter-message ID.
+        thread_id = discord_id_to_legacy_int(event.thread)
+        parent_id = discord_id_to_legacy_int(event.thread, component='parent')
+        return self._adopt_thread_ids(thread_id=thread_id, parent_id=parent_id)
+
     def adopt_manual_thread(self, *, thread: object) -> PersonalFeedConversationResult:
-        """Adopt a Discord public thread only when its snowflake maps to a Stage 7 root."""
-        thread_id = int(getattr(thread, "id"))
-        parent_id = int(getattr(thread, "parent_id"))
+        """Retain existing direct caller while all forum Create paths are migrating."""
+        return self._adopt_thread_ids(
+            thread_id=int(getattr(thread, 'id')),
+            parent_id=int(getattr(thread, 'parent_id')),
+        )
+
+    def _adopt_thread_ids(
+        self, *, thread_id: int, parent_id: int,
+    ) -> PersonalFeedConversationResult:
+        """Verify persisted canonical root and matching parent before adoption."""
         root = self.database.activitypub_objects.get_published_activity_object_by_discord_message_id(
             thread_id
         )

@@ -29,7 +29,8 @@ This document explains the major runtime traces through the bridge: user/platfor
 2. `DiscordAdapter.ingest_message_created()` confirms the physical text/announcement kind, refuses unsupported attachments, and converts the SDK message to `MessageCreated` with original `created_at` and connector-scoped IDs.
 3. `PlatformEventIngress` rejects another connector before `DiscordEventRouter.handle_platform_message_create()` verifies the root placement, source guild, human author and current binding. Forum/thread creates are not acknowledged by this partial route.
 4. `PersonalFeedPublisher.publish_normalized_root()` rechecks the current owner binding, registered User Actor, ban/guild policy and source timestamp. It preserves the prior deterministic ActivityPub identity and persists once; duplicate Gateway replay does not render again.
-5. Other thread/message Create callbacks still use their prior SDK-shaped domain path until the remaining typed create cutover. No duplicate publication route is active for bound Personal Feed roots.
+5. A later `on_thread_create` for the published text/announcement root enters `DiscordAdapter.ingest_thread_created()` and the same typed sink. `DiscordEventRouter.handle_platform_thread_create()` adopts the exact root/thread ID only when the original publication and parent channel agree. No guessed forum starter or history fallback is needed.
+6. Other community forum-thread and reply Create callbacks still use their SDK-shaped domain path until their own typed cutover. No duplicate publication route is active for bound Personal Feed roots.
 
 ## Discord thread -> remote Lemmy community publish flow
 

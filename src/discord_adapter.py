@@ -147,6 +147,29 @@ class DiscordAdapter:
         if event is not None:
             await self._sink.handle_platform_event(event)
 
+    async def ingest_thread_created(self, thread: object) -> None:
+        """Normalize a verified physical thread without guessing its starter ID."""
+        if self._sink is None:
+            raise RuntimeError('Discord normalized ingress is not bound')
+        if not isinstance(thread, self._sdk().Thread):
+            raise PlatformOperationError('invalid_request', 'expected Discord thread')
+        parent = getattr(thread, 'parent', None)
+        parent_id = getattr(thread, 'parent_id', None)
+        if (parent is None or parent_id is None
+            or str(getattr(parent, 'id', '')) != str(parent_id)):
+            raise PlatformOperationError('invalid_request', 'thread parent not verified')
+        guild = getattr(getattr(thread, 'guild', None), 'id', None)
+        parent_guild = getattr(getattr(parent, 'guild', None), 'id', None)
+        if guild is None or parent_guild is None or str(guild) != str(parent_guild):
+            raise PlatformOperationError('invalid_request', 'thread guild not verified')
+        verified = self._validate_channel(
+            ChannelRef(self.connector.key, str(parent_id), external_guild_id=str(guild)),
+            parent,
+        )
+        event = self._normalizer().thread_created(thread, parent_kind=verified.kind)
+        if event is not None:
+            await self._sink.handle_platform_event(event)
+
     async def ingest_raw_message_edit(self, payload: object) -> None:
         """Normalize one raw edit and deliver it exactly once to typed ingress."""
         if self._sink is None:

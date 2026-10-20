@@ -21,6 +21,9 @@ class PlatformCreateRouter(Protocol):
     async def handle_platform_message_create(self, event: MessageCreated) -> object:
         """Route a trusted, typed root to the owning canonical publisher."""
 
+    async def handle_platform_thread_create(self, event: ThreadCreated) -> object:
+        """Adopt an existing Personal Feed root or route a verified forum starter."""
+
 
 if TYPE_CHECKING:
     from .runtime_ports import PlatformAdapterPort
@@ -70,6 +73,8 @@ class PlatformEventIngress:
             )
         elif isinstance(event, MessageCreated) and self.creates is not None:
             await self.creates.handle_platform_message_create(event)
+        elif isinstance(event, ThreadCreated) and self.creates is not None:
+            await self.creates.handle_platform_thread_create(event)
         else:
             # Thread and reply Create still require explicit typed domain
             # bindings: never silently acknowledge an unpublished Create.

@@ -253,6 +253,14 @@ class BridgeBot(discord.Client):
             return
         if self.user and thread.owner_id == self.user.id:
             return
+        if (personal_root is not None
+            and personal_root.publication_context == 'personal_feed'
+            and int(personal_root.discord_channel_id) == int(thread.parent_id)
+            and getattr(self, 'discord_adapter', None) is not None):
+            # Root-anchored Personal Feed threads need no arbitrary starter
+            # history fallback; the persisted root and parent prove identity.
+            await self._require_discord_adapter().ingest_thread_created(thread)
+            return
 
         # In-memory fast-path: if this session already processed the thread,
         # skip before acquiring any lock or hitting the DB.

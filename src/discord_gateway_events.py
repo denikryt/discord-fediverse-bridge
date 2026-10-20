@@ -183,8 +183,12 @@ class DiscordGatewayNormalizer:
         )
 
     def thread_created(self, thread: object, *, parent_kind: ChannelKind) -> ThreadCreated | None:
-        """Keep only observed forum threads, never infer the raw newly_created bit."""
-        if parent_kind != "forum":
+        """Normalize verified forum threads or text-root discussion threads.
+
+        A text/announcement parent is still only a physical observation; the
+        existing Personal Feed root mapping decides whether adoption is valid.
+        """
+        if parent_kind not in ('forum', 'text', 'announcement'):
             return None
         parent = getattr(thread, "parent", None)
         if parent is None:
@@ -193,7 +197,7 @@ class DiscordGatewayNormalizer:
         if parent_id != self._id(getattr(parent, "id", None), "parent"):
             raise ValueError("Discord thread parent contradicts observed parent")
         guild_id = getattr(getattr(thread, "guild", None), "id", None)
-        channel = self._channel(parent_id, "forum", guild_id)
+        channel = self._channel(parent_id, parent_kind, guild_id)
         thread_ref = ThreadRef(channel, self._id(getattr(thread, "id", None), "thread"))
         starter = getattr(thread, "starter_message", None)
         starter_ref = None

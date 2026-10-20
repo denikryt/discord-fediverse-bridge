@@ -227,3 +227,8 @@ cutover has yet been performed. Two targeted positive/negative tests pass.
 
 - Bound text/announcement roots now pass through DiscordAdapter, the single typed ingress and the owner-verified PersonalFeedPublisher. Production forum starters and thread replies still use legacy SDK-shaped create routes; submitting those through typed ingress fails visibly. The legacy `publish_root(message=SDK, binding=...)` entry remains for tests and other direct callers until the remaining Create cutover is complete; it shares the same persistent publish core.
 - Original Discord source timestamp and owner binding remain required. Unsupported attachments are rejected explicitly. Focused real SQLite tests pass, while full installed-SDK tests remain blocked by missing dependencies.
+
+## Stage 03 Personal Feed typed discussion-thread adoption (Checkpoint 22, 2026-10-19)
+
+- The live manual text/announcement discussion-thread path now normalizes `ThreadCreated`, checks the persisted Personal Feed root identity and exact parent, and adopts using the existing repository. A verified forum `ThreadCreated` cannot silently pass the incomplete typed Create path. Missing/wrong parent or guild is rejected at adapter boundary; no starter history guess is made for Personal Feed.
+- Generic forum thread and local/remote community message Create remain SDK-shaped. Full installed-SDK and multi-service integration tests remain unavailable; focused normalized runtime/SQLite tests passed.

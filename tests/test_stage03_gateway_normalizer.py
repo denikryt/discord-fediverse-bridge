@@ -84,7 +84,9 @@ def test_thread_create_only_with_verified_forum_and_never_guesses_starter():
     assert isinstance(event, ThreadCreated)
     assert event.thread.channel.external_channel_id == "9"
     assert event.starter is None and event.newly_created is None
-    assert normalizer.thread_created(raw, parent_kind="text") is None
+    # Stage 03 also normalizes verified text-root discussion threads; only
+    # the repository can decide whether that physical thread is a Personal Feed root.
+    assert normalizer.thread_created(raw, parent_kind="text").thread.channel.kind == "text"
     with pytest.raises(ValueError, match="parent"):
         normalizer.thread_created(SimpleNamespace(**{**raw.__dict__, "parent_id": 3}), parent_kind="forum")
 

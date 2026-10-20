@@ -17,7 +17,7 @@ This document is a short, feature-oriented index of the test suite. It helps mai
 
 ## Stage 03 Personal Feed root create ingress (Checkpoint 21)
 
-- A bound owner text-channel Create traverses adapter -> `PlatformEventIngress` -> `DiscordEventRouter` -> real SQLite publication, with deterministic AP identity and original timestamp. Wrong connector, unknown author, moved binding, absent source time, forum Create and unsupported attachments have no canonical publish side effect — `tests/test_stage03_personal_feed_created_ingress.py`.
+- A bound owner text-channel Create traverses adapter -> `PlatformEventIngress` -> `DiscordEventRouter` -> real SQLite publication, with deterministic AP identity and original timestamp. A user-created text/announcement discussion thread is then adopted through typed `ThreadCreated` against the published root; a wrong parent cannot rebind it. Wrong connector, unknown author, moved binding, absent source time, forum Create and unsupported attachments have no canonical publish side effect — `tests/test_stage03_personal_feed_created_ingress.py`.
 - Existing Stage 7 duplicate-root and announcement-channel tests remain the behavioral regression references — `tests/behavior/test_personal_feed_stage7_root_publication.py`.
 
 ## Stage 03 Gateway ingress transition

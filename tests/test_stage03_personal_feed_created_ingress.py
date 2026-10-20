@@ -14,7 +14,7 @@ from src.personal_feed_publisher import PersonalFeedPublisher
 from src.platform_event_ingress import PlatformEventIngress
 from src.platform_types import (
     AuthorRef, ChannelRef, ConnectorRef, ContentDocument, MessageCreated,
-    MessageRef, PlatformOperationError,
+    MessageRef, ThreadCreated, ThreadRef, PlatformOperationError,
 )
 
 
@@ -221,5 +221,109 @@ async def test_sdk_gateway_message_reaches_real_router_and_sql_once(tmp_path):
         with pytest.raises(PlatformOperationError, match='attachment'):
             await adapter.ingest_message_created(message)
         assert len(renderer.requests) == 1
+    finally:
+        db.close()
+
+@pytest.mark.asyncio
+async def test_manual_reply_thread_adopts_only_exact_published_personal_root(tmp_path):
+    """User starts a thread from a published root -> typed event adopts only that root."""
+    from src.personal_feed_conversations import PersonalFeedConversationRuntime
+    from src.discord_event_router import DiscordEventRouter
+    from src.discord_gateway_events import DiscordGatewayNormalizer
+
+    db, service, fixture_route, ingress, _ = _world(tmp_path)
+    try:
+        await ingress.handle_platform_event(_event())
+        runtime = PersonalFeedConversationRuntime(
+            database=db, personal_feed_service=service,
+            fedify_gateway=SimpleNamespace(), user_ban_service=SimpleNamespace(),
+            bridge_policy_service=SimpleNamespace(), fedify_origin='https://bridge.example',
+        )
+        router = DiscordEventRouter(
+            database=db, community_runtime=SimpleNamespace(),
+            local_community_runtime=SimpleNamespace(),
+            bridge_policy_service=SimpleNamespace(is_discord_guild_allowed=lambda _id: True),
+            personal_feed_service=service, personal_feed_publisher=fixture_route.publisher,
+            personal_feed_conversation_runtime=runtime,
+        )
+        ingress.creates = router
+        normalizer = DiscordGatewayNormalizer('discord-primary', owned_bot_id=None)
+        guild = SimpleNamespace(id=100)
+        parent = SimpleNamespace(id=200, guild=guild)
+        thread = SimpleNamespace(id=300, parent_id=200, parent=parent, guild=guild,
+                                 name='Discussion', owner_id=10, starter_message=None)
+        event = normalizer.thread_created(thread, parent_kind='text')
+        await ingress.handle_platform_event(event)
+        await ingress.handle_platform_event(event)
+        assert db.personal_feed_conversations.get_thread_by_thread_id(300) is not None
+        # Same thread ID under another parent cannot rewrite the binding.
+        wrong = ThreadCreated('discord-primary', ThreadRef(ChannelRef('discord-primary', '201', 'text', '100'), '300'), 'Other parent', external_guild_id='100')
+        await ingress.handle_platform_event(wrong)
+        assert db.personal_feed_conversations.get_thread_by_thread_id(300).root_discord_channel_id == 200
+    finally:
+        db.close()
+
+
+def test_text_root_thread_normalization_rejects_unverified_or_nonroot_identity():
+    """Only a verified root-anchored thread may be treated as a Personal Feed thread."""
+    from src.discord_gateway_events import DiscordGatewayNormalizer
+    normalizer = DiscordGatewayNormalizer('discord-primary', owned_bot_id=None)
+    parent = SimpleNamespace(id=200, guild=SimpleNamespace(id=100))
+    raw = SimpleNamespace(id=300, parent_id=200, parent=parent, guild=parent.guild,
+                          name='Discussion', owner_id=10, starter_message=None)
+    assert normalizer.thread_created(raw, parent_kind='text') is not None
+    bad = SimpleNamespace(**{**raw.__dict__, 'parent': None})
+    assert normalizer.thread_created(bad, parent_kind='text') is None
+
+@pytest.mark.asyncio
+async def test_adapter_physical_manual_thread_adopts_with_verified_parent(tmp_path):
+    """Gateway thread with exact root/parent is mapped without fetching a starter."""
+    from src.discord_adapter import DiscordAdapter
+    from src.discord_event_router import DiscordEventRouter
+    from src.personal_feed_conversations import PersonalFeedConversationRuntime
+
+    db, service, fixture_route, ingress, _ = _world(tmp_path)
+    try:
+        await ingress.handle_platform_event(_event())
+        runtime = PersonalFeedConversationRuntime(
+            database=db, personal_feed_service=service,
+            fedify_gateway=SimpleNamespace(), user_ban_service=SimpleNamespace(),
+            bridge_policy_service=SimpleNamespace(), fedify_origin='https://bridge.example',
+        )
+        router = DiscordEventRouter(
+            database=db, community_runtime=SimpleNamespace(),
+            local_community_runtime=SimpleNamespace(),
+            bridge_policy_service=SimpleNamespace(is_discord_guild_allowed=lambda _id: True),
+            personal_feed_service=service, personal_feed_conversation_runtime=runtime,
+            personal_feed_publisher=fixture_route.publisher,
+        )
+        adapter = DiscordAdapter(
+            connector=ConnectorRef('discord-primary', 'discord'),
+            bot=SimpleNamespace(user=SimpleNamespace(id=900)),
+        )
+        adapter.bind_ingress_sink(PlatformEventIngress(
+            adapter=adapter, mutations=MutationEffects(), creates=router,
+        ))
+        class PhysicalThread:
+            """SDK boundary fake with explicitly observed thread metadata."""
+        adapter._sdk = lambda: SimpleNamespace(Thread=PhysicalThread)
+        adapter._validate_channel = lambda expected, parent: ChannelRef(
+            'discord-primary', str(parent.id), 'announcement', '100',
+        )
+        guild = SimpleNamespace(id=100)
+        parent = SimpleNamespace(id=200, guild=guild)
+        physical = PhysicalThread()
+        physical.id = 300
+        physical.parent_id = 200
+        physical.parent = parent
+        physical.guild = guild
+        physical.name = 'Discussion'
+        physical.owner_id = 10
+        physical.starter_message = None
+        await adapter.ingest_thread_created(physical)
+        assert db.personal_feed_conversations.get_thread_by_thread_id(300) is not None
+        physical.parent = SimpleNamespace(id=201, guild=guild)
+        with pytest.raises(PlatformOperationError, match='parent'):
+            await adapter.ingest_thread_created(physical)
     finally:
         db.close()

@@ -15,7 +15,7 @@ from .local_communities.participant_routing import (
     resolve_local_community_source_for_forum,
 )
 from .personal_feeds import PersonalFeedBindingView, PersonalFeedService
-from .platform_types import MessageCreated, PlatformOperationError
+from .platform_types import MessageCreated, ThreadCreated, PlatformOperationError
 from .discord_legacy_projection import discord_id_to_legacy_int
 from .runtime_ports import DiscordMutationContext
 
@@ -103,6 +103,23 @@ class DiscordEventRouter:
         return await self.personal_feed_publisher.publish_normalized_root(
             event=event, binding=binding,
         )
+
+    async def handle_platform_thread_create(self, event: ThreadCreated) -> object:
+        """Adopt a verified text-root thread before considering forum publication."""
+        if event.connector_key != 'discord-primary':
+            raise PlatformOperationError('invalid_request', 'Discord thread connector mismatch')
+        if event.thread.channel.kind == 'forum':
+            # Forum starters still require the author-verified starter Create
+            # pipeline. Returning ignored here would permanently lose a post.
+            raise RuntimeError('normalized community thread create ingress is not bound')
+        if event.thread.channel.kind not in ('text', 'announcement'):
+            return None
+        if (event.external_guild_id is None or not event.external_guild_id.isdecimal()
+            or not self._is_guild_allowed(int(event.external_guild_id))):
+            return None
+        if self.personal_feed_conversation_runtime is None:
+            return None
+        return self.personal_feed_conversation_runtime.adopt_normalized_thread(event)
 
     def is_personal_feed_thread(self, thread_id: int | None) -> bool:
         """Return whether one Discord thread is durably owned by a personal-feed root."""
