@@ -17,7 +17,7 @@ from ..fedify_gateway_client import FedifyGatewayClient
 from ..local_community_lifecycle import evaluate_local_community_lifecycle
 from ..discord_legacy_projection import discord_id_to_legacy_int
 from ..platform_types import MessageCreated, MessageView, PlatformOperationError, ThreadCreated
-from ..runtime_ports import DiscordDeliveryClientPort, DiscordMutationContext, PlatformDeliveryPort
+from ..runtime_ports import DiscordDeliveryClientPort, DiscordMutationContext, PlatformDeliveryPort, PlatformAdapterPort
 from .discord_fanout import LocalCommunityDiscordFanout
 from .discord_create import LocalCommunityDiscordCreateHandler
 from .discord_surface_fanout import LocalCommunitySurfaceFanout
@@ -92,6 +92,10 @@ class LocalCommunityRuntime:
         if self.bot is not None:
             raise RuntimeError("LocalCommunityRuntime Discord client is already configured")
         self.bot = bot
+
+    def bind_discord_adapter(self, adapter: PlatformAdapterPort) -> None:
+        """Bind typed Discord physical mutations without changing canonical routing."""
+        self.mutation_handler.bind_discord_adapter(adapter)
 
     def _disabled_result_if_needed(
         self, local_community: object

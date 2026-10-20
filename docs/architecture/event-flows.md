@@ -23,6 +23,15 @@ This document explains the major runtime traces through the bridge: user/platfor
 3. If it was the last channel for the community, Python calls gateway `/unfollow-community`.
 4. The bridge follow row is removed or preserved according to Undo(Follow) delivery outcome.
 
+## Discord Local Community source edit/delete (Stage 03 Checkpoint 39)
+
+1. Typed Discord Gateway mutation ingress retains the original physical message ID; `DiscordEventRouter` resolves a persisted Local Community starter or comment surface before invoking `LocalCommunityRuntime`.
+2. `LocalCommunityMutationHandler` verifies source community lifecycle and active subscriber-origin authority (if applicable), finds the persisted canonical AP object, and submits its Update/Delete through the existing federation service.
+3. The runtime-bound `DiscordAdapter` is passed to `LocalCommunitySurfaceFanout`, which enumerates canonical host and subscriber surface receipts. It omits the physical source copy.
+4. Before each target edit/tombstone, `LocalCommunityDiscordFanout` rechecks current host placement or active local subscriber identity, including original subscriber row ID, community, guild policy and parent thread mapping. Historical receipts alone never authorize a mutation.
+5. Edits fetch an exact scoped `MessageRef`, preserve each copy's existing attribution header, and refuse a mismatched/unknown read. Deletes keep the visible `*deleted by creator*` marker. Per-target failure does not issue a legacy SDK fallback or block healthy copies.
+6. These are best-effort mutations; there is no new delivery queue or Stage 04 recovery. Direct SDK test callers without a bound adapter remain supported until the final dependency-audit cutover.
+
 ## Discord Personal Feed root -> ActivityPub Create (Stage 03)
 
 1. A bound text/announcement-channel `on_message` passes the synchronous Gateway admission gate and checks the current root binding. Bot-authored messages remain excluded.

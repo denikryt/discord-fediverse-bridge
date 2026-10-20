@@ -135,3 +135,5 @@ Fedify-native security integration remains blocked by missing dependencies.
   exact scoped DiscordAdapter edits when registered. SDK-based local
   Discord-originated mutation fanout still awaits its own cutover; physical
   mutation failure remains best-effort without Stage 04 durable reconciliation.
+
+- Stage 03 Checkpoint 39: Local Community persisted mutation surface receipts were insufficient for authorization after a subscriber was removed. Fixed by verifying current host/subscriber ownership and policy at each physical edit/delete boundary. Real SQLite regressions cover host/subscriber origins, revoked subscribers and transport failures; full SDK integration remains unverified.

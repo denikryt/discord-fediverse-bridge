@@ -276,6 +276,9 @@ def _build_live_runtime(settings: Settings, deployment_lease: FileLock) -> Runti
         community_runtime.bind_discord_fanout(discord_fanout)
         community_runtime.bind_discord_client(bot)
         local_community_runtime.bind_discord_client(bot)
+        # Discord-originated Local Community edits/deletes must never fall back
+        # to an SDK bot when the typed transport returns an uncertain result.
+        local_community_runtime.bind_discord_adapter(discord_adapter)
         user_actor_follow_service = UserActorFollowService(
             database=database, fedify_gateway=fedify_gateway, bot=bot
         )

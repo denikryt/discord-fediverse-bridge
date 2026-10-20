@@ -221,3 +221,9 @@ Behavior coverage lives in `test_user_profile_persistence_scenarios.py`, `test_p
 - Physical receipt/idempotency regressions remain in
   [`tests/test_stage03_neutral_local_community_fanout.py`](../../tests/test_stage03_neutral_local_community_fanout.py).
   These tests do not claim that production callbacks have been switched.
+
+## Stage 03 Local Community Discord-originated source mutations (Checkpoint 39)
+
+- `tests/test_stage03_local_source_mutations.py`: real SQLite host/subscriber starter and comment edit/delete, preserved attribution, source exclusion, authorized subscriber-origin edits, revoked subscriber source/destination, wrong physical fetch receipt, isolated transport failure, and forbidden SDK fallback.
+- Neighboring `test_stage03_local_inbound_mutations.py`, `test_stage03_normalized_local_community_runtime.py`, `test_stage03_neutral_local_community_fanout.py`, Remote Community and AP inbound mutation tests jointly verify canonical routing and shared surface boundary.
+- Full installed-Discord SDK behavior still requires an integration run. A test-only import stub supplies no Discord transport behavior.

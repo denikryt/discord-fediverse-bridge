@@ -133,21 +133,43 @@ class LocalCommunityDiscordFanout:
             else None
         )
 
-    def _surface_is_allowed(self, forum_channel_id: int) -> bool:
-        """Fail closed before mutating a persisted Discord surface."""
+    def _surface_is_allowed(self, surface: object, community_id: int) -> bool:
+        """Authorize a persisted physical copy against its current owner and guild.
+
+        An old receipt is not a subscription: Undo or rebinding a forum must
+        prevent later mutations even if the copy remains in SQLite.
+        """
+        forum_id = getattr(surface, "discord_forum_channel_id", None)
+        role = getattr(surface, "role", None)
+        if not isinstance(forum_id, int) or forum_id <= 0:
+            return False
+        if role == "host":
+            placement = self.database.platform_surfaces.get_discord_host_placement(
+                community_id
+            )
+            if (placement is None
+                or placement.external_channel_id != str(forum_id)
+                or getattr(surface, "local_subscriber_id", None) is not None):
+                return False
+        elif role == "local_subscriber":
+            subscriber = self.database.local_subscribers.get_local_subscriber_by_channel(
+                forum_id
+            )
+            if (subscriber is None or subscriber.status != "active"
+                or subscriber.local_community_id != community_id
+                or subscriber.id != getattr(surface, "local_subscriber_id", None)):
+                return False
+        else:
+            return False
         try:
-            guild_id = self._forum_guild_id(forum_channel_id)
+            guild_id = self._forum_guild_id(forum_id)
             if guild_id is None:
-                logger.warning(
-                    "Skipping local Discord surface with missing or invalid routing metadata forum_channel_id=%s",
-                    forum_channel_id,
-                )
                 return False
             return self.policy_service.is_discord_guild_allowed(guild_id)
         except Exception:
             logger.exception(
-                "Failed to validate local Discord surface routing metadata forum_channel_id=%s",
-                forum_channel_id,
+                "Failed to validate local Discord surface ownership forum_channel_id=%s",
+                forum_id,
             )
             return False
 
@@ -582,7 +604,7 @@ class LocalCommunityDiscordFanout:
             getattr(thread_row, "id")
         ):
             if not self._surface_is_allowed(
-                getattr(surface, "discord_forum_channel_id")
+                surface, getattr(thread_row, "local_community_id")
             ):
                 continue
             if (
@@ -627,6 +649,11 @@ class LocalCommunityDiscordFanout:
     ) -> LocalDiscordMutationFanoutSummary:
         """Edit message surfaces for all selected copies of one comment."""
         summary = LocalDiscordMutationFanoutSummary()
+        canonical_thread = self.database.local_community_content.get_local_community_thread_by_id(
+            getattr(message_row, "local_community_thread_id")
+        )
+        if canonical_thread is None:
+            return summary
         for (
             surface
         ) in self.database.local_community_surfaces.list_local_community_message_surfaces(
@@ -635,9 +662,13 @@ class LocalCommunityDiscordFanout:
             thread_surface = self.database.local_community_surfaces.get_local_community_thread_surface_by_id(
                 getattr(surface, "local_community_thread_surface_id")
             )
-            if thread_surface is None or not self._surface_is_allowed(
-                getattr(thread_surface, "discord_forum_channel_id")
-            ):
+            if (thread_surface is None
+                or getattr(thread_surface, "local_community_thread_id") != canonical_thread.id
+                or getattr(surface, "role") != getattr(thread_surface, "role")
+                or getattr(surface, "local_subscriber_id", None) != getattr(thread_surface, "local_subscriber_id", None)
+                or not self._surface_is_allowed(
+                    thread_surface, canonical_thread.local_community_id
+                )):
                 summary.skipped_missing_thread += 1
                 continue
             if (
@@ -687,7 +718,7 @@ class LocalCommunityDiscordFanout:
             getattr(thread_row, "id")
         ):
             if not self._surface_is_allowed(
-                getattr(surface, "discord_forum_channel_id")
+                surface, getattr(thread_row, "local_community_id")
             ):
                 continue
             if (
@@ -730,6 +761,11 @@ class LocalCommunityDiscordFanout:
     ) -> LocalDiscordMutationFanoutSummary:
         """Mark message surfaces deleted for all selected copies of one comment."""
         summary = LocalDiscordMutationFanoutSummary()
+        canonical_thread = self.database.local_community_content.get_local_community_thread_by_id(
+            getattr(message_row, "local_community_thread_id")
+        )
+        if canonical_thread is None:
+            return summary
         for (
             surface
         ) in self.database.local_community_surfaces.list_local_community_message_surfaces(
@@ -738,9 +774,13 @@ class LocalCommunityDiscordFanout:
             thread_surface = self.database.local_community_surfaces.get_local_community_thread_surface_by_id(
                 getattr(surface, "local_community_thread_surface_id")
             )
-            if thread_surface is None or not self._surface_is_allowed(
-                getattr(thread_surface, "discord_forum_channel_id")
-            ):
+            if (thread_surface is None
+                or getattr(thread_surface, "local_community_thread_id") != canonical_thread.id
+                or getattr(surface, "role") != getattr(thread_surface, "role")
+                or getattr(surface, "local_subscriber_id", None) != getattr(thread_surface, "local_subscriber_id", None)
+                or not self._surface_is_allowed(
+                    thread_surface, canonical_thread.local_community_id
+                )):
                 summary.skipped_missing_thread += 1
                 continue
             if (
