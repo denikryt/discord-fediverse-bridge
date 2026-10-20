@@ -12,6 +12,8 @@ from dataclasses import dataclass
 from types import SimpleNamespace
 
 from ..content_sync.inbound_references import build_message_reference
+from ..discord_legacy_projection import discord_id_to_legacy_int
+from ..platform_types import MessageCreated, PlatformOperationError
 
 
 @dataclass(slots=True)
@@ -40,18 +42,58 @@ def resolve_reply_context(
     thread_group: object,
     sibling_deliveries: list[object],
 ) -> ReplyContext:
-    """Resolve per-thread reply references for one outbound Discord message.
+    """Resolve the legacy Discord reference through the shared DB mapping logic."""
+    reference = getattr(message, 'reference', None)
+    referenced_id = getattr(reference, 'message_id', None) if reference else None
+    return _resolve_reference_context(database, referenced_id, thread_group, sibling_deliveries)
 
-    The current behavior is preserved exactly:
 
-    - no source reference -> flat send everywhere
-    - reply to any starter message -> each sibling references its own starter
-    - reply to a known mirrored message -> each sibling references its own copy
-    - unknown reference -> flat fallback for all siblings
+def resolve_normalized_reply_context(
+    database: object, event: MessageCreated,
+    thread_group: object, sibling_deliveries: list[object],
+) -> ReplyContext:
+    """Resolve a normalized forum reply under verified physical and canonical ownership.
+
+    A cross-thread parent ID or parent mapped to another canonical thread group
+    cannot become the newly published comment's parent FK or a remote reference.
+    Unknown IDs retain the established flat-send behavior.
     """
-    reference = getattr(message, "reference", None)
-    referenced_id = getattr(reference, "message_id", None) if reference else None
+    thread = event.thread_context
+    if (event.connector_key != 'discord-primary' or thread is None
+        or event.parent_channel is None or event.parent_channel.kind != 'forum'
+        or thread.channel.kind != 'forum'
+        or thread.channel != event.parent_channel
+        or thread.channel.external_guild_id != event.external_guild_id
+        or event.message.external_container_id != thread.external_thread_id):
+        raise PlatformOperationError('invalid_request', 'unverified community reply source')
+    thread_id = discord_id_to_legacy_int(thread)
+    forum_id = discord_id_to_legacy_int(thread, component='parent')
+    # Only a delivery belonging to this canonical group authorizes resolving
+    # references from the claimed physical source thread.
+    group_deliveries = database.discord_fanout_groups.get_thread_deliveries(thread_group.id)
+    if not any(d.discord_thread_id == thread_id and d.discord_channel_id == forum_id
+               for d in group_deliveries):
+        raise PlatformOperationError('invalid_request', 'source thread not in canonical group')
+    if any(d.thread_group_id != thread_group.id for d in sibling_deliveries):
+        raise PlatformOperationError('invalid_request', 'sibling belongs to another group')
+    reference_id = None
+    if event.reply_to is not None:
+        if (event.reply_to.connector_key != event.connector_key
+            or event.reply_to.external_container_id != thread.external_thread_id):
+            raise PlatformOperationError('invalid_request', 'cross-thread reply parent')
+        reference_id = discord_id_to_legacy_int(event.reply_to)
+    return _resolve_reference_context(
+        database, reference_id, thread_group, sibling_deliveries,
+        source_thread_id=thread_id,
+    )
 
+
+def _resolve_reference_context(
+    database: object, referenced_id: int | None,
+    thread_group: object, sibling_deliveries: list[object],
+    *, source_thread_id: int | None = None,
+) -> ReplyContext:
+    """Share SQLite reply-chain resolution without constructing SDK-shaped proxies."""
     if referenced_id is None:
         return ReplyContext(
             parent_message_group_id=None,
@@ -64,6 +106,8 @@ def resolve_reply_context(
         thread_group.id
     )
     for delivery in thread_deliveries:
+        if (source_thread_id is not None and delivery.discord_thread_id != source_thread_id):
+            continue
         if referenced_id == delivery.discord_starter_message_id:
             return ReplyContext(
                 parent_message_group_id=None,
@@ -78,7 +122,16 @@ def resolve_reply_context(
             referenced_id
         )
     )
-    if parent_group is None:
+    # A message ID from another physical thread must not become a canonical
+    # parent merely because it has a persisted group somewhere in the bridge.
+    valid_parent = parent_group is not None
+    if valid_parent and source_thread_id is not None:
+        physical = database.discord_fanout_groups.get_message_delivery_by_message(referenced_id)
+        valid_parent = (
+            parent_group.thread_group_id == thread_group.id
+            and physical is not None and physical.discord_thread_id == source_thread_id
+        )
+    if not valid_parent:
         return ReplyContext(
             parent_message_group_id=None,
             per_thread_references={

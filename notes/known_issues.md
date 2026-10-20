@@ -259,3 +259,8 @@ cutover has yet been performed. Two targeted positive/negative tests pass.
 - `DiscordFanout` can now send typed mirrored forum threads/replies through `PlatformDeliveryPort` with accepted-subscription/guild checks, deterministic per-target attempt keys, real starter/thread receipts, per-target reply reference and partial failure isolation. Eight SQLite-backed regression tests pass.
 - Production Community/Local Community routes still call their SDK-backed fanout until canonical source/recipient and mapping ownership are cut over together. The new methods are not a second live publication path.
 - No durable retry/receipt recovery for previously unknown physical copies is added; Stage 04 retains that separate task.
+
+## Stage 03 normalized Community reply-chain resolution (Checkpoint 28, 2026-10-19)
+
+- `resolve_normalized_reply_context()` resolves typed `MessageCreated.reply_to` under the source canonical thread-group and physical delivery, returning the existing per-thread `ReplyContext` without constructing SDK reference objects. Unknown/stale parent mappings preserve flat-send fallback; foreign group, source thread and reply container cannot authorize parent relationships.
+- This is a pre-cutover mechanism. The old SDK route remains production-owned until Community create routing, adapter fanout and source/mirror mapping preservation are switched together.
