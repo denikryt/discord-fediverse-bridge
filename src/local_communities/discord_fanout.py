@@ -17,13 +17,14 @@ from ..content_sync.edit_delete import (
     mark_discord_message_deleted,
 )
 from ..content_sync.inbound_references import build_message_reference
+from ..formatting import apply_edit_to_discord_message
 from ..db import Database
 from ..discord_legacy_projection import discord_id_to_legacy_int
 from ..platform_types import (
     ChannelRef, ContentDocument, CreateAttempt, DeliveryPresentation,
     MessageRef, PlatformOperationError, ThreadRef,
 )
-from ..runtime_ports import PlatformDeliveryPort
+from ..runtime_ports import PlatformAdapterPort, PlatformDeliveryPort
 
 logger = logging.getLogger(__name__)
 
@@ -534,12 +535,39 @@ class LocalCommunityDiscordFanout:
                 )
         return summary
 
+    async def _apply_normalized_mutation(
+        self,
+        *,
+        adapter: PlatformAdapterPort,
+        thread_id: int,
+        message_id: int,
+        new_content: str | None,
+    ) -> None:
+        """Edit one verified Discord receipt through the connector boundary.
+
+        A remote Update must retain the physical copy's existing attribution
+        header. Missing or mismatched reads fail closed instead of guessing an
+        author. Delete keeps the historical visible tombstone semantics.
+        """
+        ref = MessageRef('discord-primary', str(thread_id), str(message_id))
+        if new_content is None:
+            body = '*deleted by creator*'
+        else:
+            observed = await adapter.fetch_message(ref)
+            if observed.message != ref or observed.content is None:
+                raise PlatformOperationError(
+                    'unknown_delivery', 'local Discord mutation receipt mismatch',
+                )
+            body = apply_edit_to_discord_message(observed.content.body, new_content)
+        await adapter.edit_message(ref, ContentDocument(body))
+
     async def fanout_thread_starter_edit(
         self,
         *,
         thread_row: object,
         source_surface_id: int | None,
         new_content: str,
+        adapter: PlatformAdapterPort | None = None,
     ) -> LocalDiscordMutationFanoutSummary:
         """Edit starter messages for all selected surfaces of one post.
 
@@ -565,13 +593,20 @@ class LocalCommunityDiscordFanout:
                 continue
             summary.attempted += 1
             try:
-                await edit_discord_message(
-                    bot=self.bot,
-                    discord_thread_id=getattr(surface, "discord_thread_id"),
-                    discord_message_id=getattr(surface, "discord_starter_message_id"),
-                    new_content=new_content,
-                    preserve_header=True,
-                )
+                if adapter is not None:
+                    await self._apply_normalized_mutation(
+                        adapter=adapter,
+                        thread_id=getattr(surface, "discord_thread_id"),
+                        message_id=getattr(surface, "discord_starter_message_id"),
+                        new_content=new_content,
+                    )
+                else:
+                    await edit_discord_message(
+                        bot=self.bot,
+                        discord_thread_id=getattr(surface, "discord_thread_id"),
+                        discord_message_id=getattr(surface, "discord_starter_message_id"),
+                        new_content=new_content, preserve_header=True,
+                    )
                 summary.applied += 1
             except Exception:
                 summary.failed += 1
@@ -588,6 +623,7 @@ class LocalCommunityDiscordFanout:
         message_row: object,
         source_surface_id: int | None,
         new_content: str,
+        adapter: PlatformAdapterPort | None = None,
     ) -> LocalDiscordMutationFanoutSummary:
         """Edit message surfaces for all selected copies of one comment."""
         summary = LocalDiscordMutationFanoutSummary()
@@ -612,13 +648,20 @@ class LocalCommunityDiscordFanout:
                 continue
             summary.attempted += 1
             try:
-                await edit_discord_message(
-                    bot=self.bot,
-                    discord_thread_id=getattr(thread_surface, "discord_thread_id"),
-                    discord_message_id=getattr(surface, "discord_message_id"),
-                    new_content=new_content,
-                    preserve_header=True,
-                )
+                if adapter is not None:
+                    await self._apply_normalized_mutation(
+                        adapter=adapter,
+                        thread_id=getattr(thread_surface, "discord_thread_id"),
+                        message_id=getattr(surface, "discord_message_id"),
+                        new_content=new_content,
+                    )
+                else:
+                    await edit_discord_message(
+                        bot=self.bot,
+                        discord_thread_id=getattr(thread_surface, "discord_thread_id"),
+                        discord_message_id=getattr(surface, "discord_message_id"),
+                        new_content=new_content, preserve_header=True,
+                    )
                 summary.applied += 1
             except Exception:
                 summary.failed += 1
@@ -634,6 +677,7 @@ class LocalCommunityDiscordFanout:
         *,
         thread_row: object,
         source_surface_id: int | None,
+        adapter: PlatformAdapterPort | None = None,
     ) -> LocalDiscordMutationFanoutSummary:
         """Mark starter messages deleted for all selected surfaces of one post."""
         summary = LocalDiscordMutationFanoutSummary()
@@ -654,11 +698,19 @@ class LocalCommunityDiscordFanout:
                 continue
             summary.attempted += 1
             try:
-                await mark_discord_message_deleted(
-                    bot=self.bot,
-                    discord_thread_id=getattr(surface, "discord_thread_id"),
-                    discord_message_id=getattr(surface, "discord_starter_message_id"),
-                )
+                if adapter is not None:
+                    await self._apply_normalized_mutation(
+                        adapter=adapter,
+                        thread_id=getattr(surface, "discord_thread_id"),
+                        message_id=getattr(surface, "discord_starter_message_id"),
+                        new_content=None,
+                    )
+                else:
+                    await mark_discord_message_deleted(
+                        bot=self.bot,
+                        discord_thread_id=getattr(surface, "discord_thread_id"),
+                        discord_message_id=getattr(surface, "discord_starter_message_id"),
+                    )
                 summary.applied += 1
             except Exception:
                 summary.failed += 1
@@ -674,6 +726,7 @@ class LocalCommunityDiscordFanout:
         *,
         message_row: object,
         source_surface_id: int | None,
+        adapter: PlatformAdapterPort | None = None,
     ) -> LocalDiscordMutationFanoutSummary:
         """Mark message surfaces deleted for all selected copies of one comment."""
         summary = LocalDiscordMutationFanoutSummary()
@@ -698,11 +751,19 @@ class LocalCommunityDiscordFanout:
                 continue
             summary.attempted += 1
             try:
-                await mark_discord_message_deleted(
-                    bot=self.bot,
-                    discord_thread_id=getattr(thread_surface, "discord_thread_id"),
-                    discord_message_id=getattr(surface, "discord_message_id"),
-                )
+                if adapter is not None:
+                    await self._apply_normalized_mutation(
+                        adapter=adapter,
+                        thread_id=getattr(thread_surface, "discord_thread_id"),
+                        message_id=getattr(surface, "discord_message_id"),
+                        new_content=None,
+                    )
+                else:
+                    await mark_discord_message_deleted(
+                        bot=self.bot,
+                        discord_thread_id=getattr(thread_surface, "discord_thread_id"),
+                        discord_message_id=getattr(surface, "discord_message_id"),
+                    )
                 summary.applied += 1
             except Exception:
                 summary.failed += 1

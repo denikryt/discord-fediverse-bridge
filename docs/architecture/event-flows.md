@@ -269,3 +269,17 @@ and transport cutover of community fanout are still in progress.
 5. Failures are logged per target and do not suppress edits to healthy targets.
    Compatibility callers without an adapter still use the preexisting SDK path
    until its final removal during the Stage 03 dependency audit.
+
+## Local Community inbound ActivityPub Update/Delete (Stage 03)
+
+1. `activitypub_handlers.py` resolves the accepted, authenticated inbound
+   activity to `LocalCommunityRuntime`, which locates its canonical AP object.
+2. `local_communities/mutations.py` chooses persisted thread or message surfaces;
+   `LocalCommunitySurfaceFanout` checks per-forum metadata and guild policy.
+3. With a registered adapter, `LocalCommunityDiscordFanout` mutates exact
+   `MessageRef(discord-primary, thread_id, starter_or_comment_id)` copies through
+   `PlatformAdapterPort`. Updates verify the read receipt before preserving the
+   stored attribution header; Deletes edit bodies to a visible tombstone.
+4. A failure of one Discord surface does not block the others. The existing
+   `LocalCommunityFederationFanout` relays to eligible remote subscribers.
+   SDK-backed Discord-originated mutations remain a separate pending cutover.

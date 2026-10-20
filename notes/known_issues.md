@@ -130,3 +130,8 @@ Fedify-native security integration remains blocked by missing dependencies.
 
 - Production inbound Remote Community post/comment Update/Delete now edits exact persisted physical Discord message IDs through `Runtime.discord_adapter`. Comment Updates verify the current message and preserve its attribution header; a bad read or individual target failure does not overwrite another message or stop sibling edits. Real SQLite scenario tests cover these boundaries.
 - Legacy direct-call SDK mutation compatibility remains while the rest of the Stage 03 dependency audit proceeds. Local Community inbound mutations, User Actor, native Fedify SSRF validation and the Python backfill GET release blocker remain open.
+
+- Stage 03 Checkpoint 37: inbound Local Community AP Update/Delete now use
+  exact scoped DiscordAdapter edits when registered. SDK-based local
+  Discord-originated mutation fanout still awaits its own cutover; physical
+  mutation failure remains best-effort without Stage 04 durable reconciliation.

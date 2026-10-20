@@ -98,3 +98,17 @@ sufficient. Production forum Create callbacks now use the single normalized
 by `LocalCommunityRuntime` before canonical publication, and no parallel SDK
 Create callback publishes a second activity. Remaining inbound ActivityPub
 physical writes and edits/deletes are separate Stage 03 migration work.
+
+### Stage 03 inbound ActivityPub mutations via the platform boundary
+
+`LocalCommunityMutationHandler.handle_inbound_post_update/delete()` and
+`handle_inbound_comment_update/delete()` continue to resolve canonical AP
+object IDs, selected persisted surfaces, and remote relay through the existing
+repositories. When Runtime supplies `discord_adapter`, physical starter/comment
+edits go through `PlatformAdapterPort` using the exact thread-container
+`MessageRef` from each surface. Updates fetch and verify the existing physical
+body before preserving its attribution header; an ambiguous or mismatched read
+cannot authorize an overwrite. Deletes use the existing visible tombstone
+(`*deleted by creator*`). Per-surface failures are isolated and currently
+remain best-effort. Legacy Discord-originated mutation methods retain their
+SDK route until the separate remaining-dependency cutover.

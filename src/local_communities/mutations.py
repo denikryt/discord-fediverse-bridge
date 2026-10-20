@@ -390,6 +390,7 @@ class LocalCommunityMutationHandler:
             thread_row=thread_row,
             source_surface_id=None,
             new_content=format_inbound_post_body(event),
+            adapter=getattr(runtime, 'discord_adapter', None),
         )
         if local_community is not None:
             await self.federation_fanout.relay_update_or_delete(
@@ -427,6 +428,7 @@ class LocalCommunityMutationHandler:
         await self.surface_fanout.fanout_thread_delete(
             thread_row=thread_row,
             source_surface_id=None,
+            adapter=getattr(runtime, 'discord_adapter', None),
         )
         if local_community is not None:
             await self.federation_fanout.relay_update_or_delete(
@@ -476,6 +478,7 @@ class LocalCommunityMutationHandler:
             message_row=message_row,
             source_surface_id=None,
             new_content=format_inbound_comment_body(event),
+            adapter=getattr(runtime, 'discord_adapter', None),
         )
         if local_community is not None:
             await self.federation_fanout.relay_update_or_delete(
@@ -524,6 +527,7 @@ class LocalCommunityMutationHandler:
         await self.surface_fanout.fanout_message_delete(
             message_row=message_row,
             source_surface_id=None,
+            adapter=getattr(runtime, 'discord_adapter', None),
         )
         if local_community is not None:
             await self.federation_fanout.relay_update_or_delete(
