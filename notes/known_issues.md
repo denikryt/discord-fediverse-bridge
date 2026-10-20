@@ -205,3 +205,11 @@ Fedify-native security integration remains blocked by missing dependencies.
   unclassified errors remain `unknown_delivery` and sticky to prevent blind
   duplicate POSTs; physical receipt/restart uncertainty remains Stage 04.
   Integration against actual pinned discord.py exceptions is still outstanding.
+
+- **Stage 03 Checkpoint 49:** A malformed typed Create receipt returned
+  *after* a physical SDK create is now a sticky `unknown_delivery` in
+  `DiscordAdapter`'s per-key coordinator, even if the receipt validator raises
+  `invalid_request`. Previously the key was removed and the same physical
+  Create could be issued twice. Explicit pre-send 403/404/429 failures remain
+  retryable; in-process verified receipts remain reusable. This guard is not a
+  cross-restart durable intent ledger (Stage 04).

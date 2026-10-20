@@ -375,7 +375,6 @@ class DiscordAdapter:
             return outcome
         try:
             receipt = await send()
-            validate_created_receipt(attempt, receipt, presentation=presentation)
         except asyncio.CancelledError:
             # The SDK POST may already have committed. Never interpret task
             # cancellation as proof that Discord did not create the copy.
@@ -391,6 +390,16 @@ class DiscordAdapter:
             raise
         except Exception as exc:
             unknown = PlatformOperationError('unknown_delivery', str(exc))
+            flight.future.set_result(unknown)
+            raise unknown from exc
+        # The physical call already returned. Any failure to validate its
+        # receipt is post-send uncertainty, NOT a proven pre-send rejection.
+        # In particular an `invalid_request` raised by the receipt validator
+        # must never remove this key and permit another physical POST.
+        try:
+            validate_created_receipt(attempt, receipt, presentation=presentation)
+        except Exception as exc:
+            unknown = PlatformOperationError('unknown_delivery', 'Discord create receipt could not be verified')
             flight.future.set_result(unknown)
             raise unknown from exc
         else:
