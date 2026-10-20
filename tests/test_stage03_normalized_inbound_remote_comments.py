@@ -196,3 +196,31 @@ async def test_comment_after_undo_follow_skips_target(tmp_path):
     result = await runtime.handle_normalized_inbound_comment(comment(), adapter=discord)
     assert result.status == 'processed'
     assert [call[0].channel.external_channel_id for call in discord.calls] == ['100']
+
+
+@pytest.mark.asyncio
+async def test_failed_first_remote_comment_target_does_not_block_healthy_second(tmp_path):
+    """Per-thread reply failure does not suppress a second valid subscribed recipient."""
+    db, group, runtime = world(tmp_path)
+    try:
+        class OneFailedMessage(DiscordMessages):
+            """Reject a single physical thread before observing the next one."""
+
+            async def send_message(self, destination, content, *, reply_to, presentation, attempt):
+                """Model a permission failure isolated to one Discord thread."""
+                self.calls.append((destination, content, reply_to, presentation, attempt))
+                if destination.external_thread_id == '1100':
+                    raise RuntimeError('first target forbidden')
+                return CreatedMessage(MessageRef('discord-primary', destination.external_thread_id, '5500'), 'bot')
+
+        transport = OneFailedMessage()
+        result = await runtime.handle_normalized_inbound_comment(comment(), adapter=transport)
+        assert result.status == 'processed'
+        assert [c[0].external_thread_id for c in transport.calls] == ['1100', '1200']
+        mapped = db.discord_fanout_groups.get_message_group_by_ap_object(comment().object.ap_id)
+        assert {(d.discord_channel_id, d.discord_message_id) for d in
+                db.discord_fanout_groups.get_message_deliveries(mapped.id)} == {(200, 5500)}
+        assert (await runtime.handle_normalized_inbound_comment(comment(), adapter=transport)).status == 'skipped'
+        assert len(transport.calls) == 2
+    finally:
+        db.close()

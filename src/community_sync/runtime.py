@@ -547,6 +547,7 @@ class CommunityRuntime:
             actor_id=event.actor_id,
         ))
         delivered = 0
+        first_error: Exception | None = None
         for subscription in allowed:
             if subscription.discord_channel_id in delivered_forums:
                 # An existing physical receipt is durable proof that this
@@ -587,13 +588,19 @@ class CommunityRuntime:
                     role='inbound',
                 )
                 delivered += 1
-            except Exception:
-                if not recover_missing:
-                    raise
-                # Backfill is best-effort per target. In particular an invalid
-                # physical receipt must never be interpreted as a completion.
-                logger.exception('Parent-post backfill failed for forum %s', forum.external_channel_id)
+            except Exception as exc:
+                if first_error is None:
+                    first_error = exc
+                # Physical Create may already have reached Discord. Never
+                # infer a receipt or blindly retry, but continue to healthy
+                # subscribers even during the original (non-backfill) event.
+                # A later verified parent backfill can inspect missing rows.
+                logger.exception('Remote post delivery failed for forum %s', forum.external_channel_id)
 
+        # An entirely failed initial fan-out must not acknowledge the event as
+        # delivered; retain the first concrete exception for the caller.
+        if delivered == 0 and first_error is not None and not recover_missing:
+            raise first_error
         logger.info('Delivered inbound post %s to %d Discord forums', event.object.ap_id, delivered)
         return _HandlerResult(
             status='processed', outcome=InboundActivityOutcome.APPLIED,
@@ -808,6 +815,7 @@ class CommunityRuntime:
             for sub in get_accepted_subscriptions(self.database, event.community_actor_id)
         }
         delivered = 0
+        first_error: Exception | None = None
         for physical in self.database.discord_fanout_groups.get_thread_deliveries(thread_group.id):
             current = self.database.remote_subscriptions.get_subscription_by_channel(
                 physical.discord_channel_id
@@ -837,21 +845,34 @@ class CommunityRuntime:
                     f'{physical.discord_channel_id}:{physical.discord_thread_id}',
                 connector_key='discord-primary', operation='message', destination=thread,
             )
-            created = await adapter.send_message(
-                thread, content, reply_to=reply_to,
-                presentation=DeliveryPresentation(), attempt=attempt,
-            )
-            if (created.message.connector_key != forum.connector_key
-                or created.message.external_container_id != thread.external_thread_id):
-                raise PlatformOperationError('unknown_delivery', 'inbound comment receipt thread mismatch')
-            self.database.discord_fanout_groups.add_message_delivery(
-                message_group_id=msg_group.id,
-                discord_channel_id=discord_id_to_legacy_int(forum),
-                discord_thread_id=discord_id_to_legacy_int(thread),
-                discord_message_id=discord_id_to_legacy_int(created.message),
-                role='inbound', parent_discord_message_id=parent_id,
-            )
-            delivered += 1
+            try:
+                created = await adapter.send_message(
+                    thread, content, reply_to=reply_to,
+                    presentation=DeliveryPresentation(), attempt=attempt,
+                )
+                if (created.message.connector_key != forum.connector_key
+                    or created.message.external_container_id != thread.external_thread_id):
+                    raise PlatformOperationError('unknown_delivery', 'inbound comment receipt thread mismatch')
+                self.database.discord_fanout_groups.add_message_delivery(
+                    message_group_id=msg_group.id,
+                    discord_channel_id=discord_id_to_legacy_int(forum),
+                    discord_thread_id=discord_id_to_legacy_int(thread),
+                    discord_message_id=discord_id_to_legacy_int(created.message),
+                    role='inbound', parent_discord_message_id=parent_id,
+                )
+                delivered += 1
+            except Exception as exc:
+                if first_error is None:
+                    first_error = exc
+                # A missing receipt is not permission to resend an uncertain
+                # Discord Create. Preserve the canonical group and deliver to
+                # other eligible threads without claiming this physical copy.
+                logger.exception('Remote comment delivery failed for thread %s',
+                                 thread.external_thread_id)
+        # Preserve the caller's failure signal if no target acknowledged a
+        # physical message, without undoing any already committed receipts.
+        if delivered == 0 and first_error is not None:
+            raise first_error
         logger.info('Delivered inbound comment %s to %d mapped threads', event.object.ap_id, delivered)
         return _HandlerResult('processed', InboundActivityOutcome.APPLIED, 'comment created')
 

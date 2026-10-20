@@ -170,3 +170,45 @@ async def test_inbound_post_rechecks_follow_before_each_forum_post(tmp_path):
     transport = UndoDuringSend()
     await runtime.handle_normalized_inbound_post(post(), adapter=transport)
     assert [c[0].external_channel_id for c in transport.calls] == ['100']
+
+
+@pytest.mark.asyncio
+async def test_failed_first_remote_post_target_does_not_block_healthy_second(tmp_path):
+    """One Discord permission failure leaves only that surface pending, not the whole fanout."""
+    db = build_database(tmp_path, 'inbound-post-partial-failure.db')
+    try:
+        for channel in (100, 200):
+            add_accepted_subscription(db, channel_id=channel, guild_id=10)
+        runtime = CommunityRuntime(database=db, content_publish_service=object())
+        discord = RecordingDiscord(fail_forum='100')
+        result = await runtime.handle_normalized_inbound_post(post(), adapter=discord)
+        group = db.discord_fanout_groups.get_thread_group_by_ap_object(post().object.ap_id)
+        assert result.status == 'processed'
+        assert [c[0].external_channel_id for c in discord.calls] == ['100', '200']
+        assert {(d.discord_channel_id, d.discord_thread_id) for d in
+                db.discord_fanout_groups.get_thread_deliveries(group.id)} == {(200, 1200)}
+        # Ordinary replays do not blindly POST again, since an earlier create
+        # might have landed without returning a confirmed receipt.
+        assert (await runtime.handle_normalized_inbound_post(post(), adapter=discord)).status == 'skipped'
+        assert len(discord.calls) == 2
+    finally:
+        db.close()
+
+
+@pytest.mark.asyncio
+async def test_verified_parent_backfill_can_complete_only_missing_remote_target(tmp_path):
+    """Explicit parent recovery reuses the successful recipient's durable physical receipt."""
+    db = build_database(tmp_path, 'inbound-post-recovery.db')
+    try:
+        for channel in (100, 200):
+            add_accepted_subscription(db, channel_id=channel, guild_id=10)
+        runtime = CommunityRuntime(database=db, content_publish_service=object())
+        first = RecordingDiscord(fail_forum='100')
+        await runtime.handle_normalized_inbound_post(post(), adapter=first)
+        later = RecordingDiscord()
+        await runtime.handle_normalized_inbound_post(post(), adapter=later, recover_missing=True)
+        assert [c[0].external_channel_id for c in later.calls] == ['100']
+        group = db.discord_fanout_groups.get_thread_group_by_ap_object(post().object.ap_id)
+        assert {d.discord_channel_id for d in db.discord_fanout_groups.get_thread_deliveries(group.id)} == {100, 200}
+    finally:
+        db.close()

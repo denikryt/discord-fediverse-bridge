@@ -189,3 +189,12 @@ Fedify-native security integration remains blocked by missing dependencies.
   a second concurrent cancellation and command-task lifetime still need
   SDK-backed integration checks. T5 thread-mutation no-op is now explicitly
   marked. Fedify pinned SDK and fan-out partial-target recovery remain open.
+
+- **Stage 03 Checkpoint 47:** Remote Community AP→Discord post/comment fan-out
+  now continues to other accepted targets after a failed physical create and
+  preserves confirmed per-target mappings. If every target fails, the handler
+  still propagates the original error; ordinary duplicates never replay
+  uncertain Discord Create. Explicit verified parent backfill may recover
+  a missing post target using its existing canonical group. Automatic
+  durable comment/unknown-create recovery remains Stage 04; native Fedify
+  security gates are still release-blocked.
