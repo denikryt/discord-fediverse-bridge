@@ -76,7 +76,11 @@ async function testHttpActorRoutesPublishCanonicalKey(config: GatewayConfig): Pr
   const app = createGatewayApp(config);
 
   for (const oldPath of ["/communities/hackers", "/c/hackers", "/actors/hackers"]) {
-    const oldResponse = await app.request(oldPath);
+    // Explicit ActivityPub negotiation keeps this a route-existence check:
+    // unsupported paths must return 404, not a Fedify 406 content-type response.
+    const oldResponse = await app.request(oldPath, {
+      headers: { Accept: "application/activity+json" },
+    });
     assert.equal(oldResponse.status, 404, `${oldPath} must be unsupported`);
   }
 
