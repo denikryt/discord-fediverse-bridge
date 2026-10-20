@@ -198,3 +198,16 @@ Behavior coverage lives in `test_user_profile_persistence_scenarios.py`, `test_p
 ## Direct released SQLite upgrade (plan 147)
 
 `tests/test_direct_sql_v0_to_v1_migration.py` covers native source staging before DROP, single ORM target creation, physical-window failures, TEMP cleanup, malformed integer-affinity snowflakes and pinned-source/schema provenance. `tests/test_legacy_v0_to_v1_migration.py` and `tests/test_legacy_identity_cutover.py` retain release, preservation, identity/owner, concurrency and runtime scenarios. Current-only descendants are checked directly on v1; no obsolete migration oracle remains. `tests/test_migration_cleanup.py` covers every released scalar relation missing an FK, ancestry cycles, pre-staging rejection and native index contract changes.
+
+## Stage 03 Local Community normalized runtime (pre-cutover)
+
+- File-backed SQLite + real `LocalCommunityRuntime` + `ContentPublishService`:
+  [`tests/test_stage03_normalized_local_community_runtime.py`](../../tests/test_stage03_normalized_local_community_runtime.py).
+  Host/subscriber starter publication, physical source vs mirror ownership,
+  sibling receipts, mapped root/nested comment parents, duplicate Gateway
+  events, unknown/mismatched forum/connector/guild, removed subscriber and
+  unregistered author, and a foreign known starter ID. HTTP and Discord
+  SDK are the only faked boundaries.
+- Physical receipt/idempotency regressions remain in
+  [`tests/test_stage03_neutral_local_community_fanout.py`](../../tests/test_stage03_neutral_local_community_fanout.py).
+  These tests do not claim that production callbacks have been switched.

@@ -72,3 +72,26 @@ starter, comment, parent, forum, subscriber owner or role fails before a
 mapping can be overwritten. A message surface must also belong to the
 canonical parent thread carried by its parent physical surface. There is no
 new queue or database schema.
+
+### Stage 03 normalized Local Community source (Checkpoint 31, pre-cutover)
+
+`LocalCommunityRuntime.handle_normalized_thread_create()` and
+`handle_normalized_message_create()` now accept verified `ThreadCreated`/
+`MessageView` and `MessageCreated` snapshots, respectively. Host and current
+active subscriber sources are resolved against the stored Discord forum claim,
+confirmed guild and community lifecycle before publication; Fluxer IDs cannot
+be projected into legacy Discord columns. Canonical AP publication still uses
+`ContentPublishService`, and the existing host/subscriber surface repositories
+own receipt identity. A subscriber-authored source is **not** stored as a host
+surface. Typed `LocalCommunityDiscordFanout` delivers target-specific copies,
+including nested replies whose parent is present on the destination.
+An already mapped starter of a different physical thread is explicitly
+rejected, not treated as an unknown parent and flattened to the root.
+
+A repeated physical copy must not be mistaken for an originating subscriber:
+local subscriber source and mirrored subscriber both have role
+`local_subscriber`. A replay can repair missing copies only if the persisted
+`PublishedActivityObject` confirms the actual author, source forum/message,
+original title and body. A mere matching Discord ID or source role is not
+sufficient. Gateway production callbacks still run the old SDK route until
+Community and Local Community can switch together; **no parallel dispatch**.

@@ -222,3 +222,26 @@ Discord SDK context. The SDK closes next; `Runtime.close()` subsequently closes
 Fedify and the database. `BridgeBot.close()` must not close the shared gateway.
 This is a callback-lifecycle change only: Stage 03's normalized-domain ingress
 and transport cutover of community fanout are still in progress.
+
+## Stage 03 Local Community normalized source (pre-cutover)
+
+1. `LocalCommunityRuntime.handle_normalized_thread_create()` checks the incoming
+   `ThreadCreated` and actual starter `MessageView` as Discord forum inputs.
+   The active host or local-subscriber forum, guild and community lifecycle
+   are verified from SQLite, not selected from DTO metadata alone.
+2. `LocalCommunityDiscordCreateHandler` publishes one AP post through the
+   existing `ContentPublishService` and records the original host or subscriber
+   physical source in `LocalCommunityThreadSurface`; the latter does not imply
+   host ownership for a subscriber-authored post.
+3. `LocalCommunityDiscordFanout.fanout_normalized_thread()` creates only missing
+   physical copies through `PlatformDeliveryPort`, excluding the source forum.
+   A repeated thread is checked against the original persisted published
+   identity before any recovery fan-out; mirrored Discord threads never become
+   a second AP post.
+4. `handle_normalized_message_create()` checks the current source thread
+   surface and uses the actual starter or mapped source-local parent to resolve
+   the AP comment parent. A mapped parent or known starter in a different physical thread is
+   rejected. Each subscriber/host destination resolves its own parent message
+   ID; incomplete nested delivery does not fall back to an unrelated starter.
+5. These methods are available to scenario tests but are **not** invoked by
+   the production forum Gateway callbacks until the coordinated Stage 03 cutover.

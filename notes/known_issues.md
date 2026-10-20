@@ -82,3 +82,14 @@ not yet complete.
 ## Stage 03 Checkpoint 30 — local-community physical adapter fan-out (pre-cutover)
 
 The existing `LocalCommunityDiscordFanout` now has typed transport methods that preserve per-recipient parent IDs, active subscriber/host selection, SQLite surface idempotency and per-target error isolation without making SDK writes. Nine focused SQLite tests pass. No production event route has been switched. Full dependency-backed validation remains incomplete (`hypothesis`, `discord.py` and Node Fedify unavailable); two SDK-dependent legacy inbound test cases could not load under the import-only Discord shim, not an observed implementation regression.
+
+**Stage 03 Checkpoint 31 — Local Community normalized source (pre-cutover):**
+`LocalCommunityRuntime` now routes typed host and active local-subscriber
+starters/replies through existing `ContentPublishService` and SQLite canonical
+surfaces and uses the typed physical fanout. Duplicate recovery verifies the
+published source message/forum, author, original body and title; matching
+subscriber roles alone do not identify the original, as mirrored subscriber
+copies have the same role. Nested reply parents cannot borrow another source
+thread's persisted message surface or known starter ID. Production forum Gateway callbacks remain
+on the prior SDK handler pending coordinated cutover; full SDK-dependent and
+Fedify-native security integration remains blocked by missing dependencies.
