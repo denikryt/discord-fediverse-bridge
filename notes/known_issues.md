@@ -119,3 +119,13 @@ Discord delivery worker inside the SDK context before SDK shutdown. Runtime
 alone closes Fedify. The existing SDK-object domain ingress has not been
 replaced with `PlatformEventIngress`, and application-command callbacks need
 additional lifetime admission review before calling this fully complete.
+
+## Stage 03 idempotent canonical receipt persistence (partial, 2026-10-19)
+
+The existing local-community repository now serializes canonical host thread and
+message receipt persistence through `BEGIN IMMEDIATE`. An identical concurrent
+receipt returns the original row and a changed AP/physical identity fails
+without overwriting it. Generic AP comment mappings also compare both unique
+identity keys under the writer reservation, recovering after a partial handler
+failure. Source/mirror fanout and early duplicate ingress still require the
+separate Stage 03 routing and provenance checks before side effects.

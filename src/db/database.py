@@ -77,7 +77,7 @@ class Database:
         self.local_subscribers = LocalSubscriberRepository(
             self.session, self.immediate_session
         )
-        self.local_community_content = LocalCommunityContentRepository(self.session)
+        self.local_community_content = LocalCommunityContentRepository(self.session, self.immediate_session)
         self.local_community_surfaces = LocalCommunitySurfaceRepository(self.session)
         self.local_community_relay = LocalCommunityRelayRepository(
             self.session, self.immediate_session
@@ -103,7 +103,7 @@ class Database:
             self.session, self.immediate_session
         )
         self.registration_sessions = RegistrationSessionRepository(self.session)
-        self.message_mappings = MessageMappingRepository(self.session)
+        self.message_mappings = MessageMappingRepository(self.session, self.immediate_session)
         self.activitypub_objects = ActivityPubObjectRepository(self.session)
         self.remote_actors = RemoteActorRepository(self.session)
         self.legacy_lemmy_mappings = LegacyLemmyMappingRepository(self.session)

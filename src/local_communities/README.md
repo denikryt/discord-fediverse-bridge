@@ -39,3 +39,14 @@ must match both that snapshot and the admitted generation before persisting a
 result. Historical conflicting source IDs halt retries without rewriting
 already published identities. Successful targets never replay solely because
 an Actor's inbox changes.
+
+### Stage 03 canonical receipt persistence
+
+Host thread/comment canonical writes and their host Discord surface receipts
+are now idempotent under a `Database.immediate_session()` transaction. Repeated
+identical AP/Discord receipts reuse the existing mapping; changed activity,
+object, parent or physical IDs fail with a conflict before altering saved
+identity. Generic inbound comment mappings follow the same receipt identity
+rule, permitting recovery when an earlier handler committed its canonical
+message but stopped before generic mapping persistence. The domain ingress
+must still verify actor provenance **before** invoking sibling fanout/relay.
