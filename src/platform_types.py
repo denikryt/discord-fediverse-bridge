@@ -574,10 +574,13 @@ class MessageCreated:
     thread_context: ThreadRef | None = None
     external_guild_id: str | None = None
     received_at: datetime = field(default_factory=lambda: datetime.now(timezone.utc))
+    # Publication time comes from the source message, never Gateway receipt time.
+    created_at: datetime | None = None
 
     def __post_init__(self) -> None:
         """Preserve provenance and reject contradictory resolved placement data."""
         _aware_datetime(self.received_at, 'received_at', optional=False)
+        _aware_datetime(self.created_at, 'message created_at')
         _message_event(self.connector_key, self.message, self.parent_channel, self.thread_context)
         if not isinstance(self.author, AuthorRef) or self.author.connector_key != self.connector_key:
             raise ValueError('message author connector mismatch')
@@ -606,10 +609,16 @@ class MessageUpdated:
     thread_context: ThreadRef | None = None
     external_guild_id: str | None = None
     received_at: datetime = field(default_factory=lambda: datetime.now(timezone.utc))
+    # Missing raw author is not an assertion about the original author.
+    author: AuthorRef | None = None
 
     def __post_init__(self) -> None:
         """Allow ID-only raw edits and preserve absent attachment/body fields."""
         _aware_datetime(self.received_at, 'received_at', optional=False)
+        if self.author is not None and (
+            not isinstance(self.author, AuthorRef) or self.author.connector_key != self.connector_key
+        ):
+            raise ValueError('edited message author connector mismatch')
         _message_event(self.connector_key, self.message, self.parent_channel, self.thread_context)
         if self.content is not None and not isinstance(self.content, ContentDocument):
             raise ValueError('edited content must be neutral content or unknown')
