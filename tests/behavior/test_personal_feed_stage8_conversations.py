@@ -550,3 +550,66 @@ async def test_worker_rechecks_binding_after_network_lookup_before_discord_send(
         delivery = session.get(InboundDiscordDelivery, created.delivery_id)
         assert delivery.state == "suppressed"
         assert delivery.attempt_count == 0
+
+
+def test_consecutive_utc_updates_survive_sqlite_roundtrip_without_losing_revision() -> None:
+    """An ActivityPub Update still orders correctly after SQLite forgets timezone info."""
+    database = _database()
+    _root(database)
+    object_id = 'https://remote.example/o/utc-update'
+    actor = 'https://remote.example/users/alice'
+    created = database.personal_feed_conversations.admit_create(
+        activity_id='https://remote.example/a/utc-create', object_id=object_id,
+        root_object_id='https://bridge.example/o/root',
+        parent_object_id='https://bridge.example/o/root',
+        activity_actor_id=actor, attributed_to_actor_id=actor,
+        actor_name='Alice', content_markdown='original',
+        published_at=datetime(2026, 10, 18, 20, tzinfo=timezone.utc),
+        source_activity={'type': 'Create'}, destination_channel_id=10, parent_known=True,
+    )
+    assert created.status == 'created'
+    v1 = datetime(2026, 10, 18, 21, tzinfo=timezone.utc)
+    assert database.personal_feed_conversations.admit_update(
+        object_id=object_id, activity_actor_id=actor, attributed_to_actor_id=actor,
+        content_markdown='v1', updated_at=v1, source_activity={'type':'Update'},
+    ).status == 'accepted'
+    # SQLite returns the stored timestamp as naive even when passed aware UTC.
+    with database.session() as session:
+        row = session.query(InboundConversationObject).filter_by(object_id=object_id).one()
+        assert row.updated_at_remote.tzinfo is None
+    assert database.personal_feed_conversations.admit_update(
+        object_id=object_id, activity_actor_id=actor, attributed_to_actor_id=actor,
+        content_markdown='v2', updated_at=v1 + timedelta(minutes=2),
+        source_activity={'type':'Update'},
+    ).status == 'accepted'
+    assert database.personal_feed_conversations.get_inbound_object(object_id).content_markdown == 'v2'
+    # Equivalent timestamp in a different timezone is the same canonical revision.
+    assert database.personal_feed_conversations.admit_update(
+        object_id=object_id, activity_actor_id=actor, attributed_to_actor_id=actor,
+        content_markdown='v2',
+        updated_at=(v1 + timedelta(minutes=2)).astimezone(timezone(timedelta(hours=3))),
+        source_activity={'type': 'Update'},
+    ).status == 'duplicate'
+
+
+def test_naive_incoming_update_is_rejected_before_canonical_write() -> None:
+    """Incoming timestamp without an offset must not inherit the host timezone."""
+    database = _database()
+    _root(database)
+    object_id = 'https://remote.example/o/naive-update'
+    actor = 'https://remote.example/users/alice'
+    database.personal_feed_conversations.admit_create(
+        activity_id='https://remote.example/a/naive-create', object_id=object_id,
+        root_object_id='https://bridge.example/o/root',
+        parent_object_id='https://bridge.example/o/root',
+        activity_actor_id=actor, attributed_to_actor_id=actor,
+        actor_name='Alice', content_markdown='original', published_at=None,
+        source_activity={'type': 'Create'}, destination_channel_id=10, parent_known=True,
+    )
+    with pytest.raises(ValueError, match='timezone'):
+        database.personal_feed_conversations.admit_update(
+            object_id=object_id, activity_actor_id=actor, attributed_to_actor_id=actor,
+            content_markdown='unsafe', updated_at=datetime(2026, 10, 18, 21),
+            source_activity={'type':'Update'},
+        )
+    assert database.personal_feed_conversations.get_inbound_object(object_id).content_markdown == 'original'

@@ -187,6 +187,8 @@ class PersonalFeedConversationRepository:
         """Atomically verify Create ownership and persist canonical state before Discord."""
         if activity_actor_id != attributed_to_actor_id:
             return InboundAdmission("actor_mismatch")
+        # Incoming AP timestamps must identify UTC instants, not local wall time.
+        published_at = self._utc_incoming(published_at)
         fingerprint = self._fingerprint(content_markdown, published_at, False)
         source_json = self._bounded_source(source_activity)
         with self.immediate_session() as session:
@@ -260,6 +262,7 @@ class PersonalFeedConversationRepository:
         source_activity: dict | None,
     ) -> InboundAdmission:
         """Persist a canonical community comment before its existing Discord fanout."""
+        published_at = self._utc_incoming(published_at)
         fingerprint = self._fingerprint(content_markdown, published_at, False)
         with self.immediate_session() as session:
             existing = session.scalar(
@@ -301,6 +304,7 @@ class PersonalFeedConversationRepository:
         """Atomically enforce object ownership and ordering before accepting a remote Update."""
         if activity_actor_id != attributed_to_actor_id:
             return InboundAdmission("actor_mismatch")
+        updated_at = self._utc_incoming(updated_at)
         fingerprint = self._fingerprint(content_markdown, updated_at, False)
         with self.immediate_session() as session:
             row = session.scalar(
@@ -318,7 +322,7 @@ class PersonalFeedConversationRepository:
                 return InboundAdmission("duplicate", row.id)
             if updated_at is None or (
                 row.updated_at_remote is not None
-                and updated_at <= row.updated_at_remote
+                and updated_at <= self._utc_stored(row.updated_at_remote)
             ):
                 return InboundAdmission("stale", row.id)
             row.content_markdown = content_markdown
@@ -528,9 +532,28 @@ class PersonalFeedConversationRepository:
             return row.state
 
     @staticmethod
+    def _utc_incoming(timestamp: datetime | None) -> datetime | None:
+        """Normalize a supplied ActivityPub instant to UTC; never guess a missing offset."""
+        if timestamp is None:
+            return None
+        if (not isinstance(timestamp, datetime) or timestamp.tzinfo is None
+                or timestamp.utcoffset() is None):
+            raise ValueError("incoming ActivityPub timestamp must be timezone-aware")
+        return timestamp.astimezone(timezone.utc)
+
+    @staticmethod
+    def _utc_stored(timestamp: datetime) -> datetime:
+        """Interpret SQLite's timezone-stripped stored timestamp as UTC."""
+        # This database historically stores UTC, but SQLite's DateTime type
+        # does not retain tzinfo after a write/read roundtrip.
+        return (timestamp.replace(tzinfo=timezone.utc) if timestamp.tzinfo is None
+                else timestamp.astimezone(timezone.utc))
+
+    @staticmethod
     def _fingerprint(content: str, timestamp: datetime | None, deleted: bool) -> str:
-        """Build stable revision evidence for duplicate and ordering decisions."""
-        raw = f"{content}\0{timestamp.isoformat() if timestamp else ''}\0{int(deleted)}"
+        """Hash the UTC instant so equivalent offsets yield one revision."""
+        instant = PersonalFeedConversationRepository._utc_incoming(timestamp)
+        raw = f"{content}\0{instant.isoformat() if instant else ''}\0{int(deleted)}"
         return sha256(raw.encode()).hexdigest()
 
     @staticmethod
