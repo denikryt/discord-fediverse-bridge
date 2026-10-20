@@ -177,11 +177,24 @@ async def test_bridgebot_thread_create_adopts_personal_root_before_community(
     bot.database = database
     bot.event_router = router
     bot._connection = SimpleNamespace(user=SimpleNamespace(id=999))
-    bot._synced_threads = set()
+    # The production callback now submits one normalized event instead of
+    # calling SDK-bound community handlers or looking up starter history.
+    from src.platform_types import ChannelRef, ThreadCreated, ThreadRef
+
+    class PersonalThreadAdapter:
+        """Observe the SDK boundary and dispatch one trusted typed adoption."""
+
+        async def ingest_thread_created(self, observed):
+            """Adopt the exact physical Personal Feed root through its typed handler."""
+            event = ThreadCreated(
+                connector_key='discord-primary',
+                thread=ThreadRef(ChannelRef('discord-primary', '10', 'text', '1'), str(observed.id)),
+                name='', external_guild_id='1',
+            )
+            return await router.handle_platform_thread_create(event)
+
+    bot.discord_adapter = PersonalThreadAdapter()
     bot._thread_locks = {}
-    bot._fetch_starter_message = AsyncMock(
-        return_value=SimpleNamespace(author=SimpleNamespace(bot=False))
-    )
     thread = SimpleNamespace(
         id=100, parent_id=10, owner_id=10, guild=SimpleNamespace(id=1)
     )

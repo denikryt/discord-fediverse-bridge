@@ -199,17 +199,29 @@ class DiscordAdapter:
             await self._sink.handle_platform_event(event)
 
     async def ingest_thread_created(self, thread: object) -> None:
-        """Normalize a verified physical thread without guessing its starter ID."""
+        """Normalize one verified thread and publish its actual forum starter.
+
+        The observed starter must be in the exact physical thread. Discord may
+        not cache it; only fetch the exact root ID, never an arbitrary history
+        message whose author and content could belong to a later reply.
+        """
         if self._sink is None:
             raise RuntimeError('Discord normalized ingress is not bound')
         if not isinstance(thread, self._sdk().Thread):
             raise PlatformOperationError('invalid_request', 'expected Discord thread')
         parent = getattr(thread, 'parent', None)
         parent_id = getattr(thread, 'parent_id', None)
-        if (parent is None or parent_id is None
-            or str(getattr(parent, 'id', '')) != str(parent_id)):
+        if parent_id is None:
             raise PlatformOperationError('invalid_request', 'thread parent not verified')
         guild = getattr(getattr(thread, 'guild', None), 'id', None)
+        if parent is None:
+            # Cold-cache thread parents must be fetched by exact ID and guild.
+            parent = await self._get_sdk_channel(ChannelRef(
+                self.connector.key, str(parent_id),
+                external_guild_id=(str(guild) if guild is not None else None),
+            ))
+        if str(getattr(parent, 'id', '')) != str(parent_id):
+            raise PlatformOperationError('invalid_request', 'thread parent not verified')
         parent_guild = getattr(getattr(parent, 'guild', None), 'id', None)
         if guild is None or parent_guild is None or str(guild) != str(parent_guild):
             raise PlatformOperationError('invalid_request', 'thread guild not verified')
@@ -217,9 +229,46 @@ class DiscordAdapter:
             ChannelRef(self.connector.key, str(parent_id), external_guild_id=str(guild)),
             parent,
         )
-        event = self._normalizer().thread_created(thread, parent_kind=verified.kind)
+        starter = None
+        if verified.kind == 'forum':
+            starter = await self._fetch_exact_forum_starter(thread)
+            if starter is None:
+                return  # Missing precise starter evidence; allow a later replay.
+            if (str(getattr(getattr(starter, 'channel', None), 'id', '')) != str(thread.id)
+                or not str(getattr(starter, 'id', '')).isdecimal()):
+                raise PlatformOperationError('invalid_request', 'forum starter identity mismatch')
+            if getattr(starter, 'attachments', ()):
+                raise PlatformOperationError('unsupported', 'forum starter attachments are unsupported')
+            author = self._normalizer()._author(
+                getattr(starter, 'author', None), getattr(starter, 'webhook_id', None),
+            )
+            if author.kind != 'human':
+                return  # Bot/webhook starter is not a new canonical post.
+        event = self._normalizer().thread_created(
+            thread, parent_kind=verified.kind, verified_parent=parent,
+            verified_starter=starter,
+        )
         if event is not None:
             await self._sink.handle_platform_event(event)
+
+    @_tracked_io
+    async def _fetch_exact_forum_starter(self, thread: object) -> object | None:
+        """Resolve an observed starter ID with SDK admission; never scan history.
+
+        Discord may supply a cached starter with an ID different from thread.id.
+        When the cache is empty, only an exact thread-ID message may be tried.
+        Failure to find that message is not proof that another message is root.
+        """
+        cached = getattr(thread, 'starter_message', None)
+        if cached is not None:
+            return cached
+        try:
+            return await thread.fetch_message(thread.id)
+        except Exception as exc:
+            failure = self._read_error(exc)
+            if failure.reason == 'not_found':
+                return None
+            raise failure from exc
 
     async def ingest_raw_message_edit(self, payload: object) -> None:
         """Normalize one raw edit and deliver it exactly once to typed ingress."""
@@ -497,6 +546,8 @@ class DiscordAdapter:
     async def fetch_message(self, message: MessageRef) -> MessageView:
         """Resolve actual physical content and author for missing Gateway fields."""
         physical = await self._get_message(message)
+        if getattr(physical, 'attachments', ()):
+            raise PlatformOperationError('unsupported', 'fetching attached Discord message as text is unsupported')
         edited_at = getattr(physical, 'edited_at', None)
         return MessageView(message, self._author(physical),
                            ContentDocument(str(getattr(physical, 'content', ''))), edited_at)

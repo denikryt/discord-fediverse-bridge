@@ -74,12 +74,12 @@ async def test_reply_precedes_thread_create_but_published_root_enters_typed_ingr
 
 
 @pytest.mark.asyncio
-async def test_unmatched_text_thread_is_ignored_and_forum_keeps_legacy_route(monkeypatch):
-    """A non-Personal Feed thread cannot publish via the new typed route."""
+async def test_unmatched_text_thread_is_ignored_and_forum_uses_typed_route(monkeypatch):
+    """Unmatched text threads are ignored; community replies use the typed route."""
     root = SimpleNamespace(publication_context='personal_feed', discord_channel_id=201)
     bridge, bot, msg, observed = _bot_world(monkeypatch, root=root)
     await bridge._on_message_admitted(bot, msg)
     assert observed == []
     bridge, bot, msg, observed = _bot_world(monkeypatch, community=True)
     await bridge._on_message_admitted(bot, msg)
-    assert observed == ['community']
+    assert observed == ['typed']

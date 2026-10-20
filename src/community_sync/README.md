@@ -23,3 +23,18 @@ Local community actor hosting, local follower state, or gateway route ownership.
 ## User moderation boundary
 
 Discord-originated remote-subscription publishing resolves the registered local identity before side effects. Active global bans reject the source action and reply only in the source thread. Discord-to-Discord mirror attribution uses the registered `user@bridge-authority` handle rather than guild display names.
+
+## Stage 03 Gateway forum ingress (Checkpoint 32)
+
+Production Discord forum `ThreadCreated` and `MessageCreated` are normalized
+by `DiscordAdapter` and routed by the single `PlatformEventIngress`. The
+`DiscordEventRouter` checks the source forum before invoking
+`CommunityRuntime.handle_normalized_thread_create()` or
+`handle_normalized_message_create()`. Physical sibling deliveries use the
+connector-scoped `PlatformDeliveryPort`, not an additional SDK callback path.
+A starter must have a verified physical `MessageRef`; an unavailable starter
+does not cause the router to invent one from arbitrary thread history. SQLite
+thread/message groups remain the durable deduplication boundary. Concurrent
+`THREAD_CREATE` callbacks for one connector/thread are serialized through
+the AP publish and SQLite receipt boundary; a failed first callback does not
+poison a process-local seen cache.

@@ -15,7 +15,9 @@ from .local_communities.participant_routing import (
     resolve_local_community_source_for_forum,
 )
 from .personal_feeds import PersonalFeedBindingView, PersonalFeedService
-from .platform_types import MessageCreated, ThreadCreated, PlatformOperationError
+from .platform_types import (
+    MessageCreated, MessageView, ThreadCreated, PlatformOperationError,
+)
 from .discord_legacy_projection import discord_id_to_legacy_int
 from .runtime_ports import DiscordMutationContext
 
@@ -77,10 +79,10 @@ class DiscordEventRouter:
         )
 
     async def handle_platform_message_create(self, event: MessageCreated) -> object:
-        """Route neutral Personal Feed roots/replies without SDK-shaped input.
+        """Route a verified neutral Create to one owning canonical runtime.
 
-        Forum starters and community replies still require their own typed
-        canonical bindings; never count an unbound Create as published.
+        Personal Feed and forum sources never share publication ownership;
+        Local Community takes precedence over Remote Community for forum IDs.
         """
         if event.connector_key != 'discord-primary':
             raise PlatformOperationError('invalid_request', 'Discord root connector mismatch')
@@ -108,9 +110,30 @@ class DiscordEventRouter:
                             event, adapter=self._reply_notice_adapter,
                         )
                 return None
-            # A forum reply cannot be dropped as successfully processed until
-            # the subscribed/local-community typed handlers are connected.
-            raise RuntimeError('normalized community create ingress is not bound')
+            if (event.parent_channel is not None
+                and event.parent_channel.kind == 'forum'):
+                if (event.external_guild_id is None
+                    or not event.external_guild_id.isdecimal()
+                    or not self._is_guild_allowed(int(event.external_guild_id))):
+                    return None
+                if self._reply_notice_adapter is None:
+                    raise RuntimeError('Discord adapter is not bound for forum replies')
+                forum_id = discord_id_to_legacy_int(event.thread_context, component='parent')
+                # Local host/subscriber ownership wins over remote subscription
+                # just as in the old SDK router; each runtime independently
+                # checks the physical source's current authorization.
+                if self.is_local_community_forum(forum_id):
+                    return await self.local_community_runtime.handle_normalized_message_create(
+                        event, adapter=self._reply_notice_adapter,
+                    )
+                if self.is_remote_subscription_forum(forum_id):
+                    return await self.community_runtime.handle_normalized_message_create(
+                        event, adapter=self._reply_notice_adapter,
+                    )
+                return None
+            # A normalized event with no verified parent cannot be classified
+            # into a canonical community or Personal Feed publication.
+            raise PlatformOperationError('invalid_request', 'unverified thread parent kind')
         if event.parent_channel is None or event.parent_channel.kind not in ('text', 'announcement'):
             raise RuntimeError('normalized community create ingress is not bound')
         if event.content.attachments:
@@ -136,13 +159,35 @@ class DiscordEventRouter:
         )
 
     async def handle_platform_thread_create(self, event: ThreadCreated) -> object:
-        """Adopt a verified text-root thread before considering forum publication."""
+        """Route verified forum starters or adopt existing Personal Feed roots."""
         if event.connector_key != 'discord-primary':
             raise PlatformOperationError('invalid_request', 'Discord thread connector mismatch')
         if event.thread.channel.kind == 'forum':
-            # Forum starters still require the author-verified starter Create
-            # pipeline. Returning ignored here would permanently lose a post.
-            raise RuntimeError('normalized community thread create ingress is not bound')
+            if (event.external_guild_id is None
+                or not event.external_guild_id.isdecimal()
+                or not self._is_guild_allowed(int(event.external_guild_id))):
+                return None
+            if event.starter is None:
+                # Do not invent thread.id as a starter or fall back to the
+                # first unrelated history message. Later replay may succeed.
+                return None
+            if self._reply_notice_adapter is None:
+                raise RuntimeError('Discord adapter is not bound for forum starters')
+            starter = await self._reply_notice_adapter.fetch_message(event.starter)
+            if not isinstance(starter, MessageView) or starter.message != event.starter:
+                raise PlatformOperationError('invalid_request', 'unverified forum starter receipt')
+            if starter.author is None or starter.author.kind != 'human' or starter.content is None:
+                return None
+            forum_id = discord_id_to_legacy_int(event.thread, component='parent')
+            if self.is_local_community_forum(forum_id):
+                return await self.local_community_runtime.handle_normalized_thread_create(
+                    event, starter, adapter=self._reply_notice_adapter,
+                )
+            if self.is_remote_subscription_forum(forum_id):
+                return await self.community_runtime.handle_normalized_thread_create(
+                    event, starter, adapter=self._reply_notice_adapter,
+                )
+            return None
         if event.thread.channel.kind not in ('text', 'announcement'):
             return None
         if (event.external_guild_id is None or not event.external_guild_id.isdecimal()

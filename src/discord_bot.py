@@ -1,4 +1,4 @@
-"""Discord adapter for slash commands and forum thread/message callbacks."""
+"""Discord SDK shell for commands and normalized Gateway callbacks."""
 
 from __future__ import annotations
 
@@ -65,12 +65,10 @@ class BridgeBot(discord.Client):
         )
         self.tree = BridgeCommandTree(self)
         self.bridge_ready = asyncio.Event()
-        # Per-thread locks prevent duplicate Lemmy posts when Discord fires
-        # on_thread_create twice for the same thread (e.g. on reconnect).
-        self._thread_locks: dict[int, asyncio.Lock] = {}
-        # Tracks thread IDs that have already been processed this session so
-        # a second on_thread_create after lock cleanup still exits cleanly.
-        self._synced_threads: set[int] = set()
+        # A keyed admission lock protects the gap between AP publish and the
+        # canonical SQLite receipt for concurrent THREAD_CREATE callbacks.
+        # Unlike a seen-set, it never claims a failed delivery has succeeded.
+        self._thread_locks: dict[tuple[str, int], asyncio.Lock] = {}
         # Raw edit/delete mutation handling and ready-gated personal-feed
         # delivery are true bot/router cycles, so they use guarded one-time
         # binds instead of raw attribute writes from the composition root.
@@ -233,73 +231,33 @@ class BridgeBot(discord.Client):
         finally:
             self._leave_gateway_callback()
 
-    # MULTIPLATFORM_STAGE02_TEMP: BridgeBot callbacks still forward Discord SDK objects directly; Stage 03 must emit normalized PlatformInboundEvent values and retire this legacy ingress after regression tests.
     async def _on_thread_create_admitted(self, thread: discord.Thread) -> None:
-        # Only threads in subscribed channels should be forwarded to Lemmy.
-        # Threads created by the bot itself are skipped to break the echo loop.
-        if thread.parent_id is None:
+        """Send subscribed forum and Personal Feed threads through one typed sink.
+
+        Canonical deduplication lives in SQLite; a process-local seen set could
+        suppress recovery following a failed or interrupted federation call.
+        """
+        parent_id = getattr(thread, 'parent_id', None)
+        if parent_id is None or (self.user and thread.owner_id == self.user.id):
             return
         personal_root = self.database.activitypub_objects.get_published_activity_object_by_discord_message_id(
             thread.id
         )
-        if not (
-            (
-                personal_root is not None
-                and personal_root.publication_context == "personal_feed"
-            )
-            or self.event_router.is_remote_subscription_forum(thread.parent_id)
-            or self.event_router.is_local_community_forum(thread.parent_id)
-        ):
-            return
-        if self.user and thread.owner_id == self.user.id:
-            return
-        if (personal_root is not None
+        personal = bool(
+            personal_root is not None
             and personal_root.publication_context == 'personal_feed'
-            and int(personal_root.discord_channel_id) == int(thread.parent_id)
-            and getattr(self, 'discord_adapter', None) is not None):
-            # Root-anchored Personal Feed threads need no arbitrary starter
-            # history fallback; the persisted root and parent prove identity.
+            and int(personal_root.discord_channel_id) == int(parent_id)
+        )
+        if not (personal or self.event_router.is_remote_subscription_forum(parent_id)
+                or self.event_router.is_local_community_forum(parent_id)):
+            return
+        # Keep concurrent notifications of this physical thread serialized
+        # through publication and SQLite receipt persistence. A replay after
+        # failure is still admitted; the durable repositories decide dedup.
+        key = ('discord-primary', int(thread.id))
+        lock = self._thread_locks.setdefault(key, asyncio.Lock())
+        async with lock:
             await self._require_discord_adapter().ingest_thread_created(thread)
-            return
-
-        # In-memory fast-path: if this session already processed the thread,
-        # skip before acquiring any lock or hitting the DB.
-        if thread.id in self._synced_threads:
-            return
-
-        # Acquire a per-thread lock so a second on_thread_create for the same
-        # thread (Discord reconnect race) blocks until the first finishes.
-        if thread.id not in self._thread_locks:
-            self._thread_locks[thread.id] = asyncio.Lock()
-        async with self._thread_locks[thread.id]:
-            # Re-check both the in-memory set and the DB inside the lock.
-            if thread.id in self._synced_threads:
-                return
-            if (
-                self.database.legacy_lemmy_mappings.get_post_link_by_thread_id(
-                    thread.id
-                )
-                is not None
-            ):
-                self._synced_threads.add(thread.id)
-                return
-
-            starter_message = await self._fetch_starter_message(thread)
-            if starter_message is None:
-                logger.warning(
-                    "Could not fetch starter message for Discord forum thread %s",
-                    thread.id,
-                )
-                return
-            if starter_message.author.bot:
-                return
-
-            result = await self.event_router.handle_thread_create(
-                thread=thread,
-                starter_message=starter_message,
-            )
-            if result.status == "published":
-                self._synced_threads.add(thread.id)
 
     async def _on_message_admitted(self, message: discord.Message) -> None:
         # Only messages in threads inside subscribed channels are forwarded.
@@ -372,14 +330,9 @@ class BridgeBot(discord.Client):
             delivery.role if delivery else None,
         )
 
-        # Personal Feed replies have one neutral Create path. Community replies
-        # still use their legacy SDK handler until the forum typed cutover.
-        if personal_thread or personal_unadopted:
-            await self._require_discord_adapter().ingest_thread_message_created(message)
-            return
-        # Phase 9: Allow all delivery roles (source, mirror, inbound) to proceed.
-        # The bot-author guard is the existing community echo suppression gate.
-        await self.event_router.handle_message(message=message)
+        # Personal Feed and subscribed/local Community replies now share the
+        # exact same normalized sink; never invoke the old SDK publisher too.
+        await self._require_discord_adapter().ingest_thread_message_created(message)
 
     async def on_raw_thread_update(self, payload: object) -> None:
         """Normalize an uncached thread update under the Gateway shutdown gate."""
@@ -445,28 +398,6 @@ class BridgeBot(discord.Client):
             return "present", await channel.fetch_message(message_id)
         except discord.NotFound:
             return "missing", None
-
-    async def _fetch_starter_message(
-        self, thread: discord.Thread
-    ) -> discord.Message | None:
-        # Discord APIs are inconsistent here, so we try the direct starter
-        # message path first and then fall back to oldest history.
-        if thread.starter_message is not None:
-            return thread.starter_message
-        try:
-            return await thread.fetch_message(thread.id)
-        except discord.NotFound:
-            try:
-                history = [
-                    message
-                    async for message in thread.history(limit=1, oldest_first=True)
-                ]
-                return history[0] if history else None
-            except discord.HTTPException:
-                return None
-        except discord.HTTPException:
-            logger.exception("Failed to fetch starter message for thread %s", thread.id)
-            return None
 
     async def wait_until_bridge_ready(self) -> None:
         await self.bridge_ready.wait()

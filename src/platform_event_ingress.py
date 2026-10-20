@@ -1,8 +1,7 @@
 """Single connector-scoped normalized Gateway mutation ingress.
 
-Stage 03 routes edits/deletes and Personal Feed roots/replies through this
-connector-scoped sink. Community forum starter/reply routes remain explicitly
-unbound until their domain handlers accept neutral DTOs.
+Stage 03 routes edits/deletes, Personal Feed roots/replies and Community
+forum starters/replies through one connector-scoped sink.
 """
 
 from __future__ import annotations
@@ -37,7 +36,8 @@ class PlatformEventIngress:
 
     Normalized message mutation behavior stays with the existing mutation
     handler; thread metadata events have no canonical AP mutation owner in
-    Stage 03. Unsupported create paths fail visibly until fully rewired.
+    Stage 03. Forum Create paths dispatch to authorized canonical runtimes; unknown
+    or incomplete events fail closed instead of entering a legacy SDK route.
     """
 
     def __init__(

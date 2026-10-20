@@ -73,7 +73,7 @@ mapping can be overwritten. A message surface must also belong to the
 canonical parent thread carried by its parent physical surface. There is no
 new queue or database schema.
 
-### Stage 03 normalized Local Community source (Checkpoint 31, pre-cutover)
+### Stage 03 normalized Local Community source (Checkpoints 31–32)
 
 `LocalCommunityRuntime.handle_normalized_thread_create()` and
 `handle_normalized_message_create()` now accept verified `ThreadCreated`/
@@ -93,5 +93,8 @@ local subscriber source and mirrored subscriber both have role
 `local_subscriber`. A replay can repair missing copies only if the persisted
 `PublishedActivityObject` confirms the actual author, source forum/message,
 original title and body. A mere matching Discord ID or source role is not
-sufficient. Gateway production callbacks still run the old SDK route until
-Community and Local Community can switch together; **no parallel dispatch**.
+sufficient. Production forum Create callbacks now use the single normalized
+`PlatformEventIngress` route; both host and subscriber authorship are checked
+by `LocalCommunityRuntime` before canonical publication, and no parallel SDK
+Create callback publishes a second activity. Remaining inbound ActivityPub
+physical writes and edits/deletes are separate Stage 03 migration work.

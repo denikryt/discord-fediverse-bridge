@@ -185,7 +185,11 @@ class DiscordGatewayNormalizer:
             external_guild_id=self._optional_id(getattr(raw, "guild_id", None)),
         )
 
-    def thread_created(self, thread: object, *, parent_kind: ChannelKind) -> ThreadCreated | None:
+    def thread_created(
+        self, thread: object, *, parent_kind: ChannelKind,
+        verified_starter: object | None = None,
+        verified_parent: object | None = None,
+    ) -> ThreadCreated | None:
         """Normalize verified forum threads or text-root discussion threads.
 
         A text/announcement parent is still only a physical observation; the
@@ -193,7 +197,7 @@ class DiscordGatewayNormalizer:
         """
         if parent_kind not in ('forum', 'text', 'announcement'):
             return None
-        parent = getattr(thread, "parent", None)
+        parent = verified_parent if verified_parent is not None else getattr(thread, "parent", None)
         if parent is None:
             return None
         parent_id = self._id(getattr(thread, "parent_id", None), "thread parent")
@@ -202,7 +206,8 @@ class DiscordGatewayNormalizer:
         guild_id = getattr(getattr(thread, "guild", None), "id", None)
         channel = self._channel(parent_id, parent_kind, guild_id)
         thread_ref = ThreadRef(channel, self._id(getattr(thread, "id", None), "thread"))
-        starter = getattr(thread, "starter_message", None)
+        starter = (verified_starter if verified_starter is not None
+                   else getattr(thread, "starter_message", None))
         starter_ref = None
         if starter is not None:
             if str(getattr(getattr(starter, "channel", None), "id", None)) != thread_ref.external_thread_id:

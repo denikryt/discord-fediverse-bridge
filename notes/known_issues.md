@@ -93,3 +93,15 @@ copies have the same role. Nested reply parents cannot borrow another source
 thread's persisted message surface or known starter ID. Production forum Gateway callbacks remain
 on the prior SDK handler pending coordinated cutover; full SDK-dependent and
 Fedify-native security integration remains blocked by missing dependencies.
+
+## 2026-10-19 — Stage 03 Checkpoint 32 forum Gateway cutover
+
+- Verified in focused SQLite/fake SDK scenarios: forum Create now uses one
+  normalized ingress; concurrent same-thread callbacks are serialized and
+  remote/local source identity and replay are checked by
+  their existing runtimes and persisted mappings. Exact starter missing/foreign
+  must not trigger publication; an unsupported attached starter is rejected.
+- Outstanding release verification: pinned `discord.py` runtime and full pytest
+  remain unavailable; native Fedify transport/SSRF acceptance is also pending.
+- Remaining migration: ActivityPub inbound physical SDK fan-out, mutations,
+  User Actor SDK reads and command lifecycle audit. No Stage 04 outbox added.
