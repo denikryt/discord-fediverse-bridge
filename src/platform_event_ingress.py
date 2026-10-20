@@ -1,8 +1,8 @@
 """Single connector-scoped normalized Gateway mutation ingress.
 
-Stage 03 switches raw message and thread mutation callbacks here first. The
-create routes remain explicitly unbound until their domain handlers accept
-neutral DTOs; an unbound create must not be acknowledged or silently dropped.
+Stage 03 routes edits/deletes and Personal Feed roots/replies through this
+connector-scoped sink. Community forum starter/reply routes remain explicitly
+unbound until their domain handlers accept neutral DTOs.
 """
 
 from __future__ import annotations
@@ -19,7 +19,7 @@ class PlatformCreateRouter(Protocol):
     """Consume neutral authored Create events through existing domain services."""
 
     async def handle_platform_message_create(self, event: MessageCreated) -> object:
-        """Route a trusted, typed root to the owning canonical publisher."""
+        """Route a trusted, typed root or reply to the owning canonical publisher."""
 
     async def handle_platform_thread_create(self, event: ThreadCreated) -> object:
         """Adopt an existing Personal Feed root or route a verified forum starter."""
@@ -76,6 +76,6 @@ class PlatformEventIngress:
         elif isinstance(event, ThreadCreated) and self.creates is not None:
             await self.creates.handle_platform_thread_create(event)
         else:
-            # Thread and reply Create still require explicit typed domain
-            # bindings: never silently acknowledge an unpublished Create.
+            # A missing domain Create binding must never silently acknowledge
+            # a community post or reply that was not published.
             raise RuntimeError('normalized create ingress is not bound')

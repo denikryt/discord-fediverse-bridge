@@ -78,6 +78,7 @@ class DiscordGatewayNormalizer:
     def message_created(
         self, message: object, *, channel_kind: ChannelKind,
         parent_kind: ChannelKind = "unknown",
+        verified_parent: object | None = None,
     ) -> MessageCreated | None:
         """Map a full SDK message while preserving source timestamp and container."""
         message_type = getattr(message, "type", None)
@@ -90,7 +91,9 @@ class DiscordGatewayNormalizer:
         channel_guild = getattr(getattr(container, "guild", None), "id", None)
         if guild_id is not None and channel_guild is not None and str(guild_id) != str(channel_guild):
             raise ValueError("Discord message guild contradicts observed channel")
-        parent = getattr(container, "parent", None)
+        # An adapter may independently fetch a cold-cache thread parent;
+        # the normalizer must not invent one from the numeric parent ID.
+        parent = verified_parent if verified_parent is not None else getattr(container, "parent", None)
         if parent is None:
             # A thread may retain parent_id after its parent object falls out
             # of the SDK cache. Never misclassify it as a root text channel;

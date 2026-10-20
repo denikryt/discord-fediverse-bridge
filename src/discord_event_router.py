@@ -46,6 +46,13 @@ class DiscordEventRouter:
         )
         self.personal_feed_publisher = personal_feed_publisher
         self.personal_feed_conversation_runtime = personal_feed_conversation_runtime
+        self._reply_notice_adapter: object | None = None
+
+    def bind_reply_notice_adapter(self, adapter: object) -> None:
+        """Bind the existing physical adapter for best-effort rejection notices."""
+        if self._reply_notice_adapter is not None:
+            raise RuntimeError('Personal Feed reply notice adapter already bound')
+        self._reply_notice_adapter = adapter
 
     def _is_guild_allowed(self, guild_id: int | str | None) -> bool:
         """Evaluate one Discord event against the current guild policy."""
@@ -70,17 +77,41 @@ class DiscordEventRouter:
         )
 
     async def handle_platform_message_create(self, event: MessageCreated) -> object:
-        """Admit one authored root via neutral identity and current Personal Feed binding.
+        """Route neutral Personal Feed roots/replies without SDK-shaped input.
 
-        Other Create types are not routed here until their canonical runtimes
-        consume DTOs; callers must not treat those as successfully published.
+        Forum starters and community replies still require their own typed
+        canonical bindings; never count an unbound Create as published.
         """
         if event.connector_key != 'discord-primary':
             raise PlatformOperationError('invalid_request', 'Discord root connector mismatch')
-        if (event.parent_channel is None or event.parent_channel.kind not in ('text', 'announcement')
-            or event.thread_context is not None):
-            # Forum starters and thread replies have not yet migrated to the
-            # normalized Create route. A caller must not count them delivered.
+        if event.thread_context is not None:
+            # Text/announcement replies are Personal Feed only when the
+            # canonical root and thread parent have already been proven. A
+            # reply can arrive ahead of THREAD_CREATE, so adopt that exact root
+            # via the existing repository before attempting publication.
+            if (event.parent_channel is not None
+                and event.parent_channel.kind in ('text', 'announcement')
+                and self.personal_feed_conversation_runtime is not None):
+                if (event.external_guild_id is not None and event.external_guild_id.isdecimal()
+                    and self._is_guild_allowed(int(event.external_guild_id))):
+                    thread_id = discord_id_to_legacy_int(event.thread_context)
+                    if not self.is_personal_feed_thread(thread_id):
+                        self.personal_feed_conversation_runtime.adopt_normalized_thread(
+                            ThreadCreated(
+                                connector_key=event.connector_key,
+                                thread=event.thread_context, name='',
+                                external_guild_id=event.external_guild_id,
+                            )
+                        )
+                    if self.is_personal_feed_thread(thread_id):
+                        return await self.personal_feed_conversation_runtime.publish_normalized_reply(
+                            event, adapter=self._reply_notice_adapter,
+                        )
+                return None
+            # A forum reply cannot be dropped as successfully processed until
+            # the subscribed/local-community typed handlers are connected.
+            raise RuntimeError('normalized community create ingress is not bound')
+        if event.parent_channel is None or event.parent_channel.kind not in ('text', 'announcement'):
             raise RuntimeError('normalized community create ingress is not bound')
         if event.content.attachments:
             raise PlatformOperationError('unsupported', 'personal feed attachment publication is not supported')

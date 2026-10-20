@@ -237,3 +237,9 @@ cutover has yet been performed. Two targeted positive/negative tests pass.
 
 - Adapter now verifies observed thread parent and three guild identities before normalizing a reply into `MessageCreated`; synthetic starter events and unsupported attachments cannot publish through that boundary.
 - Production `on_message` remains on SDK-shaped forum/Personal Feed reply handlers until typed domain routes can be switched without duplicate publication.
+
+## Stage 03 Personal Feed typed replies (Checkpoint 24, 2026-10-19)
+
+- Production Personal Feed reply Create now uses `DiscordAdapter` → normalized ingress → canonical SQLite publication, including out-of-order root adoption and nested-parent validation. Legacy direct `publish_local_reply(message=...)` remains for existing non-production callers until the remaining forum cutover.
+- Cold-cache thread parent resolves through an exact adapter channel lookup. If the lookup fails, ingress rejects the event without fabricating a parent.
+- Community/local forum Create and fanout are still SDK-shaped. Full installed-Discord/Fedify integration tests and patched Fedify native SSRF validation remain blocked by missing dependencies.

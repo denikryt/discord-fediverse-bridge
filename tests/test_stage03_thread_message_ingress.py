@@ -99,3 +99,43 @@ async def test_synthetic_starter_is_not_published_and_attachments_fail_closed() 
     with pytest.raises(PlatformOperationError, match='attachment'):
         await adapter.ingest_thread_message_created(physical_message(attachments=(object(),)))
     assert sink.events == []
+
+
+@pytest.mark.asyncio
+async def test_uncached_parent_is_resolved_by_exact_sdk_lookup_before_ingress() -> None:
+    """A cold SDK cache may publish only after an exact verified parent lookup."""
+    adapter, sink = adapter_with_sink()
+    msg = physical_message()
+    parent = msg.channel.parent
+    msg.channel.parent = None
+    looked_up = []
+
+    async def fetch_channel(channel_id: int) -> object:
+        """Return the physical parent from the simulated Discord API."""
+        looked_up.append(channel_id)
+        return parent
+
+    adapter._bot.get_channel = lambda _id: None
+    adapter._bot.fetch_channel = fetch_channel
+    await adapter.ingest_thread_message_created(msg)
+    assert looked_up == [45]
+    assert len(sink.events) == 1
+    assert sink.events[0].thread_context.channel.external_channel_id == '45'
+
+
+@pytest.mark.asyncio
+async def test_uncached_parent_fetch_failure_never_guesses_a_reply_context() -> None:
+    """Unavailable parent metadata cannot silently become a text-channel root."""
+    adapter, sink = adapter_with_sink()
+    msg = physical_message()
+    msg.channel.parent = None
+    adapter._bot.get_channel = lambda _id: None
+
+    async def fetch_channel(_channel_id: int) -> object:
+        """Simulate Discord refusing the authoritative parent lookup."""
+        raise RuntimeError('Discord unavailable')
+
+    adapter._bot.fetch_channel = fetch_channel
+    with pytest.raises(PlatformOperationError, match='unavailable'):
+        await adapter.ingest_thread_message_created(msg)
+    assert sink.events == []

@@ -165,8 +165,18 @@ class DiscordAdapter:
             raise PlatformOperationError('invalid_request', 'expected Discord thread container')
         parent = getattr(container, 'parent', None)
         parent_id = getattr(container, 'parent_id', None)
-        if (parent is None or parent_id is None
-            or str(getattr(parent, 'id', '')) != str(parent_id)):
+        message_guild_id = getattr(getattr(message, 'guild', None), 'id', None)
+        if parent_id is None:
+            raise PlatformOperationError('invalid_request', 'thread parent not verified')
+        if parent is None:
+            # Discord may omit Thread.parent when the channel cache is cold.
+            # Resolve the exact parent through the same verified physical
+            # adapter lookup; never silently treat this reply as a root.
+            parent = await self._get_sdk_channel(ChannelRef(
+                self.connector.key, str(parent_id),
+                external_guild_id=(str(message_guild_id) if message_guild_id is not None else None),
+            ))
+        if str(getattr(parent, 'id', '')) != str(parent_id):
             raise PlatformOperationError('invalid_request', 'thread parent not verified')
         # All three independently observed guild references must agree. A
         # mismatched cached parent cannot authorize community publication.
@@ -183,6 +193,7 @@ class DiscordAdapter:
         )
         event = self._normalizer().message_created(
             message, channel_kind='unknown', parent_kind=verified.kind,
+            verified_parent=parent,
         )
         if event is not None:
             await self._sink.handle_platform_event(event)

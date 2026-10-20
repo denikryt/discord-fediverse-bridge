@@ -30,13 +30,16 @@ This document explains the major runtime traces through the bridge: user/platfor
 3. `PlatformEventIngress` rejects another connector before `DiscordEventRouter.handle_platform_message_create()` verifies the root placement, source guild, human author and current binding. Forum/thread creates are not acknowledged by this partial route.
 4. `PersonalFeedPublisher.publish_normalized_root()` rechecks the current owner binding, registered User Actor, ban/guild policy and source timestamp. It preserves the prior deterministic ActivityPub identity and persists once; duplicate Gateway replay does not render again.
 5. A later `on_thread_create` for the published text/announcement root enters `DiscordAdapter.ingest_thread_created()` and the same typed sink. `DiscordEventRouter.handle_platform_thread_create()` adopts the exact root/thread ID only when the original publication and parent channel agree. No guessed forum starter or history fallback is needed.
-6. Other community forum-thread and reply Create callbacks still use their SDK-shaped domain path until their own typed cutover. No duplicate publication route is active for bound Personal Feed roots.
+6. A `MESSAGE_CREATE` inside an adopted Personal Feed discussion thread now enters `DiscordAdapter.ingest_thread_message_created()` and the same typed sink. Its parent/guild/author/source timestamp/reply reference are verified before `DiscordEventRouter.handle_platform_message_create()` routes to `PersonalFeedConversationRuntime.publish_normalized_reply()`.
+7. The conversation runtime rechecks the persisted root parent, current channel owner, guild policy, registered author and bans. `MESSAGE_CREATE` arriving before `THREAD_CREATE` can adopt the exact already published root; duplicate replies reuse deterministic ActivityPub IDs and the existing SQLite mapping. A nested reference is accepted only if its canonical object belongs to the same root.
+8. An unregistered reply is rejected before federation. A best-effort registration notice uses `DiscordAdapter.send_message()` with a deterministic `CreateAttempt`; failed notice delivery does not change the rejection. Bot/unknown authors and unsupported media cannot publish.
+9. Other community forum-thread and reply Create callbacks still use their SDK-shaped domain path until their own typed cutover. No duplicate publication route is active for bound Personal Feed roots or replies.
 
 ## Discord thread message observation (Stage 03 preparatory boundary)
 
 1. `DiscordAdapter.ingest_thread_message_created()` verifies a physical `discord.Thread`, its independently observed parent, and matching message/thread/parent guild IDs; ambiguous metadata fails before domain admission.
 2. The adapter refuses unsupported attachments instead of discarding them and emits one `MessageCreated` with its immediate thread container, parent channel kind, reply reference, actual author and original timestamp. Discord's synthetic `THREAD_STARTER_MESSAGE` emits nothing.
-3. This is a transport-facing capability only in Checkpoint 23: production `on_message` still calls legacy SDK-shaped forum and Personal Feed reply routes. The typed domain Create cutover must happen before this adapter method is called from those callbacks, so only one route publishes each message.
+3. The production Personal Feed reply callback now uses this neutral event; subscribed/local community forum replies still call their existing SDK-shaped runtime. The physical parent may be fetched via the adapter when absent from the SDK cache; a failed/conflicting lookup does not guess the parent or convert the message into a root.
 
 ## Discord thread -> remote Lemmy community publish flow
 

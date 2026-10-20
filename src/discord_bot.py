@@ -338,8 +338,23 @@ class BridgeBot(discord.Client):
             return
         if message.channel.parent_id is None:
             return
+        # A reply may arrive before THREAD_CREATE has installed the conversation
+        # mapping. Detect only an existing published Personal Feed root with the
+        # same physical thread/root ID and parent; the canonical runtime will
+        # independently recheck ownership before adopting or publishing it.
+        personal_thread = self.event_router.is_personal_feed_thread(message.channel.id)
+        possible_root = None
+        if not personal_thread:
+            possible_root = self.database.activitypub_objects.get_published_activity_object_by_discord_message_id(
+                message.channel.id
+            )
+        personal_unadopted = bool(
+            possible_root is not None
+            and possible_root.publication_context == 'personal_feed'
+            and int(possible_root.discord_channel_id) == int(message.channel.parent_id)
+        )
         if not (
-            self.event_router.is_personal_feed_thread(message.channel.id)
+            personal_thread or personal_unadopted
             or self.event_router.is_remote_subscription_forum(message.channel.parent_id)
             or self.event_router.is_local_community_forum(message.channel.parent_id)
         ):
@@ -357,11 +372,14 @@ class BridgeBot(discord.Client):
             delivery.role if delivery else None,
         )
 
+        # Personal Feed replies have one neutral Create path. Community replies
+        # still use their legacy SDK handler until the forum typed cutover.
+        if personal_thread or personal_unadopted:
+            await self._require_discord_adapter().ingest_thread_message_created(message)
+            return
         # Phase 9: Allow all delivery roles (source, mirror, inbound) to proceed.
-        # The bot-author guard (line 119 above) is the sole loop-prevention mechanism.
-        await self.event_router.handle_message(
-            message=message,
-        )
+        # The bot-author guard is the existing community echo suppression gate.
+        await self.event_router.handle_message(message=message)
 
     async def on_raw_thread_update(self, payload: object) -> None:
         """Normalize an uncached thread update under the Gateway shutdown gate."""

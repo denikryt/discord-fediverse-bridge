@@ -25,6 +25,13 @@ This document is a short, feature-oriented index of the test suite. It helps mai
 - Forum thread reply normalization preserves its exact container, verified parent, author, reply target and timestamp. Parent/guild mismatches fail before ingress; synthetic starter and unsupported attachments cause no canonical Create — `tests/test_stage03_thread_message_ingress.py`.
 - Production forum and personal-feed reply Create cutover remains pending; these are transport-boundary tests, not a claim of completed end-to-end publication.
 
+## Stage 03 Personal Feed typed reply ingress (Checkpoint 24)
+
+- Typed reply actions enter `PlatformEventIngress` → real `DiscordEventRouter` → real `PersonalFeedConversationRuntime` and SQLite, retaining registered User Actor identity, deterministic ActivityPub IDs, root and nested-parent ancestry. Duplicate notices persist once; `MESSAGE_CREATE` before `THREAD_CREATE` adopts only the exact published root. Parent/guild mismatch, foreign connector, opaque Discord ID, unregistered/bot author, missing permission, unsupported media and cross-root reply references do not produce canonical Create — `tests/test_stage03_personal_feed_reply_ingress.py`.
+- Missing `Thread.parent` in the SDK cache is handled by an authoritative adapter lookup; unavailable parent fails before ingress, without changing the message into a root — `tests/test_stage03_thread_message_ingress.py`.
+- Existing Stage 8 direct-caller regression tests remain required until the forum SDK-shaped callback cutover is complete.
+- The production `BridgeBot._on_message_admitted` gate admits an unadopted but published Personal Feed root before `THREAD_CREATE`; unrelated text threads are ignored and subscribed forum replies retain their legacy routing — `tests/test_stage03_bot_personal_reply_cutover.py` (SDK import-only stub where discord.py is unavailable).
+
 ## Stage 03 Gateway ingress transition
 
 - Normalized raw edit/delete -> single domain-mutation sink, foreign-connector rejection, thread mutation no-op, unbound create rejection and real adapter admission — `tests/test_stage03_platform_event_ingress.py`.

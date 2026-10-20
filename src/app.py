@@ -240,6 +240,7 @@ def _build_live_runtime(settings: Settings, deployment_lease: FileLock) -> Runti
         discord_adapter = DiscordAdapter(connector=connector, bot=bot)
         adapter_registry.register(discord_adapter)
         bot.bind_discord_adapter(discord_adapter)
+        event_router.bind_reply_notice_adapter(discord_adapter)
         personal_feed_discord_delivery_worker = PersonalFeedDiscordDeliveryWorker(
             database=database, adapter=discord_adapter, personal_feed_service=personal_feed_service
         )
