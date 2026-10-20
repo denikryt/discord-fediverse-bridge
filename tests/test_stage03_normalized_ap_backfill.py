@@ -246,8 +246,104 @@ async def test_normalized_comment_recovers_post_then_posts_to_both_mapped_thread
 
 
 @pytest.mark.asyncio
-async def test_incomplete_parent_never_dispatches_child_message(tmp_path, monkeypatch):
-    """A bad backfilled parent receipt defers the child instead of guessing."""
+async def test_initial_parent_partial_send_still_delivers_child_to_confirmed_forum(tmp_path, monkeypatch):
+    """When first backfill has one bad receipt, its good thread gets the child."""
+    import src.bridge_lemmy_to_discord as legacy_ap
+
+    async def fetch(ap_url):
+        """Fetch the matching original Page once at the remote network edge."""
+        assert ap_url == POST
+        return document()
+
+    monkeypatch.setattr(legacy_ap, '_fetch_ap_object', fetch)
+    db, _, runtime = world(tmp_path)
+    adapter = DiscordPostsAndComments()
+    adapter.bad_forum = '200'
+
+    result = await runtime.handle_normalized_inbound_comment_with_backfill(
+        comment(), adapter=adapter,
+    )
+
+    assert result.status == 'processed'
+    assert {call[0].external_channel_id for call in adapter.calls} == {'100', '200'}
+    assert [call[0].external_thread_id for call in adapter.message_calls] == ['1100']
+    group = db.discord_fanout_groups.get_thread_group_by_ap_object(POST)
+    assert group is not None
+    assert {row.discord_channel_id for row in
+            db.discord_fanout_groups.get_thread_deliveries(group.id)} == {100}
+    msg_group = db.discord_fanout_groups.get_message_group_by_ap_object(comment().object.ap_id)
+    assert msg_group is not None
+    assert {row.discord_channel_id for row in
+            db.discord_fanout_groups.get_message_deliveries(msg_group.id)} == {100}
+
+
+@pytest.mark.asyncio
+async def test_new_subscriber_does_not_block_confirmed_existing_comment_targets(tmp_path):
+    """A later Follow cannot stall replies in two already-confirmed parent threads."""
+    db, group, runtime = world(tmp_path, only_first=True)
+    db.discord_fanout_groups.add_thread_delivery(
+        thread_group_id=group.id, discord_channel_id=200,
+        discord_thread_id=1200, discord_starter_message_id=2200, role='inbound',
+    )
+    add_accepted_subscription(db, channel_id=300, guild_id=10)
+    adapter = DiscordPostsAndComments()
+    event = comment()
+
+    result = await runtime.handle_normalized_inbound_comment_with_backfill(event, adapter=adapter)
+
+    assert result.status == 'processed'
+    assert adapter.calls == []  # Never backfill the unproven third parent.
+    assert {call[0].external_thread_id for call in adapter.message_calls} == {'1100', '1200'}
+    msg_group = db.discord_fanout_groups.get_message_group_by_ap_object(event.object.ap_id)
+    assert msg_group is not None
+    assert {delivery.discord_channel_id for delivery in
+            db.discord_fanout_groups.get_message_deliveries(msg_group.id)} == {100, 200}
+    assert {delivery.discord_channel_id for delivery in
+            db.discord_fanout_groups.get_thread_deliveries(group.id)} == {100, 200}
+    assert (await runtime.handle_normalized_inbound_comment_with_backfill(
+        event, adapter=adapter,
+    )).status == 'skipped'
+    assert len(adapter.message_calls) == 2
+
+
+@pytest.mark.asyncio
+async def test_missing_one_receipt_does_not_block_other_confirmed_comment_target(tmp_path):
+    """An unknown create at forum 200 cannot suppress replies in forum 100."""
+    db, group, runtime = world(tmp_path, only_first=True)
+    adapter = DiscordPostsAndComments()
+    event = comment()
+
+    result = await runtime.handle_normalized_inbound_comment_with_backfill(event, adapter=adapter)
+
+    assert result.status == 'processed'
+    assert adapter.calls == []  # The lost parent receipt is not negative proof.
+    assert [call[0].external_thread_id for call in adapter.message_calls] == ['1100']
+    msg_group = db.discord_fanout_groups.get_message_group_by_ap_object(event.object.ap_id)
+    assert msg_group is not None
+    assert {delivery.discord_channel_id for delivery in
+            db.discord_fanout_groups.get_message_deliveries(msg_group.id)} == {100}
+    assert len(db.discord_fanout_groups.get_thread_deliveries(group.id)) == 1
+
+
+@pytest.mark.asyncio
+async def test_no_authorized_confirmed_parent_keeps_comment_deferred(tmp_path):
+    """A revoked only receipt and an unknown destination permit no child create."""
+    db, group, runtime = world(tmp_path, only_first=True)
+    db.remote_subscriptions.delete_subscription(100)
+    adapter = DiscordPostsAndComments()
+    event = comment()
+
+    result = await runtime.handle_normalized_inbound_comment_with_backfill(event, adapter=adapter)
+
+    assert result.status == 'deferred'
+    assert adapter.calls == adapter.message_calls == []
+    assert db.discord_fanout_groups.get_message_group_by_ap_object(event.object.ap_id) is None
+    assert len(db.discord_fanout_groups.get_thread_deliveries(group.id)) == 1
+
+
+@pytest.mark.asyncio
+async def test_incomplete_parent_only_delivers_child_to_verified_thread(tmp_path, monkeypatch):
+    """An invalid or missing second parent never taints the verified first thread."""
     import src.bridge_lemmy_to_discord as legacy_ap
     async def fetch(ap_url):
         """Provide the real requested post, not a forged object."""
@@ -259,9 +355,12 @@ async def test_incomplete_parent_never_dispatches_child_message(tmp_path, monkey
     result = await runtime.handle_normalized_inbound_comment_with_backfill(
         comment(), adapter=adapter,
     )
-    assert result.status == 'deferred'
-    assert adapter.message_calls == []
-    assert db.discord_fanout_groups.get_message_group_by_ap_object(comment().object.ap_id) is None
+    assert result.status == 'processed'
+    assert adapter.calls == []
+    assert [call[0].external_thread_id for call in adapter.message_calls] == ['1100']
+    msg_group = db.discord_fanout_groups.get_message_group_by_ap_object(comment().object.ap_id)
+    assert msg_group is not None
+    assert [row.discord_channel_id for row in db.discord_fanout_groups.get_message_deliveries(msg_group.id)] == [100]
     assert db.discord_fanout_groups.get_thread_group_by_ap_object(POST).id == existing.id
 
 

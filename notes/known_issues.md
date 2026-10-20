@@ -217,9 +217,10 @@ Fedify-native security integration remains blocked by missing dependencies.
 - **Stage 03 Checkpoint 50:** Remote Community normalized parent backfill
   no longer repeats Create for unmapped recipient forums of an existing thread
   group. Even independently fetched AP Page/Article does not prove Discord
-  never created the thread when a response was lost. Parent and child are
-  deferred until Stage 04 verified receipt reconciliation; completely absent
-  groups remain eligible for first-send backfill. Definite failed recipients
+  never created the thread when a response was lost. The missing parent
+  stays unresolved; Checkpoint 52 restores child delivery to independently
+  confirmed parent threads. Completely absent groups remain eligible for
+  first-send backfill. Definite failed recipients
   also remain conservatively unrecovered without durable negative evidence.
   Legacy unbound SDK helper still needs deletion during Stage 03 cutover.
 
@@ -229,3 +230,12 @@ Fedify-native security integration remains blocked by missing dependencies.
   cleanup attempt. Real worker task joining remains the worker's contract.
   Discord command/interaction task lifetime and second-cancellation cleanup
   under the native SDK still require integration validation.
+
+- **Stage 03 Checkpoint 52:** Corrected CP50's global comment deferral: a
+  newly subscribed or unresolved Remote Community forum no longer prevents
+  replies to already-confirmed parent threads. First-time partial parent
+  backfill likewise permits safe replies to its confirmed subset. A group
+  without any authorized confirmed parent remains deferred; no parent thread
+  is recreated without a verified negative physical outcome. Existing global
+  `CommunityMessageGroup` dedup intentionally does not replay already-processed
+  comments to newly subscribed forums (Stage 04 target-specific recovery).

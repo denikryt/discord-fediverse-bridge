@@ -716,10 +716,10 @@ class CommunityRuntime:
     ) -> HandlerResult:
         """Recover a missing AP parent post before sending the typed comment.
 
-        The physical parent must be confirmed in every currently accepted
-        destination before replies may use its canonical thread group. The
-        helper preserves existing receipts and fails closed on missing remote
-        documents, revoked follows and incompatible physical receipts.
+        A wholly missing parent is recovered before comment delivery. An
+        existing group with a missing recipient receipt must not be backfilled
+        blindly: confirmed target threads can receive replies independently,
+        while unresolved recipients remain excluded until Stage 04 recovery.
         """
         from ..activitypub_handlers import HandlerResult as _HandlerResult
         from .backfill import backfill_normalized_post_as_thread_group
@@ -733,19 +733,24 @@ class CommunityRuntime:
             )
         post_id = event.object.post_ap_id or ''
         thread_group = get_thread_group_for_ap_object(self.database, post_id)
-        if needs_backfill(
-            thread_group=thread_group, community_actor_id=event.community_actor_id,
-            database=self.database,
-        ):
+        if thread_group is None:
+            # A partial canonical group is not negative proof that its missing
+            # recipient never received a parent thread. Do not refetch/create
+            # those missing parents; route the child only to verified copies.
             thread_group = await backfill_normalized_post_as_thread_group(
                 post_ap_id=post_id, community_actor_id=event.community_actor_id,
                 delivery_id=event.delivery_id, database=self.database,
                 community_runtime=self, adapter=adapter,
             )
             if thread_group is None:
+                # First backfill may have persisted a successful subset before
+                # failing another target. Only the persisted receipts may be
+                # used for this child; never re-POST the missing parent.
+                thread_group = get_thread_group_for_ap_object(self.database, post_id)
+            if thread_group is None:
                 return _HandlerResult(
                     'deferred', InboundActivityOutcome.DEFERRED_MISSING_DEPENDENCY,
-                    'parent post could not be completely backfilled',
+                    'parent post could not be safely backfilled',
                 )
         return await self.handle_normalized_inbound_comment(event, adapter=adapter)
 
@@ -754,9 +759,9 @@ class CommunityRuntime:
     ) -> HandlerResult:
         """Deliver a mapped remote comment through neutral per-thread message sends.
 
-        Parent-post discovery/backfill is a separate Stage 03 step. Until its
-        adapter conversion, an unmapped or incomplete canonical thread remains
-        deferred rather than guessing a destination from an ActivityPub URL.
+        A missing canonical parent remains deferred. A partial parent group
+        delivers only to confirmed, currently authorized target threads; an
+        absent recipient mapping never authorizes physical parent recreation.
         """
         from ..activitypub_handlers import HandlerResult as _HandlerResult
         from ..formatting import format_lemmy_comment_for_discord, normalize_text
@@ -768,13 +773,10 @@ class CommunityRuntime:
             )
         post_id = event.object.post_ap_id or ''
         thread_group = get_thread_group_for_ap_object(self.database, post_id)
-        if thread_group is None or needs_backfill(
-            thread_group=thread_group, community_actor_id=event.community_actor_id,
-            database=self.database,
-        ):
+        if thread_group is None:
             return _HandlerResult(
                 'deferred', InboundActivityOutcome.DEFERRED_MISSING_DEPENDENCY,
-                'parent post not completely mapped; backfill required',
+                'parent post has no canonical mapping; backfill required',
             )
         if thread_group.community_actor_id != event.community_actor_id:
             return _HandlerResult(
@@ -788,6 +790,32 @@ class CommunityRuntime:
             return _HandlerResult(
                 'skipped', InboundActivityOutcome.IGNORED_UNMAPPED_CONTEXT,
                 'comment parent belongs to another canonical post',
+            )
+        # Select only stored physical parent receipts for currently accepted
+        # forums. Missing recipients are not safe to backfill, and a stale or
+        # revoked receipt is not an authorized destination for a new comment.
+        eligible = {
+            sub.discord_channel_id: sub
+            for sub in get_accepted_subscriptions(self.database, event.community_actor_id)
+        }
+        confirmed = []
+        for physical in self.database.discord_fanout_groups.get_thread_deliveries(thread_group.id):
+            current = self.database.remote_subscriptions.get_subscription_by_channel(
+                physical.discord_channel_id
+            )
+            expected = eligible.get(physical.discord_channel_id)
+            if (expected is None or current is None or current.status != 'accepted'
+                or current.lemmy_community_actor_id != event.community_actor_id
+                or type(current.discord_guild_id) is not int or current.discord_guild_id <= 0
+                or current.discord_guild_id != expected.discord_guild_id):
+                continue
+            confirmed.append(physical)
+        if not confirmed:
+            # No authorized confirmed parent: do not consume the canonical
+            # comment identity or create a child in a guessed destination.
+            return _HandlerResult(
+                'deferred', InboundActivityOutcome.DEFERRED_MISSING_DEPENDENCY,
+                'no authorized confirmed parent threads for comment',
             )
         # Record the provenance before any physical POST, as the established
         # inbound admission path does. A source mismatch cannot authorize send.
@@ -818,13 +846,11 @@ class CommunityRuntime:
             event.object.author_name, normalize_text(event.object.body_markdown),
             event.object.url, actor_id=event.actor_id,
         ))
-        eligible = {
-            sub.discord_channel_id: sub
-            for sub in get_accepted_subscriptions(self.database, event.community_actor_id)
-        }
         delivered = 0
         first_error: Exception | None = None
-        for physical in self.database.discord_fanout_groups.get_thread_deliveries(thread_group.id):
+        for physical in confirmed:
+            # Re-read subscription at the physical-send boundary so Follow
+            # revocation during earlier targets cannot authorize later writes.
             current = self.database.remote_subscriptions.get_subscription_by_channel(
                 physical.discord_channel_id
             )

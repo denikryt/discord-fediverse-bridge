@@ -81,9 +81,23 @@ receipt recovery. The direct-call SDK fallback remains pending migration.
 An existing Remote Community thread group whose accepted forum is missing a
 confirmed delivery row cannot distinguish a definitively unsent Create from a
 Discord thread that was created before its HTTP receipt disappeared. The
-normalized backfill path therefore defers that parent and its dependent
-comment instead of retrying the missing forum, even when the ActivityPub
-Page/Article is authentic. A fully absent parent group is still eligible for
-first delivery. This conservative limitation needs Stage 04 durable physical
-receipt reconciliation; it also means definitely failed historical targets
-are not automatically recovered by reprocessing a duplicate post.
+normalized backfill path therefore refuses to recreate that missing
+forum thread, even when the ActivityPub Page/Article is authentic. Since
+Checkpoint 52, dependent comments can still reach other confirmed parent
+threads; the missing forum receives no new child. A fully absent parent group
+is still eligible for first delivery. This conservative limitation needs Stage
+04 durable physical receipt reconciliation; even definitely failed historical
+targets are not automatically recovered by reprocessing a duplicate post.
+
+## Stage 03 Checkpoint 52 — per-recipient parent receipt isolation
+
+A missing recipient receipt in an existing remote post group must not stop
+comments in other forums with confirmed parent threads. The typed comment
+handler checks the canonical community, active subscription and physical parent
+receipt for each destination and sends only to eligible confirmed threads.
+It never retries an absent parent thread in an existing group. A first-time
+backfill that partially succeeds may deliver the child to its verified subset;
+if no accepted parent receipt exists, the comment remains deferred and has no
+new canonical message group. Global comment dedup still means an already
+processed comment is not retroactively delivered to a later subscriber:
+target-specific historical recovery remains Stage 04 work.
