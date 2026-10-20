@@ -140,3 +140,16 @@ or physical destination may indicate an already transmitted create, so that
 target fails as `unknown_delivery` without claiming a confirmed copy; healthy
 sibling targets proceed independently. This is the existing Stage 03 typed
 transport contract, not a durable uncertain-delivery recovery mechanism.
+
+**Stage 03 Checkpoint 53 — verified Personal Feed root-thread adoption:**
+`DiscordAdapter.create_reply_thread()` first reads the exact root message and
+checks for a root-anchored thread with that same message ID under the verified
+text/announcement channel and guild. An already-existing thread is adopted
+without a second physical Create. If a create's response is lost, only this
+independently verified unique root/thread mapping can resolve the attempt;
+otherwise uncertainty remains sticky. `reconcile_create()` can repeat the
+read-only verification after process restart but refuses a changed destination
+under an already remembered attempt key. An unavailable lookup or mismatched
+thread is not proof of non-delivery and cannot authorize another POST. This
+exception does not apply to forum threads or arbitrary message sends; their
+cross-restart recovery remains Stage 04.

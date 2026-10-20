@@ -415,11 +415,29 @@ class DiscordAdapter:
         async with self._create_lock:
             flight = self._creates.get((attempt.connector_key, attempt.key))
         if flight is not None:
+            # Reconciliation lacks the original title/body; it can still
+            # refuse changed operation and physical destination immediately.
+            if (flight.fingerprint[1] != attempt.operation
+                or flight.fingerprint[2] != _physical_identity(attempt.destination)):
+                raise PlatformOperationError('invalid_request', 'create attempt destination changed')
             if not flight.future.done():
                 return None
             outcome = flight.future.result()
             if not isinstance(outcome, PlatformOperationError):
                 return outcome
+        # A Discord message-root thread has the unique ID of its root message.
+        # Unlike forum/message creates, this identity permits read-only adoption
+        # across restarts, but only after verifying the original root and parent.
+        if attempt.operation == 'reply_thread' and isinstance(attempt.destination, MessageRef):
+            try:
+                root = attempt.destination
+                channel = (await self.fetch_channel(ChannelRef(self.connector.key, root.external_container_id))).channel
+                if channel.kind not in ('text', 'announcement'):
+                    return None
+                await self._get_message(root)
+                return await self._verified_root_thread(root, channel)
+            except PlatformOperationError:
+                return None
         # MULTIPLATFORM_STAGE03_TEMP_UNKNOWN_CREATE: Discord has no verified durable receipt lookup for these attempts; return unresolved without replay until Stage 04 owns durable intents and receipt reconciliation.
         return None
 
@@ -746,6 +764,30 @@ class DiscordAdapter:
             send=physical,
         )
 
+    async def _verified_root_thread(
+        self, root: MessageRef, parent: ChannelRef,
+    ) -> ThreadRef | None:
+        """Adopt only an independently observed root-anchored message thread.
+
+        An actual not-found response proves absence for this lookup. Any other
+        read failure or mismatched parent is not permission to create again.
+        """
+        if (root.connector_key != self.connector.key
+            or root.external_container_id != parent.external_channel_id
+            or parent.kind not in ('text', 'announcement')):
+            raise PlatformOperationError('invalid_request', 'unverified reply-thread root channel')
+        expected = ThreadRef(parent, root.external_message_id)
+        try:
+            observed = await self.fetch_thread(expected)
+        except PlatformOperationError as exc:
+            if exc.reason == 'not_found':
+                return None
+            raise
+        if (observed.kind != 'message'
+            or _physical_identity(observed.thread) != _physical_identity(expected)):
+            raise PlatformOperationError('invalid_request', 'unverified root/thread association')
+        return observed.thread
+
     @_tracked_io
     async def create_reply_thread(self, root: MessageRef, *, title: str,
                                   attempt: CreateAttempt) -> ThreadRef:
@@ -762,12 +804,28 @@ class DiscordAdapter:
                 raise PlatformOperationError('unsupported', 'root is not a text channel')
             sdk_root = await self._get_message(root)
             await self._require_bot_permission(view.channel, 'start_message_thread')
+            existing = await self._verified_root_thread(root, view.channel)
+            if existing is not None:
+                # An already existing exact root thread is a unique physical
+                # target; creating a new thread is neither needed nor safe.
+                return existing
             try:
                 thread = await sdk_root.create_thread(name=title[:90].replace('@', '@\u200b'))
             except Exception as exc:
-                # A failed create may have succeeded on Discord. Never guess by
-                # a thread name or send a second POST from this error path.
-                raise self._create_error(exc) from exc
+                # A successful POST can lose its response. Read the uniquely
+                # identified root thread before treating this as uncertain.
+                failure = self._create_error(exc)
+                if failure.reason in ('forbidden', 'not_found', 'rate_limited'):
+                    # A definitive HTTP rejection did not create a thread;
+                    # retain its normal bounded retry classification.
+                    raise failure from exc
+                try:
+                    adopted = await self._verified_root_thread(root, view.channel)
+                except PlatformOperationError:
+                    raise PlatformOperationError('unknown_delivery', 'root-thread receipt cannot be verified') from exc
+                if adopted is not None:
+                    return adopted
+                raise failure from exc
             if (str(getattr(thread, 'parent_id', '')) != view.channel.external_channel_id
                 or str(getattr(thread, 'id', '')) != root.external_message_id):
                 raise PlatformOperationError('unknown_delivery', 'unverified root/thread association')

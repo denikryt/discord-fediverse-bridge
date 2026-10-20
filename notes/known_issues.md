@@ -239,3 +239,12 @@ Fedify-native security integration remains blocked by missing dependencies.
   is recreated without a verified negative physical outcome. Existing global
   `CommunityMessageGroup` dedup intentionally does not replay already-processed
   comments to newly subscribed forums (Stage 04 target-specific recovery).
+
+- **Stage 03 Checkpoint 53:** Personal Feed root-anchored Discord discussion
+  threads can now be adopted from a verified existing thread (including after
+  response loss and restart) without issuing another Create. Parent, guild,
+  channel kind, exact root ID and connector are checked by the adapter before
+  adoption. An uncertain/mismatched lookup prevents a new Create; ordinary
+  confirmed HTTP refusal remains retryable. This does not provide durable
+  general Discord message/forum create recovery (Stage 04). Native SDK-backed
+  integration tests remain unavailable in this environment.

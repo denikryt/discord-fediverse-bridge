@@ -279,3 +279,112 @@ async def test_send_and_mutations_touch_only_immediate_message():
     await transport.delete_message(receipt.message)
     assert physical.edits[0]['content'] == 'updated'
     assert physical.deleted
+
+@pytest.mark.asyncio
+async def test_existing_root_thread_is_adopted_without_second_create():
+    """A verified existing root-anchored public thread needs no physical POST."""
+    channel = FakeChannel(is_news=True)
+    root = FakeMessage(1234, channel)
+    channel._messages[root.id] = root
+    existing = FakeThread(root.id, parent_id=channel.id, guild_id=channel.guild.id)
+    transport = adapter(channel, existing)
+    ref = MessageRef('discord-primary', '100', '1234')
+    attempt = CreateAttempt('adopt-existing', 'discord-primary', 'reply_thread', ref)
+
+    adopted = await transport.create_reply_thread(ref, title='Replies', attempt=attempt)
+    assert adopted == ThreadRef(ChannelRef('discord-primary', '100', 'announcement', '10'), '1234')
+    assert root.edits == []
+    assert await transport.reconcile_create(attempt) == adopted
+
+
+@pytest.mark.asyncio
+async def test_lost_root_thread_response_can_adopt_verified_physical_thread():
+    """A lost create response cannot force a duplicate root thread POST."""
+    channel = FakeChannel()
+    root = FakeMessage(1234, channel)
+    channel._messages[root.id] = root
+    bot = FakeBot([channel])
+    transport = DiscordAdapter(connector=ConnectorRef('discord-primary', 'discord'), bot=bot)
+    ref = MessageRef('discord-primary', '100', '1234')
+    attempt = CreateAttempt('lost-root', 'discord-primary', 'reply_thread', ref)
+    calls = 0
+
+    async def lost_reply(**kwargs):
+        """The server created the root thread but dropped the response."""
+        nonlocal calls
+        calls += 1
+        bot.channels[root.id] = FakeThread(root.id, parent_id=channel.id, guild_id=channel.guild.id)
+        raise TimeoutError('response dropped')
+
+    root.create_thread = lost_reply
+    adopted = await transport.create_reply_thread(ref, title='Replies', attempt=attempt)
+    assert adopted.external_thread_id == '1234'
+    assert await transport.create_reply_thread(ref, title='Replies', attempt=attempt) == adopted
+    assert calls == 1
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize('incorrect', ['parent', 'guild', 'kind', 'unavailable'])
+async def test_unverified_root_thread_never_authorizes_create_or_adoption(incorrect):
+    """Foreign or unreadable same-ID threads must not bypass physical ownership."""
+    channel = FakeChannel()
+    root = FakeMessage(1234, channel)
+    channel._messages[root.id] = root
+    thread = FakeThread(root.id, parent_id=999 if incorrect == 'parent' else channel.id,
+                        guild_id=99 if incorrect == 'guild' else channel.guild.id)
+    bot = FakeBot([channel, thread])
+    if incorrect == 'kind':
+        bot.channels[channel.id] = FakeForum(channel.id)
+    elif incorrect == 'unavailable':
+        async def fetch_unavailable(channel_id):
+            """Simulate uncertain network lookup; absence is not confirmed."""
+            raise TimeoutError('read failed')
+        bot.channels.pop(thread.id)
+        bot.fetch_channel = fetch_unavailable
+    transport = DiscordAdapter(connector=ConnectorRef('discord-primary', 'discord'), bot=bot)
+    ref = MessageRef('discord-primary', '100', '1234')
+    attempt = CreateAttempt('not-adopted', 'discord-primary', 'reply_thread', ref)
+    with pytest.raises(PlatformOperationError):
+        await transport.create_reply_thread(ref, title='Replies', attempt=attempt)
+    assert root.edits == []
+    assert await transport.reconcile_create(attempt) is None
+
+
+@pytest.mark.asyncio
+async def test_reconcile_root_thread_after_restart_uses_verified_identity():
+    """A newly initialized adapter may read a unique root thread without creating it."""
+    channel = FakeChannel()
+    root = FakeMessage(1234, channel)
+    channel._messages[root.id] = root
+    thread = FakeThread(root.id, parent_id=channel.id, guild_id=channel.guild.id)
+    transport = adapter(channel, thread)
+    ref = MessageRef('discord-primary', '100', '1234')
+    attempt = CreateAttempt('new-process', 'discord-primary', 'reply_thread', ref)
+    assert await transport.reconcile_create(attempt) == ThreadRef(
+        ChannelRef('discord-primary', '100', 'text', '10'), '1234')
+    assert root.edits == []
+
+@pytest.mark.asyncio
+async def test_reconcile_cannot_use_other_destination_under_remembered_attempt_key():
+    """A changed root must not inherit an uncertain attempt's verified thread."""
+    channel = FakeChannel()
+    original = FakeMessage(1234, channel)
+    channel._messages[original.id] = original
+    other = FakeMessage(4567, channel)
+    channel._messages[other.id] = other
+    transport = adapter(channel)
+    ref = MessageRef('discord-primary', '100', '1234')
+    attempt = CreateAttempt('same-key', 'discord-primary', 'reply_thread', ref)
+
+    async def lost_response(**kwargs):
+        """Leave the original key parked with a possible physical send."""
+        raise TimeoutError('lost')
+
+    original.create_thread = lost_response
+    with pytest.raises(PlatformOperationError, match='lost'):
+        await transport.create_reply_thread(ref, title='Replies', attempt=attempt)
+    incorrect = CreateAttempt('same-key', 'discord-primary', 'reply_thread',
+                              MessageRef('discord-primary', '100', '4567'))
+    with pytest.raises(PlatformOperationError) as caught:
+        await transport.reconcile_create(incorrect)
+    assert caught.value.reason == 'invalid_request'
