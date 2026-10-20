@@ -55,7 +55,7 @@ class ConnectorRef:
     instance_origin: str | None = None
 
     def __post_init__(self) -> None:
-        """Enforce Stage 01 connector metadata before registry registration."""
+        """Enforce connector-scoped persistence connector metadata before registry registration."""
         _identity(self.key, 'connector key')
         _one_of(self.platform, ('discord', 'fluxer'), 'platform')
         if self.platform == 'discord':
@@ -64,7 +64,7 @@ class ConnectorRef:
         else:
             if not isinstance(self.instance_origin, str):
                 raise ValueError('Fluxer connectors require an instance origin')
-            # Persisted Stage 01 origins contain only HTTP(S) scheme/authority.
+            # Persisted connector-scoped persistence origins contain only HTTP(S) scheme/authority.
             # Keep DTO imports independent from SQLAlchemy/repository ownership.
             parsed = urlsplit(self.instance_origin)
             if (parsed.scheme.lower() not in ('http', 'https') or not parsed.hostname

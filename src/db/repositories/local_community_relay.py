@@ -241,7 +241,7 @@ class LocalCommunityRelayRepository(BaseRepository):
             )))
             ids = {sibling.relay_activity_id for sibling in siblings if sibling.relay_activity_id}
             if len(ids) > 1:
-                # MULTIPLATFORM_STAGE03_TEMP_LEGACY_RELAY_IDS: Previously published recipient-specific Announce IDs cannot be silently unified; block new sends for this source until verified historical reconciliation preserves remote activity identity.
+                # MULTIPLATFORM_DISCORD_ADAPTER_TEMP_LEGACY_RELAY_IDS: Previously published recipient-specific Announce IDs cannot be silently unified; block new sends for this source until verified historical reconciliation preserves remote activity identity.
                 delivery.status = "failed"
                 delivery.last_error = "R7_F1_LEGACY_ID_CONFLICT"
                 return None

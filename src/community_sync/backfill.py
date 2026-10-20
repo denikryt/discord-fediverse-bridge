@@ -145,7 +145,7 @@ async def backfill_normalized_post_as_thread_group(
         # The current schema stores only confirmed target receipts. A missing
         # row may represent a committed Discord Create with a lost HTTP reply;
         # fetching the AP source cannot disprove that physical side effect.
-        # Defer dependent comments until Stage 04 verifies the gap. No fetch
+        # Defer dependent comments until local subscriber publishing verifies the gap. No fetch
         # or second create is safe here, even after a process restart.
         logger.warning('Parent post %s has unresolved Discord target receipts', post_ap_id)
         return None

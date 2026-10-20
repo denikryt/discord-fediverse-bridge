@@ -17,7 +17,7 @@ export async function sendUserActorDeliveries(
   config: GatewayConfig,
   request: SendUserActorDeliveriesRequest,
 ): Promise<{ outcomes: Array<{ deliveryId: number; ok: boolean; error: string | null }> }> {
-  // Stage 4 keeps durable retry ownership in Python. The gateway only resolves
+  // typed ActivityPub identity migration keeps durable retry ownership in Python. The gateway only resolves
   // the canonical local key and signs each explicit endpoint independently.
   const identity = await loadUserActorIdentity(config, request.actorUsername);
   if (identity == null || identity.actorId.href !== request.signingActorUrl) {

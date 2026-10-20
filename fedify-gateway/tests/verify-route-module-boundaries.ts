@@ -1,7 +1,7 @@
 /**
  * Gateway route-module boundary verification.
  *
- * Stage 2 keeps public HTTP request parsing separate from secret-bearing
+ * physical surface mapping keeps public HTTP request parsing separate from secret-bearing
  * composition. This test guards the file-level boundary so future route edits
  * cannot accidentally regain direct access to GatewayConfig, Fedify context
  * creation, or the Python bridge shared secret.

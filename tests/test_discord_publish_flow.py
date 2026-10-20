@@ -1,4 +1,4 @@
-"""Runtime scenarios for Stage 6 Discord-originated ActivityPub publishing."""
+"""Runtime scenarios for personal feed control plane Discord-originated ActivityPub publishing."""
 
 from __future__ import annotations
 from support.runtime import build_test_policy_service
@@ -16,7 +16,7 @@ from tests_constants import BRIDGE_HOST_DOMAIN, LEMMY_EXAMPLE_DOMAIN
 
 
 def _service(database, fedify_gateway: AsyncMock) -> ContentPublishService:
-    """Build the Stage 6 publish service with one fake gateway boundary."""
+    """Build the personal feed control plane publish service with one fake gateway boundary."""
     return ContentPublishService(
         database=database,
         fedify_gateway=fedify_gateway,
@@ -30,7 +30,7 @@ async def test_thread_starter_from_registered_user_publishes_and_persists_mappin
     tmp_path: Path,
 ) -> None:
     """A registered user should publish a thread starter through the gateway."""
-    database = build_database(tmp_path, "bridge-stage6.db")
+    database = build_database(tmp_path, "bridge-personal feed control plane.db")
     add_accepted_subscription(database)
     add_registered_user(database)
     post_object_url = f"https://{BRIDGE_HOST_DOMAIN}/actors/users/alice/objects/posts/1"
@@ -74,7 +74,7 @@ async def test_thread_starter_from_unregistered_user_is_ignored_and_replied_to(
     tmp_path: Path,
 ) -> None:
     """An unregistered author should be told to use `/register` and not published."""
-    database = build_database(tmp_path, "bridge-stage6.db")
+    database = build_database(tmp_path, "bridge-personal feed control plane.db")
     add_accepted_subscription(database)
     fedify_gateway = AsyncMock()
     service = _service(database, fedify_gateway)
@@ -98,7 +98,7 @@ async def test_thread_message_from_registered_user_publishes_as_comment(
     tmp_path: Path,
 ) -> None:
     """A registered user message inside a mapped thread should publish as a comment."""
-    database = build_database(tmp_path, "bridge-stage6.db")
+    database = build_database(tmp_path, "bridge-personal feed control plane.db")
     add_accepted_subscription(database)
     add_registered_user(database)
     thread = build_thread()
@@ -155,7 +155,7 @@ async def test_thread_reply_uses_parent_comment_object_id_when_available(
     tmp_path: Path,
 ) -> None:
     """A Discord reply should target the mapped parent AP comment when known."""
-    database = build_database(tmp_path, "bridge-stage6.db")
+    database = build_database(tmp_path, "bridge-personal feed control plane.db")
     add_accepted_subscription(database)
     add_registered_user(database)
     thread = build_thread()
@@ -226,7 +226,7 @@ async def test_thread_message_in_pending_subscription_is_ignored(
     tmp_path: Path,
 ) -> None:
     """Pending subscriptions must not publish Discord messages yet."""
-    database = build_database(tmp_path, "bridge-stage6.db")
+    database = build_database(tmp_path, "bridge-personal feed control plane.db")
     database.remote_subscriptions.create_subscription(
         discord_channel_id=100,
         lemmy_community_actor_id=f"https://{LEMMY_EXAMPLE_DOMAIN}/c/hackers",
@@ -252,7 +252,7 @@ async def test_message_without_thread_group_returns_no_post_context(
     tmp_path: Path,
 ) -> None:
     """A message in a thread with no CommunityThreadGroup returns no_post_context."""
-    database = build_database(tmp_path, "bridge-stage6.db")
+    database = build_database(tmp_path, "bridge-personal feed control plane.db")
     add_accepted_subscription(database)
     add_registered_user(database)
     thread = build_thread()
@@ -274,7 +274,7 @@ async def test_gateway_publish_failure_does_not_store_false_success_mapping(
     tmp_path: Path,
 ) -> None:
     """Publish persistence must only happen after the gateway returns success."""
-    database = build_database(tmp_path, "bridge-stage6.db")
+    database = build_database(tmp_path, "bridge-personal feed control plane.db")
     add_accepted_subscription(database)
     add_registered_user(database)
     fedify_gateway = AsyncMock()

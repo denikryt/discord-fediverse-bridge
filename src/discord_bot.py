@@ -177,7 +177,7 @@ class BridgeBot(discord.Client):
         """Reject late SDK event tasks synchronously before accessing database state."""
         adapter = self.discord_adapter
         if adapter is None:
-            # Legacy test constructors are SDK-only until Stage 03 cutover.
+            # Legacy test constructors are SDK-only until Discord adapter integration cutover.
             return True
         return adapter.enter_ingress()
 

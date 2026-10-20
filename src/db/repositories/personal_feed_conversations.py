@@ -13,8 +13,22 @@ from typing import Callable, ContextManager
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-UNCERTAIN_DISCORD_CREATE_ERROR = "uncertain Discord create; Stage 04 reconciliation required"
+UNCERTAIN_DISCORD_CREATE_ERROR = "uncertain Discord create; physical receipt reconciliation required"
 CREATE_STARTED_DISCORD_SENTINEL = "Discord create started; outcome may be unknown"
+
+
+def _is_uncertain_discord_create(error: str | None) -> bool:
+    """Recognize parked sends written by current and older deployments.
+
+    The historical diagnostic's middle words changed with this naming cleanup.
+    Its fixed prefix and suffix still identify a parked, unreconciled first send;
+    treating such a row as uncertain is safer than resending a possible POST.
+    """
+    return bool(
+        error is not None
+        and error.startswith("uncertain Discord create; ")
+        and error.endswith("reconciliation required")
+    )
 
 
 from ...models import (
@@ -376,8 +390,8 @@ class PersonalFeedConversationRepository:
                         delivery.attempt_count = 0
                         delivery.next_attempt_at = utcnow()
                 elif delivery.state == "failed":
-                    # MULTIPLATFORM_STAGE03_TEMP_PERSONAL_FEED_UNCERTAIN_TRANSITION: An ID-less Discord create may be parked uncertain or still in flight; preserve canonical Update/Delete without enabling a second send or discarding a possible receipt until Stage 04 reconciliation.
-                    if delivery.last_error != UNCERTAIN_DISCORD_CREATE_ERROR:
+                    # MULTIPLATFORM_DISCORD_ADAPTER_TEMP_PERSONAL_FEED_UNCERTAIN_TRANSITION: An ID-less Discord create may be parked uncertain or still in flight; preserve canonical Update/Delete without enabling a second send or discarding a possible receipt until durable delivery reconciliation.
+                    if not _is_uncertain_discord_create(delivery.last_error):
                         delivery.state = "ready"
                         delivery.attempt_count = 0
                         delivery.next_attempt_at = utcnow()
@@ -413,8 +427,8 @@ class PersonalFeedConversationRepository:
                 if delivery.state == "dispatching":
                     pass
                 elif delivery.discord_message_id is None:
-                    # MULTIPLATFORM_STAGE03_TEMP_PERSONAL_FEED_UNCERTAIN_TRANSITION: An ID-less Discord create may be parked uncertain or still in flight; preserve canonical Update/Delete without enabling a second send or discarding a possible receipt until Stage 04 reconciliation.
-                    if delivery.last_error != UNCERTAIN_DISCORD_CREATE_ERROR:
+                    # MULTIPLATFORM_DISCORD_ADAPTER_TEMP_PERSONAL_FEED_UNCERTAIN_TRANSITION: An ID-less Discord create may be parked uncertain or still in flight; preserve canonical Update/Delete without enabling a second send or discarding a possible receipt until durable delivery reconciliation.
+                    if not _is_uncertain_discord_create(delivery.last_error):
                         delivery.state = "suppressed"
                         delivery.next_attempt_at = None
                 elif delivery.state != "suppressed":
@@ -515,9 +529,10 @@ class PersonalFeedConversationRepository:
                 # Never lose the only durable evidence of an unknown first
                 # Create when an inactive personal binding is detected.
                 if (row.discord_message_id is None
-                    and row.last_error in {
-                        CREATE_STARTED_DISCORD_SENTINEL, UNCERTAIN_DISCORD_CREATE_ERROR
-                    }):
+                    and (
+                        row.last_error == CREATE_STARTED_DISCORD_SENTINEL
+                        or _is_uncertain_discord_create(row.last_error)
+                    )):
                     return
                 row.state = "suppressed"
                 row.next_attempt_at = None
@@ -537,11 +552,12 @@ class PersonalFeedConversationRepository:
             row = session.get(InboundDiscordDelivery, delivery_id)
             if (row is None or row.state != "dispatching"
                 or row.discord_message_id is not None
-                or row.last_error in {
-                    UNCERTAIN_DISCORD_CREATE_ERROR, CREATE_STARTED_DISCORD_SENTINEL
-                }):
+                or (
+                    row.last_error == CREATE_STARTED_DISCORD_SENTINEL
+                    or _is_uncertain_discord_create(row.last_error)
+                )):
                 return False
-            # MULTIPLATFORM_STAGE03_TEMP_PERSONAL_FEED_CREATE_STARTED: Mark a claimed first Discord message create before network I/O so interrupted sends cannot be replayed blindly; replace with Stage 04 durable send-intent state.
+            # MULTIPLATFORM_DISCORD_ADAPTER_TEMP_PERSONAL_FEED_CREATE_STARTED: Mark a claimed first Discord message create before network I/O so interrupted sends cannot be replayed blindly; replace with durable generic send-intent state.
             row.last_error = CREATE_STARTED_DISCORD_SENTINEL
             return True
 
@@ -550,11 +566,12 @@ class PersonalFeedConversationRepository:
         with self.immediate_session() as session:
             row = session.get(InboundDiscordDelivery, delivery_id)
             if (row is None or row.discord_message_id is not None
-                or row.last_error not in {
-                    CREATE_STARTED_DISCORD_SENTINEL, UNCERTAIN_DISCORD_CREATE_ERROR
-                }):
+                or not (
+                    row.last_error == CREATE_STARTED_DISCORD_SENTINEL
+                    or _is_uncertain_discord_create(row.last_error)
+                )):
                 return False
-            # MULTIPLATFORM_STAGE03_TEMP_PERSONAL_FEED_UNCERTAIN: Park an ambiguously sent Discord message without another create; Stage 04 must give it explicit unresolved delivery state and verified recovery.
+            # MULTIPLATFORM_DISCORD_ADAPTER_TEMP_PERSONAL_FEED_UNCERTAIN: Park an ambiguously sent Discord message without another create; durable delivery reconciliation must give it explicit unresolved delivery state and verified recovery.
             row.state = "failed"
             if row.last_error == CREATE_STARTED_DISCORD_SENTINEL:
                 row.attempt_count = min(3, row.attempt_count + 1)
@@ -569,7 +586,7 @@ class PersonalFeedConversationRepository:
                 InboundDiscordDelivery.state == "dispatching"
             )))
             for row in rows:
-                # MULTIPLATFORM_STAGE03_TEMP_PERSONAL_FEED_RECOVERY: A dispatching row marked create-started may already exist on Discord; park rather than automatically retry until Stage 04 can reconcile the physical receipt.
+                # MULTIPLATFORM_DISCORD_ADAPTER_TEMP_PERSONAL_FEED_RECOVERY: A dispatching row marked create-started may already exist on Discord; park rather than automatically retry until typed User Actor namespace can reconcile the physical receipt.
                 if (row.discord_message_id is None
                     and row.last_error == CREATE_STARTED_DISCORD_SENTINEL):
                     row.state = "failed"
@@ -596,12 +613,12 @@ class PersonalFeedConversationRepository:
             row = session.get(InboundDiscordDelivery, delivery_id)
             if row is None:
                 raise LookupError("delivery not found")
-            previously_parked = row.state == "failed" and row.last_error == UNCERTAIN_DISCORD_CREATE_ERROR
+            previously_parked = row.state == "failed" and _is_uncertain_discord_create(row.last_error)
             if row.state != "dispatching":
                 # A late verified receipt can reconcile a parked first Create;
                 # a failure or unverified ID cannot unpark an uncertain send.
                 if not (row.state == "failed"
-                        and row.last_error == UNCERTAIN_DISCORD_CREATE_ERROR
+                        and _is_uncertain_discord_create(row.last_error)
                         and success and discord_message_id is not None):
                     return row.state
             canonical = session.get(InboundConversationObject, row.inbound_object_id)

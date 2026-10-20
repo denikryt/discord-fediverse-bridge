@@ -38,7 +38,7 @@ class LocalCommunityContentRepository(BaseRepository):
     ) -> LocalCommunityThread:
         """Persist one canonical thread row plus its host Discord surface.
 
-        Stage 2 keeps the public repository entry point small for callers while
+        community surface mapping keeps the public repository entry point small for callers while
         moving the actual Discord ownership into `LocalCommunityThreadSurface`.
         """
         with self._immediate_session_provider() as session:
@@ -66,7 +66,7 @@ class LocalCommunityContentRepository(BaseRepository):
                 )
                 session.add(thread)
                 session.flush()
-            # Stage 2 only creates host surfaces. Later stages can add more
+            # community surface mapping only creates host surfaces. later work can add more
             # surfaces for the same canonical thread without rewriting callers.
             local_community = session.get(LocalCommunity, local_community_id)
             if local_community is None:
@@ -129,7 +129,7 @@ class LocalCommunityContentRepository(BaseRepository):
     ) -> LocalCommunityThread:
         """Persist one canonical local-community thread without a host surface.
 
-        Stage 4 local-subscriber source events create the source surface first
+        local subscriber publishing local-subscriber source events create the source surface first
         and then fan out to host/sibling targets.  This helper keeps that path
         from incorrectly storing the source Discord thread as the host surface.
         """

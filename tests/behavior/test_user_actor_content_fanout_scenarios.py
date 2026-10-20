@@ -1,4 +1,4 @@
-"""Behavior scenarios for Stage 5 canonical content follower fanout."""
+"""Behavior scenarios for participant mutation support canonical content follower fanout."""
 
 from __future__ import annotations
 

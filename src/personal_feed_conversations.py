@@ -73,7 +73,7 @@ class PersonalFeedConversationRuntime:
         if (event.thread.channel.kind not in ('text', 'announcement')
             or event.external_guild_id is None):
             return PersonalFeedConversationResult('ignored', 'not_personal_feed_channel')
-        # Both root and parent use Stage 03 checked legacy projections. Never
+        # Both root and parent use local subscriber synchronization checked legacy projections. Never
         # infer a parent from the thread ID or a guessed starter-message ID.
         thread_id = discord_id_to_legacy_int(event.thread)
         parent_id = discord_id_to_legacy_int(event.thread, component='parent')

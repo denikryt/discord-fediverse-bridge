@@ -152,7 +152,7 @@ class DiscordFanout:
         self.database = database
         self.policy_service = policy_service
         # Physical Community mutations use this typed boundary in production.
-        # The SDK path remains only for direct legacy callers during Stage 03.
+        # The SDK path remains only for direct legacy callers during subscriber synchronization.
         self.adapter = adapter
 
     def _channel_is_allowed(self, channel_id: int) -> bool:

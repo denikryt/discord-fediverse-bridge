@@ -1,4 +1,4 @@
-"""Stage 5 scenarios for fail-closed Discord fanout routing metadata."""
+"""participant mutation support scenarios for fail-closed Discord fanout routing metadata."""
 
 from __future__ import annotations
 

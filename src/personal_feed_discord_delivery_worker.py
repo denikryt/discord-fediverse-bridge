@@ -193,7 +193,7 @@ class PersonalFeedDiscordDeliveryWorker:
                         claim.delivery_id, "inactive personal-feed binding"
                     )
                     return
-                # MULTIPLATFORM_STAGE03_TEMP_PERSONAL_FEED_SEND_GUARD: Persist possible first-send intent before Discord HTTP send; Stage 04 must replace this guard with durable generic delivery intent reconciliation.
+                # MULTIPLATFORM_DISCORD_ADAPTER_TEMP_PERSONAL_FEED_SEND_GUARD: Persist possible first-send intent before Discord HTTP send; typed User Actor namespace must replace this guard with durable generic delivery intent reconciliation.
                 if not self.database.personal_feed_conversations.mark_create_started(
                     claim.delivery_id
                 ):

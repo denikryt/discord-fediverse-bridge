@@ -94,7 +94,7 @@ class PlatformSurfaceRepository(BaseRepository):
     def get_discord_primary_connector(self) -> ConnectorRef:
         """Read the persisted Discord transport identity or fail before Gateway startup.
 
-        Stage 01 migration owns creation of the connector row. Runtime must
+        connector-scoped persistence migration owns creation of the connector row. Runtime must
         never construct an adapter from an assumed row that was not verified.
         """
         with self.session() as session:

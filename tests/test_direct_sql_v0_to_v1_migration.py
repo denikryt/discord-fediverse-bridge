@@ -5,7 +5,7 @@ from sqlalchemy import event
 from test_legacy_v0_to_v1_migration import legacy, _seed, _evidence
 
 
-def test_startup_replaces_source_directly_without_stage00_tables(legacy):
+def test_startup_replaces_source_directly_without_unsupported_prerelease_tables(legacy):
     """One startup stages every source table before DROP and creates the ORM target once."""
     _seed(legacy)
     statements = []

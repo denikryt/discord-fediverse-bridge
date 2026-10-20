@@ -1,4 +1,4 @@
-"""Runtime-oriented follow lifecycle scenarios for Stage 4 subscriptions."""
+"""Runtime-oriented follow lifecycle scenarios for local subscriber participation subscriptions."""
 
 from __future__ import annotations
 from support.runtime import build_test_policy_service
@@ -18,7 +18,7 @@ from tests_constants import BRIDGE_EXAMPLE_DOMAIN, LEMMY_EXAMPLE_DOMAIN
 
 def _database(tmp_path: Path) -> Database:
     """Create a real SQLite-backed repository for follow lifecycle tests."""
-    database = Database(f"sqlite:///{tmp_path / 'bridge-stage4.db'}")
+    database = Database(f"sqlite:///{tmp_path / 'bridge-local subscriber participation.db'}")
     database.migrate()
     return database
 

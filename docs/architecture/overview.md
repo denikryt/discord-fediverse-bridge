@@ -24,7 +24,7 @@ Remote ActivityPub server
   -> Discord or relay fanout
 ```
 
-Stage 02 defines an **inactive** connector-scoped [Platform API](platform-api.md) (SDK-independent references, event shapes, lookup/delivery/permission ports, and a non-owning adapter registry). Stage 01 physical identities live in SQLite; Discord Gateway ingress and fanout **still execute the existing Discord-specific paths** until the Stage 03/04 cutover. A configured Fluxer connector row does not start an adapter or Gateway client.
+physical surface mapping defines an **inactive** connector-scoped [Platform API](platform-api.md) (SDK-independent references, event shapes, lookup/delivery/permission ports, and a non-owning adapter registry). initial persistence implementation physical identities live in SQLite; Discord Gateway ingress and fanout **still execute the existing Discord-specific paths** until the Discord adapter and durable fan-out integration cutover. A configured Fluxer connector row does not start an adapter or Gateway client.
 
 The Python bridge is the orchestration and persistence process. It starts the Discord bot, exposes registration and private gateway intake routes, owns SQLite state through SQLAlchemy, routes Discord events, and decides which runtime handles a bridge action.
 
@@ -77,7 +77,7 @@ This document does not define exact payload fields, every route, or every table 
 
 ## Profile persistence and media ownership
 
-Python owns profile persistence and bridge-managed profile image bytes. The main runtime holds a shared deployment-generation lease while DB and media paths are open; backup shares that generation, while restore and startup recovery require exclusive ownership. The Fedify gateway does not receive filesystem access. Stage 1 does not change actor serialization.
+Python owns profile persistence and bridge-managed profile image bytes. The main runtime holds a shared deployment-generation lease while DB and media paths are open; backup shares that generation, while restore and startup recovery require exclusive ownership. The Fedify gateway does not receive filesystem access. initial persistence implementation does not change actor serialization.
 
 ## User Actor profile delivery recovery
 
@@ -94,7 +94,7 @@ The existing `UserActorDeliveryWorker` is the single process-owned recovery loop
 
 ## Personal-feed root publication
 
-Stage 7 adds a dedicated `PersonalFeedPublisher` between Discord routing and the existing User Actor follower-delivery domain. The publisher reloads the active binding, validates exact owner identity and global ban state, derives deterministic object/activity IDs plus a Discord-derived publication timestamp, asks the gateway for render-only `Create(Note)` JSON, and commits mapping, canonical object, follower snapshot, source, and deliveries in one SQLite `BEGIN IMMEDIATE` transaction.
+personal feed publication adds a dedicated `PersonalFeedPublisher` between Discord routing and the existing User Actor follower-delivery domain. The publisher reloads the active binding, validates exact owner identity and global ban state, derives deterministic object/activity IDs plus a Discord-derived publication timestamp, asks the gateway for render-only `Create(Note)` JSON, and commits mapping, canonical object, follower snapshot, source, and deliveries in one SQLite `BEGIN IMMEDIATE` transaction.
 
 `message_mappings` and `published_activity_objects` carry an explicit `community` or `personal_feed` context. Database checks require personal-feed rows to retain guild, channel, and message identity while forbidding a fabricated community URL. Gateway rendering occurs before the transaction because it has no delivery or signing side effect; the delivery worker is woken only after a newly created source commits. Existing community publication, reply routing, mutation handling, and the empty User Actor outbox remain separate contracts.
 
@@ -104,6 +104,6 @@ The gateway renders User Actor outboxes from a fixed-size internal DTO. Python o
 
 ## Platform persistence boundary
 
-Stage 01 separates domain actors from physical connector/channel locations. `src/db/repositories/platform_surfaces.py` owns placement resolution and typed claim mutations. Discord routing uses current `discord-primary` claims; connector-scoped historical copies survive release and rebinding. Fluxer rows are persistence-only at this stage. SQLite 3.31+ is required for stored generated roles; PostgreSQL 12+ DDL compatibility does not imply a PostgreSQL runtime migration implementation.
+Connector-scoped persistence separates domain actors from physical connector/channel locations. `src/db/repositories/platform_surfaces.py` owns placement resolution and typed claim mutations. Discord routing uses current `discord-primary` claims; connector-scoped historical copies survive release and rebinding. Fluxer rows are persistence-only at present. SQLite 3.31+ is required for stored generated roles; PostgreSQL 12+ DDL compatibility does not imply a PostgreSQL runtime migration implementation.
 
-Database startup supports released v0.1.0 SQLite sources at version 0 and the complete current model at version 1. It upgrades directly in one transaction; The direct transfer stages the released rows in SQL TEMP, creates the current ORM target once and copies them natively; no Stage 00 business schema is reconstructed. See [SQLite startup migrations](../development/database-migrations.md).
+Database startup supports released v0.1.0 SQLite sources at version 0 and the complete current model at version 1. It upgrades directly in one transaction; The direct transfer work items the released rows in SQL TEMP, creates the current ORM target once and copies them natively; no legacy schema inventory business schema is reconstructed. See [SQLite startup migrations](../development/database-migrations.md).

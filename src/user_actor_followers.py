@@ -152,7 +152,7 @@ class UserActorFollowService:
         try:
             remote_label = self._remote_label(remote_actor_id)
             local_host = urlparse(user.actor_url).netloc
-            # MULTIPLATFORM_STAGE03_TEMP_DISCORD_DM: User Actor follower notices still target the registered Discord account; remove this adapter-only user-id path when [Stage 07](https://github.com/denikryt/discord-fediverse-bridge/issues/14) provides connector-aware account linking.
+            # MULTIPLATFORM_DISCORD_ADAPTER_TEMP_DISCORD_DM: User Actor follower notices still target the registered Discord account; remove this adapter-only user-id path when [personal feed publication](https://github.com/denikryt/discord-fediverse-bridge/issues/14) provides connector-aware account linking.
             await self.discord_notices.send_owner_notice(
                 int(user.discord_user_id),
                 f"{remote_label} followed your Fediverse account "

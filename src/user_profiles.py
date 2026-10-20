@@ -91,7 +91,7 @@ class UserProfileService:
         delivery_service: UserActorDeliveryService | None = None,
         delivery_worker: UserActorDeliveryWorker | None = None,
     ) -> None:
-        """Bind profile persistence and optional Stage 4 delivery owners."""
+        """Bind profile persistence and optional User Actor profile publishing delivery owners."""
         self.database = database
         self.store = store
         self.public_origin = public_origin.rstrip("/")
@@ -214,7 +214,7 @@ class UserProfileService:
             )
             snapshot = self._snapshot(user, fields, avatar, header)
             # Profile Update IDs are externally visible delivery source ids and
-            # must follow the typed User Actor grammar after the Stage 4 cutover.
+            # must follow the typed User Actor grammar after the User Actor profile publishing cutover.
             activity_id = build_user_profile_update_activity_id(
                 origin=self.public_origin,
                 username=str(user.activitypub_username),

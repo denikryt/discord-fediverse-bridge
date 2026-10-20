@@ -2,7 +2,7 @@
 
 Reply mapping is correctness-critical because local-community comments must
 preserve parent structure across ActivityPub and each concrete Discord surface.
-Stage 4 adds local-subscriber source surfaces, so outbound resolution can no
+local subscriber participation adds local-subscriber source surfaces, so outbound resolution can no
 longer assume the host surface is always the source context.
 """
 

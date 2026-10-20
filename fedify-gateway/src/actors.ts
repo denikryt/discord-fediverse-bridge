@@ -26,7 +26,7 @@ export function buildBridgeServiceActor(
   sharedInboxId: URL,
   keyPairs: PublicKeyCarrier[],
 ): Service {
-  // The service actor stays intentionally small because later stages only need
+  // The service actor stays intentionally small because later work only need
   // a correct identity envelope for follow and inbound community handling.
   return new Service({
     id: identity.actorId,
@@ -104,7 +104,7 @@ export function buildLocalCommunityGroupActor(
 }
 
 export function buildEmptyOrderedCollection(collectionId: URL): OrderedCollection {
-  // Stage 3 only needs stable collection URLs. Returning an empty collection
+  // Discord adapter integration only needs stable collection URLs. Returning an empty collection
   // keeps the surface coherent until follow/outbox semantics arrive later.
   return new OrderedCollection({
     id: collectionId,

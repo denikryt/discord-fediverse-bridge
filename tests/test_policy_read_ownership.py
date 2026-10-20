@@ -1,4 +1,4 @@
-"""Structural coverage for Stage 7 policy-read ownership boundaries."""
+"""Structural coverage for personal feed publication policy-read ownership boundaries."""
 
 from __future__ import annotations
 

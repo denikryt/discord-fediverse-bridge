@@ -81,7 +81,7 @@ class FakeGateway:
 
 
 def _system(tmp_path):
-    """Build the real Stage 4 persistence and service graph."""
+    """Build the real User Actor profile publishing persistence and service graph."""
     database = Database(f"sqlite:///{tmp_path / 'bridge.db'}")
     database.migrate()
     user = database.users.create_user(
@@ -107,7 +107,7 @@ def _system(tmp_path):
 def _follow(
     database: Database, user_id: int, actor: str, inbox: str, shared: str | None = None
 ) -> int:
-    """Create one accepted relationship through the Stage 3 repository path."""
+    """Create one accepted relationship through the local subscriber synchronization repository path."""
     with database.immediate_session() as session:
         transition = database.user_actor_followers.create_or_refresh(
             session,
@@ -386,7 +386,7 @@ async def test_two_service_instances_submit_one_active_claim_for_same_source(
         assert row.attempt_count == 1
 
 
-def test_legacy_stage3_database_is_rejected_without_synthetic_source(
+def test_legacy_database_is_rejected_without_synthetic_source(
     tmp_path,
 ) -> None:
     """Existing users receive version zero while migration emits no historical update."""

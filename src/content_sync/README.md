@@ -20,7 +20,7 @@ Runtime selection, Discord delivery, gateway routes, or ActivityPub signing.
 
 `message_mappings`, `published_activity_objects`, community group tables, and gateway publish/update/delete payloads.
 
-## Stage 03 dependency audit
+## local subscriber synchronization dependency audit
 
 Legacy `inbound_references.build_message_reference()` defers loading
 `discord.py` until a legacy physical send actually requests an SDK reference.

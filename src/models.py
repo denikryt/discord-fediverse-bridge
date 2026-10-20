@@ -175,7 +175,7 @@ class PostLink(Base):
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
     lemmy_post_id: Mapped[int] = mapped_column(Integer, nullable=False)
     lemmy_post_ap_id: Mapped[str | None] = mapped_column(String(512), nullable=True)
-    # MULTIPLATFORM_STAGE01_TEMP: Discord content ID columns remain only for pre-adapter callers; scoped IDs are authoritative.
+    # MULTIPLATFORM_DISCORD_PROJECTION_TEMP: Discord content ID columns remain only for pre-adapter callers; scoped IDs are authoritative.
     discord_forum_channel_id: Mapped[int | None] = mapped_column(Integer, nullable=True)
     discord_forum_thread_id: Mapped[int | None] = mapped_column(Integer, nullable=True)
     discord_starter_message_id: Mapped[int | None] = mapped_column(
@@ -220,7 +220,7 @@ class CommentLink(Base):
         String(512), nullable=True
     )
     lemmy_post_id: Mapped[int] = mapped_column(Integer, nullable=False)
-    # MULTIPLATFORM_STAGE01_TEMP: Discord content ID columns remain only for pre-adapter callers; scoped IDs are authoritative.
+    # MULTIPLATFORM_DISCORD_PROJECTION_TEMP: Discord content ID columns remain only for pre-adapter callers; scoped IDs are authoritative.
     discord_forum_thread_id: Mapped[int | None] = mapped_column(Integer, nullable=True)
     discord_message_id: Mapped[int | None] = mapped_column(Integer, nullable=True)
     direction: Mapped[str] = mapped_column(String(32), nullable=False)
@@ -298,11 +298,11 @@ class ChannelCommunitySubscription(Base):
     # ChannelCommunitySubscription binds one Discord forum channel to one Lemmy
     # community. The older Lemmy-named fields stay in place because the current
     # runtime still routes thread/comment sync through them, while the new
-    # follow-state fields prepare the Stage 3+ federation flow.
+    # follow-state fields prepare the community repositories+ federation flow.
     __tablename__ = "channel_community_subscriptions"
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
-    # MULTIPLATFORM_STAGE01_TEMP: Nullable Discord subscription location projection is for the legacy Discord runtime only.
+    # MULTIPLATFORM_DISCORD_PROJECTION_TEMP: Nullable Discord subscription location projection is for the legacy Discord runtime only.
     discord_channel_id: Mapped[int | None] = mapped_column(
         Integer, nullable=True, unique=True
     )
@@ -358,7 +358,7 @@ class User(Base):
 
     # User is the shared source of truth for Discord-to-ActivityPub ownership,
     # including the actor URLs and keypair material needed by later publish
-    # flows. Stage 2 stores the keys directly here to avoid split ownership.
+    # flows. schema and migration extraction stores the keys directly here to avoid split ownership.
     __tablename__ = "users"
     __table_args__ = (
         UniqueConstraint("discord_user_id"),
@@ -416,7 +416,7 @@ class PersonalFeedBinding(Base):
     user_id: Mapped[int] = mapped_column(
         ForeignKey("users.id", ondelete="CASCADE"), nullable=False
     )
-    # MULTIPLATFORM_STAGE01_TEMP: Discord location projection remains for existing publication and personal-feed contracts.
+    # MULTIPLATFORM_DISCORD_PROJECTION_TEMP: Discord location projection remains for existing publication and personal-feed contracts.
     discord_guild_id: Mapped[int | None] = mapped_column(Integer, nullable=True)
     discord_channel_id: Mapped[int | None] = mapped_column(Integer, nullable=True)
     created_at: Mapped[datetime] = mapped_column(
@@ -584,7 +584,7 @@ class UserActorOutboundSource(Base):
 
     @property
     def profile_snapshot_json(self) -> str:
-        """Expose the Stage 4 name for profile-only callers during migration."""
+        """Expose the remote subscription repositories name for profile-only callers during migration."""
         return self.snapshot_json
 
 
@@ -754,7 +754,7 @@ class MessageMapping(Base):
     )
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
-    # MULTIPLATFORM_STAGE01_TEMP: Discord location projection remains for existing publication and personal-feed contracts.
+    # MULTIPLATFORM_DISCORD_PROJECTION_TEMP: Discord location projection remains for existing publication and personal-feed contracts.
     source_platform: Mapped[str] = mapped_column(String(32), nullable=False)
     source_id: Mapped[str] = mapped_column(String(255), nullable=False)
     activity_id: Mapped[str] = mapped_column(String(512), nullable=False)
@@ -835,7 +835,7 @@ class PublishedActivityObject(Base):
     conversation_root_object_id: Mapped[str | None] = mapped_column(
         String(512), nullable=True, index=True
     )
-    # MULTIPLATFORM_STAGE01_TEMP: Discord location projection remains for existing publication and personal-feed contracts.
+    # MULTIPLATFORM_DISCORD_PROJECTION_TEMP: Discord location projection remains for existing publication and personal-feed contracts.
     discord_guild_id: Mapped[int | None] = mapped_column(Integer, nullable=True)
     discord_channel_id: Mapped[int | None] = mapped_column(Integer, nullable=True)
     discord_message_id: Mapped[int | None] = mapped_column(Integer, nullable=True)
@@ -903,7 +903,7 @@ class PersonalFeedThreadMapping(Base):
     root_published_object_id: Mapped[int] = mapped_column(
         ForeignKey("published_activity_objects.id", ondelete="CASCADE"), nullable=False
     )
-    # MULTIPLATFORM_STAGE01_TEMP: Discord location projection remains for existing publication and personal-feed contracts.
+    # MULTIPLATFORM_DISCORD_PROJECTION_TEMP: Discord location projection remains for existing publication and personal-feed contracts.
     root_discord_channel_id: Mapped[int | None] = mapped_column(Integer, nullable=True)
     root_discord_message_id: Mapped[int | None] = mapped_column(Integer, nullable=True)
     thread_id: Mapped[int | None] = mapped_column(Integer, nullable=True)
@@ -1001,7 +1001,7 @@ class InboundDiscordDelivery(Base):
     root_published_object_id: Mapped[int] = mapped_column(
         ForeignKey("published_activity_objects.id", ondelete="CASCADE"), nullable=False
     )
-    # MULTIPLATFORM_STAGE01_TEMP: Discord location projection remains for existing publication and personal-feed contracts.
+    # MULTIPLATFORM_DISCORD_PROJECTION_TEMP: Discord location projection remains for existing publication and personal-feed contracts.
     destination_channel_id: Mapped[int | None] = mapped_column(Integer, nullable=True)
     destination_thread_id: Mapped[int | None] = mapped_column(Integer, nullable=True)
     discord_message_id: Mapped[int | None] = mapped_column(Integer, nullable=True)
@@ -1116,7 +1116,7 @@ class CommunityThreadGroup(Base):
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
     community_actor_id: Mapped[str] = mapped_column(String(512), nullable=False)
-    # MULTIPLATFORM_STAGE01_TEMP: Discord content ID columns remain only for pre-adapter callers; scoped IDs are authoritative.
+    # MULTIPLATFORM_DISCORD_PROJECTION_TEMP: Discord content ID columns remain only for pre-adapter callers; scoped IDs are authoritative.
     source_channel_id: Mapped[int | None] = mapped_column(Integer, nullable=True)
     source_thread_id: Mapped[int | None] = mapped_column(Integer, nullable=True)
     source_starter_message_id: Mapped[int | None] = mapped_column(
@@ -1158,7 +1158,7 @@ class CommunityThreadGroupDelivery(Base):
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
     thread_group_id: Mapped[int] = mapped_column(Integer, nullable=False)
-    # MULTIPLATFORM_STAGE01_TEMP: Discord content ID columns remain only for pre-adapter callers; scoped IDs are authoritative.
+    # MULTIPLATFORM_DISCORD_PROJECTION_TEMP: Discord content ID columns remain only for pre-adapter callers; scoped IDs are authoritative.
     discord_channel_id: Mapped[int | None] = mapped_column(Integer, nullable=True)
     discord_thread_id: Mapped[int | None] = mapped_column(Integer, nullable=True)
     discord_starter_message_id: Mapped[int | None] = mapped_column(
@@ -1202,7 +1202,7 @@ class CommunityMessageGroup(Base):
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
     community_actor_id: Mapped[str] = mapped_column(String(512), nullable=False)
     thread_group_id: Mapped[int] = mapped_column(Integer, nullable=False)
-    # MULTIPLATFORM_STAGE01_TEMP: Discord content ID columns remain only for pre-adapter callers; scoped IDs are authoritative.
+    # MULTIPLATFORM_DISCORD_PROJECTION_TEMP: Discord content ID columns remain only for pre-adapter callers; scoped IDs are authoritative.
     source_channel_id: Mapped[int | None] = mapped_column(Integer, nullable=True)
     source_thread_id: Mapped[int | None] = mapped_column(Integer, nullable=True)
     source_message_id: Mapped[int | None] = mapped_column(Integer, nullable=True)
@@ -1244,7 +1244,7 @@ class CommunityMessageGroupDelivery(Base):
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
     message_group_id: Mapped[int] = mapped_column(Integer, nullable=False)
-    # MULTIPLATFORM_STAGE01_TEMP: Discord content ID columns remain only for pre-adapter callers; scoped IDs are authoritative.
+    # MULTIPLATFORM_DISCORD_PROJECTION_TEMP: Discord content ID columns remain only for pre-adapter callers; scoped IDs are authoritative.
     discord_channel_id: Mapped[int | None] = mapped_column(Integer, nullable=True)
     discord_thread_id: Mapped[int | None] = mapped_column(Integer, nullable=True)
     discord_message_id: Mapped[int | None] = mapped_column(Integer, nullable=True)
@@ -1287,7 +1287,7 @@ class RemoteActor(Base):
     """Cache remote actor metadata needed for verification and delivery."""
 
     # RemoteActor keeps the last fetched addressing and public-key data for a
-    # remote AP actor so later stages can verify signatures and choose the
+    # remote AP actor so later work can verify signatures and choose the
     # correct inbox without refetching actor documents on every event.
     __tablename__ = "remote_actors"
     __table_args__ = (UniqueConstraint("actor_url"),)
@@ -1493,7 +1493,7 @@ class RemoteSubscriber(Base):
 class LocalSubscriber(Base):
     """Persist one same-instance Discord forum subscribed to a local community.
 
-    Local-subscriber rows are control-plane state in Stage 1. Later stages may
+    Local-subscriber rows are control-plane state in connector-scoped persistence. later work may
     use them for participant sync, but this model itself does not imply any
     runtime routing behavior.
     """
@@ -1507,7 +1507,7 @@ class LocalSubscriber(Base):
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
     local_community_id: Mapped[int] = mapped_column(Integer, nullable=False)
     discord_guild_id: Mapped[int | None] = mapped_column(Integer, nullable=True)
-    # MULTIPLATFORM_STAGE01_TEMP: Nullable Discord subscription location projection is for the legacy Discord runtime only.
+    # MULTIPLATFORM_DISCORD_PROJECTION_TEMP: Nullable Discord subscription location projection is for the legacy Discord runtime only.
     discord_channel_id: Mapped[int | None] = mapped_column(Integer, nullable=True)
     initiated_by_discord_user_id: Mapped[str | None] = mapped_column(
         String(64), nullable=True
@@ -1598,7 +1598,7 @@ class LocalCommunityThread(Base):
     """Map one canonical local-community thread in either federation direction.
 
     Threads are the canonical post-level identity rows for local-community
-    mode. Stage 2 deliberately removes direct Discord ownership from this row
+    mode. schema and migration extraction deliberately removes direct Discord ownership from this row
     so one canonical thread can later fan out onto several Discord surfaces.
     """
 
@@ -1624,7 +1624,7 @@ class LocalCommunityMessage(Base):
 
     Message rows preserve the canonical AP identity and AP-parent linkage for
     one local-community comment. Discord-parent linkage moves to per-surface
-    rows in Stage 2 because later stages will need different parent message ids
+    rows in schema and migration extraction because later work will need different parent message ids
     on different Discord forum surfaces.
     """
 
@@ -1648,8 +1648,8 @@ class LocalCommunityMessage(Base):
 class LocalCommunityThreadSurface(Base):
     """Map one canonical local-community thread onto one Discord forum surface.
 
-    Stage 2 introduces explicit surface rows so host-forum behavior can keep
-    working while later stages add more local Discord targets for the same
+    schema and migration extraction introduces explicit surface rows so host-forum behavior can keep
+    working while later work add more local Discord targets for the same
     canonical thread.
     """
 
@@ -1677,7 +1677,7 @@ class LocalCommunityThreadSurface(Base):
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
     local_community_thread_id: Mapped[int] = mapped_column(Integer, nullable=False)
-    # MULTIPLATFORM_STAGE01_TEMP: Discord content ID columns remain only for pre-adapter callers; scoped IDs are authoritative.
+    # MULTIPLATFORM_DISCORD_PROJECTION_TEMP: Discord content ID columns remain only for pre-adapter callers; scoped IDs are authoritative.
     discord_forum_channel_id: Mapped[int | None] = mapped_column(Integer, nullable=True)
     discord_thread_id: Mapped[int | None] = mapped_column(Integer, nullable=True)
     discord_starter_message_id: Mapped[int | None] = mapped_column(
@@ -1696,7 +1696,7 @@ class LocalCommunityMessageSurface(Base):
     """Map one canonical local-community message onto one Discord message surface.
 
     Message surfaces stay bound to a concrete thread surface so nested reply
-    routing can remain local to one Discord thread even after later stages add
+    routing can remain local to one Discord thread even after later work add
     several sibling forum surfaces for the same canonical community activity.
     """
 
@@ -1735,7 +1735,7 @@ class LocalCommunityMessageSurface(Base):
     local_community_thread_surface_id: Mapped[int] = mapped_column(
         Integer, nullable=False
     )
-    # MULTIPLATFORM_STAGE01_TEMP: Discord content ID columns remain only for pre-adapter callers; scoped IDs are authoritative.
+    # MULTIPLATFORM_DISCORD_PROJECTION_TEMP: Discord content ID columns remain only for pre-adapter callers; scoped IDs are authoritative.
     discord_forum_channel_id: Mapped[int | None] = mapped_column(Integer, nullable=True)
     discord_message_id: Mapped[int | None] = mapped_column(Integer, nullable=True)
     parent_discord_message_id: Mapped[int | None] = mapped_column(

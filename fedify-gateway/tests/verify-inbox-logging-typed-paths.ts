@@ -1,9 +1,9 @@
 /**
- * Verifies Stage 3 raw ActivityPub inbox capture readiness.
+ * Verifies Discord adapter integration raw ActivityPub inbox capture readiness.
  *
  * Production Fedify still listens on the pre-cutover inbox routes, but the raw
  * capture boundary must already recognize future typed actor-specific inboxes
- * so Undo(Follow) payload recovery is not lost after Stage 4 cutover.
+ * so Undo(Follow) payload recovery is not lost after typed ActivityPub identity migration cutover.
  */
 import assert from "node:assert/strict";
 import { createHash } from "node:crypto";

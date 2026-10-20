@@ -16,7 +16,7 @@ from urllib.parse import quote, unquote, urlsplit
 # These patterns intentionally duplicate the existing registration and
 # local-community service contracts. Importing those modules here would pull in
 # database-facing service dependencies, which would make this pure helper a
-# wider runtime boundary than Stage 2 needs.
+# wider runtime boundary than typed actor grammar needs.
 _USERNAME_PATTERN = re.compile(r"^[a-z0-9_-]+$")
 _COMMUNITY_SLUG_PATTERN = re.compile(r"^[a-z0-9_-]+$")
 

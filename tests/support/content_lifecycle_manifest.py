@@ -143,7 +143,7 @@ CONTENT_CONTRACT_ENTRIES = (
                 "test_source_message_edit_propagates_to_mirrors_and_ap",
             ),
             _node(
-                "tests/behavior/test_local_community_stage5_participant_edit_delete_scenarios.py",
+                "tests/behavior/test_local_community_participant_edit_delete_scenarios.py",
                 "test_host_and_local_subscriber_comment_edits_update_other_surfaces",
             ),
         ),
@@ -158,7 +158,7 @@ CONTENT_CONTRACT_ENTRIES = (
                 "test_source_message_delete_removes_mirrors_and_sends_ap_delete",
             ),
             _node(
-                "tests/behavior/test_local_community_stage5_participant_edit_delete_scenarios.py",
+                "tests/behavior/test_local_community_participant_edit_delete_scenarios.py",
                 "test_local_discord_deletes_mark_non_source_surfaces",
             ),
         ),
@@ -200,7 +200,7 @@ CONTENT_CONTRACT_ENTRIES = (
                 "test_mirror_delete_failure_does_not_block_ap_delete",
             ),
             _node(
-                "tests/behavior/test_local_community_stage5_participant_edit_delete_scenarios.py",
+                "tests/behavior/test_local_community_participant_edit_delete_scenarios.py",
                 "test_partial_local_discord_failure_does_not_block_healthy_targets",
             ),
         ),

@@ -1,4 +1,4 @@
-/** Verify Stage 8 personal-feed Create/Update/Delete normalization and routing identity. */
+/** Verify personal-feed conversations personal-feed Create/Update/Delete normalization and routing identity. */
 
 import assert from "node:assert/strict";
 

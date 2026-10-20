@@ -144,7 +144,7 @@ class LocalCommunityService:
         )
         if placement is None or placement.external_guild_id is None:
             raise LocalCommunityError("Created community has no Discord host placement")
-        # MULTIPLATFORM_STAGE01_TEMP: Discord creation result projects host placement for the current slash-command contract.
+        # MULTIPLATFORM_DISCORD_PROJECTION_TEMP: Discord creation result projects host placement for the current slash-command contract.
         return CreatedLocalCommunity(
             slug=created.slug,
             display_name=created.display_name,
@@ -168,7 +168,7 @@ class LocalCommunityService:
 
     def build_actor_urls(self, slug: str) -> tuple[str, str, str, str]:
         """Build the canonical actor URLs for one local community slug."""
-        # Stage 4 makes local communities first-class typed actors rather than
+        # local subscriber participation makes local communities first-class typed actors rather than
         # exposing the retired /communities/{slug} ActivityPub identity.
         address = build_actor_address(
             origin=self.base_url, kind=LocalActorKind.COMMUNITY, identifier=slug

@@ -37,7 +37,7 @@ REGISTRATION_HTML_PATH = WEB_DIR / "registration.html"
 def create_http_app(runtime: Runtime) -> FastAPI:
     """Create the FastAPI app for internal bridge events and public registration."""
 
-    # The app exposes both the trusted gateway ingest endpoint and the Stage 5
+    # The app exposes both the trusted gateway ingest endpoint and the participant mutation support
     # public registration pages. The internal auth rules apply only to the
     # private event-ingest surface.
     app = FastAPI(title="discord-lemmy-bridge-internal-api")
@@ -376,7 +376,7 @@ def _apply_session_cookie(
 
 def _extract_form_field(raw_body: bytes, field_name: str) -> str:
     """Parse one URL-encoded form field without adding a form dependency."""
-    # Stage 5 serves plain HTML without a template/form stack, so parsing the
+    # participant mutation support serves plain HTML without a template/form stack, so parsing the
     # single username field directly keeps the backend dependency surface small.
     parsed = parse_qs(raw_body.decode("utf-8"), keep_blank_values=True)
     values = parsed.get(field_name)

@@ -83,13 +83,13 @@ npm run check
 npm test
 ```
 
-## Stage 03 federation security gates (not yet release-certified)
+## Discord adapter integration federation security gates (not yet release-certified)
 
-The Stage 03 gateway now rejects relayed `Announce(Create/Update/Delete)`
+The Discord adapter integration gateway now rejects relayed `Announce(Create/Update/Delete)`
 when it cannot independently obtain the exact original activity from its
 claimed author's HTTPS origin. A signature on the relayer's outer `Announce`
 is not evidence of nested authorship. Non-dereferenceable nested mutations are
-intentionally rejected (`MULTIPLATFORM_STAGE03_TEMP_FORWARDED_MUTATION_PROOF`)
+intentionally rejected (`MULTIPLATFORM_DISCORD_ADAPTER_TEMP_FORWARDED_MUTATION_PROOF`)
 until a separately verified author proof is implemented.
 
 Signed JSON POST uses public-only DNS/socket admission and never follows a

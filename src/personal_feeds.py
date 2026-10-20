@@ -49,7 +49,7 @@ class PersonalFeedService:
     @staticmethod
     def _view(binding: PersonalFeedBinding, user: User) -> PersonalFeedBindingView:
         """Convert ORM state into a detached immutable routing view."""
-        # MULTIPLATFORM_STAGE01_TEMP: Discord personal-feed view requires a primary Discord surface claim and complete location.
+        # MULTIPLATFORM_DISCORD_PROJECTION_TEMP: Discord personal-feed view requires a primary Discord surface claim and complete location.
         if (
             binding.discord_guild_id is None
             or binding.discord_channel_id is None

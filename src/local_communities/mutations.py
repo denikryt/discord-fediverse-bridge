@@ -67,7 +67,7 @@ class LocalCommunityMutationHandler:
 
         Host surfaces are always authoritative.  Local-subscriber surfaces are
         authoritative only while the matching local subscriber row remains
-        active, matching Stage 4's create-source routing invariant.
+        active, matching local subscriber participation's create-source routing invariant.
         """
         if getattr(surface, "role") != "local_subscriber":
             return True
@@ -214,7 +214,7 @@ class LocalCommunityMutationHandler:
     ) -> None:
         """Propagate one Discord-authored local-community edit to all participants.
 
-        Stage 5 resolves the edited Discord message through surface rows first.
+        participant mutation support resolves the edited Discord message through surface rows first.
         That lets host and local-subscriber copies both resolve the same
         canonical AP object, while still excluding the user-edited source copy
         from local Discord fanout.

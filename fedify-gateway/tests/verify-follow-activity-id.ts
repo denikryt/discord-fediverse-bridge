@@ -19,7 +19,7 @@ const config: GatewayConfig = {
 };
 
 async function main(): Promise<void> {
-  /** Stage regression: Follow ids must remain valid without trailing slash. */
+  /** Regression: Follow ids must remain valid without trailing slash. */
   const originalFetch = globalThis.fetch;
   const sentActivities: Array<{ recipients: Array<{ id: string; inboxId: string }>; activity: { id?: URL } }> = [];
 

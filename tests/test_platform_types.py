@@ -1,4 +1,4 @@
-"""Stage 02 physical-identity, ingress, and outbound admission contracts."""
+"""Platform API physical-identity, ingress, and outbound admission contracts."""
 
 from dataclasses import FrozenInstanceError
 from datetime import datetime, timezone
@@ -32,7 +32,7 @@ from src.platform_types import (
 )
 
 
-def test_connector_metadata_matches_stage01_identity_and_rejects_invalid_origin():
+def test_connector_metadata_matches_persisted_identity_and_rejects_invalid_origin():
     """Only valid persisted connector snapshots may cross the adapter boundary."""
     assert ConnectorRef('discord-primary', 'discord').instance_origin is None
     assert ConnectorRef('fluxer-a', 'fluxer', 'https://fluxer.test').instance_origin == 'https://fluxer.test'
@@ -207,7 +207,7 @@ def test_unknown_delivery_is_one_unambiguous_reason():
         PlatformOperationError('perhaps')
 
 
-def test_opaque_identity_preserves_whitespace_that_stage01_can_store_but_rejects_control_bytes():
+def test_opaque_identity_preserves_persisted_whitespace_but_rejects_control_bytes():
     """Metadata must not silently rewrite a persisted opaque connector/channel key."""
     preserved = ChannelRef(' primary ', ' 900 ')
     assert (preserved.connector_key, preserved.external_channel_id) == (' primary ', ' 900 ')
@@ -264,7 +264,7 @@ def test_content_descriptor_requires_urls_not_native_upload_objects_or_credentia
         ContentDocument('x', attachments=['an SDK File'])
 
 
-def test_stage02_action_surface_does_not_grow_unused_physical_thread_methods():
+def test_platform_api_action_surface_does_not_grow_unused_physical_thread_methods():
     """Inbound physical mutations need not imply unused outbound thread controls."""
     from typing import get_args
 

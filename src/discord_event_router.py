@@ -216,7 +216,7 @@ class DiscordEventRouter:
         )
 
     def is_active_personal_feed_channel(self, user_id: int, channel_id: int) -> bool:
-        """Expose the durable current-channel comparison required by later stages."""
+        """Expose the durable current-channel comparison required by later work."""
         return self.personal_feed_service.is_active_personal_feed_channel(
             user_id, channel_id
         )
@@ -224,7 +224,7 @@ class DiscordEventRouter:
     def is_local_community_forum(self, forum_channel_id: int | None) -> bool:
         """Return whether one forum is a local-community create source.
 
-        Stage 4 widens create routing from host forums to active local
+        durable delivery widens create routing from host forums to active local
         subscriber forums.  The helper keeps inactive subscribers and unrelated
         forums out of local-community mode while preserving host precedence.
         """
@@ -247,7 +247,7 @@ class DiscordEventRouter:
     def is_local_community_message(self, message_id: int) -> bool:
         """Return whether one Discord message belongs to local-community mode.
 
-        Stage 2 moves Discord ownership to explicit surface rows, so both
+        Platform API contract moves Discord ownership to explicit surface rows, so both
         starter and reply detection must resolve through those tables instead
         of checking canonical local-community rows directly.
         """

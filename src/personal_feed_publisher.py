@@ -136,7 +136,7 @@ class PersonalFeedPublisher:
             f"personal-feed:{guild_id}:{channel_id}:{message_id}:{user.id}".encode()
         ).hexdigest()
         username = str(user.activitypub_username)
-        # Stage 4 stores new personal-feed roots under the typed User Actor URL.
+        # typed User Actor namespace stores new personal-feed roots under the typed User Actor URL.
         object_id = build_user_post_object_id(
             origin=self.fedify_origin, username=username, object_id=operation_id
         )

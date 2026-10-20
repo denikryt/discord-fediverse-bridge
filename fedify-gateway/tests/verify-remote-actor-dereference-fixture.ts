@@ -1,10 +1,10 @@
 /**
- * Verifies Stage 3 fake remote actor dereference at the HTTP boundary.
+ * Verifies Discord adapter integration fake remote actor dereference at the HTTP boundary.
  *
  * A remote Follow must resolve Bob's effective inbox data from Bob's served
  * actor document. The test deliberately does not patch `activity.getActor()` or
  * `buildLocalFollowRequestedEvent()` internals, matching the production failure
- * class that Stage 5 will exercise through public HTTP.
+ * class that federation ingress will exercise through public HTTP.
  */
 import assert from "node:assert/strict";
 import { mkdtemp, writeFile } from "node:fs/promises";

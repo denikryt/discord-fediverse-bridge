@@ -47,11 +47,11 @@ The gateway serves these ActivityPub actor categories:
 
 Actor documents provide stable identity and routing fields plus editable registered-user profile data. User `Person` actors expose immutable `preferredUsername`, editable `name` and escaped `summary`, optional `icon` and `image` objects backed by bridge-owned immutable media URLs, and up to four ordered `PropertyValue` attachments. Successful profile edits also create a durable complete `Update(Person)` and deliver it to the unique accepted follower endpoints.
 
-Registered User Actor followers are auto-accepted and stored separately from local-community subscribers. Their canonical `/actors/users/{username}/followers` collection publicly exposes accepted remote actor IDs through bounded pages. User-authored public content is delivered to the accepted follower endpoint snapshot through durable per-target retry. User outboxes remain empty placeholders until the dedicated outbox stage.
+Registered User Actor followers are auto-accepted and stored separately from local-community subscribers. Their canonical `/actors/users/{username}/followers` collection publicly exposes accepted remote actor IDs through bounded pages. User-authored public content is delivered to the accepted follower endpoint snapshot through durable per-target retry. User outboxes remain empty placeholders until the dedicated outbox work.
 
 A bound personal-feed guild text channel publishes only owner-authored root messages. Each accepted root becomes one bridge-owned public `Create(Note)` with deterministic object/activity IDs, a canonical `published` value derived from the Discord message creation time, Public addressing, and the User Actor followers collection in `cc`. Replies use a lazily adopted or created public Discord thread whose snowflake equals the root message ID. Registered Discord users publish replies as their own `Person` actors; unregistered users are rejected without federation. Inbound remote comments are stored canonically before Discord delivery, and remote Update/Delete activities must match the stored exact actor owner before they may edit or remove the mapped Discord message.
 
-Discord synchronization is active only while the root mapping's channel remains the User Actor's current personal-feed binding. After unbind or move, inbound comments remain stored but Discord rendering and outbound thread publication are suppressed. Discord rendering uses at most three actual API attempts with retry intervals no longer than 30 seconds; waiting for an out-of-order parent does not consume that budget. Attachments, private visibility, complete remote conversation reconstruction, and public outbox pagination remain outside Stage 8.
+Discord synchronization is active only while the root mapping's channel remains the User Actor's current personal-feed binding. After unbind or move, inbound comments remain stored but Discord rendering and outbound thread publication are suppressed. Discord rendering uses at most three actual API attempts with retry intervals no longer than 30 seconds; waiting for an out-of-order parent does not consume that budget. Attachments, private visibility, complete remote conversation reconstruction, and public outbox pagination remain outside personal feed conversations.
 
 ## Supported discovery
 
@@ -246,7 +246,7 @@ Successful registered-user profile mutations create one immutable logical profil
 
 The Python runtime owns source state, retry timing, endpoint claims, ordering, and per-target outcomes. The Fedify gateway renders the complete `Person` through the same actor builder used by the public actor route and performs signed endpoint delivery as the owning User Actor. Retry uses the persisted activity JSON and stable activity ID; it does not re-read a newer profile into an older source.
 
-Profile delivery is partial-failure tolerant. A failed endpoint does not roll back the local profile or block healthy endpoints. Account settings report local success separately from pending remote refresh. Existing user-authored content recipients are unchanged in Stage 4.
+Profile delivery is partial-failure tolerant. A failed endpoint does not roll back the local profile or block healthy endpoints. Account settings report local success separately from pending remote refresh. Existing user-authored content recipients are unchanged in local subscriber participation.
 
 ## User Actor content follower delivery
 

@@ -53,7 +53,7 @@ TECHNICAL_CONTRACT_ENTRIES = (
         "schema_cleanup_contract",
         "schema",
         "pytest",
-        ("tests/test_stage5_schema_cleanup.py::",),
+        ("tests/test_schema_cleanup.py::",),
     ),
     TechnicalContractEntry(
         "gateway_typescript_check",

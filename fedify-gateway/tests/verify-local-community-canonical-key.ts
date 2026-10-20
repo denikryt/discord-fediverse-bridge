@@ -2,7 +2,7 @@
  * Gateway verification for local-community canonical key identity.
  *
  * Local communities are canonical ActivityPub Group actors under
- * `/actors/communities/{slug}`. This test locks the Stage 7 cleanup invariant
+ * `/actors/communities/{slug}`. This test locks the personal feed publication cleanup invariant
  * that retired `/communities/{slug}`, `/c/{slug}`, and untyped `/actors/{slug}`
  * routes stay unsupported while typed community signatures use the typed actor
  * URL as the key owner/key id.

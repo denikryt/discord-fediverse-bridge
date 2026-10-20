@@ -1,8 +1,8 @@
 /**
- * Verifies a fixture-only Fedify reserved-expansion route shape for Stage 4.
+ * Verifies a fixture-only Fedify reserved-expansion route shape for typed ActivityPub identity migration.
  *
  * This does not exercise production `createGatewayFederation()`. It proves that
- * a slash-containing `{+identifier}` value can reach the Stage 3 parser before
+ * a slash-containing `{+identifier}` value can reach the Discord adapter integration parser before
  * later actor lookup, key ownership, and inbox-owner resolution are wired.
  */
 import assert from "node:assert/strict";

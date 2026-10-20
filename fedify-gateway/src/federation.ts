@@ -420,7 +420,7 @@ async function verifyForwardedActivityOrigin(
   } catch (error) {
     if ((nested.type === "Update" || nested.type === "Delete") &&
         error instanceof Error && /unverifiable/i.test(error.message)) {
-      // MULTIPLATFORM_STAGE03_TEMP_FORWARDED_MUTATION_PROOF: A relayed Update/Delete without independently provable original author is rejected; remove only when a verified author-signature or origin lookup mechanism safely supports non-dereferenceable mutations.
+      // MULTIPLATFORM_DISCORD_ADAPTER_TEMP_FORWARDED_MUTATION_PROOF: A relayed Update/Delete without independently provable original author is rejected; remove only when a verified author-signature or origin lookup mechanism safely supports non-dereferenceable mutations.
       throw new Error("forwarded mutation origin_unverifiable", { cause: error });
     }
     throw error;
@@ -682,7 +682,7 @@ function matchesActorSpecificInboxOwner(
 }
 
 function parseTypedActorAlias(resource: URL, origin: string): string | null {
-  // Only typed actor aliases are accepted after Stage 4; old actor URLs are not
+  // Only typed actor aliases are accepted after typed ActivityPub identity migration; old actor URLs are not
   // rewritten because they are no longer a compatibility surface.
   if (resource.origin !== new URL(origin).origin) return null;
   const match = resource.pathname.match(/^\/actors\/(services|users|communities)\/([^/]+)$/);
@@ -690,7 +690,7 @@ function parseTypedActorAlias(resource: URL, origin: string): string | null {
 }
 
 function parseUserAlias(resource: URL, origin: string): string | null {
-  // Stage 4 accepts only the typed user actor URL as local User identity.
+  // typed ActivityPub identity migration accepts only the typed user actor URL as local User identity.
   const resourceOrigin = new URL(origin);
   if (resource.origin !== resourceOrigin.origin) {
     return null;

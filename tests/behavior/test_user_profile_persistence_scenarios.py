@@ -89,7 +89,7 @@ def test_sqlite_enforces_foreign_keys_and_slot_kind(tmp_path: Path) -> None:
 def test_profile_field_name_accepts_255_code_points_and_rejects_256(
     tmp_path: Path,
 ) -> None:
-    """The persisted Stage 1 metadata-name boundary is exactly 255 code points."""
+    """The persisted profile media storage metadata-name boundary is exactly 255 code points."""
     _database, service, user_id = _system(tmp_path)
     accepted = "é" * 255
     assert service.update_profile(

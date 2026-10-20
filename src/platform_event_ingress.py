@@ -1,6 +1,6 @@
 """Single connector-scoped normalized Gateway mutation ingress.
 
-Stage 03 routes edits/deletes, Personal Feed roots/replies and Community
+Discord adapter integration routes edits/deletes, Personal Feed roots/replies and Community
 forum starters/replies through one connector-scoped sink.
 """
 
@@ -36,7 +36,7 @@ class PlatformEventIngress:
 
     Normalized message mutation behavior stays with the existing mutation
     handler; thread metadata events have no canonical AP mutation owner in
-    Stage 03. Forum Create paths dispatch to authorized canonical runtimes; unknown
+    Discord adapter integration. Forum Create paths dispatch to authorized canonical runtimes; unknown
     or incomplete events fail closed instead of entering a legacy SDK route.
     """
 
@@ -65,7 +65,7 @@ class PlatformEventIngress:
         elif isinstance(event, MessageDeleted):
             await self.mutations.handle_platform_message_delete(event, self.adapter)
         elif isinstance(event, (ThreadUpdated, ThreadDeleted)):
-            # MULTIPLATFORM_STAGE03_TEMP_THREAD_MUTATIONS: Physical thread update/delete notices are normalized but not canonical AP mutations; Stage 04 must resolve source/copy ownership before enabling any propagation.
+            # MULTIPLATFORM_DISCORD_ADAPTER_TEMP_THREAD_MUTATIONS: Physical thread update/delete notices are normalized but not canonical AP mutations; durable fan-out must resolve source/copy ownership before enabling any propagation.
             # No existing domain runtime owns a physical thread rename/delete
             # as an AP mutation. Keep this an observable no-op, never an edit.
             logger.info(

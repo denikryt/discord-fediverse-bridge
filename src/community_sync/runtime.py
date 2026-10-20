@@ -506,7 +506,7 @@ class CommunityRuntime:
             # A missing delivery row does not prove the target Discord Create
             # was never transmitted. Even a freshly verified ActivityPub post
             # cannot supply a negative physical receipt after a restart. Until
-            # Stage 04 can reconcile durable intents, do not re-post to gaps in
+            # local subscriber publishing can reconcile durable intents, do not re-post to gaps in
             # an already persisted group, including in the parent-backfill path.
             if recover_missing:
                 return _HandlerResult(
@@ -719,7 +719,7 @@ class CommunityRuntime:
         A wholly missing parent is recovered before comment delivery. An
         existing group with a missing recipient receipt must not be backfilled
         blindly: confirmed target threads can receive replies independently,
-        while unresolved recipients remain excluded until Stage 04 recovery.
+        while unresolved recipients remain excluded until local subscriber publishing recovery.
         """
         from ..activitypub_handlers import HandlerResult as _HandlerResult
         from .backfill import backfill_normalized_post_as_thread_group

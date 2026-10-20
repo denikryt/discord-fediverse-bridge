@@ -443,7 +443,7 @@ class LocalCommunityInboundCreateHandler:
                 )
         else:
             # Historical direct-call tests still use the SDK projection;
-            # Stage 03 cleanup will migrate these consumers to the adapter.
+            # local subscriber synchronization cleanup will migrate these consumers to the adapter.
             parent_discord_message_id = resolve_inbound_reply_target(
                 database=self.database,
                 parent_ap_object_id=getattr(event.object, 'parent_ap_id'),
@@ -560,7 +560,7 @@ class LocalCommunityInboundCreateHandler:
             source_activity_id=source_id,
         )
         if source is None or not isinstance(getattr(event, "source_activity_json", None), dict):
-            # MULTIPLATFORM_STAGE03_TEMP_UNVERIFIED_AP_DUPLICATE: A legacy mapped AP object without independent persisted actor/payload provenance cannot safely replay Discord fan-out or ActivityPub relay; Stage 04 must reconcile original proof before enabling recovery.
+            # MULTIPLATFORM_DISCORD_ADAPTER_TEMP_UNVERIFIED_AP_DUPLICATE: A legacy mapped AP object without independent persisted actor/payload provenance cannot safely replay Discord fan-out or ActivityPub relay; local subscriber participation must reconcile original proof before enabling recovery.
             return "unverified_duplicate"
         if (source.object_kind != "post"
             or source.origin_remote_actor_id != event.actor_id
@@ -583,7 +583,7 @@ class LocalCommunityInboundCreateHandler:
         # Do not insert a new source row while allegedly verifying a duplicate.
         previous = self.database.personal_feed_conversations.get_inbound_object(event.object.ap_id)
         if previous is None or previous.source_activity_json is None:
-            # MULTIPLATFORM_STAGE03_TEMP_UNVERIFIED_AP_DUPLICATE: A legacy mapped AP object without independent persisted actor/payload provenance cannot safely replay Discord fan-out or ActivityPub relay; Stage 04 must reconcile original proof before enabling recovery.
+            # MULTIPLATFORM_DISCORD_ADAPTER_TEMP_UNVERIFIED_AP_DUPLICATE: A legacy mapped AP object without independent persisted actor/payload provenance cannot safely replay Discord fan-out or ActivityPub relay; local subscriber participation must reconcile original proof before enabling recovery.
             return "unverified_duplicate"
         admission = self.database.personal_feed_conversations.retain_community_create(
             activity_id=getattr(event, "source_activity_id", None) or event.delivery_id,

@@ -1,8 +1,8 @@
 """Checked projection of Discord-only physical identities into legacy SQLite IDs.
 
-Stage 03 preserves preexisting integer Discord repository columns, not a new
+Discord adapter integration preserves preexisting integer Discord repository columns, not a new
 multi-platform identifier scheme. Only a verified discord-primary reference may
-cross this narrow boundary; Stage 04 replaces these lookups with scoped keys.
+cross this narrow boundary; durable delivery replaces these lookups with scoped keys.
 """
 from __future__ import annotations
 
@@ -46,7 +46,7 @@ def discord_id_to_legacy_int(
         raw = ref.external_channel_id
     else:
         raw = ref.external_actor_id
-    # MULTIPLATFORM_STAGE03_TEMP_LEGACY_IDS: Convert only verified discord-primary refs into legacy integer repository projections; Stage 04 must use connector-scoped source/copy lookups and delete this shim.
+    # MULTIPLATFORM_DISCORD_ADAPTER_TEMP_LEGACY_IDS: Convert only verified discord-primary refs into legacy integer repository projections; durable delivery must use connector-scoped source/copy lookups and delete this shim.
     if not isinstance(raw, str) or not raw.isascii() or not raw.isdecimal() or int(raw) <= 0:
         raise PlatformOperationError('invalid_request', 'invalid Discord legacy snowflake')
     return int(raw)

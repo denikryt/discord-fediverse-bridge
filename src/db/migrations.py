@@ -99,7 +99,7 @@ def _require_sqlite_model_support(conn: Connection) -> None:
         .split(".")
     )
     if version < (3, 31, 0):
-        raise RuntimeError("Stage 01 requires SQLite >= 3.31.0 for STORED role")
+        raise RuntimeError("current SQLite schema requires SQLite >= 3.31.0 for STORED role")
 
 
 def _validate_current_v1_schema(conn: Connection) -> None:
@@ -358,7 +358,7 @@ def run_pending_migrations(
             _rollback_physical_transaction(conn)
             # Never attach the exception/SQL parameters to phase logs. The
             # contextual exception remains available to the caller through chaining.
-            logger.warning("Database migration rolled back: stage=%s", phase)
+            logger.warning("Database migration rolled back: phase=%s", phase)
             if isinstance(exc, SQLAlchemyError):
                 if isinstance(exc, StatementError):
                     exc.hide_parameters = True

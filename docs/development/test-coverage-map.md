@@ -9,59 +9,59 @@ This document is a short, feature-oriented index of the test suite. It helps mai
 - **Command** — Discord adapter behavior such as inputs, ephemeral responses, and autocomplete.
 - **Contract / infrastructure** — persistence, protocol, configuration, migration, and integration contracts.
 
-## Stage 03 User Actor Discord auxiliary edges (Checkpoint 40)
+## local subscriber synchronization User Actor Discord auxiliary edges (Checkpoint 40)
 
-- Accepted Follow owner notices use a durable at-most-once SQLite claim before one adapter-backed DM. Real follower lifecycle scenarios retain unchanged Accept/Undo/refollow semantics, while the new fake outer SDK transport verifies exact target ID, mention suppression, and loss of HTTP response without duplicate notification — `tests/behavior/test_user_actor_follow_scenarios.py`, `tests/test_stage03_user_actor_adapter_edges.py`.
-- Durable partial Discord mutation reconciliation uses the actual `UserActorDeliveryService` and SQLite publication rows, a neutral adapter state snapshot, and rejects a wrong physical receipt or transient Discord GET without publishing an unintended Delete — `tests/test_stage03_user_actor_adapter_edges.py`, `tests/behavior/test_user_actor_content_fanout_scenarios.py`.
+- Accepted Follow owner notices use a durable at-most-once SQLite claim before one adapter-backed DM. Real follower lifecycle scenarios retain unchanged Accept/Undo/refollow semantics, while the new fake outer SDK transport verifies exact target ID, mention suppression, and loss of HTTP response without duplicate notification — `tests/behavior/test_user_actor_follow_scenarios.py`, `tests/test_user_actor_adapter_edges.py`.
+- Durable partial Discord mutation reconciliation uses the actual `UserActorDeliveryService` and SQLite publication rows, a neutral adapter state snapshot, and rejects a wrong physical receipt or transient Discord GET without publishing an unintended Delete — `tests/test_user_actor_adapter_edges.py`, `tests/behavior/test_user_actor_content_fanout_scenarios.py`.
 
-## Stage 03 contract and Personal Feed timestamp regressions
+## local subscriber synchronization contract and Personal Feed timestamp regressions
 
 - Source creation timestamps and optional edit author validation — `tests/test_platform_types.py`.
-- SQLite UTC roundtrip, sequential ActivityPub Updates and invalid naive timestamp admission — `tests/behavior/test_personal_feed_stage8_conversations.py`.
+- SQLite UTC roundtrip, sequential ActivityPub Updates and invalid naive timestamp admission — `tests/behavior/test_personal_feed_conversations.py`.
 - Static Compose gateway process secret allowlist — `fedify-gateway/src/test-docker-contract.ts`.
 
-## Stage 03 Personal Feed root create ingress (Checkpoint 21)
+## local subscriber synchronization Personal Feed root create ingress (Checkpoint 21)
 
-- A bound owner text-channel Create traverses adapter -> `PlatformEventIngress` -> `DiscordEventRouter` -> real SQLite publication, with deterministic AP identity and original timestamp. A user-created text/announcement discussion thread is then adopted through typed `ThreadCreated` against the published root; a wrong parent cannot rebind it. Wrong connector, unknown author, moved binding, absent source time, forum Create and unsupported attachments have no canonical publish side effect — `tests/test_stage03_personal_feed_created_ingress.py`.
-- Existing Stage 7 duplicate-root and announcement-channel tests remain the behavioral regression references — `tests/behavior/test_personal_feed_stage7_root_publication.py`.
+- A bound owner text-channel Create traverses adapter -> `PlatformEventIngress` -> `DiscordEventRouter` -> real SQLite publication, with deterministic AP identity and original timestamp. A user-created text/announcement discussion thread is then adopted through typed `ThreadCreated` against the published root; a wrong parent cannot rebind it. Wrong connector, unknown author, moved binding, absent source time, forum Create and unsupported attachments have no canonical publish side effect — `tests/test_personal_feed_created_ingress.py`.
+- Existing personal feed publication duplicate-root and announcement-channel tests remain the behavioral regression references — `tests/behavior/test_personal_feed_root_publication.py`.
 
-## Stage 03 verified thread message transport (Checkpoint 23)
+## local subscriber synchronization verified thread message transport (Checkpoint 23)
 
-- Forum thread reply normalization preserves its exact container, verified parent, author, reply target and timestamp. Parent/guild mismatches fail before ingress; synthetic starter and unsupported attachments cause no canonical Create — `tests/test_stage03_thread_message_ingress.py`.
+- Forum thread reply normalization preserves its exact container, verified parent, author, reply target and timestamp. Parent/guild mismatches fail before ingress; synthetic starter and unsupported attachments cause no canonical Create — `tests/test_thread_message_ingress.py`.
 - Production forum and personal-feed reply Create cutover remains pending; these are transport-boundary tests, not a claim of completed end-to-end publication.
 
-## Stage 03 Personal Feed typed reply ingress (Checkpoint 24)
+## local subscriber synchronization Personal Feed typed reply ingress (Checkpoint 24)
 
-- Typed reply actions enter `PlatformEventIngress` → real `DiscordEventRouter` → real `PersonalFeedConversationRuntime` and SQLite, retaining registered User Actor identity, deterministic ActivityPub IDs, root and nested-parent ancestry. Duplicate notices persist once; `MESSAGE_CREATE` before `THREAD_CREATE` adopts only the exact published root. Parent/guild mismatch, foreign connector, opaque Discord ID, unregistered/bot author, missing permission, unsupported media and cross-root reply references do not produce canonical Create — `tests/test_stage03_personal_feed_reply_ingress.py`.
-- Missing `Thread.parent` in the SDK cache is handled by an authoritative adapter lookup; unavailable parent fails before ingress, without changing the message into a root — `tests/test_stage03_thread_message_ingress.py`.
-- Existing Stage 8 direct-caller regression tests remain required until the forum SDK-shaped callback cutover is complete.
-- The production `BridgeBot._on_message_admitted` gate admits an unadopted but published Personal Feed root before `THREAD_CREATE`; unrelated text threads are ignored and subscribed forum replies retain their legacy routing — `tests/test_stage03_bot_personal_reply_cutover.py` (SDK import-only stub where discord.py is unavailable).
+- Typed reply actions enter `PlatformEventIngress` → real `DiscordEventRouter` → real `PersonalFeedConversationRuntime` and SQLite, retaining registered User Actor identity, deterministic ActivityPub IDs, root and nested-parent ancestry. Duplicate notices persist once; `MESSAGE_CREATE` before `THREAD_CREATE` adopts only the exact published root. Parent/guild mismatch, foreign connector, opaque Discord ID, unregistered/bot author, missing permission, unsupported media and cross-root reply references do not produce canonical Create — `tests/test_personal_feed_reply_ingress.py`.
+- Missing `Thread.parent` in the SDK cache is handled by an authoritative adapter lookup; unavailable parent fails before ingress, without changing the message into a root — `tests/test_thread_message_ingress.py`.
+- Existing personal feed conversations direct-caller regression tests remain required until the forum SDK-shaped callback cutover is complete.
+- The production `BridgeBot._on_message_admitted` gate admits an unadopted but published Personal Feed root before `THREAD_CREATE`; unrelated text threads are ignored and subscribed forum replies retain their legacy routing — `tests/test_bot_personal_reply_cutover.py` (SDK import-only stub where discord.py is unavailable).
 
-## Stage 03 typed forum starter publisher preparation (Checkpoint 25)
+## local subscriber synchronization typed forum starter publisher preparation (Checkpoint 25)
 
-- A neutral `ThreadCreated` + `MessageView` uses the existing canonical post publication core with distinct starter/message IDs. Invalid connector, kind, guild, starter identity, source snowflakes, unknown content and bot author fail before the gateway; registration notice failures and ban-check uncertainty cannot authorize publication — `tests/test_stage03_typed_community_publish.py` (real SQLite, fake gateway/transport).
-- The companion normalized comment publisher rejects bot/cross-connector/cross-thread/wrong-parent/invalid snowflake messages, reuses the unchanged canonical SQLite comment mapping, and delivers best-effort registration/ban notices without changing the refusal decision — `tests/test_stage03_typed_community_publish.py` (Checkpoint 26).
+- A neutral `ThreadCreated` + `MessageView` uses the existing canonical post publication core with distinct starter/message IDs. Invalid connector, kind, guild, starter identity, source snowflakes, unknown content and bot author fail before the gateway; registration notice failures and ban-check uncertainty cannot authorize publication — `tests/test_typed_community_publish.py` (real SQLite, fake gateway/transport).
+- The companion normalized comment publisher rejects bot/cross-connector/cross-thread/wrong-parent/invalid snowflake messages, reuses the unchanged canonical SQLite comment mapping, and delivers best-effort registration/ban notices without changing the refusal decision — `tests/test_typed_community_publish.py` (Checkpoint 26).
 - Production forum callbacks still use the legacy path; only the SDK-free post/comment publisher is prepared. Full runtime cutover and sibling fanout require later verified bindings.
 
-## Stage 03 Local Community typed physical fan-out (Checkpoint 30)
+## local subscriber synchronization Local Community typed physical fan-out (Checkpoint 30)
 
-- Real-SQLite host/local-subscriber physical thread copies, separate thread/starter IDs, idempotent replay, subscriber revocation, invalid-guild/destination receipts, per-target failure isolation, subscriber-to-host fan-out and nested per-destination parent preservation — `tests/test_stage03_neutral_local_community_fanout.py`.
-- Previous SDK-backed Stage 3/4 Local Community behavior remains the regression reference; typed operations are preparatory and not yet wired into the live Gateway router.
+- Real-SQLite host/local-subscriber physical thread copies, separate thread/starter IDs, idempotent replay, subscriber revocation, invalid-guild/destination receipts, per-target failure isolation, subscriber-to-host fan-out and nested per-destination parent preservation — `tests/test_neutral_local_community_fanout.py`.
+- Previous SDK-backed local subscriber synchronization/4 Local Community behavior remains the regression reference; typed operations are preparatory and not yet wired into the live Gateway router.
 
-## Stage 03 Discord-originated Community mirror mutations (Checkpoint 38)
+## local subscriber synchronization Discord-originated Community mirror mutations (Checkpoint 38)
 
-- Real SQLite source, mirror and inbound delivery ownership, exact normalized message edit/delete, preserved attribution, per-target failure isolation, raw-event echo tracking and source exclusion — `tests/test_stage03_community_source_mutations.py`.
-- Revoked/rebound forum subscriptions, invalid guild metadata, mismatched fetched physical identity and adapter failure are rejected without a second SDK operation — `tests/test_stage03_community_source_mutations.py`.
+- Real SQLite source, mirror and inbound delivery ownership, exact normalized message edit/delete, preserved attribution, per-target failure isolation, raw-event echo tracking and source exclusion — `tests/test_community_source_mutations.py`.
+- Revoked/rebound forum subscriptions, invalid guild metadata, mismatched fetched physical identity and adapter failure are rejected without a second SDK operation — `tests/test_community_source_mutations.py`.
 - Legacy outbound and inbound mutation semantic regressions remain covered by `tests/test_phase8_edit_delete_sync.py` when the Discord SDK dependencies are available.
 
-## Stage 03 Gateway ingress transition
+## local subscriber synchronization Gateway ingress transition
 
-- Normalized raw edit/delete -> single domain-mutation sink, foreign-connector rejection, thread mutation no-op, unbound create rejection and real adapter admission — `tests/test_stage03_platform_event_ingress.py`.
-- Typed mutation source/mirror ownership and partial-read reconciliation — `tests/test_stage03_typed_message_mutations.py`.
-- Gateway shutdown admission and callback drain — `tests/test_stage03_discord_adapter_lifecycle.py`.
-- Discord SDK lifetime vs both workers (normal exit, failure, TaskGroup cancellation), repeated cancellation of a callback drain — `tests/test_stage03_bot_shutdown_order.py`, `tests/test_stage03_discord_adapter_lifecycle.py`.
-- Repeated cancellation while Personal Feed/User Actor recovery workers complete their own finalizers — `tests/test_stage03_worker_shutdown_cancellation.py`.
-- Definitively invalid Personal Feed destination fails without another identical POST; temporary `unavailable` remains retryable — `tests/test_stage03_personal_feed_adapter_worker.py`.
+- Normalized raw edit/delete -> single domain-mutation sink, foreign-connector rejection, thread mutation no-op, unbound create rejection and real adapter admission — `tests/test_platform_event_ingress.py`.
+- Typed mutation source/mirror ownership and partial-read reconciliation — `tests/test_typed_message_mutations.py`.
+- Gateway shutdown admission and callback drain — `tests/test_discord_adapter_lifecycle.py`.
+- Discord SDK lifetime vs both workers (normal exit, failure, TaskGroup cancellation), repeated cancellation of a callback drain — `tests/test_bot_shutdown_order.py`, `tests/test_discord_adapter_lifecycle.py`.
+- Repeated cancellation while Personal Feed/User Actor recovery workers complete their own finalizers — `tests/test_worker_shutdown_cancellation.py`.
+- Definitively invalid Personal Feed destination fails without another identical POST; temporary `unavailable` remains retryable — `tests/test_personal_feed_adapter_worker.py`.
 
 ## Registration and user identity
 
@@ -75,7 +75,7 @@ This document is a short, feature-oriented index of the test suite. It helps mai
 
 - Remote subscription lifecycle and accepted/pending behavior — [`tests/behavior/test_subscription_scenarios.py`](../../tests/behavior/test_subscription_scenarios.py)
 - Follow/Accept subscription protocol flow — [`tests/test_follow_subscription_flow.py`](../../tests/test_follow_subscription_flow.py)
-- Cross-stage register, subscribe, accept, publish, retry, and echo suppression — [`tests/behavior/test_cross_stage_scenarios.py`](../../tests/behavior/test_cross_stage_scenarios.py)
+- cross-workflow register, subscribe, accept, publish, retry, and echo suppression — [`tests/behavior/test_end_to_end_bridge_scenarios.py`](../../tests/behavior/test_end_to_end_bridge_scenarios.py)
 - Unified local/remote community discovery — [`tests/behavior/test_unified_community_discovery_scenarios.py`](../../tests/behavior/test_unified_community_discovery_scenarios.py)
 - Community resolution rules and fallback behavior — [`tests/test_community_discovery_resolution.py`](../../tests/test_community_discovery_resolution.py)
 - Subscribe business rules — [`tests/operations/test_subscribe_operation.py`](../../tests/operations/test_subscribe_operation.py)
@@ -96,9 +96,9 @@ This document is a short, feature-oriented index of the test suite. It helps mai
 
 ## Fediverse to Discord inbound delivery
 
-- Stage 03 Remote Community typed inbound post, verified separate thread/starter IDs, replay, revoked subscription and foreign receipt rejection on real SQLite — `tests/test_stage03_normalized_inbound_remote_posts.py`.
-- Stage 03 preparatory typed inbound comments: mapped post delivery, per-recipient nested parent, foreign canonical parent rejection, deferred missing post/backfill, wrong receipt and withdrawn Follow — `tests/test_stage03_normalized_inbound_remote_comments.py`.
-- Stage 03 production Remote Community typed comment/backfill: comment-before-post, fail-closed incomplete parent deferral, distinct thread/starter IDs, repeated comment, wrong Page identity, revoked Follow, foreign physical receipt and remote fetch outage — `tests/test_stage03_normalized_ap_backfill.py`. Only network fetch/Discord HTTP are faked; SQLite and runtime are real.
+- local subscriber synchronization Remote Community typed inbound post, verified separate thread/starter IDs, replay, revoked subscription and foreign receipt rejection on real SQLite — `tests/test_normalized_inbound_remote_posts.py`.
+- local subscriber synchronization preparatory typed inbound comments: mapped post delivery, per-recipient nested parent, foreign canonical parent rejection, deferred missing post/backfill, wrong receipt and withdrawn Follow — `tests/test_normalized_inbound_remote_comments.py`.
+- local subscriber synchronization production Remote Community typed comment/backfill: comment-before-post, fail-closed incomplete parent deferral, distinct thread/starter IDs, repeated comment, wrong Page identity, revoked Follow, foreign physical receipt and remote fetch outage — `tests/test_normalized_ap_backfill.py`. Only network fetch/Discord HTTP are faked; SQLite and runtime are real.
 
 - Inbound posts/comments, fanout, dedup, deferred delivery, and partial failure — [`tests/behavior/test_inbound_scenarios.py`](../../tests/behavior/test_inbound_scenarios.py)
 - Comment-before-post backfill and retry — [`tests/behavior/test_inbound_comment_backfill.py`](../../tests/behavior/test_inbound_comment_backfill.py)
@@ -120,11 +120,11 @@ This document is a short, feature-oriented index of the test suite. It helps mai
 
 ## Local subscriber Discord surfaces
 
-- Local subscription control-plane behavior — [`tests/behavior/test_local_subscriber_stage1_scenarios.py`](../../tests/behavior/test_local_subscriber_stage1_scenarios.py)
-- Host-originated fanout to local subscriber surfaces — [`tests/behavior/test_local_community_stage3_local_subscriber_sync_scenarios.py`](../../tests/behavior/test_local_community_stage3_local_subscriber_sync_scenarios.py)
-- Subscriber-originated publishing, headers, reply mapping, and retries — [`tests/behavior/test_local_community_stage4_local_subscriber_origin_scenarios.py`](../../tests/behavior/test_local_community_stage4_local_subscriber_origin_scenarios.py)
-- Participant edit/delete propagation — [`tests/behavior/test_local_community_stage5_participant_edit_delete_scenarios.py`](../../tests/behavior/test_local_community_stage5_participant_edit_delete_scenarios.py)
-- Discord surface creation and placement — [`tests/behavior/test_local_community_surface_stage2_scenarios.py`](../../tests/behavior/test_local_community_surface_stage2_scenarios.py), [`tests/test_discord_forum_placement.py`](../../tests/test_discord_forum_placement.py)
+- Local subscription control-plane behavior — [`tests/behavior/test_local_subscriber_scenarios.py`](../../tests/behavior/test_local_subscriber_scenarios.py)
+- Host-originated fanout to local subscriber surfaces — [`tests/behavior/test_local_community_local_subscriber_sync_scenarios.py`](../../tests/behavior/test_local_community_local_subscriber_sync_scenarios.py)
+- Subscriber-originated publishing, headers, reply mapping, and retries — [`tests/behavior/test_local_community_local_subscriber_origin_scenarios.py`](../../tests/behavior/test_local_community_local_subscriber_origin_scenarios.py)
+- Participant edit/delete propagation — [`tests/behavior/test_local_community_participant_edit_delete_scenarios.py`](../../tests/behavior/test_local_community_participant_edit_delete_scenarios.py)
+- Discord surface creation and placement — [`tests/behavior/test_local_community_surface_scenarios.py`](../../tests/behavior/test_local_community_surface_scenarios.py), [`tests/test_discord_forum_placement.py`](../../tests/test_discord_forum_placement.py)
 
 ## User bans and moderation
 
@@ -162,8 +162,8 @@ This document is a short, feature-oriented index of the test suite. It helps mai
 
 - Database federation identity and actor persistence — [`tests/test_db_federation_identity.py`](../../tests/test_db_federation_identity.py)
 - SQLite versions, startup preservation, DDL ordering, rollback and concurrent upgrades — [`tests/test_migration_safety.py`](../../tests/test_migration_safety.py)
-- Schema cleanup and migration idempotency — [`tests/test_stage5_schema_cleanup.py`](../../tests/test_stage5_schema_cleanup.py)
-- Removal of legacy remote-subscriber naming compatibility — [`tests/test_stage1_remote_subscriber_naming.py`](../../tests/test_stage1_remote_subscriber_naming.py)
+- Schema cleanup and migration idempotency — [`tests/test_schema_cleanup.py`](../../tests/test_schema_cleanup.py)
+- Removal of legacy remote-subscriber naming compatibility — [`tests/test_remote_subscriber_naming.py`](../../tests/test_remote_subscriber_naming.py)
 - SQLite backups — [`tests/behavior/test_sqlite_backup_scenarios.py`](../../tests/behavior/test_sqlite_backup_scenarios.py)
 - Internal Python/Fedify API contract — [`tests/test_internal_fedify_api.py`](../../tests/test_internal_fedify_api.py)
 - Federation policy and allowlist handlers — [`tests/test_federation_policy.py`](../../tests/test_federation_policy.py), [`tests/test_federation_allowlist_handlers.py`](../../tests/test_federation_allowlist_handlers.py)
@@ -184,25 +184,25 @@ rg -n '<message|reason_code|domain term>' tests
 
 Start with the **Behavior** files for user-visible bridge behavior, then check **Operation** and **Command** files for policy and adapter-specific coverage.
 
-## User profile/media Stage 1
+## User profile/media initial persistence implementation
 
 Behavior coverage lives in `test_user_profile_persistence_scenarios.py`, `test_profile_media_scenarios.py`, and `test_profile_media_backup_scenarios.py`. It covers fallback defaults, atomic metadata validation, SQLite invariants, canonical image publication, DB-backed HTTP delivery, and complete DB-plus-media backup/restore.
 
-## Platform API Stage 02 (inactive contract)
+## Platform API physical surface mapping (inactive contract)
 
 - Identity/hash invariants, conflicting inbound kind/guild detection, aware timestamp validation, raw update/delete representability, partial content, attempt and receipt scope, SDK-free event DTOs — [`tests/test_platform_types.py`](../../tests/test_platform_types.py).
-- Two-connector registry and real SQLite physical-claim state; forum starter/replies, wrong-parent thread lookup/send rejection, root-anchored Personal Feed recovery, negative ACL/capabilities, and uncertain delivery without blind retry — [`tests/behavior/test_platform_api_stage02.py`](../../tests/behavior/test_platform_api_stage02.py).
-- Existing production behavior remains covered by the Discord, local-community, Personal Feed, ActivityPub, and Stage 01 tests listed above and below; Stage 02 does not activate a second event pipeline.
+- Two-connector registry and real SQLite physical-claim state; forum starter/replies, wrong-parent thread lookup/send rejection, root-anchored Personal Feed recovery, negative ACL/capabilities, and uncertain delivery without blind retry — [`tests/behavior/test_platform_api_contract.py`](../../tests/behavior/test_platform_api_contract.py).
+- Existing production behavior remains covered by the Discord, local-community, Personal Feed, ActivityPub, and initial persistence implementation tests listed above and below; physical surface mapping does not activate a second event pipeline.
 
-## Platform model Stage 01
+## Platform model initial persistence implementation
 
-- Personal Feed service/repository agreement on physical claims and target-local parent resolution during upgrade — [`tests/test_stage01_simplicity_regressions.py`](../../tests/test_stage01_simplicity_regressions.py).
+- Personal Feed service/repository agreement on physical claims and target-local parent resolution during upgrade — [`tests/test_platform_persistence_simplicity_regressions.py`](../../tests/test_platform_persistence_simplicity_regressions.py).
 
 - Generated roles, owner exclusivity, scoped identity, parent-channel FKs, recipient selection, and retry CAS — [`tests/test_platform_data_model.py`](../../tests/test_platform_data_model.py).
-- Claim kind admission for all owner types on both connectors, schema-only `create_all()` and explicit application bootstrap — [`tests/test_stage01_review_regressions.py`](../../tests/test_stage01_review_regressions.py).
-- Released-source/fresh schema parity, current-only cascade/restart preservation, real replacement-window failures, concurrent migration runners, and FK enforcement after commit — [`tests/test_platform_data_model_migration_stage01.py`](../../tests/test_platform_data_model_migration_stage01.py).
-- Mixed Discord/Fluxer post/comment routing, explicit/implicit Accept with global status promotion and Discord-only DMs, local publish fanout, HTTP dashboard, guild/guildless subscription lists, and Personal Feed view/mutation isolation — [`tests/behavior/test_platform_data_model_stage01.py`](../../tests/behavior/test_platform_data_model_stage01.py).
-- `tests/fixtures/unsupported_stage00_schema.sql` is a rejection-only unsupported development schema; supported upgrade fixtures come from released v0 SQL, independent tagged models and the tagged SQLite file.
+- Claim kind admission for all owner types on both connectors, schema-only `create_all()` and explicit application bootstrap — [`tests/test_platform_persistence_review_regressions.py`](../../tests/test_platform_persistence_review_regressions.py).
+- Released-source/fresh schema parity, current-only cascade/restart preservation, real replacement-window failures, concurrent migration runners, and FK enforcement after commit — [`tests/test_platform_data_model_migration.py`](../../tests/test_platform_data_model_migration.py).
+- Mixed Discord/Fluxer post/comment routing, explicit/implicit Accept with global status promotion and Discord-only DMs, local publish fanout, HTTP dashboard, guild/guildless subscription lists, and Personal Feed view/mutation isolation — [`tests/behavior/test_connector_scoped_persistence.py`](../../tests/behavior/test_connector_scoped_persistence.py).
+- `tests/fixtures/unsupported_prerelease_schema.sql` is a rejection-only unsupported development schema; supported upgrade fixtures come from released v0 SQL, independent tagged models and the tagged SQLite file.
 
 - Released v0→current v1, source recognition, exact rollback, restored FK enforcement, semantic DDL parity, concurrent startup and migrated runtime actions — [`tests/test_legacy_v0_to_v1_migration.py`](../../tests/test_legacy_v0_to_v1_migration.py).
 
@@ -214,21 +214,21 @@ Behavior coverage lives in `test_user_profile_persistence_scenarios.py`, `test_p
 
 `tests/test_direct_sql_v0_to_v1_migration.py` covers native source staging before DROP, single ORM target creation, physical-window failures, TEMP cleanup, malformed integer-affinity snowflakes and pinned-source/schema provenance. `tests/test_legacy_v0_to_v1_migration.py` and `tests/test_legacy_identity_cutover.py` retain release, preservation, identity/owner, concurrency and runtime scenarios. Current-only descendants are checked directly on v1; no obsolete migration oracle remains. `tests/test_migration_cleanup.py` covers every released scalar relation missing an FK, ancestry cycles, pre-staging rejection and native index contract changes.
 
-## Stage 03 Local Community normalized runtime (pre-cutover)
+## local subscriber synchronization Local Community normalized runtime (pre-cutover)
 
 - File-backed SQLite + real `LocalCommunityRuntime` + `ContentPublishService`:
-  [`tests/test_stage03_normalized_local_community_runtime.py`](../../tests/test_stage03_normalized_local_community_runtime.py).
+  [`tests/test_normalized_local_community_runtime.py`](../../tests/test_normalized_local_community_runtime.py).
   Host/subscriber starter publication, physical source vs mirror ownership,
   sibling receipts, mapped root/nested comment parents, duplicate Gateway
   events, unknown/mismatched forum/connector/guild, removed subscriber and
   unregistered author, and a foreign known starter ID. HTTP and Discord
   SDK are the only faked boundaries.
 - Physical receipt/idempotency regressions remain in
-  [`tests/test_stage03_neutral_local_community_fanout.py`](../../tests/test_stage03_neutral_local_community_fanout.py).
+  [`tests/test_neutral_local_community_fanout.py`](../../tests/test_neutral_local_community_fanout.py).
   These tests do not claim that production callbacks have been switched.
 
-## Stage 03 Local Community Discord-originated source mutations (Checkpoint 39)
+## local subscriber synchronization Local Community Discord-originated source mutations (Checkpoint 39)
 
-- `tests/test_stage03_local_source_mutations.py`: real SQLite host/subscriber starter and comment edit/delete, preserved attribution, source exclusion, authorized subscriber-origin edits, revoked subscriber source/destination, wrong physical fetch receipt, isolated transport failure, and forbidden SDK fallback.
-- Neighboring `test_stage03_local_inbound_mutations.py`, `test_stage03_normalized_local_community_runtime.py`, `test_stage03_neutral_local_community_fanout.py`, Remote Community and AP inbound mutation tests jointly verify canonical routing and shared surface boundary.
+- `tests/test_local_source_mutations.py`: real SQLite host/subscriber starter and comment edit/delete, preserved attribution, source exclusion, authorized subscriber-origin edits, revoked subscriber source/destination, wrong physical fetch receipt, isolated transport failure, and forbidden SDK fallback.
+- Neighboring `test_local_inbound_mutations.py`, `test_normalized_local_community_runtime.py`, `test_neutral_local_community_fanout.py`, Remote Community and AP inbound mutation tests jointly verify canonical routing and shared surface boundary.
 - Full installed-Discord SDK behavior still requires an integration run. A test-only import stub supplies no Discord transport behavior.

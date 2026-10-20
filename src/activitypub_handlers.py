@@ -287,7 +287,7 @@ async def handle_post_created(
             detail="no subscriptions for this community",
         )
     # Production has one registered Discord transport. The old SDK delivery
-    # entry point remains for isolated legacy tests until the Stage 03 graph
+    # entry point remains for isolated legacy tests until the local subscriber synchronization graph
     # audit removes the remaining SDK-dependent callers.
     adapter = getattr(runtime, 'discord_adapter', None)
     if adapter is not None:

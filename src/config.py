@@ -152,7 +152,7 @@ class Settings(BaseSettings):
     @model_validator(mode="after")
     def _validate_public_base_url_origin(self) -> "Settings":
         """Reject PUBLIC_BASE_URL values that are not an ActivityPub origin."""
-        # Stage 2 treats PUBLIC_BASE_URL as the ActivityPub origin, not as a
+        # physical surface mapping treats PUBLIC_BASE_URL as the ActivityPub origin, not as a
         # path prefix. Failing here prevents wrong durable actor ids later.
         parsed = urlsplit(str(self.public_base_url))
         if parsed.username is not None or parsed.password is not None:

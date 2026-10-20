@@ -66,7 +66,7 @@ export function buildPublishedCreateActivityJson(
 }
 
 function canonicalActorUrlForRecord(record: PublishedActivityObjectRow): string {
-  // Stage 4 migration stores the canonical typed actor URL directly on retained
+  // typed ActivityPub identity migration migration stores the canonical typed actor URL directly on retained
   // local publication rows, so renderers must not reconstruct old untyped roots.
   return record.actorUrl;
 }

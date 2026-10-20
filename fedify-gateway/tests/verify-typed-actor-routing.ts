@@ -1,9 +1,9 @@
 /**
- * Verifies Stage 3 typed actor route-tail parsing without production cutover.
+ * Verifies typed actor route validation typed actor route-tail parsing without production cutover.
  *
  * The parser receives Fedify reserved-expansion identifier tails such as
  * `users/alice`. These are not full URLs and must be resolved by kind before
- * any Stage 4 actor-store, key-pair, or inbox-owner lookup happens.
+ * any typed actor identity migration actor-store, key-pair, or inbox-owner lookup happens.
  */
 import assert from "node:assert/strict";
 

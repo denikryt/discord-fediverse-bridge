@@ -217,9 +217,9 @@ The bridge process holds a shared lock on `/data/deployment-state.lock` for its 
 
 The bot enables Discord's Message Content intent in code. Keep that privileged intent enabled and, where required by Discord, approved in the Discord Developer Portal for every production application. Personal-feed publication requires the complete message body; disabling the portal-side intent leaves binding rows intact but causes text-only roots and replies to arrive without usable content and be ignored. Attachments and embeds without text are not published.
 
-The bot also needs permission in each bound feed channel to view the channel, read message history, create public threads, send messages in threads, and manage only messages it previously rendered when applying remote Update/Delete. A retained inbound comment is not discarded when Discord is unavailable: the worker performs at most three Discord calls and then records a durable terminal failure. Moving or removing a binding intentionally prevents further synchronization to the old channel; retained history is not replayed into a replacement channel in Stage 8.
+The bot also needs permission in each bound feed channel to view the channel, read message history, create public threads, send messages in threads, and manage only messages it previously rendered when applying remote Update/Delete. A retained inbound comment is not discarded when Discord is unavailable: the worker performs at most three Discord calls and then records a durable terminal failure. Moving or removing a binding intentionally prevents further synchronization to the old channel; retained history is not replayed into a replacement channel in personal feed conversations.
 
-## Stage 9 maintenance
+## outbox maintenance maintenance
 
 Use `bridge-user-deliveries` for bounded, database-only diagnostics and explicit retry resets. Bulk retry requires `--username --all-failed --limit` and processes at most 100 rows. Use `bridge-profile-media cleanup` with explicit database, media root, deployment lock, and media lock paths. A complete backup must contain both the SQLite database and profile-media volume; exporting a container image is not a volume backup.
 

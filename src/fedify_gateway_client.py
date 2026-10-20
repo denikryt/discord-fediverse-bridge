@@ -38,7 +38,7 @@ class PublishContentRequest:
     The same request shape is used by both the ordinary remote-community
     publish path and the local-community follower-fanout path. Newer gateway
     routes may attach mutation metadata, but existing callers must remain able
-    to submit the original Stage 5 request without providing those optional
+    to submit the original participant mutation support request without providing those optional
     fields.
     """
 

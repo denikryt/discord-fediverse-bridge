@@ -75,7 +75,7 @@ class LocalDiscordFanoutSummary:
 class LocalDiscordMutationFanoutSummary:
     """Report local Discord edit/delete attempts across persisted surfaces.
 
-    Stage 5 mutation fanout is best-effort per persisted surface.  The source
+    participant mutation support mutation fanout is best-effort per persisted surface.  The source
     surface is skipped for Discord-originated mutations, while remote-originated
     mutations target every local surface because no local Discord source exists.
     """

@@ -81,7 +81,7 @@ class DiscordMessageMutationHandler:
     ) -> tuple[int, int, int | None]:
         """Validate a typed event at the first Discord-only integer projection."""
         # Old Discord tables still use integer snowflakes. A second connector
-        # must not silently collide with them before Stage 04 generalizes keys.
+        # must not silently collide with them before durable delivery generalizes keys.
         if event.connector_key != reader.connector.key or event.connector_key != "discord-primary":
             raise PlatformOperationError("invalid_request", "Discord mutation connector mismatch")
         ref = event.message

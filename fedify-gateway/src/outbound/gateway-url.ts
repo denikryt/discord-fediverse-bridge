@@ -22,6 +22,6 @@ export function buildGatewayUrl(config: GatewayConfig, absolutePath: string): UR
 
 /** Build the canonical typed ActivityPub actor URL for one registered bridge user. */
 export function buildUserActorUri(config: GatewayConfig, actorUsername: string): URL {
-  // Stage 4 makes user actor identity live under /actors/users/{username}.
+  // typed ActivityPub identity migration makes user actor identity live under /actors/users/{username}.
   return buildGatewayUrl(config, `/actors/users/${actorUsername}`);
 }

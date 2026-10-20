@@ -1,4 +1,4 @@
-"""Discord physical transport implementing the connector-scoped Stage 02 port.
+"""Discord physical transport implementing the connector-scoped Platform API contract port.
 
 The SDK client is borrowed from BridgeBot, not owned here. Process-local create
 receipts prevent concurrent duplicate POSTs but are not a durable outbox.
@@ -319,7 +319,7 @@ class DiscordAdapter:
         if not isinstance(content, ContentDocument):
             raise PlatformOperationError('invalid_request', 'expected neutral content')
         if content.attachments:
-            # MULTIPLATFORM_STAGE03_TEMP_ATTACHMENTS: Preserve an explicit refusal for unsupported attachment delivery; remove only when verified Discord upload/download and size/SSRF policy exists at the adapter boundary.
+            # MULTIPLATFORM_DISCORD_ADAPTER_TEMP_ATTACHMENTS: Preserve an explicit refusal for unsupported attachment delivery; remove only when verified Discord upload/download and size/SSRF policy exists at the adapter boundary.
             raise PlatformOperationError('unsupported', 'Discord attachment transport is not verified')
         if not content.body:
             raise PlatformOperationError('invalid_request', 'empty Discord message body')
@@ -332,7 +332,7 @@ class DiscordAdapter:
         if not isinstance(presentation, DeliveryPresentation):
             raise PlatformOperationError('invalid_request', 'invalid presentation')
         if presentation.mode == 'webhook':
-            # MULTIPLATFORM_STAGE03_TEMP_NO_WEBHOOK: Discord physical delivery is bot-only until a verified webhook send/edit/delete implementation can preserve explicit requested delivery mode without downgrade.
+            # MULTIPLATFORM_DISCORD_ADAPTER_TEMP_NO_WEBHOOK: Discord physical delivery is bot-only until a verified webhook send/edit/delete implementation can preserve explicit requested delivery mode without downgrade.
             raise PlatformOperationError('unsupported', 'Discord webhook send not implemented')
 
     async def _begin_create_attempt(
@@ -363,7 +363,7 @@ class DiscordAdapter:
                 if not self._io_admission_open:
                     raise PlatformOperationError('unavailable', 'adapter is closing')
                 if len(self._creates) >= self._max_create_attempts:
-                    # MULTIPLATFORM_STAGE03_TEMP_CREATE_ATTEMPT_CAPACITY: Fail closed when process-local verified or unknown create receipts fill the bounded registry; Stage 04 must replace this with durable keyed intent and receipt lookup before permitting more creates.
+                    # MULTIPLATFORM_DISCORD_ADAPTER_TEMP_CREATE_ATTEMPT_CAPACITY: Fail closed when process-local verified or unknown create receipts fill the bounded registry; durable delivery must replace this with durable keyed intent and receipt lookup before permitting more creates.
                     raise PlatformOperationError('unavailable', 'create receipt registry full')
                 flight = _CreateFlight(signature, asyncio.get_running_loop().create_future())
                 self._creates[key] = flight
@@ -461,7 +461,7 @@ class DiscordAdapter:
                             flight.fingerprint, resolved,
                         )
             return verified
-        # MULTIPLATFORM_STAGE03_TEMP_UNKNOWN_CREATE: Discord has no verified durable receipt lookup for these attempts; return unresolved without replay until Stage 04 owns durable intents and receipt reconciliation.
+        # MULTIPLATFORM_DISCORD_ADAPTER_TEMP_UNKNOWN_CREATE: Discord has no verified durable receipt lookup for these attempts; return unresolved without replay until durable delivery owns durable intents and receipt reconciliation.
         return None
 
     @staticmethod

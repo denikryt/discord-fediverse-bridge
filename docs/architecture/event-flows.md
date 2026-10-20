@@ -8,7 +8,7 @@ This document explains the major runtime traces through the bridge: user/platfor
 2. Discord OAuth state is stored through `src/registration_service.py`.
 3. Successful completion creates a `users` row with stable local actor URLs and key material.
 
-## User Actor Follow notice and Discord mutation reconciliation (Stage 03 Checkpoint 40)
+## User Actor Follow notice and Discord mutation reconciliation (local subscriber synchronization Checkpoint 40)
 
 1. An accepted ActivityPub Follow to a registered User Actor is persisted through `UserActorFollowService`; the signed Accept is sent through Fedify. The follower repository claims the owner notification **before** attempting Discord I/O, preserving at-most-once delivery even if the HTTP response is lost.
 2. The service calls `DiscordAdapter.send_owner_notice(discord_user_id, content)`, not `BridgeBot.fetch_user()` or a generic `PlatformDeliveryPort` DM operation. The adapter verifies the target user ID and disables mention parsing. DM failures are logged; they do not undo the accepted Follow or re-enable a notification retry.
@@ -30,16 +30,16 @@ This document explains the major runtime traces through the bridge: user/platfor
 3. If it was the last channel for the community, Python calls gateway `/unfollow-community`.
 4. The bridge follow row is removed or preserved according to Undo(Follow) delivery outcome.
 
-## Discord Local Community source edit/delete (Stage 03 Checkpoint 39)
+## Discord Local Community source edit/delete (local subscriber synchronization Checkpoint 39)
 
 1. Typed Discord Gateway mutation ingress retains the original physical message ID; `DiscordEventRouter` resolves a persisted Local Community starter or comment surface before invoking `LocalCommunityRuntime`.
 2. `LocalCommunityMutationHandler` verifies source community lifecycle and active subscriber-origin authority (if applicable), finds the persisted canonical AP object, and submits its Update/Delete through the existing federation service.
 3. The runtime-bound `DiscordAdapter` is passed to `LocalCommunitySurfaceFanout`, which enumerates canonical host and subscriber surface receipts. It omits the physical source copy.
 4. Before each target edit/tombstone, `LocalCommunityDiscordFanout` rechecks current host placement or active local subscriber identity, including original subscriber row ID, community, guild policy and parent thread mapping. Historical receipts alone never authorize a mutation.
 5. Edits fetch an exact scoped `MessageRef`, preserve each copy's existing attribution header, and refuse a mismatched/unknown read. Deletes keep the visible `*deleted by creator*` marker. Per-target failure does not issue a legacy SDK fallback or block healthy copies.
-6. These are best-effort mutations; there is no new delivery queue or Stage 04 recovery. Direct SDK test callers without a bound adapter remain supported until the final dependency-audit cutover.
+6. These are best-effort mutations; there is no new delivery queue or local subscriber participation recovery. Direct SDK test callers without a bound adapter remain supported until the final dependency-audit cutover.
 
-## Discord Personal Feed root -> ActivityPub Create (Stage 03)
+## Discord Personal Feed root -> ActivityPub Create (local subscriber synchronization)
 
 1. A bound text/announcement-channel `on_message` passes the synchronous Gateway admission gate and checks the current root binding. Bot-authored messages remain excluded.
 2. `DiscordAdapter.ingest_message_created()` confirms the physical text/announcement kind, refuses unsupported attachments, and converts the SDK message to `MessageCreated` with original `created_at` and connector-scoped IDs.
@@ -51,13 +51,13 @@ This document explains the major runtime traces through the bridge: user/platfor
 8. An unregistered reply is rejected before federation. A best-effort registration notice uses `DiscordAdapter.send_message()` with a deterministic `CreateAttempt`; failed notice delivery does not change the rejection. Bot/unknown authors and unsupported media cannot publish.
 9. Other community forum-thread and reply Create callbacks still use their SDK-shaped domain path until their own typed cutover. No duplicate publication route is active for bound Personal Feed roots or replies.
 
-## Discord thread message observation (Stage 03 preparatory boundary)
+## Discord thread message observation (local subscriber synchronization preparatory boundary)
 
 1. `DiscordAdapter.ingest_thread_message_created()` verifies a physical `discord.Thread`, its independently observed parent, and matching message/thread/parent guild IDs; ambiguous metadata fails before domain admission.
 2. The adapter refuses unsupported attachments instead of discarding them and emits one `MessageCreated` with its immediate thread container, parent channel kind, reply reference, actual author and original timestamp. Discord's synthetic `THREAD_STARTER_MESSAGE` emits nothing.
 3. The production Personal Feed reply callback now uses this neutral event; subscribed/local community forum replies still call their existing SDK-shaped runtime. The physical parent may be fetched via the adapter when absent from the SDK cache; a failed/conflicting lookup does not guess the parent or convert the message into a root.
 
-## Remote community forum publication through typed runtime (Stage 03 pre-cutover)
+## Remote community forum publication through typed runtime (local subscriber synchronization pre-cutover)
 
 1. A verified forum `ThreadCreated` plus separately verified starter `MessageView` enters `CommunityRuntime.handle_normalized_thread_create()` (preparatory route, not yet bound to production callbacks). The runtime checks the current accepted source subscription, persisted guild and federation policy before any ActivityPub publish.
 2. The canonical `ContentPublishService.publish_normalized_post_to_community()` verifies the author and publishes using the existing gateway and persistence. The runtime records the actual thread ID and distinct starter ID in `CommunityThreadGroup` and the source delivery row; each current accepted sibling is sent via `DiscordFanout.mirror_normalized_thread_to_siblings()` and `PlatformDeliveryPort`.
@@ -83,8 +83,8 @@ This document explains the major runtime traces through the bridge: user/platfor
 2. `src/activitypub_handlers.py` validates idempotency and routes to remote subscription runtime.
 3. If no accepted subscription and no existing mapped thread context exists, Python skips the event locally while gateway delivery remains acknowledged.
 4. In production `CommunityRuntime.handle_normalized_inbound_post()` obtains current accepted subscription targets and checked guild metadata before creating Discord forum threads through `PlatformDeliveryPort.create_forum_thread()`. Each destination gets one stable `CreateAttempt`; the adapter owns the physical Discord permission check and POST. The canonical `CommunityThreadGroup` and per-destination delivery rows record the verified **separate** thread and starter IDs. A repeated mapped event never submits another create.
-5. Each accepted forum is attempted independently: a rejected or unverified Create receipt cannot block later healthy recipients and never records a physical mapping. If every initial attempt fails, the original error is surfaced; successful physical copies remain durable. Normal duplicate Create and parent backfill never resend into gaps of an already persisted group: a missing receipt is not evidence of a negative Discord create. Recovery of existing partial groups requires Stage 04 verified physical reconciliation.
-6. A missing guild, revoked subscription, or mismatched transport receipt cannot authorize a persisted physical copy. The legacy SDK path remains only for isolated compatibility tests while the remaining inbound comment/backfill paths await Stage 03 migration.
+5. Each accepted forum is attempted independently: a rejected or unverified Create receipt cannot block later healthy recipients and never records a physical mapping. If every initial attempt fails, the original error is surfaced; successful physical copies remain durable. Normal duplicate Create and parent backfill never resend into gaps of an already persisted group: a missing receipt is not evidence of a negative Discord create. Recovery of existing partial groups requires local subscriber participation verified physical reconciliation.
+6. A missing guild, revoked subscription, or mismatched transport receipt cannot authorize a persisted physical copy. The legacy SDK path remains only for isolated compatibility tests while the remaining inbound comment/backfill paths await local subscriber synchronization migration.
 
 ## Remote ActivityPub comment -> Discord fanout flow
 
@@ -93,12 +93,12 @@ This document explains the major runtime traces through the bridge: user/platfor
 3. Unsubscribed comments without mapped context are skipped before backfill or Discord fanout.
 4. Production with a registered `DiscordAdapter` calls `CommunityRuntime.handle_normalized_inbound_comment_with_backfill()` through the same ActivityPub dispatcher. When the post group is entirely absent, `backfill_normalized_post_as_thread_group()` retrieves the exact Page/Article post identity and calls the typed post writer. When a group exists but any accepted forum lacks a confirmed physical receipt, it defers dependent comments without fetching the post or issuing another Discord Create; the missing row could follow a lost HTTP response. Revoked subscriptions cannot authorize new delivery and every physical receipt is checked before persistence.
 5. If the remote document cannot be fetched, has a different object ID or type, or any accepted destination still lacks a confirmed thread mapping, the comment remains `deferred` and no child Discord POST occurs. Normal `post.created` duplicates still skip rather than triggering recovery. A second comment delivery of an already-mapped object skips without refetching the parent.
-6. Per-thread message Create failures are isolated: only verified physical receipts create delivery rows. An all-target failure is surfaced, and ordinary duplicate Create never blindly replays a possible delivered message. Recovery across process restarts without proof remains Stage 04.
+6. Per-thread message Create failures are isolated: only verified physical receipts create delivery rows. An all-target failure is surfaced, and ordinary duplicate Create never blindly replays a possible delivered message. Recovery across process restarts without proof remains local subscriber participation.
 7. Once the parent post is fully mapped, `handle_normalized_inbound_comment()` uses `PlatformDeliveryPort.send_message()` with per-destination physical parent references. Existing canonical message-group and SQLite delivery mappings remain authoritative. Known cross-post parent references are rejected; unknown comment parent mapping keeps the legacy flat-send policy. The legacy SDK path is reachable only through direct compatibility callers without a registered adapter, not parallel to production typed delivery.
-7. **Checkpoint 41 security boundary:** Python `_fetch_ap_object()` now delegates to `activitypub_safe_fetch.fetch_public_ap_object()`: HTTPS-only, socket-checked public DNS, no implicit proxies/redirects, TLS hostname validation and bounded JSON. Tests cover unsafe URL, mixed/rebinding DNS, socket checks, redirect and oversized bodies. The local security tests do not establish a full dial-level integration with the installed runtime; production-ready Stage 03 still requires installed-SDK/Fedify integration, native gateway SSRF tests and the locked Fedify security upgrade.
+7. **Checkpoint 41 security boundary:** Python `_fetch_ap_object()` now delegates to `activitypub_safe_fetch.fetch_public_ap_object()`: HTTPS-only, socket-checked public DNS, no implicit proxies/redirects, TLS hostname validation and bounded JSON. Tests cover unsafe URL, mixed/rebinding DNS, socket checks, redirect and oversized bodies. The local security tests do not establish a full dial-level integration with the installed runtime; production-ready local subscriber synchronization still requires installed-SDK/Fedify integration, native gateway SSRF tests and the locked Fedify security upgrade.
 
 
-## Inbound local-community replay admission (Stage 03)
+## Inbound local-community replay admission (local subscriber synchronization)
 
 When an incoming Create matches a previously stored local-community post or
 comment, `src/local_communities/inbound_create.py` checks current Follow state,
@@ -113,15 +113,15 @@ the claimed ActivityPub author before these checks count as authentication.
 
 1. `BridgeBot.on_raw_message_edit` / `on_raw_message_delete` enters the tracked Gateway callback lifetime, and `DiscordAdapter` normalizes the SDK payload once into `MessageUpdated` / `MessageDeleted`.
 2. `src/platform_event_ingress.py` checks connector scope before delegating to the **typed** methods in `src/discord_message_mutations.py`. The mutation handler retains echo suppression, partial-read reconciliation through `DiscordAdapter.fetch_message()`, and the existing `DiscordMutationContext`. The old raw handler is not invoked by production callbacks.
-3. The selected runtime resolves persisted ActivityPub object ids through `src/db/database.py` and uses the context's narrow delivery wake/gateway capabilities for outbound Update/Delete. For Remote Community source mutations, `CommunityRuntime.handle_discord_message_edit/delete()` selects persisted mirror/non-source delivery rows and `DiscordFanout.propagate_edit/delete()` uses the registered `DiscordAdapter` for physical edits/deletes. Before each write, the fanout rechecks the current accepted subscription, community actor and allowed guild; historical receipts alone never authorize a mutation. An edit fetches and verifies the exact `MessageRef` to preserve the existing author header, while delete removes only the selected physical message. A failing target cannot cancel the others or trigger an SDK fallback; echo tracking records only successful physical mutations. The SDK path remains for direct compatibility callers without the adapter until the remainder of Stage 03 is removed.
+3. The selected runtime resolves persisted ActivityPub object ids through `src/db/database.py` and uses the context's narrow delivery wake/gateway capabilities for outbound Update/Delete. For Remote Community source mutations, `CommunityRuntime.handle_discord_message_edit/delete()` selects persisted mirror/non-source delivery rows and `DiscordFanout.propagate_edit/delete()` uses the registered `DiscordAdapter` for physical edits/deletes. Before each write, the fanout rechecks the current accepted subscription, community actor and allowed guild; historical receipts alone never authorize a mutation. An edit fetches and verifies the exact `MessageRef` to preserve the existing author header, while delete removes only the selected physical message. A failing target cannot cancel the others or trigger an SDK fallback; echo tracking records only successful physical mutations. The SDK path remains for direct compatibility callers without the adapter until the remainder of local subscriber synchronization is removed.
 4. `src/content_sync/edit_delete.py` prepares the request.
 5. Gateway `/update` or `/delete` signs and sends the ActivityPub operation.
 
-## Discord raw thread mutation notices (Stage 03)
+## Discord raw thread mutation notices (local subscriber synchronization)
 
 `BridgeBot.on_raw_thread_update` / `on_raw_thread_delete` enters the same tracked Gateway callback lifetime. `DiscordAdapter` preserves raw identity through `ThreadUpdated` / `ThreadDeleted`; `PlatformEventIngress` logs an explicit no-op. A physical thread rename or removal is **not** automatically an ActivityPub Update/Delete because no current canonical thread-mutation handler owns it. Source thread/message creation is still on the legacy SDK path pending the atomic typed Create cutover.
 
-## Discord Gateway shutdown ordering (Stage 03)
+## Discord Gateway shutdown ordering (local subscriber synchronization)
 
 `src/app.py::_run_bot_lifetime()` keeps the SDK context open while it closes Gateway callback admission, joins independently scheduled ingress callbacks, stops Personal Feed Discord delivery and User Actor delivery workers, and drains physical Discord adapter I/O. Only then does `BridgeBot.close()` close the Discord SDK. `Runtime.close()` owns Fedify/OAuth/database shutdown afterward; its idempotent worker-stop paths cover partially started processes. Cancellation during ingress drain or either worker stop is propagated **after** the underlying async task finalizers have completed, not by abandoning work against resources about to be closed.
 
@@ -179,7 +179,7 @@ the claimed ActivityPub author before these checks count as authentication.
 2. Active `LocalSubscriber` forums route into `LocalCommunityRuntime`; inactive subscribers and unrelated forums do not.
 3. Runtime publishes the source Discord starter/reply through the existing local-community publish path and persists one canonical row.
 4. Runtime records the source `role="local_subscriber"` surface and then fans out to the host forum plus sibling active local subscribers.
-5. Stage 5 handles later edits/deletes from the source local-subscriber surface through the participant-wide mutation flow above.
+5. participant mutation support handles later edits/deletes from the source local-subscriber surface through the participant-wide mutation flow above.
 
 
 ## Disabled local community lifecycle flow
@@ -190,7 +190,7 @@ the claimed ActivityPub author before these checks count as authentication.
 4. Discord-originated post, comment, edit, delete, and local subscription paths resolve the local community and stop before publish, persistence, relay, or Discord fanout when status is disabled.
 5. Existing actor/object routes, content rows, subscribers, and Discord surfaces remain readable and unchanged; re-enabling returns existing subscriber rows to normal fanout behavior.
 
-## Personal-feed binding and Stage 6 routing flow
+## Personal-feed binding and personal feed control plane routing flow
 
 1. `/account-settings feed-bind` resolves the invoking registered user, checks the existing guild policy, requires Discord Manage Server permission, and accepts protocol `GUILD_TEXT` and `GUILD_ANNOUNCEMENT` channels.
 2. The command snapshots the caller's current binding and submits one cancellation-safe synchronous mutation to `PersonalFeedService`.
@@ -198,7 +198,7 @@ the claimed ActivityPub author before these checks count as authentication.
 4. `/account-settings feed-view` reads the durable assignment; `feed-unbind` removes only the caller's current assignment. Historical publication/thread/message mappings are not modified.
 5. `BridgeBot.on_message` recognizes owner-authored root messages in an active ordinary text-channel or announcement-channel binding before existing forum routing. Non-owner roots, stale bindings, threads, DMs, and unrelated channels do not classify as personal-feed roots.
 
-## Stage 03 normalized Discord Gateway event boundary (in progress)
+## local subscriber synchronization normalized Discord Gateway event boundary (in progress)
 
 `src/discord_gateway_events.py` converts observed SDK callbacks into the frozen
 `ThreadCreated`/`ThreadUpdated`/`ThreadDeleted` and `MessageCreated`/`MessageUpdated`/
@@ -218,7 +218,7 @@ resolve an authoritative `MessageView` via `PlatformAdapterPort.fetch_message`,
 and transient read failure schedules the existing durable reconciliation. This
 is a preparatory path, not yet wired into live Gateway callbacks.
 
-## Stage 03 Personal Feed inbound Discord delivery safety
+## local subscriber synchronization Personal Feed inbound Discord delivery safety
 
 1. An authorized remote Create, Update or Delete mutates the canonical inbound conversation object under `BEGIN IMMEDIATE`; each due claim captures the exact revision fingerprint and deleted flag before physical Discord work.
 2. The Personal Feed worker rechecks the active binding. Before the first unknown-ID message send, it durably marks `CREATE_STARTED_DISCORD_SENTINEL`; the network call runs outside the SQLite transaction.
@@ -228,13 +228,13 @@ is a preparatory path, not yet wired into live Gateway callbacks.
 
 ## Versioned startup and channel claims
 
-Startup recognizes released v0.1.0 schema at version 0 and validates the complete current schema at version 1. Empty files bootstrap current v1 atomically. The sole registered v0→v1 step reserves a dedicated connection, suspends FK enforcement before `BEGIN IMMEDIATE`, and rechecks header and inventory under the writer lock. All 30 released tables are staged in SQL TEMP before any DROP; the 45-table current ORM target is created once. Native INSERT/SELECT and JOIN build scoped locations and typed claims, followed by the planned one-time AP identity deltas. Published objects retain their source IDs; features absent from released v0 stay empty. No Stage 00 schema or internal version is created. Target definitions, every original row, `foreign_key_check` and `integrity_check` are verified before the sole version-1 stamp and commit. Errors restore original schema/data and header; FK enforcement is restored and verified in `finally`, with unsafe connections invalidated. Current v1 startup is read-only and never repairs a partial schema.
+Startup recognizes released v0.1.0 schema at version 0 and validates the complete current schema at version 1. Empty files bootstrap current v1 atomically. The sole registered v0→v1 step reserves a dedicated connection, suspends FK enforcement before `BEGIN IMMEDIATE`, and rechecks header and inventory under the writer lock. All 30 released tables are staged in SQL TEMP before any DROP; the 45-table current ORM target is created once. Native INSERT/SELECT and JOIN build scoped locations and typed claims, followed by the planned one-time AP identity deltas. Published objects retain their source IDs; features absent from released v0 stay empty. No legacy schema inventory schema or internal version is created. Target definitions, every original row, `foreign_key_check` and `integrity_check` are verified before the sole version-1 stamp and commit. Errors restore original schema/data and header; FK enforcement is restored and verified in `finally`, with unsafe connections invalidated. Current v1 startup is read-only and never repairs a partial schema.
 
 Subscribe resolves policy and performs gateway work outside the writer transaction. Persistence rechecks the typed channel owner and updates only the expected failed subscription in place; replacement or concurrent claims fail closed. Shared ActivityPub Follow state is global. Discord fanout selects accepted/active current primary claims, while history lookups use scoped copy locations independently of current ownership. Personal-feed move releases the old claim and claims the new location in one writer transaction.
 
 During released identity cutover only relationships of renamed actors lose confirmation: changed communities lose incoming remote_subscribers; changed service/local target relations keep their Follow/channel rows as failed with cleared Follow IDs. Local subscribers and claims survive. Normal subscribe retry sends a new Follow after commit; migration performs no delivery itself.
 
-## Stage 03 live callback shutdown (partial)
+## local subscriber synchronization live callback shutdown (partial)
 
 Production composition now creates one `DiscordAdapter` borrowing `BridgeBot`.
 `BridgeBot` callbacks enter its process-local admission gate before touching
@@ -243,10 +243,10 @@ When the bot stops, `app.py` closes admission, cancels/joins outstanding
 Gateway callback tasks and stops the Personal Feed worker **inside** the
 Discord SDK context. The SDK closes next; `Runtime.close()` subsequently closes
 Fedify and the database. `BridgeBot.close()` must not close the shared gateway.
-This is a callback-lifecycle change only: Stage 03's normalized-domain ingress
+This is a callback-lifecycle change only: local subscriber synchronization's normalized-domain ingress
 and transport cutover of community fanout are still in progress.
 
-## Stage 03 Local Community normalized source (pre-cutover)
+## local subscriber synchronization Local Community normalized source (pre-cutover)
 
 1. `LocalCommunityRuntime.handle_normalized_thread_create()` checks the incoming
    `ThreadCreated` and actual starter `MessageView` as Discord forum inputs.
@@ -267,9 +267,9 @@ and transport cutover of community fanout are still in progress.
    rejected. Each subscriber/host destination resolves its own parent message
    ID; incomplete nested delivery does not fall back to an unrelated starter.
 5. These methods are available to scenario tests but are **not** invoked by
-   the production forum Gateway callbacks until the coordinated Stage 03 cutover.
+   the production forum Gateway callbacks until the coordinated local subscriber synchronization cutover.
 
-## Remote ActivityPub Update/Delete -> Discord copies (Stage 03 Checkpoint 36)
+## Remote ActivityPub Update/Delete -> Discord copies (local subscriber synchronization Checkpoint 36)
 
 1. The existing ActivityPub dispatcher resolves a persisted Remote Community
    post or comment group by the canonical AP object ID. Missing groups produce
@@ -286,9 +286,9 @@ and transport cutover of community fanout are still in progress.
    `*deleted by creator*`, preserving the physical conversation structure.
 5. Failures are logged per target and do not suppress edits to healthy targets.
    Compatibility callers without an adapter still use the preexisting SDK path
-   until its final removal during the Stage 03 dependency audit.
+   until its final removal during the local subscriber synchronization dependency audit.
 
-## Local Community inbound ActivityPub Update/Delete (Stage 03)
+## Local Community inbound ActivityPub Update/Delete (local subscriber synchronization)
 
 1. `activitypub_handlers.py` resolves the accepted, authenticated inbound
    activity to `LocalCommunityRuntime`, which locates its canonical AP object.

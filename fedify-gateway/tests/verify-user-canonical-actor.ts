@@ -16,7 +16,7 @@ const TEST_ORIGIN = "https://discord-bridge.example.com/";
 /**
  * Verify that registered-user actor documents expose the typed /actors/users id.
  *
- * This regression protects Mastodon fetch-time actor validation after Stage 4:
+ * This regression protects Mastodon fetch-time actor validation after typed ActivityPub identity migration:
  * the DB and Fedify route both use /actors/users/{username}.
  */
 async function main(): Promise<void> {

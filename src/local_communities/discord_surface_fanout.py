@@ -51,7 +51,7 @@ class LocalCommunitySurfaceFanout:
         author_display_name: str | None,
         source_forum_channel_id: int | None,
     ) -> None:
-        """Best-effort Stage 3 fanout of one canonical post to subscribers."""
+        """Best-effort Discord adapter integration fanout of one canonical post to subscribers."""
         await self.fanout_thread_to_local_participants(
             local_community=local_community,
             thread_row=thread_row,
@@ -97,7 +97,7 @@ class LocalCommunitySurfaceFanout:
         author_display_name: str | None,
         source_forum_channel_id: int | None,
     ) -> None:
-        """Best-effort Stage 3 fanout of one canonical comment to subscribers."""
+        """Best-effort Discord adapter integration fanout of one canonical comment to subscribers."""
         await self.fanout_message_to_local_participants(
             local_community=local_community,
             thread_row=thread_row,

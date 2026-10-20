@@ -1,4 +1,4 @@
-"""Repository scenarios for the Stage 2 federation identity schema."""
+"""Repository scenarios for the typed actor grammar federation identity schema."""
 
 from __future__ import annotations
 
@@ -15,13 +15,13 @@ from tests_constants import (
 
 def _database(tmp_path: Path) -> Database:
     """Create a real SQLite-backed repository for scenario-style DB tests."""
-    database = Database(f"sqlite:///{tmp_path / 'bridge-stage2.db'}")
+    database = Database(f"sqlite:///{tmp_path / 'bridge-typed actor grammar.db'}")
     database.migrate()
     return database
 
 
-def test_create_all_builds_stage_2_federation_tables(tmp_path: Path) -> None:
-    """A clean Stage 2 startup should create all identity and dedup tables."""
+def test_create_all_builds_federation_tables(tmp_path: Path) -> None:
+    """A clean typed actor grammar startup should create all identity and dedup tables."""
     database = _database(tmp_path)
 
     table_names = set(inspect(database.engine).get_table_names())
@@ -69,7 +69,7 @@ def test_registered_user_can_be_created_and_loaded_by_all_identity_keys(
 def test_subscription_follow_state_is_persisted_for_existing_subscription(
     tmp_path: Path,
 ) -> None:
-    """Subscription rows must carry federation follow metadata for later stages."""
+    """Subscription rows must carry federation follow metadata for later work."""
     database = _database(tmp_path)
     community_actor_url = f"https://{LEMMY_WORLD_DOMAIN}/c/hackers"
     database.remote_subscriptions.create_subscription(

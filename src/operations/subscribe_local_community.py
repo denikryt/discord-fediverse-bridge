@@ -1,6 +1,6 @@
 """Framework-backed local-subscriber subscribe policy.
 
-Stage 1 only persists same-instance local subscriber state. It must not send
+local subscriber registration only persists same-instance local subscriber state. It must not send
 remote Follow activities or mutate bridge_actor_follows / remote_subscribers.
 """
 

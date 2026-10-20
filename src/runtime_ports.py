@@ -89,10 +89,10 @@ class PlatformInboundSinkPort(Protocol):
     """Single future Gateway ingress for normalized connector-scoped events."""
 
     async def handle_platform_event(self, event: PlatformInboundEvent) -> None:
-        """Accept a typed notice; actual routing will be wired in Stage 03."""
+        """Accept a typed notice; actual routing will be wired in Discord adapter integration."""
 
 
-# MULTIPLATFORM_STAGE02_TEMP: Legacy Discord-only runtime ports stay until Stage 03/04 replaces direct Discord delivery binds with PlatformAdapterPort; remove after all affected callers use the new port.
+# MULTIPLATFORM_LEGACY_DISCORD_PORT_TEMP: Legacy Discord-only runtime ports stay until Discord adapter and durable fan-out integration replaces direct Discord delivery binds with PlatformAdapterPort; remove after all affected callers use the new port.
 class DiscordDeliveryClientPort(Protocol):
     """Expose only Discord delivery operations used by community runtimes."""
 

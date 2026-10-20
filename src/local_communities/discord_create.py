@@ -123,7 +123,7 @@ class LocalCommunityDiscordCreateHandler:
         local_community: object,
         local_subscriber: object | None,
     ) -> LocalCommunityRuntimeResult:
-        """Handle a Stage 4 local-subscriber forum thread as canonical content."""
+        """Handle a durable delivery local-subscriber forum thread as canonical content."""
         if local_subscriber is None:
             return LocalCommunityRuntimeResult(
                 status="ignored", reason="not_local_subscriber"
@@ -296,7 +296,7 @@ class LocalCommunityDiscordCreateHandler:
         local_community: object,
         local_subscriber: object | None,
     ) -> LocalCommunityRuntimeResult:
-        """Handle a Stage 4 local-subscriber Discord reply as canonical content."""
+        """Handle a durable delivery local-subscriber Discord reply as canonical content."""
         if local_subscriber is None:
             return LocalCommunityRuntimeResult(
                 status="ignored", reason="not_local_subscriber"

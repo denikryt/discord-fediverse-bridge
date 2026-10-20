@@ -3,7 +3,7 @@
  *
  * The transport is the security-sensitive seam shared by outbound use cases
  * that already have rendered ActivityPub JSON. These tests pin the wire shape
- * before the Stage 1 module split so refactoring cannot change signatures,
+ * before the initial persistence implementation module split so refactoring cannot change signatures,
  * digests, request-target construction, or redaction behavior accidentally.
  */
 

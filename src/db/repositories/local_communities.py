@@ -130,7 +130,7 @@ class LocalCommunityRepository(BaseRepository):
         self, discord_forum_channel_id: int
     ) -> LocalCommunity | None:
         """Load the local community bound to one Discord forum channel."""
-        # MULTIPLATFORM_STAGE01_TEMP: Discord-only community placement lookup delegates to connector-scoped channel surfaces.
+        # MULTIPLATFORM_DISCORD_PROJECTION_TEMP: Discord-only community placement lookup delegates to connector-scoped channel surfaces.
         with self.session() as session:
             return session.scalar(
                 discord_claim_query(LocalCommunity, "local_community_id").where(
@@ -174,7 +174,7 @@ class LocalCommunityRepository(BaseRepository):
         self, *, discord_guild_id: int
     ) -> list[LocalCommunity]:
         """Return active local communities for one Discord guild by slug."""
-        # MULTIPLATFORM_STAGE01_TEMP: Discord-only community placement lookup delegates to connector-scoped channel surfaces.
+        # MULTIPLATFORM_DISCORD_PROJECTION_TEMP: Discord-only community placement lookup delegates to connector-scoped channel surfaces.
         with self.session() as session:
             return list(
                 session.scalars(
@@ -194,7 +194,7 @@ class LocalCommunityRepository(BaseRepository):
         created_by_discord_user_id: str,
     ) -> list[LocalCommunity]:
         """Return active guild communities owned by one Discord user id."""
-        # MULTIPLATFORM_STAGE01_TEMP: Discord-only community placement lookup delegates to connector-scoped channel surfaces.
+        # MULTIPLATFORM_DISCORD_PROJECTION_TEMP: Discord-only community placement lookup delegates to connector-scoped channel surfaces.
         with self.session() as session:
             return list(
                 session.scalars(
@@ -224,7 +224,7 @@ class LocalCommunityRepository(BaseRepository):
         self, *, discord_guild_id: int
     ) -> list[LocalCommunity]:
         """Return active and disabled local communities for one guild by slug."""
-        # MULTIPLATFORM_STAGE01_TEMP: Discord-only community placement lookup delegates to connector-scoped channel surfaces.
+        # MULTIPLATFORM_DISCORD_PROJECTION_TEMP: Discord-only community placement lookup delegates to connector-scoped channel surfaces.
         with self.session() as session:
             return list(
                 session.scalars(
@@ -244,7 +244,7 @@ class LocalCommunityRepository(BaseRepository):
         created_by_discord_user_id: str,
     ) -> list[LocalCommunity]:
         """Return owned active and disabled guild communities for management UI."""
-        # MULTIPLATFORM_STAGE01_TEMP: Discord-only community placement lookup delegates to connector-scoped channel surfaces.
+        # MULTIPLATFORM_DISCORD_PROJECTION_TEMP: Discord-only community placement lookup delegates to connector-scoped channel surfaces.
         with self.session() as session:
             return list(
                 session.scalars(
