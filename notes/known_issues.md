@@ -177,3 +177,13 @@ Node source modules typecheck with global Node types, and 14 Node security
 scenarios pass. Full pytest, Fedify TypeScript suite and live Discord/Fedify
 integration are not verified, and the vulnerable Fedify dependency remains a
 release blocker.
+
+## Stage 03 typed message mutation admission (Checkpoint 16, 2026-10-19)
+
+The existing mutation handler now supports typed edit/delete events with connector
+validation before Discord-ID DB lookup, no SDK message objects in the typed
+path, echo/role admission, and adapter-only reconciliation for partial edits.
+The production bot remains on its legacy callback path until the full one-ingress
+cutover can switch thread/message creation and mutations atomically. Five
+focused positive/negative tests plus eleven existing mutation-handler tests pass
+using an import-only `discord` test stub; this does not verify the real SDK.

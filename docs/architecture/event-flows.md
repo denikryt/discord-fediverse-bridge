@@ -152,6 +152,13 @@ guild/channel metadata are checked before any domain publication. The live
 `BridgeBot` to `PlatformEventIngress` cutover remains pending, so these DTO
 conversions are not yet the deployed callback path.
 
+The mutation boundary also accepts typed `MessageUpdated`/`MessageDeleted` events.
+Before reading Discord-scoped database keys it validates the connector and
+physical snowflakes; source/mirror echo policy is unchanged. Partial edits
+resolve an authoritative `MessageView` via `PlatformAdapterPort.fetch_message`,
+and transient read failure schedules the existing durable reconciliation. This
+is a preparatory path, not yet wired into live Gateway callbacks.
+
 ## Stage 03 Personal Feed inbound Discord delivery safety
 
 1. An authorized remote Create, Update or Delete mutates the canonical inbound conversation object under `BEGIN IMMEDIATE`; each due claim captures the exact revision fingerprint and deleted flag before physical Discord work.
