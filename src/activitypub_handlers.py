@@ -373,6 +373,15 @@ async def handle_follow_accepted(
             detail="bridge follow activity is not mapped",
         )
 
+    # An Accept is not permission to activate an arbitrary known Follow ID.
+    # The authenticated AP actor must be the community that owns that Follow.
+    if event.actor_id != bridge_follow.community_actor_id:
+        return HandlerResult(
+            status="skipped",
+            outcome=InboundActivityOutcome.IGNORED_UNMAPPED_CONTEXT,
+            detail="Accept actor does not own the Follow activity",
+        )
+
     if bridge_follow.status == "accepted":
         return HandlerResult(
             status="skipped",

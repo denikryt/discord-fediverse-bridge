@@ -150,6 +150,55 @@ async def test_follow_accept_without_bridge_follow_does_not_accept_channel_subsc
     dm_user.send.assert_not_awaited()
 
 
+@pytest.mark.asyncio
+async def test_follow_accept_from_different_actor_cannot_activate_subscription(
+    tmp_path: Path,
+) -> None:
+    """A signed Accept from another community must not claim an existing Follow ID."""
+    database = _database(tmp_path)
+    expected_actor = f"https://{LEMMY_EXAMPLE_DOMAIN}/c/hackers"
+    unrelated_actor = f"https://{LEMMY_EXAMPLE_DOMAIN}/c/other"
+    follow_id = f"https://{BRIDGE_EXAMPLE_DOMAIN}/activities/follow/1"
+    database.bridge_actor_follows.create_bridge_actor_follow(
+        community_actor_id=expected_actor,
+        follow_activity_id=follow_id,
+        community_inbox_url=f"{expected_actor}/inbox",
+        status="pending",
+    )
+    database.remote_subscriptions.create_subscription(
+        discord_channel_id=123,
+        lemmy_community_actor_id=expected_actor,
+        lemmy_community_name="hackers",
+        lemmy_community_id=42,
+        community_handle=f"!hackers@{LEMMY_EXAMPLE_DOMAIN}",
+        community_inbox_url=f"{expected_actor}/inbox",
+        follow_activity_id=follow_id,
+        initiated_by_discord_user_id="1234567890",
+        status="pending",
+    )
+    runtime = SimpleNamespace(
+        database=database,
+        bot=SimpleNamespace(fetch_user=AsyncMock()),
+        bridge_policy_service=build_test_policy_service(database),
+    )
+    event = FollowLifecycleEvent(
+        event_type="follow.accepted",
+        delivery_id=f"{unrelated_actor}/activities/accept/1",
+        occurred_at=datetime.now(UTC),
+        community_actor_id=unrelated_actor,
+        actor_id=unrelated_actor,
+        object={"follow_activity_id": follow_id},
+    )
+
+    result = await dispatch_activitypub_event(event, runtime)
+
+    assert result.status == "skipped"
+    assert result.outcome.value == "ignored_unmapped_context"
+    assert database.bridge_actor_follows.get_bridge_actor_follow(expected_actor).status == "pending"
+    assert database.remote_subscriptions.get_subscription_by_channel(123).status == "pending"
+    runtime.bot.fetch_user.assert_not_awaited()
+
+
 def test_only_accepted_subscriptions_are_routed_for_inbound_community_events(
     tmp_path: Path,
 ) -> None:
