@@ -123,18 +123,16 @@ async def test_missing_parent_is_created_once_with_distinct_thread_starter_ids(t
 
 
 @pytest.mark.asyncio
-async def test_partial_backfill_preserves_old_receipt_and_creates_only_missing(tmp_path):
-    """One historical mapped forum cannot be physically posted a second time."""
+async def test_partial_backfill_defers_unproven_missing_destination(tmp_path):
+    """A partial old group cannot prove another target lacks a prior Discord thread."""
     db, existing, runtime = world(tmp_path, only_first=True)
     discord = DiscordCreates()
-    group = await restore(db, runtime, discord)
-    assert group.id == existing.id
-    rows = db.discord_fanout_groups.get_thread_deliveries(group.id)
-    assert {(r.discord_channel_id, r.discord_thread_id) for r in rows} == {
-        (100, 1100), (200, 1200),
-    }
-    assert [call[0].external_channel_id for call in discord.calls] == ['200']
-    assert needs_backfill(thread_group=group, community_actor_id=COMMUNITY, database=db) is False
+    # The missing receipt could be a committed thread whose HTTP response was lost.
+    assert await restore(db, runtime, discord) is None
+    rows = db.discord_fanout_groups.get_thread_deliveries(existing.id)
+    assert {(r.discord_channel_id, r.discord_thread_id) for r in rows} == {(100, 1100)}
+    assert discord.calls == []
+    assert needs_backfill(thread_group=existing, community_actor_id=COMMUNITY, database=db) is True
 
 
 @pytest.mark.asyncio
@@ -294,4 +292,27 @@ async def test_unverified_new_subscriber_cannot_receive_backfilled_post(tmp_path
     discord = DiscordCreates()
     assert await restore(db, runtime, discord) is None
     assert discord.calls == []
+    assert len(db.discord_fanout_groups.get_thread_deliveries(existing.id)) == 1
+
+
+@pytest.mark.asyncio
+async def test_incomplete_group_does_not_refetch_ap_or_create_thread(tmp_path):
+    """A real AP Page can prove authorship, not negative Discord delivery."""
+    db, existing, runtime = world(tmp_path, only_first=True)
+    adapter = DiscordCreates()
+    requests = []
+
+    async def fetch(_url):
+        """Expose whether the unsafe recovery path tries to fetch the AP post."""
+        requests.append(_url)
+        return document()
+
+    result = await backfill_normalized_post_as_thread_group(
+        post_ap_id=POST, community_actor_id=COMMUNITY,
+        delivery_id='https://remote.example/create/comment', database=db,
+        community_runtime=runtime, adapter=adapter, fetch_ap_object=fetch,
+    )
+    assert result is None
+    assert requests == []
+    assert adapter.calls == []
     assert len(db.discord_fanout_groups.get_thread_deliveries(existing.id)) == 1

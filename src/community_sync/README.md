@@ -75,3 +75,15 @@ potentially transmitted request is treated as `unknown_delivery` and does
 not claim a delivered mirror, while another eligible sibling can succeed.
 This does not authorize a blind Create retry or provide Stage 04 durable
 receipt recovery. The direct-call SDK fallback remains pending migration.
+
+## Stage 03 Checkpoint 50 — fail-closed parent backfill
+
+An existing Remote Community thread group whose accepted forum is missing a
+confirmed delivery row cannot distinguish a definitively unsent Create from a
+Discord thread that was created before its HTTP receipt disappeared. The
+normalized backfill path therefore defers that parent and its dependent
+comment instead of retrying the missing forum, even when the ActivityPub
+Page/Article is authentic. A fully absent parent group is still eligible for
+first delivery. This conservative limitation needs Stage 04 durable physical
+receipt reconciliation; it also means definitely failed historical targets
+are not automatically recovered by reprocessing a duplicate post.

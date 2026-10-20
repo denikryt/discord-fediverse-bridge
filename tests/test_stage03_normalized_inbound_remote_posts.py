@@ -196,8 +196,8 @@ async def test_failed_first_remote_post_target_does_not_block_healthy_second(tmp
 
 
 @pytest.mark.asyncio
-async def test_verified_parent_backfill_can_complete_only_missing_remote_target(tmp_path):
-    """Explicit parent recovery reuses the successful recipient's durable physical receipt."""
+async def test_existing_partial_parent_cannot_repost_missing_remote_target(tmp_path):
+    """A missing mapping in a persisted group is not proof of a negative POST."""
     db = build_database(tmp_path, 'inbound-post-recovery.db')
     try:
         for channel in (100, 200):
@@ -206,9 +206,53 @@ async def test_verified_parent_backfill_can_complete_only_missing_remote_target(
         first = RecordingDiscord(fail_forum='100')
         await runtime.handle_normalized_inbound_post(post(), adapter=first)
         later = RecordingDiscord()
-        await runtime.handle_normalized_inbound_post(post(), adapter=later, recover_missing=True)
-        assert [c[0].external_channel_id for c in later.calls] == ['100']
+        outcome = await runtime.handle_normalized_inbound_post(post(), adapter=later, recover_missing=True)
+        assert outcome.status == 'skipped'
+        assert later.calls == []
         group = db.discord_fanout_groups.get_thread_group_by_ap_object(post().object.ap_id)
-        assert {d.discord_channel_id for d in db.discord_fanout_groups.get_thread_deliveries(group.id)} == {100, 200}
+        assert {d.discord_channel_id for d in db.discord_fanout_groups.get_thread_deliveries(group.id)} == {200}
+    finally:
+        db.close()
+
+
+@pytest.mark.asyncio
+async def test_lost_receipt_cannot_repost_missing_forum_on_restart_backfill(tmp_path):
+    """A persisted group with an ID-less possible Discord create cannot authorize another POST."""
+    from src.platform_types import PlatformOperationError
+
+    db = build_database(tmp_path, 'remote-unknown-restart.sqlite')
+    try:
+        for forum_id in (100, 200):
+            add_accepted_subscription(db, channel_id=forum_id, guild_id=10)
+        runtime = CommunityRuntime(database=db, content_publish_service=object())
+        event = post()
+        physical = []
+
+        class LostResponse(RecordingDiscord):
+            """Discord creates an actual thread in 100, then the HTTP response vanishes."""
+
+            async def create_forum_thread(self, forum, content, *, title, presentation, attempt):
+                """Record physical effects separately from SQLite's confirmed receipts."""
+                receipt = await super().create_forum_thread(
+                    forum, content, title=title, presentation=presentation, attempt=attempt,
+                )
+                physical.append(forum.external_channel_id)
+                if forum.external_channel_id == '100':
+                    raise PlatformOperationError('unknown_delivery', 'HTTP response lost')
+                return receipt
+
+        await runtime.handle_normalized_inbound_post(event, adapter=LostResponse())
+        group = db.discord_fanout_groups.get_thread_group_by_ap_object(event.object.ap_id)
+        assert {d.discord_channel_id for d in db.discord_fanout_groups.get_thread_deliveries(group.id)} == {200}
+        assert physical == ['100', '200']
+        # A fresh adapter/process has forgotten its in-process attempt receipts.
+        # An AP object re-fetch cannot prove the first physical thread was absent.
+        recovered = RecordingDiscord()
+        outcome = await runtime.handle_normalized_inbound_post(
+            event, adapter=recovered, recover_missing=True,
+        )
+        assert outcome.status == 'skipped'
+        assert recovered.calls == []
+        assert physical.count('100') == 1
     finally:
         db.close()

@@ -126,10 +126,10 @@ async def backfill_normalized_post_as_thread_group(
 ) -> object | None:
     """Recover missing AP parent-post forum mappings through the typed transport.
 
-    A remote fetch is only needed while an accepted recipient lacks a mapped
-    post. The fetched document must identify the exact requested post; a
-    caller-controlled ActivityPub URL cannot substitute another canonical ID.
-    Network failure and incomplete recovery defer the dependent comment.
+    Remote fetch is used only when a canonical parent group is fully absent.
+    Incomplete existing groups are deferred: no stored negative physical receipt
+    proves that an ID-less target was not created before a lost HTTP response.
+    The fetched document must identify the exact requested AP object.
     """
     from ..bridge_lemmy_to_discord import _build_post_event_from_ap_doc, _fetch_ap_object
     from .inbound_mapping import needs_backfill
@@ -138,6 +138,16 @@ async def backfill_normalized_post_as_thread_group(
     if existing is not None and existing.community_actor_id != community_actor_id:
         # A post already bound to another community must never be recovered
         # into this community using a new comment's asserted community ID.
+        return None
+    if existing is not None and needs_backfill(
+        thread_group=existing, community_actor_id=community_actor_id, database=database,
+    ):
+        # The current schema stores only confirmed target receipts. A missing
+        # row may represent a committed Discord Create with a lost HTTP reply;
+        # fetching the AP source cannot disprove that physical side effect.
+        # Defer dependent comments until Stage 04 verifies the gap. No fetch
+        # or second create is safe here, even after a process restart.
+        logger.warning('Parent post %s has unresolved Discord target receipts', post_ap_id)
         return None
     if not needs_backfill(
         thread_group=existing, community_actor_id=community_actor_id, database=database,

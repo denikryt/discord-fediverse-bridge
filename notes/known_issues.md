@@ -213,3 +213,12 @@ Fedify-native security integration remains blocked by missing dependencies.
   Create could be issued twice. Explicit pre-send 403/404/429 failures remain
   retryable; in-process verified receipts remain reusable. This guard is not a
   cross-restart durable intent ledger (Stage 04).
+
+- **Stage 03 Checkpoint 50:** Remote Community normalized parent backfill
+  no longer repeats Create for unmapped recipient forums of an existing thread
+  group. Even independently fetched AP Page/Article does not prove Discord
+  never created the thread when a response was lost. Parent and child are
+  deferred until Stage 04 verified receipt reconciliation; completely absent
+  groups remain eligible for first-send backfill. Definite failed recipients
+  also remain conservatively unrecovered without durable negative evidence.
+  Legacy unbound SDK helper still needs deletion during Stage 03 cutover.

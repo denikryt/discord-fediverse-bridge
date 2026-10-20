@@ -485,8 +485,8 @@ class CommunityRuntime:
         The existing repository remains the canonical mapping owner; each
         physical result is checked against the subscribed forum before the
         actual Discord thread and starter IDs cross the legacy integer boundary.
-        Only a verified parent-post backfill may opt into completing missing
-        delivery rows; normal duplicate Create events must never re-fan-out.
+        A parent-post backfill may create a previously absent group, but cannot
+        retry gaps in an existing group without verified negative receipts.
         """
         from ..activitypub_handlers import HandlerResult as _HandlerResult
         from ..formatting import (
@@ -503,11 +503,20 @@ class CommunityRuntime:
                     status='skipped', outcome=InboundActivityOutcome.IGNORED_UNMAPPED_CONTEXT,
                     detail='parent post community mismatch',
                 )
-            if not recover_missing:
+            # A missing delivery row does not prove the target Discord Create
+            # was never transmitted. Even a freshly verified ActivityPub post
+            # cannot supply a negative physical receipt after a restart. Until
+            # Stage 04 can reconcile durable intents, do not re-post to gaps in
+            # an already persisted group, including in the parent-backfill path.
+            if recover_missing:
                 return _HandlerResult(
                     status='skipped', outcome=InboundActivityOutcome.IGNORED_ALREADY_APPLIED,
-                    detail='post already mapped',
+                    detail='existing post has unresolved physical target receipts',
                 )
+            return _HandlerResult(
+                status='skipped', outcome=InboundActivityOutcome.IGNORED_ALREADY_APPLIED,
+                detail='post already mapped',
+            )
 
         subscriptions = get_accepted_subscriptions(self.database, event.community_actor_id)
         if not subscriptions:
@@ -527,10 +536,9 @@ class CommunityRuntime:
                 detail='no subscriptions with verified Discord guilds',
             )
 
-        # When recovering a partial parent post, reuse its exact canonical
-        # group and all recorded receipts: creating a second canonical object
-        # or second Discord thread in an existing forum is not a retry.
-        group = existing or self.database.discord_fanout_groups.create_thread_group(
+        # Only a new canonical group reaches physical creation. An existing
+        # group was already handled above, regardless of recovery mode.
+        group = self.database.discord_fanout_groups.create_thread_group(
             community_actor_id=event.community_actor_id,
             source_channel_id=None, source_thread_id=None,
             source_starter_message_id=None,
@@ -594,7 +602,7 @@ class CommunityRuntime:
                 # Physical Create may already have reached Discord. Never
                 # infer a receipt or blindly retry, but continue to healthy
                 # subscribers even during the original (non-backfill) event.
-                # A later verified parent backfill can inspect missing rows.
+                # A later backfill must not equate a missing row with a safe retry.
                 logger.exception('Remote post delivery failed for forum %s', forum.external_channel_id)
 
         # An entirely failed initial fan-out must not acknowledge the event as
