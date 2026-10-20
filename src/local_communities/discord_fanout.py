@@ -18,6 +18,12 @@ from ..content_sync.edit_delete import (
 )
 from ..content_sync.inbound_references import build_message_reference
 from ..db import Database
+from ..discord_legacy_projection import discord_id_to_legacy_int
+from ..platform_types import (
+    ChannelRef, ContentDocument, CreateAttempt, DeliveryPresentation,
+    MessageRef, PlatformOperationError, ThreadRef,
+)
+from ..runtime_ports import PlatformDeliveryPort
 
 logger = logging.getLogger(__name__)
 
@@ -165,6 +171,175 @@ class LocalCommunityDiscordFanout:
                 target.role,
             )
             return False
+
+    async def fanout_normalized_thread(
+        self,
+        *,
+        adapter: PlatformDeliveryPort,
+        local_community: object,
+        thread_row: object,
+        title: str,
+        content: str,
+        author_display_name: str | None,
+        source_forum_channel_id: int | None,
+        include_host: bool,
+    ) -> LocalDiscordFanoutSummary:
+        """Deliver typed forum copies to the same host/subscriber targets as legacy fanout.
+
+        A stable per-canonical-target attempt identifies physical delivery, while
+        the repository owns permanent copy identity. Never infer a starter ID
+        from a thread ID and never persist a receipt from another target.
+        """
+        if getattr(thread_row, 'local_community_id') != getattr(local_community, 'id'):
+            raise PlatformOperationError('invalid_request', 'canonical thread community mismatch')
+        summary = LocalDiscordFanoutSummary()
+        body = ContentDocument(_format_local_mirror_body(
+            author_display_name=author_display_name, content=content,
+        ))
+        for target in self._select_targets(
+            local_community=local_community, include_host=include_host,
+            source_forum_channel_id=source_forum_channel_id,
+        ):
+            if not self._target_is_allowed(target):
+                continue
+            existing = self.database.local_community_surfaces.get_local_community_thread_surface(
+                local_community_thread_id=thread_row.id,
+                discord_forum_channel_id=target.discord_forum_channel_id,
+            )
+            if existing is not None:
+                summary.skipped_existing += 1
+                continue
+            summary.attempted += 1
+            try:
+                # Target guild is sourced from the active subscription or the
+                # independently stored host placement, not the untrusted event.
+                forum = ChannelRef(
+                    'discord-primary', str(target.discord_forum_channel_id),
+                    'forum', str(target.discord_guild_id),
+                )
+                attempt = CreateAttempt(
+                    f'local-community-thread:{thread_row.id}:{target.discord_forum_channel_id}',
+                    'discord-primary', 'forum_thread', forum,
+                )
+                receipt = await adapter.create_forum_thread(
+                    forum, body, title=title,
+                    presentation=DeliveryPresentation(), attempt=attempt,
+                )
+                if (receipt.thread.channel != forum
+                    or receipt.thread.channel.kind != forum.kind
+                    or receipt.thread.channel.external_guild_id != forum.external_guild_id):
+                    raise PlatformOperationError('unknown_delivery', 'local thread receipt destination mismatch')
+                thread_id = discord_id_to_legacy_int(receipt.thread)
+                starter_id = discord_id_to_legacy_int(receipt.starter)
+                self.database.local_community_surfaces.create_local_community_thread_surface(
+                    local_community_thread_id=thread_row.id,
+                    discord_forum_channel_id=target.discord_forum_channel_id,
+                    discord_thread_id=thread_id,
+                    discord_starter_message_id=starter_id,
+                    role=target.role, local_subscriber_id=target.local_subscriber_id,
+                )
+                summary.delivered += 1
+            except Exception:
+                summary.failed += 1
+                logger.exception(
+                    'Failed to deliver typed local thread community=%s forum=%s',
+                    local_community.id, target.discord_forum_channel_id,
+                )
+        return summary
+
+    async def fanout_normalized_message(
+        self,
+        *,
+        adapter: PlatformDeliveryPort,
+        local_community: object,
+        thread_row: object,
+        message_row: object,
+        content: str,
+        author_display_name: str | None,
+        source_forum_channel_id: int | None,
+        include_host: bool,
+    ) -> LocalDiscordFanoutSummary:
+        """Send one canonical reply through typed destinations with per-copy parent IDs.
+
+        Missing nested parents suppress only the affected target. The original
+        Discord thread/starter pairing is never a fallback for an unresolved
+        nested reply, and duplicate physical receipts remain repository-owned.
+        """
+        if (getattr(thread_row, 'local_community_id') != getattr(local_community, 'id')
+            or getattr(message_row, 'local_community_thread_id') != thread_row.id):
+            raise PlatformOperationError('invalid_request', 'canonical local reply ownership mismatch')
+        summary = LocalDiscordFanoutSummary()
+        body = ContentDocument(_format_local_mirror_body(
+            author_display_name=author_display_name, content=content,
+        ))
+        for target in self._select_targets(
+            local_community=local_community, include_host=include_host,
+            source_forum_channel_id=source_forum_channel_id,
+        ):
+            if not self._target_is_allowed(target):
+                continue
+            surface = self.database.local_community_surfaces.get_local_community_thread_surface(
+                local_community_thread_id=thread_row.id,
+                discord_forum_channel_id=target.discord_forum_channel_id,
+            )
+            if surface is None:
+                summary.skipped_missing_thread_surface += 1
+                continue
+            existing = self.database.local_community_surfaces.get_local_community_message_surface(
+                local_community_message_id=message_row.id,
+                local_community_thread_surface_id=surface.id,
+            )
+            if existing is not None:
+                summary.skipped_existing += 1
+                continue
+            parent_id = self.resolve_parent_message_id(
+                thread_row=thread_row, message_row=message_row,
+                target_thread_surface=surface,
+            )
+            if parent_id is MISSING_PARENT_SURFACE:
+                summary.skipped_missing_parent_surface += 1
+                continue
+            summary.attempted += 1
+            try:
+                # Resolve the physical reply parent inside each destination
+                # thread, never the source's message ID or a sibling's parent.
+                forum = ChannelRef(
+                    'discord-primary', str(target.discord_forum_channel_id),
+                    'forum', str(target.discord_guild_id),
+                )
+                destination = ThreadRef(forum, str(surface.discord_thread_id))
+                reply_to = (
+                    MessageRef('discord-primary', destination.external_thread_id, str(parent_id))
+                    if parent_id is not None else None
+                )
+                attempt = CreateAttempt(
+                    f'local-community-message:{message_row.id}:{surface.id}',
+                    'discord-primary', 'message', destination,
+                )
+                receipt = await adapter.send_message(
+                    destination, body, reply_to=reply_to,
+                    presentation=DeliveryPresentation(), attempt=attempt,
+                )
+                if (receipt.message.connector_key != destination.connector_key
+                    or receipt.message.external_container_id != destination.external_thread_id):
+                    raise PlatformOperationError('unknown_delivery', 'local message receipt container mismatch')
+                message_id = discord_id_to_legacy_int(receipt.message)
+                self.database.local_community_surfaces.create_local_community_message_surface(
+                    local_community_message_id=message_row.id,
+                    local_community_thread_surface_id=surface.id,
+                    discord_forum_channel_id=target.discord_forum_channel_id,
+                    discord_message_id=message_id,
+                    parent_discord_message_id=parent_id,
+                    role=target.role, local_subscriber_id=target.local_subscriber_id,
+                )
+                summary.delivered += 1
+            except Exception:
+                summary.failed += 1
+                logger.exception(
+                    'Failed to deliver typed local reply community=%s forum=%s',
+                    local_community.id, target.discord_forum_channel_id,
+                )
+        return summary
 
     async def fanout_thread_to_local_subscribers(
         self,

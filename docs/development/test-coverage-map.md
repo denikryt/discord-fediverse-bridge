@@ -38,6 +38,11 @@ This document is a short, feature-oriented index of the test suite. It helps mai
 - The companion normalized comment publisher rejects bot/cross-connector/cross-thread/wrong-parent/invalid snowflake messages, reuses the unchanged canonical SQLite comment mapping, and delivers best-effort registration/ban notices without changing the refusal decision — `tests/test_stage03_typed_community_publish.py` (Checkpoint 26).
 - Production forum callbacks still use the legacy path; only the SDK-free post/comment publisher is prepared. Full runtime cutover and sibling fanout require later verified bindings.
 
+## Stage 03 Local Community typed physical fan-out (Checkpoint 30)
+
+- Real-SQLite host/local-subscriber physical thread copies, separate thread/starter IDs, idempotent replay, subscriber revocation, invalid-guild/destination receipts, per-target failure isolation, subscriber-to-host fan-out and nested per-destination parent preservation — `tests/test_stage03_neutral_local_community_fanout.py`.
+- Previous SDK-backed Stage 3/4 Local Community behavior remains the regression reference; typed operations are preparatory and not yet wired into the live Gateway router.
+
 ## Stage 03 Gateway ingress transition
 
 - Normalized raw edit/delete -> single domain-mutation sink, foreign-connector rejection, thread mutation no-op, unbound create rejection and real adapter admission — `tests/test_stage03_platform_event_ingress.py`.

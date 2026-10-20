@@ -78,3 +78,7 @@ not yet complete.
 ## Stage 03 Checkpoint 29 — typed remote-community orchestration (pre-cutover)
 
 `CommunityRuntime` now has typed forum starter/reply paths using real SQLite group/delivery receipts, checked subscriber/guild policy, the existing publisher and neutral sibling fan-out. Eight new end-to-end SQLite scenarios and 47 related focused regressions passed with an import-only `discord` stub. Production forum callbacks and local-community routes are still SDK-based and have not been switched; no parallel live publisher was added. Full pytest and installed Fedify/Discord integration remain blocked by unavailable dependencies.
+
+## Stage 03 Checkpoint 30 — local-community physical adapter fan-out (pre-cutover)
+
+The existing `LocalCommunityDiscordFanout` now has typed transport methods that preserve per-recipient parent IDs, active subscriber/host selection, SQLite surface idempotency and per-target error isolation without making SDK writes. Nine focused SQLite tests pass. No production event route has been switched. Full dependency-backed validation remains incomplete (`hypothesis`, `discord.py` and Node Fedify unavailable); two SDK-dependent legacy inbound test cases could not load under the import-only Discord shim, not an observed implementation regression.
