@@ -166,3 +166,16 @@ subsequent equal-key callers without enabling another POST or changing the
 immutable request fingerprint. Adoption needs an actual verified root/thread,
 not `CREATE_PUBLIC_THREADS`; the permission is checked immediately before a
 new physical Create. Actual sends still require their own current ACL.
+
+
+**Stage 03 Checkpoint 55 — cancellation-safe definite Create failure:**
+A proved no-create outcome (`invalid_request`, `forbidden`, `not_found`,
+`unsupported`, `rate_limited`, or a pre-POST `unavailable`) completes the
+shared `CreateAttempt` Future and removes that exact flight with **no await**
+between those operations. A shutdown cancellation therefore cannot strand
+joined waiters behind a contended cleanup lock. The original flight's waiters
+receive its definite error; a later separately admitted attempt can retry
+only because the preceding physical write did not happen. A cancelled or
+ambiguous physical POST continues to latch `unknown_delivery` and cannot be
+replayed blindly. This coordinator remains process-local, not a Stage 04
+recovery ledger.

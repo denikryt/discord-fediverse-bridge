@@ -388,8 +388,13 @@ class DiscordAdapter:
                 # ambiguous post-transmission failures to unknown_delivery.
                 # In particular, a transient preflight read cannot pin an
                 # unsent attempt key for the entire adapter lifetime.
-                async with self._create_lock:
-                    self._creates.pop(key, None)
+                # Settlement and release must have no await: shutdown can
+                # cancel the owner while an async cleanup lock is contended,
+                # otherwise joined waiters remain pending indefinitely.
+                # This event-loop-only section is atomic with respect to other
+                # create/reconcile tasks; never remove a replacement flight.
+                if self._creates.get(key) is flight:
+                    del self._creates[key]
             flight.future.set_result(exc)
             raise
         except Exception as exc:

@@ -482,3 +482,179 @@ async def test_existing_reply_thread_adopts_without_create_permission_but_new_on
         await transport.create_reply_thread(new_ref, title='Replies', attempt=attempt)
     assert denied.value.reason == 'forbidden'
     assert new_root.edits == []
+
+@pytest.mark.asyncio
+async def test_cancelled_owner_during_unsent_root_preflight_finishes_waiter_and_shutdown():
+    """Cancelling a pre-POST lookup failure cannot strand another Personal Feed creator."""
+    import asyncio
+
+    channel = FakeChannel()
+    root = FakeMessage(1234, channel)
+    channel._messages[root.id] = root
+    bot = FakeBot([channel])
+    transport = DiscordAdapter(connector=ConnectorRef('discord-primary', 'discord'), bot=bot)
+    ref = MessageRef('discord-primary', '100', '1234')
+    attempt = CreateAttempt('root-unsent-cancel', 'discord-primary', 'reply_thread', ref)
+    entered, release = asyncio.Event(), asyncio.Event()
+    original_fetch = bot.fetch_channel
+
+    async def failed_lookup(channel_id):
+        """An outer Discord GET fails before a thread creation is attempted."""
+        if channel_id == root.id:
+            entered.set()
+            await release.wait()
+            raise TimeoutError('temporary read outage')
+        return await original_fetch(channel_id)
+
+    bot.fetch_channel = failed_lookup
+
+    async def create():
+        """Exercise the real adapter public Create entry point."""
+        return await transport.create_reply_thread(ref, title='Replies', attempt=attempt)
+
+    owner = asyncio.create_task(create())
+    await asyncio.wait_for(entered.wait(), timeout=1)
+    waiter = asyncio.create_task(create())
+    await asyncio.sleep(0)  # Waiter has entered the matching CreateAttempt.
+    await transport._create_lock.acquire()
+    try:
+        release.set()
+        await asyncio.sleep(0.02)  # Owner enters definite-error completion with lock held.
+        # Once cleanup is cancellation-safe it finishes without acquiring
+        # the deliberately held lock. A pending owner is cancelled at the
+        # same fault-injection point to check that its waiter still settles.
+        if not owner.done():
+            owner.cancel()
+            with pytest.raises(asyncio.CancelledError):
+                await asyncio.wait_for(owner, timeout=1)
+        else:
+            with pytest.raises(PlatformOperationError):
+                await owner
+    finally:
+        transport._create_lock.release()
+
+    try:
+        with pytest.raises(PlatformOperationError) as outcome:
+            await asyncio.wait_for(waiter, timeout=1)
+        assert outcome.value.reason == 'unavailable'
+        assert root.edits == []
+        assert (attempt.connector_key, attempt.key) not in transport._creates
+
+        # A later policy retry is safe precisely because no POST was started.
+        bot.fetch_channel = original_fetch
+        created = await asyncio.wait_for(create(), timeout=1)
+        assert created.external_thread_id == str(root.id)
+        assert len(root.edits) == 1
+        transport.close_ingress_admission()
+        await asyncio.wait_for(transport.quiesce(), timeout=1)
+    finally:
+        if not waiter.done():
+            waiter.cancel()
+            await asyncio.gather(waiter, return_exceptions=True)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize('reason', ['invalid_request', 'forbidden', 'not_found',
+                                    'unsupported', 'rate_limited', 'unavailable'])
+async def test_cancelled_owner_with_definite_unsent_error_settles_singleflight(reason):
+    """Every known negative Create result must finish its joined waiters without an await."""
+    import asyncio
+
+    transport = DiscordAdapter(connector=ConnectorRef('discord-primary', 'discord'), bot=object())
+    target = ChannelRef('discord-primary', '100', 'text', '10')
+    attempt = CreateAttempt(f'unsent-{reason}', 'discord-primary', 'message', target)
+    entered, release = asyncio.Event(), asyncio.Event()
+    sends = 0
+
+    async def rejected_send():
+        """Report an authoritative negative result with no physical Create."""
+        nonlocal sends
+        sends += 1
+        entered.set()
+        await release.wait()
+        raise PlatformOperationError(reason, 'definitely no remote copy')
+
+    async def attempt_send():
+        """Enter normal CreateAttempt singleflight with an SDK-free payload."""
+        return await transport._begin_create_attempt(
+            attempt, operation='message', destination=target,
+            content=ContentDocument('content'), title=None, reply_to=None,
+            presentation=DeliveryPresentation('bot'), send=rejected_send,
+        )
+
+    owner = asyncio.create_task(attempt_send())
+    await asyncio.wait_for(entered.wait(), timeout=1)
+    waiter = asyncio.create_task(attempt_send())
+    await asyncio.sleep(0)
+    await transport._create_lock.acquire()
+    try:
+        release.set()
+        await asyncio.sleep(0.02)
+        # Once cleanup is cancellation-safe it finishes without acquiring
+        # the deliberately held lock. A pending owner is cancelled at the
+        # same fault-injection point to check that its waiter still settles.
+        if not owner.done():
+            owner.cancel()
+            with pytest.raises(asyncio.CancelledError):
+                await asyncio.wait_for(owner, timeout=1)
+        else:
+            with pytest.raises(PlatformOperationError):
+                await owner
+    finally:
+        transport._create_lock.release()
+    try:
+        with pytest.raises(PlatformOperationError) as joined:
+            await asyncio.wait_for(waiter, timeout=1)
+        assert joined.value.reason == reason
+        assert sends == 1
+        assert (attempt.connector_key, attempt.key) not in transport._creates
+        transport.close_ingress_admission()
+        await asyncio.wait_for(transport.quiesce(), timeout=1)
+    finally:
+        if not waiter.done():
+            waiter.cancel()
+            await asyncio.gather(waiter, return_exceptions=True)
+
+
+@pytest.mark.asyncio
+async def test_unknown_create_remains_sticky_after_owner_cancelled_during_post():
+    """A cancellable transmitted Create stays unknown and never authorizes retry."""
+    import asyncio
+
+    transport = DiscordAdapter(connector=ConnectorRef('discord-primary', 'discord'), bot=object())
+    target = ChannelRef('discord-primary', '100', 'text', '10')
+    attempt = CreateAttempt('unknown-post-cancel', 'discord-primary', 'message', target)
+    entered = asyncio.Event()
+    sends = 0
+
+    async def maybe_sent():
+        """Simulate a POST whose response is lost when its owner is cancelled."""
+        nonlocal sends
+        sends += 1
+        entered.set()
+        await asyncio.Event().wait()
+
+    async def attempt_send():
+        """Use the real coordinator to track potential transmission."""
+        return await transport._begin_create_attempt(
+            attempt, operation='message', destination=target,
+            content=ContentDocument('content'), title=None, reply_to=None,
+            presentation=DeliveryPresentation('bot'), send=maybe_sent,
+        )
+
+    owner = asyncio.create_task(attempt_send())
+    await asyncio.wait_for(entered.wait(), timeout=1)
+    waiter = asyncio.create_task(attempt_send())
+    await asyncio.sleep(0)
+    owner.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await asyncio.wait_for(owner, timeout=1)
+    with pytest.raises(PlatformOperationError) as joined:
+        await asyncio.wait_for(waiter, timeout=1)
+    assert joined.value.reason == 'unknown_delivery'
+    with pytest.raises(PlatformOperationError) as later:
+        await asyncio.wait_for(attempt_send(), timeout=1)
+    assert later.value.reason == 'unknown_delivery'
+    assert sends == 1
+    transport.close_ingress_admission()
+    await asyncio.wait_for(transport.quiesce(), timeout=1)

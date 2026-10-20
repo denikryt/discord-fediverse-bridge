@@ -257,3 +257,14 @@ Fedify-native security integration remains blocked by missing dependencies.
   wrong-parent lookups remain fail-closed, while a new Create requires that
   permission. The SDK-backed integration and Fedify security release gates
   remain outstanding.
+
+
+- **Stage 03 Checkpoint 55:** Fixed the CP54 cancellation race in
+  `DiscordAdapter._begin_create_attempt`: a definite no-Create error now
+  resolves all existing same-key waiters and releases its flight without
+  awaiting an async cleanup lock. The old race could indefinitely block
+  waiters and adapter shutdown. Regression tests exercise concurrent owner
+  cancellation during pre-POST root lookup and each definite error class,
+  plus the sticky unknown-post control. Physical Discord SDK and Fedify
+  release integration remain outstanding; process-local recovery is not a
+  durable Stage 04 delivery intent.
