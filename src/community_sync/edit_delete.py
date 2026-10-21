@@ -11,12 +11,35 @@ import logging
 
 from sqlalchemy import select
 
+from ..formatting import apply_edit_to_discord_message
+from ..platform_types import ContentDocument, MessageRef
+from ..runtime_ports import PlatformAdapterPort
+
 from ..content_sync.edit_delete import (
     edit_discord_message,
     mark_discord_message_deleted,
 )
 
 logger = logging.getLogger(__name__)
+
+
+async def _edit_normalized_delivery(
+    adapter: PlatformAdapterPort, delivery: object, message_id: int,
+    content: str, *, preserve_header: bool,
+) -> None:
+    """Edit a verified stored copy through its scoped platform message ID.
+
+    Comments must preserve the existing remote-author attribution, so use the
+    adapter's exact fetched body rather than a separately guessed username.
+    A failed lookup is not permission to overwrite an unknown header.
+    """
+    ref = MessageRef('discord-primary', str(delivery.discord_thread_id), str(message_id))
+    if preserve_header:
+        observed = await adapter.fetch_message(ref)
+        if observed.message != ref or observed.content is None:
+            raise ValueError('Discord message content could not be verified before edit')
+        content = apply_edit_to_discord_message(observed.content.body, content)
+    await adapter.edit_message(ref, ContentDocument(content))
 
 
 def get_outbound_edit_deliveries(all_deliveries: list[object]) -> list[object]:
@@ -65,7 +88,8 @@ async def resolve_actor_username(database: object, message_group: object) -> str
 
 async def propagate_inbound_post_update(
     *,
-    bot: object,
+    bot: object | None = None,
+    adapter: PlatformAdapterPort | None = None,
     thread_deliveries: list[object],
     new_content: str,
 ) -> None:
@@ -73,13 +97,19 @@ async def propagate_inbound_post_update(
 
     async def edit_thread_starter(delivery: object) -> None:
         try:
-            await edit_discord_message(
-                bot=bot,
-                discord_thread_id=delivery.discord_thread_id,
-                discord_message_id=delivery.discord_starter_message_id,
-                new_content=new_content,
-                preserve_header=False,
-            )
+            if adapter is not None:
+                await _edit_normalized_delivery(
+                    adapter, delivery, delivery.discord_starter_message_id, new_content,
+                    preserve_header=False,
+                )
+            else:
+                await edit_discord_message(
+                    bot=bot,
+                    discord_thread_id=delivery.discord_thread_id,
+                    discord_message_id=delivery.discord_starter_message_id,
+                    new_content=new_content,
+                    preserve_header=False,
+                )
             logger.info(
                 "Edited inbound post starter in thread %s", delivery.discord_thread_id
             )
@@ -97,18 +127,26 @@ async def propagate_inbound_post_update(
 
 async def propagate_inbound_post_delete(
     *,
-    bot: object,
+    bot: object | None = None,
+    adapter: PlatformAdapterPort | None = None,
     thread_deliveries: list[object],
 ) -> None:
     """Mark all inbound post starter messages deleted concurrently."""
 
     async def mark_starter_deleted(delivery: object) -> None:
         try:
-            await mark_discord_message_deleted(
-                bot=bot,
-                discord_thread_id=delivery.discord_thread_id,
-                discord_message_id=delivery.discord_starter_message_id,
-            )
+            if adapter is not None:
+                # Deletion intentionally writes a visible tombstone, not a physical DELETE.
+                await _edit_normalized_delivery(
+                    adapter, delivery, delivery.discord_starter_message_id, '*deleted by creator*',
+                    preserve_header=False,
+                )
+            else:
+                await mark_discord_message_deleted(
+                    bot=bot,
+                    discord_thread_id=delivery.discord_thread_id,
+                    discord_message_id=delivery.discord_starter_message_id,
+                )
             logger.info(
                 "Marked inbound post starter deleted in thread %s",
                 delivery.discord_thread_id,
@@ -127,7 +165,8 @@ async def propagate_inbound_post_delete(
 
 async def propagate_inbound_comment_update(
     *,
-    bot: object,
+    bot: object | None = None,
+    adapter: PlatformAdapterPort | None = None,
     deliveries: list[object],
     new_content: str,
 ) -> None:
@@ -135,13 +174,19 @@ async def propagate_inbound_comment_update(
 
     async def edit_message(delivery: object) -> None:
         try:
-            await edit_discord_message(
-                bot=bot,
-                discord_thread_id=delivery.discord_thread_id,
-                discord_message_id=delivery.discord_message_id,
-                new_content=new_content,
-                preserve_header=True,
-            )
+            if adapter is not None:
+                await _edit_normalized_delivery(
+                    adapter, delivery, delivery.discord_message_id, new_content,
+                    preserve_header=True,
+                )
+            else:
+                await edit_discord_message(
+                    bot=bot,
+                    discord_thread_id=delivery.discord_thread_id,
+                    discord_message_id=delivery.discord_message_id,
+                    new_content=new_content,
+                    preserve_header=True,
+                )
             logger.info(
                 "Edited inbound comment message %s in thread %s",
                 delivery.discord_message_id,
@@ -162,18 +207,26 @@ async def propagate_inbound_comment_update(
 
 async def propagate_inbound_comment_delete(
     *,
-    bot: object,
+    bot: object | None = None,
+    adapter: PlatformAdapterPort | None = None,
     deliveries: list[object],
 ) -> None:
     """Mark all bot-owned inbound comment messages deleted concurrently."""
 
     async def mark_message_deleted(delivery: object) -> None:
         try:
-            await mark_discord_message_deleted(
-                bot=bot,
-                discord_thread_id=delivery.discord_thread_id,
-                discord_message_id=delivery.discord_message_id,
-            )
+            if adapter is not None:
+                # Deletion intentionally writes a visible tombstone, not a physical DELETE.
+                await _edit_normalized_delivery(
+                    adapter, delivery, delivery.discord_message_id, '*deleted by creator*',
+                    preserve_header=False,
+                )
+            else:
+                await mark_discord_message_deleted(
+                    bot=bot,
+                    discord_thread_id=delivery.discord_thread_id,
+                    discord_message_id=delivery.discord_message_id,
+                )
             logger.info(
                 "Marked inbound comment message %s deleted in thread %s",
                 delivery.discord_message_id,

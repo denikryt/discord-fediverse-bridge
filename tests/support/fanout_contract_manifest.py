@@ -130,11 +130,11 @@ FANOUT_CONTRACT_ENTRIES = (
         "named_scenario",
         (
             _node(
-                "tests/behavior/test_local_community_stage3_local_subscriber_sync_scenarios.py",
+                "tests/behavior/test_local_community_local_subscriber_sync_scenarios.py",
                 "test_host_thread_create_fans_out_to_local_subscriber_thread_surfaces",
             ),
             _node(
-                "tests/behavior/test_local_community_stage4_local_subscriber_origin_scenarios.py",
+                "tests/behavior/test_local_community_local_subscriber_origin_scenarios.py",
                 "test_local_subscriber_thread_create_creates_source_host_and_sibling_surfaces",
             ),
         ),
@@ -145,11 +145,11 @@ FANOUT_CONTRACT_ENTRIES = (
         "named_scenario",
         (
             _node(
-                "tests/behavior/test_local_community_stage3_local_subscriber_sync_scenarios.py",
+                "tests/behavior/test_local_community_local_subscriber_sync_scenarios.py",
                 "test_host_root_and_nested_replies_use_surface_local_parent_ids",
             ),
             _node(
-                "tests/behavior/test_local_community_stage4_local_subscriber_origin_scenarios.py",
+                "tests/behavior/test_local_community_local_subscriber_origin_scenarios.py",
                 "test_local_subscriber_nested_reply_maps_parent_surface_per_target",
             ),
         ),
@@ -160,11 +160,11 @@ FANOUT_CONTRACT_ENTRIES = (
         "named_scenario",
         (
             _node(
-                "tests/behavior/test_local_community_stage3_local_subscriber_sync_scenarios.py",
+                "tests/behavior/test_local_community_local_subscriber_sync_scenarios.py",
                 "test_duplicate_source_processing_retries_missing_surfaces_only",
             ),
             _node(
-                "tests/behavior/test_local_community_stage4_local_subscriber_origin_scenarios.py",
+                "tests/behavior/test_local_community_local_subscriber_origin_scenarios.py",
                 "test_duplicate_local_subscriber_thread_retries_missing_targets_without_republish",
             ),
         ),

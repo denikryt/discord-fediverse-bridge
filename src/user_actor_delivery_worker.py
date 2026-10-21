@@ -33,24 +33,50 @@ class UserActorDeliveryWorker:
         self._wake.set()
 
     async def stop(self) -> None:
-        """Stop new passes and allow the in-flight bounded pass to finish."""
+        """Join the current Fedify pass before shared clients can be closed.
+
+        A shutdown-task cancellation is retained and propagated only after the
+        existing bounded grace period and, if needed, forced worker cancellation.
+        No in-flight delivery may outlive the caller of this stop method.
+        """
         self._stopping = True
         self._wake.set()
         task = self._task
         if task is None:
             return
+        interrupted = False
+        deadline = asyncio.get_running_loop().time() + self.SHUTDOWN_GRACE_SECONDS
         try:
-            await asyncio.wait_for(
-                asyncio.shield(task), timeout=self.SHUTDOWN_GRACE_SECONDS
-            )
-        except TimeoutError:
-            task.cancel()
-            try:
-                await task
-            except asyncio.CancelledError:
-                pass
+            while not task.done():
+                remaining = deadline - asyncio.get_running_loop().time()
+                if remaining <= 0:
+                    task.cancel()
+                    break
+                try:
+                    await asyncio.wait_for(asyncio.shield(task), timeout=remaining)
+                except TimeoutError:
+                    # Shield keeps timeout from cancelling a partially sent
+                    # ActivityPub POST until the explicit grace deadline.
+                    task.cancel()
+                    break
+                except asyncio.CancelledError:
+                    if not task.done():
+                        interrupted = True
+            # Even after a grace timeout, join the task's async finally before
+            # releasing Fedify and database ownership to Runtime.close().
+            while not task.done():
+                try:
+                    await asyncio.shield(task)
+                except asyncio.CancelledError:
+                    if not task.done():
+                        interrupted = True
+            if not task.cancelled():
+                task.result()
         finally:
-            self._task = None
+            if task.done():
+                self._task = None
+        if interrupted:
+            raise asyncio.CancelledError
 
     async def _run(self) -> None:
         """Drain immediately, then continue with failure-isolated cadence."""

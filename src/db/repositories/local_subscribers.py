@@ -31,7 +31,7 @@ class LocalSubscriberRepository(BaseRepository):
         status: str = "active",
     ) -> LocalSubscriber:
         """Persist one same-instance local subscriber forum row."""
-        # MULTIPLATFORM_STAGE01_TEMP: Discord channel-ID wrapper is scoped to the primary Discord connector.
+        # MULTIPLATFORM_DISCORD_PROJECTION_TEMP: Discord channel-ID wrapper is scoped to the primary Discord connector.
         with self._writer_provider() as session:
             surface = PlatformSurfaceRepository.discord_channel(
                 session, discord_channel_id, discord_guild_id, "forum"
@@ -79,7 +79,7 @@ class LocalSubscriberRepository(BaseRepository):
         discord_channel_id: int,
     ) -> LocalSubscriber | None:
         """Load one local-subscriber row by community and channel id."""
-        # MULTIPLATFORM_STAGE01_TEMP: Discord channel-ID wrapper is scoped to the primary Discord connector.
+        # MULTIPLATFORM_DISCORD_PROJECTION_TEMP: Discord channel-ID wrapper is scoped to the primary Discord connector.
         with self.session() as session:
             return session.scalar(
                 discord_claim_query(LocalSubscriber, "local_subscriber_id").where(
@@ -92,7 +92,7 @@ class LocalSubscriberRepository(BaseRepository):
         self, discord_channel_id: int
     ) -> LocalSubscriber | None:
         """Load one local-subscriber row by its Discord forum channel."""
-        # MULTIPLATFORM_STAGE01_TEMP: Discord channel-ID wrapper is scoped to the primary Discord connector.
+        # MULTIPLATFORM_DISCORD_PROJECTION_TEMP: Discord channel-ID wrapper is scoped to the primary Discord connector.
         with self.session() as session:
             return session.scalar(
                 discord_claim_query(LocalSubscriber, "local_subscriber_id").where(
@@ -115,12 +115,12 @@ class LocalSubscriberRepository(BaseRepository):
         self, discord_guild_id: int
     ) -> list[LocalSubscriber]:
         """Load local subscribers scoped to one Discord guild."""
-        # MULTIPLATFORM_STAGE01_TEMP: Discord channel-ID wrapper is scoped to the primary Discord connector.
+        # MULTIPLATFORM_DISCORD_PROJECTION_TEMP: Discord channel-ID wrapper is scoped to the primary Discord connector.
         return self.list_discord_subscribers(guild_id=discord_guild_id)
 
     def delete_local_subscriber(self, discord_channel_id: int) -> bool:
         """Delete one local-subscriber row by Discord forum channel id."""
-        # MULTIPLATFORM_STAGE01_TEMP: Discord channel-ID wrapper is scoped to the primary Discord connector.
+        # MULTIPLATFORM_DISCORD_PROJECTION_TEMP: Discord channel-ID wrapper is scoped to the primary Discord connector.
         with self._writer_provider() as session:
             row = session.scalar(
                 discord_claim_query(LocalSubscriber, "local_subscriber_id").where(

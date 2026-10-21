@@ -83,7 +83,7 @@ def test_outbox_slice_orders_filters_and_is_bounded(tmp_path: Path) -> None:
     assert [item.id for item in result.items] == [second.id]
 
 
-def test_outbox_query_plan_uses_stage9_composite_index(tmp_path: Path) -> None:
+def test_outbox_query_plan_uses_community_writers_composite_index(tmp_path: Path) -> None:
     """Representative page lookup uses the migration-owned composite index."""
     database, user = _database(tmp_path)
     _row(database, user, 1)

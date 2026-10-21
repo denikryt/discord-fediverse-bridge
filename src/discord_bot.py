@@ -1,4 +1,4 @@
-"""Discord adapter for slash commands and forum thread/message callbacks."""
+"""Discord SDK shell for commands and normalized Gateway callbacks."""
 
 from __future__ import annotations
 
@@ -12,6 +12,7 @@ from .config import Settings
 from .bridge_policy import BridgePolicyService
 from .db import Database
 from .discord_event_router import DiscordEventRouter
+from .discord_adapter import DiscordAdapter
 from .discord_message_mutations import DiscordMessageMutationHandler
 from .fedify_gateway_client import FedifyGatewayClient
 from .discord_directory import refresh_discord_directory_from_bot
@@ -64,17 +65,16 @@ class BridgeBot(discord.Client):
         )
         self.tree = BridgeCommandTree(self)
         self.bridge_ready = asyncio.Event()
-        # Per-thread locks prevent duplicate Lemmy posts when Discord fires
-        # on_thread_create twice for the same thread (e.g. on reconnect).
-        self._thread_locks: dict[int, asyncio.Lock] = {}
-        # Tracks thread IDs that have already been processed this session so
-        # a second on_thread_create after lock cleanup still exits cleanly.
-        self._synced_threads: set[int] = set()
+        # A keyed admission lock protects the gap between AP publish and the
+        # canonical SQLite receipt for concurrent THREAD_CREATE callbacks.
+        # Unlike a seen-set, it never claims a failed delivery has succeeded.
+        self._thread_locks: dict[tuple[str, int], asyncio.Lock] = {}
         # Raw edit/delete mutation handling and ready-gated personal-feed
         # delivery are true bot/router cycles, so they use guarded one-time
         # binds instead of raw attribute writes from the composition root.
         self._message_mutation_handler: DiscordMessageMutationHandler | None = None
         self._personal_feed_delivery_worker: object | None = None
+        self.discord_adapter: DiscordAdapter | None = None
 
     async def setup_hook(self) -> None:
         # setup_hook runs before the bot connects, making it the right place to
@@ -150,7 +150,7 @@ class BridgeBot(discord.Client):
             )
         await self.tree.sync()
 
-    async def on_ready(self) -> None:
+    async def _on_ready_admitted(self) -> None:
         # Signal inbound event handlers that the bot is connected and Discord
         # API calls (thread/message creation) can proceed.
         self.bridge_ready.set()
@@ -164,70 +164,102 @@ class BridgeBot(discord.Client):
         logger.info("Bridge bot is ready as %s", self.user)
 
     async def close(self) -> None:
-        await self.fedify_gateway.close()
+        """Close only the borrowed SDK; Runtime alone owns the Fedify gateway."""
         await super().close()
 
-    # MULTIPLATFORM_STAGE02_TEMP: BridgeBot callbacks still forward Discord SDK objects directly; Stage 03 must emit normalized PlatformInboundEvent values and retire this legacy ingress after regression tests.
+    def bind_discord_adapter(self, adapter: DiscordAdapter) -> None:
+        """Attach the one SDK-owning transport after construction, before Gateway start."""
+        if self.discord_adapter is not None or adapter.connector.key != 'discord-primary':
+            raise RuntimeError('Discord adapter already configured or wrong connector')
+        self.discord_adapter = adapter
+
+    def _enter_gateway_callback(self) -> bool:
+        """Reject late SDK event tasks synchronously before accessing database state."""
+        adapter = self.discord_adapter
+        if adapter is None:
+            # Legacy test constructors are SDK-only until Discord adapter integration cutover.
+            return True
+        return adapter.enter_ingress()
+
+    def _leave_gateway_callback(self) -> None:
+        """Ensure active ingress is unregistered in success/error/cancellation paths."""
+        if self.discord_adapter is not None:
+            self.discord_adapter.leave_ingress()
+
+    async def on_ready(self) -> None:
+        """Gate worker startup on the same callback lifetime as other Gateway work."""
+        if not self._enter_gateway_callback():
+            return
+        try:
+            await self._on_ready_admitted()
+        finally:
+            self._leave_gateway_callback()
+
     async def on_thread_create(self, thread: discord.Thread) -> None:
-        # Only threads in subscribed channels should be forwarded to Lemmy.
-        # Threads created by the bot itself are skipped to break the echo loop.
-        if thread.parent_id is None:
+        """Admit one thread event before dereferencing database or Fedify state."""
+        if not self._enter_gateway_callback():
+            return
+        try:
+            await self._on_thread_create_admitted(thread)
+        finally:
+            self._leave_gateway_callback()
+
+    async def on_message(self, message: discord.Message) -> None:
+        """Admit one message callback before durable domain routing."""
+        if not self._enter_gateway_callback():
+            return
+        try:
+            await self._on_message_admitted(message)
+        finally:
+            self._leave_gateway_callback()
+
+    async def on_raw_message_edit(self, payload: discord.RawMessageUpdateEvent) -> None:
+        """Drain a raw edit even if its reconciler is blocked on Fedify."""
+        if not self._enter_gateway_callback():
+            return
+        try:
+            await self._require_discord_adapter().ingest_raw_message_edit(payload)
+        finally:
+            self._leave_gateway_callback()
+
+    async def on_raw_message_delete(self, payload: discord.RawMessageDeleteEvent) -> None:
+        """Drain an ID-only raw delete independently of Discord SDK I/O."""
+        if not self._enter_gateway_callback():
+            return
+        try:
+            await self._require_discord_adapter().ingest_raw_message_delete(payload)
+        finally:
+            self._leave_gateway_callback()
+
+    async def _on_thread_create_admitted(self, thread: discord.Thread) -> None:
+        """Send subscribed forum and Personal Feed threads through one typed sink.
+
+        Canonical deduplication lives in SQLite; a process-local seen set could
+        suppress recovery following a failed or interrupted federation call.
+        """
+        parent_id = getattr(thread, 'parent_id', None)
+        if parent_id is None or (self.user and thread.owner_id == self.user.id):
             return
         personal_root = self.database.activitypub_objects.get_published_activity_object_by_discord_message_id(
             thread.id
         )
-        if not (
-            (
-                personal_root is not None
-                and personal_root.publication_context == "personal_feed"
-            )
-            or self.event_router.is_remote_subscription_forum(thread.parent_id)
-            or self.event_router.is_local_community_forum(thread.parent_id)
-        ):
+        personal = bool(
+            personal_root is not None
+            and personal_root.publication_context == 'personal_feed'
+            and int(personal_root.discord_channel_id) == int(parent_id)
+        )
+        if not (personal or self.event_router.is_remote_subscription_forum(parent_id)
+                or self.event_router.is_local_community_forum(parent_id)):
             return
-        if self.user and thread.owner_id == self.user.id:
-            return
+        # Keep concurrent notifications of this physical thread serialized
+        # through publication and SQLite receipt persistence. A replay after
+        # failure is still admitted; the durable repositories decide dedup.
+        key = ('discord-primary', int(thread.id))
+        lock = self._thread_locks.setdefault(key, asyncio.Lock())
+        async with lock:
+            await self._require_discord_adapter().ingest_thread_created(thread)
 
-        # In-memory fast-path: if this session already processed the thread,
-        # skip before acquiring any lock or hitting the DB.
-        if thread.id in self._synced_threads:
-            return
-
-        # Acquire a per-thread lock so a second on_thread_create for the same
-        # thread (Discord reconnect race) blocks until the first finishes.
-        if thread.id not in self._thread_locks:
-            self._thread_locks[thread.id] = asyncio.Lock()
-        async with self._thread_locks[thread.id]:
-            # Re-check both the in-memory set and the DB inside the lock.
-            if thread.id in self._synced_threads:
-                return
-            if (
-                self.database.legacy_lemmy_mappings.get_post_link_by_thread_id(
-                    thread.id
-                )
-                is not None
-            ):
-                self._synced_threads.add(thread.id)
-                return
-
-            starter_message = await self._fetch_starter_message(thread)
-            if starter_message is None:
-                logger.warning(
-                    "Could not fetch starter message for Discord forum thread %s",
-                    thread.id,
-                )
-                return
-            if starter_message.author.bot:
-                return
-
-            result = await self.event_router.handle_thread_create(
-                thread=thread,
-                starter_message=starter_message,
-            )
-            if result.status == "published":
-                self._synced_threads.add(thread.id)
-
-    async def on_message(self, message: discord.Message) -> None:
+    async def _on_message_admitted(self, message: discord.Message) -> None:
         # Only messages in threads inside subscribed channels are forwarded.
         # The subscription check guards against channels with no active mapping.
         if self.user and message.author.id == self.user.id:
@@ -250,16 +282,37 @@ class BridgeBot(discord.Client):
             if binding is not None:
                 # Personal-feed channels are exclusive routing surfaces. The
                 # publisher performs a second durable binding/owner check.
-                await self.event_router.handle_personal_feed_root(
-                    message=message, binding=binding
-                )
+                # Production uses the verified SDK -> neutral event boundary.
+                # Legacy direct-test bot instances are still constructed without
+                # an adapter while the other Create routes are being cut over.
+                if getattr(self, 'discord_adapter', None) is not None:
+                    await self._require_discord_adapter().ingest_message_created(message)
+                else:
+                    await self.event_router.handle_personal_feed_root(
+                        message=message, binding=binding
+                    )
                 return
         if not isinstance(message.channel, discord.Thread):
             return
         if message.channel.parent_id is None:
             return
+        # A reply may arrive before THREAD_CREATE has installed the conversation
+        # mapping. Detect only an existing published Personal Feed root with the
+        # same physical thread/root ID and parent; the canonical runtime will
+        # independently recheck ownership before adopting or publishing it.
+        personal_thread = self.event_router.is_personal_feed_thread(message.channel.id)
+        possible_root = None
+        if not personal_thread:
+            possible_root = self.database.activitypub_objects.get_published_activity_object_by_discord_message_id(
+                message.channel.id
+            )
+        personal_unadopted = bool(
+            possible_root is not None
+            and possible_root.publication_context == 'personal_feed'
+            and int(possible_root.discord_channel_id) == int(message.channel.parent_id)
+        )
         if not (
-            self.event_router.is_personal_feed_thread(message.channel.id)
+            personal_thread or personal_unadopted
             or self.event_router.is_remote_subscription_forum(message.channel.parent_id)
             or self.event_router.is_local_community_forum(message.channel.parent_id)
         ):
@@ -277,21 +330,33 @@ class BridgeBot(discord.Client):
             delivery.role if delivery else None,
         )
 
-        # Phase 9: Allow all delivery roles (source, mirror, inbound) to proceed.
-        # The bot-author guard (line 119 above) is the sole loop-prevention mechanism.
-        await self.event_router.handle_message(
-            message=message,
-        )
+        # Personal Feed and subscribed/local Community replies now share the
+        # exact same normalized sink; never invoke the old SDK publisher too.
+        await self._require_discord_adapter().ingest_thread_message_created(message)
 
-    async def on_raw_message_edit(self, payload: discord.RawMessageUpdateEvent) -> None:
-        """Delegate raw Discord edit orchestration to the mutation handler."""
-        await self._require_message_mutation_handler().handle_raw_message_edit(payload)
+    async def on_raw_thread_update(self, payload: object) -> None:
+        """Normalize an uncached thread update under the Gateway shutdown gate."""
+        if not self._enter_gateway_callback():
+            return
+        try:
+            await self._require_discord_adapter().ingest_raw_thread_update(payload)
+        finally:
+            self._leave_gateway_callback()
 
-    async def on_raw_message_delete(
-        self, payload: discord.RawMessageDeleteEvent
-    ) -> None:
-        """Delegate raw Discord delete orchestration to the mutation handler."""
-        await self._require_message_mutation_handler().handle_raw_message_delete(payload)
+    async def on_raw_thread_delete(self, payload: object) -> None:
+        """Normalize an uncached thread deletion without inventing an AP Delete."""
+        if not self._enter_gateway_callback():
+            return
+        try:
+            await self._require_discord_adapter().ingest_raw_thread_delete(payload)
+        finally:
+            self._leave_gateway_callback()
+
+    def _require_discord_adapter(self) -> DiscordAdapter:
+        """Reject an incomplete production bind instead of using a raw fallback."""
+        if self.discord_adapter is None:
+            raise RuntimeError('Discord Adapter is not bound')
+        return self.discord_adapter
 
     def set_message_mutation_handler(
         self, handler: DiscordMessageMutationHandler
@@ -321,40 +386,6 @@ class BridgeBot(discord.Client):
         if worker is None:
             raise RuntimeError("Personal-feed Discord delivery worker is not configured")
         return worker
-
-    async def fetch_message_state(
-        self, channel_id: int, message_id: int
-    ) -> tuple[str, object | None]:
-        """Fetch authoritative Discord message state for durable reconciliation."""
-        try:
-            channel = self.get_channel(channel_id) or await self.fetch_channel(
-                channel_id
-            )
-            return "present", await channel.fetch_message(message_id)
-        except discord.NotFound:
-            return "missing", None
-
-    async def _fetch_starter_message(
-        self, thread: discord.Thread
-    ) -> discord.Message | None:
-        # Discord APIs are inconsistent here, so we try the direct starter
-        # message path first and then fall back to oldest history.
-        if thread.starter_message is not None:
-            return thread.starter_message
-        try:
-            return await thread.fetch_message(thread.id)
-        except discord.NotFound:
-            try:
-                history = [
-                    message
-                    async for message in thread.history(limit=1, oldest_first=True)
-                ]
-                return history[0] if history else None
-            except discord.HTTPException:
-                return None
-        except discord.HTTPException:
-            logger.exception("Failed to fetch starter message for thread %s", thread.id)
-            return None
 
     async def wait_until_bridge_ready(self) -> None:
         await self.bridge_ready.wait()

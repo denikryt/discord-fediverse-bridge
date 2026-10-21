@@ -35,7 +35,7 @@ async function main(): Promise<void> {
     inReplyToObjectId: `${TEST_ORIGIN}actors/users/alice/objects/posts/123`,
   };
 
-  // The Stage 4 cutover makes locally emitted personal-user IDs non-Lemmy
+  // The typed ActivityPub identity migration cutover makes locally emitted personal-user IDs non-Lemmy
   // paths. This test therefore verifies the outbound JSON contract directly
   // instead of routing the bridge's own Create back through inbound Lemmy
   // normalization, which is reserved for remote objects with Lemmy numeric IDs.

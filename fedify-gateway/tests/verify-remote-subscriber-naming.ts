@@ -119,7 +119,7 @@ async function buildLegacyOnlyConfig(): Promise<GatewayConfig> {
 }
 
 async function main(): Promise<void> {
-  /** Stage 1 should stop silently reading the legacy follower table. */
+  /** local subscriber registration should stop silently reading the legacy follower table. */
   const config = await buildLegacyOnlyConfig();
 
   assert.deepEqual(

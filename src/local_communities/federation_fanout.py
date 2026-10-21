@@ -185,49 +185,107 @@ class LocalCommunityFederationFanout:
             return RelayFanoutSummary(attempted=0, delivered=0, failed=0)
 
         outbound = []
+        attempts = {}
         for row in pending:
-            # The source JSON preserves source ids and attribution, while the
-            # normalized event provides sanitized body text and reply-chain ids
-            # needed for compatibility projections.
-            activity_json = render_local_community_relay_activity(
-                source_activity_json=source.source_activity_json,
-                normalized_event=event,
+            attempt = self.database.local_community_relay.prepare_local_community_relay_attempt(
+                delivery_id=row.id,
                 community_actor_url=getattr(local_community, "actor_url"),
                 community_slug=getattr(local_community, "slug"),
-                delivery_profile=row.delivery_profile,
-                object_kind=row.object_kind,
+                policy_service=self.policy_service,
             )
+            if attempt is None:
+                continue
+            # A recipient's address and attempt generation are frozen after
+            # the writer transaction commits; no DB lock spans gateway HTTP.
+            attempts[attempt.delivery_id] = attempt
+            try:
+                activity_json = render_local_community_relay_activity(
+                    source_activity_json=source.source_activity_json,
+                    normalized_event=event,
+                    community_actor_url=getattr(local_community, "actor_url"),
+                    community_slug=getattr(local_community, "slug"),
+                    delivery_profile=attempt.delivery_profile,
+                    object_kind=row.object_kind,
+                    relay_activity_id=attempt.relay_activity_id,
+                )
+                if activity_json["id"] != attempt.relay_activity_id:
+                    raise ValueError("rendered relay activity ID differs from reservation")
+            except Exception as exc:
+                # A renderer error never permits an untracked transport send.
+                self._record_outcome(attempt, local_community=local_community, ok=False, error=f"relay render failed: {exc}")
+                attempts.pop(attempt.delivery_id)
+                logger.exception("Relay rendering failed for delivery %s", attempt.delivery_id)
+                continue
             outbound.append(
                 SendLocalCommunityRelayDelivery(
-                    delivery_id=row.id,
-                    target_remote_actor_id=row.target_remote_actor_id,
-                    target_inbox_url=row.target_inbox_url,
+                    delivery_id=attempt.delivery_id,
+                    target_remote_actor_id=attempt.target_remote_actor_id,
+                    target_inbox_url=attempt.attempted_inbox_url,
                     activity_json=activity_json,
                 )
             )
 
-        result = await self.fedify_gateway.send_local_community_relay(
-            signing_actor_url=getattr(local_community, "actor_url"),
-            deliveries=outbound,
-        )
+        if not outbound:
+            return RelayFanoutSummary(attempted=0, delivered=0, failed=0)
+        # Gateway failure and omitted outcomes use the same generation-guarded
+        # completion path as individual responses. No stale result may override
+        # a later successful send of this source-level activity.
+        try:
+            result = await self.fedify_gateway.send_local_community_relay(
+                signing_actor_url=getattr(local_community, "actor_url"),
+                deliveries=outbound,
+            )
+            outcomes = result.outcomes
+        except Exception as exc:
+            logger.exception("ActivityPub relay gateway call failed")
+            outcomes = []
+            transport_error = str(exc)
+        else:
+            transport_error = "gateway omitted relay outcome"
         delivered = 0
         failed = 0
-        for outcome in result.outcomes:
-            if outcome.ok:
+        seen = set()
+        for outcome in outcomes:
+            attempt = attempts.get(outcome.delivery_id)
+            if attempt is None or outcome.delivery_id in seen:
+                logger.error("Unrecognized or duplicate gateway relay outcome: %s", outcome.delivery_id)
+                continue
+            seen.add(outcome.delivery_id)
+            matched = (
+                outcome.activity_id == attempt.relay_activity_id
+                and outcome.target_remote_actor_id == attempt.target_remote_actor_id
+            )
+            ok = bool(outcome.ok and matched)
+            self._record_outcome(
+                attempt,
+                local_community=local_community,
+                ok=ok,
+                error=outcome.error if matched else "gateway relay outcome identity mismatch",
+            )
+            if ok:
                 delivered += 1
-                self.database.local_community_relay.mark_local_community_relay_delivery_result(
-                    delivery_id=outcome.delivery_id,
-                    status="delivered",
-                    relay_activity_id=outcome.activity_id,
-                )
             else:
                 failed += 1
-                self.database.local_community_relay.mark_local_community_relay_delivery_result(
-                    delivery_id=outcome.delivery_id,
-                    status="failed",
-                    relay_activity_id=outcome.activity_id,
-                    error=outcome.error,
-                )
+        for delivery_id, attempt in attempts.items():
+            if delivery_id in seen:
+                continue
+            self._record_outcome(attempt, local_community=local_community, ok=False, error=transport_error)
+            failed += 1
         return RelayFanoutSummary(
             attempted=len(outbound), delivered=delivered, failed=failed
+        )
+
+    def _record_outcome(
+        self, attempt: object, *, local_community: object, ok: bool, error: str | None
+    ) -> None:
+        """Write an HTTP outcome only against its own route and generation."""
+        self.database.local_community_relay.mark_local_community_relay_delivery_result(
+            delivery_id=attempt.delivery_id,
+            status="delivered" if ok else "failed",
+            relay_activity_id=attempt.relay_activity_id,
+            attempted_inbox_url=attempt.attempted_inbox_url,
+            claimed_attempt_count=attempt.claimed_attempt_count,
+            policy_service=self.policy_service,
+            community_actor_url=getattr(local_community, "actor_url"),
+            error=error,
         )

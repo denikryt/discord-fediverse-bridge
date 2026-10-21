@@ -18,7 +18,7 @@ RESERVED_USERNAMES = {"bridge", "admin", "system"}
 
 
 class RegistrationError(Exception):
-    """Signal a registration request that violates Stage 5 policy."""
+    """Signal a registration request that violates participant mutation support policy."""
 
 
 @dataclass(slots=True)
@@ -96,7 +96,7 @@ class RegistrationService:
 
     def build_actor_urls(self, username: str) -> tuple[str, str, str, str]:
         """Build the canonical local actor URLs for one registered username."""
-        # Stage 4 moves registered users to the typed actor namespace so actor
+        # local subscriber participation moves registered users to the typed actor namespace so actor
         # documents, inbox delivery, key ownership, and durable rows agree.
         address = build_actor_address(
             origin=self.base_url, kind=LocalActorKind.USER, identifier=username
@@ -137,7 +137,7 @@ def generate_oauth_state() -> str:
 
 def generate_rsa_keypair_pem() -> tuple[str, str]:
     """Generate one RSA keypair in PEM form using the local OpenSSL binary."""
-    # Fedify expects real PEM key material from the shared DB, so Stage 5 uses
+    # Fedify expects real PEM key material from the shared DB, so participant mutation support uses
     # OpenSSL here instead of storing placeholders that later publish flows
     # could not sign with.
     with tempfile.TemporaryDirectory(prefix="bridge-register-keys-") as temp_dir:

@@ -23,7 +23,7 @@ export function renderPersonalFeedCreate(
   config: GatewayConfig,
   request: RenderPersonalFeedRequest,
 ): RenderPersonalFeedResult {
-  // Stage 8 keeps one render-only boundary for both personal-feed roots and
+  // personal-feed conversations keeps one render-only boundary for both personal-feed roots and
   // comments. Python owns persistence and delivery; the gateway owns canonical
   // ActivityStreams construction without loading signing keys.
   const origin = new URL(config.fedifyOrigin).origin;

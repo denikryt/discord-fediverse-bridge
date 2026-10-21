@@ -2,7 +2,7 @@
 
 The local-community runtime accepts Discord events from two local participant
 families: the host forum that owns the community metadata and active local
-subscriber forums that Stage 4 makes create-capable.  Keeping that decision in
+subscriber forums that local subscriber participation makes create-capable.  Keeping that decision in
 one helper prevents the router and runtime from duplicating role checks or
 accidentally treating inactive subscriber rows as valid sources.
 """
@@ -19,7 +19,7 @@ class ResolvedLocalCommunitySource:
     """Describe the local-community participant that owns one Discord forum.
 
     `source_kind` is intentionally constrained to `host_forum` and
-    `local_subscriber` because Stage 4 only widens create routing to active
+    `local_subscriber` because local subscriber participation only widens create routing to active
     same-instance subscribers; remote ActivityPub participants never enter via
     the Discord event router.
     """
@@ -38,7 +38,7 @@ def resolve_local_community_source_for_forum(
 
     Host ownership wins over subscriber rows so bad legacy data cannot demote
     the canonical host forum into a subscriber surface.  Inactive or deleted
-    local subscribers are deliberately ignored; Stage 4 only routes active
+    local subscribers are deliberately ignored; local subscriber participation only routes active
     local subscriber forums as create-capable sources.
     """
     if forum_channel_id is None:
@@ -58,7 +58,7 @@ def resolve_local_community_source_for_forum(
         )
 
     # A mixed remote-subscription/local-subscriber forum should not silently
-    # switch runtimes in Stage 4.  Stage 1 rejects this during normal control
+    # switch runtimes in local subscriber participation.  initial persistence implementation rejects this during normal control
     # flow, and this defensive check keeps corrupted/manual rows on the older
     # remote-subscription path instead of treating them as local sources.
     if (

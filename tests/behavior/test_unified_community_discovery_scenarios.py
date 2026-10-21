@@ -60,7 +60,7 @@ def _create_local_community(
     display_name: str = "Local News",
 ) -> object:
     """Create one local community row used by same-instance discovery tests."""
-    # The discovery command can now transition directly into Stage 1 local
+    # The discovery command can now transition directly into local subscriber registration local
     # subscriber persistence, so the behavior scenario must create the backing
     # LocalCommunity row instead of expecting the removed placeholder branch.
     LocalCommunityService(
@@ -220,7 +220,7 @@ async def test_same_instance_local_actor_url_creates_local_subscriber_state(
     forum_channel,
     fedify_gateway,
 ) -> None:
-    """Same-instance local discovery should create Stage 1 local-subscriber state."""
+    """Same-instance local discovery should create local subscriber registration local-subscriber state."""
     database = _database(tmp_path)
     _register_user(database)
     community = _create_local_community(database, forum_channel_id=100)

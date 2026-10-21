@@ -7,6 +7,9 @@
  */
 
 import { createHash, webcrypto } from "node:crypto";
+import { request as httpsRequest } from "node:https";
+
+import { admitRemoteDeliveryEndpoint, publicOnlyLookup } from "../remote-delivery-endpoints.js";
 
 import type { GatewayConfig } from "../config.js";
 
@@ -33,7 +36,8 @@ export async function sendSignedJsonActivity(
   // Lemmy's Announce(Create(...)) shape. Fedify's high-level sendActivity
   // expects Fedify-native activity objects, so this path signs and posts the
   // already-rendered JSON directly while keeping detailed body logs opt-in.
-  const inbox = new URL(inboxUrl);
+  // Reject literal private destinations before signing or opening a socket.
+  const inbox = new URL(admitRemoteDeliveryEndpoint(inboxUrl));
   const body = JSON.stringify(activityJson);
   const digest = `SHA-256=${createHash("sha256").update(body).digest("base64")}`;
   const date = new Date().toUTCString();
@@ -82,8 +86,8 @@ export async function sendSignedJsonActivity(
       });
     }
   }
-  const response = await fetch(inbox, { method: "POST", headers, body });
-  const responseBody = await response.text();
+  const response = await sendViaValidatedSocket(inbox, headers, body);
+  const responseBody = response.body;
   if (options.debugDelivery) {
     console.log(`[${label}] Raw ActivityPub response:`, {
       inboxUrl,
@@ -92,7 +96,7 @@ export async function sendSignedJsonActivity(
       ...(options.includeResponseBodyInDiagnostics === false ? {} : { responseBody }),
     });
   }
-  if (!response.ok) {
+  if (response.status < 200 || response.status >= 300) {
     const suffix = options.includeResponseBodyInDiagnostics === false
       ? ""
       : `: ${responseBody}`;
@@ -107,4 +111,45 @@ export function shouldLogSignedJsonDelivery(config: GatewayConfig): boolean {
   // LOG_LEVEL=debug is the single operator switch for verbose gateway
   // diagnostics, including signed JSON delivery request/response logging.
   return config.logLevel === "debug";
+}
+
+
+/** Send exactly one HTTPS POST using DNS resolution validated at socket dial. */
+function sendViaValidatedSocket(
+  inbox: URL,
+  headers: Record<string, string>,
+  body: string,
+): Promise<{ status: number; statusText: string; body: string }> {
+  // Native https.request does not follow 3xx redirects: the signature, body,
+  // and key ID are never replayed to an unvalidated second destination.
+  return new Promise((resolve, reject) => {
+    const request = httpsRequest(inbox, {
+      method: "POST",
+      headers,
+      lookup: publicOnlyLookup,
+      agent: false,
+      rejectUnauthorized: true,
+      timeout: 10_000,
+    }, (response) => {
+      const chunks: Buffer[] = [];
+      let responseLength = 0;
+      response.on("data", (chunk: Buffer) => {
+        responseLength += chunk.length;
+        if (responseLength > 65_536) {
+          request.destroy(new Error("remote ActivityPub response exceeds size limit"));
+        } else {
+          chunks.push(chunk);
+        }
+      });
+      response.on("end", () => resolve({
+        status: response.statusCode ?? 0,
+        statusText: response.statusMessage ?? "",
+        body: Buffer.concat(chunks).toString("utf8"),
+      }));
+      response.on("error", reject);
+    });
+    request.on("timeout", () => request.destroy(new Error("remote ActivityPub request timed out")));
+    request.on("error", reject);
+    request.end(body);
+  });
 }

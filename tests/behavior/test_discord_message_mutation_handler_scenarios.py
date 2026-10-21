@@ -138,7 +138,7 @@ class _DeliveryService:
 
 
 def _mutation_context(*, wake: object | None = None) -> DiscordMutationContext:
-    """Build the narrow mutation context used by the Stage 4 handler contract."""
+    """Build the narrow mutation context used by the durable delivery handler contract."""
     return DiscordMutationContext(
         bridge_policy_service=_Policy(),
         user_actor_delivery_service=_DeliveryService(),
@@ -339,7 +339,7 @@ async def test_local_community_admission_bypasses_remote_delivery_lookup() -> No
 
 @pytest.mark.asyncio
 async def test_context_absence_skips_admitted_edit_and_delete() -> None:
-    """Admitted raw events still return when Stage 4 mutation context wiring is unavailable."""
+    """Admitted raw events still return when durable delivery mutation context wiring is unavailable."""
     database = _Database(delivery=SimpleNamespace(role="source"))
     router = _Router()
     handler = _handler(database=database, router=router, mutation_context=None)

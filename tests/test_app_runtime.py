@@ -43,7 +43,7 @@ async def test_build_runtime_wires_user_actor_follow_service_after_bot_and_close
 ) -> None:
     runtime = build_runtime(_settings(tmp_path))
 
-    assert runtime.user_actor_follow_service.bot is runtime.bot
+    assert runtime.user_actor_follow_service.discord_notices is runtime.discord_adapter
     assert not hasattr(runtime.bot, "_runtime")
     assert runtime.bot._require_personal_feed_delivery_worker() is runtime.personal_feed_discord_delivery_worker
     assert isinstance(
@@ -61,7 +61,7 @@ async def test_build_runtime_wires_user_actor_follow_service_after_bot_and_close
         runtime.user_profile_service.delivery_worker
         is runtime.user_actor_delivery_worker
     )
-    assert runtime.user_actor_delivery_service.discord_message_reader is runtime.bot
+    assert runtime.user_actor_delivery_service.discord_message_reader is runtime.discord_adapter
     publisher = runtime.bot.event_router.personal_feed_publisher
     assert publisher.user_ban_service is runtime.bot.user_ban_service
     assert publisher.bridge_policy_service is runtime.bridge_policy_service
@@ -214,10 +214,9 @@ async def test_runtime_close_cancels_inflight_personal_feed_delivery_before_depe
         await never.wait()
         raise AssertionError("unreachable")
 
-    runtime.personal_feed_discord_delivery_worker.bot = SimpleNamespace(
-        get_channel=lambda _id: None,
-        fetch_channel=blocked_fetch,
-    )
+    # The worker owns a typed PlatformAdapterPort, not a raw Discord bot.
+    # Intercept its physical channel lookup without mutating the live SDK.
+    runtime.personal_feed_discord_delivery_worker.adapter.fetch_channel = blocked_fetch
     close_order: list[str] = []
     original_database_close = runtime.database.close
     original_lease_close = runtime.deployment_state_lease.close

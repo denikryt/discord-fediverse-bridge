@@ -3,7 +3,9 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from datetime import timezone
+from datetime import datetime, timezone
+from typing import Awaitable, Callable
+import logging
 from hashlib import sha256
 
 from .content_sync.persistence import (
@@ -11,10 +13,18 @@ from .content_sync.persistence import (
     persist_publish_artifacts,
 )
 from .fedify_gateway_client import RenderPersonalFeedRequest
+from .platform_types import (
+    ThreadCreated, MessageCreated, PlatformOperationError, CreateAttempt,
+    ContentDocument, DeliveryPresentation, validate_message_reply,
+)
+from .discord_legacy_projection import discord_id_to_legacy_int
 from .activitypub_identity_urls import (
     build_user_comment_object_id,
     build_user_create_comment_activity_id,
 )
+
+
+logger = logging.getLogger(__name__)
 
 
 @dataclass(frozen=True, slots=True)
@@ -56,10 +66,30 @@ class PersonalFeedConversationRuntime:
             raise RuntimeError("Personal-feed conversation delivery wake is already configured")
         self.delivery_worker = delivery_worker
 
+    def adopt_normalized_thread(self, event: ThreadCreated) -> PersonalFeedConversationResult:
+        """Adopt a root-anchored personal discussion from verified platform identity."""
+        if event.connector_key != 'discord-primary':
+            raise PlatformOperationError('invalid_request', 'wrong Personal Feed thread connector')
+        if (event.thread.channel.kind not in ('text', 'announcement')
+            or event.external_guild_id is None):
+            return PersonalFeedConversationResult('ignored', 'not_personal_feed_channel')
+        # Both root and parent use local subscriber synchronization checked legacy projections. Never
+        # infer a parent from the thread ID or a guessed starter-message ID.
+        thread_id = discord_id_to_legacy_int(event.thread)
+        parent_id = discord_id_to_legacy_int(event.thread, component='parent')
+        return self._adopt_thread_ids(thread_id=thread_id, parent_id=parent_id)
+
     def adopt_manual_thread(self, *, thread: object) -> PersonalFeedConversationResult:
-        """Adopt a Discord public thread only when its snowflake maps to a Stage 7 root."""
-        thread_id = int(getattr(thread, "id"))
-        parent_id = int(getattr(thread, "parent_id"))
+        """Retain existing direct caller while all forum Create paths are migrating."""
+        return self._adopt_thread_ids(
+            thread_id=int(getattr(thread, 'id')),
+            parent_id=int(getattr(thread, 'parent_id')),
+        )
+
+    def _adopt_thread_ids(
+        self, *, thread_id: int, parent_id: int,
+    ) -> PersonalFeedConversationResult:
+        """Verify persisted canonical root and matching parent before adoption."""
         root = self.database.activitypub_objects.get_published_activity_object_by_discord_message_id(
             thread_id
         )
@@ -156,9 +186,93 @@ class PersonalFeedConversationRuntime:
     async def publish_local_reply(
         self, *, message: object
     ) -> PersonalFeedConversationResult:
-        """Publish one eligible registered-user message in a current personal-feed thread."""
-        thread = getattr(message, "channel", None)
-        thread_id = getattr(thread, "id", None)
+        """Retain the original SDK-shaped caller until the forum cutover is complete.
+
+        This compatibility entry extracts observed fields and delegates to the
+        same canonical publication logic as the normalized ingress. No new
+        ActivityPub identity is computed from SDK-specific objects.
+        """
+        thread = getattr(message, 'channel', None)
+        reference = getattr(message, 'reference', None)
+        reply = getattr(message, 'reply', None)
+
+        async def notice() -> None:
+            """Keep the existing registration notice for legacy direct callers."""
+            if callable(reply):
+                await reply('Register your bridge account before posting federated replies.')
+
+        return await self._publish_reply_fields(
+            guild_id=getattr(getattr(message, 'guild', None), 'id', None),
+            thread_id=getattr(thread, 'id', None),
+            message_id=int(getattr(message, 'id')),
+            author_id=str(getattr(getattr(message, 'author', None), 'id', '')),
+            body=str(getattr(message, 'content', '')),
+            created_at=getattr(message, 'created_at'),
+            reference_id=getattr(reference, 'message_id', None),
+            notice=notice,
+        )
+
+    async def publish_normalized_reply(
+        self, event: MessageCreated, *, adapter: object | None = None,
+    ) -> PersonalFeedConversationResult:
+        """Publish one verified neutral Personal Feed reply with unchanged AP IDs.
+
+        The current persisted root and registration policy own the decision;
+        the adapter is used only for an optional best-effort physical notice.
+        """
+        if event.connector_key != 'discord-primary':
+            raise PlatformOperationError('invalid_request', 'wrong Personal Feed reply connector')
+        if (event.thread_context is None or event.parent_channel is None
+            or event.parent_channel.kind not in ('text', 'announcement')
+            or event.author.kind != 'human'
+            or event.author.external_actor_id is None
+            or event.external_guild_id is None or event.created_at is None):
+            return PersonalFeedConversationResult('ignored', 'invalid_source')
+        if event.content.attachments:
+            raise PlatformOperationError('unsupported', 'Personal Feed reply attachments are unsupported')
+        if (event.message.external_container_id != event.thread_context.external_thread_id
+            or event.parent_channel != event.thread_context.channel):
+            raise PlatformOperationError('invalid_request', 'reply thread identity mismatch')
+        validate_message_reply(event.thread_context, event.reply_to)
+        if (event.created_at.tzinfo is None or event.created_at.utcoffset() is None):
+            return PersonalFeedConversationResult('ignored', 'invalid_timestamp')
+        thread_id = discord_id_to_legacy_int(event.thread_context)
+        parent_id = discord_id_to_legacy_int(event.thread_context, component='parent')
+        message_id = discord_id_to_legacy_int(event.message)
+        guild_id = int(event.external_guild_id) if event.external_guild_id.isdecimal() else None
+        reference_id = (discord_id_to_legacy_int(event.reply_to)
+                        if event.reply_to is not None else None)
+
+        async def notice() -> None:
+            """Reply once with a registration hint, without federating the notice."""
+            if adapter is None:
+                return
+            await adapter.send_message(
+                event.thread_context,
+                ContentDocument('Register your bridge account before posting federated replies.'),
+                reply_to=event.message,
+                presentation=DeliveryPresentation(),
+                attempt=CreateAttempt(
+                    f'personal-feed-registration-notice:{event.connector_key}:{thread_id}:{message_id}',
+                    event.connector_key, 'message', event.thread_context,
+                ),
+            )
+
+        return await self._publish_reply_fields(
+            guild_id=guild_id, thread_id=thread_id, message_id=message_id,
+            author_id=event.author.external_actor_id, body=event.content.body,
+            created_at=event.created_at, reference_id=reference_id,
+            parent_channel_id=parent_id, notice=notice,
+        )
+
+    async def _publish_reply_fields(
+        self, *, guild_id: int | None, thread_id: int | None,
+        message_id: int, author_id: str, body: str, created_at: datetime,
+        reference_id: int | None,
+        parent_channel_id: int | None = None,
+        notice: Callable[[], Awaitable[None]] | None = None,
+    ) -> PersonalFeedConversationResult:
+        """Persist the same canonical reply for both legacy and normalized callers."""
         root = (
             self.database.personal_feed_conversations.get_root_for_thread(
                 int(thread_id)
@@ -168,12 +282,19 @@ class PersonalFeedConversationRuntime:
         )
         if root is None:
             return PersonalFeedConversationResult("ignored", "unknown_thread")
+        # The persisted source parent is authoritative even if a Gateway DTO
+        # references an identically numbered thread under a different channel.
+        if (parent_channel_id is not None and
+            int(root.discord_channel_id) != parent_channel_id):
+            return PersonalFeedConversationResult('ignored', 'wrong_parent_channel')
+        if (guild_id is not None and root.discord_guild_id is not None
+            and int(root.discord_guild_id) != guild_id):
+            return PersonalFeedConversationResult('ignored', 'wrong_guild')
         # A terminally deleted root no longer accepts outbound Discord replies.
         # The thread mapping remains archival, but it must not mint new objects
         # after the conversation owner deleted the root publication.
         if root.deleted_at is not None:
             return PersonalFeedConversationResult("ignored", "root_deleted")
-        guild_id = getattr(getattr(message, "guild", None), "id", None)
         if not self.bridge_policy_service.is_discord_guild_allowed(guild_id):
             return PersonalFeedConversationResult("ignored", "guild_disallowed")
         root_user = self.database.users.get_user_by_actor_url(root.actor_url)
@@ -184,22 +305,21 @@ class PersonalFeedConversationRuntime:
             )
         ):
             return PersonalFeedConversationResult("ignored", "inactive_binding")
-        author_id = str(getattr(getattr(message, "author", None), "id", ""))
         decision = self.user_ban_service.check_global_discord_user(author_id)
         if decision.banned:
             return PersonalFeedConversationResult("rejected", "user_banned")
         user = self.database.users.get_user_by_discord_user_id(author_id)
         if user is None:
-            reply = getattr(message, "reply", None)
-            if callable(reply):
-                await reply(
-                    "Register your bridge account before posting federated replies."
-                )
+            if notice is not None:
+                try:
+                    await notice()
+                except Exception:
+                    # A registration notice is best-effort. Its physical send
+                    # cannot convert a rejected reply into a canonical Create.
+                    logger.exception('Could not deliver registration notice for %s', message_id)
             return PersonalFeedConversationResult("rejected", "not_registered")
-        body = str(getattr(message, "content", ""))
         if not body.strip():
             return PersonalFeedConversationResult("ignored", "empty_content")
-        message_id = int(getattr(message, "id"))
         operation_id = sha256(
             f"personal-feed-reply:{guild_id}:{thread_id}:{message_id}:{user.id}".encode()
         ).hexdigest()
@@ -211,19 +331,25 @@ class PersonalFeedConversationRuntime:
         activity_id = build_user_create_comment_activity_id(
             origin=self.fedify_origin, username=username, activity_id=operation_id
         )
-        created_at = getattr(message, "created_at").astimezone(timezone.utc)
+        created_at = created_at.astimezone(timezone.utc)
         published_at = created_at.isoformat(timespec="milliseconds").replace(
             "+00:00", "Z"
         )
         parent_object_id = root.object_id
-        reference = getattr(message, "reference", None)
-        reference_id = getattr(reference, "message_id", None)
         if reference_id is not None:
             mapped = self.database.message_mappings.get_message_mapping_by_discord_message_id(
                 int(reference_id)
             )
-            if mapped is not None:
-                parent_object_id = mapped.object_id
+            if mapped is not None and mapped.publication_context == 'personal_feed':
+                # A Discord reply ID is not proof that its ActivityPub object
+                # belongs to this conversation. Validate the stored canonical
+                # root before adopting a nested parent from a generic mapping.
+                context = self.database.personal_feed_conversations.resolve_conversation_object(
+                    mapped.object_id
+                )
+                if (context is not None and context[0] == 'personal_feed'
+                    and context[1] == root.object_id):
+                    parent_object_id = mapped.object_id
         existing = inspect_publish_artifacts(
             self.database,
             source_id=str(message_id),

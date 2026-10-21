@@ -1,4 +1,4 @@
-"""Stage 02 physical-identity, ingress, and outbound admission contracts."""
+"""Platform API physical-identity, ingress, and outbound admission contracts."""
 
 from dataclasses import FrozenInstanceError
 from datetime import datetime, timezone
@@ -32,7 +32,7 @@ from src.platform_types import (
 )
 
 
-def test_connector_metadata_matches_stage01_identity_and_rejects_invalid_origin():
+def test_connector_metadata_matches_persisted_identity_and_rejects_invalid_origin():
     """Only valid persisted connector snapshots may cross the adapter boundary."""
     assert ConnectorRef('discord-primary', 'discord').instance_origin is None
     assert ConnectorRef('fluxer-a', 'fluxer', 'https://fluxer.test').instance_origin == 'https://fluxer.test'
@@ -207,7 +207,7 @@ def test_unknown_delivery_is_one_unambiguous_reason():
         PlatformOperationError('perhaps')
 
 
-def test_opaque_identity_preserves_whitespace_that_stage01_can_store_but_rejects_control_bytes():
+def test_opaque_identity_preserves_persisted_whitespace_but_rejects_control_bytes():
     """Metadata must not silently rewrite a persisted opaque connector/channel key."""
     preserved = ChannelRef(' primary ', ' 900 ')
     assert (preserved.connector_key, preserved.external_channel_id) == (' primary ', ' 900 ')
@@ -264,7 +264,7 @@ def test_content_descriptor_requires_urls_not_native_upload_objects_or_credentia
         ContentDocument('x', attachments=['an SDK File'])
 
 
-def test_stage02_action_surface_does_not_grow_unused_physical_thread_methods():
+def test_platform_api_action_surface_does_not_grow_unused_physical_thread_methods():
     """Inbound physical mutations need not imply unused outbound thread controls."""
     from typing import get_args
 
@@ -372,3 +372,40 @@ def test_inbound_received_timestamp_requires_timezone_aware_datetime(event_type)
             event_type(**payload, received_at=invalid)
     aware = datetime(2026, 10, 17, tzinfo=timezone.utc)
     assert event_type(**payload, received_at=aware).received_at == aware
+
+
+def test_created_message_preserves_source_creation_instant_not_received_instant():
+    """A valid Discord source timestamp survives conversion without losing its offset."""
+    from datetime import timedelta
+
+    message = MessageRef('discord-primary', 'thread-1', 'message-1')
+    author = AuthorRef('discord-primary', 'user-1', 'human', 'Example')
+    published = datetime(2026, 10, 18, 21, 30, tzinfo=timezone(timedelta(hours=3)))
+    observed = datetime(2026, 10, 18, 22, 00, tzinfo=timezone.utc)
+    event = MessageCreated('discord-primary', message, author, ContentDocument('body'),
+                           created_at=published, received_at=observed)
+    assert event.created_at == published
+    assert event.received_at == observed
+    assert event.created_at != event.received_at
+    assert MessageCreated('discord-primary', message, author, ContentDocument('body')).created_at is None
+
+
+def test_created_message_rejects_unverified_or_naive_source_timestamp():
+    """A missing timestamp is allowed but a supplied naive timestamp is unsafe."""
+    message = MessageRef('discord-primary', 'thread-1', 'message-1')
+    author = AuthorRef('discord-primary', 'user-1', 'human', 'Example')
+    for invalid in (datetime(2026, 10, 18), '2026-10-18T00:00:00Z'):
+        with pytest.raises(ValueError, match='created_at'):
+            MessageCreated('discord-primary', message, author, ContentDocument('body'),
+                           created_at=invalid)
+
+
+def test_partial_edit_author_is_optional_but_must_match_connector():
+    """Best-effort edit attribution cannot introduce a cross-platform author."""
+    message = MessageRef('discord-primary', 'thread-1', 'message-1')
+    valid = AuthorRef('discord-primary', 'user-1', 'human', 'Example')
+    assert MessageUpdated('discord-primary', message).author is None
+    assert MessageUpdated('discord-primary', message, author=valid).author == valid
+    with pytest.raises(ValueError, match='author'):
+        MessageUpdated('discord-primary', message,
+                       author=AuthorRef('fluxer-a', 'user-1', 'human', 'Example'))

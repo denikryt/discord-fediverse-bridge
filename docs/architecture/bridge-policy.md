@@ -12,7 +12,7 @@
 | Dashboard request | `build_dashboard_data()` | One request-owned snapshot is reused while filtering all rows. |
 | Fanout batch | The concrete fanout service | Discord fanout validates each persisted target; federation fanout may reuse one batch snapshot across targets. |
 
-These boundaries do not imply one policy read for an entire command/event. Separate admission, destination, and target checks retain their current reads. Snapshot propagation, action contexts, and read-count reduction belong only to Stage 8 and are not implemented here.
+These boundaries do not imply one policy read for an entire command/event. Separate admission, destination, and target checks retain their current reads. Snapshot propagation, action contexts, and read-count reduction belong only to personal feed conversations and are not implemented here.
 
 ## API rule
 

@@ -15,6 +15,10 @@ from .local_communities.participant_routing import (
     resolve_local_community_source_for_forum,
 )
 from .personal_feeds import PersonalFeedBindingView, PersonalFeedService
+from .platform_types import (
+    MessageCreated, MessageView, ThreadCreated, PlatformOperationError,
+)
+from .discord_legacy_projection import discord_id_to_legacy_int
 from .runtime_ports import DiscordMutationContext
 
 
@@ -44,6 +48,13 @@ class DiscordEventRouter:
         )
         self.personal_feed_publisher = personal_feed_publisher
         self.personal_feed_conversation_runtime = personal_feed_conversation_runtime
+        self._reply_notice_adapter: object | None = None
+
+    def bind_reply_notice_adapter(self, adapter: object) -> None:
+        """Bind the existing physical adapter for best-effort rejection notices."""
+        if self._reply_notice_adapter is not None:
+            raise RuntimeError('Personal Feed reply notice adapter already bound')
+        self._reply_notice_adapter = adapter
 
     def _is_guild_allowed(self, guild_id: int | str | None) -> bool:
         """Evaluate one Discord event against the current guild policy."""
@@ -67,6 +78,125 @@ class DiscordEventRouter:
             message=message, binding=binding
         )
 
+    async def handle_platform_message_create(self, event: MessageCreated) -> object:
+        """Route a verified neutral Create to one owning canonical runtime.
+
+        Personal Feed and forum sources never share publication ownership;
+        Local Community takes precedence over Remote Community for forum IDs.
+        """
+        if event.connector_key != 'discord-primary':
+            raise PlatformOperationError('invalid_request', 'Discord root connector mismatch')
+        if event.thread_context is not None:
+            # Text/announcement replies are Personal Feed only when the
+            # canonical root and thread parent have already been proven. A
+            # reply can arrive ahead of THREAD_CREATE, so adopt that exact root
+            # via the existing repository before attempting publication.
+            if (event.parent_channel is not None
+                and event.parent_channel.kind in ('text', 'announcement')
+                and self.personal_feed_conversation_runtime is not None):
+                if (event.external_guild_id is not None and event.external_guild_id.isdecimal()
+                    and self._is_guild_allowed(int(event.external_guild_id))):
+                    thread_id = discord_id_to_legacy_int(event.thread_context)
+                    if not self.is_personal_feed_thread(thread_id):
+                        self.personal_feed_conversation_runtime.adopt_normalized_thread(
+                            ThreadCreated(
+                                connector_key=event.connector_key,
+                                thread=event.thread_context, name='',
+                                external_guild_id=event.external_guild_id,
+                            )
+                        )
+                    if self.is_personal_feed_thread(thread_id):
+                        return await self.personal_feed_conversation_runtime.publish_normalized_reply(
+                            event, adapter=self._reply_notice_adapter,
+                        )
+                return None
+            if (event.parent_channel is not None
+                and event.parent_channel.kind == 'forum'):
+                if (event.external_guild_id is None
+                    or not event.external_guild_id.isdecimal()
+                    or not self._is_guild_allowed(int(event.external_guild_id))):
+                    return None
+                if self._reply_notice_adapter is None:
+                    raise RuntimeError('Discord adapter is not bound for forum replies')
+                forum_id = discord_id_to_legacy_int(event.thread_context, component='parent')
+                # Local host/subscriber ownership wins over remote subscription
+                # just as in the old SDK router; each runtime independently
+                # checks the physical source's current authorization.
+                if self.is_local_community_forum(forum_id):
+                    return await self.local_community_runtime.handle_normalized_message_create(
+                        event, adapter=self._reply_notice_adapter,
+                    )
+                if self.is_remote_subscription_forum(forum_id):
+                    return await self.community_runtime.handle_normalized_message_create(
+                        event, adapter=self._reply_notice_adapter,
+                    )
+                return None
+            # A normalized event with no verified parent cannot be classified
+            # into a canonical community or Personal Feed publication.
+            raise PlatformOperationError('invalid_request', 'unverified thread parent kind')
+        if event.parent_channel is None or event.parent_channel.kind not in ('text', 'announcement'):
+            raise RuntimeError('normalized community create ingress is not bound')
+        if event.content.attachments:
+            raise PlatformOperationError('unsupported', 'personal feed attachment publication is not supported')
+        if (event.author.kind != 'human'
+            or event.author.external_actor_id is None
+            or event.external_guild_id is None
+            or event.created_at is None):
+            return None
+        try:
+            if not event.external_guild_id.isdecimal() or int(event.external_guild_id) <= 0:
+                return None
+            guild_id = int(event.external_guild_id)
+            channel_id = discord_id_to_legacy_int(event.parent_channel)
+        except PlatformOperationError:
+            return None
+        binding = self.resolve_personal_feed_root(guild_id, channel_id)
+        if binding is None or self.personal_feed_publisher is None:
+            return None
+        # Publisher rechecks current binding and author before any AP render.
+        return await self.personal_feed_publisher.publish_normalized_root(
+            event=event, binding=binding,
+        )
+
+    async def handle_platform_thread_create(self, event: ThreadCreated) -> object:
+        """Route verified forum starters or adopt existing Personal Feed roots."""
+        if event.connector_key != 'discord-primary':
+            raise PlatformOperationError('invalid_request', 'Discord thread connector mismatch')
+        if event.thread.channel.kind == 'forum':
+            if (event.external_guild_id is None
+                or not event.external_guild_id.isdecimal()
+                or not self._is_guild_allowed(int(event.external_guild_id))):
+                return None
+            if event.starter is None:
+                # Do not invent thread.id as a starter or fall back to the
+                # first unrelated history message. Later replay may succeed.
+                return None
+            if self._reply_notice_adapter is None:
+                raise RuntimeError('Discord adapter is not bound for forum starters')
+            starter = await self._reply_notice_adapter.fetch_message(event.starter)
+            if not isinstance(starter, MessageView) or starter.message != event.starter:
+                raise PlatformOperationError('invalid_request', 'unverified forum starter receipt')
+            if starter.author is None or starter.author.kind != 'human' or starter.content is None:
+                return None
+            forum_id = discord_id_to_legacy_int(event.thread, component='parent')
+            if self.is_local_community_forum(forum_id):
+                return await self.local_community_runtime.handle_normalized_thread_create(
+                    event, starter, adapter=self._reply_notice_adapter,
+                )
+            if self.is_remote_subscription_forum(forum_id):
+                return await self.community_runtime.handle_normalized_thread_create(
+                    event, starter, adapter=self._reply_notice_adapter,
+                )
+            return None
+        if event.thread.channel.kind not in ('text', 'announcement'):
+            return None
+        if (event.external_guild_id is None or not event.external_guild_id.isdecimal()
+            or not self._is_guild_allowed(int(event.external_guild_id))):
+            return None
+        if self.personal_feed_conversation_runtime is None:
+            return None
+        return self.personal_feed_conversation_runtime.adopt_normalized_thread(event)
+
     def is_personal_feed_thread(self, thread_id: int | None) -> bool:
         """Return whether one Discord thread is durably owned by a personal-feed root."""
         return bool(
@@ -86,7 +216,7 @@ class DiscordEventRouter:
         )
 
     def is_active_personal_feed_channel(self, user_id: int, channel_id: int) -> bool:
-        """Expose the durable current-channel comparison required by later stages."""
+        """Expose the durable current-channel comparison required by later work."""
         return self.personal_feed_service.is_active_personal_feed_channel(
             user_id, channel_id
         )
@@ -94,7 +224,7 @@ class DiscordEventRouter:
     def is_local_community_forum(self, forum_channel_id: int | None) -> bool:
         """Return whether one forum is a local-community create source.
 
-        Stage 4 widens create routing from host forums to active local
+        durable delivery widens create routing from host forums to active local
         subscriber forums.  The helper keeps inactive subscribers and unrelated
         forums out of local-community mode while preserving host precedence.
         """
@@ -117,7 +247,7 @@ class DiscordEventRouter:
     def is_local_community_message(self, message_id: int) -> bool:
         """Return whether one Discord message belongs to local-community mode.
 
-        Stage 2 moves Discord ownership to explicit surface rows, so both
+        Platform API contract moves Discord ownership to explicit surface rows, so both
         starter and reply detection must resolve through those tables instead
         of checking canonical local-community rows directly.
         """

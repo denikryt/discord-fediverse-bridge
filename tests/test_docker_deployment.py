@@ -115,7 +115,11 @@ def test_deployment_uses_one_root_env_file() -> None:
     systemd = _read("systemd-services.sh")
     env_example = _read(".env.example")
 
-    assert compose.count("      - ${COMPOSE_ENV_FILE:-.env}") == 2
+    # The gateway only receives its allowlisted variables; inheriting the root
+    # env_file would leak the bridge's Discord/OAuth credentials.
+    assert compose.count("      - ${COMPOSE_ENV_FILE:-.env}") == 1
+    gateway_block = compose.split("  fedify-gateway:", 1)[1].split("\n  backup:", 1)[0]
+    assert "    env_file:" not in gateway_block
     assert "BRIDGE_ENV_FILE" not in compose
     assert "GATEWAY_ENV_FILE" not in compose
     assert "--env-file=../.env --env-file=.env" not in package

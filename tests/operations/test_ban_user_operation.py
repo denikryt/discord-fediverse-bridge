@@ -192,7 +192,7 @@ def test_super_admin_can_ban_cross_guild_by_manual_slug(tmp_path: Path) -> None:
 def test_inactive_community_is_inaccessible_for_owner_and_super_admin(
     tmp_path: Path,
 ) -> None:
-    """This stage treats inactive communities as unavailable to moderation."""
+    """This moderation operation treats inactive communities as unavailable."""
     database = build_database(tmp_path, "ban-user-inactive.db")
     _local_community(database, owner_id="111", status="inactive")
 

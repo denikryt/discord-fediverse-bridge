@@ -1,6 +1,6 @@
 """Framework-backed local-subscriber unsubscribe policy.
 
-Stage 1 local unsubscribe removes only same-instance local-subscriber state. It
+local subscriber registration local unsubscribe removes only same-instance local-subscriber state. It
 must not send remote Undo(Follow) or mutate bridge_actor_follows.
 """
 

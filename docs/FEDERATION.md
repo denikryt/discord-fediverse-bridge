@@ -47,11 +47,11 @@ The gateway serves these ActivityPub actor categories:
 
 Actor documents provide stable identity and routing fields plus editable registered-user profile data. User `Person` actors expose immutable `preferredUsername`, editable `name` and escaped `summary`, optional `icon` and `image` objects backed by bridge-owned immutable media URLs, and up to four ordered `PropertyValue` attachments. Successful profile edits also create a durable complete `Update(Person)` and deliver it to the unique accepted follower endpoints.
 
-Registered User Actor followers are auto-accepted and stored separately from local-community subscribers. Their canonical `/actors/users/{username}/followers` collection publicly exposes accepted remote actor IDs through bounded pages. User-authored public content is delivered to the accepted follower endpoint snapshot through durable per-target retry. User outboxes remain empty placeholders until the dedicated outbox stage.
+Registered User Actor followers are auto-accepted and stored separately from local-community subscribers. Their canonical `/actors/users/{username}/followers` collection publicly exposes accepted remote actor IDs through bounded pages. User-authored public content is delivered to the accepted follower endpoint snapshot through durable per-target retry. User outboxes remain empty placeholders until the dedicated outbox work.
 
 A bound personal-feed guild text channel publishes only owner-authored root messages. Each accepted root becomes one bridge-owned public `Create(Note)` with deterministic object/activity IDs, a canonical `published` value derived from the Discord message creation time, Public addressing, and the User Actor followers collection in `cc`. Replies use a lazily adopted or created public Discord thread whose snowflake equals the root message ID. Registered Discord users publish replies as their own `Person` actors; unregistered users are rejected without federation. Inbound remote comments are stored canonically before Discord delivery, and remote Update/Delete activities must match the stored exact actor owner before they may edit or remove the mapped Discord message.
 
-Discord synchronization is active only while the root mapping's channel remains the User Actor's current personal-feed binding. After unbind or move, inbound comments remain stored but Discord rendering and outbound thread publication are suppressed. Discord rendering uses at most three actual API attempts with retry intervals no longer than 30 seconds; waiting for an out-of-order parent does not consume that budget. Attachments, private visibility, complete remote conversation reconstruction, and public outbox pagination remain outside Stage 8.
+Discord synchronization is active only while the root mapping's channel remains the User Actor's current personal-feed binding. After unbind or move, inbound comments remain stored but Discord rendering and outbound thread publication are suppressed. Discord rendering uses at most three actual API attempts with retry intervals no longer than 30 seconds; waiting for an out-of-order parent does not consume that budget. Attachments, private visibility, complete remote conversation reconstruction, and public outbox pagination remain outside personal feed conversations.
 
 ## Supported discovery
 
@@ -99,6 +99,28 @@ Supported inbound activity patterns include:
 | `Follow` targeting a local community `Group` | Remote actor requests to follow a Discord-backed local community. |
 | `Undo(Follow)` targeting a local community `Group` | Remote actor unfollows a Discord-backed local community. |
 | `Accept(Follow)` | Remote instance accepted a bridge actor follow request. |
+
+For wrapped `Announce(Create/Update/Delete)`, the gateway processes the payload
+attached to the Fedify-accepted delivery, rather than a shared raw cache entry
+indexed by the outer ID. It checks the complete nested content against the
+typed accepted `Announce` and its object ID before dereferencing the author's
+origin. A later inbox request with the same outer and nested IDs cannot replace
+the signed content. The fetched original must still match the claimed author,
+object identity, recipients, and supported content fields.
+
+Inbound `Undo(Follow)` also uses the payload attached to its authenticated
+Fedify delivery. Before producing a local unfollow event, the gateway checks
+that the accepted outer Undo and embedded Follow IDs, actor, and target match
+Fedify's typed activity. A later request reusing the Undo ID cannot change
+the local actor whose subscription is removed.
+
+Inbound `Accept(Follow)` is accepted for bridge subscription state only when
+its authenticated object identifies an outbound Follow. A URL reference is
+matched to the stored Follow ID by Python. An embedded activity must be a
+Follow by the bridge service actor targeting the Accept actor; an embedded
+Follow without an ID is ignored. The gateway does not fill a missing ID from
+the shared raw request cache. Python also requires the Accept actor to own
+the stored pending Follow before activating subscriptions.
 
 The project does not provide generic inbox processing for every ActivityStreams activity type.
 
@@ -246,7 +268,7 @@ Successful registered-user profile mutations create one immutable logical profil
 
 The Python runtime owns source state, retry timing, endpoint claims, ordering, and per-target outcomes. The Fedify gateway renders the complete `Person` through the same actor builder used by the public actor route and performs signed endpoint delivery as the owning User Actor. Retry uses the persisted activity JSON and stable activity ID; it does not re-read a newer profile into an older source.
 
-Profile delivery is partial-failure tolerant. A failed endpoint does not roll back the local profile or block healthy endpoints. Account settings report local success separately from pending remote refresh. Existing user-authored content recipients are unchanged in Stage 4.
+Profile delivery is partial-failure tolerant. A failed endpoint does not roll back the local profile or block healthy endpoints. Account settings report local success separately from pending remote refresh. Existing user-authored content recipients are unchanged in local subscriber participation.
 
 ## User Actor content follower delivery
 

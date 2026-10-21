@@ -609,6 +609,20 @@ async def test_duplicate_post_recovers_missing_relay_rows_without_discord_duplic
         origin_kind="remote_follower",
     )
 
+    # The original Create was authenticated and its source snapshot committed
+    # before the process lost the uncommitted relay-target rows. An old mapping
+    # without this proof must not authorize a fresh federation relay.
+    source_event = _post_event()
+    database.local_community_relay.get_or_create_local_community_relay_source_activity(
+        local_community_id=local_community.id,
+        object_kind="post", operation="create",
+        source_object_ap_id=source_event.object.ap_id,
+        source_activity_id=source_event.source_activity_id,
+        source_announce_id=source_event.source_announce_id,
+        origin_remote_actor_id=source_event.actor_id,
+        source_activity_json=source_event.source_activity_json,
+    )
+
     async def gateway_result(
         *, signing_actor_url: str, deliveries: list[object]
     ) -> SendLocalCommunityRelayResult:
@@ -627,7 +641,7 @@ async def test_duplicate_post_recovers_missing_relay_rows_without_discord_duplic
 
     runtime.fedify_gateway.send_local_community_relay.side_effect = gateway_result
 
-    result = await runtime.handle_inbound_post(_post_event(), SimpleNamespace())
+    result = await runtime.handle_inbound_post(source_event, SimpleNamespace())
 
     assert result.status == "skipped"
     runtime.fedify_gateway.send_local_community_relay.assert_awaited_once()

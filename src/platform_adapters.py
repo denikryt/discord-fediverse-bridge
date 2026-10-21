@@ -1,7 +1,7 @@
 """Connector-keyed registry of externally owned platform adapter instances.
 
 This process-local registry neither owns SDK clients nor changes bridge database
-claims. Runtime composition will register live adapters only from Stage 03.
+claims. Runtime composition will register live adapters only from Discord adapter integration.
 """
 
 from __future__ import annotations

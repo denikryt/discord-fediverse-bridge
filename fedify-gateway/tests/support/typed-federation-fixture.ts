@@ -2,8 +2,8 @@
  * Test-only Fedify composition for the future typed actor route contract.
  *
  * This fixture proves that `/actors/{+identifier}` can hand slash-containing
- * tails to Stage 3 parsing helpers. It must never be imported by production
- * gateway composition, because Stage 4 owns the real public cutover.
+ * tails to Discord adapter integration parsing helpers. It must never be imported by production
+ * gateway composition, because typed ActivityPub identity migration owns the real public cutover.
  */
 import {
   createFederation,

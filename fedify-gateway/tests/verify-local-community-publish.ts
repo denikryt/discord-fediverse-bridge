@@ -16,6 +16,7 @@ import path from "node:path";
 import { exportJwk } from "@fedify/fedify";
 import initSqlJs, { seedBridgeActorJwk } from "./support/sqlite-fixture.js";
 import { closeAllPythonBridgeFixtures, importFixedRsaKeyPair, startPythonBridgeFixture } from "./support/python-bridge-fixture.js";
+import { installSignedJsonSocketFixture, lowercaseSignedHeaders } from "./support/signed-json-socket-fixture.js";
 
 import { publishLocalCommunityContent } from "../src/federation-outbound.js";
 import type { GatewayConfig } from "../src/config.js";
@@ -252,30 +253,21 @@ async function testLogLevelDebugControlsSignedJsonDeliveryLogs(): Promise<void> 
   }
 }
 
+/** Return signed delivery outcomes for healthy and failing remote inboxes. */
 function installFetchRecorder(
   deliveries: DeliveryRecord[],
   failingInboxes: Set<string> = new Set(),
 ): () => void {
-  /** Capture signed JSON HTTP delivery without relying on Fedify sendActivity. */
-  const originalFetch = globalThis.fetch;
-  globalThis.fetch = async (input: RequestInfo | URL, init?: RequestInit): Promise<Response> => {
-    const targetUrl = input instanceof URL ? input.href : String(input);
-    if (targetUrl.startsWith("http://127.0.0.1:")) return await originalFetch(input, init);
-    const inboxId = input instanceof URL ? input.href : String(input);
-    if (failingInboxes.has(inboxId)) {
-      return new Response("simulated failure", { status: 500, statusText: "Internal Server Error" });
-    }
-    const headers = new Headers(init?.headers);
+  /** Preserve success and failure scenarios at the native HTTPS boundary. */
+  return installSignedJsonSocketFixture((request) => {
+    if (failingInboxes.has(request.url)) return { status: 500, body: "simulated failure" };
     deliveries.push({
-      inboxId,
-      payload: JSON.parse(String(init?.body ?? "{}")) as Record<string, unknown>,
-      headers: Object.fromEntries(headers.entries()),
+      inboxId: request.url,
+      payload: JSON.parse(request.body) as Record<string, unknown>,
+      headers: lowercaseSignedHeaders(request.headers),
     });
-    return new Response("", { status: 202, statusText: "Accepted" });
-  };
-  return () => {
-    globalThis.fetch = originalFetch;
-  };
+    return { status: 202 };
+  });
 }
 
 async function buildConfig(logLevel: "info" | "debug" = "info"): Promise<GatewayConfig> {

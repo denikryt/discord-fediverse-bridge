@@ -104,7 +104,7 @@ class UserProfileRepository(BaseRepository):
         summary: str | None,
         fields: list[tuple[str, str]],
     ) -> None:
-        """Preserve the Stage 1 atomic combined-update compatibility contract."""
+        """Preserve the profile media storage atomic combined-update compatibility contract."""
         cls.update_scalar_text(session, user_id, display_name, summary)
         cls.replace_fields(session, user_id, fields)
 

@@ -1,4 +1,4 @@
-"""Runtime registration scenarios for the Stage 5 FastAPI backend."""
+"""Runtime registration scenarios for the participant mutation support FastAPI backend."""
 
 from __future__ import annotations
 from support.runtime import build_test_policy_service
@@ -41,7 +41,7 @@ class FakeDiscordOAuthClient:
 
 def _database(tmp_path: Path) -> Database:
     """Create a real SQLite-backed repository for registration flow tests."""
-    database = Database(f"sqlite:///{tmp_path / 'bridge-stage5.db'}")
+    database = Database(f"sqlite:///{tmp_path / 'bridge-participant mutation support.db'}")
     database.migrate()
     return database
 

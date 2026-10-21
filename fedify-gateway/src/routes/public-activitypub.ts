@@ -87,7 +87,7 @@ export interface PublicActivityPubRouteDependencies {
   renders: PublicActivityPubRenderPort;
 }
 
-/** Register public ActivityPub routes in the typed Stage 4 namespace. */
+/** Register public ActivityPub routes in the typed typed ActivityPub identity migration namespace. */
 export function registerPublicActivityPubRoutes(
   app: Hono,
   dependencies: PublicActivityPubRouteDependencies,

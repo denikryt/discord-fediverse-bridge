@@ -1,8 +1,8 @@
 /**
  * Canonical local ActivityPub actor, object, and activity URL builders.
  *
- * Stage 2 uses this pure module as the TypeScript target grammar for later
- * routing and migration stages. It intentionally imports no gateway runtime,
+ * typed actor grammar uses this pure module as the TypeScript target grammar for later
+ * routing and migration work. It intentionally imports no gateway runtime,
  * signing, network, Python-client, or config code so secret-bearing settings do
  * not cross into identity construction.
  */

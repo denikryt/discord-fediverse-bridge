@@ -1,26 +1,9 @@
 /**
  * Regression test for the Accept(Follow) -> follow.accepted delivery path.
  *
- * Bug: when Fedify dispatches the Accept handler from its internal queue, the
- * raw request body is no longer available via activitypubRawJson on ctx.data
- * because the Hono middleware already consumed it. buildFollowAcceptedEvent
- * must fall back to the raw-activity cache (storeRawActivity/getRawActivity)
- * which is populated during the initial HTTP intake.
- *
- * This script verifies the full path:
- *   storeRawActivity(acceptId, payload)
- *   -> buildFollowAcceptedEvent reads from cache when activitypubRawJson is undefined
- *   -> FollowAcceptedEvent with correct follow_activity_id is delivered to Python bridge
- *
- * System state: the Accept payload is present in the raw-activity cache
- * (simulating what the Hono middleware does), but activitypubRawJson is NOT
- * set on ctx.data (simulating the condition that triggered the bug).
- *
- * Action: buildFollowAcceptedEvent is called with undefined activitypubRawJson
- * and the Accept activity id as fallbackDeliveryId.
- *
- * Observable result: a FollowAcceptedEvent is produced with the correct
- * follow_activity_id, and it is delivered to the Python bridge endpoint.
+ * A queued Accept uses Fedify's typed payload, even if a same-ID raw cache
+ * entry is stale or forged. Only a reference to a known outbound Follow may
+ * produce a lifecycle event for the Python bridge.
  */
 
 import assert from "node:assert/strict";
@@ -31,6 +14,7 @@ import { Accept } from "@fedify/vocab";
 import { storeRawActivity } from "../src/activitypub-raw-cache.js";
 import { buildFollowAcceptedEvent } from "../src/federation.js";
 import { PythonBridgeClient } from "../src/python-bridge-client.js";
+import type { GatewayConfig } from "../src/config.js";
 import type { FollowAcceptedEvent } from "../src/types.js";
 
 const TEST_ORIGIN = "https://discord-bridge.example.com/";
@@ -78,80 +62,41 @@ const STALE_ANNOUNCE_PAYLOAD = {
 };
 
 async function main(): Promise<void> {
-  await testCacheFallbackExtractsFollowId();
+  await testCacheCannotProvideMissingFollowId();
   await testTypedAcceptWinsOverStaleRawPayload();
   await testDeliveryShapeMatchesPythonContract();
   console.log("Accept(Follow) -> follow.accepted path verification passed");
 }
 
 /**
- * Verifies that buildFollowAcceptedEvent can extract the follow_activity_id
- * from the raw-activity cache when activitypubRawJson is undefined — the
- * exact condition that occurs when Fedify re-dispatches from its internal queue.
- *
- * This is a direct unit-level scenario test of the fallback path. It imports
- * the internal helper indirectly by reproducing the logic inline, keeping the
- * test focused on the observable behavior rather than the implementation detail.
+ * A signed Accept without an object ID cannot borrow one from a later body
+ * that reused its outer activity ID.
  */
-async function testCacheFallbackExtractsFollowId(): Promise<void> {
-  // Pre-condition: Accept payload is stored in cache (done by Hono middleware
-  // during initial HTTP intake), but activitypubRawJson is absent (Fedify
-  // handler runs later from its internal delivery queue).
+async function testCacheCannotProvideMissingFollowId(): Promise<void> {
+  // Hono can cache a body before Fedify rejects its signature; the typed
+  // accepted activity remains the sole source for subscription state.
   storeRawActivity(ACCEPT_ACTIVITY_ID, ACCEPT_PAYLOAD);
-
-  // Reproduce the extraction logic from buildFollowAcceptedEvent with
-  // activitypubRawJson explicitly undefined to lock the fallback path.
-  const { getRawActivity } = await import("../src/activitypub-raw-cache.js");
-
-  const cached = getRawActivity(ACCEPT_ACTIVITY_ID);
-  assert.ok(cached, "raw-activity cache must return the stored payload");
-
-  const rawRecord = cached.rawJson as Record<string, unknown>;
-  const actorId = typeof rawRecord.actor === "string" ? rawRecord.actor : null;
-  const objectValue = rawRecord.object;
-  const objectRecord =
-    typeof objectValue === "object" && objectValue !== null
-      ? (objectValue as Record<string, unknown>)
-      : null;
-  // object.id when Lemmy sends a full Follow object (not a bare string)
-  const followActivityId =
-    typeof objectValue === "string"
-      ? objectValue
-      : typeof objectRecord?.id === "string"
-        ? objectRecord.id
-        : null;
-
-  assert.equal(actorId, COMMUNITY_ACTOR_ID, "actor must be extracted from cached payload");
-  assert.equal(
-    followActivityId,
-    FOLLOW_ACTIVITY_ID,
-    "follow_activity_id must be extracted from nested object.id in cached payload",
-  );
+  const activity = new Accept({
+    id: new URL(ACCEPT_ACTIVITY_ID), actor: new URL(COMMUNITY_ACTOR_ID),
+  });
+  assert.equal(await buildFollowAcceptedEvent(activity, gatewayConfig()), null);
 }
 
 /**
- * Verifies the invariant that follow.accepted is extracted from the current
- * Accept(Follow) activity even if ctx.data still carries stale raw JSON from a
- * previous inbox event.
+ * Verify the current typed Accept wins over a stale raw cache entry.
  *
  * This matches the true correctness contract: delivery_id must come from the
  * current Accept.id and follow_activity_id must come from Accept.object.
  */
 async function testTypedAcceptWinsOverStaleRawPayload(): Promise<void> {
-  const staleData = {
-    activitypubRawJson: STALE_ANNOUNCE_PAYLOAD,
-  } as Parameters<typeof buildFollowAcceptedEvent>[1];
+  storeRawActivity(ACCEPT_ACTIVITY_ID, STALE_ANNOUNCE_PAYLOAD);
   const activity = new Accept({
     id: new URL(ACCEPT_ACTIVITY_ID),
     actor: new URL(COMMUNITY_ACTOR_ID),
     object: new URL(FOLLOW_ACTIVITY_ID),
   });
 
-  const event = buildFollowAcceptedEvent(
-    activity,
-    staleData,
-    ACCEPT_ACTIVITY_ID,
-  );
+  const event = await buildFollowAcceptedEvent(activity, gatewayConfig());
 
   assert.ok(event, "Accept(Follow) must still produce an event");
   assert.equal(
@@ -172,26 +117,18 @@ async function testTypedAcceptWinsOverStaleRawPayload(): Promise<void> {
 }
 
 /**
- * Verifies the full delivery shape: a FollowAcceptedEvent built from the
- * cache fallback path is delivered to the Python bridge with the correct
+ * Verifies the full delivery shape: an event built from a typed Follow URL
+ * reference is delivered to the Python bridge with the correct
  * fields, auth header, and delivery-id header.
  *
  * Uses an ephemeral HTTP server as a fake Python bridge boundary.
  */
 async function testDeliveryShapeMatchesPythonContract(): Promise<void> {
-  // Pre-condition: cache populated as it would be by Hono middleware.
-  storeRawActivity(ACCEPT_ACTIVITY_ID, ACCEPT_PAYLOAD);
-
-  const event: FollowAcceptedEvent = {
-    actor_id: COMMUNITY_ACTOR_ID,
-    community_actor_id: COMMUNITY_ACTOR_ID,
-    delivery_id: ACCEPT_ACTIVITY_ID,
-    event_type: "follow.accepted",
-    object: {
-      follow_activity_id: FOLLOW_ACTIVITY_ID,
-    },
-    occurred_at: new Date().toISOString(),
-  };
+  const event = await buildFollowAcceptedEvent(new Accept({
+    id: new URL(ACCEPT_ACTIVITY_ID), actor: new URL(COMMUNITY_ACTOR_ID),
+    object: new URL(FOLLOW_ACTIVITY_ID),
+  }), gatewayConfig());
+  assert.ok(event, "a typed Follow reference must produce a delivery event");
 
   let receivedBody = "";
   let receivedAuth = "";
@@ -226,6 +163,16 @@ async function testDeliveryShapeMatchesPythonContract(): Promise<void> {
   assert.equal(parsed.event_type, "follow.accepted");
   assert.equal(parsed.object.follow_activity_id, FOLLOW_ACTIVITY_ID);
   assert.equal(parsed.community_actor_id, COMMUNITY_ACTOR_ID);
+}
+
+/** Supply the local bridge identity used to check an embedded Follow actor. */
+function gatewayConfig(): GatewayConfig {
+  return {
+    actorIdentifier: "bridge", actorName: "Bridge", actorSummary: "Bridge",
+    fedifyOrigin: TEST_ORIGIN, port: 3000,
+    pythonBridgeInternalUrl: "http://python-accept.fixture",
+    pythonBridgeSharedSecret: TEST_SHARED_SECRET, logLevel: "info",
+  };
 }
 
 main().catch((error) => {

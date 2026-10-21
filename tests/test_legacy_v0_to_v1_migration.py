@@ -337,7 +337,7 @@ def test_populated_release_upgrades_in_one_startup(legacy):
         "missing_unique",
         "extra_fk",
         "view",
-        "stage00",
+        "unsupported_prerelease",
         "schema_only",
         "future",
         "negative",
@@ -371,15 +371,15 @@ def test_unknown_source_or_header_is_rejected_unchanged(legacy, mutation):
             c.exec_driver_sql(
                 "PRAGMA user_version=" + ("2" if mutation == "future" else "-1")
             )
-    if mutation in {"stage00", "schema_only"}:
+    if mutation in {"unsupported_prerelease", "schema_only"}:
         legacy.close()
         with sqlite3.connect(legacy.engine.url.database) as c:
             for name in _evidence(legacy)[2]:
                 c.execute(f'DROP TABLE "{name}"')
-            if mutation == "stage00":
+            if mutation == "unsupported_prerelease":
                 c.executescript(
                     (
-                        Path(__file__).parent / "fixtures/unsupported_stage00_schema.sql"
+                        Path(__file__).parent / "fixtures/unsupported_prerelease_schema.sql"
                     ).read_text()
                 )
         if mutation == "schema_only":
@@ -989,7 +989,7 @@ def test_release_snapshot_loaded_once_per_inspection_and_kept_immutable(legacy, 
             transaction = statement
 
     def capture(connection):
-        """Retain the evidence and its value before downstream migration stages use it."""
+        """Retain the evidence and its value before downstream migration steps use it."""
         snapshot = real_capture(connection)
         captures.append((connection, transaction, snapshot, deepcopy(snapshot)))
         return snapshot

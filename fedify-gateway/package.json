@@ -7,18 +7,19 @@
     "dev": "node --env-file=../.env ./node_modules/.bin/tsx watch src/server.ts",
     "start": "node --env-file=../.env ./node_modules/.bin/tsx src/server.ts",
     "check": "tsc --noEmit",
-    "test": "npm run check && for test in tests/verify-*.ts; do echo \"Running $test\"; ./node_modules/.bin/tsx \"$test\" || exit 1; done",
+    "test": "npm run check && npm run test:security-boundaries && for test in tests/verify-*.ts; do echo \"Running $test\"; ./node_modules/.bin/tsx \"$test\" || exit 1; done",
     "follow-community": "node --env-file=../.env ./node_modules/.bin/tsx src/follow-community-cli.ts",
     "unfollow-community": "node --env-file=../.env ./node_modules/.bin/tsx src/unfollow-community-cli.ts",
     "verify:local-community-canonical-key": "node --env-file=../.env ./node_modules/.bin/tsx tests/verify-local-community-canonical-key.ts",
+    "test:security-boundaries": "node --experimental-strip-types --test tests/verify-remote-socket-admission.mjs tests/verify-remote-actor-lookup.mjs tests/verify-forwarded-origin.mjs",
     "test:project-version": "./node_modules/.bin/tsx tests/verify-project-version.ts",
     "test:docker-contract": "./node_modules/.bin/tsx src/test-docker-contract.ts",
     "test:bridge-key-store": "./node_modules/.bin/tsx tests/verify-bridge-actor-key-store.ts"
   },
   "dependencies": {
-    "@fedify/fedify": "^2.2.0",
-    "@fedify/hono": "^2.2.0",
-    "@fedify/vocab": "^2.2.0",
+    "@fedify/fedify": "2.2.19",
+    "@fedify/hono": "2.2.19",
+    "@fedify/vocab": "2.2.19",
     "@hono/node-server": "^1.19.6",
     "hono": "^4.12.16"
   },

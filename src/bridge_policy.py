@@ -211,6 +211,38 @@ class BridgePolicyService:
             )
         )
 
+    def snapshot_in_session(self, session: object) -> BridgePolicySnapshot:
+        """Build the effective policy from the caller's SQLite transaction.
+
+        Relay admission must observe policy and subscription under the same
+        writer reservation; a second repository session cannot provide that.
+        """
+        from sqlalchemy import select
+
+        from .models import BridgePolicyEntry
+
+        # Bootstrap rules remain immutable; dynamic rows come from this session.
+        bootstrap = {
+            PolicyType.FEDERATION_ALLOW: getattr(self.settings, "federation_allowlist", []),
+            PolicyType.FEDERATION_BLOCK: getattr(self.settings, "federation_blocklist", []),
+            PolicyType.DISCORD_GUILD_ALLOW: getattr(self.settings, "discord_guild_allowlist", []),
+            PolicyType.DISCORD_GUILD_BLOCK: getattr(self.settings, "discord_guild_blocklist", []),
+            PolicyType.BRIDGE_SUPER_ADMIN: getattr(self.settings, "bridge_super_admin_user_ids", []),
+        }
+        merged = {}
+        for kind, values in bootstrap.items():
+            for value in values:
+                normalized = self.normalize_subject(kind, str(value))
+                merged[(kind, normalized)] = EffectivePolicyEntry(kind, normalized, "bootstrap")
+        rows = session.scalars(
+            select(BridgePolicyEntry).where(BridgePolicyEntry.status == "active")
+        )
+        for row in rows:
+            kind = PolicyType(str(row.policy_type))
+            key = (kind, str(row.normalized_subject))
+            merged.setdefault(key, EffectivePolicyEntry(kind, key[1], "dynamic"))
+        return BridgePolicySnapshot(tuple(sorted(merged.values(), key=lambda item: (item.policy_type.value, item.subject))))
+
     @staticmethod
     def normalize_subject(policy_type: PolicyType, subject: str) -> str:
         """Normalize a subject according to its policy category."""

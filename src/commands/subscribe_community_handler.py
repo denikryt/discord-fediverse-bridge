@@ -51,7 +51,7 @@ class SubscribeCommunityRequest:
     """Normalized Discord submit input for one /subscribe-community invocation.
 
     The dataclass carries only Discord-parsed values. It deliberately does not
-    contain resolved community or placement state so each flow stage has a clear
+    contain resolved community or placement state so each routing step has a clear
     input/output contract.
     """
 

@@ -25,7 +25,7 @@ class RemoteSubscriptionRepository(BaseRepository):
     ) -> ChannelCommunitySubscription | None:
         """Load the single community subscription owned by one Discord channel."""
         # Each channel maps to at most one community, so this is a point lookup.
-        # MULTIPLATFORM_STAGE01_TEMP: Discord channel-ID wrapper is scoped to the primary Discord connector.
+        # MULTIPLATFORM_DISCORD_PROJECTION_TEMP: Discord channel-ID wrapper is scoped to the primary Discord connector.
         with self.session() as session:
             return session.scalar(
                 discord_claim_query(
@@ -43,7 +43,7 @@ class RemoteSubscriptionRepository(BaseRepository):
         # Inbound routing only uses subscriptions that completed the Follow ->
         # Accept lifecycle. Pending/failed rows are visible to moderator flows
         # but must not fan out remote content into Discord.
-        # MULTIPLATFORM_STAGE01_TEMP: Legacy subscription recipient query delegates to Discord-scoped surface claims.
+        # MULTIPLATFORM_DISCORD_PROJECTION_TEMP: Legacy subscription recipient query delegates to Discord-scoped surface claims.
         return self.list_discord_accepted_subscriptions_for_community(
             lemmy_community_actor_id
         )
@@ -88,7 +88,7 @@ class RemoteSubscriptionRepository(BaseRepository):
         Used by /list-subscriptions to show only the subscriptions that belong
         to the guild where the command was invoked.
         """
-        # MULTIPLATFORM_STAGE01_TEMP: Legacy subscription recipient query delegates to Discord-scoped surface claims.
+        # MULTIPLATFORM_DISCORD_PROJECTION_TEMP: Legacy subscription recipient query delegates to Discord-scoped surface claims.
         return self.list_discord_subscriptions(guild_id=discord_guild_id)
 
     def create_subscription(
@@ -109,7 +109,7 @@ class RemoteSubscriptionRepository(BaseRepository):
         # Callers are responsible for checking uniqueness before calling this;
         # the DB UNIQUE constraint on discord_channel_id is the final safety net
         # and will raise IntegrityError if a duplicate is attempted.
-        # MULTIPLATFORM_STAGE01_TEMP: Discord channel-ID wrapper is scoped to the primary Discord connector.
+        # MULTIPLATFORM_DISCORD_PROJECTION_TEMP: Discord channel-ID wrapper is scoped to the primary Discord connector.
         with self._writer_provider() as session:
             sub = ChannelCommunitySubscription(
                 discord_channel_id=discord_channel_id,
@@ -143,9 +143,9 @@ class RemoteSubscriptionRepository(BaseRepository):
         status: str,
     ) -> None:
         """Update the federation follow state for one existing subscription."""
-        # Follow state lives on the subscription row because later stages need a
+        # Follow state lives on the subscription row because later work need a
         # single source of truth for whether the bridge is pending/accepted.
-        # MULTIPLATFORM_STAGE01_TEMP: Discord channel-ID wrapper is scoped to the primary Discord connector.
+        # MULTIPLATFORM_DISCORD_PROJECTION_TEMP: Discord channel-ID wrapper is scoped to the primary Discord connector.
         with self.session() as session:
             subscription = session.scalar(
                 discord_claim_query(
@@ -168,7 +168,7 @@ class RemoteSubscriptionRepository(BaseRepository):
         """Delete one channel subscription if it exists."""
         # Returns False when no subscription exists so callers can give a
         # meaningful response without a separate existence check.
-        # MULTIPLATFORM_STAGE01_TEMP: Discord channel-ID wrapper is scoped to the primary Discord connector.
+        # MULTIPLATFORM_DISCORD_PROJECTION_TEMP: Discord channel-ID wrapper is scoped to the primary Discord connector.
         with self._writer_provider() as session:
             sub = session.scalar(
                 discord_claim_query(
@@ -223,7 +223,7 @@ class RemoteSubscriptionRepository(BaseRepository):
         Used by handle_follow_accepted to DM each initiating Discord user when
         the bridge actor follow is confirmed by the remote instance.
         """
-        # MULTIPLATFORM_STAGE01_TEMP: Legacy subscription recipient query delegates to Discord-scoped surface claims.
+        # MULTIPLATFORM_DISCORD_PROJECTION_TEMP: Legacy subscription recipient query delegates to Discord-scoped surface claims.
         return self.list_discord_pending_subscriptions_for_notification(
             community_actor_id
         )

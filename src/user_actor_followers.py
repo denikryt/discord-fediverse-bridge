@@ -10,7 +10,7 @@ from .remote_delivery_endpoints import (
     RemoteDeliveryEndpointError,
     admit_remote_delivery_endpoint,
 )
-from .runtime_ports import DiscordUserLookupPort
+from .runtime_ports import DiscordOwnerNoticePort
 
 logger = logging.getLogger(__name__)
 
@@ -19,12 +19,12 @@ class UserActorFollowService:
     """Own User Actor follower persistence, Accept delivery, and owner notification."""
 
     def __init__(
-        self, *, database: object, fedify_gateway: object, bot: DiscordUserLookupPort
+        self, *, database: object, fedify_gateway: object, discord_notices: DiscordOwnerNoticePort
     ) -> None:
         """Bind persistence and outer delivery boundaries used by the lifecycle."""
         self.database = database
         self.fedify_gateway = fedify_gateway
-        self.bot = bot
+        self.discord_notices = discord_notices
 
     async def handle_follow(
         self,
@@ -150,10 +150,11 @@ class UserActorFollowService:
     async def _notify_owner(self, *, user: object, remote_actor_id: str) -> None:
         """Attempt one non-retryable DM after the matching Accept succeeds."""
         try:
-            discord_user = await self.bot.fetch_user(int(user.discord_user_id))
             remote_label = self._remote_label(remote_actor_id)
             local_host = urlparse(user.actor_url).netloc
-            await discord_user.send(
+            # MULTIPLATFORM_DISCORD_ADAPTER_TEMP_DISCORD_DM: User Actor follower notices still target the registered Discord account; remove this adapter-only user-id path when [personal feed publication](https://github.com/denikryt/discord-fediverse-bridge/issues/14) provides connector-aware account linking.
+            await self.discord_notices.send_owner_notice(
+                int(user.discord_user_id),
                 f"{remote_label} followed your Fediverse account "
                 f"@{user.activitypub_username}@{local_host}."
             )

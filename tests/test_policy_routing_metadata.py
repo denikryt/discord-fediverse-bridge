@@ -1,4 +1,4 @@
-"""Stage 5 scenarios for fail-closed Discord fanout routing metadata."""
+"""participant mutation support scenarios for fail-closed Discord fanout routing metadata."""
 
 from __future__ import annotations
 
@@ -230,7 +230,9 @@ def test_local_surface_missing_or_malformed_metadata_is_fail_closed() -> None:
     database = SimpleNamespace(
         local_subscribers=_LocalSubscribers(
             [],
-            by_channel={20: SimpleNamespace(discord_guild_id=0)},
+            by_channel={20: SimpleNamespace(
+                id=4, local_community_id=7, status="active", discord_guild_id=0
+            )},
         ),
         local_communities=_LocalCommunities(),
     )
@@ -238,8 +240,15 @@ def test_local_surface_missing_or_malformed_metadata_is_fail_closed() -> None:
         database=database, bot=object(), policy_service=_Policy()
     )
 
-    assert fanout._surface_is_allowed(20) is False
-    assert fanout._surface_is_allowed(30) is False
+    # Validate persisted receipts, not the obsolete channel-ID-only API.
+    assert fanout._surface_is_allowed(SimpleNamespace(
+        role="local_subscriber", discord_forum_channel_id=20,
+        local_subscriber_id=4,
+    ), community_id=7) is False
+    assert fanout._surface_is_allowed(SimpleNamespace(
+        role="local_subscriber", discord_forum_channel_id=30,
+        local_subscriber_id=5,
+    ), community_id=7) is False
 
 
 def test_local_surface_repository_failure_is_fail_closed() -> None:
@@ -255,7 +264,10 @@ def test_local_surface_repository_failure_is_fail_closed() -> None:
         database=database, bot=object(), policy_service=_Policy()
     )
 
-    assert fanout._surface_is_allowed(20) is False
+    assert fanout._surface_is_allowed(SimpleNamespace(
+        role="local_subscriber", discord_forum_channel_id=20,
+        local_subscriber_id=4,
+    ), community_id=7) is False
 
 
 @pytest.mark.asyncio

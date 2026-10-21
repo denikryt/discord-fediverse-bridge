@@ -148,7 +148,7 @@ class ChannelCommunitySubscription(Base):
     # ChannelCommunitySubscription binds one Discord forum channel to one Lemmy
     # community. The older Lemmy-named fields stay in place because the current
     # runtime still routes thread/comment sync through them, while the new
-    # follow-state fields prepare the Stage 3+ federation flow.
+    # follow-state fields prepare the local subscriber synchronization+ federation flow.
     __tablename__ = "channel_community_subscriptions"
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
@@ -171,7 +171,7 @@ class User(Base):
 
     # User is the shared source of truth for Discord-to-ActivityPub ownership,
     # including the actor URLs and keypair material needed by later publish
-    # flows. Stage 2 stores the keys directly here to avoid split ownership.
+    # flows. physical surface mapping stores the keys directly here to avoid split ownership.
     __tablename__ = "users"
     __table_args__ = (
         UniqueConstraint("discord_user_id"),
@@ -387,7 +387,7 @@ class RemoteActor(Base):
     """Cache remote actor metadata needed for verification and delivery."""
 
     # RemoteActor keeps the last fetched addressing and public-key data for a
-    # remote AP actor so later stages can verify signatures and choose the
+    # remote AP actor so later work can verify signatures and choose the
     # correct inbox without refetching actor documents on every event.
     __tablename__ = "remote_actors"
     __table_args__ = (UniqueConstraint("actor_url"),)
@@ -552,7 +552,7 @@ class RemoteSubscriber(Base):
 class LocalSubscriber(Base):
     """Persist one same-instance Discord forum subscribed to a local community.
 
-    Local-subscriber rows are control-plane state in Stage 1. Later stages may
+    Local-subscriber rows are control-plane state in initial persistence implementation. later work may
     use them for participant sync, but this model itself does not imply any
     runtime routing behavior.
     """
@@ -634,7 +634,7 @@ class LocalCommunityThread(Base):
     """Map one canonical local-community thread in either federation direction.
 
     Threads are the canonical post-level identity rows for local-community
-    mode. Stage 2 deliberately removes direct Discord ownership from this row
+    mode. physical surface mapping deliberately removes direct Discord ownership from this row
     so one canonical thread can later fan out onto several Discord surfaces.
     """
 
@@ -658,7 +658,7 @@ class LocalCommunityMessage(Base):
 
     Message rows preserve the canonical AP identity and AP-parent linkage for
     one local-community comment. Discord-parent linkage moves to per-surface
-    rows in Stage 2 because later stages will need different parent message ids
+    rows in physical surface mapping because later work will need different parent message ids
     on different Discord forum surfaces.
     """
 
@@ -680,8 +680,8 @@ class LocalCommunityMessage(Base):
 class LocalCommunityThreadSurface(Base):
     """Map one canonical local-community thread onto one Discord forum surface.
 
-    Stage 2 introduces explicit surface rows so host-forum behavior can keep
-    working while later stages add more local Discord targets for the same
+    physical surface mapping introduces explicit surface rows so host-forum behavior can keep
+    working while later work add more local Discord targets for the same
     canonical thread.
     """
 
@@ -710,7 +710,7 @@ class LocalCommunityMessageSurface(Base):
     """Map one canonical local-community message onto one Discord message surface.
 
     Message surfaces stay bound to a concrete thread surface so nested reply
-    routing can remain local to one Discord thread even after later stages add
+    routing can remain local to one Discord thread even after later work add
     several sibling forum surfaces for the same canonical community activity.
     """
 

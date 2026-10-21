@@ -17,7 +17,9 @@ import discord
 
 from .db import Database
 from .discord_event_router import DiscordEventRouter
-from .runtime_ports import DiscordMutationContext
+from .runtime_ports import DiscordMutationContext, PlatformAdapterPort
+from .platform_types import MessageDeleted, MessageUpdated, PlatformOperationError
+from .discord_legacy_projection import discord_id_to_legacy_int
 
 logger = logging.getLogger(__name__)
 
@@ -72,6 +74,95 @@ class DiscordMessageMutationHandler:
         # mutation idempotency remains in repositories and downstream services.
         self._recent_edits: dict[int, float] = {}
         self._recent_deletes: dict[int, float] = {}
+
+    @staticmethod
+    def _validate_platform_identity(
+        event: MessageUpdated | MessageDeleted, reader: PlatformAdapterPort,
+    ) -> tuple[int, int, int | None]:
+        """Validate a typed event at the first Discord-only integer projection."""
+        # Old Discord tables still use integer snowflakes. A second connector
+        # must not silently collide with them before durable delivery generalizes keys.
+        if event.connector_key != reader.connector.key or event.connector_key != "discord-primary":
+            raise PlatformOperationError("invalid_request", "Discord mutation connector mismatch")
+        ref = event.message
+        container_id = discord_id_to_legacy_int(ref, component='container')
+        message_id = discord_id_to_legacy_int(ref)
+        guild_id = event.external_guild_id
+        if guild_id is not None and (not guild_id.isdecimal() or int(guild_id) <= 0):
+            raise PlatformOperationError("invalid_request", "invalid Discord mutation guild")
+        return container_id, message_id, int(guild_id) if guild_id is not None else None
+
+    async def handle_platform_message_edit(
+        self, event: MessageUpdated, reader: PlatformAdapterPort,
+    ) -> None:
+        """Admit a normalized edit through the existing canonical mutation router.
+
+        A partial edit is reconciled via an adapter-owned neutral read; never
+        pass a Discord SDK message through to the federation runtime.
+        """
+        channel_id, message_id, guild_id = self._validate_platform_identity(event, reader)
+        if self._was_recent(self._recent_edits, message_id):
+            return
+        delivery, is_local, is_personal = self._classify_message(message_id)
+        if delivery is None and not is_local and not is_personal:
+            return
+        if delivery is not None and delivery.role != "source":
+            return
+        content = event.content
+        edited_at = event.edited_at
+        # A missing content field is not an empty-string edit; a missing
+        # timestamp cannot establish causal order. Read authoritative state.
+        if content is None or edited_at is None:
+            try:
+                view = await reader.fetch_message(event.message)
+            except PlatformOperationError as exc:
+                # Preserve existing durable reconciliation instead of losing
+                # a partial edit during transient Discord read failures.
+                self.database.content_mutations.request_discord_reconciliation(
+                    channel_id=channel_id, message_id=message_id, error=str(exc),
+                )
+                context = self._mutation_context_provider()
+                if context is not None:
+                    context.user_actor_delivery_wake.wake()
+                return
+            if view.message != event.message:
+                raise PlatformOperationError("invalid_request", "Discord read returned another message")
+            content, edited_at = view.content, view.edited_at
+        if content is None or not content.body or edited_at is None:
+            return
+        context = self._mutation_context_provider()
+        if context is None:
+            return
+        try:
+            await self.event_router.handle_message_edit(
+                message_id=message_id, new_content=content.body,
+                author_display_name=event.author.display_name if event.author else "",
+                mutation_context=context, edited_timestamp=edited_at, guild_id=guild_id,
+            )
+        except Exception:
+            logger.exception("[platform_message_edit] failed for message %s", message_id)
+
+    async def handle_platform_message_delete(
+        self, event: MessageDeleted, reader: PlatformAdapterPort,
+    ) -> None:
+        """Admit ID-only normalized deletion without fetching an SDK message."""
+        _, message_id, guild_id = self._validate_platform_identity(event, reader)
+        if self._was_recent(self._recent_deletes, message_id):
+            return
+        delivery, is_local, is_personal = self._classify_message(message_id)
+        if delivery is None and not is_local and not is_personal:
+            return
+        if delivery is not None and delivery.role == "inbound":
+            return
+        context = self._mutation_context_provider()
+        if context is None:
+            return
+        try:
+            await self.event_router.handle_message_delete(
+                message_id=message_id, mutation_context=context, guild_id=guild_id,
+            )
+        except Exception:
+            logger.exception("[platform_message_delete] failed for message %s", message_id)
 
     def track_message_edit(self, message_id: int) -> None:
         """Record one bridge-originated Discord edit for raw-event suppression."""

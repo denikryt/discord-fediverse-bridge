@@ -15,6 +15,11 @@ from .base import BaseRepository
 class MessageMappingRepository(BaseRepository):
     """Persist the message mappings domain."""
 
+    def __init__(self, session_provider, immediate_session_provider) -> None:
+        """Use SQLite writer reservation for independently retried mapping receipts."""
+        super().__init__(session_provider)
+        self._immediate_session_provider = immediate_session_provider
+
     def create_message_mapping(
         self,
         *,
@@ -28,7 +33,25 @@ class MessageMappingRepository(BaseRepository):
         discord_message_id: int | None,
     ) -> MessageMapping:
         """Create the generic dedup record used by later AP publish flows."""
-        with self.session() as session:
+        with self._immediate_session_provider() as session:
+            # Both AP unique keys must identify the exact same persisted
+            # object. A preliminary handler lookup is not atomic with INSERT.
+            by_object = session.scalar(select(MessageMapping).where(
+                MessageMapping.object_id == object_id))
+            by_activity = session.scalar(select(MessageMapping).where(
+                MessageMapping.activity_id == activity_id))
+            if by_object is not None or by_activity is not None:
+                if (by_object is None or by_activity is None or
+                    by_object.id != by_activity.id):
+                    raise ValueError('generic AP mapping identity conflict')
+                if (by_object.source_platform, by_object.source_id,
+                    by_object.activity_id, by_object.object_id, by_object.actor_url,
+                    by_object.community_actor_url, by_object.discord_channel_id,
+                    by_object.discord_message_id) != (
+                    source_platform, source_id, activity_id, object_id, actor_url,
+                    community_actor_url, discord_channel_id, discord_message_id):
+                    raise ValueError('generic AP mapping immutable receipt conflict')
+                return by_object
             mapping = MessageMapping(
                 **(
                     PlatformSurfaceRepository.discord_source_location(

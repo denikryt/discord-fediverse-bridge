@@ -9,6 +9,8 @@ from .bridge_policy import BridgePolicyService
 from .config import Settings
 from .db import Database
 from .discord_bot import BridgeBot
+from .discord_adapter import DiscordAdapter
+from .platform_adapters import PlatformAdapterRegistry
 from .discord_oauth_client import DiscordOAuthClient
 from .content_publish_service import ContentPublishService
 from .fedify_gateway_client import FedifyGatewayClient
@@ -41,6 +43,8 @@ class Runtime:
     registration_service: RegistrationService
     bridge_policy_service: BridgePolicyService
     bot: BridgeBot
+    discord_adapter: DiscordAdapter
+    adapter_registry: PlatformAdapterRegistry
     community_runtime: CommunityRuntime
     local_community_runtime: LocalCommunityRuntime
     profile_media_store: ProfileMediaStore
@@ -53,12 +57,45 @@ class Runtime:
     deployment_state_lease: FileLock
 
     async def close(self) -> None:
-        """Close live-state owners before releasing the deployment generation lease."""
-        # The ordering prevents restore from replacing DB/media paths while a
-        # client, pooled connection, or HTTP reader can still use them.
-        await self.personal_feed_discord_delivery_worker.stop()
-        await self.user_actor_delivery_worker.stop()
-        await self.discord_oauth_client.close()
-        await self.fedify_gateway.close()
-        self.database.close()
-        self.deployment_state_lease.close()
+        """Join active owners and report all failures without masking the first.
+
+        Workers own joining their task finalizers before `stop()` returns or
+        raises. The runtime must still attempt the remaining ordered cleanup,
+        retaining cancellation and every independent failure for the caller.
+        """
+        errors: list[BaseException] = []
+
+        # Close the gate before the first await, even when shutdown itself was
+        # entered due to TaskGroup failure. Every later owner is attempted.
+        try:
+            self.discord_adapter.close_ingress_admission()
+        except BaseException as exc:
+            errors.append(exc)
+
+        for operation in (
+            self.discord_adapter.drain_ingress,
+            self.personal_feed_discord_delivery_worker.stop,
+            self.user_actor_delivery_worker.stop,
+            self.discord_adapter.quiesce,
+            self.discord_oauth_client.close,
+            self.fedify_gateway.close,
+        ):
+            try:
+                await operation()
+            except BaseException as exc:
+                # An earlier stop failure should not be replaced by a later
+                # Fedify/DB failure. Cancellation is preserved, not swallowed.
+                errors.append(exc)
+
+        for operation in (self.database.close, self.deployment_state_lease.close):
+            try:
+                operation()
+            except BaseException as exc:
+                errors.append(exc)
+
+        if len(errors) == 1:
+            raise errors[0]
+        if errors:
+            # The earliest failure remains first and every subsequent error is
+            # visible; Python 3.12 ExceptionGroup preserves traceback chains.
+            raise BaseExceptionGroup('Runtime shutdown failures', errors)

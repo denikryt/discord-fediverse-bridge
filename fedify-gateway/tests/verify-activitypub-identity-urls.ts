@@ -1,9 +1,9 @@
 /**
  * Verification tests for typed local ActivityPub identity URL helpers.
  *
- * These assertions define the Stage 2 target grammar only. Production gateway
+ * These assertions define the typed actor grammar target grammar only. Production gateway
  * routes, WebFinger output, actor-store mapping, and outbound emitters remain on
- * their pre-cutover paths until later stages switch them atomically.
+ * their pre-cutover paths until later work switch them atomically.
  */
 
 import assert from "node:assert/strict";

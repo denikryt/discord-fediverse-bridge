@@ -184,7 +184,7 @@ def build_dashboard_payload(runtime: Any) -> dict[str, object]:
                 "actorUrl": getattr(community, "actor_url"),
                 "aliasUrl": getattr(community, "actor_url"),
                 "followersUrl": getattr(community, "followers_url"),
-                # Stage 1 keeps participant types explicit. A later read model
+                # initial persistence implementation keeps participant types explicit. A later read model
                 # may add a combined total, but the payload should not imply
                 # that remote and local participants are the same stored state.
                 "remoteSubscriberCount": len(community_remote_subscribers),

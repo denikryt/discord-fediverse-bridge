@@ -113,7 +113,7 @@ def test_unversioned_nonempty_database_is_not_guessed(tmp_path):
     with sqlite3.connect(path) as connection:
         connection.executescript(
             (
-                Path(__file__).parent / "fixtures/unsupported_stage00_schema.sql"
+                Path(__file__).parent / "fixtures/unsupported_prerelease_schema.sql"
             ).read_text()
         )
         connection.execute("PRAGMA user_version=0")
@@ -320,7 +320,7 @@ def _seed_current_federation_confirmations(database):
 @pytest.mark.parametrize("source", ["release", "current"])
 def test_restart_preserves_complete_federation_snapshot(tmp_path, source):
     """Supported release/current state survives migration and a fresh process-style reopen."""
-    from test_platform_data_model_migration_stage01 import (
+    from test_platform_data_model_migration import (
         _released_database,
         _current_database,
         _seed_cascade_graph,

@@ -15,7 +15,10 @@ from ..content_publish_service import ContentPublishService
 from ..db import Database
 from ..fedify_gateway_client import FedifyGatewayClient
 from ..local_community_lifecycle import evaluate_local_community_lifecycle
-from ..runtime_ports import DiscordDeliveryClientPort, DiscordMutationContext
+from ..discord_legacy_projection import discord_id_to_legacy_int
+from ..platform_types import MessageCreated, MessageView, PlatformOperationError, ThreadCreated
+from ..runtime_ports import DiscordDeliveryClientPort, DiscordMutationContext, PlatformDeliveryPort, PlatformAdapterPort
+from .discord_fanout import LocalCommunityDiscordFanout
 from .discord_create import LocalCommunityDiscordCreateHandler
 from .discord_surface_fanout import LocalCommunitySurfaceFanout
 from .federation_fanout import LocalCommunityFederationFanout
@@ -49,6 +52,7 @@ class LocalCommunityRuntime:
         self.bridge_prefix = bridge_prefix
         self.bridge_policy_service = bridge_policy_service
         self.bot = bot
+        self.discord_adapter: PlatformAdapterPort | None = None
         self.federation_fanout = LocalCommunityFederationFanout(
             database=database,
             fedify_gateway=fedify_gateway,
@@ -90,6 +94,12 @@ class LocalCommunityRuntime:
             raise RuntimeError("LocalCommunityRuntime Discord client is already configured")
         self.bot = bot
 
+    def bind_discord_adapter(self, adapter: PlatformAdapterPort) -> None:
+        """Bind typed Discord physical mutations without changing canonical routing."""
+        self.discord_adapter = adapter
+        self.inbound_create_handler.bind_discord_adapter(adapter)
+        self.mutation_handler.bind_discord_adapter(adapter)
+
     def _disabled_result_if_needed(
         self, local_community: object
     ) -> LocalCommunityRuntimeResult | None:
@@ -109,6 +119,95 @@ class LocalCommunityRuntime:
         if community is None:
             return False
         return not evaluate_local_community_lifecycle(community).allowed
+
+    def _authorized_normalized_source(
+        self, *, forum_id: int, guild_id: str | None
+    ) -> object | None:
+        """Resolve an active host/subscriber from persisted guild and policy data.
+
+        DTOs cannot supply an alternative community identity or resurrect a
+        removed subscriber. The host's guild is the current host placement.
+        """
+        if not guild_id or not guild_id.isdecimal() or int(guild_id) <= 0:
+            return None
+        source = resolve_local_community_source_for_forum(self.database, forum_id)
+        if source is None:
+            return None
+        if source.source_kind == 'local_subscriber':
+            expected_guild = getattr(source.local_subscriber, 'discord_guild_id', None)
+        else:
+            placement = self.database.platform_surfaces.get_discord_host_placement(
+                source.local_community.id
+            )
+            expected_guild = (
+                int(placement.external_guild_id)
+                if placement is not None and placement.external_guild_id is not None
+                else None
+            )
+        if expected_guild != int(guild_id):
+            return None
+        try:
+            if not self.bridge_policy_service.is_discord_guild_allowed(int(guild_id)):
+                return None
+        except Exception:
+            return None
+        return source
+
+    async def handle_normalized_thread_create(
+        self, event: ThreadCreated, starter: MessageView, *, adapter: PlatformDeliveryPort,
+    ) -> LocalCommunityRuntimeResult:
+        """Admit and publish a typed host/subscriber forum starter exactly once.
+
+        The physical fanout stays inside the platform port; original SDK
+        callbacks are not also dispatched while the cutover is incomplete.
+        """
+        if (event.connector_key != 'discord-primary' or event.thread.channel.kind != 'forum'
+            or event.starter is None or starter.message != event.starter
+            or starter.message.external_container_id != event.thread.external_thread_id
+            or event.thread.channel.external_guild_id != event.external_guild_id):
+            raise PlatformOperationError('invalid_request', 'unverified local-community forum starter')
+        forum_id = discord_id_to_legacy_int(event.thread, component='parent')
+        source = self._authorized_normalized_source(
+            forum_id=forum_id, guild_id=event.external_guild_id
+        )
+        if source is None:
+            return LocalCommunityRuntimeResult('ignored', 'not_active_local_community_source')
+        disabled = self._disabled_result_if_needed(source.local_community)
+        if disabled is not None:
+            return disabled
+        fanout = LocalCommunityDiscordFanout(
+            database=self.database, bot=None, policy_service=self.bridge_policy_service,
+        )
+        return await self.discord_create_handler.handle_normalized_thread_create(
+            event=event, starter=starter, source=source, adapter=adapter, fanout=fanout,
+        )
+
+    async def handle_normalized_message_create(
+        self, event: MessageCreated, *, adapter: PlatformDeliveryPort,
+    ) -> LocalCommunityRuntimeResult:
+        """Publish a typed reply only from an authorized physical local surface."""
+        if (event.connector_key != 'discord-primary'
+            or event.thread_context is None or event.parent_channel is None
+            or event.parent_channel.kind != 'forum'
+            or event.thread_context.channel != event.parent_channel
+            or event.parent_channel.external_guild_id != event.external_guild_id
+            or event.message.external_container_id != event.thread_context.external_thread_id):
+            raise PlatformOperationError('invalid_request', 'unverified local-community reply')
+        forum_id = discord_id_to_legacy_int(event.thread_context, component='parent')
+        source = self._authorized_normalized_source(
+            forum_id=forum_id, guild_id=event.external_guild_id
+        )
+        if source is None:
+            return LocalCommunityRuntimeResult('ignored', 'not_active_local_community_source')
+        disabled = self._disabled_result_if_needed(source.local_community)
+        if disabled is not None:
+            return disabled
+        fanout = LocalCommunityDiscordFanout(
+            database=self.database, bot=None, policy_service=self.bridge_policy_service,
+        )
+        return await self.discord_create_handler.handle_normalized_message_create(
+            event=event, source=source, adapter=adapter, fanout=fanout,
+        )
 
     async def handle_discord_thread_create(
         self,

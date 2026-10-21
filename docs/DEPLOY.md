@@ -43,6 +43,15 @@ Use the deploy helper for the selected env file. It prepares `BACKUP_HOST_DIR`, 
 ./scripts/deploy.sh --env-file .env --with-nginx
 ```
 
+The deploy helper passes `--env-file` to Compose for variable interpolation. This
+matters because `fedify-gateway` receives an explicit environment allowlist,
+not the Python bridge's entire env file. For manual Compose commands always use
+`docker compose --env-file .env ...` (or `--env-file .env.dev` for development):
+`COMPOSE_ENV_FILE` alone does not select the file for `${...}` interpolation.
+The gateway receives only the public origin, shared Fedify secret, Actor display
+settings, log level, and internal routing details; it must not receive Discord
+bot/OAuth credentials. The bridge continues to receive its own env file.
+
 If you start Compose manually instead of using the helper, make sure `BACKUP_HOST_DIR`
 exists and is writable by the container user (`10001:10001`) before `docker compose up`:
 
@@ -208,9 +217,9 @@ The bridge process holds a shared lock on `/data/deployment-state.lock` for its 
 
 The bot enables Discord's Message Content intent in code. Keep that privileged intent enabled and, where required by Discord, approved in the Discord Developer Portal for every production application. Personal-feed publication requires the complete message body; disabling the portal-side intent leaves binding rows intact but causes text-only roots and replies to arrive without usable content and be ignored. Attachments and embeds without text are not published.
 
-The bot also needs permission in each bound feed channel to view the channel, read message history, create public threads, send messages in threads, and manage only messages it previously rendered when applying remote Update/Delete. A retained inbound comment is not discarded when Discord is unavailable: the worker performs at most three Discord calls and then records a durable terminal failure. Moving or removing a binding intentionally prevents further synchronization to the old channel; retained history is not replayed into a replacement channel in Stage 8.
+The bot also needs permission in each bound feed channel to view the channel, read message history, create public threads, send messages in threads, and manage only messages it previously rendered when applying remote Update/Delete. A retained inbound comment is not discarded when Discord is unavailable: the worker performs at most three Discord calls and then records a durable terminal failure. Moving or removing a binding intentionally prevents further synchronization to the old channel; retained history is not replayed into a replacement channel in personal feed conversations.
 
-## Stage 9 maintenance
+## outbox maintenance maintenance
 
 Use `bridge-user-deliveries` for bounded, database-only diagnostics and explicit retry resets. Bulk retry requires `--username --all-failed --limit` and processes at most 100 rows. Use `bridge-profile-media cleanup` with explicit database, media root, deployment lock, and media lock paths. A complete backup must contain both the SQLite database and profile-media volume; exporting a container image is not a volume backup.
 

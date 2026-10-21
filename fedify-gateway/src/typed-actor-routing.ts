@@ -1,8 +1,8 @@
 /**
  * Fedify typed actor route-tail parsing for the future reserved-expansion route.
  *
- * Stage 3 keeps this module pure and independent from production actor lookup so
- * Stage 4 can parse `/actors/{+identifier}` values before resolving keys,
+ * typed actor route validation keeps this module pure and independent from production actor lookup so
+ * typed actor identity migration can parse `/actors/{+identifier}` values before resolving keys,
  * inbox owners, or database-backed actors. The input is the slash-containing
  * identifier tail that Fedify reserved expansion will pass, not a full URL.
  */

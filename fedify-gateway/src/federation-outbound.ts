@@ -1,7 +1,7 @@
 /**
  * Compatibility exports for gateway outbound use cases.
  *
- * Stage 1 moves implementation into focused modules under `src/outbound/` while
+ * initial persistence implementation moves implementation into focused modules under `src/outbound/` while
  * preserving existing imports from `federation-outbound.ts`. This file must stay
  * logic-free so route extraction and caller import cleanup remain isolated from
  * the outbound decomposition.

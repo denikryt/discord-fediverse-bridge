@@ -812,7 +812,7 @@ async function loadLocalParentMessageMapping(
   // mapping table proves that the parent has Discord placement state.
   const row = await requirePythonBridgeClient(options).loadMessageMappingByObjectId(objectId);
   if (row == null || row.publicationContext !== "community" || row.communityActorUrl == null) {
-    // Stage 7 personal-feed roots are not community reply parents. Stage 8
+    // personal feed publication personal-feed roots are not community reply parents. personal feed conversations
     // introduces their dedicated inbound conversation routing contract.
     return null;
   }

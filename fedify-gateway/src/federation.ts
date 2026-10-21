@@ -6,6 +6,7 @@ import {
 import { Accept, Announce, Create, Delete, Follow, Undo, Update } from "@fedify/vocab";
 
 import { getRawActivity } from "./activitypub-raw-cache.js";
+import { verifyDirectSourceAttribution, verifyForwardedSourceRecord } from "./verified-forwarded-source.js";
 import {
   buildBridgeServiceActor,
   buildLocalCommunityGroupActor,
@@ -48,7 +49,16 @@ export function createGatewayFederation(
     origin: config.fedifyOrigin,
     kv: new MemoryKvStore(),
     queue: new InProcessMessageQueue(),
+    manuallyStartQueue: config.manuallyStartQueueForTests === true,
     skipSignatureVerification: config.skipSignatureVerificationForTests === true,
+    // Fixture loaders model public peers without requiring real DNS; loadConfig
+    // never supplies one, so production retains Fedify's validated loader.
+    ...(config.documentLoaderFactoryForTests == null
+      ? {}
+      : { documentLoaderFactory: config.documentLoaderFactoryForTests }),
+    ...(config.authenticatedDocumentLoaderFactoryForTests == null
+      ? {}
+      : { authenticatedDocumentLoaderFactory: config.authenticatedDocumentLoaderFactoryForTests }),
   });
 
   federation
@@ -135,6 +145,10 @@ export function createGatewayFederation(
         // Direct Create handling is the happy path when the remote server does
         // not wrap local objects inside Announce. Errors must be logged here
         // because the inbox already returns 202 before async processing finishes.
+        const sourceActivityJson = verifyDirectSourceAttribution(
+          { id: activity.id?.href ?? null, actorId: activity.actorId?.href ?? null },
+          await activity.toJsonLd(),
+        );
         const event = await normalizeCreateActivity(activity, {
           pythonBridgeClient: getPythonBridgeClient(config),
         });
@@ -143,7 +157,6 @@ export function createGatewayFederation(
           return;
         }
 
-        const sourceActivityJson = await activity.toJsonLd() as Record<string, unknown>;
         event.source_activity_json = sourceActivityJson;
         event.source_activity_id = typeof sourceActivityJson.id === "string" ? sourceActivityJson.id : event.delivery_id;
         event.source_announce_id = null;
@@ -176,27 +189,29 @@ export function createGatewayFederation(
     .on(Announce, async (ctx, activity) => {
       try {
         // Lemmy wraps Create, Update, and Delete inside Announce.
-        // Try each type in turn using the cached raw inbox payload.
-        const announceEnvelope = getAnnounceEnvelope(ctx, activity.id?.href ?? null);
+        // Use the payload bound to this accepted Fedify delivery. A shared
+        // raw cache can be replaced by a later request with the same ID.
+        const announceEnvelope = await getAnnounceEnvelope(ctx, activity);
 
         logAnnounceDebug(isDebug, announceEnvelope);
 
         const createRecord = extractCreateRecord(announceEnvelope.rawRecord);
         if (createRecord != null) {
-          const event = await normalizeCreateActivityFromJson(createRecord, {
+          const verifiedRecord = await verifyForwardedActivityOrigin(ctx, activity, announceEnvelope.rawRecord, createRecord, announceEnvelope.acceptedObject);
+          const event = await normalizeCreateActivityFromJson(verifiedRecord, {
             pythonBridgeClient: getPythonBridgeClient(config),
           });
           if (event == null) {
             logDebug(isDebug, "normalizeCreateActivityFromJson returned null");
             return;
           }
-          const nestedObject = asRecord(createRecord.object);
-          event.source_activity_json = createRecord;
-          event.source_activity_id = asString(createRecord.id) ?? event.delivery_id;
+          const nestedObject = asRecord(verifiedRecord.object);
+          event.source_activity_json = verifiedRecord;
+          event.source_activity_id = asString(verifiedRecord.id) ?? event.delivery_id;
           event.source_announce_id = announceEnvelope.announceId;
           await deliverNormalizedEvent(config, event, {
             announceId: announceEnvelope.announceId,
-            createId: asString(createRecord.id) ?? event.delivery_id,
+            createId: asString(verifiedRecord.id) ?? event.delivery_id,
             eventType: event.event_type,
             kind: event.object.kind,
             objectId: asString(nestedObject?.id) ?? event.object.ap_id,
@@ -206,19 +221,20 @@ export function createGatewayFederation(
 
         const updateRecord = extractUpdateRecord(announceEnvelope.rawRecord);
         if (updateRecord != null) {
-          const event = await normalizeUpdateActivityFromJson(updateRecord, {
+          const verifiedRecord = await verifyForwardedActivityOrigin(ctx, activity, announceEnvelope.rawRecord, updateRecord, announceEnvelope.acceptedObject);
+          const event = await normalizeUpdateActivityFromJson(verifiedRecord, {
             pythonBridgeClient: getPythonBridgeClient(config),
           });
           if (event == null) {
             logDebug(isDebug, "normalizeUpdateActivityFromJson returned null");
             return;
           }
-          event.source_activity_json = updateRecord;
-          event.source_activity_id = asString(updateRecord.id) ?? event.delivery_id;
+          event.source_activity_json = verifiedRecord;
+          event.source_activity_id = asString(verifiedRecord.id) ?? event.delivery_id;
           event.source_announce_id = announceEnvelope.announceId;
           await deliverNormalizedEvent(config, event, {
             announceId: announceEnvelope.announceId,
-            updateId: asString(updateRecord.id) ?? event.delivery_id,
+            updateId: asString(verifiedRecord.id) ?? event.delivery_id,
             eventType: event.event_type,
             objectId: event.object.ap_id,
           });
@@ -227,17 +243,18 @@ export function createGatewayFederation(
 
         const deleteRecord = extractDeleteRecord(announceEnvelope.rawRecord);
         if (deleteRecord != null) {
-          const event = await normalizeDeleteActivityFromJson(deleteRecord, { pythonBridgeClient: getPythonBridgeClient(config) });
+          const verifiedRecord = await verifyForwardedActivityOrigin(ctx, activity, announceEnvelope.rawRecord, deleteRecord, announceEnvelope.acceptedObject);
+          const event = await normalizeDeleteActivityFromJson(verifiedRecord, { pythonBridgeClient: getPythonBridgeClient(config) });
           if (event == null) {
             logDebug(isDebug, "normalizeDeleteActivityFromJson returned null");
             return;
           }
-          event.source_activity_json = deleteRecord;
-          event.source_activity_id = asString(deleteRecord.id) ?? event.delivery_id;
+          event.source_activity_json = verifiedRecord;
+          event.source_activity_id = asString(verifiedRecord.id) ?? event.delivery_id;
           event.source_announce_id = announceEnvelope.announceId;
           await deliverNormalizedEvent(config, event, {
             announceId: announceEnvelope.announceId,
-            deleteId: asString(deleteRecord.id) ?? event.delivery_id,
+            deleteId: asString(verifiedRecord.id) ?? event.delivery_id,
             eventType: event.event_type,
             objectId: event.object.ap_id,
           });
@@ -268,9 +285,9 @@ export function createGatewayFederation(
       });
     })
     .on(Undo, async (ctx, activity) => {
-      const activityId = activity.id?.href;
-      const cachedRaw = activityId == null ? null : getRawActivity(activityId);
-      const rawForUndo = asRecord(cachedRaw?.rawJson ?? ctx.data.activitypubRawJson);
+      // The inbox context and typed activity belong to this authenticated
+      // delivery. An ID-keyed raw cache can be replaced before the queue runs.
+      const rawForUndo = await getAcceptedUndoRecord(ctx, activity);
       const event = await buildLocalUnfollowRequestedEvent(
         ctx.data,
         activity,
@@ -287,23 +304,12 @@ export function createGatewayFederation(
         followActivityId: event.object.follow_activity_id,
       });
     })
-    .on(Accept, async (ctx, activity) => {
-      const activityId = activity.id?.href ?? null;
-      const rawJson = ctx.data.activitypubRawJson;
-      console.log("[Fedify][debug] Accept received", {
-        activityId,
-        actorId: activity.actorId?.href,
-        objectId: activity.objectId?.href,
-        rawObject: (rawJson as Record<string, unknown>)?.object,
-      });
-      const event = buildFollowAcceptedEvent(
-        activity,
-        ctx.data,
-        activityId,
-      );
+    .on(Accept, async (_ctx, activity) => {
+      // A queued Accept must be interpreted only from Fedify's authenticated
+      // activity. The shared raw cache can contain an unsigned same-ID body.
+      const event = await buildFollowAcceptedEvent(activity, config);
       if (event == null) {
-        logDebug(isDebug, "Accept did not contain a follow activity id");
-        console.log("[Fedify][debug] Accept null event — raw activity:", JSON.stringify(rawJson, null, 2));
+        logDebug(isDebug, "Accept did not reference a valid bridge Follow");
         return;
       }
 
@@ -315,6 +321,34 @@ export function createGatewayFederation(
     });
 
   return federation;
+}
+
+/** Bind the Follow used for an unfollow to this accepted Fedify Undo. */
+async function getAcceptedUndoRecord(
+  ctx: object,
+  undo: Undo,
+): Promise<Record<string, unknown> | null> {
+  const typed = asRecord(await undo.toJsonLd());
+  const received = asRecord((ctx as { activity?: unknown }).activity);
+  if (typed == null) return null;
+  if (received == null) return typed;
+
+  const typedFollow = asRecord(typed.object);
+  const receivedFollow = asRecord(received.object);
+  // Only fields that determine the resulting unfollow are accepted. Fedify's
+  // typed representation independently proves what the authenticated listener
+  // parsed; comparing it prevents a context/body mismatch from changing the
+  // Follow ID, actor, or local target.
+  if (typed.type !== "Undo" || received.type !== "Undo" ||
+      typed.id !== undo.id?.href || received.id !== typed.id ||
+      typed.actor !== undo.actorId?.href || received.actor !== typed.actor ||
+      typedFollow?.type !== "Follow" || receivedFollow?.type !== "Follow" ||
+      typedFollow.id !== receivedFollow.id ||
+      typedFollow.actor !== receivedFollow.actor ||
+      typedFollow.object !== receivedFollow.object) {
+    return null;
+  }
+  return received;
 }
 
 async function deliverNormalizedEvent(
@@ -336,7 +370,10 @@ export async function deliverDirectUpdateActivity(
   isDebug = false,
 ): Promise<void> {
   /** Normalize one direct Update and deliver it to the Python bridge. */
-  const sourceActivityJson = await activity.toJsonLd() as Record<string, unknown>;
+  const sourceActivityJson = verifyDirectSourceAttribution(
+    { id: activity.id?.href ?? null, actorId: activity.actorId?.href ?? null },
+    await activity.toJsonLd(),
+  );
   const event = await normalizeUpdateActivityFromJson(sourceActivityJson, {
     pythonBridgeClient: getPythonBridgeClient(config),
   });
@@ -360,7 +397,10 @@ export async function deliverDirectDeleteActivity(
   isDebug = false,
 ): Promise<void> {
   /** Normalize one direct Delete and deliver it to the Python bridge. */
-  const sourceActivityJson = await activity.toJsonLd() as Record<string, unknown>;
+  const sourceActivityJson = verifyDirectSourceAttribution(
+    { id: activity.id?.href ?? null, actorId: activity.actorId?.href ?? null },
+    await activity.toJsonLd(),
+  );
   const event = await normalizeDeleteActivityFromJson(sourceActivityJson, { pythonBridgeClient: getPythonBridgeClient(config) });
   if (event == null) {
     logDebug(isDebug, "normalizeDeleteActivityFromJson returned null for direct Delete");
@@ -376,23 +416,72 @@ export async function deliverDirectDeleteActivity(
   });
 }
 
-function getAnnounceEnvelope(
+
+/** Verify an Announce's nested authorship using a separate origin dereference. */
+async function verifyForwardedActivityOrigin(
+  ctx: {
+    lookupObject(identifier: string, options?: { crossOrigin?: "throw" }): Promise<unknown>;
+  },
+  announce: Announce,
+  envelope: Record<string, unknown> | null,
+  nested: Record<string, unknown>,
+  acceptedObject: unknown,
+): Promise<Record<string, unknown>> {
+  // The typed Announce comes from Fedify's authenticated listener. Never use
+  // cached HTTP-body actor assertions as proof of the nested author's claim.
+  try {
+    return await verifyForwardedSourceRecord(
+      {
+        id: announce.id?.href ?? null,
+        actorId: announce.actorId?.href ?? null,
+        // Fedify derived this ID from the accepted activity, independently of
+        // the mutable raw-body cache used for nested payload recovery.
+        objectId: announce.objectId?.href ?? null,
+        objectPayload: acceptedObject,
+      },
+      envelope,
+      nested,
+      async (activityId) => {
+        // The patched Fedify document loader is the SSRF and origin authority.
+        // crossOrigin=throw rejects a returned resource with a different origin.
+        const source = await ctx.lookupObject(activityId, { crossOrigin: "throw" });
+        if (source == null || typeof source !== "object" ||
+            !("toJsonLd" in source) || typeof source.toJsonLd !== "function") {
+          return null;
+        }
+        return await source.toJsonLd();
+      },
+    );
+  } catch (error) {
+    if ((nested.type === "Update" || nested.type === "Delete") &&
+        error instanceof Error && /unverifiable/i.test(error.message)) {
+      // MULTIPLATFORM_DISCORD_ADAPTER_TEMP_FORWARDED_MUTATION_PROOF: A relayed Update/Delete without independently provable original author is rejected; remove only when a verified author-signature or origin lookup mechanism safely supports non-dereferenceable mutations.
+      throw new Error("forwarded mutation origin_unverifiable", { cause: error });
+    }
+    throw error;
+  }
+}
+
+async function getAnnounceEnvelope(
   ctx: { data: GatewayContextData },
-  announceId: string | null,
-): {
+  announce: Announce,
+): Promise<{
   announceId: string | null;
   rawRecord: Record<string, unknown> | null;
   rawBodySha256: string | undefined;
-} {
-  // Prefer the payload stored at HTTP-ingest time because queued handler
-  // execution may no longer have the original request-local body attached.
-  const cachedRaw = announceId ? getRawActivity(announceId) : null;
-  const rawJson = cachedRaw?.rawJson ?? ctx.data.activitypubRawJson;
+  acceptedObject: unknown;
+}> {
+  // Fedify 2.2.19 retains the original accepted payload on its inbox context.
+  // Its typed Announce is an independent content check and a safe fallback if
+  // the internal context field changes in a later pinned Fedify version.
+  const acceptedJson = asRecord(await announce.toJsonLd());
+  const receivedJson = asRecord((ctx as { activity?: unknown }).activity);
+  const rawJson = receivedJson ?? acceptedJson;
   return {
-    announceId,
+    announceId: announce.id?.href ?? null,
     rawRecord: asRecord(rawJson),
-    rawBodySha256:
-      cachedRaw?.rawBodySha256 ?? ctx.data.activitypubRawBodySha256,
+    rawBodySha256: ctx.data.activitypubRawBodySha256,
+    acceptedObject: acceptedJson?.object,
   };
 }
 
@@ -476,35 +565,37 @@ function logDebug(isDebug: boolean, message: string): void {
   }
 }
 
-export function buildFollowAcceptedEvent(
+/** Convert a typed Accept of our outbound Follow into a lifecycle event. */
+export async function buildFollowAcceptedEvent(
   activity: Accept,
-  data: GatewayContextData,
-  fallbackDeliveryId: string | null,
-): FollowAcceptedEvent | null {
-  // The typed Accept activity is the source of truth for follow lifecycle
-  // events. Raw JSON exists only as a fallback because Hono/Fedify request
-  // body handling can be unavailable when the internal queue re-dispatches.
-  const rawJson = data.activitypubRawJson
-    ?? (fallbackDeliveryId != null ? getRawActivity(fallbackDeliveryId)?.rawJson : undefined);
-  const rawRecord = asRecord(rawJson);
-  const actorId = activity.actorId?.href ?? asString(rawRecord?.actor);
-  const objectValue = rawRecord?.object;
-  const objectRecord = asRecord(objectValue);
-  const followActivityId =
-    activity.objectId?.href
-    ?? asString(objectValue)
-    ?? asString(objectRecord?.id);
+  config: GatewayContextData,
+): Promise<FollowAcceptedEvent | null> {
+  const actorId = activity.actorId?.href;
+  const followActivityId = activity.objectId?.href;
   if (actorId == null || followActivityId == null) {
     return null;
   }
+
+  const typed = asRecord(await activity.toJsonLd());
+  const objectValue = typed?.object;
+  if (typed?.type !== "Accept" || typed.actor !== actorId) return null;
+  if (typeof objectValue === "string") {
+    // A URL reference is sufficient only because Python checks this exact ID
+    // against a previously sent Follow owned by the Accept actor.
+    if (objectValue !== followActivityId) return null;
+  } else {
+    const follow = asRecord(objectValue);
+    const bridgeActorId = getBridgeActorIdentity(config).actorId.href;
+    // An embedded activity must actually be our Follow to this community;
+    // another activity with the same ID is not an Accept(Follow).
+    if (follow?.type !== "Follow" || follow.id !== followActivityId ||
+        follow.actor !== bridgeActorId || follow.object !== actorId) return null;
+  }
+
   return {
     actor_id: actorId,
     community_actor_id: actorId,
-    delivery_id:
-      activity.id?.href
-      ?? asString(rawRecord?.id)
-      ?? fallbackDeliveryId
-      ?? `follow-accepted:${followActivityId}`,
+    delivery_id: activity.id?.href ?? `follow-accepted:${followActivityId}`,
     event_type: "follow.accepted",
     object: {
       follow_activity_id: followActivityId,
@@ -631,7 +722,7 @@ function matchesActorSpecificInboxOwner(
 }
 
 function parseTypedActorAlias(resource: URL, origin: string): string | null {
-  // Only typed actor aliases are accepted after Stage 4; old actor URLs are not
+  // Only typed actor aliases are accepted after typed ActivityPub identity migration; old actor URLs are not
   // rewritten because they are no longer a compatibility surface.
   if (resource.origin !== new URL(origin).origin) return null;
   const match = resource.pathname.match(/^\/actors\/(services|users|communities)\/([^/]+)$/);
@@ -639,7 +730,7 @@ function parseTypedActorAlias(resource: URL, origin: string): string | null {
 }
 
 function parseUserAlias(resource: URL, origin: string): string | null {
-  // Stage 4 accepts only the typed user actor URL as local User identity.
+  // typed ActivityPub identity migration accepts only the typed user actor URL as local User identity.
   const resourceOrigin = new URL(origin);
   if (resource.origin !== resourceOrigin.origin) {
     return null;

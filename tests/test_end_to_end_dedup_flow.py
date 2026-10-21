@@ -1,4 +1,4 @@
-"""Runtime scenarios for Stage 7 deduplication and inbound hardening."""
+"""Runtime scenarios for personal feed publication deduplication and inbound hardening."""
 
 from __future__ import annotations
 from support.runtime import build_test_policy_service
@@ -19,8 +19,8 @@ from tests_constants import BRIDGE_HOST_DOMAIN, LEMMY_EXAMPLE_DOMAIN
 
 
 def _database(tmp_path: Path) -> Database:
-    """Create a real SQLite-backed repository for Stage 7 runtime scenarios."""
-    database = Database(f"sqlite:///{tmp_path / 'bridge-stage7.db'}")
+    """Create a real SQLite-backed repository for personal feed publication runtime scenarios."""
+    database = Database(f"sqlite:///{tmp_path / 'bridge-personal feed publication.db'}")
     database.migrate()
     return database
 

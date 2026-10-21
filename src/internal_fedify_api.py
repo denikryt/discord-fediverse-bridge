@@ -222,7 +222,7 @@ def create_internal_fedify_router(runtime: Runtime) -> APIRouter:
             body_markdown=row.body_markdown,
             in_reply_to_object_id=row.in_reply_to_object_id,
             published_at=row.published_at.isoformat(),
-            # MULTIPLATFORM_STAGE01_TEMP: Existing Fedify JSON DTO keeps Discord fields until the gateway contract is versioned.
+            # MULTIPLATFORM_DISCORD_PROJECTION_TEMP: Existing Fedify JSON DTO keeps Discord fields until the gateway contract is versioned.
             discord_guild_id=row.discord_guild_id,
             discord_channel_id=row.discord_channel_id,
             discord_message_id=row.discord_message_id,
@@ -536,7 +536,7 @@ def create_internal_fedify_router(runtime: Runtime) -> APIRouter:
             body_markdown=row.body_markdown,
             in_reply_to_object_id=row.in_reply_to_object_id,
             published_at=_isoformat(row.published_at),
-            # MULTIPLATFORM_STAGE01_TEMP: Existing Fedify JSON DTO keeps Discord fields until the gateway contract is versioned.
+            # MULTIPLATFORM_DISCORD_PROJECTION_TEMP: Existing Fedify JSON DTO keeps Discord fields until the gateway contract is versioned.
             discord_guild_id=row.discord_guild_id,
             discord_channel_id=row.discord_channel_id,
             discord_message_id=row.discord_message_id,
@@ -589,7 +589,7 @@ def create_internal_fedify_router(runtime: Runtime) -> APIRouter:
             actor_url=row.actor_url,
             publication_context=row.publication_context,
             community_actor_url=row.community_actor_url,
-            # MULTIPLATFORM_STAGE01_TEMP: Existing Fedify JSON DTO keeps Discord fields until the gateway contract is versioned.
+            # MULTIPLATFORM_DISCORD_PROJECTION_TEMP: Existing Fedify JSON DTO keeps Discord fields until the gateway contract is versioned.
             discord_guild_id=row.discord_guild_id,
             discord_channel_id=row.discord_channel_id,
             discord_message_id=row.discord_message_id,

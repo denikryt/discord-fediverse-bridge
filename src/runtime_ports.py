@@ -89,10 +89,10 @@ class PlatformInboundSinkPort(Protocol):
     """Single future Gateway ingress for normalized connector-scoped events."""
 
     async def handle_platform_event(self, event: PlatformInboundEvent) -> None:
-        """Accept a typed notice; actual routing will be wired in Stage 03."""
+        """Accept a typed notice; actual routing will be wired in Discord adapter integration."""
 
 
-# MULTIPLATFORM_STAGE02_TEMP: Legacy Discord-only runtime ports stay until Stage 03/04 replaces direct Discord delivery binds with PlatformAdapterPort; remove after all affected callers use the new port.
+# MULTIPLATFORM_LEGACY_DISCORD_PORT_TEMP: Legacy Discord-only runtime ports stay until Discord adapter and durable fan-out integration replaces direct Discord delivery binds with PlatformAdapterPort; remove after all affected callers use the new port.
 class DiscordDeliveryClientPort(Protocol):
     """Expose only Discord delivery operations used by community runtimes."""
 
@@ -106,8 +106,11 @@ class DiscordDeliveryClientPort(Protocol):
         """Return a Discord thread by snowflake id when it is still reachable."""
 
 
-class DiscordUserLookupPort(Protocol):
-    """Expose only the user fetch needed for User Actor follow notifications."""
+class DiscordOwnerNoticePort(Protocol):
+    """Discord-only owner DM transport, deliberately absent from Platform API."""
+
+    async def send_owner_notice(self, discord_user_id: int, content: str) -> None:
+        """Attempt one mention-safe Discord DM; no implicit retry on failure."""
 
     async def fetch_user(self, user_id: int) -> object:
         """Fetch one Discord user by snowflake id."""

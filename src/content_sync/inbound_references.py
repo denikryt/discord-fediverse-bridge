@@ -2,7 +2,10 @@
 
 from __future__ import annotations
 
-import discord
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    import discord
 
 
 def build_message_reference(
@@ -18,6 +21,10 @@ def build_message_reference(
     guild = getattr(discord_thread, "guild", None)
     if guild_id is None and guild is not None:
         guild_id = getattr(guild, "id", None)
+
+    # Legacy compatibility only: the SDK is loaded when a legacy physical
+    # writer actually constructs a reference, not when core is imported.
+    import discord
 
     return discord.MessageReference(
         message_id=message_id,

@@ -1,36 +1,40 @@
 /**
- * Remote community actor lookup for outbound gateway use cases.
+ * Remote community Actor resolution through Fedify's hardened document loader.
  *
- * The helper preserves the existing fetch headers and validation errors while
- * avoiding any signing, fanout, or subscription-policy responsibility.
+ * Caller-provided Actor and inbox URLs must not cross this boundary via a
+ * general-purpose fetch. Only Fedify's origin-checked lookup may supply the
+ * Actor's identity and inbox for outbound ActivityPub delivery.
  */
+import { admitRemoteDeliveryEndpoint } from "../remote-delivery-endpoints.js";
 
-/** Fetch one remote community actor and return its canonical id and inbox. */
+/** The narrow part of Fedify Context needed to dereference an Actor. */
+export interface RemoteActorLookupContext {
+  lookupObject(
+    identifier: string,
+    options?: { crossOrigin?: "throw" },
+  ): Promise<unknown>;
+}
+
+/** Resolve one remote community actor and check its canonical ID and inbox. */
 export async function fetchRemoteCommunity(
+  ctx: RemoteActorLookupContext,
   communityActorUrl: string,
 ): Promise<{ communityId: string; inboxUrl: string }> {
-  // Both follow and publish need the remote actor's canonical id and inbox, so
-  // the fetch/validation logic is shared here instead of being repeated.
-  const communityResponse = await fetch(communityActorUrl, {
-    headers: {
-      Accept: "application/activity+json",
-    },
-  });
-  if (!communityResponse.ok) {
-    throw new Error(
-      `Failed to fetch community actor: ${communityResponse.status}`,
-    );
+  // URL admission is an early filter. Fedify's document loader must also
+  // inspect resolved socket addresses and redirects during the actual GET.
+  const requested = admitRemoteDeliveryEndpoint(communityActorUrl);
+  const actor = await ctx.lookupObject(requested, { crossOrigin: "throw" });
+  if (actor == null || typeof actor !== "object") {
+    throw new Error("remote community actor could not be verified");
   }
-  const communityActor = await communityResponse.json();
-  const inboxUrl = communityActor.inbox;
-  const communityId = communityActor.id;
-
-  if (!inboxUrl) {
-    throw new Error("Community actor does not have an inbox");
+  const identity = (actor as { id?: unknown }).id;
+  const inbox = (actor as { inboxId?: unknown }).inboxId;
+  if (!(identity instanceof URL) || identity.href !== requested) {
+    throw new Error("remote community actor identity mismatch");
   }
-  if (!communityId) {
-    throw new Error("Community actor does not have an id");
+  if (!(inbox instanceof URL)) {
+    throw new Error("remote community actor does not have an inbox");
   }
-
-  return { communityId, inboxUrl };
+  const admittedInbox = admitRemoteDeliveryEndpoint(inbox.href);
+  return { communityId: identity.href, inboxUrl: admittedInbox };
 }

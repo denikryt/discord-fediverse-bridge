@@ -2,7 +2,7 @@
  * Gateway verification for local-community canonical key identity.
  *
  * Local communities are canonical ActivityPub Group actors under
- * `/actors/communities/{slug}`. This test locks the Stage 7 cleanup invariant
+ * `/actors/communities/{slug}`. This test locks the personal feed publication cleanup invariant
  * that retired `/communities/{slug}`, `/c/{slug}`, and untyped `/actors/{slug}`
  * routes stay unsupported while typed community signatures use the typed actor
  * URL as the key owner/key id.
@@ -16,6 +16,7 @@ import { webcrypto } from "node:crypto";
 import { exportJwk } from "@fedify/fedify";
 import initSqlJs, { seedBridgeActorJwk } from "./support/sqlite-fixture.js";
 import { closeAllPythonBridgeFixtures, importFixedRsaKeyPair, startPythonBridgeFixture } from "./support/python-bridge-fixture.js";
+import { installSignedJsonSocketFixture, lowercaseSignedHeaders } from "./support/signed-json-socket-fixture.js";
 
 import { buildLocalCommunityGroupActor } from "../src/actors.js";
 import { loadLocalCommunityIdentity } from "../src/actor-store.js";
@@ -76,7 +77,11 @@ async function testHttpActorRoutesPublishCanonicalKey(config: GatewayConfig): Pr
   const app = createGatewayApp(config);
 
   for (const oldPath of ["/communities/hackers", "/c/hackers", "/actors/hackers"]) {
-    const oldResponse = await app.request(oldPath);
+    // Explicit ActivityPub negotiation keeps this a route-existence check:
+    // unsupported paths must return 404, not a Fedify 406 content-type response.
+    const oldResponse = await app.request(oldPath, {
+      headers: { Accept: "application/activity+json" },
+    });
     assert.equal(oldResponse.status, 404, `${oldPath} must be unsupported`);
   }
 
@@ -161,25 +166,19 @@ async function testRelaySignsWithCanonicalCommunityKey(config: GatewayConfig): P
   assert.match(deliveries[0]?.headers.signature ?? "", /keyId="https:\/\/discord-bridge.example.com\/actors\/communities\/hackers#main-key"/);
 }
 
+/** Record the exact relay POST while leaving local fixture HTTP requests intact. */
 function installFetchRecorder(
   deliveries: Array<{ inboxId: string; payload: Record<string, unknown>; headers: Record<string, string> }>,
 ): () => void {
-  /** Capture signed JSON relay delivery so key identity is verified at the HTTP signature boundary. */
-  const originalFetch = globalThis.fetch;
-  globalThis.fetch = async (input: RequestInfo | URL, init?: RequestInit): Promise<Response> => {
-    const target = input instanceof URL ? input.href : String(input);
-    if (target.startsWith("http://127.0.0.1:")) return await originalFetch(input, init);
-    const headers = new Headers(init?.headers);
+  /** Capture the native HTTPS transport used by signed relay delivery. */
+  return installSignedJsonSocketFixture((request) => {
     deliveries.push({
-      inboxId: input instanceof URL ? input.href : String(input),
-      payload: JSON.parse(String(init?.body ?? "{}")) as Record<string, unknown>,
-      headers: Object.fromEntries(headers.entries()),
+      inboxId: request.url,
+      payload: JSON.parse(request.body) as Record<string, unknown>,
+      headers: lowercaseSignedHeaders(request.headers),
     });
-    return new Response("", { status: 202, statusText: "Accepted" });
-  };
-  return () => {
-    globalThis.fetch = originalFetch;
-  };
+    return { status: 202 };
+  });
 }
 
 function buildFakeFederation(

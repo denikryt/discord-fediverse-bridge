@@ -16,7 +16,7 @@ from ..bridge_policy import BridgePolicyService
 from ..db import Database
 from ..fedify_gateway_client import DeleteContentRequest, FedifyGatewayClient, UpdateContentRequest
 from ..inbound_activity_outcomes import InboundActivityOutcome
-from ..runtime_ports import DiscordMutationContext
+from ..runtime_ports import DiscordMutationContext, PlatformAdapterPort
 from .discord_surface_fanout import LocalCommunitySurfaceFanout
 from .federation_fanout import LocalCommunityFederationFanout
 from .rendering import format_inbound_comment_body, format_inbound_post_body
@@ -54,13 +54,20 @@ class LocalCommunityMutationHandler:
         self.surface_fanout = surface_fanout
         self.federation_fanout = federation_fanout
         self.is_community_id_disabled = is_community_id_disabled
+        self.discord_adapter: PlatformAdapterPort | None = None
+
+    def bind_discord_adapter(self, adapter: PlatformAdapterPort) -> None:
+        """Bind the single verified physical transport for Discord-originated mutations."""
+        if self.discord_adapter is not None:
+            raise RuntimeError('Local Community mutation adapter is already configured')
+        self.discord_adapter = adapter
 
     def _surface_can_mutate(self, surface: object, local_community_id: int) -> bool:
         """Return whether one Discord surface can author canonical mutations.
 
         Host surfaces are always authoritative.  Local-subscriber surfaces are
         authoritative only while the matching local subscriber row remains
-        active, matching Stage 4's create-source routing invariant.
+        active, matching local subscriber participation's create-source routing invariant.
         """
         if getattr(surface, "role") != "local_subscriber":
             return True
@@ -207,7 +214,7 @@ class LocalCommunityMutationHandler:
     ) -> None:
         """Propagate one Discord-authored local-community edit to all participants.
 
-        Stage 5 resolves the edited Discord message through surface rows first.
+        participant mutation support resolves the edited Discord message through surface rows first.
         That lets host and local-subscriber copies both resolve the same
         canonical AP object, while still excluding the user-edited source copy
         from local Discord fanout.
@@ -247,6 +254,7 @@ class LocalCommunityMutationHandler:
                 thread_row=thread_row,
                 source_surface_id=getattr(thread_surface, "id"),
                 new_content=new_content,
+                adapter=self.discord_adapter,
             )
             return
 
@@ -288,6 +296,7 @@ class LocalCommunityMutationHandler:
             message_row=message_row,
             source_surface_id=getattr(message_surface, "id"),
             new_content=new_content,
+            adapter=self.discord_adapter,
         )
 
     async def handle_discord_message_delete(
@@ -327,6 +336,7 @@ class LocalCommunityMutationHandler:
             await self.surface_fanout.fanout_thread_delete(
                 thread_row=thread_row,
                 source_surface_id=getattr(thread_surface, "id"),
+                adapter=self.discord_adapter,
             )
             return
 
@@ -364,6 +374,7 @@ class LocalCommunityMutationHandler:
         await self.surface_fanout.fanout_message_delete(
             message_row=message_row,
             source_surface_id=getattr(message_surface, "id"),
+            adapter=self.discord_adapter,
         )
 
     async def handle_inbound_post_update(
@@ -390,6 +401,7 @@ class LocalCommunityMutationHandler:
             thread_row=thread_row,
             source_surface_id=None,
             new_content=format_inbound_post_body(event),
+            adapter=getattr(runtime, 'discord_adapter', None),
         )
         if local_community is not None:
             await self.federation_fanout.relay_update_or_delete(
@@ -427,6 +439,7 @@ class LocalCommunityMutationHandler:
         await self.surface_fanout.fanout_thread_delete(
             thread_row=thread_row,
             source_surface_id=None,
+            adapter=getattr(runtime, 'discord_adapter', None),
         )
         if local_community is not None:
             await self.federation_fanout.relay_update_or_delete(
@@ -476,6 +489,7 @@ class LocalCommunityMutationHandler:
             message_row=message_row,
             source_surface_id=None,
             new_content=format_inbound_comment_body(event),
+            adapter=getattr(runtime, 'discord_adapter', None),
         )
         if local_community is not None:
             await self.federation_fanout.relay_update_or_delete(
@@ -524,6 +538,7 @@ class LocalCommunityMutationHandler:
         await self.surface_fanout.fanout_message_delete(
             message_row=message_row,
             source_surface_id=None,
+            adapter=getattr(runtime, 'discord_adapter', None),
         )
         if local_community is not None:
             await self.federation_fanout.relay_update_or_delete(
