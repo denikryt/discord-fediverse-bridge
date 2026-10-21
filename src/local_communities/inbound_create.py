@@ -617,8 +617,21 @@ class LocalCommunityInboundCreateHandler:
         object_id = getattr(object_payload, "ap_id")
         activity_id = getattr(event, "delivery_id")
 
-        # Repository insertion is transactionally idempotent; an AP key reused
-        # with a different physical Discord receipt must fail, never disappear.
+        # An independent local-community Discord copy can have a different
+        # physical ID from an existing generic AP receipt. Keep that first
+        # canonical lookup immutable while persisting the community-specific
+        # copy in local_community_messages. Never adopt a different AP identity.
+        existing = self.database.message_mappings.get_message_mapping_by_object_id(object_id)
+        if existing is not None and (
+            existing.source_platform, existing.source_id,
+            existing.activity_id, existing.actor_url, existing.community_actor_url,
+        ) == (
+            "activitypub", object_id, activity_id,
+            getattr(event, "actor_id"), getattr(event, "community_actor_id"),
+        ):
+            return
+        # Repository insertion remains transactionally strict for an AP key
+        # reused with incompatible provenance or a different ActivityPub ID.
         self.database.message_mappings.create_message_mapping(
             source_platform="activitypub",
             source_id=object_id,

@@ -79,8 +79,9 @@ async def test_thread_callback_routes_once_without_legacy_fetch_or_publish(bridg
 async def test_forum_message_callback_routes_once_without_legacy_publish(bridge, monkeypatch):
     """Accepted forum reply reaches same normalized transport as Personal Feed reply."""
     import discord
-    class Thread(discord.Thread):
-        """Model an observed thread rather than a text-root channel."""
+    class Thread:
+        """Model a concrete thread without constructing the live Discord SDK."""
+
     monkeypatch.setattr(discord, 'Thread', Thread)
     bot, seen = setup_world()
     channel = Thread()

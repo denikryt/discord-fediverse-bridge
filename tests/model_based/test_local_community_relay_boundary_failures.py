@@ -35,12 +35,14 @@ async def test_renderer_failure_keeps_pending_rows_without_transport(
         fail_render,
     )
 
-    with pytest.raises(RuntimeError, match="render failed"):
-        await harness.runtime.federation_fanout.relay_create(
-            event=event,
-            local_community=harness.local_community,
-            object_kind="post",
-        )
+    result = await harness.runtime.federation_fanout.relay_create(
+        event=event,
+        local_community=harness.local_community,
+        object_kind="post",
+    )
+    # Rendering failures are isolated per recipient; neither target reaches
+    # the gateway, but both have durable retryable failure records.
+    assert result.attempted == 0
 
     observed = harness.observe(event)
     assert observed.source_count == 1
@@ -48,15 +50,15 @@ async def test_renderer_failure_keeps_pending_rows_without_transport(
         row.target_actor_id: (row.status, row.attempt_count)
         for row in observed.deliveries
     } == {
-        ALICE: ("pending", 0),
-        CAROL: ("pending", 0),
+        ALICE: ("failed", 1),
+        CAROL: ("failed", 1),
     }
     harness.gateway_boundary.send_local_community_relay.assert_not_awaited()
 
 
 @pytest.mark.asyncio
 async def test_gateway_exception_keeps_pending_rows_retryable(tmp_path: Path) -> None:
-    """A raised transport call leaves all attempted rows pending with zero attempts."""
+    """An unavailable gateway records isolated retryable outcomes for each target."""
     harness = LocalCommunityRelayHarness(tmp_path, database_name="gateway-exception.db")
     harness.add_default_subscribers()
     event = harness.post_event(suffix="gateway-exception")
@@ -64,17 +66,19 @@ async def test_gateway_exception_keeps_pending_rows_retryable(tmp_path: Path) ->
         "gateway unavailable"
     )
 
-    with pytest.raises(RuntimeError, match="gateway unavailable"):
-        await harness.runtime.federation_fanout.relay_create(
-            event=event,
-            local_community=harness.local_community,
-            object_kind="post",
-        )
+    result = await harness.runtime.federation_fanout.relay_create(
+        event=event,
+        local_community=harness.local_community,
+        object_kind="post",
+    )
+    # A transport-wide exception is materialized as one independent failure
+    # per recipient, not raised after abandoning the other receipt rows.
+    assert (result.attempted, result.failed) == (2, 2)
 
     observed = harness.observe(event)
     assert observed.source_count == 1
-    assert all(row.status == "pending" for row in observed.deliveries)
-    assert all(row.attempt_count == 0 for row in observed.deliveries)
+    assert all(row.status == "failed" for row in observed.deliveries)
+    assert all(row.attempt_count == 1 for row in observed.deliveries)
 
 
 @pytest.mark.asyncio
@@ -115,7 +119,7 @@ async def test_second_outcome_persistence_failure_keeps_first_commit(
     )
     assert [(row.status, row.attempt_count) for row in rows] == [
         ("delivered", 1),
-        ("pending", 0),
+        ("pending", 1),
     ]
 
 
@@ -124,7 +128,7 @@ async def test_second_outcome_persistence_failure_keeps_first_commit(
 def test_defined_pre_result_failures_preserve_retryable_rows(
     failure_boundary: str,
 ) -> None:
-    """Both defined pre-result failures preserve pending rows for later retry."""
+    """Renderer and transport failures preserve per-target retryable receipts."""
     import asyncio
 
     with TemporaryDirectory() as directory:
@@ -147,19 +151,19 @@ def test_defined_pre_result_failures_preserve_retryable_rows(
                     RuntimeError("gateway unavailable")
                 )
 
-            with pytest.raises(RuntimeError):
-                asyncio.run(
-                    harness.runtime.federation_fanout.relay_create(
-                        event=event,
-                        local_community=harness.local_community,
-                        object_kind="post",
-                    )
+            result = asyncio.run(
+                harness.runtime.federation_fanout.relay_create(
+                    event=event,
+                    local_community=harness.local_community,
+                    object_kind="post",
                 )
+            )
+            assert result.failed == (0 if failure_boundary == "renderer" else 2)
 
             observed = harness.observe(event)
             assert observed.source_count == 1
-            assert {row.status for row in observed.deliveries} == {"pending"}
-            assert {row.attempt_count for row in observed.deliveries} == {0}
+            assert {row.status for row in observed.deliveries} == {"failed"}
+            assert {row.attempt_count for row in observed.deliveries} == {1}
         finally:
             patcher.undo()
             harness.database.engine.dispose()

@@ -130,7 +130,7 @@ def world(tmp_path):
         ('comment', comment_id, 'https://bridge.example/create/comment/39', 1201),
     ):
         db.activitypub_objects.create_published_activity_object(
-            actor_username='alice', actor_url='https://bridge.example/users/alice',
+            actor_username='alice', actor_url='https://bridge.example/actors/users/alice',
             community_actor_url=community.actor_url, activity_id=activity_id,
             object_id=object_id, kind=kind, title='A post' if kind == 'post' else None,
             body_markdown='original', in_reply_to_object_id=post_id if kind == 'comment' else None,

@@ -62,7 +62,7 @@ def _post(*, activity_id='https://remote.test/create/post',
     return SimpleNamespace(
         delivery_id=activity_id, source_activity_id=activity_id,
         source_announce_id=None, source_activity_json=source,
-        community_actor_id='https://bridge.test/c/hackers', actor_id=actor_id,
+        community_actor_id='https://bridge.test/actors/communities/hackers', actor_id=actor_id,
         object=SimpleNamespace(ap_id=obj_id, kind='post', title=title,
                                body_markdown=body, post_ap_id=None,
                                parent_ap_id=None, author_name='bob'),

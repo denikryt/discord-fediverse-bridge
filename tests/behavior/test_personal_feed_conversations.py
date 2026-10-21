@@ -323,7 +323,6 @@ async def test_worker_stop_cancels_blocked_discord_call_without_spending_attempt
 ) -> None:
     """Shutdown interrupts a stalled Discord await and leaves the claim restartable."""
     import asyncio
-    from types import SimpleNamespace
 
     from src.models import InboundDiscordDelivery, User
     from src.personal_feed_discord_delivery_worker import (
@@ -371,9 +370,12 @@ async def test_worker_stop_cancels_blocked_discord_call_without_spending_attempt
         await never.wait()
         raise AssertionError("unreachable")
 
-    bot = SimpleNamespace(get_channel=lambda _id: None, fetch_channel=blocked_fetch)
+    from test_personal_feed_adapter_worker import RecordingAdapter
+
+    adapter = RecordingAdapter()
+    adapter.fetch_channel = blocked_fetch
     worker = PersonalFeedDiscordDeliveryWorker(
-        database=database, bot=bot, personal_feed_service=service
+        database=database, adapter=adapter, personal_feed_service=service
     )
     worker.start()
     await asyncio.wait_for(entered.wait(), timeout=1)
@@ -391,10 +393,6 @@ async def test_worker_creates_deterministic_thread_and_sends_without_mentions(
     tmp_path,
 ) -> None:
     """A retained remote reply creates the root thread once and records one Discord message."""
-    from types import SimpleNamespace
-
-    import discord
-
     from src.models import InboundDiscordDelivery, User
     from src.personal_feed_discord_delivery_worker import (
         PersonalFeedDiscordDeliveryWorker,
@@ -433,47 +431,27 @@ async def test_worker_creates_deterministic_thread_and_sends_without_mentions(
         destination_channel_id=10,
         parent_known=True,
     )
-    sent: list[tuple[str, object]] = []
+    from test_personal_feed_adapter_worker import RecordingAdapter
 
-    async def send(content: str, *, allowed_mentions: object) -> object:
-        sent.append((content, allowed_mentions))
-        return SimpleNamespace(id=777)
-
-    thread = SimpleNamespace(send=send)
-
-    async def create_thread(*, name: str) -> object:
-        assert "@" not in name
-        return thread
-
-    root_message = SimpleNamespace(create_thread=create_thread)
-    channel = SimpleNamespace(fetch_message=lambda _id: _async_value(root_message))
-    bot = SimpleNamespace(
-        get_channel=lambda _id: None,
-        fetch_channel=lambda _id: _async_value(channel),
-    )
+    adapter = RecordingAdapter()
     worker = PersonalFeedDiscordDeliveryWorker(
-        database=database, bot=bot, personal_feed_service=service
+        database=database, adapter=adapter, personal_feed_service=service
     )
 
     claim = database.personal_feed_conversations.claim_due()[0]
     await worker._deliver(claim)
 
-    assert sent and sent[0][0].endswith("hello @everyone")
-    assert isinstance(sent[0][1], discord.AllowedMentions)
+    # The worker emits portable content and a bot presentation; the concrete
+    # DiscordAdapter, not this domain worker, owns allowed_mentions=None.
+    assert len(adapter.sent) == 1
+    assert adapter.sent[0][0].endswith("hello @everyone")
+    assert adapter.sent[0][1] is None
+    assert len(adapter.threads) == 1
     with database.session() as session:
         delivery = session.get(InboundDiscordDelivery, created.delivery_id)
         assert delivery.state == "delivered"
-        assert delivery.discord_message_id == 777
+        assert delivery.discord_message_id == 500
         assert delivery.attempt_count == 1
-
-
-def _async_value(value):
-    """Return one value through an awaitable outer-boundary fake."""
-
-    async def inner():
-        return value
-
-    return inner()
 
 
 @pytest.mark.asyncio
@@ -522,29 +500,16 @@ async def test_worker_rechecks_binding_after_network_lookup_before_discord_send(
     service = SimpleNamespace(
         is_active_personal_feed_channel=lambda _user_id, _channel_id: next(checks)
     )
-    send_calls: list[str] = []
+    from test_personal_feed_adapter_worker import RecordingAdapter
 
-    async def fetch_message(_message_id: int) -> object:
-        return SimpleNamespace(
-            create_thread=lambda **_kwargs: _async_value(
-                SimpleNamespace(
-                    send=lambda *_args, **_kwargs: send_calls.append("send")
-                )
-            )
-        )
-
-    channel = SimpleNamespace(fetch_message=fetch_message)
-    bot = SimpleNamespace(
-        get_channel=lambda _id: None,
-        fetch_channel=lambda _id: _async_value(channel),
-    )
+    adapter = RecordingAdapter()
     worker = PersonalFeedDiscordDeliveryWorker(
-        database=database, bot=bot, personal_feed_service=service
+        database=database, adapter=adapter, personal_feed_service=service
     )
 
     await worker._deliver(database.personal_feed_conversations.claim_due()[0])
 
-    assert send_calls == []
+    assert adapter.sent == []
     with database.session() as session:
         delivery = session.get(InboundDiscordDelivery, created.delivery_id)
         assert delivery.state == "suppressed"

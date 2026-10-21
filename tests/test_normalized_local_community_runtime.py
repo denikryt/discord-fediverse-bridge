@@ -34,7 +34,7 @@ class Gateway:
         self.requests.append(request)
         n = len(self.requests)
         return PublishContentResult(
-            activity_id=f'https://bridge.example/activities/{n}',
+            activity_id=f'https://bridge.example/actors/users/alice/activities/{n}',
             object_id=f'https://bridge.example/objects/{n}',
             community_actor_url=request.community_actor_url,
         )

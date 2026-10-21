@@ -247,7 +247,7 @@ async def test_user_actor_durable_reconciliation_uses_adapter_without_sdk_leak(t
     db.activitypub_objects.create_published_activity_object(
         actor_username='alice', actor_url=user.actor_url,
         community_actor_url='https://remote.example/c/community',
-        activity_id='https://bridge.example/activities/create/11',
+        activity_id='https://bridge.example/actors/users/alice/activities/create/11',
         object_id=object_id, kind='post', title=None,
         body_markdown='old', in_reply_to_object_id=None,
         discord_channel_id=10, discord_message_id=11,
@@ -313,7 +313,7 @@ async def test_user_actor_durable_reconciliation_retries_transient_fetch(tmp_pat
     db.activitypub_objects.create_published_activity_object(
         actor_username='alice', actor_url=user.actor_url,
         community_actor_url='https://remote.example/c/community',
-        activity_id='https://bridge.example/activities/create/11',
+        activity_id='https://bridge.example/actors/users/alice/activities/create/11',
         object_id='https://bridge.example/posts/11', kind='post', title=None,
         body_markdown='old', in_reply_to_object_id=None,
         discord_channel_id=10, discord_message_id=11,

@@ -22,7 +22,7 @@ def _world(tmp_path):
         session.add(PublishedActivityObject(
             actor_username="alice", actor_url="https://bridge.example/actors/users/alice",
             publication_context="personal_feed", community_actor_url=None,
-            activity_id="https://bridge.example/activities/root", object_id=ROOT,
+            activity_id="https://bridge.example/actors/users/alice/activities/root", object_id=ROOT,
             kind="post", title=None, body_markdown="root", in_reply_to_object_id=None,
             conversation_root_object_id=ROOT, discord_guild_id=1,
             discord_channel_id=10, discord_message_id=100,

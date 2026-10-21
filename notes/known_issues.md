@@ -299,3 +299,13 @@ Fedify-native security integration remains blocked by missing dependencies.
   pass locally. The seven pre-existing Node failures are fixed by test fixture
   updates: Follow lookup, ActivityPub Accept, and native HTTPS delivery capture.
   All 52 Node files and 20 security tests pass with Fedify 2.2.19.
+
+- **Python baseline remediation candidate (2026-10-21, not runtime verified):**
+  Updated legacy tests for typed `PlatformAdapterPort` workers and tracked
+  Gateway callbacks, immutable per-target relay failures, normalized Local
+  Community source proof, current Compose secret isolation, and retired URL
+  fixtures. `LocalCommunityDiscordFanout._surface_is_allowed()` now refuses
+  ownership-repository exceptions; inbound AP comment mirroring preserves an
+  already matching generic identity/physical receipt while persisting its
+  distinct local-community surface. Full Python regression requires the
+  project's `discord.py`/`hypothesis` environment before a merge decision.

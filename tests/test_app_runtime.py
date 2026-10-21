@@ -214,10 +214,9 @@ async def test_runtime_close_cancels_inflight_personal_feed_delivery_before_depe
         await never.wait()
         raise AssertionError("unreachable")
 
-    runtime.personal_feed_discord_delivery_worker.bot = SimpleNamespace(
-        get_channel=lambda _id: None,
-        fetch_channel=blocked_fetch,
-    )
+    # The worker owns a typed PlatformAdapterPort, not a raw Discord bot.
+    # Intercept its physical channel lookup without mutating the live SDK.
+    runtime.personal_feed_discord_delivery_worker.adapter.fetch_channel = blocked_fetch
     close_order: list[str] = []
     original_database_close = runtime.database.close
     original_lease_close = runtime.deployment_state_lease.close

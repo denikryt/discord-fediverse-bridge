@@ -112,7 +112,12 @@ canonical identity and retained immutable source **before** running a new
 Discord sibling fanout or ActivityPub relay. A changed activity, parent, author
 or source rejects the replay. Historical rows without stored origin proof skip
 recovery; a verified comment may recreate its missing generic AP mapping only
-from an existing host receipt. The Fedify gateway must independently validate
+from an existing host receipt. If a previously authenticated generic mapping
+already identifies the same AP activity, object and author, an additional
+Local Community Discord copy retains that generic mapping's original physical
+receipt; a different physical message is recorded only in Local Community
+surface state. Conflicting activity/author identity still fails closed. The
+Fedify gateway must independently validate
 the claimed ActivityPub author before these checks count as authentication.
 
 ## Discord edit/delete -> ActivityPub update/delete flow

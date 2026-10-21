@@ -63,27 +63,19 @@ def _published(database):
 
 @pytest.mark.asyncio
 async def test_partial_raw_update_fetch_failure_is_durable_before_handler_returns(
-    tmp_path, monkeypatch
+    tmp_path,
 ) -> None:
     """The actual raw callback records reconciliation work when Discord fetch fails."""
     database = build_database(tmp_path, "raw-edit.db")
     add_registered_user(database)
     _published(database)
 
-    class FakeHTTPException(Exception):
-        pass
-
-    monkeypatch.setattr("src.discord_message_mutations.discord.HTTPException", FakeHTTPException)
     bot = object.__new__(BridgeBot)
     bot.database = database
     bot._message_mutation_handler = None
     bot.event_router = SimpleNamespace(
         is_local_community_message=lambda _message_id: False,
     )
-    bot.get_channel = lambda _channel_id: SimpleNamespace(
-        fetch_message=AsyncMock(side_effect=FakeHTTPException("temporary"))
-    )
-    bot.fetch_channel = AsyncMock()
     wake = SimpleNamespace(wake=__import__("unittest.mock").mock.Mock())
     bot.set_message_mutation_handler(
         DiscordMessageMutationHandler(
@@ -126,6 +118,9 @@ async def test_partial_raw_update_fetch_failure_is_durable_before_handler_return
         role="source",
     )
 
+    from support.typed_mutation_ingress import TypedMutationIngress
+
+    bot.discord_adapter = TypedMutationIngress(bot._require_message_mutation_handler())
     await BridgeBot.on_raw_message_edit(bot, payload)
 
     published = database.activitypub_objects.get_published_activity_object_by_object_id(
@@ -164,6 +159,9 @@ async def test_raw_delete_has_no_timestamp_dependency_and_routes_terminal_intent
     )
     payload = SimpleNamespace(message_id=11, channel_id=10, guild_id=1)
 
+    from support.typed_mutation_ingress import TypedMutationIngress
+
+    bot.discord_adapter = TypedMutationIngress(bot._require_message_mutation_handler())
     await BridgeBot.on_raw_message_delete(bot, payload)
 
     router.handle_message_delete.assert_awaited_once()

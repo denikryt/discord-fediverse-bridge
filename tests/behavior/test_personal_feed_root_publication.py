@@ -564,7 +564,12 @@ async def test_bridge_bot_on_message_routes_announcement_personal_feed_root() ->
         resolve_personal_feed_root=lambda guild_id, channel_id: binding,
         handle_personal_feed_root=lambda **kwargs: _record_async(calls, kwargs),
     )
-    bot = SimpleNamespace(user=None, event_router=router)
+    bot = SimpleNamespace(user=None, event_router=router, discord_adapter=None)
+    # The fake bot intentionally skips discord.Client initialization, but a
+    # Gateway callback still needs the normal admission/drain lifecycle.
+    bot._enter_gateway_callback = lambda: True
+    bot._leave_gateway_callback = lambda: None
+    bot._on_message_admitted = lambda observed: BridgeBot._on_message_admitted(bot, observed)
 
     await BridgeBot.on_message(bot, message)
 
@@ -593,7 +598,12 @@ async def test_bridge_bot_on_message_ignores_unbound_announcement_root() -> None
         resolve_personal_feed_root=lambda guild_id, channel_id: None,
         handle_personal_feed_root=lambda **kwargs: _record_async(calls, kwargs),
     )
-    bot = SimpleNamespace(user=None, event_router=router)
+    bot = SimpleNamespace(user=None, event_router=router, discord_adapter=None)
+    # The fake bot intentionally skips discord.Client initialization, but a
+    # Gateway callback still needs the normal admission/drain lifecycle.
+    bot._enter_gateway_callback = lambda: True
+    bot._leave_gateway_callback = lambda: None
+    bot._on_message_admitted = lambda observed: BridgeBot._on_message_admitted(bot, observed)
 
     await BridgeBot.on_message(bot, message)
 

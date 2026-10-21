@@ -143,25 +143,28 @@ class LocalCommunityDiscordFanout:
         role = getattr(surface, "role", None)
         if not isinstance(forum_id, int) or forum_id <= 0:
             return False
-        if role == "host":
-            placement = self.database.platform_surfaces.get_discord_host_placement(
-                community_id
-            )
-            if (placement is None
-                or placement.external_channel_id != str(forum_id)
-                or getattr(surface, "local_subscriber_id", None) is not None):
-                return False
-        elif role == "local_subscriber":
-            subscriber = self.database.local_subscribers.get_local_subscriber_by_channel(
-                forum_id
-            )
-            if (subscriber is None or subscriber.status != "active"
-                or subscriber.local_community_id != community_id
-                or subscriber.id != getattr(surface, "local_subscriber_id", None)):
-                return False
-        else:
-            return False
         try:
+            # Subscriber and host ownership checks must also fail closed when
+            # their repositories are temporarily unavailable. Checking only
+            # the guild lookup in a try/except leaves this admission exposed.
+            if role == "host":
+                placement = self.database.platform_surfaces.get_discord_host_placement(
+                    community_id
+                )
+                if (placement is None
+                    or placement.external_channel_id != str(forum_id)
+                    or getattr(surface, "local_subscriber_id", None) is not None):
+                    return False
+            elif role == "local_subscriber":
+                subscriber = self.database.local_subscribers.get_local_subscriber_by_channel(
+                    forum_id
+                )
+                if (subscriber is None or subscriber.status != "active"
+                    or subscriber.local_community_id != community_id
+                    or subscriber.id != getattr(surface, "local_subscriber_id", None)):
+                    return False
+            else:
+                return False
             guild_id = self._forum_guild_id(forum_id)
             if guild_id is None:
                 return False

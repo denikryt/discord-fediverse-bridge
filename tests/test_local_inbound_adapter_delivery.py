@@ -92,7 +92,7 @@ def comment(*, parent='https://remote.test/post', obj='https://remote.test/comme
         delivery_id=activity, source_activity_id=activity, source_announce_id=None,
         source_activity_json={'id': activity, 'type': 'Create', 'actor': author,
                               'object': {'id': obj, 'content': 'Reply'}},
-        community_actor_id='https://bridge.test/c/hackers', actor_id=author,
+        community_actor_id='https://bridge.test/actors/communities/hackers', actor_id=author,
         object=SimpleNamespace(ap_id=obj, post_ap_id='https://remote.test/post',
                                parent_ap_id=parent, author_name='bob', body_markdown='Reply'),
     )
@@ -454,10 +454,10 @@ async def test_foreign_community_post_cannot_own_local_reply(tmp_path):
             connector = session.scalar(select(PlatformConnector).where(
                 PlatformConnector.connector_key == 'discord-primary'))
             foreign = LocalCommunity(
-                slug='other', display_name='Other', actor_url='https://bridge.test/c/other',
-                inbox_url='https://bridge.test/c/other/inbox',
-                outbox_url='https://bridge.test/c/other/outbox',
-                followers_url='https://bridge.test/c/other/followers',
+                slug='other', display_name='Other', actor_url='https://bridge.test/actors/communities/other',
+                inbox_url='https://bridge.test/actors/communities/other/inbox',
+                outbox_url='https://bridge.test/actors/communities/other/outbox',
+                followers_url='https://bridge.test/actors/communities/other/followers',
                 public_key_pem='public', private_key_pem='private',
             )
             session.add(foreign)

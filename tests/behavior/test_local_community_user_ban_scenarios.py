@@ -76,8 +76,18 @@ def _post_payload(
     *, delivery_id: str, actor_id: str, community_actor_id: str
 ) -> dict[str, object]:
     """Build one inbound post payload in the gateway-to-Python contract."""
+    source = {
+        "type": "Create", "id": delivery_id, "actor": actor_id,
+        "object": {
+            "type": "Page", "id": "https://example.com/post/1",
+            "attributedTo": actor_id, "name": "Remote topic",
+            "content": "<p>spam content</p>",
+        },
+    }
     return {
         "event_type": "post.created",
+        "source_activity_id": delivery_id,
+        "source_activity_json": source,
         "delivery_id": delivery_id,
         "occurred_at": "2026-05-19T10:00:00Z",
         "community_actor_id": community_actor_id,

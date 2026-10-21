@@ -62,9 +62,23 @@ def _local_community(database: object) -> object:
 
 def _post_event(*, actor_id: str = "https://lemmy.example/u/bob") -> ActivityPubEvent:
     """Build one normalized inbound post targeting the local community actor."""
+    # Inbound post delivery must carry the separately authenticated original
+    # Create; the current runtime refuses to write a Discord post without it.
+    source = {
+        "type": "Create",
+        "id": "https://lemmy.example/activities/create/post/1",
+        "actor": actor_id,
+        "object": {
+            "type": "Page", "id": "https://lemmy.example/post/1",
+            "attributedTo": actor_id, "name": "Remote topic",
+            "content": "<p>hello from lemmy</p>",
+        },
+    }
     return ActivityPubEvent.model_validate(
         {
             "event_type": "post.created",
+            "source_activity_id": source["id"],
+            "source_activity_json": source,
             "delivery_id": "https://lemmy.example/activities/create/post/1",
             "occurred_at": "2026-05-19T10:00:00Z",
             "community_actor_id": "https://bridge.example/actors/communities/hackers",

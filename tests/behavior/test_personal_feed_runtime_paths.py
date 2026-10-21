@@ -184,6 +184,13 @@ async def test_bridgebot_thread_create_adopts_personal_root_before_community(
     class PersonalThreadAdapter:
         """Observe the SDK boundary and dispatch one trusted typed adoption."""
 
+        def enter_ingress(self):
+            """Admit the synthetic event while testing the Gateway lifecycle."""
+            return True
+
+        def leave_ingress(self):
+            """Balance admission after the normalized handler completes."""
+
         async def ingest_thread_created(self, observed):
             """Adopt the exact physical Personal Feed root through its typed handler."""
             event = ThreadCreated(
@@ -249,6 +256,37 @@ async def test_bridgebot_registered_reply_persists_once_and_duplicate_is_safe(
     bot.database = database
     bot.event_router = router
     bot._connection = SimpleNamespace(user=SimpleNamespace(id=999))
+
+    class PersonalReplyAdapter:
+        """Translate the observed SDK reply at the trusted typed ingress seam."""
+
+        def enter_ingress(self):
+            """Admit a synthetic Gateway callback."""
+            return True
+
+        def leave_ingress(self):
+            """Balance synthetic Gateway callback admission."""
+
+        async def ingest_thread_message_created(self, observed):
+            """Submit the exact physical root/thread/message and author IDs."""
+            from src.platform_types import (
+                AuthorRef, ChannelRef, ContentDocument, MessageCreated,
+                MessageRef, ThreadRef,
+            )
+            parent = ChannelRef("discord-primary", "10", "text", "1")
+            event = MessageCreated(
+                connector_key="discord-primary",
+                message=MessageRef("discord-primary", "100", str(observed.id)),
+                author=AuthorRef("discord-primary", str(observed.author.id), "human", "Bob"),
+                content=ContentDocument(observed.content),
+                parent_channel=parent,
+                thread_context=ThreadRef(parent, "100"),
+                external_guild_id=str(observed.guild.id),
+                created_at=observed.created_at,
+            )
+            await router.handle_platform_message_create(event)
+
+    bot.discord_adapter = PersonalReplyAdapter()
     message = SimpleNamespace(
         id=200,
         guild=SimpleNamespace(id=1),
@@ -366,6 +404,9 @@ async def test_raw_personal_feed_edit_and_delete_route_to_user_actor_mutations(
             mutation_context_provider=_mutation_context,
         )
     )
+    from support.typed_mutation_ingress import TypedMutationIngress
+
+    bot.discord_adapter = TypedMutationIngress(bot._require_message_mutation_handler())
     edited_at = "2026-06-17T12:00:00Z"
 
     await BridgeBot.on_raw_message_edit(

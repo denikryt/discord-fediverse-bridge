@@ -20,10 +20,10 @@ def world(tmp_path):
         connector = session.scalar(select(PlatformConnector).where(
             PlatformConnector.connector_key == 'discord-primary'))
         community = LocalCommunity(
-            slug='hackers', display_name='Hackers', actor_url='https://bridge.test/c/hackers',
-            inbox_url='https://bridge.test/c/hackers/inbox',
-            outbox_url='https://bridge.test/c/hackers/outbox',
-            followers_url='https://bridge.test/c/hackers/followers',
+            slug='hackers', display_name='Hackers', actor_url='https://bridge.test/actors/communities/hackers',
+            inbox_url='https://bridge.test/actors/communities/hackers/inbox',
+            outbox_url='https://bridge.test/actors/communities/hackers/outbox',
+            followers_url='https://bridge.test/actors/communities/hackers/followers',
             public_key_pem='public', private_key_pem='private',
         )
         session.add(community)
@@ -126,7 +126,7 @@ def test_generic_ap_mapping_recovers_after_partial_handler_failure(tmp_path):
                   activity_id='https://remote.test/create/comment',
                   object_id='https://remote.test/comment',
                   actor_url='https://remote.test/u/bob',
-                  community_actor_url='https://bridge.test/c/hackers',
+                  community_actor_url='https://bridge.test/actors/communities/hackers',
                   discord_channel_id=400, discord_message_id=700)
     with ThreadPoolExecutor(max_workers=2) as pool:
         results = list(pool.map(lambda _: db.message_mappings.create_message_mapping(**kwargs), range(2)))
@@ -145,7 +145,7 @@ def test_generic_ap_mapping_same_object_different_author_rejected(tmp_path):
                   activity_id='https://remote.test/create/comment',
                   object_id='https://remote.test/comment',
                   actor_url='https://remote.test/u/bob',
-                  community_actor_url='https://bridge.test/c/hackers',
+                  community_actor_url='https://bridge.test/actors/communities/hackers',
                   discord_channel_id=400, discord_message_id=700)
     db.message_mappings.create_message_mapping(**kwargs)
     for changed in ({'actor_url': 'https://forged.test/u/attacker'},
