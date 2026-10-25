@@ -11,11 +11,12 @@ from ...models import (
     CommunityMessageGroupDelivery,
     CommunityThreadGroup,
     CommunityThreadGroupDelivery,
+    ChannelSurface,
     PlatformConnector,
 )
 from .base import BaseRepository
 from .platform_delivery_intents import cancel_deleted_source_intents, validate_authenticated_update
-from ...platform_types import MessageRef
+from ...platform_types import MessageRef, ThreadRef
 
 """Discord fanout group and delivery persistence."""
 
@@ -226,6 +227,26 @@ class DiscordFanoutGroupRepository(BaseRepository):
                     CommunityThreadGroup.id == delivery.thread_group_id
                 )
             )
+
+    def get_thread_delivery_by_ref(self, thread: ThreadRef) -> CommunityThreadGroupDelivery | None:
+        """Find only the receipt at the exact connector/forum/thread placement."""
+        with self.session() as session:
+            return session.scalar(
+                select(CommunityThreadGroupDelivery)
+                .join(ChannelSurface, ChannelSurface.id == CommunityThreadGroupDelivery.channel_surface_id)
+                .join(PlatformConnector, PlatformConnector.id == CommunityThreadGroupDelivery.connector_id)
+                .where(PlatformConnector.connector_key == thread.connector_key,
+                       ChannelSurface.connector_id == CommunityThreadGroupDelivery.connector_id,
+                       ChannelSurface.external_channel_id == thread.channel.external_channel_id,
+                       ChannelSurface.external_guild_id == thread.channel.external_guild_id,
+                       ChannelSurface.kind == 'forum',
+                       CommunityThreadGroupDelivery.external_thread_id == thread.external_thread_id)
+            )
+
+    def get_thread_group_by_ref(self, thread: ThreadRef) -> CommunityThreadGroup | None:
+        """Resolve a canonical remote post only through its scoped physical thread."""
+        delivery = self.get_thread_delivery_by_ref(thread)
+        return self.get_thread_group_by_id(delivery.thread_group_id) if delivery else None
 
     def add_thread_delivery(
         self,
@@ -444,9 +465,9 @@ class DiscordFanoutGroupRepository(BaseRepository):
             ))
             if previous is not None:
                 if (previous.discord_thread_id, previous.discord_message_id,
-                    previous.parent_discord_message_id, previous.role) != (
+                    previous.external_parent_message_id, previous.role) != (
                     discord_thread_id, discord_message_id,
-                    parent_discord_message_id, role,
+                    str(parent_discord_message_id) if parent_discord_message_id is not None else None, role,
                 ):
                     raise ValueError('community message physical receipt conflict')
                 return previous
@@ -470,6 +491,29 @@ class DiscordFanoutGroupRepository(BaseRepository):
             session.add(delivery)
             session.flush()
             return delivery
+
+    def get_message_delivery_by_ref(self, message: MessageRef) -> CommunityMessageGroupDelivery | None:
+        """Resolve a physical comment by connector, immediate thread and message."""
+        with self.session() as session:
+            return session.scalar(select(CommunityMessageGroupDelivery)
+                .join(PlatformConnector, PlatformConnector.id == CommunityMessageGroupDelivery.connector_id)
+                .where(PlatformConnector.connector_key == message.connector_key,
+                       CommunityMessageGroupDelivery.external_thread_id == message.external_container_id,
+                       CommunityMessageGroupDelivery.external_message_id == message.external_message_id))
+
+    def get_message_delivery_in_thread_ref(self, message_group_id: int,
+                                           thread: ThreadRef) -> CommunityMessageGroupDelivery | None:
+        """Find the parent's copy in the exact target thread, never by bare ID."""
+        target = self.get_thread_delivery_by_ref(thread)
+        if target is None:
+            return None
+        with self.session() as session:
+            return session.scalar(select(CommunityMessageGroupDelivery).where(
+                CommunityMessageGroupDelivery.message_group_id == message_group_id,
+                CommunityMessageGroupDelivery.connector_id == target.connector_id,
+                CommunityMessageGroupDelivery.channel_surface_id == target.channel_surface_id,
+                CommunityMessageGroupDelivery.external_thread_id == thread.external_thread_id,
+            ))
 
     def get_message_delivery_by_message(
         self, discord_message_id: int

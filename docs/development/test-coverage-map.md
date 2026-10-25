@@ -35,6 +35,20 @@ Discord integration tests, which require the project dependencies.
   including host thread with typed-only receipt and idempotent replay;
   mutation render API rejects untyped direct inbox URL parameters — same file.
 
+### Stage 04 Remote Community typed receipt handoff (review P1)
+
+- Real SQLite and domain handlers: new B/C coordinator-created threads with
+  NULL legacy Discord projections admit later source comments, replies
+  originating in mirrored threads, inbound authenticated AP comments, and
+  immutable target-local parent references. A wrong forum/thread claim is
+  rejected; a known nested parent absent from one forum creates `blocked`
+  without sending a flat reply —
+  `tests/test_stage04_remote_typed_receipt_regressions.py`.
+- Older Remote Community tests asserting populated `discord_*` projections on
+  new coordinator-created copies are historical expectations and do not prove
+  the authoritative typed receipt contract. Test the `external_*` columns,
+  `channel_surface_id`, durable intents and actual transport destinations.
+
 ## Stage 04 typed Community source mutations (Checkpoint 61 WIP)
 
 - Real SQLite source post/comment + current surface and author validation,

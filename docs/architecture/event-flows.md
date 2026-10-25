@@ -452,3 +452,21 @@ Unknown results and expired dispatches remain unresolved, with no automatic
 Create replay. Missing nested parent materialization, inbound AP destinations
 and full startup wake/reconciliation are later Stage 04 boundaries; this
 section does not claim those paths have been cut over yet.
+
+## Stage 04 Remote Community typed physical receipt continuation
+
+The physical Create coordinator commits Remote Community post copies with
+`(connector_id, channel_surface_id, external_thread_id,
+external_starter_message_id)` and leaves legacy nullable `discord_*` columns
+unset. On a later verified normalized Discord reply, the Remote Community
+runtime resolves the **exact** `ThreadRef` under the current forum claim,
+then enumerates sibling copies using their typed IDs and accepted subscription
+owner. A human in a mirrored thread is still a valid source, but a matching
+thread ID from another forum or a revoked/rebound claim cannot become one.
+For each destination, the actual starter `MessageRef` or the actual parent
+comment `MessageRef` is resolved **within that thread**, not by bare Discord
+message ID. If an identified canonical nested parent has no target copy, the
+coordinator reserves a `blocked` intent without a physical request. Its
+immutable DTO is constructed only after the exact parent receipt appears;
+unknown source references retain the established root fallback. Inbound
+ActivityPub comments and post backfill consult the same typed thread receipts.

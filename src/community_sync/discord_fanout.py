@@ -18,6 +18,7 @@ import discord
 from ..bridge_policy import BridgePolicyService
 from ..db import Database
 from ..content_sync.platform_fanout import PlatformFanoutCoordinator
+from .delivery_mapping import remote_thread_receipt
 from ..discord_legacy_projection import discord_id_to_legacy_int
 from ..platform_types import (
     ChannelRef, ContentDocument, CreateAttempt, DeliveryPresentation,
@@ -250,11 +251,16 @@ class DiscordFanout:
                     forum=forum,operation='forum_thread',destination=forum,
                     content=body,presentation=DeliveryPresentation(),title=source.name)
                 if delivered:
-                    delivery=next((row for row in self.database.discord_fanout_groups.get_thread_deliveries(
-                        canonical_thread_group_id) if row.discord_channel_id==channel_id),None)
-                    if delivery is None:raise ValueError('committed remote receipt without copy')
-                    copies.append(MirrorResult(channel_id,delivery.discord_thread_id,
-                                               delivery.discord_starter_message_id))
+                    placement = self.database.platform_surfaces.resolve_claim(
+                        forum.connector_key, forum.external_channel_id)
+                    delivery = next((row for row in self.database.discord_fanout_groups.get_thread_deliveries(
+                        canonical_thread_group_id) if placement is not None
+                        and row.channel_surface_id == placement.id), None)
+                    refs = remote_thread_receipt(self.database, delivery) if delivery else None
+                    if refs is None or refs[0].channel != forum:
+                        raise ValueError('committed remote receipt without matching typed copy')
+                    copies.append(MirrorResult(channel_id, discord_id_to_legacy_int(refs[0]),
+                                               discord_id_to_legacy_int(refs[1])))
             except Exception:
                 logger.exception('Could not mirror source thread %s to forum %s', source_id, channel_id)
         return copies
@@ -285,31 +291,55 @@ class DiscordFanout:
         copies: list[MirrorMessageResult] = []
         seen: set[int] = set()
         for delivery in sibling_thread_deliveries:
-            channel_id, thread_id = delivery.discord_channel_id, delivery.discord_thread_id
+            refs = remote_thread_receipt(self.database, delivery)
+            if refs is None:
+                continue
+            destination, _starter = refs
+            try:
+                channel_id = discord_id_to_legacy_int(destination, component='parent')
+                thread_id = discord_id_to_legacy_int(destination)
+            except PlatformOperationError:
+                continue
             if thread_id in seen or thread_id == source_thread:
                 continue
             seen.add(thread_id)
             forum = self._normalized_target(channel_id, community_actor_id)
-            if forum is None:
+            placement = self.database.platform_surfaces.resolve_claim(
+                destination.connector_key, destination.channel.external_channel_id)
+            if (forum is None or forum != destination.channel or placement is None
+                or placement.id != delivery.channel_surface_id):
                 continue
             try:
-                destination = ThreadRef(forum, str(thread_id))
                 parent_id = reply_context.get_reference_for_thread(thread_id)
                 reply_to = (MessageRef('discord-primary', str(thread_id), str(parent_id))
                             if parent_id is not None else None)
                 if reply_to is not None:
                     discord_id_to_legacy_int(reply_to)
+                if (reply_context.parent_message_group_id is not None and reply_to is None):
+                    # A known canonical nested parent is not yet physically
+                    # present in this target. Persist a dependency rather than
+                    # silently flattening or losing this child on later wake.
+                    PlatformFanoutCoordinator.from_adapter(
+                        self.database, adapter).stage_blocked(
+                        domain='remote', kind='comment', canonical_id=canonical_message_group_id,
+                        forum=forum, parent_canonical_id=reply_context.parent_message_group_id,
+                    )
+                    continue
                 delivered=await PlatformFanoutCoordinator.from_adapter(
                     self.database,adapter).stage_and_deliver(
                     domain='remote',kind='comment',canonical_id=canonical_message_group_id,
                     forum=forum,operation='message',destination=destination,
                     content=body,presentation=DeliveryPresentation(),reply_to=reply_to)
                 if delivered:
-                    delivery=next((row for row in self.database.discord_fanout_groups.get_message_deliveries(
-                        canonical_message_group_id) if row.discord_channel_id==channel_id),None)
-                    if delivery is None:raise ValueError('committed remote message receipt without copy')
-                    copies.append(MirrorMessageResult(channel_id,thread_id,
-                                                      delivery.discord_message_id,parent_id))
+                    receipt = next((row for row in self.database.discord_fanout_groups.get_message_deliveries(
+                        canonical_message_group_id) if row.channel_surface_id == placement.id
+                        and row.external_thread_id == destination.external_thread_id), None)
+                    if receipt is None:
+                        raise ValueError('committed remote message receipt without typed copy')
+                    message = MessageRef(destination.connector_key,
+                                         destination.external_thread_id, receipt.external_message_id)
+                    copies.append(MirrorMessageResult(channel_id, thread_id,
+                                                      discord_id_to_legacy_int(message), parent_id))
             except Exception:
                 logger.exception('Could not mirror source message %s to thread %s', source_id, thread_id)
         return copies

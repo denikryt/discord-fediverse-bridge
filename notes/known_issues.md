@@ -412,3 +412,25 @@ Fedify-native security integration remains blocked by missing dependencies.
 - Focused SQLite and runtime tests are available. Full pytest/TypeScript and
   live Discord/Fedify remain unverified without project dependencies and
   external test services; this is not a Stage 04 release approval.
+
+## 2026-10-24 — Stage 04 Remote Community typed physical receipt handoff
+
+- **FIXED (P1):** the Remote Community normalized sibling thread and comment
+  paths used nullable legacy `discord_channel_id`/`discord_thread_id` rather
+  than the coordinator's authoritative connector/surface/`external_*` receipt.
+  Confirmed new threads could therefore be invisible to subsequent comments,
+  yielding zero fanout targets or `committed remote receipt without copy`.
+  Exact typed lookups now bind the current accepted subscription, source thread,
+  destination forum and the separate actual starter/message IDs.
+- **FIXED (related nested reply):** Remote known nested parent without a
+  recipient-local message receipt now reserves a `blocked` Create intent
+  instead of sending a flattened reply. The parent must later arrive in the
+  exact destination physical thread to materialize the child.
+- New SQLite domain/runtime scenarios verify typed-only B/C root comments,
+  a reply authored inside a typed mirror, an inbound AP comment, a missing
+  destination nested parent and a wrong-forum identity denial. Legacy tests
+  asserting non-NULL `discord_*` columns on newly created copies do not match
+  the Stage 04 schema contract; those assertions were not rewritten solely
+  to make an obsolete projection pass.
+- Full Python/TypeScript dependency-backed and live Discord/Fedify verification
+  remain outstanding. Focused tests alone are not production acceptance.

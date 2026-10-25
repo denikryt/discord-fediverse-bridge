@@ -16,6 +16,7 @@ from typing import TYPE_CHECKING
 
 from ..inbound_activity_outcomes import InboundActivityOutcome
 from .delivery_mapping import (
+    remote_thread_receipt, remote_thread_is_current,
     get_message_group_for_ap_object,
     get_message_group_for_delivered_message,
     get_message_group_for_source_message,
@@ -180,7 +181,7 @@ class CommunityRuntime:
             return _ignored_result('no_active_subscription_or_policy')
         # The group lookup includes mirror/inbound deliveries: a duplicate
         # thread notice must not republish an existing physical mirror.
-        if get_thread_group_for_any_thread(self.database, thread_id) is not None:
+        if get_thread_group_for_any_thread(self.database, event.thread) is not None:
             return _ignored_result('duplicate_discord_thread')
         result = await self.content_publish_service.publish_normalized_post_to_community(
             event=event, starter=starter,
@@ -240,23 +241,25 @@ class CommunityRuntime:
         )
         if subscription is None:
             return _ignored_result('no_active_subscription_or_policy')
-        if get_message_group_for_delivered_message(self.database, message_id) is not None:
+        if self.database.discord_fanout_groups.get_message_delivery_by_ref(event.message) is not None:
             return _ignored_result('duplicate_discord_message')
-        group = get_thread_group_for_any_thread(self.database, thread_id)
+        group = get_thread_group_for_any_thread(self.database, thread)
         if group is None or group.ap_object_id is None:
             return _ignored_result('no_post_context')
         if group.community_actor_id != subscription.lemmy_community_actor_id:
             raise PlatformOperationError('invalid_request', 'source forum belongs to another community')
-        physical = self.database.discord_fanout_groups.get_thread_delivery_by_thread(thread_id)
-        if (physical is None or physical.thread_group_id != group.id
-            or physical.discord_channel_id != forum_id):
+        physical = self.database.discord_fanout_groups.get_thread_delivery_by_ref(thread)
+        if physical is None or physical.thread_group_id != group.id:
             raise PlatformOperationError('invalid_request', 'source thread physical ownership mismatch')
         # An opening/starter message already belongs to its parent post,
         # independent of whether the source has the canonical 'source' role.
-        if physical.discord_starter_message_id == message_id:
+        starter = remote_thread_receipt(self.database, physical)
+        if starter is None or starter[0] != thread:
+            raise PlatformOperationError('invalid_request', 'source thread has no exact typed receipt')
+        if starter[1] == event.message:
             return _ignored_result('starter_message_already_handled')
         siblings = get_sibling_thread_deliveries(
-            self.database, thread_group_id=group.id, source_thread_id=thread_id,
+            self.database, thread_group_id=group.id, source_thread=thread,
         )
         context = resolve_normalized_reply_context(self.database, event, group, siblings)
         target = group.ap_object_id
@@ -557,10 +560,13 @@ class CommunityRuntime:
             ap_activity_id=event.delivery_id, ap_object_id=event.object.ap_id,
             current_content_json=_inbound_content_snapshot(event),
         )
-        delivered_forums = {
-            row.discord_channel_id
-            for row in self.database.discord_fanout_groups.get_thread_deliveries(group.id)
-        }
+        delivered_forums = set()
+        for row in self.database.discord_fanout_groups.get_thread_deliveries(group.id):
+            refs = remote_thread_receipt(self.database, row)
+            if refs is not None and remote_thread_is_current(
+                self.database, row, event.community_actor_id,
+            ):
+                delivered_forums.add(int(refs[0].channel.external_channel_id))
         title = format_thread_title_for_discord(event.object.title or 'Untitled Lemmy Post')
         body = ContentDocument(format_lemmy_post_for_discord(
             event.object.author_name, event.object.title or 'Untitled Lemmy Post',
@@ -750,14 +756,15 @@ class CommunityRuntime:
         }
         confirmed = []
         for physical in self.database.discord_fanout_groups.get_thread_deliveries(thread_group.id):
-            current = self.database.remote_subscriptions.get_subscription_by_channel(
-                physical.discord_channel_id
-            )
-            expected = eligible.get(physical.discord_channel_id)
-            if (expected is None or current is None or current.status != 'accepted'
-                or current.lemmy_community_actor_id != event.community_actor_id
-                or type(current.discord_guild_id) is not int or current.discord_guild_id <= 0
-                or current.discord_guild_id != expected.discord_guild_id):
+            refs = remote_thread_receipt(self.database, physical)
+            if refs is None or not remote_thread_is_current(
+                self.database, physical, event.community_actor_id,
+            ):
+                continue
+            channel_id = int(refs[0].channel.external_channel_id)
+            expected = eligible.get(channel_id)
+            if (expected is None or str(expected.discord_guild_id)
+                != refs[0].channel.external_guild_id):
                 continue
             confirmed.append(physical)
         if not confirmed:
@@ -800,31 +807,22 @@ class CommunityRuntime:
         delivered = 0
         first_error: Exception | None = None
         for physical in confirmed:
-            # Re-read subscription at the physical-send boundary so Follow
-            # revocation during earlier targets cannot authorize later writes.
-            current = self.database.remote_subscriptions.get_subscription_by_channel(
-                physical.discord_channel_id
-            )
-            expected = eligible.get(physical.discord_channel_id)
-            if (expected is None or current is None or current.status != 'accepted'
-                or current.lemmy_community_actor_id != event.community_actor_id
-                or type(current.discord_guild_id) is not int or current.discord_guild_id <= 0
-                or current.discord_guild_id != expected.discord_guild_id):
+            # The claim and the exact typed thread receipt must still match
+            # immediately before each physical POST, including after Undo.
+            refs = remote_thread_receipt(self.database, physical)
+            if refs is None or not remote_thread_is_current(
+                self.database, physical, event.community_actor_id,
+            ):
                 continue
-            forum = ChannelRef('discord-primary', str(physical.discord_channel_id),
-                               'forum', str(current.discord_guild_id))
-            thread = ThreadRef(forum, str(physical.discord_thread_id))
-            parent_id = None
-            if parent_group is not None:
-                parent_delivery = self.database.discord_fanout_groups.get_message_delivery_in_thread(
-                    parent_group.id, physical.discord_thread_id,
-                )
-                if parent_delivery is not None:
-                    parent_id = parent_delivery.discord_message_id
-            reply_to = (
-                MessageRef('discord-primary', str(physical.discord_thread_id), str(parent_id))
-                if parent_id is not None else None
-            )
+            thread, _starter = refs
+            forum = thread.channel
+            parent_copy = (self.database.discord_fanout_groups.get_message_delivery_in_thread_ref(
+                parent_group.id, thread,
+            ) if parent_group is not None else None)
+            reply_to = (MessageRef(thread.connector_key, thread.external_thread_id,
+                                   parent_copy.external_message_id)
+                        if parent_copy is not None else None)
+            parent_id = reply_to.external_message_id if reply_to is not None else None
             from ..content_sync.platform_fanout import PlatformFanoutCoordinator
             try:
                 if parent_group is not None and parent_id is None:
