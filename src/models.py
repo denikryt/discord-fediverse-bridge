@@ -593,6 +593,14 @@ class UserActorOutboundDelivery(Base):
 
     __tablename__ = "user_actor_outbound_deliveries"
     __table_args__ = (
+        CheckConstraint(
+            "direct_authorizations_json IS NULL OR "
+            "(length(direct_authorizations_json) BETWEEN 2 AND 16384 "
+            "AND json_valid(direct_authorizations_json) "
+            "AND json_type(direct_authorizations_json) = 'array' "
+            "AND json_array_length(direct_authorizations_json) BETWEEN 1 AND 32)",
+            name="ck_user_actor_direct_evidence_json",
+        ),
         UniqueConstraint("source_id", "target_endpoint_url"),
         CheckConstraint(
             "status IN ('pending', 'sending', 'delivered', 'failed', 'ineligible', 'superseded')",
@@ -619,6 +627,9 @@ class UserActorOutboundDelivery(Base):
         ForeignKey("user_actor_outbound_sources.id", ondelete="CASCADE"), nullable=False
     )
     target_endpoint_url: Mapped[str] = mapped_column(String(512), nullable=False)
+    # Positive evidence for context-authorized direct recipients, independent
+    # of the User Actor follower child table; validated further at admission.
+    direct_authorizations_json: Mapped[str | None] = mapped_column(Text, nullable=True)
     status: Mapped[str] = mapped_column(String(32), nullable=False, default="pending")
     claim_token: Mapped[str | None] = mapped_column(String(64), nullable=True)
     claimed_at: Mapped[datetime | None] = mapped_column(
@@ -734,7 +745,11 @@ class MessageMapping(Base):
             "source_channel_surface_id IS NULL OR source_connector_id IS NOT NULL",
             name="ck_messagemapping_source_pair",
         ),
-        UniqueConstraint("source_connector_id", "source_id"),
+        UniqueConstraint("source_connector_id", "source_external_container_id", "source_id"),
+        CheckConstraint(
+            "source_external_container_id IS NULL OR source_connector_id IS NOT NULL",
+            name="ck_message_mapping_container_connector",
+        ),
         UniqueConstraint("activity_id"),
         UniqueConstraint("object_id"),
         CheckConstraint(
@@ -752,6 +767,7 @@ class MessageMapping(Base):
     source_channel_surface_id: Mapped[int | None] = mapped_column(
         Integer, nullable=True
     )
+    source_external_container_id: Mapped[str | None] = mapped_column(Text, nullable=True)
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
     # MULTIPLATFORM_DISCORD_PROJECTION_TEMP: Discord location projection remains for existing publication and personal-feed contracts.
@@ -792,6 +808,16 @@ class PublishedActivityObject(Base):
         ),
         UniqueConstraint("activity_id"),
         UniqueConstraint("object_id"),
+        Index(
+            "ix_published_source_exact",
+            "source_connector_id", "source_external_container_id", "source_external_message_id",
+            unique=True,
+            sqlite_where=text("source_connector_id IS NOT NULL AND source_external_container_id IS NOT NULL AND source_external_message_id IS NOT NULL"),
+        ),
+        CheckConstraint(
+            "source_external_container_id IS NULL OR source_connector_id IS NOT NULL",
+            name="ck_published_source_container_connector",
+        ),
         CheckConstraint(
             "(publication_context = 'community' AND community_actor_url IS NOT NULL) OR "
             "(publication_context = 'personal_feed' AND community_actor_url IS NULL "
@@ -815,6 +841,7 @@ class PublishedActivityObject(Base):
     source_channel_surface_id: Mapped[int | None] = mapped_column(
         Integer, nullable=True
     )
+    source_external_container_id: Mapped[str | None] = mapped_column(Text, nullable=True)
     source_external_message_id: Mapped[str | None] = mapped_column(Text, nullable=True)
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
@@ -1093,6 +1120,7 @@ class CommunityThreadGroup(Base):
     # no source Discord channel — threads are created in all subscribed channels.
     __tablename__ = "community_thread_groups"
     __table_args__ = (
+        CheckConstraint("content_revision >= 0", name="ck_canonical_content_revision"),
         ForeignKeyConstraint(
             ["source_connector_id", "source_channel_surface_id"],
             ["platform_channel_surfaces.connector_id", "platform_channel_surfaces.id"],
@@ -1113,6 +1141,16 @@ class CommunityThreadGroup(Base):
         Integer, nullable=True
     )
     source_external_thread_id: Mapped[str | None] = mapped_column(Text, nullable=True)
+
+    # Authoritative mutation state belongs to the canonical row, not a copy or
+    # a Create intent. Released v0 cannot prove a latest normalized snapshot.
+    content_revision: Mapped[int] = mapped_column(
+        Integer, nullable=False, default=0, server_default=text("0")
+    )
+    current_content_json: Mapped[str | None] = mapped_column(Text, nullable=True)
+    last_source_update_order_key: Mapped[str | None] = mapped_column(Text, nullable=True)
+    last_source_update_identity: Mapped[str | None] = mapped_column(Text, nullable=True)
+    deleted_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
     community_actor_id: Mapped[str] = mapped_column(String(512), nullable=False)
@@ -1137,6 +1175,16 @@ class CommunityThreadGroupDelivery(Base):
     # UNIQUE(thread_group_id, discord_channel_id) ensures one delivery per channel per group.
     __tablename__ = "community_thread_group_deliveries"
     __table_args__ = (
+        CheckConstraint(
+            "mutation_state IN ('idle','pending','dispatching','unresolved','failed_definite')",
+            name="ck_copy_mutation_state",
+        ),
+        CheckConstraint(
+            "(applied_revision IS NULL OR applied_revision >= 0) AND "
+            "(mutation_target_revision IS NULL OR mutation_target_revision >= 0)",
+            name="ck_copy_mutation_revisions",
+        ),
+        Index("ix_communitythreadgroupdelivery_mutation_pending", "mutation_state", "mutation_target_revision"),
         ForeignKeyConstraint(
             ["connector_id", "channel_surface_id"],
             ["platform_channel_surfaces.connector_id", "platform_channel_surfaces.id"],
@@ -1155,6 +1203,17 @@ class CommunityThreadGroupDelivery(Base):
     channel_surface_id: Mapped[int] = mapped_column(Integer, nullable=False)
     external_thread_id: Mapped[str] = mapped_column(Text, nullable=False)
     external_starter_message_id: Mapped[str] = mapped_column(Text, nullable=False)
+
+    # The physical copy proves which canonical revision was applied. NULL is
+    # intentionally unknown for rows migrated from released v0.
+    applied_revision: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    mutation_state: Mapped[str] = mapped_column(
+        String(32), nullable=False, default="idle", server_default=text("'idle'")
+    )
+    mutation_target_revision: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    mutation_claim_token: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    mutation_lease_until: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    mutation_last_error: Mapped[str | None] = mapped_column(String(512), nullable=True)
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
     thread_group_id: Mapped[int] = mapped_column(Integer, nullable=False)
@@ -1178,6 +1237,7 @@ class CommunityMessageGroup(Base):
     # no source Discord message — the message is created in all subscribed threads.
     __tablename__ = "community_message_groups"
     __table_args__ = (
+        CheckConstraint("content_revision >= 0", name="ck_canonical_content_revision"),
         ForeignKeyConstraint(
             ["source_connector_id", "source_channel_surface_id"],
             ["platform_channel_surfaces.connector_id", "platform_channel_surfaces.id"],
@@ -1188,7 +1248,7 @@ class CommunityMessageGroup(Base):
             "source_channel_surface_id IS NULL OR source_connector_id IS NOT NULL",
             name="ck_communitymessagegroup_source_pair",
         ),
-        UniqueConstraint("source_connector_id", "source_external_message_id"),
+        UniqueConstraint("source_connector_id", "source_external_container_id", "source_external_message_id"),
     )
 
     source_connector_id: Mapped[int | None] = mapped_column(
@@ -1197,7 +1257,18 @@ class CommunityMessageGroup(Base):
     source_channel_surface_id: Mapped[int | None] = mapped_column(
         Integer, nullable=True
     )
+    source_external_container_id: Mapped[str | None] = mapped_column(Text, nullable=True)
     source_external_message_id: Mapped[str | None] = mapped_column(Text, nullable=True)
+
+    # Authoritative mutation state belongs to the canonical row, not a copy or
+    # a Create intent. Released v0 cannot prove a latest normalized snapshot.
+    content_revision: Mapped[int] = mapped_column(
+        Integer, nullable=False, default=0, server_default=text("0")
+    )
+    current_content_json: Mapped[str | None] = mapped_column(Text, nullable=True)
+    last_source_update_order_key: Mapped[str | None] = mapped_column(Text, nullable=True)
+    last_source_update_identity: Mapped[str | None] = mapped_column(Text, nullable=True)
+    deleted_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
     community_actor_id: Mapped[str] = mapped_column(String(512), nullable=False)
@@ -1223,6 +1294,16 @@ class CommunityMessageGroupDelivery(Base):
     # UNIQUE(message_group_id, discord_channel_id) ensures one delivery per channel per group.
     __tablename__ = "community_message_group_deliveries"
     __table_args__ = (
+        CheckConstraint(
+            "mutation_state IN ('idle','pending','dispatching','unresolved','failed_definite')",
+            name="ck_copy_mutation_state",
+        ),
+        CheckConstraint(
+            "(applied_revision IS NULL OR applied_revision >= 0) AND "
+            "(mutation_target_revision IS NULL OR mutation_target_revision >= 0)",
+            name="ck_copy_mutation_revisions",
+        ),
+        Index("ix_communitymessagegroupdelivery_mutation_pending", "mutation_state", "mutation_target_revision"),
         ForeignKeyConstraint(
             ["connector_id", "channel_surface_id"],
             ["platform_channel_surfaces.connector_id", "platform_channel_surfaces.id"],
@@ -1241,6 +1322,17 @@ class CommunityMessageGroupDelivery(Base):
     external_thread_id: Mapped[str] = mapped_column(Text, nullable=False)
     external_message_id: Mapped[str] = mapped_column(Text, nullable=False)
     external_parent_message_id: Mapped[str | None] = mapped_column(Text, nullable=True)
+
+    # The physical copy proves which canonical revision was applied. NULL is
+    # intentionally unknown for rows migrated from released v0.
+    applied_revision: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    mutation_state: Mapped[str] = mapped_column(
+        String(32), nullable=False, default="idle", server_default=text("'idle'")
+    )
+    mutation_target_revision: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    mutation_claim_token: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    mutation_lease_until: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    mutation_last_error: Mapped[str | None] = mapped_column(String(512), nullable=True)
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
     message_group_id: Mapped[int] = mapped_column(Integer, nullable=False)
@@ -1604,9 +1696,34 @@ class LocalCommunityThread(Base):
 
     __tablename__ = "local_community_threads"
     __table_args__ = (
+        ForeignKeyConstraint(
+            ["source_connector_id", "source_channel_surface_id"],
+            ["platform_channel_surfaces.connector_id", "platform_channel_surfaces.id"],
+            ondelete="RESTRICT",
+        ),
+        CheckConstraint(
+            "source_channel_surface_id IS NULL OR source_connector_id IS NOT NULL",
+            name="ck_local_source_surface_connector",
+        ),
+        CheckConstraint("content_revision >= 0", name="ck_canonical_content_revision"),
         UniqueConstraint("ap_activity_id"),
         UniqueConstraint("ap_object_id"),
     )
+
+    # Authoritative mutation state belongs to the canonical row, not a copy or
+    # a Create intent. Released v0 cannot prove a latest normalized snapshot.
+    content_revision: Mapped[int] = mapped_column(
+        Integer, nullable=False, default=0, server_default=text("0")
+    )
+    current_content_json: Mapped[str | None] = mapped_column(Text, nullable=True)
+    last_source_update_order_key: Mapped[str | None] = mapped_column(Text, nullable=True)
+    last_source_update_identity: Mapped[str | None] = mapped_column(Text, nullable=True)
+    deleted_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+
+    source_connector_id: Mapped[int | None] = mapped_column(ForeignKey("platform_connectors.id", ondelete="RESTRICT"), nullable=True)
+    source_channel_surface_id: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    source_external_thread_id: Mapped[str | None] = mapped_column(Text, nullable=True)
+    source_external_starter_message_id: Mapped[str | None] = mapped_column(Text, nullable=True)
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
     local_community_id: Mapped[int] = mapped_column(Integer, nullable=False)
@@ -1630,9 +1747,34 @@ class LocalCommunityMessage(Base):
 
     __tablename__ = "local_community_messages"
     __table_args__ = (
+        ForeignKeyConstraint(
+            ["source_connector_id", "source_channel_surface_id"],
+            ["platform_channel_surfaces.connector_id", "platform_channel_surfaces.id"],
+            ondelete="RESTRICT",
+        ),
+        CheckConstraint(
+            "source_channel_surface_id IS NULL OR source_connector_id IS NOT NULL",
+            name="ck_local_source_surface_connector",
+        ),
+        CheckConstraint("content_revision >= 0", name="ck_canonical_content_revision"),
         UniqueConstraint("ap_activity_id"),
         UniqueConstraint("ap_object_id"),
     )
+
+    # Authoritative mutation state belongs to the canonical row, not a copy or
+    # a Create intent. Released v0 cannot prove a latest normalized snapshot.
+    content_revision: Mapped[int] = mapped_column(
+        Integer, nullable=False, default=0, server_default=text("0")
+    )
+    current_content_json: Mapped[str | None] = mapped_column(Text, nullable=True)
+    last_source_update_order_key: Mapped[str | None] = mapped_column(Text, nullable=True)
+    last_source_update_identity: Mapped[str | None] = mapped_column(Text, nullable=True)
+    deleted_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+
+    source_connector_id: Mapped[int | None] = mapped_column(ForeignKey("platform_connectors.id", ondelete="RESTRICT"), nullable=True)
+    source_channel_surface_id: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    source_external_container_id: Mapped[str | None] = mapped_column(Text, nullable=True)
+    source_external_message_id: Mapped[str | None] = mapped_column(Text, nullable=True)
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
     local_community_thread_id: Mapped[int] = mapped_column(Integer, nullable=False)
@@ -1655,6 +1797,16 @@ class LocalCommunityThreadSurface(Base):
 
     __tablename__ = "local_community_thread_surfaces"
     __table_args__ = (
+        CheckConstraint(
+            "mutation_state IN ('idle','pending','dispatching','unresolved','failed_definite')",
+            name="ck_copy_mutation_state",
+        ),
+        CheckConstraint(
+            "(applied_revision IS NULL OR applied_revision >= 0) AND "
+            "(mutation_target_revision IS NULL OR mutation_target_revision >= 0)",
+            name="ck_copy_mutation_revisions",
+        ),
+        Index("ix_localcommunitythreadsurface_mutation_pending", "mutation_state", "mutation_target_revision"),
         ForeignKeyConstraint(
             ["connector_id", "channel_surface_id"],
             ["platform_channel_surfaces.connector_id", "platform_channel_surfaces.id"],
@@ -1674,6 +1826,17 @@ class LocalCommunityThreadSurface(Base):
     channel_surface_id: Mapped[int] = mapped_column(Integer, nullable=False)
     external_thread_id: Mapped[str] = mapped_column(Text, nullable=False)
     external_starter_message_id: Mapped[str] = mapped_column(Text, nullable=False)
+
+    # The physical copy proves which canonical revision was applied. NULL is
+    # intentionally unknown for rows migrated from released v0.
+    applied_revision: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    mutation_state: Mapped[str] = mapped_column(
+        String(32), nullable=False, default="idle", server_default=text("'idle'")
+    )
+    mutation_target_revision: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    mutation_claim_token: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    mutation_lease_until: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    mutation_last_error: Mapped[str | None] = mapped_column(String(512), nullable=True)
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
     local_community_thread_id: Mapped[int] = mapped_column(Integer, nullable=False)
@@ -1702,6 +1865,16 @@ class LocalCommunityMessageSurface(Base):
 
     __tablename__ = "local_community_message_surfaces"
     __table_args__ = (
+        CheckConstraint(
+            "mutation_state IN ('idle','pending','dispatching','unresolved','failed_definite')",
+            name="ck_copy_mutation_state",
+        ),
+        CheckConstraint(
+            "(applied_revision IS NULL OR applied_revision >= 0) AND "
+            "(mutation_target_revision IS NULL OR mutation_target_revision >= 0)",
+            name="ck_copy_mutation_revisions",
+        ),
+        Index("ix_localcommunitymessagesurface_mutation_pending", "mutation_state", "mutation_target_revision"),
         ForeignKeyConstraint(
             ["connector_id", "channel_surface_id"],
             ["platform_channel_surfaces.connector_id", "platform_channel_surfaces.id"],
@@ -1730,6 +1903,17 @@ class LocalCommunityMessageSurface(Base):
     external_message_id: Mapped[str] = mapped_column(Text, nullable=False)
     external_parent_message_id: Mapped[str | None] = mapped_column(Text, nullable=True)
 
+    # The physical copy proves which canonical revision was applied. NULL is
+    # intentionally unknown for rows migrated from released v0.
+    applied_revision: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    mutation_state: Mapped[str] = mapped_column(
+        String(32), nullable=False, default="idle", server_default=text("'idle'")
+    )
+    mutation_target_revision: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    mutation_claim_token: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    mutation_lease_until: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    mutation_last_error: Mapped[str | None] = mapped_column(String(512), nullable=True)
+
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
     local_community_message_id: Mapped[int] = mapped_column(Integer, nullable=False)
     local_community_thread_surface_id: Mapped[int] = mapped_column(
@@ -1748,3 +1932,107 @@ class LocalCommunityMessageSurface(Base):
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), default=utcnow, nullable=False
     )
+
+
+
+class PlatformDeliveryIntent(Base):
+    """Persist the create request before POST and retain uncertain/orphan outcomes.
+
+    This row is logical-target-scoped. It never represents a canonical post or
+    an Update/Delete queue, and its frozen DTO is never rebuilt after claiming.
+    """
+
+    __tablename__ = "platform_delivery_intents"
+    __table_args__ = (
+        ForeignKeyConstraint(
+            ["connector_id", "channel_surface_id"],
+            ["platform_channel_surfaces.connector_id", "platform_channel_surfaces.id"],
+            ondelete="RESTRICT",
+        ),
+        UniqueConstraint("domain", "object_kind", "canonical_row_id", "channel_surface_id", "operation"),
+        CheckConstraint("domain IN ('local','remote') AND object_kind IN ('post','comment') AND operation='create'", name="ck_delivery_intent_identity"),
+        CheckConstraint("state IN ('blocked','pending','dispatching','delivered','unresolved','failed_definite','cancelled','cancelled_after_send')", name="ck_delivery_intent_state"),
+        CheckConstraint("initial_revision>=0 AND desired_revision>=0 AND (request_revision IS NULL OR request_revision>=0)", name="ck_delivery_intent_revisions"),
+        CheckConstraint("desired_deleted IN (0,1)", name="ck_delivery_intent_deleted"),
+        CheckConstraint("state<>'blocked' OR (blocked_parent_canonical_id IS NOT NULL AND request_json IS NULL AND request_fingerprint IS NULL AND dispatch_token IS NULL)", name="ck_delivery_intent_blocked"),
+        CheckConstraint("state NOT IN ('pending','dispatching','delivered','unresolved','cancelled_after_send') OR (request_json IS NOT NULL AND request_fingerprint IS NOT NULL AND request_revision IS NOT NULL)", name="ck_delivery_intent_request_frozen"),
+        CheckConstraint("state<>'unresolved' OR dispatch_token IS NOT NULL", name="ck_delivery_intent_unknown_attempt"),
+        CheckConstraint("state<>'cancelled_after_send' OR (orphan_receipt_json IS NOT NULL AND orphan_receipt_verified_at IS NOT NULL AND orphan_cleanup_state IS NOT NULL)", name="ck_delivery_intent_orphan_proven"),
+        CheckConstraint("orphan_receipt_json IS NULL OR (length(orphan_receipt_json) <= 8192 AND json_valid(orphan_receipt_json))", name="ck_delivery_intent_orphan_json"),
+        CheckConstraint("orphan_cleanup_state IS NULL OR orphan_cleanup_state IN ('review_required','cleanup_unresolved','removed_verified','retained')", name="ck_delivery_intent_cleanup_state"),
+        Index("ix_delivery_intent_recovery", "state", "lease_until"),
+        Index("ix_delivery_intent_orphan", "state", "orphan_cleanup_state"),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    domain: Mapped[str] = mapped_column(String(16), nullable=False)
+    object_kind: Mapped[str] = mapped_column(String(16), nullable=False)
+    canonical_row_id: Mapped[int] = mapped_column(Integer, nullable=False)
+    connector_id: Mapped[int] = mapped_column(ForeignKey("platform_connectors.id", ondelete="RESTRICT"), nullable=False)
+    channel_surface_id: Mapped[int] = mapped_column(Integer, nullable=False)
+    operation: Mapped[str] = mapped_column(String(16), nullable=False, default="create", server_default=text("'create'"))
+    attempt_key: Mapped[str] = mapped_column(String(512), nullable=False, unique=True)
+    initial_revision: Mapped[int] = mapped_column(Integer, nullable=False)
+    request_revision: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    request_fingerprint: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    request_json: Mapped[str | None] = mapped_column(Text, nullable=True)
+    blocked_parent_canonical_id: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    target_owner_kind: Mapped[str] = mapped_column(String(32), nullable=False)
+    target_owner_id: Mapped[int] = mapped_column(Integer, nullable=False)
+    state: Mapped[str] = mapped_column(String(32), nullable=False)
+    dispatch_token: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    lease_until: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    last_error_kind: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    desired_revision: Mapped[int] = mapped_column(Integer, nullable=False)
+    applied_revision: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    desired_deleted: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False, server_default=text('0'))
+    orphan_receipt_json: Mapped[str | None] = mapped_column(Text, nullable=True)
+    orphan_receipt_verified_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    orphan_cleanup_state: Mapped[str | None] = mapped_column(String(32), nullable=True)
+    orphan_cleanup_claim_token: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    orphan_cleanup_evidence_json: Mapped[str | None] = mapped_column(Text, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, nullable=False)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, onupdate=utcnow, nullable=False)
+
+
+class LocalCommunityAuthoredAnnounceDelivery(Base):
+    """Retain Group-signed per-Follow activity state after current Follow deletion.
+
+    A row is a frozen authored delivery, distinct from inbound remote relay.
+    The claim repository enforces Create→Update→Delete order across these rows.
+    """
+
+    __tablename__ = "local_community_authored_announce_deliveries"
+    __table_args__ = (
+        UniqueConstraint("published_object_id", "local_community_id", "target_remote_actor_id", "target_follow_activity_id", "activity_kind", "content_revision"),
+        UniqueConstraint("announce_activity_id"),
+        CheckConstraint("activity_kind IN ('create','update','delete')", name="ck_authored_announce_kind"),
+        CheckConstraint("(activity_kind='create' AND content_revision=0) OR (activity_kind IN ('update','delete') AND content_revision>0)", name="ck_authored_announce_revision"),
+        CheckConstraint("status IN ('pending','dispatching','delivered','failed_proven_unsent','ambiguous','cancelled')", name="ck_authored_announce_status"),
+        CheckConstraint("attempt_count>=0 AND attempt_generation>=0", name="ck_authored_announce_attempts"),
+        CheckConstraint("length(target_remote_actor_id)>0 AND length(target_follow_activity_id)>0 AND length(target_remote_inbox_url)>0 AND length(group_actor_id)>0", name="ck_authored_announce_identity"),
+        CheckConstraint("length(activity_json) <= 131072 AND json_valid(activity_json)", name="ck_authored_announce_activity_json"),
+        Index("ix_authored_announce_causal", "published_object_id", "local_community_id", "target_remote_actor_id", "target_follow_activity_id", "content_revision", "activity_kind", "status"),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    published_object_id: Mapped[int] = mapped_column(ForeignKey("published_activity_objects.id", ondelete="RESTRICT"), nullable=False)
+    local_community_id: Mapped[int] = mapped_column(ForeignKey("local_communities.id", ondelete="RESTRICT"), nullable=False)
+    target_remote_actor_id: Mapped[str] = mapped_column(String(512), nullable=False)
+    target_follow_activity_id: Mapped[str] = mapped_column(String(512), nullable=False)
+    target_remote_inbox_url: Mapped[str] = mapped_column(String(512), nullable=False)
+    delivery_profile: Mapped[str] = mapped_column(String(64), nullable=False)
+    group_actor_id: Mapped[str] = mapped_column(String(512), nullable=False)
+    activity_kind: Mapped[str] = mapped_column(String(16), nullable=False)
+    content_revision: Mapped[int] = mapped_column(Integer, nullable=False)
+    announce_activity_id: Mapped[str] = mapped_column(String(512), nullable=False)
+    activity_json: Mapped[str] = mapped_column(Text, nullable=False)
+    status: Mapped[str] = mapped_column(String(32), nullable=False, default="pending", server_default=text("'pending'"))
+    claim_token: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    lease_until: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    attempt_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0, server_default=text('0'))
+    attempt_generation: Mapped[int] = mapped_column(Integer, nullable=False, default=0, server_default=text('0'))
+    last_attempted_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    last_error: Mapped[str | None] = mapped_column(String(512), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, nullable=False)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, onupdate=utcnow, nullable=False)

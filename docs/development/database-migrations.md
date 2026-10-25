@@ -4,7 +4,7 @@ This document defines supported database versions, startup recognition and atomi
 
 ## Supported source and target
 
-The current target is **database v1**, the complete 45-table current SQLite schema model. The supported legacy source is **unversioned v0** with the released `v0.1.0` (`8ab4403e`) 30-table schema. Startup recognizes its columns, defaults, CHECK/UNIQUE/FK constraints, indexes, triggers and ownership/parent relationships before writes. The source fact is `src/db/legacy_v0.sql`, installed as package data and introspected in a disposable in-memory reference database. The release identity cutover is planned from narrow source metadata using non-secret public-origin/service-identifier settings; ambiguous namespaces fail before DDL. Unknown and partial sources fail closed.
+The current target is **database v1**, the evolving 47-table current SQLite schema model. The supported legacy source is **unversioned v0** with the released `v0.1.0` (`8ab4403e`) 30-table schema. Startup recognizes its columns, defaults, CHECK/UNIQUE/FK constraints, indexes, triggers and ownership/parent relationships before writes. The source fact is `src/db/legacy_v0.sql`, installed as package data and introspected in a disposable in-memory reference database. The release identity cutover is planned from narrow source metadata using non-secret public-origin/service-identifier settings; ambiguous namespaces fail before DDL. Unknown and partial sources fail closed.
 
 Back up the database and media before upgrading. Run the current application once: startup supplies `IdentityCutoverConfig` from settings to `Database.migrate(identity=...)`, which upgrades a recognized release v0 directly to current v1. No intermediate application install or manual header stamp is needed. A genuine empty file bootstraps current v1 directly.
 
@@ -12,7 +12,7 @@ Unpublished unsupported prerelease schema databases stamped 1 and development da
 
 ## Transaction boundary
 
-Read-only preflight uses a stable SQLite read snapshot. Writing paths reread the header and table inventory under `BEGIN IMMEDIATE`. Fresh initialization keeps foreign-key enforcement ON. The released-source path suspends enforcement before the transaction and calls `legacy_v0_to_v1.upgrade_released_v0_to_v1(conn, identity)` directly. It revalidates source schema/data, plans protocol deltas, copies all 30 source tables to transactional SQL TEMP staging, then removes the old main tables. Current `Base.metadata.create_all(conn)` creates all 45 target tables once. Native SQL builds the channel inventory, copies preserved values with INSERT/SELECT and JOIN, and installs typed claims before applying identity deltas. No unsupported prerelease schema business schema or persistent intermediate header exists.
+Read-only preflight uses a stable SQLite read snapshot. Writing paths reread the header and table inventory under `BEGIN IMMEDIATE`. Fresh initialization keeps foreign-key enforcement ON. The released-source path suspends enforcement before the transaction and calls `legacy_v0_to_v1.upgrade_released_v0_to_v1(conn, identity)` directly. It revalidates source schema/data, plans protocol deltas, copies all 30 source tables to transactional SQL TEMP staging, then removes the old main tables. Current `Base.metadata.create_all(conn)` creates all 47 target tables once. Native SQL builds the channel inventory, copies preserved values with INSERT/SELECT and JOIN, and installs typed claims before applying identity deltas. No unsupported prerelease schema business schema or persistent intermediate header exists.
 
 Advisory and writer inspections read separate evidence under BEGIN and BEGIN IMMEDIATE. Python evidence contains only fields needed for relationship/identity validation; key material, publication bodies, timestamps and untouched audit/policy payloads stay in SQL staging. Preservation compares complete staged source rows against the target with bidirectional EXCEPT after applying only approved protocol deltas to the implementationd oracle. TEMP copies are removed before commit. There is no cross-transaction cache. Reads of the changed target remain separate validation evidence.
 
@@ -21,6 +21,25 @@ Before commit, the runner validates the full target schema, every preserved row/
 After commit or rollback, suspended enforcement is restored and verified. Failed restoration invalidates the connection. Enforcement-negative SQL tests run after restoration; FK OFF cannot reject invalid writes inside the transaction.
 
 Already-current v1 startup validates through read-only queries, including the seed connector, the complete generated-role column definition and STORED mode, defaults, composite FKs, UNIQUE/CHECK constraints and explicit index/trigger definitions. It performs no repairs or writer reservation. Concurrent initializers validate the winner instead of applying the migration twice.
+
+## Stage 04 additions to the evolving v1 target
+
+Checkpoint 56 adds `platform_delivery_intents` and
+`local_community_authored_announce_deliveries` directly to current ORM v1.
+It adds canonical `content_revision`, nullable latest-content/last-update evidence
+and `deleted_at` to four existing Local/Remote Community canonical tables, and
+nullable `applied_revision` plus per-copy mutation claim/state to their four
+existing delivery/surface tables. Source object dedup stores the immediate
+physical container separately from a parent forum claim. User Actor outbound
+endpoint deliveries gain optional bounded direct-recipient evidence alongside
+independent accepted-follower rows.
+
+Released-v0 physical copies are not newly sent by the migration: `applied_revision`
+and authored delivery intents remain unknown/empty. No source-body snapshot,
+original accepted Follow snapshot, CreateAttempt receipt or canonical deletion
+can be inferred from a missing historical record. The same complete target ORM
+is used for fresh bootstrap, released-v0 upgrade and read-only current-v1
+validation. No v1→v2 migration or development-v1 upgrade is added.
 
 ## Historical evidence and tests
 
