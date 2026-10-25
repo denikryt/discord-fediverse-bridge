@@ -418,3 +418,39 @@ async def test_incomplete_group_does_not_refetch_ap_or_create_thread(tmp_path):
     assert requests == []
     assert adapter.calls == []
     assert len(db.discord_fanout_groups.get_thread_deliveries(existing.id)) == 1
+
+@pytest.mark.asyncio
+async def test_deleted_canonical_parent_is_not_returned_by_backfill(tmp_path):
+    """A retained physical starter is not permission to recover a deleted post."""
+    db, group, runtime = world(tmp_path, only_first=True)
+    db.discord_fanout_groups.add_thread_delivery(
+        thread_group_id=group.id, discord_channel_id=200,
+        discord_thread_id=1200, discord_starter_message_id=2200, role='inbound',
+    )
+    from src.models import CommunityThreadGroup
+    with db.immediate_session() as session:
+        session.get(CommunityThreadGroup, group.id).deleted_at = datetime.now(timezone.utc)
+
+    adapter = DiscordPostsAndComments()
+    assert await restore(db, runtime, adapter) is None
+    assert adapter.calls == adapter.message_calls == []
+    assert len(db.discord_fanout_groups.get_thread_deliveries(group.id)) == 2
+
+
+@pytest.mark.asyncio
+async def test_deleted_canonical_parent_rejects_late_child_before_admission(tmp_path):
+    """Late AP comment cannot create a new canonical child under a tombstone."""
+    db, group, runtime = world(tmp_path, only_first=True)
+    from src.models import CommunityThreadGroup
+    with db.immediate_session() as session:
+        session.get(CommunityThreadGroup, group.id).deleted_at = datetime.now(timezone.utc)
+
+    adapter = DiscordPostsAndComments()
+    event = comment()
+    response = await runtime.handle_normalized_inbound_comment_with_backfill(
+        event, adapter=adapter,
+    )
+    assert response.status == 'skipped'
+    assert adapter.calls == adapter.message_calls == []
+    assert db.discord_fanout_groups.get_message_group_by_ap_object(event.object.ap_id) is None
+    assert db.discord_fanout_groups.get_thread_group_by_ap_object(POST).deleted_at is not None

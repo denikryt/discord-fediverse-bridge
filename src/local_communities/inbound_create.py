@@ -369,6 +369,13 @@ class LocalCommunityInboundCreateHandler:
                 outcome=InboundActivityOutcome.IGNORED_UNMAPPED_CONTEXT,
                 detail="comment parent post is not mapped",
             )
+        if thread_row.deleted_at is not None:
+            # Do not retain the inbound child source before checking the
+            # authoritative parent tombstone: this would poison later dedup.
+            return _HandlerResult(
+                status='skipped', outcome=InboundActivityOutcome.IGNORED_UNMAPPED_CONTEXT,
+                detail='comment parent post is canonically deleted',
+            )
         if self._adapter is None:
             raise RuntimeError('Local AP comment Create requires a bound platform adapter')
         forum = self._host_forum(local_community)
@@ -408,7 +415,8 @@ class LocalCommunityInboundCreateHandler:
                 parent_row = self.database.local_community_content.get_local_community_message_by_ap_object_id(
                     parent_ap_id
                 )
-                if parent_row is None or parent_row.local_community_thread_id != thread_row.id:
+                if (parent_row is None or parent_row.deleted_at is not None
+                    or parent_row.local_community_thread_id != thread_row.id):
                     return _HandlerResult(
                         status="skipped", outcome=InboundActivityOutcome.IGNORED_UNMAPPED_CONTEXT,
                         detail="nested reply parent is absent or belongs to another thread",

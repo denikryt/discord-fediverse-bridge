@@ -15,7 +15,6 @@ import json
 from typing import TYPE_CHECKING
 
 from ..inbound_activity_outcomes import InboundActivityOutcome
-from .backfill import backfill_post_as_thread_group
 from .delivery_mapping import (
     get_message_group_for_ap_object,
     get_message_group_for_delivered_message,
@@ -655,6 +654,13 @@ class CommunityRuntime:
             )
         post_id = event.object.post_ap_id or ''
         thread_group = get_thread_group_for_ap_object(self.database, post_id)
+        if thread_group is not None and thread_group.deleted_at is not None:
+            # Reject an AP child before writing its canonical provenance or
+            # reserving a physical Create under a deleted canonical parent.
+            return _HandlerResult(
+                'skipped', InboundActivityOutcome.IGNORED_UNMAPPED_CONTEXT,
+                'parent post is canonically deleted',
+            )
         if thread_group is None:
             # A partial canonical group is not negative proof that its missing
             # recipient never received a parent thread. Do not refetch/create
@@ -695,6 +701,13 @@ class CommunityRuntime:
             )
         post_id = event.object.post_ap_id or ''
         thread_group = get_thread_group_for_ap_object(self.database, post_id)
+        if thread_group is not None and thread_group.deleted_at is not None:
+            # Reject an AP child before writing its canonical provenance or
+            # reserving a physical Create under a deleted canonical parent.
+            return _HandlerResult(
+                'skipped', InboundActivityOutcome.IGNORED_UNMAPPED_CONTEXT,
+                'parent post is canonically deleted',
+            )
         if thread_group is None:
             return _HandlerResult(
                 'deferred', InboundActivityOutcome.DEFERRED_MISSING_DEPENDENCY,
@@ -713,6 +726,13 @@ class CommunityRuntime:
             return _HandlerResult(
                 'deferred', InboundActivityOutcome.DEFERRED_MISSING_DEPENDENCY,
                 'nested canonical comment parent is unavailable',
+            )
+        if parent_group is not None and parent_group.deleted_at is not None:
+            # A known nested reply cannot attach to an already deleted
+            # canonical parent, even when an old physical receipt survives.
+            return _HandlerResult(
+                'skipped', InboundActivityOutcome.IGNORED_UNMAPPED_CONTEXT,
+                'nested canonical parent is deleted',
             )
         if parent_group is not None and parent_group.thread_group_id != thread_group.id:
             # Do not reinterpret a known foreign canonical comment as an

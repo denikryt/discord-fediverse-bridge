@@ -659,3 +659,59 @@ async def test_canonical_tombstones_block_replayed_local_ap_create(tmp_path):
         assert relays == ['post', 'comment']
     finally:
         db.close()
+
+@pytest.mark.asyncio
+async def test_deleted_local_post_rejects_late_ap_comment_without_poisoning_admission(tmp_path):
+    """A tombstoned local canonical parent prevents even retaining a late child."""
+    from datetime import datetime, timezone
+    from src.models import LocalCommunityThread
+
+    db, runtime, adapter, relays = setup(tmp_path)
+    try:
+        await runtime.handle_inbound_post(_post(), SimpleNamespace())
+        parent = db.local_community_content.get_local_community_thread_by_ap_object_id(
+            'https://remote.test/post')
+        with db.immediate_session() as session:
+            session.get(LocalCommunityThread, parent.id).deleted_at = datetime.now(timezone.utc)
+
+        response = await runtime.handle_inbound_comment(comment(), SimpleNamespace())
+        assert response.status == 'skipped'
+        assert [w for w in adapter.writes if w[0] == 'comment'] == []
+        assert db.local_community_content.get_local_community_message_by_ap_object_id(
+            'https://remote.test/comment') is None
+        assert db.personal_feed_conversations.get_inbound_object(
+            'https://remote.test/comment') is None
+    finally:
+        db.close()
+
+
+@pytest.mark.asyncio
+async def test_deleted_local_nested_comment_rejects_new_child(tmp_path):
+    """A retained Discord receipt for a deleted nested parent is unusable."""
+    from datetime import datetime, timezone
+    from src.models import LocalCommunityMessage
+
+    db, runtime, adapter, relays = setup(tmp_path)
+    try:
+        await runtime.handle_inbound_post(_post(), SimpleNamespace())
+        first = await runtime.handle_inbound_comment(comment(), SimpleNamespace())
+        assert first.status == 'processed'
+        parent = db.local_community_content.get_local_community_message_by_ap_object_id(
+            'https://remote.test/comment')
+        with db.immediate_session() as session:
+            session.get(LocalCommunityMessage, parent.id).deleted_at = datetime.now(timezone.utc)
+
+        reply = comment(parent='https://remote.test/comment',
+                        obj='https://remote.test/deleted-parent-child')
+        reply.delivery_id = reply.source_activity_id = 'https://remote.test/create/deleted-parent-child'
+        reply.source_activity_json = {
+            'id': reply.delivery_id, 'type': 'Create', 'actor': reply.actor_id,
+            'object': {'id': reply.object.ap_id, 'content': 'Reply'},
+        }
+        result = await runtime.handle_inbound_comment(reply, SimpleNamespace())
+        assert result.status == 'skipped'
+        assert [w for w in adapter.writes if w[0] == 'comment'] == [
+            ('comment', '400', '401')]
+        assert db.personal_feed_conversations.get_inbound_object(reply.object.ap_id) is None
+    finally:
+        db.close()

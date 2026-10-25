@@ -40,6 +40,26 @@ not shadowed by a parallel live ingress.
    recipient does not authorize a fresh ActivityPub Create ID. Later physical
    fanout, edits and crash recovery belong to subsequent Stage 04 checkpoints.
 
+## Stage 04 canonical parent tombstone gate (checkpoint 60)
+
+An inbound remote AP comment with a mapped canonical parent is admitted only
+when the owning post belongs to the expected remote community **and has no
+`deleted_at` tombstone**. A known nested comment parent must also be live and
+belong to that same canonical post. These checks occur before retaining the
+child's AP provenance or creating a delivery intent. An existing physical
+starter/message row is historical receipt evidence, **not** authorization to
+resurrect a deleted parent. Remote post backfill refuses an already-deleted
+canonical group before fetching or reusing its physical copies.
+
+The Local Community inbound handler enforces the same boundary before
+recording the new child's AP source, including where a deleted nested parent's
+old host message still exists. A late or forged child is skipped without
+physical POST or a poisoned canonical admission; the intent repository repeats
+these constraints transactionally when the physical request is reserved.
+
+The unused legacy Discord-SDK-only parent-backfill helper has been removed;
+normalized runtime delivery always uses the durable typed coordinator.
+
 ## Stage 04 physical Community Create and restart recovery
 
 1. After canonical Local/Remote Community admission, each eligible forum is
