@@ -2,6 +2,20 @@
 
 This document is a short, feature-oriented index of the test suite. It helps maintainers find existing coverage before adding a new test. It intentionally links to files rather than line numbers or individual test functions, because those change more often.
 
+## Stage 04 S-01 duplicate Community Create audit
+
+- `docs/development/stage04_s01_legacy_create_audit.md` inventories the
+  normalized production call graph, 14 test files with 62 direct raw runtime
+  invocations, external/dynamic compatibility risk and staged deletion gate.
+- `tests/test_stage04_single_community_create_route_contract.py` rejects a
+  reintroduced raw `DiscordEventRouter` Create entry; the migrated router cases
+  in three Local Community behavior modules verify Local/Remote selection,
+  inactive subscribers and exact forum reply ownership through typed events.
+- `tests/test_normalized_community_runtime.py` and
+  `tests/test_normalized_local_community_runtime.py` are the canonical SQLite
+  sources for fully normalized Create/dedup/fanout behavior. Legacy raw runtime
+  suites must be migrated before their direct SDK-shaped methods are removed.
+
 ## Stage 04 durable Create admission and recovery (Checkpoints 56–60)
 
 - Current-v1 bootstrap and released-v0→v1 migration preservation, including

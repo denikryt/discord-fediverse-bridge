@@ -434,3 +434,20 @@ Fedify-native security integration remains blocked by missing dependencies.
   to make an obsolete projection pass.
 - Full Python/TypeScript dependency-backed and live Discord/Fedify verification
   remain outstanding. Focused tests alone are not production acceptance.
+
+
+## Stage 04 S-01: obsolete raw Community Create API (partial migration)
+
+- **Verified (2026-10-25):** `BridgeBot` only invokes normalized Community
+  Create via `DiscordAdapter` → `PlatformEventIngress`. Removed unreachable
+  raw router methods `DiscordEventRouter.handle_thread_create/handle_message`.
+  Four direct router tests now enter via typed events and current SQLite
+  forum-source ownership checks; standalone source-contract tests pass.
+- **Still open:** raw SDK-shaped Create methods in Local/Remote Community
+  runtimes remain directly invoked by 14 legacy test files (62 call sites
+  before partial migration); removing them now would discard coverage or
+  introduce failures. The exact inventory and migration gate are in
+  `docs/development/stage04_s01_legacy_create_audit.md`. Those methods are not
+  production-bound but still duplicate implementation. Do not describe S-01
+  as fully completed until their behavior is covered by typed scenarios and
+  the last raw Create implementation is removed.

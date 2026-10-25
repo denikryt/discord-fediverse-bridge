@@ -2,6 +2,21 @@
 
 This document explains the major runtime traces through the bridge: user/platform action, important preconditions, modules called, database effects, and outbound effects. It owns step-by-step behavior flow descriptions, not exhaustive function internals.
 
+## Stage 04 S-01 — single production Community Create entry
+
+`BridgeBot` submits observed SDK creates only through `DiscordAdapter` and
+`PlatformEventIngress`. `DiscordEventRouter` now exposes only its normalized
+`handle_platform_thread_create` / `handle_platform_message_create` entry points
+for Community publication. The former raw SDK `handle_thread_create` /
+`handle_message` router methods have been removed; neither would persist a
+`PlatformDeliveryIntent` before physical fanout. These names remain **absent**
+from the production router API. Personal Feed and physical Update/Delete retain
+their separate existing owners. A follow-up migration of direct runtime method
+calls in legacy tests is still needed before raw `CommunityRuntime` and
+`LocalCommunityRuntime` Create methods (and their SDK-only collaborators) can be
+fully deleted; they have no explicit production ingress caller. This partial
+cutover does not claim that the obsolete implementation has been deleted yet.
+
 ## Stage 04 typed forum source admission (checkpoint 57 foundation)
 
 A verified forum `ChannelRef` enters `content_sync.surface_resolution` with

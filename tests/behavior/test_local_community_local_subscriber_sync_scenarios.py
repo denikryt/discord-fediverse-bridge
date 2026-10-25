@@ -12,6 +12,7 @@ from sqlalchemy import func, select
 
 from src.activitypub_models import ActivityPubEvent
 from src.discord_event_router import DiscordEventRouter
+from support.typed_forum_creates import route_verified_forum_thread, verified_forum_reply
 from src.content_publish_service import ContentPublishService
 from src.fedify_gateway_client import PublishLocalCommunityContentResult
 from src.local_communities.runtime import LocalCommunityRuntime
@@ -552,22 +553,17 @@ async def test_local_subscriber_forum_creates_route_to_local_runtime(
         local_community_runtime=local_runtime,
         bridge_policy_service=build_test_policy_service(database),
     )
-    local_runtime.handle_discord_thread_create = AsyncMock()
+    local_runtime.handle_normalized_thread_create = AsyncMock()
 
-    await router.handle_thread_create(
-        thread=build_thread(thread_id=2200, channel_id=200),
-        starter_message=build_starter_message(),
-    )
+    await route_verified_forum_thread(router, forum_id=200, thread_id=2200, starter_id=300)
 
-    local_runtime.handle_discord_thread_create.assert_awaited_once()
-    remote_runtime.handle_discord_thread_create.assert_not_awaited()
+    local_runtime.handle_normalized_thread_create.assert_awaited_once()
+    remote_runtime.handle_normalized_thread_create.assert_not_awaited()
 
-    local_runtime.handle_discord_message = AsyncMock()
-    await router.handle_message(
-        message=build_thread_message(message_id=2400, thread_id=2200, channel_id=200)
-    )
-    local_runtime.handle_discord_message.assert_awaited_once()
-    remote_runtime.handle_discord_message.assert_not_awaited()
+    local_runtime.handle_normalized_message_create = AsyncMock()
+    await router.handle_platform_message_create(verified_forum_reply(forum_id=200, thread_id=2200, message_id=2400))
+    local_runtime.handle_normalized_message_create.assert_awaited_once()
+    remote_runtime.handle_normalized_message_create.assert_not_awaited()
 
 
 @pytest.mark.asyncio

@@ -17,6 +17,7 @@ import pytest
 from sqlalchemy import text
 
 from src.discord_event_router import DiscordEventRouter
+from support.typed_forum_creates import route_verified_forum_thread, verified_forum_reply
 from src.content_publish_service import ContentPublishService
 from src.local_communities.runtime import LocalCommunityRuntime
 from src.local_communities.service import LocalCommunityService
@@ -256,10 +257,10 @@ async def test_local_subscriber_forum_is_runtime_source(
         initiated_by_discord_user_id="456",
     )
     community_runtime = SimpleNamespace(
-        handle_discord_thread_create=AsyncMock(return_value="community")
+        handle_normalized_thread_create=AsyncMock(return_value="community")
     )
     local_runtime = SimpleNamespace(
-        handle_discord_thread_create=AsyncMock(return_value="local")
+        handle_normalized_thread_create=AsyncMock(return_value="local")
     )
     router = DiscordEventRouter(
         database=database,
@@ -268,12 +269,9 @@ async def test_local_subscriber_forum_is_runtime_source(
         bridge_policy_service=build_test_policy_service(database),
     )
 
-    result = await router.handle_thread_create(
-        thread=build_thread(thread_id=501, channel_id=101),
-        starter_message=build_starter_message(message_id=601),
-    )
+    result = await route_verified_forum_thread(router, forum_id=101, thread_id=501, starter_id=601)
 
     assert router.is_local_community_forum(101) is True
     assert result == "local"
-    local_runtime.handle_discord_thread_create.assert_awaited_once()
-    community_runtime.handle_discord_thread_create.assert_not_awaited()
+    local_runtime.handle_normalized_thread_create.assert_awaited_once()
+    community_runtime.handle_normalized_thread_create.assert_not_awaited()

@@ -11,6 +11,7 @@ import pytest
 from sqlalchemy import func, select
 
 from src.discord_event_router import DiscordEventRouter
+from support.typed_forum_creates import route_verified_forum_thread, verified_forum_reply
 from src.content_publish_service import ContentPublishService
 from src.fedify_gateway_client import PublishLocalCommunityContentResult
 from src.local_communities.runtime import LocalCommunityRuntime
@@ -585,15 +586,14 @@ async def test_inactive_local_subscriber_is_not_routed_as_source(
         local_community_runtime=local_runtime,
         bridge_policy_service=build_test_policy_service(database),
     )
-    local_runtime.handle_discord_thread_create = AsyncMock()
+    local_runtime.handle_normalized_thread_create = AsyncMock()
 
-    await router.handle_thread_create(
-        thread=build_thread(thread_id=2200, channel_id=200),
-        starter_message=build_starter_message(message_id=2300),
-    )
+    await route_verified_forum_thread(router, forum_id=200, thread_id=2200, starter_id=2300)
 
-    local_runtime.handle_discord_thread_create.assert_not_awaited()
-    remote_runtime.handle_discord_thread_create.assert_awaited_once()
+    local_runtime.handle_normalized_thread_create.assert_not_awaited()
+    # Typed router drops unclaimed/inactive forums at admission; it never
+    # falls through to the remote Community publisher without a subscription.
+    remote_runtime.handle_normalized_thread_create.assert_not_awaited()
 
 
 @pytest.mark.asyncio
@@ -625,15 +625,12 @@ async def test_remote_subscription_forum_with_bad_local_subscriber_row_stays_rem
         local_community_runtime=local_runtime,
         bridge_policy_service=build_test_policy_service(database),
     )
-    local_runtime.handle_discord_thread_create = AsyncMock()
+    local_runtime.handle_normalized_thread_create = AsyncMock()
 
-    await router.handle_thread_create(
-        thread=build_thread(thread_id=2200, channel_id=200),
-        starter_message=build_starter_message(message_id=2300),
-    )
+    await route_verified_forum_thread(router, forum_id=200, thread_id=2200, starter_id=2300)
 
-    local_runtime.handle_discord_thread_create.assert_not_awaited()
-    remote_runtime.handle_discord_thread_create.assert_awaited_once()
+    local_runtime.handle_normalized_thread_create.assert_not_awaited()
+    remote_runtime.handle_normalized_thread_create.assert_awaited_once()
 
 
 @pytest.mark.asyncio
