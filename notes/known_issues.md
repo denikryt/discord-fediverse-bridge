@@ -443,11 +443,19 @@ Fedify-native security integration remains blocked by missing dependencies.
   raw router methods `DiscordEventRouter.handle_thread_create/handle_message`.
   Four direct router tests now enter via typed events and current SQLite
   forum-source ownership checks; standalone source-contract tests pass.
-- **Still open:** raw SDK-shaped Create methods in Local/Remote Community
-  runtimes remain directly invoked by 14 legacy test files (62 call sites
-  before partial migration); removing them now would discard coverage or
-  introduce failures. The exact inventory and migration gate are in
-  `docs/development/stage04_s01_legacy_create_audit.md`. Those methods are not
-  production-bound but still duplicate implementation. Do not describe S-01
-  as fully completed until their behavior is covered by typed scenarios and
-  the last raw Create implementation is removed.
+- **Follow-up verified (2026-10-25):** migrated another 25 raw runtime
+  invocations from six legacy test modules to the actual normalized Local/Remote
+  counterpart (Phase 2, 3, 4, 5, 9, and CommunityRuntime). Two old SDK-only
+  inbound cases now use bound typed AP transport. These cases retain their
+  original observable source, sibling, parent, replay and failure assertions.
+  A new failing SQLite test exposed a double writer of an authored Remote
+  comment source receipt when the source message had no explicit `reply_to`;
+  the normalized runtime now validates the receipt atomically persisted by
+  canonical publication instead of attempting a second conflicting insert.
+- **Still open:** 32 direct raw runtime Create invocations in eight legacy
+  behavior/migration test modules. The four raw methods in `CommunityRuntime`
+  and `LocalCommunityRuntime` remain to avoid silently discarding assertions
+  until those tests are migrated. They are not live production callbacks, but
+  still duplicate implementation. The pre-change inventory is preserved in
+  `docs/development/stage04_s01_legacy_create_audit.md`; this follow-up does
+  **not** close S-01, MIG-01/MIG-02, full dependency tests or live integration.

@@ -284,15 +284,17 @@ class CommunityRuntime:
             ap_activity_id=result.activity_id, ap_object_id=result.object_id,
             parent_message_group_id=context.parent_message_group_id,
         )
-        self.database.discord_fanout_groups.add_message_delivery(
-            message_group_id=message_group.id, discord_channel_id=forum_id,
-            discord_thread_id=thread_id, discord_message_id=message_id,
-            role='source',
-            parent_discord_message_id=(
-                discord_id_to_legacy_int(event.reply_to)
-                if event.reply_to is not None else None
-            ),
+        # The canonical publish transaction already persists the exact source
+        # physical receipt. A second writer would disagree about the starter
+        # fallback for a root reply with no explicit Discord reference, then
+        # reject an otherwise valid publication after canonical commit.
+        source_receipt = self.database.discord_fanout_groups.get_message_delivery_by_ref(
+            event.message,
         )
+        if source_receipt is None or source_receipt.message_group_id != message_group.id:
+            raise PlatformOperationError(
+                'invalid_request', 'published Community source has no matching physical receipt',
+            )
         if self.discord_fanout is not None and siblings:
             copies = await self.discord_fanout.mirror_normalized_message_to_siblings(
                 adapter=adapter, source=event,

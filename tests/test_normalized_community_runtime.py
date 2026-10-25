@@ -90,16 +90,22 @@ class PhysicalTransport(FakeDiscordPort):
         n = int(destination.external_thread_id)
         # Every new source message gets its own physical receipt; different
         # recipients of that source share a logical generation, not an ID.
-        generation = (len(self.replies) - 1) // 2
+        # Message snowflakes must be unique inside each immediate thread;
+        # a test with one sibling cannot reuse the first receipt on its next
+        # comment merely because the fake was built for two recipients.
+        generation = sum(
+            1 for prior, _parent, _attempt in self.replies[:-1]
+            if prior.external_thread_id == destination.external_thread_id
+        )
         return CreatedMessage(MessageRef('discord-primary', str(n),
                                          str(n + 3000 + generation * 10000)), 'bot')
 
 
-def world(tmp_path, *, fail_forum=None):
+def world(tmp_path, *, fail_forum=None, forum_ids=(100, 101, 102)):
     """Configure authorized Discord forums and real persisted canonical mappings."""
     db = build_database(tmp_path, 'canonical-neutral.sqlite3')
     add_registered_user(db)
-    for channel_id in (100, 101, 102):
+    for channel_id in forum_ids:
         add_accepted_subscription(db, channel_id=channel_id)
     gateway = RecordingGateway(db.users.get_user_by_discord_user_id('123').actor_url)
     policy = SimpleNamespace(
@@ -430,5 +436,31 @@ async def test_remote_community_reply_receipt_mode_controls_durable_mirror(tmp_p
                     if row.channel_surface_id == db.platform_surfaces.resolve_claim(
                         'discord-primary', '102').id) == '4102'
         assert adapter.replies[1][1].external_message_id == '2102'
+    finally:
+        db.close()
+
+@pytest.mark.asyncio
+async def test_normalized_root_reply_without_explicit_reference_admits_once(tmp_path):
+    """A plain human forum reply is not rejected by duplicate source receipt writers.
+
+    The canonical persistence layer may normalize a root's physical parent to
+    the starter. The runtime must use that checked SQLite source receipt rather
+    than writing a contradictory second row with a missing reply reference.
+    """
+    db, runtime, gateway, adapter = world(tmp_path, forum_ids=(100, 101))
+    try:
+        event, opening = starter()
+        await runtime.handle_normalized_thread_create(event, opening, adapter=adapter)
+        result = await runtime.handle_normalized_message_create(
+            reply(message='400', parent=None), adapter=adapter,
+        )
+        row = db.discord_fanout_groups.get_message_group_by_source_message(400)
+        assert result.status == 'published' and row is not None
+        source = db.discord_fanout_groups.get_message_delivery_by_ref(
+            MessageRef('discord-primary', '200', '400'),
+        )
+        assert source is not None and source.message_group_id == row.id
+        assert len(db.discord_fanout_groups.get_message_deliveries(row.id)) == 2
+        assert len(gateway.requests) == 2 and len(adapter.replies) == 1
     finally:
         db.close()

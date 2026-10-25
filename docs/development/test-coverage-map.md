@@ -11,6 +11,22 @@ This document is a short, feature-oriented index of the test suite. It helps mai
   reintroduced raw `DiscordEventRouter` Create entry; the migrated router cases
   in three Local Community behavior modules verify Local/Remote selection,
   inactive subscribers and exact forum reply ownership through typed events.
+- S-01 follow-up converts `tests/test_phase2_fanout_scenarios.py`,
+  `tests/test_phase3_message_fanout_scenarios.py`,
+  `tests/test_phase4_reply_preservation.py`,
+  `tests/test_phase9_bidirectional_mirror_messages.py`, the outbound case in
+  `tests/test_phase5_inbound_ap_shared_groups.py`, and both authored cases in
+  `tests/test_community_runtime_scenarios.py` to actual
+  `handle_normalized_thread_create` / `handle_normalized_message_create` with
+  immutable SQLite physical receipts and a render-only gateway. The two inbound
+  cases in `test_community_runtime_scenarios.py` now bind a typed adapter too.
+  `test_normalized_community_runtime.py` protects root replies with no explicit
+  Discord reference: canonical persistence owns the source receipt and the
+  runtime must not write a contradictory second row after AP commit.
+- **Remaining S-01 migration:** 32 raw runtime Create calls in 8 behavior/
+  migration suites still need case-by-case conversion before deleting the four
+  SDK-shaped runtime entry points. Do not remove those tests or insert a raw
+  compatibility shim to satisfy method existence.
 - `tests/test_normalized_community_runtime.py` and
   `tests/test_normalized_local_community_runtime.py` are the canonical SQLite
   sources for fully normalized Create/dedup/fanout behavior. Legacy raw runtime
