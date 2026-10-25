@@ -313,6 +313,13 @@ class UserActorDeliveryService:
                     self.database.content_mutations.reserve_next(
                         object_id=object_id,
                     )
+                else:
+                    # A CAS refusal must not spin forever with an unreported
+                    # canonical-ready claim. Stale tokens cannot alter a new owner.
+                    self.database.content_mutations.record_retryable_failure(
+                        claim.mutation_id, claim.claim_token,
+                        "canonical commit refused: revision or ownership changed",
+                    )
             except ValueError as exc:
                 self.database.content_mutations.abort_local_validation(
                     claim.mutation_id, claim.claim_token, str(exc)

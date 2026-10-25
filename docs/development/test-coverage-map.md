@@ -426,3 +426,11 @@ full Python/Node suites or live Discord/Fedify integration acceptance.
   `tests/test_stage04_delivery_intents.py`: all five formerly hidden scenarios
   now belong to collected test classes; canonical tombstones and unsent/unknown
   Create cancellation remain distinct.
+
+
+## Rendered User Actor mutation commit recovery
+
+- `tests/behavior/test_canonical_ready_commit_recovery.py`: failed local commit
+  after render, durable error/backoff, immutable canonical JSON across restart,
+  a confirmed typed source with injected SQL failure, active lease protection,
+  stale-owner CAS and a revision conflict without overwriting newer content.

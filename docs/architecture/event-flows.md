@@ -487,3 +487,24 @@ coordinator reserves a `blocked` intent without a physical request. Its
 immutable DTO is constructed only after the exact parent receipt appears;
 unknown source references retain the established root fallback. Inbound
 ActivityPub comments and post backfill consult the same typed thread receipts.
+
+
+## Author mutation: rendered activity awaiting local commit
+
+1. `UserActorDeliveryService.drain_mutations` persists the verified renderer JSON
+   as `canonical_ready` before applying the local canonical transaction. The
+   existing claim token/lease continues to own this local commit; another worker
+   may claim it only after release or expiry.
+2. A commit exception or revision-CAS refusal retains that exact JSON, activity
+   ID and desired intent. The repository records `last_error`, clears ownership
+   and schedules bounded exponential `next_attempt_at`. It does not classify a
+   verified render as ambiguous or abort it as an unsent request.
+3. A recovery claim counts another attempt and retries the stored local commit,
+   without calling render or inbox transport again. A successful commit clears
+   the error/backoff and atomically advances the publication, domain canonical
+   row and durable outbound source. A stale owner cannot release a newer token.
+
+`tests/behavior/test_canonical_ready_commit_recovery.py` covers missing canonical
+rows, an actual SQL flush failure on an otherwise verified source, lease theft
+and a refused revision CAS. The tests repair state and reopen the database to
+verify recovery without duplicate rendering or outbound source creation.

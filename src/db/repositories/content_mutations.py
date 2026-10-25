@@ -393,6 +393,13 @@ class ContentMutationRepository(BaseRepository):
                                 UserActorContentMutation.next_attempt_at.is_(None),
                                 UserActorContentMutation.next_attempt_at <= now,
                             ),
+                            # A persisted render still belongs to its current
+                            # local-commit owner until release or lease expiry.
+                            or_(
+                                UserActorContentMutation.state != "canonical_ready",
+                                UserActorContentMutation.lease_expires_at.is_(None),
+                                UserActorContentMutation.lease_expires_at <= now,
+                            ),
                         ),
                         and_(
                             UserActorContentMutation.state == "dispatching",
@@ -408,10 +415,12 @@ class ContentMutationRepository(BaseRepository):
                 mutation.claim_token = token
                 mutation.claimed_at = now
                 mutation.lease_expires_at = now + timedelta(seconds=stale_after_seconds)
+                # Local commit retries count too: their bounded backoff must
+                # grow without discarding or rendering the frozen activity.
+                mutation.attempt_count += 1
                 if mutation.state != "canonical_ready":
                     mutation.state = "dispatching"
                     mutation.side_effect_classification = "not_dispatched"
-                    mutation.attempt_count += 1
                 claims.append(
                     ClaimedContentMutation(
                         mutation_id=mutation.id,
@@ -471,40 +480,51 @@ class ContentMutationRepository(BaseRepository):
     def record_retryable_failure(
         self, mutation_id: int, claim_token: str, error: str
     ) -> None:
-        """Release an ambiguous gateway attempt for stable-identity replay."""
+        """Release a failed attempt while preserving a durably received render."""
         with self.session() as session:
             mutation = session.scalar(
                 select(UserActorContentMutation).where(
                     UserActorContentMutation.id == mutation_id,
                     UserActorContentMutation.claim_token == claim_token,
-                    UserActorContentMutation.state == "dispatching",
+                    UserActorContentMutation.state.in_(("dispatching", "canonical_ready")),
                 )
             )
             if mutation is None:
                 return
+            self._release_retryable(mutation, error)
+
+    @staticmethod
+    def _release_retryable(mutation: UserActorContentMutation, error: str) -> None:
+        """Retain canonical-ready JSON; retry only its local commit after backoff."""
+        if mutation.state != "canonical_ready":
             mutation.state = "ambiguous"
             mutation.side_effect_classification = "send_possible"
-            mutation.claim_token = None
-            mutation.claimed_at = None
-            mutation.lease_expires_at = None
-            mutation.last_error = error[:500]
-            mutation.next_attempt_at = datetime.now(timezone.utc) + timedelta(
-                seconds=min(300, 2 ** min(mutation.attempt_count, 8))
-            )
+        mutation.claim_token = None
+        mutation.claimed_at = None
+        mutation.lease_expires_at = None
+        mutation.last_error = error[:500]
+        mutation.next_attempt_at = datetime.now(timezone.utc) + timedelta(
+            seconds=min(300, 2 ** min(mutation.attempt_count, 8))
+        )
 
     def abort_local_validation(
         self, mutation_id: int, claim_token: str, error: str
     ) -> None:
-        """Abort a pre-send invalid transition without advancing revision."""
+        """Abort pre-render validation, or park a failed already-rendered commit."""
         with self.session() as session:
             mutation = session.scalar(
                 select(UserActorContentMutation).where(
                     UserActorContentMutation.id == mutation_id,
                     UserActorContentMutation.claim_token == claim_token,
-                    UserActorContentMutation.state == "dispatching",
+                    UserActorContentMutation.state.in_(("dispatching", "canonical_ready")),
                 )
             )
             if mutation is None:
+                return
+            if mutation.state == "canonical_ready":
+                # A local invariant failure after render is not pre-send abort.
+                # Preserve JSON and desired intent for repair and commit-only retry.
+                self._release_retryable(mutation, error)
                 return
             mutation.state = "aborted_pre_send"
             mutation.side_effect_classification = "not_dispatched"
@@ -764,6 +784,7 @@ class ContentMutationRepository(BaseRepository):
             mutation.claimed_at = None
             mutation.lease_expires_at = None
             mutation.next_attempt_at = None
+            mutation.last_error = None
             return source.id, published.object_id
 
     def load_canonical_ready(self, mutation_id: int, claim_token: str) -> dict | None:

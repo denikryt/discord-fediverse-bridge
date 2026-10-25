@@ -463,3 +463,13 @@ Fedify-native security integration remains blocked by missing dependencies.
   migrates it, enters real handlers and checks mirrors, human sources and restart.
 - Removed process-global empty `discord` placeholders from six scenario modules;
   combined runs load the installed SDK while retaining network-edge fakes.
+
+
+## Stage 04 canonical-ready commit recovery
+
+- Fixed: a failed local canonical commit now preserves its rendered activity,
+  records the error and schedules bounded retry instead of immediately spinning.
+- Canonical-ready ownership respects the current lease; recovery counts commit
+  attempts, retries only stored JSON and clears diagnostics after success.
+- Four real-SQLite behavioral cases cover missing ownership rows, SQL flush
+  failure, claim fencing and commit-CAS refusal. No schema change is required.
