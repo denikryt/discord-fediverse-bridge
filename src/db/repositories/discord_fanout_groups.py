@@ -9,8 +9,10 @@ from ...models import (
     CommunityMessageGroupDelivery,
     CommunityThreadGroup,
     CommunityThreadGroupDelivery,
+    PlatformConnector,
 )
 from .base import BaseRepository
+from ...platform_types import MessageRef
 
 """Discord fanout group and delivery persistence."""
 
@@ -189,6 +191,9 @@ class DiscordFanoutGroupRepository(BaseRepository):
                     if source_channel_id is not None
                     else {}
                 ),
+                source_external_container_id=(
+                    str(source_thread_id) if source_message_id is not None and source_thread_id is not None else None
+                ),
                 source_external_message_id=(
                     str(source_message_id) if source_message_id is not None else None
                 ),
@@ -211,6 +216,24 @@ class DiscordFanoutGroupRepository(BaseRepository):
         """Retrieve a message group by its primary key ID."""
         with self.session() as session:
             return session.get(CommunityMessageGroup, message_group_id)
+
+    def get_message_group_by_source_ref(self, source: MessageRef) -> CommunityMessageGroup | None:
+        """Resolve only the exact remote-domain authored source comment.
+
+        Mirror receipts and their message IDs are not source-author evidence.
+        """
+        if not isinstance(source, MessageRef):
+            raise TypeError('Source lookup requires typed MessageRef')
+        with self.session() as session:
+            return session.scalar(
+                select(CommunityMessageGroup)
+                .join(PlatformConnector, CommunityMessageGroup.source_connector_id == PlatformConnector.id)
+                .where(
+                    PlatformConnector.connector_key == source.connector_key,
+                    CommunityMessageGroup.source_external_container_id == source.external_container_id,
+                    CommunityMessageGroup.source_external_message_id == source.external_message_id,
+                )
+            )
 
     def get_message_group_by_source_message(
         self, source_message_id: int

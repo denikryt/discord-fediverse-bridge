@@ -1,12 +1,16 @@
 """Connector-scoped channel identity and transactional typed-claim persistence."""
 
 from dataclasses import dataclass
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from ...content_sync.surface_resolution import ResolvedForumSource
 from urllib.parse import urlsplit, urlunsplit
 
 from sqlalchemy import select, update, String
 from sqlalchemy.orm import Session
 
-from ...platform_types import ConnectorRef
+from ...platform_types import ConnectorRef, ChannelRef
 from ...models import (
     ChannelSurface,
     PlatformConnector,
@@ -311,6 +315,17 @@ class PlatformSurfaceRepository(BaseRepository):
             surface.remote_subscription_id,
             surface.personal_feed_binding_id,
         )
+
+    @staticmethod
+    def resolve_forum_source(session: Session, channel: "ChannelRef") -> "ResolvedForumSource | None":
+        """Delegate verified forum-source admission to the SDK-neutral boundary.
+
+        Callers must supply a transaction and must revalidate its frozen owner
+        against the current claim before any canonical or network side effect.
+        """
+        from ...content_sync.surface_resolution import resolve_forum_source
+
+        return resolve_forum_source(session, channel)
 
     def resolve_channel(
         self, connector_key: str, external_id: str

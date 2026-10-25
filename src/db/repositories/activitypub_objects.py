@@ -10,9 +10,11 @@ from sqlalchemy import func, select
 from ...models import (
     PublishedActivityObject,
     User,
+    PlatformConnector,
     utcnow,
 )
 from .base import BaseRepository
+from ...platform_types import MessageRef
 
 """Persisted ActivityPub object JSON lookup persistence."""
 
@@ -96,16 +98,34 @@ class ActivityPubObjectRepository(BaseRepository):
                 )
             )
 
+    def get_by_source_ref(self, source: MessageRef) -> PublishedActivityObject | None:
+        """Resolve a canonical published object by the full physical source tuple."""
+        if not isinstance(source, MessageRef):
+            raise TypeError('typed MessageRef is required')
+        with self.session() as session:
+            return session.scalar(
+                select(PublishedActivityObject)
+                .join(PlatformConnector, PublishedActivityObject.source_connector_id == PlatformConnector.id)
+                .where(
+                    PlatformConnector.connector_key == source.connector_key,
+                    PublishedActivityObject.source_external_container_id == source.external_container_id,
+                    PublishedActivityObject.source_external_message_id == source.external_message_id,
+                )
+            )
+
     def get_published_activity_object_by_discord_message_id(
         self, discord_message_id: int
     ) -> PublishedActivityObject | None:
         """Load one stored gateway-published object by Discord message ID."""
         with self.session() as session:
-            return session.scalar(
+            rows = list(session.scalars(
                 discord_copy_query(PublishedActivityObject, source=True).where(
                     PublishedActivityObject.discord_message_id == discord_message_id
-                )
-            )
+                ).limit(2)
+            ))
+            if len(rows) > 1 or any(r.source_external_container_id is not None for r in rows):
+                raise ValueError('Published source lookup requires exact MessageRef')
+            return rows[0] if rows else None
 
     def load_user_outbox_slice(
         self, *, user: User, offset: int, limit: int

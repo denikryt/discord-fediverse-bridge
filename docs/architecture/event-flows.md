@@ -2,6 +2,19 @@
 
 This document explains the major runtime traces through the bridge: user/platform action, important preconditions, modules called, database effects, and outbound effects. It owns step-by-step behavior flow descriptions, not exhaustive function internals.
 
+## Stage 04 typed forum source admission (checkpoint 57 foundation)
+
+A verified forum `ChannelRef` enters `content_sync.surface_resolution` with
+the actual connector, parent forum kind, and guild identity. The resolver
+queries `ChannelSurface` and the owner row together: active Local host, active
+Local subscriber with active owning community, or accepted Remote subscription.
+Unknown metadata and an inactive/rebound claim cannot publish. The frozen
+`ResolvedForumSource` is a candidate: persistence and later sends must
+revalidate it in the SQLite writer transaction. Exact authored source lookups
+use `(connector, immediate container, message id)` rather than global Discord
+message IDs. Remaining old Discord event routes are replaced in checkpoint 58,
+not shadowed by a parallel live ingress.
+
 ## Registration flow
 
 1. `/register` starts in `src/commands/register.py` and browser routes in `src/http_api.py`.

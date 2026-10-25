@@ -747,7 +747,7 @@ class MessageMapping(Base):
         ),
         UniqueConstraint("source_connector_id", "source_external_container_id", "source_id"),
         CheckConstraint(
-            "source_external_container_id IS NULL OR source_connector_id IS NOT NULL",
+            "source_external_container_id IS NULL OR (source_connector_id IS NOT NULL AND length(source_external_container_id)>0)",
             name="ck_message_mapping_container_connector",
         ),
         UniqueConstraint("activity_id"),
@@ -815,7 +815,7 @@ class PublishedActivityObject(Base):
             sqlite_where=text("source_connector_id IS NOT NULL AND source_external_container_id IS NOT NULL AND source_external_message_id IS NOT NULL"),
         ),
         CheckConstraint(
-            "source_external_container_id IS NULL OR source_connector_id IS NOT NULL",
+            "source_external_container_id IS NULL OR (source_connector_id IS NOT NULL AND length(source_external_container_id)>0)",
             name="ck_published_source_container_connector",
         ),
         CheckConstraint(
@@ -1706,6 +1706,13 @@ class LocalCommunityThread(Base):
             name="ck_local_source_surface_connector",
         ),
         CheckConstraint("content_revision >= 0", name="ck_canonical_content_revision"),
+        CheckConstraint(
+            "(source_external_thread_id IS NULL AND source_external_starter_message_id IS NULL) OR "
+            "(source_connector_id IS NOT NULL AND source_external_thread_id IS NOT NULL AND length(source_external_thread_id)>0 AND "
+            "source_external_starter_message_id IS NOT NULL AND length(source_external_starter_message_id)>0)",
+            name="ck_local_thread_source_coordinates",
+        ),
+        UniqueConstraint("source_connector_id", "source_external_thread_id"),
         UniqueConstraint("ap_activity_id"),
         UniqueConstraint("ap_object_id"),
     )
@@ -1757,6 +1764,13 @@ class LocalCommunityMessage(Base):
             name="ck_local_source_surface_connector",
         ),
         CheckConstraint("content_revision >= 0", name="ck_canonical_content_revision"),
+        CheckConstraint(
+            "(source_external_container_id IS NULL AND source_external_message_id IS NULL) OR "
+            "(source_connector_id IS NOT NULL AND source_external_container_id IS NOT NULL AND length(source_external_container_id)>0 AND "
+            "source_external_message_id IS NOT NULL AND length(source_external_message_id)>0)",
+            name="ck_local_message_source_coordinates",
+        ),
+        UniqueConstraint("source_connector_id", "source_external_container_id", "source_external_message_id"),
         UniqueConstraint("ap_activity_id"),
         UniqueConstraint("ap_object_id"),
     )

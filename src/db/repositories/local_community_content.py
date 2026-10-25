@@ -4,6 +4,7 @@ from __future__ import annotations
 from sqlalchemy import select
 
 from ...models import (
+    PlatformConnector,
     LocalCommunity,
     LocalCommunityMessage,
     LocalCommunityMessageSurface,
@@ -11,6 +12,7 @@ from ...models import (
     LocalCommunityThreadSurface,
 )
 from .base import BaseRepository
+from ...platform_types import MessageRef
 from .platform_surfaces import discord_copy_query
 from ...models import ChannelSurface, PlatformConnector
 
@@ -268,6 +270,25 @@ class LocalCommunityContentRepository(BaseRepository):
             session.add(message)
             session.flush()
             return message
+
+    def get_local_message_by_source_ref(self, source: MessageRef) -> LocalCommunityMessage | None:
+        """Find only the source-authored comment in its immediate container.
+
+        A historical mirror with the same message ID is not a source and
+        changing a channel owner cannot reassign an immutable canonical row.
+        """
+        if not isinstance(source, MessageRef):
+            raise TypeError('Source lookup requires typed MessageRef')
+        with self.session() as session:
+            return session.scalar(
+                select(LocalCommunityMessage)
+                .join(PlatformConnector, LocalCommunityMessage.source_connector_id == PlatformConnector.id)
+                .where(
+                    PlatformConnector.connector_key == source.connector_key,
+                    LocalCommunityMessage.source_external_container_id == source.external_container_id,
+                    LocalCommunityMessage.source_external_message_id == source.external_message_id,
+                )
+            )
 
     def get_local_community_message_by_ap_object_id(
         self, ap_object_id: str

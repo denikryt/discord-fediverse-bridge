@@ -339,6 +339,79 @@ def _claim_channels(conn):
         raise RuntimeError(f"Migration SQL failed during {context}") from exc
 
 
+
+def _backfill_proven_local_sources(conn):
+    """Recover only a uniquely proven v0 host-origin post source.
+
+    A historical `role=host` *alone* does not prove source ownership: a
+    subscriber-origin post can also have a host copy. A historical comment has
+    no `origin_kind`, so the migration deliberately leaves its source unknown.
+    This writes additional v1 fields only, leaving every released-v0 column
+    byte-for-byte preserved by the existing migration oracle.
+    """
+    try:
+        conn.exec_driver_sql("""
+            UPDATE local_community_threads AS t SET
+                source_connector_id = (
+                    SELECT ts.connector_id
+                    FROM local_community_thread_surfaces AS ts
+                    JOIN platform_channel_surfaces AS ps
+                      ON ps.id = ts.channel_surface_id AND ps.connector_id = ts.connector_id
+                    WHERE ts.local_community_thread_id = t.id
+                      AND ts.role = 'host'
+                      AND ps.local_community_id = t.local_community_id
+                    GROUP BY ts.local_community_thread_id
+                    HAVING COUNT(*) = 1
+                ),
+                source_channel_surface_id = (
+                    SELECT ts.channel_surface_id
+                    FROM local_community_thread_surfaces AS ts
+                    JOIN platform_channel_surfaces AS ps
+                      ON ps.id = ts.channel_surface_id AND ps.connector_id = ts.connector_id
+                    WHERE ts.local_community_thread_id = t.id
+                      AND ts.role = 'host'
+                      AND ps.local_community_id = t.local_community_id
+                    GROUP BY ts.local_community_thread_id
+                    HAVING COUNT(*) = 1
+                ),
+                source_external_thread_id = (
+                    SELECT ts.external_thread_id
+                    FROM local_community_thread_surfaces AS ts
+                    JOIN platform_channel_surfaces AS ps
+                      ON ps.id = ts.channel_surface_id AND ps.connector_id = ts.connector_id
+                    WHERE ts.local_community_thread_id = t.id
+                      AND ts.role = 'host'
+                      AND ps.local_community_id = t.local_community_id
+                    GROUP BY ts.local_community_thread_id
+                    HAVING COUNT(*) = 1
+                ),
+                source_external_starter_message_id = (
+                    SELECT ts.external_starter_message_id
+                    FROM local_community_thread_surfaces AS ts
+                    JOIN platform_channel_surfaces AS ps
+                      ON ps.id = ts.channel_surface_id AND ps.connector_id = ts.connector_id
+                    WHERE ts.local_community_thread_id = t.id
+                      AND ts.role = 'host'
+                      AND ps.local_community_id = t.local_community_id
+                    GROUP BY ts.local_community_thread_id
+                    HAVING COUNT(*) = 1
+                )
+            WHERE t.direction IN ('outbound', 'discord_to_ap')
+              AND t.origin_kind IN ('local_host', 'discord_local')
+              AND (SELECT COUNT(*)
+                   FROM local_community_thread_surfaces AS ts
+                   JOIN platform_channel_surfaces AS ps
+                     ON ps.id = ts.channel_surface_id AND ps.connector_id = ts.connector_id
+                   WHERE ts.local_community_thread_id = t.id
+                     AND ts.role = 'host'
+                     AND ps.local_community_id = t.local_community_id) = 1
+        """)
+    except SQLAlchemyError as exc:
+        if isinstance(exc, StatementError):
+            exc.hide_parameters = True
+        raise RuntimeError('Migration SQL failed during proven local source backfill') from exc
+
+
 def _assert_preserved(conn, names, original, expected):
     """Apply only approved protocol deltas to staged evidence, then compare all original columns in SQL."""
     context = "source preservation"
@@ -434,6 +507,8 @@ def upgrade_released_v0_to_v1(conn: Connection, identity=None):
         _copy_source_rows(conn, names)
         context = "typed channel claims"
         _claim_channels(conn)
+        context = "proven local source backfill"
+        _backfill_proven_local_sources(conn)
         context = "ActivityPub identity cutover"
         logger.info("Database migration: ActivityPub identity cutover")
         apply_identity_cutover(conn, original, expected, urls)
