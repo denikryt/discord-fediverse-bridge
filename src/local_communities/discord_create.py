@@ -43,11 +43,13 @@ class LocalCommunityDiscordCreateHandler:
         database: Database,
         content_publish_service: ContentPublishService,
         surface_fanout: LocalCommunitySurfaceFanout,
+        federation_fanout: object | None = None,
     ) -> None:
         """Store the narrow create-path dependencies used by moved runtime code."""
         self.database = database
         self.content_publish_service = content_publish_service
         self.surface_fanout = surface_fanout
+        self.federation_fanout = federation_fanout
 
     async def handle_host_thread_create(
         self,
@@ -493,6 +495,10 @@ class LocalCommunityDiscordCreateHandler:
                 discord_thread_id=thread_id, discord_starter_message_id=starter_id,
                 role='local_subscriber', local_subscriber_id=source.local_subscriber.id,
             )
+        # Canonical object and recipient snapshots are already committed;
+        # Group signing cannot run from a pre-commit renderer.
+        if self.federation_fanout is not None:
+            await self.federation_fanout.drain_authored()
         await fanout.fanout_normalized_thread(
             adapter=adapter, local_community=source.local_community,
             thread_row=canonical, title=event.name, content=starter.content.body,
@@ -638,6 +644,10 @@ class LocalCommunityDiscordCreateHandler:
                 parent_discord_message_id=parent_discord,
                 role='local_subscriber', local_subscriber_id=source.local_subscriber.id,
             )
+        # Canonical object and recipient snapshots are already committed;
+        # Group signing cannot run from a pre-commit renderer.
+        if self.federation_fanout is not None:
+            await self.federation_fanout.drain_authored()
         await fanout.fanout_normalized_message(
             adapter=adapter, local_community=source.local_community,
             thread_row=canonical, message_row=message_row,

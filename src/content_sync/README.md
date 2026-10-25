@@ -40,5 +40,15 @@ canonical admission or physical send; a candidate is not a persistent permit.
 immediate message container from its parent forum surface. New neutral callers
 look up exact `MessageRef`s. The old numeric-only Discord read methods reject
 fully typed sources rather than treating a missing container as a wildcard.
-The eventual Stage 04 canonical cutover will wire each normalized event through
-this resolver; until then these helpers do not activate a second publisher.
+Stage 04 community Create uses a single typed ingress: source identity and
+current surface ownership are checked before and during the SQLite writer
+transaction. `canonical_admission.py` atomically persists the community post
+or comment, its original typed physical receipt, `MessageMapping`,
+`PublishedActivityObject`, and signed delivery audience. The Fedify gateway's
+`/render-community` route only renders deterministic Page/Note/Create bytes;
+legacy `/publish` endpoints reject calls rather than sending before persistence.
+A verified current Remote Group Follow grants a direct User Actor recipient;
+Local Community Group Announce destinations are independently snapshot-bound
+to an accepted Follow incarnation in the same writer commit. Revocation is
+checked again before transport. Failed renders and invalid reply parents
+leave no canonical graph or signed network send.

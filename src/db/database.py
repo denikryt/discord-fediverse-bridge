@@ -12,6 +12,7 @@ from ..management_actions import ManagementActions
 from ..management_audit_recorder import ManagementAuditRecorder
 from . import migrations, schema
 from .repositories.platform_surfaces import PlatformSurfaceRepository
+from .repositories.local_community_authored_announces import LocalCommunityAuthoredAnnounceRepository
 from .repositories import (
     ActivityPubObjectRepository,
     BridgeActorKeyRepository,
@@ -80,6 +81,9 @@ class Database:
         self.local_community_content = LocalCommunityContentRepository(self.session, self.immediate_session)
         self.local_community_surfaces = LocalCommunitySurfaceRepository(self.session, self.immediate_session)
         self.local_community_relay = LocalCommunityRelayRepository(
+            self.session, self.immediate_session
+        )
+        self.local_community_authored_announces = LocalCommunityAuthoredAnnounceRepository(
             self.session, self.immediate_session
         )
         self.remote_subscriptions = RemoteSubscriptionRepository(

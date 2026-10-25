@@ -189,6 +189,11 @@ def _build_live_runtime(settings: Settings, deployment_lease: FileLock) -> Runti
             bridge_prefix=settings.bridge_display_prefix,
             bridge_policy_service=bridge_policy_service,
         )
+        # Reuse the process-owned signed-activity recovery loop for durable
+        # Group Announce without creating a competing federation worker.
+        user_actor_delivery_worker.add_drain(
+            local_community_runtime.federation_fanout.drain_authored
+        )
         community_runtime = CommunityRuntime(
             database=database,
             content_publish_service=content_publish_service,

@@ -3,11 +3,11 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
-from sqlalchemy import func, select
+from sqlalchemy import func, select, update
 from sqlalchemy.orm import Session
 
 from ...models import (
-    RemoteSubscriber,
+    RemoteSubscriber, LocalCommunityAuthoredAnnounceDelivery,
     utcnow,
 )
 from .base import BaseRepository
@@ -80,6 +80,16 @@ class RemoteSubscriberRepository(BaseRepository):
             session.flush()
             transition = "created"
         else:
+            # Follow(F2) or an endpoint refresh terminates *only* proven-unsent
+            # F1 Group Announce rows in the same writer transaction. Historical
+            # delivered and ambiguous evidence must not be erased or retargeted.
+            if (remote_subscriber.follow_activity_id != follow_activity_id
+                or remote_subscriber.remote_inbox_url != remote_inbox_url):
+                self._cancel_unsent_authored(
+                    session, local_community_id=local_community_id,
+                    remote_actor_id=remote_actor_id,
+                    follow_activity_id=remote_subscriber.follow_activity_id,
+                )
             # A repeated Follow refreshes the request fields used by the
             # recovery Accept and later fanout without creating another target.
             remote_subscriber.remote_inbox_url = remote_inbox_url
@@ -90,6 +100,45 @@ class RemoteSubscriberRepository(BaseRepository):
             transition = "refreshed"
 
         return RemoteSubscriberTransition(remote_subscriber.id, transition)
+
+    @staticmethod
+    def _cancel_unsent_authored(
+        session: Session, *, local_community_id: int,
+        remote_actor_id: str, follow_activity_id: str,
+    ) -> None:
+        """Fence unsent Group Announce snapshots before the Follow ID changes."""
+        session.execute(update(LocalCommunityAuthoredAnnounceDelivery).where(
+            LocalCommunityAuthoredAnnounceDelivery.local_community_id == local_community_id,
+            LocalCommunityAuthoredAnnounceDelivery.target_remote_actor_id == remote_actor_id,
+            LocalCommunityAuthoredAnnounceDelivery.target_follow_activity_id == follow_activity_id,
+            LocalCommunityAuthoredAnnounceDelivery.status.in_(('pending','failed_proven_unsent')),
+        ).values(status='cancelled'))
+
+    def delete_if_current_follow(
+        self, session: Session, *, local_community_id: int,
+        remote_actor_id: str, follow_activity_id: str | None,
+    ) -> str:
+        """Atomically compare Follow incarnation, cancel unsent work and Undo.
+
+        A delayed Undo(F1) cannot remove newly accepted F2, including when
+        concurrent with a refresh on a separate SQLite connection.
+        """
+        row = session.scalar(select(RemoteSubscriber).where(
+            RemoteSubscriber.local_community_id == local_community_id,
+            RemoteSubscriber.remote_actor_id == remote_actor_id,
+        ))
+        if row is None:
+            return 'missing'
+        if follow_activity_id is not None and row.follow_activity_id != follow_activity_id:
+            return 'stale'
+        self._cancel_unsent_authored(
+            session, local_community_id=local_community_id,
+            remote_actor_id=remote_actor_id,
+            follow_activity_id=row.follow_activity_id,
+        )
+        session.delete(row)
+        session.flush()
+        return 'removed'
 
     def create_remote_subscriber(
         self,

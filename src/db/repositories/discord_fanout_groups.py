@@ -36,6 +36,20 @@ class DiscordFanoutGroupRepository(BaseRepository):
         in all subscribed channels simultaneously without a single source channel.
         """
         with self.session() as session:
+            # The authored AP Create transaction may already have admitted
+            # the exact canonical group. Reuse only its immutable source and
+            # actor identity, never insert a second group on callback replay.
+            existing = session.scalar(select(CommunityThreadGroup).where(
+                CommunityThreadGroup.ap_object_id == ap_object_id,
+            )) if ap_object_id else None
+            if existing is not None:
+                if ((existing.community_actor_id, existing.ap_activity_id,
+                     existing.source_channel_id,existing.source_thread_id,
+                     existing.source_starter_message_id)
+                    != (community_actor_id,ap_activity_id,source_channel_id,
+                        source_thread_id,source_starter_message_id)):
+                    raise ValueError('canonical authored thread group identity conflict')
+                return existing
             group = CommunityThreadGroup(
                 **(
                     PlatformSurfaceRepository.discord_source_location(
@@ -123,6 +137,15 @@ class DiscordFanoutGroupRepository(BaseRepository):
     ) -> CommunityThreadGroupDelivery:
         """Record one per-channel thread delivery for a CommunityThreadGroup."""
         with self.session() as session:
+            existing = session.scalar(select(CommunityThreadGroupDelivery).where(
+                CommunityThreadGroupDelivery.thread_group_id == thread_group_id,
+                CommunityThreadGroupDelivery.discord_channel_id == discord_channel_id,
+            ))
+            if existing is not None:
+                if ((existing.discord_thread_id,existing.discord_starter_message_id,existing.role)
+                    != (discord_thread_id,discord_starter_message_id,role)):
+                    raise ValueError('canonical thread physical receipt identity conflict')
+                return existing
             delivery = CommunityThreadGroupDelivery(
                 **PlatformSurfaceRepository.discord_copy_location(
                     session, discord_channel_id
@@ -183,6 +206,21 @@ class DiscordFanoutGroupRepository(BaseRepository):
         subscribed threads simultaneously without a single source message.
         """
         with self.session() as session:
+            if ap_object_id is not None and ap_activity_id is not None:
+                existing = session.scalar(select(CommunityMessageGroup).where(
+                    CommunityMessageGroup.ap_object_id == ap_object_id,
+                ))
+                if existing is not None:
+                    if (existing.ap_activity_id, existing.community_actor_id,
+                        existing.thread_group_id, existing.source_channel_id,
+                        existing.source_thread_id, existing.source_message_id,
+                        existing.parent_message_group_id) != (
+                        ap_activity_id, community_actor_id, thread_group_id,
+                        source_channel_id, source_thread_id, source_message_id,
+                        parent_message_group_id,
+                    ):
+                        raise ValueError('community comment canonical identity conflict')
+                    return existing
             group = CommunityMessageGroup(
                 **(
                     PlatformSurfaceRepository.discord_source_location(
@@ -292,6 +330,18 @@ class DiscordFanoutGroupRepository(BaseRepository):
     ) -> CommunityMessageGroupDelivery:
         """Record one per-channel message delivery for a CommunityMessageGroup."""
         with self.session() as session:
+            previous = session.scalar(select(CommunityMessageGroupDelivery).where(
+                CommunityMessageGroupDelivery.message_group_id == message_group_id,
+                CommunityMessageGroupDelivery.discord_channel_id == discord_channel_id,
+            ))
+            if previous is not None:
+                if (previous.discord_thread_id, previous.discord_message_id,
+                    previous.parent_discord_message_id, previous.role) != (
+                    discord_thread_id, discord_message_id,
+                    parent_discord_message_id, role,
+                ):
+                    raise ValueError('community message physical receipt conflict')
+                return previous
             delivery = CommunityMessageGroupDelivery(
                 **PlatformSurfaceRepository.discord_copy_location(
                     session, discord_channel_id

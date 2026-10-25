@@ -158,12 +158,24 @@ class LocalCommunityFollowerHandler:
                 outcome=InboundActivityOutcome.IGNORED_UNKNOWN_LOCAL_COMMUNITY,
                 detail="unknown local community",
             )
-        remote_subscriber = self.database.remote_subscribers.get_remote_subscriber(
-            local_community_id=getattr(local_community, "id"),
-            remote_actor_id=remote_actor_id,
-        )
-        if remote_subscriber is None:
+        # The Follow incarnation comparison, cancellation of proven-unsent
+        # Group deliveries and subscriber removal form one SQLite writer
+        # transaction. A stale Undo(F1) must never remove accepted Follow(F2).
+        with self.database.immediate_session() as session:
+            outcome = self.database.remote_subscribers.delete_if_current_follow(
+                session,
+                local_community_id=getattr(local_community, 'id'),
+                remote_actor_id=remote_actor_id,
+                follow_activity_id=follow_activity_id,
+            )
+        if outcome != 'removed':
             return _HandlerResult(
+                status='skipped',
+                outcome=InboundActivityOutcome.IGNORED_UNKNOWN_FOLLOW if outcome == 'missing'
+                        else InboundActivityOutcome.IGNORED_ALREADY_APPLIED,
+                detail='local community remote Follow missing or incarnation mismatch',
+            )
+        return _HandlerResult(
                 status="skipped",
                 outcome=InboundActivityOutcome.IGNORED_UNKNOWN_FOLLOW,
                 detail="local community remote subscriber not found",

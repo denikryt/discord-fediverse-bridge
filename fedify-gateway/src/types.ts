@@ -117,6 +117,28 @@ export interface RenderPersonalFeedResult {
   activityJson: Record<string, unknown>;
 }
 
+/** Pure community Create build request; immutable source coordinates come from Python. */
+export interface RenderCommunityRequest {
+  actorUsername: string;
+  communityActorUrl: string;
+  kind: "post" | "comment";
+  title: string | null;
+  bodyMarkdown: string;
+  inReplyToObjectId: string | null;
+  operationId: string;
+  activityId: string;
+  objectId: string;
+  publishedAt: string;
+}
+
+export interface RenderCommunityResult {
+  activityId: string;
+  objectId: string;
+  communityActorUrl: string;
+  publishedAt: string;
+  activityJson: Record<string, unknown>;
+}
+
 export interface PublishContentRequest {
   actorUsername: string;
   communityActorUrl: string;

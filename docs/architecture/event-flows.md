@@ -15,6 +15,31 @@ use `(connector, immediate container, message id)` rather than global Discord
 message IDs. Remaining old Discord event routes are replaced in checkpoint 58,
 not shadowed by a parallel live ingress.
 
+## Stage 04 community Create — render, atomic admission, signed send
+
+1. A verified Discord forum starter or reply enters the single normalized
+   `PlatformEventIngress`; the runtime selects the exact current Local or
+   Remote Community owner by connector, forum surface and policy. Bot, webhook,
+   unknown and mismatched starter/reply sources cannot claim canonical authorship.
+2. `ContentPublishService` derives stable Page/Note/Create IDs from the exact
+   `(connector, immediate container, physical message)` source and uses its
+   original timezone-aware `created_at` rather than Gateway receipt time.
+   Fedify `/render-community` validates these IDs and returns JSON, **without**
+   signed network delivery. Legacy `/publish` routes now reject send-before-save.
+3. One SQLite writer transaction saves the source mapping, authored AP object,
+   Local/Remote canonical post or comment, source physical receipt and
+   `UserActorOutboundSource`. The same commit adds authorized Remote Group
+   direct recipients and/or immutable Local Group Announce snapshots. If source
+   ownership, parent or any identity changes, the whole graph rolls back.
+4. After commit, the existing User Actor worker may send a stored signed User
+   activity to a verified direct community actor; Local Group announcements
+   use the existing federation worker and Group signing identity. A current
+   accepted Follow incarnation and inbox remain required at both claim and
+   pre-POST checks. No followers is a valid committed canonical publication.
+5. Duplicate Gateway ingress adopts the original canonical graph; a failed
+   recipient does not authorize a fresh ActivityPub Create ID. Later physical
+   fanout, edits and crash recovery belong to subsequent Stage 04 checkpoints.
+
 ## Registration flow
 
 1. `/register` starts in `src/commands/register.py` and browser routes in `src/http_api.py`.

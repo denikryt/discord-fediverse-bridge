@@ -673,9 +673,20 @@ class DiscordAdapter:
         physical = await self._get_message(message)
         if getattr(physical, 'attachments', ()):
             raise PlatformOperationError('unsupported', 'fetching attached Discord message as text is unsupported')
+        # A fetched message must prove both its exact physical identity and
+        # original creation instant; an edit timestamp is not publication time.
+        physical_container = getattr(getattr(physical, 'channel', None), 'id', None)
+        if (str(getattr(physical, 'id', '')) != message.external_message_id
+            or str(physical_container) != message.external_container_id):
+            raise PlatformOperationError('invalid_request', 'Discord message receipt identity mismatch')
+        created_at = getattr(physical, 'created_at', None)
+        if (not isinstance(created_at, datetime) or created_at.tzinfo is None
+            or created_at.utcoffset() is None):
+            raise PlatformOperationError('invalid_request', 'Discord message source timestamp is not verified')
         edited_at = getattr(physical, 'edited_at', None)
         return MessageView(message, self._author(physical),
-                           ContentDocument(str(getattr(physical, 'content', ''))), edited_at)
+                           ContentDocument(str(getattr(physical, 'content', ''))), edited_at,
+                           created_at)
 
     @_tracked_io
     async def capabilities(self, channel: ChannelRef) -> PlatformCapabilities:

@@ -136,6 +136,16 @@ class LocalCommunityContentRepository(BaseRepository):
         from incorrectly storing the source Discord thread as the host surface.
         """
         with self.session() as session:
+            existing = session.scalar(select(LocalCommunityThread).where(
+                LocalCommunityThread.ap_object_id == ap_object_id,
+            ))
+            if existing is not None:
+                if (existing.local_community_id,existing.ap_activity_id,
+                    existing.direction,existing.origin_kind) != (
+                    local_community_id,ap_activity_id,direction,origin_kind,
+                ):
+                    raise ValueError('authored canonical local thread identity conflict')
+                return existing
             thread = LocalCommunityThread(
                 local_community_id=local_community_id,
                 ap_activity_id=ap_activity_id,
@@ -260,6 +270,17 @@ class LocalCommunityContentRepository(BaseRepository):
         surface here would bind the source Discord message to the wrong forum.
         """
         with self.session() as session:
+            existing = session.scalar(select(LocalCommunityMessage).where(
+                LocalCommunityMessage.ap_object_id == ap_object_id,
+            ))
+            if existing is not None:
+                if (existing.local_community_thread_id, existing.ap_activity_id,
+                    existing.parent_ap_object_id, existing.direction) != (
+                    local_community_thread_id, ap_activity_id,
+                    parent_ap_object_id, direction,
+                ):
+                    raise ValueError('local community comment canonical identity conflict')
+                return existing
             message = LocalCommunityMessage(
                 local_community_thread_id=local_community_thread_id,
                 ap_activity_id=ap_activity_id,

@@ -67,6 +67,7 @@ class LocalCommunityRuntime:
             database=database,
             content_publish_service=content_publish_service,
             surface_fanout=self.surface_fanout,
+            federation_fanout=self.federation_fanout,
         )
         self.inbound_create_handler = LocalCommunityInboundCreateHandler(
             database=database,

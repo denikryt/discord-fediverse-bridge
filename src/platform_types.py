@@ -437,6 +437,7 @@ class MessageView:
     author: AuthorRef | None = None
     content: ContentDocument | None = None
     edited_at: datetime | None = None
+    created_at: datetime | None = None
 
     def __post_init__(self) -> None:
         """Reject a resolved author from another connector."""
@@ -449,6 +450,7 @@ class MessageView:
         if self.content is not None and not isinstance(self.content, ContentDocument):
             raise ValueError('message view content must be neutral content')
         _aware_datetime(self.edited_at, 'message view edited_at')
+        _aware_datetime(self.created_at, 'message view created_at')
 
 
 def _aware_datetime(value: datetime | None, name: str, *, optional: bool = True) -> None:

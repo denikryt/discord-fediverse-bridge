@@ -22,6 +22,10 @@ from ..models import (
     PublishedActivityObject,
     User,
     UserActorOutboundSource,
+    ChannelCommunitySubscription,
+    LocalCommunity,
+    InboundConversationObject,
+    RemoteActor,
 )
 
 
@@ -403,9 +407,91 @@ def persist_publish_artifacts(
             )
             session.add_all([mapping, published])
             session.flush()
+            # The domain row/source physical receipt is equally part of this
+            # publication graph, not an independent post-network commit.
+            if publication_context == 'community' and source_message is not None:
+                from .canonical_admission import admit_authored_comment, admit_authored_post
+                if kind == 'post':
+                    admit_authored_post(
+                        session,published=published,source=source_message,
+                        forum_channel_id=discord_channel_id,
+                        source_thread_id=int(source_message.external_container_id),
+                        source_starter_message_id=int(source_message.external_message_id),
+                    )
+                elif kind == 'comment':
+                    admit_authored_comment(
+                        session, published=published, source=source_message,
+                        forum_channel_id=discord_channel_id,
+                    )
+                else:
+                    raise ValueError('unsupported community publication kind')
+            # Group-authored relay targets are part of the same canonical
+            # transaction; a failed commit cannot leave an orphaned Announce.
+            local_community = session.scalar(select(LocalCommunity).where(
+                LocalCommunity.actor_url == community_actor_url,
+                LocalCommunity.status == 'active',
+            )) if community_actor_url else None
+            if local_community is not None:
+                database.local_community_authored_announces.stage_create(
+                    session, published=published, community=local_community,
+                    activity_json=activity_json,
+                )
             followers = database.user_actor_followers.list_accepted_for_snapshot(
                 session, user_id=user.id
             )
+            # A current accepted remote Group Follow, bound to the original
+            # forum claim, is independent evidence for direct User Actor
+            # delivery. Bare targetInboxUrls cannot grant audience rights.
+            direct_authorizations = []
+            if community_actor_url and discord_channel_id is not None:
+                current = session.scalar(select(ChannelCommunitySubscription).where(
+                    ChannelCommunitySubscription.discord_channel_id == discord_channel_id,
+                    ChannelCommunitySubscription.lemmy_community_actor_id == community_actor_url,
+                    ChannelCommunitySubscription.status == 'accepted',
+                ))
+                if current is not None and current.community_inbox_url and current.follow_activity_id:
+                    surface = session.get(ChannelSurface, mapping.source_channel_surface_id)
+                    if surface is None or surface.remote_subscription_id != current.id:
+                        raise PublicationConflictError('remote community lacks its current forum ownership')
+                    direct_authorizations.append({
+                        'schemaVersion': 1,
+                        'contextKind': 'remote_community_publication',
+                        'publishedObjectId': published.id,
+                        'subscriptionId': current.id,
+                        'recipientActorId': community_actor_url,
+                        'followActivityId': current.follow_activity_id,
+                        'targetEndpointUrl': current.community_inbox_url,
+                        'sourceSurfaceId': surface.id,
+                    })
+            if publication_context == 'personal_feed' and in_reply_to_object_id:
+                # The parent is authenticated inbound AP state, not a URL
+                # supplied by an arbitrary Discord reply. A public reply may
+                # address this exact parent without explicit AP to/cc.
+                parent = session.scalar(select(InboundConversationObject).where(
+                    InboundConversationObject.object_id == in_reply_to_object_id,
+                    InboundConversationObject.publication_context == 'personal_feed',
+                    InboundConversationObject.conversation_root_object_id == conversation_root_object_id,
+                    InboundConversationObject.deleted_at.is_(None),
+                ))
+                root = session.scalar(select(PublishedActivityObject).where(
+                    PublishedActivityObject.object_id == conversation_root_object_id,
+                    PublishedActivityObject.publication_context == 'personal_feed',
+                    PublishedActivityObject.deleted_at.is_(None),
+                ))
+                if parent is not None and root is not None:
+                    remote_actor = session.scalar(select(RemoteActor).where(
+                        RemoteActor.actor_url == parent.actor_id,
+                    ))
+                    if remote_actor is not None:
+                        direct_authorizations.append({
+                            'schemaVersion': 1,
+                            'contextKind': 'personal_feed_reply',
+                            'publishedObjectId': published.id,
+                            'conversationRootObjectId': root.object_id,
+                            'parentObjectId': parent.object_id,
+                            'recipientActorId': parent.actor_id,
+                            'targetEndpointUrl': remote_actor.shared_inbox_url or remote_actor.inbox_url,
+                        })
             source = database.user_actor_deliveries.insert_ready_content_source(
                 session,
                 user_id=user.id,
@@ -422,7 +508,7 @@ def persist_publish_artifacts(
                     "contentRevision": 1,
                 },
                 followers=followers,
-                direct_target_inbox_urls=direct_target_inbox_urls,
+                direct_authorizations=direct_authorizations,
             )
             return PersistPublishResult(source.id, True)
     except IntegrityError:

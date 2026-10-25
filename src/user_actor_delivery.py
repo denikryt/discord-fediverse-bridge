@@ -412,6 +412,21 @@ class UserActorDeliveryService:
                     claim.source_id
                 )
                 continue
+            # Claim-time authorization is not sufficient if a Follow or
+            # surface owner changes while federation policy is being read.
+            # Recheck immediately before committing the transport boundary.
+            live_actors = self.database.user_actor_deliveries.revalidate_claim(
+                claim.delivery_id, claim.claim_token
+            )
+            if not live_actors or not any(
+                self.policy_service.federation_decision(actor_id).allowed
+                for actor_id in live_actors
+            ):
+                self.database.user_actor_deliveries.mark_ineligible(
+                    claim.delivery_id, claim.claim_token,
+                    'actor or direct-recipient authorization changed before send',
+                )
+                continue
             if not self.database.user_actor_deliveries.mark_submitted(
                 claim.delivery_id, claim.claim_token
             ):
