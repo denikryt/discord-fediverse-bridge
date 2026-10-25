@@ -132,9 +132,6 @@ export function registerInternalPublishRoutes(
           typeof payload.inReplyToObjectId === "string" && payload.inReplyToObjectId.length > 0
             ? payload.inReplyToObjectId
             : null,
-        targetInboxUrls: Array.isArray(payload.targetInboxUrls)
-          ? payload.targetInboxUrls.filter((value): value is string => typeof value === "string")
-          : null,
         operationId: typeof payload.operationId === "string" ? payload.operationId : null,
         activityId: typeof payload.activityId === "string" ? payload.activityId : null,
         mutationTimestamp: typeof payload.mutationTimestamp === "string" ? payload.mutationTimestamp : null,
@@ -177,9 +174,6 @@ export function registerInternalPublishRoutes(
         communityActorUrl: typeof payload.communityActorUrl === "string" ? payload.communityActorUrl : null,
         conversationRootObjectId: typeof payload.conversationRootObjectId === "string" ? payload.conversationRootObjectId : null,
         apObjectId: payload.apObjectId,
-        targetInboxUrls: Array.isArray(payload.targetInboxUrls)
-          ? payload.targetInboxUrls.filter((value): value is string => typeof value === "string")
-          : null,
         operationId: typeof payload.operationId === "string" ? payload.operationId : null,
         activityId: typeof payload.activityId === "string" ? payload.activityId : null,
         mutationTimestamp: typeof payload.mutationTimestamp === "string" ? payload.mutationTimestamp : null,

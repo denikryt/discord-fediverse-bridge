@@ -73,6 +73,24 @@ mapping can be overwritten. A message surface must also belong to the
 canonical parent thread carried by its parent physical surface. There is no
 new queue or database schema.
 
+### Stage 04 — typed physical receipt handoff (post-review fix)
+
+Coordinator-created Local Community thread/starter and message receipts own their
+identities in `connector_id`, `channel_surface_id` and `external_*` columns.
+New physical copies deliberately leave the historical `discord_*` projections
+NULL; the sibling fan-out and inbound AP comment handlers therefore locate the
+root using the exact typed forum surface and use the physical thread's
+`external_thread_id` and `external_starter_message_id`. They do not infer a
+starter ID from a thread ID. A target's role and subscriber identity must still
+match the snapshot of that copy; a rebound forum cannot adopt an old root.
+
+For a known canonical nested parent missing on **one** destination, the
+handler persists a `blocked` Create intent in SQLite (no request JSON, claim,
+or POST). Once that same target thread has the independently verified parent
+receipt, the existing coordinator can materialize and deliver this child after
+restart; unrelated destinations continue. A deleted, unidentified, foreign,
+or cross-thread parent never grants a new intent or flat root fallback.
+
 ### local subscriber synchronization normalized Local Community source (Checkpoints 31–32)
 
 `LocalCommunityRuntime.handle_normalized_thread_create()` and

@@ -146,7 +146,6 @@ class UserActorDeliverySubmitPort(Protocol):
         title: str | None,
         body_markdown: str,
         edited_timestamp,
-        target_inbox_urls: list[str] | None = None,
     ) -> str:
         """Persist one desired Update and return the existing admission outcome."""
 
@@ -154,7 +153,6 @@ class UserActorDeliverySubmitPort(Protocol):
         self,
         *,
         object_id: str,
-        target_inbox_urls: list[str] | None = None,
     ) -> str:
         """Persist one desired Delete and return the existing admission outcome."""
 

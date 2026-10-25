@@ -75,7 +75,6 @@ class UserActorDeliverySourceRepository:
         activity_json: dict,
         snapshot: dict,
         followers: list[UserActorFollower],
-        direct_target_inbox_urls: list[str] | None = None,
         direct_authorizations: list[dict] | None = None,
     ) -> UserActorOutboundSource:
         """Insert one already-rendered content source and verified audience."""

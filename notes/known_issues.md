@@ -389,3 +389,26 @@ Fedify-native security integration remains blocked by missing dependencies.
 - Independent Python SQLite tests and Node render-only tests pass. Complete
   dependency-backed Python/TypeScript checks and live Discord/Fedify remain
   unverified; these do not establish production readiness.
+
+## 2026-10-24 — Stage 04 review: typed Local Community receipt handoff
+
+- **FIXED (P1):** `PlatformDeliveryIntentRepository.commit_receipt()` writes
+  typed `external_thread_id`/starter IDs and leaves old `discord_*` projections
+  nullable, but the local sibling reply fan-out searched only the numeric
+  projection. A real SQLite domain test originally produced two confirmed
+  threads but zero comment intents. The handler and typed surface lookup now
+  resolve by exact connector/forum claim/thread; the inbound AP runtime also
+  consumes these typed host receipts. Receipt role/owner remains checked.
+- **FIXED (P1):** for a known nested comment whose physical parent is missing
+  in one target, Local Community fan-out now stores a `blocked` intent instead
+  of skipping the target forever. It only awakens after same-thread receipt
+  proof; unknown/foreign parents remain refused.
+- **CONTRACT CLEANUP (P2):** unused `direct_target_inbox_urls` arguments were
+  removed from Python canonical admission, and render-only Fedify mutation
+  routes no longer forward `targetInboxUrls`. The separate obsolete
+  `/publish-local-community` **Create** gateway still has a scoped
+  `targetInboxUrls` selector; this is not Update/Delete rendering and its
+  retirement requires verifying and migrating its remaining callers.
+- Focused SQLite and runtime tests are available. Full pytest/TypeScript and
+  live Discord/Fedify remain unverified without project dependencies and
+  external test services; this is not a Stage 04 release approval.

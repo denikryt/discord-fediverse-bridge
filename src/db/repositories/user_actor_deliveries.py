@@ -81,7 +81,6 @@ class UserActorDeliveryRepository(BaseRepository):
         activity_json: dict,
         snapshot: dict,
         followers: list[UserActorFollower],
-        direct_target_inbox_urls: list[str] | None = None,
         direct_authorizations: list[dict] | None = None,
     ) -> UserActorOutboundSource:
         """Insert one already-rendered content source and independently verified audience."""
@@ -96,7 +95,6 @@ class UserActorDeliveryRepository(BaseRepository):
             activity_json=activity_json,
             snapshot=snapshot,
             followers=followers,
-            direct_target_inbox_urls=direct_target_inbox_urls,
             direct_authorizations=direct_authorizations,
         )
 

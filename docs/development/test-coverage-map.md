@@ -24,6 +24,17 @@ This document is a short, feature-oriented index of the test suite. It helps mai
 These are focused tests and do not substitute for full Python/Node or live
 Discord integration tests, which require the project dependencies.
 
+### Stage 04 post-review physical receipt handoff
+
+- SQLite domain fan-out after coordinator-created Local Community threads with
+  `NULL` historical Discord ID projections: verified distinct A/C root replies,
+  durable nested `blocked` intent for a missing destination parent and wake
+  after the exact parent receipt; unknown parent has zero new sends/intents —
+  `tests/behavior/test_stage04_local_receipt_handoff.py`.
+- Real Local Community inbound AP post then comment through the runtime,
+  including host thread with typed-only receipt and idempotent replay;
+  mutation render API rejects untyped direct inbox URL parameters — same file.
+
 ## Stage 04 typed Community source mutations (Checkpoint 61 WIP)
 
 - Real SQLite source post/comment + current surface and author validation,

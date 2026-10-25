@@ -300,7 +300,6 @@ def persist_publish_artifacts(
     publication_context: str = "community",
     discord_guild_id: int | None = None,
     published_at: datetime | None = None,
-    direct_target_inbox_urls: list[str] | None = None,
     source_message: MessageRef | None = None,
 ) -> PersistPublishResult:
     """Commit mapping, public object, and fixed follower audience atomically.

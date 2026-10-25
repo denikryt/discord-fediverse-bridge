@@ -370,21 +370,9 @@ class PersonalFeedConversationRuntime:
             return PersonalFeedConversationResult(
                 "already_published", "duplicate", object_id
             )
-        direct_target_inbox_urls: list[str] = []
-        parent_actor_id: str | None = None
-        parent_inbound = self.database.personal_feed_conversations.get_inbound_object(
-            parent_object_id
-        )
-        if parent_inbound is not None:
-            parent_actor_id = parent_inbound.actor_id
-        if parent_actor_id is not None:
-            remote_actor = self.database.remote_actors.get_remote_actor_by_actor_url(
-                parent_actor_id
-            )
-            if remote_actor is not None:
-                direct_target_inbox_urls.append(
-                    remote_actor.shared_inbox_url or remote_actor.inbox_url
-                )
+        # The persisted Personal Feed parent and its trusted RemoteActor are
+        # validated at canonical admission. A caller-generated inbox list
+        # does not authorize delivery and is not part of the contract.
         rendered = await self.fedify_gateway.render_personal_feed(
             RenderPersonalFeedRequest(
                 actor_username=user.activitypub_username,
@@ -417,7 +405,6 @@ class PersonalFeedConversationRuntime:
             discord_channel_id=root.discord_channel_id,
             discord_message_id=message_id,
             published_at=created_at,
-            direct_target_inbox_urls=direct_target_inbox_urls,
         )
         if persisted.created and self.delivery_worker is not None:
             self.delivery_worker.wake()

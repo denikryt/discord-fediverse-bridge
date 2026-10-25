@@ -59,6 +59,33 @@ class PlatformFanoutCoordinator:
             presentation=presentation,title=title,reply_to=reply_to)
         return await self.deliver(row.id)
 
+    def stage_blocked(self, *, domain: str, kind: str, canonical_id: int,
+                      forum, parent_canonical_id: int) -> int | None:
+        """Reserve a known missing nested parent without freezing or sending a DTO.
+
+        The repository verifies the canonical child/parent and live destination
+        owner under the SQLite writer; a future exact parent receipt is the
+        only authority for materialization and first physical dispatch.
+        """
+        placement = self.database.platform_surfaces.resolve_claim(
+            forum.connector_key, forum.external_channel_id)
+        if (placement is None or placement.kind != 'forum'
+            or placement.external_guild_id != forum.external_guild_id
+            or placement.connector_key != forum.connector_key):
+            return None
+        owner_id = {
+            'local_host': placement.local_community_id,
+            'local_subscriber': placement.local_subscriber_id,
+            'remote_subscription': placement.remote_subscription_id,
+        }.get(placement.role)
+        if owner_id is None:
+            return None
+        row = self.database.platform_delivery_intents.reserve(
+            domain=domain, kind=kind, canonical_id=canonical_id, forum=forum,
+            channel_surface_id=placement.id, owner_kind=placement.role,
+            owner_id=owner_id, blocked_parent_canonical_id=parent_canonical_id)
+        return row.id
+
     async def recover_pending(self) -> list[int]:
         """Restart safe Create work without guessing whether old POSTs succeeded.
 

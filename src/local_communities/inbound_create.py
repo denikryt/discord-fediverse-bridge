@@ -336,8 +336,8 @@ class LocalCommunityInboundCreateHandler:
             try:
                 self._persist_inbound_activitypub_message_mapping(
                     event=event,
-                    discord_thread_id=host_thread.discord_thread_id,
-                    discord_message_id=host_surface.discord_message_id,
+                    discord_thread_id=int(host_thread.external_thread_id),
+                    discord_message_id=int(host_surface.external_message_id),
                 )
             except ValueError:
                 return _HandlerResult(
@@ -402,7 +402,10 @@ class LocalCommunityInboundCreateHandler:
                 detail="comment thread host surface not mapped",
             )
         if self._adapter is not None:
-            if host_thread_surface.discord_forum_channel_id != int(forum.external_channel_id):
+            placement = self.database.platform_surfaces.resolve_claim(
+                forum.connector_key, forum.external_channel_id)
+            if (placement is None or placement.id != host_thread_surface.channel_surface_id
+                or host_thread_surface.connector_id != placement.connector_id):
                 return _HandlerResult(
                     status="skipped", outcome=InboundActivityOutcome.IGNORED_UNMAPPED_CONTEXT,
                     detail="host surface no longer matches placement",
@@ -410,7 +413,7 @@ class LocalCommunityInboundCreateHandler:
             blocked_parent_id: int | None = None
             parent_ap_id = getattr(event.object, 'parent_ap_id')
             if parent_ap_id is None or parent_ap_id == thread_row.ap_object_id:
-                parent_discord_message_id = host_thread_surface.discord_starter_message_id
+                parent_discord_message_id = host_thread_surface.external_starter_message_id
             else:
                 parent_row = self.database.local_community_content.get_local_community_message_by_ap_object_id(
                     parent_ap_id
@@ -436,9 +439,9 @@ class LocalCommunityInboundCreateHandler:
                         detail='nested parent surface has wrong role',
                     )
                 else:
-                    parent_discord_message_id = parent_surface.discord_message_id
+                    parent_discord_message_id = parent_surface.external_message_id
             if blocked_parent_id is None and (
-                parent_discord_message_id is None or parent_discord_message_id <= 0
+                not isinstance(parent_discord_message_id, str) or not parent_discord_message_id
             ):
                 return _HandlerResult(
                     status="skipped", outcome=InboundActivityOutcome.IGNORED_UNMAPPED_CONTEXT,
@@ -489,7 +492,9 @@ class LocalCommunityInboundCreateHandler:
                     status='processed', outcome=InboundActivityOutcome.APPLIED,
                     detail='nested physical reply blocked on verified parent receipt',
                 )
-            destination = ThreadRef(forum, str(host_thread_surface.discord_thread_id))
+            # A new verified host receipt has typed IDs but intentionally no
+            # old integer Discord projection. AP replies use the actual thread.
+            destination = ThreadRef(forum, host_thread_surface.external_thread_id)
             reply = MessageRef('discord-primary', destination.external_thread_id,
                                str(parent_discord_message_id))
             confirmed = await PlatformFanoutCoordinator.from_adapter(
@@ -508,8 +513,8 @@ class LocalCommunityInboundCreateHandler:
                 )
             self._persist_inbound_activitypub_message_mapping(
                 event=event,
-                discord_thread_id=host_thread_surface.discord_thread_id,
-                discord_message_id=host_copy.discord_message_id,
+                discord_thread_id=int(host_thread_surface.external_thread_id),
+                discord_message_id=int(host_copy.external_message_id),
             )
             if not self._origin_still_accepted(local_community, event):
                 return _HandlerResult(

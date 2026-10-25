@@ -298,7 +298,11 @@ class LocalCommunityDiscordFanout:
                 local_community_thread_id=thread_row.id,
                 discord_forum_channel_id=target.discord_forum_channel_id,
             )
-            if surface is None:
+            if (surface is None or surface.role != target.role
+                or surface.local_subscriber_id != target.local_subscriber_id):
+                # A historical thread copy belongs to its original owner.
+                # Reassigning this forum cannot transfer reply authority to
+                # the new subscriber/host, even when the AP post is the same.
                 summary.skipped_missing_thread_surface += 1
                 continue
             existing = self.database.local_community_surfaces.get_local_community_message_surface(
@@ -308,33 +312,58 @@ class LocalCommunityDiscordFanout:
             if existing is not None:
                 summary.skipped_existing += 1
                 continue
-            parent_id = self.resolve_parent_message_id(
-                thread_row=thread_row, message_row=message_row,
-                target_thread_surface=surface,
-            )
-            if parent_id is MISSING_PARENT_SURFACE:
-                summary.skipped_missing_parent_surface += 1
-                continue
-            summary.attempted += 1
             try:
-                # Resolve the physical reply parent inside each destination
-                # thread, never the source's message ID or a sibling's parent.
+                # Typed receipts have no legacy integer Discord projection.
+                # Resolve both root and nested parents from the exact
+                # connector, forum surface and destination thread instead.
+                from sqlalchemy import select
+                from ..models import LocalCommunityMessage
+                from ..content_sync.parent_mapping import MissingParent, resolve_target_parent
+
                 forum = ChannelRef(
                     'discord-primary', str(target.discord_forum_channel_id),
                     'forum', str(target.discord_guild_id),
                 )
-                destination = ThreadRef(forum, str(surface.discord_thread_id))
-                reply_to = (
-                    MessageRef('discord-primary', destination.external_thread_id, str(parent_id))
-                    if parent_id is not None else None
+                destination = ThreadRef(forum, surface.external_thread_id)
+                parent_ap_id = getattr(message_row, 'parent_ap_object_id', None)
+                parent_id = None
+                with self.database.session() as session:
+                    if parent_ap_id not in (None, thread_row.ap_object_id):
+                        parent = session.scalar(select(LocalCommunityMessage).where(
+                            LocalCommunityMessage.ap_object_id == parent_ap_id,
+                            LocalCommunityMessage.local_community_thread_id == thread_row.id,
+                            LocalCommunityMessage.deleted_at.is_(None),
+                        ))
+                        if parent is None:
+                            # An unidentified or foreign parent must not be
+                            # flattened onto the starter or another thread.
+                            raise ValueError('unknown/foreign canonical nested parent')
+                        parent_id = parent.id
+                    physical_parent = resolve_target_parent(
+                        session, domain='local', canonical_thread_id=thread_row.id,
+                        target=destination, target_surface_id=surface.channel_surface_id,
+                        canonical_parent_message_id=parent_id,
+                    )
+                coordinator = PlatformFanoutCoordinator.from_adapter(self.database, adapter)
+                if isinstance(physical_parent, MissingParent):
+                    # Missing *known* parents must leave durable blocked work.
+                    # Parent receipt/restart recovery will create the complete
+                    # immutable DTO only after proof in this same destination.
+                    if coordinator.stage_blocked(
+                        domain='local', kind='comment', canonical_id=message_row.id,
+                        forum=forum, parent_canonical_id=physical_parent.canonical_parent_id,
+                    ) is None:
+                        summary.failed += 1
+                    else:
+                        summary.skipped_missing_parent_surface += 1
+                    continue
+                summary.attempted += 1
+                delivered = await coordinator.stage_and_deliver(
+                    domain='local', kind='comment', canonical_id=message_row.id,
+                    forum=forum, operation='message', destination=destination,
+                    content=body, presentation=DeliveryPresentation(),
+                    reply_to=physical_parent,
                 )
-                # One physical reply copy is recorded in the same SQLite
-                # transaction as its verified delivery receipt.
-                delivered = await PlatformFanoutCoordinator.from_adapter(
-                    self.database,adapter).stage_and_deliver(
-                    domain='local',kind='comment',canonical_id=message_row.id,
-                    forum=forum,operation='message',destination=destination,
-                    content=body,presentation=DeliveryPresentation(),reply_to=reply_to)
                 if not delivered:
                     summary.failed += 1
                     continue
