@@ -42,6 +42,7 @@ include = ["src*"]
 # tests both import the same in-repo discordops package during local runs.
 pythonpath = [
   ".",
+  "tests",
   "vendor/discordops",
 ]
 testpaths = [

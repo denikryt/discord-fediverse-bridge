@@ -1,6 +1,8 @@
 """Observable behavior for disabled local-community lifecycle gates."""
 
 from __future__ import annotations
+
+from support.community_events import create_thread, configure_renderer
 from support.runtime import build_test_policy_service
 
 from pathlib import Path
@@ -31,6 +33,7 @@ def _runtime(
     """Build one local-community runtime with mocked Discord/Fedify edges."""
     database = build_database(tmp_path, name)
     gateway = AsyncMock()
+    configure_renderer(gateway, database)
     runtime = LocalCommunityRuntime(
         database=database,
         fedify_gateway=gateway,
@@ -179,10 +182,7 @@ async def test_disabled_community_blocks_discord_thread_starter(tmp_path: Path) 
     _local_community(database, status="disabled")
     add_registered_user(database)
 
-    result = await runtime.handle_discord_thread_create(
-        thread=build_thread(channel_id=100),
-        starter_message=build_starter_message(),
-    )
+    result = await create_thread(runtime, thread=build_thread(channel_id=100), starter_message=build_starter_message())
 
     assert result.status == "ignored"
     assert result.reason == "community_disabled"

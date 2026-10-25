@@ -32,6 +32,22 @@ class SingleCommunityCreateRouteContract(unittest.TestCase):
         self.assertNotIn('handle_discord_thread_create', attributes)
         self.assertNotIn('handle_discord_message', attributes)
 
+    def test_domain_runtimes_have_only_typed_create_entry_points(self) -> None:
+        """Legacy SDK handlers cannot reintroduce independent canonical writes."""
+        root = Path(__file__).resolve().parents[1]
+        for filename, class_name in (
+            ('src/community_sync/runtime.py', 'CommunityRuntime'),
+            ('src/local_communities/runtime.py', 'LocalCommunityRuntime'),
+        ):
+            with self.subTest(runtime=class_name):
+                cls = next(n for n in ast.parse((root / filename).read_text()).body
+                           if isinstance(n, ast.ClassDef) and n.name == class_name)
+                methods = {n.name for n in cls.body if isinstance(n, (ast.FunctionDef, ast.AsyncFunctionDef))}
+                self.assertNotIn('handle_discord_thread_create', methods)
+                self.assertNotIn('handle_discord_message', methods)
+                self.assertIn('handle_normalized_thread_create', methods)
+                self.assertIn('handle_normalized_message_create', methods)
+
 
 if __name__ == '__main__':
     unittest.main()

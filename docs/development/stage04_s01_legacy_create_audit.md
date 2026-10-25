@@ -43,3 +43,17 @@ A search of `tests/**/*.py` finds **62 syntactic direct method invocations acros
 ## 4. Scope limitations
 
 No live bot/Fedify run or installed external Python/Node dependencies is implied by this static audit. Runtime reflection/dynamic consumers outside this repository cannot be proven absent by grep. Keep explicit evidence of methods that remain for inbound AP or physical mutation paths and do not conflate them with Discord-authored raw Create.
+
+## 5. Final consumer migration
+
+The final 32 direct runtime calls in eight remaining files now enter typed
+handlers through source-observation helpers in `tests/support/community_events.py`.
+The four runtime raw Create methods and four local raw host/subscriber handlers
+have been deleted. Method-level inspection also removed the SDK-only Local and
+Remote fanout Create helpers; their last direct edge tests now exercise typed
+fanout with real canonical rows. SDK physical Update/Delete remain intact.
+
+The original inventory above is historical evidence. Static AST checks now
+assert absence of raw runtime APIs as well as router dispatch. No in-repository
+dynamic binding to the removed methods was found. External callers remain an
+intentional compatibility break requiring verified platform ingress.

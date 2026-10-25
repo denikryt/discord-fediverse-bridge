@@ -41,97 +41,9 @@ class LocalCommunitySurfaceFanout:
             policy_service=self.policy_service,
         )
 
-    async def fanout_thread_to_local_subscribers(
-        self,
-        *,
-        local_community: object,
-        thread_row: object,
-        title: str,
-        content: str,
-        author_display_name: str | None,
-        source_forum_channel_id: int | None,
-    ) -> None:
-        """Best-effort Discord adapter integration fanout of one canonical post to subscribers."""
-        await self.fanout_thread_to_local_participants(
-            local_community=local_community,
-            thread_row=thread_row,
-            title=title,
-            content=content,
-            author_display_name=author_display_name,
-            source_forum_channel_id=source_forum_channel_id,
-            include_host=False,
-        )
 
-    async def fanout_thread_to_local_participants(
-        self,
-        *,
-        local_community: object,
-        thread_row: object,
-        title: str,
-        content: str,
-        author_display_name: str | None,
-        source_forum_channel_id: int | None,
-        include_host: bool,
-    ) -> None:
-        """Best-effort fanout of one canonical post to selected local surfaces."""
-        fanout = self._fanout()
-        if fanout is None:
-            return
-        await fanout.fanout_thread(
-            local_community=local_community,
-            thread_row=thread_row,
-            title=title,
-            content=content,
-            author_display_name=author_display_name,
-            source_forum_channel_id=source_forum_channel_id,
-            include_host=include_host,
-        )
 
-    async def fanout_message_to_local_subscribers(
-        self,
-        *,
-        local_community: object,
-        thread_row: object,
-        message_row: object,
-        content: str,
-        author_display_name: str | None,
-        source_forum_channel_id: int | None,
-    ) -> None:
-        """Best-effort Discord adapter integration fanout of one canonical comment to subscribers."""
-        await self.fanout_message_to_local_participants(
-            local_community=local_community,
-            thread_row=thread_row,
-            message_row=message_row,
-            content=content,
-            author_display_name=author_display_name,
-            source_forum_channel_id=source_forum_channel_id,
-            include_host=False,
-        )
 
-    async def fanout_message_to_local_participants(
-        self,
-        *,
-        local_community: object,
-        thread_row: object,
-        message_row: object,
-        content: str,
-        author_display_name: str | None,
-        source_forum_channel_id: int | None,
-        include_host: bool,
-    ) -> None:
-        """Best-effort fanout of one canonical comment to selected local surfaces."""
-        fanout = self._fanout()
-        if fanout is None:
-            return
-        await fanout.fanout_message(
-            local_community=local_community,
-            thread_row=thread_row,
-            message_row=message_row,
-            content=content,
-            author_display_name=author_display_name,
-            source_forum_channel_id=source_forum_channel_id,
-            include_host=include_host,
-        )
 
     async def fanout_thread_edit(
         self,

@@ -13,18 +13,13 @@ import logging
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Protocol
 
-import discord
 
 from ..bridge_policy import BridgePolicyService
 from ..db import Database
 from ..content_sync.platform_fanout import PlatformFanoutCoordinator
 from .delivery_mapping import remote_thread_receipt
 from ..discord_legacy_projection import discord_id_to_legacy_int
-from ..platform_types import (
-    ChannelRef, ContentDocument, CreateAttempt, DeliveryPresentation,
-    MessageCreated, MessageRef, MessageView, ThreadCreated, ThreadRef,
-    PlatformOperationError, validate_created_receipt,
-)
+from ..platform_types import ChannelRef, ContentDocument, DeliveryPresentation, MessageCreated, MessageRef, MessageView, ThreadCreated, PlatformOperationError
 from ..runtime_ports import PlatformAdapterPort, PlatformDeliveryPort
 
 if TYPE_CHECKING:
@@ -68,67 +63,6 @@ class MirrorMessageResult:
     thread_id: int
     message_id: int
     parent_message_id: int | None = None
-
-
-def _make_discord_reference(
-    thread: discord.Thread, message_id: int | None
-) -> discord.MessageReference | None:
-    """Build a Discord MessageReference for thread.send, or None for a flat send.
-
-    fail_if_not_exists=False prevents the send from raising if the referenced
-    message was deleted between mirror creation and this send call. The message
-    still arrives in the thread; Discord will just not render the reply banner.
-    """
-    if message_id is None:
-        return None
-    return discord.MessageReference(
-        message_id=message_id,
-        channel_id=thread.id,
-        fail_if_not_exists=False,
-    )
-
-
-def _format_mirror_body(
-    message: discord.Message | object, *, author_label: str | None = None
-) -> str:
-    """Build the mirror thread body from the source starter message.
-
-    Format:
-        `{author_display_name}`
-
-        {content}
-
-    Uses the same backtick-quoted header format as inbound Lemmy messages so
-    apply_edit_to_discord_message can preserve the attribution line on edits.
-    """
-    author = getattr(message, "author", None)
-    display_name = (
-        author_label
-        or getattr(author, "display_name", None)
-        or getattr(author, "name", "unknown")
-    )
-    content = getattr(message, "content", "") or ""
-    return f"`{display_name}`\n\n{content}"
-
-
-def _unpack_thread_result(result: object) -> tuple[object, object]:
-    """Extract (thread, message) from discord.py's create_thread return value.
-
-    discord.py returns either a (thread, message) tuple or a SimpleNamespace-like
-    object with .thread and .message attributes. This helper normalises both
-    shapes, matching the pattern already used in bridge_lemmy_to_discord.py.
-    """
-    thread = getattr(result, "thread", None)
-    message = getattr(result, "message", None)
-    if thread is None and isinstance(result, tuple):
-        thread = result[0]
-    if message is None and isinstance(result, tuple):
-        message = result[1]
-    if thread is None:
-        raise RuntimeError("create_thread did not return a thread object")
-    if message is None:
-        raise RuntimeError("create_thread did not return a starter message")
-    return thread, message
 
 
 class DiscordFanout:
@@ -205,6 +139,20 @@ class DiscordFanout:
             logger.exception('Could not authorize community sibling forum %s', channel_id)
             return None
 
+    def _normalized_author_label(self, author) -> str:
+        """Preserve registered local attribution when the bot has its public origin.
+
+        Guild nicknames are mutable; production mirrors retain the canonical
+        User Actor handle used before the SDK Create path was retired.
+        """
+        settings = getattr(self.bot, 'settings', None)
+        if settings is not None and author.external_actor_id is not None:
+            user = self.database.users.get_user_by_discord_user_id(author.external_actor_id)
+            if user is not None:
+                from ..user_bans import canonical_local_user_handle
+                return canonical_local_user_handle(username=user.activitypub_username, settings=settings)
+        return author.display_name
+
     @staticmethod
     def _normalized_body(author_name: str, body: str) -> ContentDocument:
         """Preserve the historical attributed source-body formatting."""
@@ -232,7 +180,7 @@ class DiscordFanout:
         source_id = discord_id_to_legacy_int(source.thread)
         source_forum = discord_id_to_legacy_int(source.thread, component='parent')
         # Receipt correlation is source+target stable even when one POST response is lost.
-        body = self._normalized_body(starter.author.display_name, starter.content.body)
+        body = self._normalized_body(self._normalized_author_label(starter.author), starter.content.body)
         copies: list[MirrorResult] = []
         seen: set[int] = set()
         for channel_id in sibling_channel_ids:
@@ -287,7 +235,7 @@ class DiscordFanout:
                 raise PlatformOperationError('invalid_request', 'cross-thread source reply')
             discord_id_to_legacy_int(source.reply_to)
         source_thread = discord_id_to_legacy_int(source.thread_context)
-        body = self._normalized_body(source.author.display_name, source.content.body)
+        body = self._normalized_body(self._normalized_author_label(source.author), source.content.body)
         copies: list[MirrorMessageResult] = []
         seen: set[int] = set()
         for delivery in sibling_thread_deliveries:
@@ -344,134 +292,6 @@ class DiscordFanout:
                 logger.exception('Could not mirror source message %s to thread %s', source_id, thread_id)
         return copies
 
-    def _author_label(self, message: object) -> str | None:
-        """Resolve a registered local handle through the bot's shared services."""
-        author = getattr(message, "author", None)
-        database = getattr(self.bot, "database", None)
-        settings = getattr(self.bot, "settings", None)
-        if author is None or database is None or settings is None:
-            return None
-        user = database.users.get_user_by_discord_user_id(str(getattr(author, "id")))
-        if user is None:
-            return None
-        from ..user_bans import canonical_local_user_handle
-
-        return canonical_local_user_handle(
-            username=str(user.activitypub_username), settings=settings
-        )
-
-    async def mirror_thread_to_siblings(
-        self,
-        *,
-        source_thread: discord.Thread | object,
-        source_starter_message: discord.Message | object,
-        sibling_channel_ids: list[int],
-    ) -> list[MirrorResult]:
-        """Create one mirror thread in each sibling channel.
-
-        Returns one MirrorResult per successfully created mirror thread.
-        A sibling channel that fails does not block the others — the error is
-        logged and that channel is skipped. This preserves partial-success
-        behaviour so source publish is never rolled back for a mirror failure.
-        """
-        results: list[MirrorResult] = []
-        title = getattr(source_thread, "name", "Untitled")
-        body = _format_mirror_body(
-            source_starter_message,
-            author_label=self._author_label(source_starter_message),
-        )
-
-        for channel_id in sibling_channel_ids:
-            if not self._channel_is_allowed(channel_id):
-                continue
-            try:
-                forum_channel = await self.bot.fetch_forum_channel(channel_id)
-                result = await forum_channel.create_thread(name=title, content=body)
-                thread, message = _unpack_thread_result(result)
-                results.append(
-                    MirrorResult(
-                        channel_id=channel_id,
-                        thread_id=thread.id,
-                        starter_message_id=message.id,
-                    )
-                )
-                logger.info(
-                    "Mirrored thread %s into channel %s as thread %s",
-                    getattr(source_thread, "id", "?"),
-                    channel_id,
-                    thread.id,
-                )
-            except Exception:
-                logger.exception(
-                    "Failed to mirror thread %s into channel %s",
-                    getattr(source_thread, "id", "?"),
-                    channel_id,
-                )
-
-        return results
-
-    async def mirror_message_to_siblings(
-        self,
-        *,
-        source_message: object,
-        sibling_thread_deliveries: list[CommunityThreadGroupDelivery],
-        reply_context: object, canonical_message_group_id: int,
-    ) -> list[MirrorMessageResult]:
-        """Deliver one mirror copy of source_message into each sibling thread.
-
-        Iterates sibling_thread_deliveries (all role='mirror' entries for the
-        thread group), fetches each target thread via bot.get_thread_by_id, and
-        sends the formatted mirror body with the resolved Discord reference.
-
-        reply_context is a duck-typed object with get_reference_for_thread(thread_id)
-        that returns the Discord message ID to use as a reference, or None for a
-        flat send. ReplyContext from `reply_mapping.py` satisfies this contract.
-
-        Returns one MirrorMessageResult per successfully delivered mirror. A
-        sibling thread that fails does not block the others — the error is logged
-        and that thread is skipped, preserving partial-success behaviour so the
-        source AP publish is never rolled back.
-        """
-        results: list[MirrorMessageResult] = []
-        content = _format_mirror_body(
-            source_message, author_label=self._author_label(source_message)
-        )
-        for delivery in sibling_thread_deliveries:
-            if not self._channel_is_allowed(delivery.discord_channel_id):
-                continue
-            try:
-                thread = await self.bot.get_thread_by_id(delivery.discord_thread_id)
-                # Resolve the Discord reference for this specific mirror thread.
-                # None means flat send (no reply banner); passing reference=None
-                # to thread.send is identical to omitting it.
-                reference = _make_discord_reference(
-                    thread,
-                    reply_context.get_reference_for_thread(delivery.discord_thread_id),
-                )
-                sent = await thread.send(content=content, reference=reference)
-                results.append(
-                    MirrorMessageResult(
-                        channel_id=delivery.discord_channel_id,
-                        thread_id=delivery.discord_thread_id,
-                        message_id=sent.id,
-                        parent_message_id=(
-                            reference.message_id if reference is not None else None
-                        ),
-                    )
-                )
-                logger.info(
-                    "Mirrored message %s into thread %s as message %s",
-                    getattr(source_message, "id", "?"),
-                    delivery.discord_thread_id,
-                    sent.id,
-                )
-            except Exception:
-                logger.exception(
-                    "Failed to mirror message %s into thread %s",
-                    getattr(source_message, "id", "?"),
-                    delivery.discord_thread_id,
-                )
-        return results
 
     async def propagate_edit(
         self,

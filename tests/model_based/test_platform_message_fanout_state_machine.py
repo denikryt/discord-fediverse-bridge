@@ -19,7 +19,7 @@ from src.platform_types import (
     ContentDocument, CreateAttempt, CreatedThread, DeliveryPresentation,
     MessageRef, ThreadRef, PlatformOperationError,
 )
-from tests.behavior.test_platform_message_fanout_scenarios import _ThreeForumFixture
+from behavior.test_platform_message_fanout_scenarios import _ThreeForumFixture
 
 
 class MessageFanoutSQLiteStateMachine(_ThreeForumFixture):

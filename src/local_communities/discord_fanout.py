@@ -16,15 +16,10 @@ from ..content_sync.edit_delete import (
     edit_discord_message,
     mark_discord_message_deleted,
 )
-from ..content_sync.inbound_references import build_message_reference
 from ..content_sync.platform_fanout import PlatformFanoutCoordinator
 from ..formatting import apply_edit_to_discord_message
 from ..db import Database
-from ..discord_legacy_projection import discord_id_to_legacy_int
-from ..platform_types import (
-    ChannelRef, ContentDocument, CreateAttempt, DeliveryPresentation,
-    MessageRef, PlatformOperationError, ThreadRef, validate_created_receipt,
-)
+from ..platform_types import ChannelRef, ContentDocument, DeliveryPresentation, MessageRef, PlatformOperationError, ThreadRef
 from ..runtime_ports import PlatformAdapterPort, PlatformDeliveryPort
 
 logger = logging.getLogger(__name__)
@@ -51,13 +46,6 @@ def _format_local_mirror_body(*, author_display_name: str | None, content: str) 
     if normalized_content:
         return f"`{normalized_author}`\n\n{normalized_content}"
     return f"`{normalized_author}`"
-
-
-class MissingParentSurface:
-    """Sentinel used when a nested reply cannot be represented on a target."""
-
-
-MISSING_PARENT_SURFACE = MissingParentSurface()
 
 
 @dataclass(slots=True)
@@ -376,198 +364,6 @@ class LocalCommunityDiscordFanout:
                 )
         return summary
 
-    async def fanout_thread_to_local_subscribers(
-        self,
-        *,
-        local_community: object,
-        thread_row: object,
-        title: str,
-        content: str,
-        author_display_name: str | None,
-        source_forum_channel_id: int | None,
-    ) -> LocalDiscordFanoutSummary:
-        """Create missing local-subscriber thread surfaces for one post."""
-        return await self.fanout_thread(
-            local_community=local_community,
-            thread_row=thread_row,
-            title=title,
-            content=content,
-            author_display_name=author_display_name,
-            source_forum_channel_id=source_forum_channel_id,
-            include_host=False,
-        )
-
-    async def fanout_thread(
-        self,
-        *,
-        local_community: object,
-        thread_row: object,
-        title: str,
-        content: str,
-        author_display_name: str | None,
-        source_forum_channel_id: int | None,
-        include_host: bool,
-    ) -> LocalDiscordFanoutSummary:
-        """Create missing Discord thread surfaces for the selected local targets.
-
-        Surface rows are the idempotency boundary.  Replayed source events can
-        call this method again; existing target surfaces are skipped, while a
-        failed target without a surface can be retried safely.
-        """
-        summary = LocalDiscordFanoutSummary()
-        for target in self._select_targets(
-            local_community=local_community,
-            include_host=include_host,
-            source_forum_channel_id=source_forum_channel_id,
-        ):
-            if not self._target_is_allowed(target):
-                continue
-            existing = self.database.local_community_surfaces.get_local_community_thread_surface(
-                local_community_thread_id=getattr(thread_row, "id"),
-                discord_forum_channel_id=target.discord_forum_channel_id,
-            )
-            if existing is not None:
-                summary.skipped_existing += 1
-                continue
-            summary.attempted += 1
-            try:
-                forum = await self.bot.fetch_forum_channel(
-                    target.discord_forum_channel_id
-                )
-                created = await forum.create_thread(
-                    name=title,
-                    content=_format_local_mirror_body(
-                        author_display_name=author_display_name,
-                        content=content,
-                    ),
-                )
-                created_thread, starter_message = self._unpack_created_thread(created)
-                self.database.local_community_surfaces.create_local_community_thread_surface(
-                    local_community_thread_id=getattr(thread_row, "id"),
-                    discord_forum_channel_id=target.discord_forum_channel_id,
-                    discord_thread_id=getattr(created_thread, "id"),
-                    discord_starter_message_id=getattr(starter_message, "id"),
-                    role=target.role,
-                    local_subscriber_id=target.local_subscriber_id,
-                )
-                summary.delivered += 1
-            except Exception:
-                summary.failed += 1
-                logger.exception(
-                    "Failed to create local thread surface community=%s target_forum=%s role=%s",
-                    getattr(local_community, "id"),
-                    target.discord_forum_channel_id,
-                    target.role,
-                )
-        return summary
-
-    async def fanout_message_to_local_subscribers(
-        self,
-        *,
-        local_community: object,
-        thread_row: object,
-        message_row: object,
-        content: str,
-        author_display_name: str | None,
-        source_forum_channel_id: int | None,
-    ) -> LocalDiscordFanoutSummary:
-        """Create missing local-subscriber message surfaces for one comment."""
-        return await self.fanout_message(
-            local_community=local_community,
-            thread_row=thread_row,
-            message_row=message_row,
-            content=content,
-            author_display_name=author_display_name,
-            source_forum_channel_id=source_forum_channel_id,
-            include_host=False,
-        )
-
-    async def fanout_message(
-        self,
-        *,
-        local_community: object,
-        thread_row: object,
-        message_row: object,
-        content: str,
-        author_display_name: str | None,
-        source_forum_channel_id: int | None,
-        include_host: bool,
-    ) -> LocalDiscordFanoutSummary:
-        """Create missing Discord message surfaces for the selected targets.
-
-        Parent Discord message ids are resolved per target surface.  Missing
-        nested parent surfaces skip that target instead of flattening the reply
-        tree to the root starter message.
-        """
-        summary = LocalDiscordFanoutSummary()
-        for target in self._select_targets(
-            local_community=local_community,
-            include_host=include_host,
-            source_forum_channel_id=source_forum_channel_id,
-        ):
-            if not self._target_is_allowed(target):
-                continue
-            target_thread_surface = self.database.local_community_surfaces.get_local_community_thread_surface(
-                local_community_thread_id=getattr(thread_row, "id"),
-                discord_forum_channel_id=target.discord_forum_channel_id,
-            )
-            if target_thread_surface is None:
-                summary.skipped_missing_thread_surface += 1
-                continue
-            existing = self.database.local_community_surfaces.get_local_community_message_surface(
-                local_community_message_id=getattr(message_row, "id"),
-                local_community_thread_surface_id=getattr(target_thread_surface, "id"),
-            )
-            if existing is not None:
-                summary.skipped_existing += 1
-                continue
-            parent_message_id = self.resolve_parent_message_id(
-                thread_row=thread_row,
-                message_row=message_row,
-                target_thread_surface=target_thread_surface,
-            )
-            if parent_message_id is MISSING_PARENT_SURFACE:
-                summary.skipped_missing_parent_surface += 1
-                continue
-            summary.attempted += 1
-            try:
-                discord_thread = await self.bot.get_thread_by_id(
-                    getattr(target_thread_surface, "discord_thread_id")
-                )
-                send_kwargs: dict[str, object] = {}
-                if parent_message_id is not None:
-                    send_kwargs["reference"] = build_message_reference(
-                        discord_thread=discord_thread,
-                        message_id=parent_message_id,
-                    )
-                created_message = await discord_thread.send(
-                    _format_local_mirror_body(
-                        author_display_name=author_display_name,
-                        content=content,
-                    ),
-                    **send_kwargs,
-                )
-                self.database.local_community_surfaces.create_local_community_message_surface(
-                    local_community_message_id=getattr(message_row, "id"),
-                    local_community_thread_surface_id=getattr(
-                        target_thread_surface, "id"
-                    ),
-                    discord_forum_channel_id=target.discord_forum_channel_id,
-                    discord_message_id=getattr(created_message, "id"),
-                    parent_discord_message_id=parent_message_id,
-                    role=target.role,
-                    local_subscriber_id=target.local_subscriber_id,
-                )
-                summary.delivered += 1
-            except Exception:
-                summary.failed += 1
-                logger.exception(
-                    "Failed to create local message surface community=%s target_forum=%s role=%s",
-                    getattr(local_community, "id"),
-                    target.discord_forum_channel_id,
-                    target.role,
-                )
-        return summary
 
     async def _apply_normalized_mutation(
         self,
@@ -826,33 +622,6 @@ class LocalCommunityDiscordFanout:
                 )
         return summary
 
-    def resolve_parent_message_id(
-        self,
-        *,
-        thread_row: object,
-        message_row: object,
-        target_thread_surface: object,
-    ) -> int | MissingParentSurface | None:
-        """Resolve the parent Discord message id inside one target thread surface."""
-        parent_ap_object_id = getattr(message_row, "parent_ap_object_id", None)
-        if parent_ap_object_id is None or parent_ap_object_id == getattr(
-            thread_row, "ap_object_id"
-        ):
-            return getattr(target_thread_surface, "discord_starter_message_id")
-        parent_message = self.database.local_community_content.get_local_community_message_by_ap_object_id(
-            parent_ap_object_id
-        )
-        if parent_message is None:
-            return MISSING_PARENT_SURFACE
-        parent_surface = (
-            self.database.local_community_surfaces.get_local_community_message_surface(
-                local_community_message_id=getattr(parent_message, "id"),
-                local_community_thread_surface_id=getattr(target_thread_surface, "id"),
-            )
-        )
-        if parent_surface is None:
-            return MISSING_PARENT_SURFACE
-        return getattr(parent_surface, "discord_message_id")
 
     def _select_targets(
         self,
@@ -905,10 +674,3 @@ class LocalCommunityDiscordFanout:
                 )
             )
         return targets
-
-    @staticmethod
-    def _unpack_created_thread(created: object) -> tuple[object, object]:
-        """Normalize both Discord `create_thread()` result shapes used by fakes."""
-        if isinstance(created, tuple):
-            return created[0], created[1]
-        return getattr(created, "thread"), getattr(created, "message")

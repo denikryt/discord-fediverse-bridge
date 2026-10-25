@@ -68,3 +68,12 @@ The `src.db.migrations` and `src.db.legacy_v0_to_v1` loggers emit INFO phase mes
 SQL failures are contextual RuntimeErrors with the original SQLAlchemy exception retained as their cause. Table/check boundaries identify staging, DROP, copy, claim, identity and schema/integrity failures; transaction failures identify stamp/commit. Bound parameters are hidden when rendering StatementError tracebacks. Inspect the cause for the underlying driver error rather than parsing log text. Semantic validation errors retain their existing type and identify only selected relationship/channel/thread/row/parent IDs, without dumping associated records. A commit message reports the completed transaction even if subsequent FK restoration or read validation fails.
 
 Before introducing database v2, freeze the v1 target used by historical v0→v1 independently of current ORM metadata; this is tracked in `dev/future_tasks.md` and is not implemented by the diagnostics change.
+
+## Incomplete legacy message sources
+
+After migration, an old message mapping may have an unknown immediate container.
+SQLite UNIQUE does not deduplicate NULL containers. The repository reserves the
+writer and rejects another AP object for the same potentially identical source,
+including incoming typed evidence that cannot disambiguate the older row.
+Exact immutable receipt retries remain idempotent. Fully scoped sources from
+different containers or connectors retain independent identities.

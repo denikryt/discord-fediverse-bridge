@@ -34,7 +34,8 @@ function buildRequest(kind: "content_update" | "content_delete") {
     title: kind === "content_update" ? "Topic" : null,
     bodyMarkdown: kind === "content_update" ? "new" : null,
     inReplyToObjectId: null,
-    targetInboxUrls: base.targetInboxUrls,
+    publicationContext: "community",
+    conversationRootObjectId: null,
     mutationTimestamp: base.mutationTimestamp,
   };
   const identity = stableJson({objectId: base.apObjectId, kind, expectedRevision: 1, nextRevision: 2, request: requestShape});
@@ -51,11 +52,14 @@ for (const kind of ["content_update", "content_delete"] as const) {
   assert.throws(() => verifyMutationIdentity(config, {...request, activityId: request.activityId + "-tampered"} as never, kind), /mutation activity identity mismatch/);
   const changedInput = kind === "content_update"
     ? {...request, bodyMarkdown: "different"}
-    : {...request, targetInboxUrls: ["https://other.example/inbox"]};
+    : {...request, conversationRootObjectId: "https://other.example/post"};
   assert.throws(
     () => verifyMutationIdentity(config, changedInput as never, kind),
     /mutation operation identity mismatch/,
   );
+  // Recipient lists cannot redefine authored identity; typed recipients are
+  // authorized separately after canonical admission.
+  verifyMutationIdentity(config, {...request, targetInboxUrls: ["https://other.example/inbox"]} as never, kind);
   // Byte-equivalent retries remain valid across gateway process restarts because
   // verification derives identity entirely from immutable request inputs.
   verifyMutationIdentity(config, JSON.parse(JSON.stringify(request)) as never, kind);

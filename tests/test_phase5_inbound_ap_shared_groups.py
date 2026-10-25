@@ -8,6 +8,7 @@ forum_channel.create_thread, thread.send, FedifyGatewayClient.
 
 from __future__ import annotations
 from support.runtime import build_test_policy_service
+from support.community_events import ScenarioDiscord
 
 from datetime import datetime, timezone
 from pathlib import Path
@@ -45,6 +46,7 @@ def _accepted_subscription(database: Database, *, channel_id: int) -> None:
     """Insert one accepted community subscription for the shared hackers community."""
     database.remote_subscriptions.create_subscription(
         discord_channel_id=channel_id,
+        discord_guild_id=10,
         lemmy_community_actor_id=COMMUNITY_ACTOR_URL,
         lemmy_community_name="hackers",
         lemmy_community_id=42,
@@ -276,6 +278,7 @@ async def test_phase5_inbound_post_creates_thread_group_and_deliveries(
         database=database,
         bot=bot,
         community_runtime=runtime,
+        discord_adapter=ScenarioDiscord(runtime),
         bridge_policy_service=build_test_policy_service(database),
     )
 
@@ -292,7 +295,7 @@ async def test_phase5_inbound_post_creates_thread_group_and_deliveries(
     deliveries = database.discord_fanout_groups.get_thread_deliveries(thread_group.id)
     assert len(deliveries) == 2
     assert all(d.role == "inbound" for d in deliveries)
-    thread_ids = {d.discord_thread_id for d in deliveries}
+    thread_ids = {int(d.external_thread_id) for d in deliveries}
     assert thread_ids == {200, 500}
     # Remote post starters must use the same full fediverse handle as comments
     # so authors are not ambiguous across remote instances.
@@ -345,6 +348,7 @@ async def test_phase5_inbound_post_dedup_skips_on_existing_thread_group(
         database=database,
         bot=bot,
         community_runtime=runtime,
+        discord_adapter=ScenarioDiscord(runtime),
         bridge_policy_service=build_test_policy_service(database),
     )
 
@@ -390,6 +394,7 @@ async def test_phase5_inbound_comment_root_creates_message_group_flat(
         database=database,
         bot=bot,
         community_runtime=runtime,
+        discord_adapter=ScenarioDiscord(runtime),
         bridge_policy_service=build_test_policy_service(database),
     )
 
@@ -406,7 +411,7 @@ async def test_phase5_inbound_comment_root_creates_message_group_flat(
 
     deliveries = database.discord_fanout_groups.get_message_deliveries(message_group.id)
     assert len(deliveries) == 1
-    assert deliveries[0].discord_thread_id == 200
+    assert deliveries[0].external_thread_id == "200"
     assert deliveries[0].role == "inbound"
 
     # Flat send: reference must be None.
@@ -496,6 +501,7 @@ async def test_phase5_inbound_comment_reply_chain_resolves_to_prior_delivery(
         database=database,
         bot=bot,
         community_runtime=runtime,
+        discord_adapter=ScenarioDiscord(runtime),
         bridge_policy_service=build_test_policy_service(database),
     )
 
@@ -559,6 +565,7 @@ async def test_phase5_inbound_comment_dedup_skips_on_existing_message_group(
         database=database,
         bot=bot,
         community_runtime=runtime,
+        discord_adapter=ScenarioDiscord(runtime),
         bridge_policy_service=build_test_policy_service(database),
     )
 

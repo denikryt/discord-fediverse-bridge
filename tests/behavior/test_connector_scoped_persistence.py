@@ -1,3 +1,5 @@
+
+from support.community_events import create_thread, configure_renderer, ScenarioDiscord, physical_forum
 """Real runtime actions with mixed connector claims and retained physical copies."""
 
 from types import SimpleNamespace
@@ -73,6 +75,7 @@ async def test_inbound_post_with_fluxer_claim_routes_only_actual_discord_targets
         database=database,
         bot=bot,
         community_runtime=community_runtime,
+        discord_adapter=ScenarioDiscord(community_runtime),
         bridge_policy_service=build_test_policy_service(database),
     )
     post = build_post_created_event(
@@ -86,7 +89,7 @@ async def test_inbound_post_with_fluxer_claim_routes_only_actual_discord_targets
         assert result.status == "processed" and group is not None
         assert calls == [900]
         deliveries = database.discord_fanout_groups.get_thread_deliveries(group.id)
-        assert len(deliveries) == 1 and deliveries[0].discord_channel_id == 900
+        assert len(deliveries) == 1 and deliveries[0].external_thread_id == "111"
         assert (
             group.source_connector_id is None
             and group.source_channel_surface_id is None
@@ -225,6 +228,7 @@ async def test_mixed_pending_accept_promotes_globally_and_notifies_only_discord(
         ),
         bridge_policy_service=build_test_policy_service(database),
     )
+    runtime.discord_adapter = ScenarioDiscord(runtime.community_runtime)
     post = build_post_created_event(
         object_id="https://remote.test/post/accept", community_actor_id=actor
     )
@@ -340,6 +344,7 @@ async def test_local_publish_with_mixed_subscribers_creates_only_discord_copies(
         fluxer_id = fluxer.id
     add_registered_user(database)
     gateway = build_gateway_mock()
+    configure_renderer(gateway, database)
     gateway.publish_local_community_content = AsyncMock(
         return_value=PublishLocalCommunityContentResult(
             "https://bridge.example/actors/communities/hackers/activities/create/1",
@@ -373,22 +378,19 @@ async def test_local_publish_with_mixed_subscribers_creates_only_discord_copies(
             bridge_policy_service=policy,
         ),
     )
-    result = await runtime.handle_discord_thread_create(
-        thread=build_thread(thread_id=2200, channel_id=200),
-        starter_message=build_starter_message(message_id=2300),
-    )
+    result = await create_thread(runtime, thread=build_thread(thread_id=2200, channel_id=200), starter_message=build_starter_message(message_id=2300))
     assert result.status == "published"
     row = database.local_community_content.get_local_community_thread_by_ap_object_id(
-        "https://bridge.example/actors/communities/hackers/objects/1"
+        result.object_id
     )
     surfaces = database.local_community_surfaces.list_local_community_thread_surfaces(
         row.id
     )
-    assert {s.discord_forum_channel_id for s in surfaces} == {100, 200, 300}
+    assert {physical_forum(database, s) for s in surfaces} == {100, 200, 300}
     assert all(s.local_subscriber_id != fluxer_id for s in surfaces)
     assert len(surfaces) == 3
     assert database.local_subscribers.count_discord_local_subscribers(community.id) == 2
-    gateway.publish_local_community_content.assert_awaited_once()
+    gateway.render_community.assert_awaited_once()
     database.close()
 
 

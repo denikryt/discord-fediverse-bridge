@@ -18,9 +18,9 @@ from src.models import (
     LocalCommunityMessage, LocalCommunityMessageSurface,
     LocalCommunityThreadSurface, PlatformDeliveryIntent,
 )
-from src.platform_types import ConnectorRef, MessageRef
+from src.platform_types import ConnectorRef
 from src.runtime_ports import PlatformAdapterPort
-from tests.behavior.test_platform_message_fanout_scenarios import (
+from behavior.test_platform_message_fanout_scenarios import (
     _ForumAdapter, _ThreeForumFixture,
 )
 
@@ -271,8 +271,8 @@ class LocalInboundRuntimeReceiptHandoff(unittest.IsolatedAsyncioTestCase):
         from pathlib import Path
         from types import ModuleType
         from unittest.mock import patch
-        from tests.test_local_inbound_adapter_delivery import setup, comment
-        from tests.test_inbound_duplicate_admission import _post
+        from test_local_inbound_adapter_delivery import setup, comment
+        from test_inbound_duplicate_admission import _post
 
         module = ModuleType('src.activitypub_handlers')
 

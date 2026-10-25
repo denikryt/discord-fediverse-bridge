@@ -1,254 +1,81 @@
-/**
- * Gateway contract tests for local-community Update/Delete fanout.
- *
- * Discord-originated local-community edits/deletes must fan out as a
- * community-owned Announce(Update|Delete) to each accepted remote subscriber.
- */
-
+/** Local Community mutations render canonical authored JSON before durable dispatch. */
 import assert from "node:assert/strict";
-import { webcrypto } from "node:crypto";
-import { mkdtemp, writeFile } from "node:fs/promises";
-import { tmpdir } from "node:os";
-import path from "node:path";
-
-import { exportJwk } from "@fedify/fedify";
-import initSqlJs, { seedBridgeActorJwk } from "./support/sqlite-fixture.js";
-import { closeAllPythonBridgeFixtures, importFixedRsaKeyPair, startPythonBridgeFixture } from "./support/python-bridge-fixture.js";
+import { createHash } from "node:crypto";
+import { updateContent, deleteContent } from "../src/federation-outbound.js";
+import type { GatewayConfig } from "../src/config.js";
 import { installSignedJsonSocketFixture } from "./support/signed-json-socket-fixture.js";
 
-import { deleteContent, updateContent } from "../src/federation-outbound.js";
-import type { GatewayConfig } from "../src/config.js";
+const origin = "https://discord-bridge.example.com";
+const community = `${origin}/actors/communities/hackers`;
+const actor = `${origin}/actors/users/alice`;
+const objectId = `${actor}/objects/comments/1`;
+const config: GatewayConfig = {
+  actorIdentifier: "bridge", actorName: "Bridge", actorSummary: "Bridge",
+  pythonBridgeInternalUrl: "http://unavailable.invalid", pythonBridgeSharedSecret: "secret",
+  fedifyOrigin: origin, port: 3000, logLevel: "info",
+};
 
-const TEST_ORIGIN = "https://discord-bridge.example.com/";
-const COMMUNITY_ACTOR = `${TEST_ORIGIN}actors/communities/hackers`;
-const USER_ACTOR = `${TEST_ORIGIN}actors/users/alice`;
-
-interface DeliveryRecord {
-  inboxId: string;
-  payload: Record<string, unknown>;
+/** Stable identity contains authored content and revisions, never recipients. */
+function stableJson(value: unknown): string {
+  if (value === null || typeof value !== "object") return JSON.stringify(value);
+  if (Array.isArray(value)) return `[${value.map(stableJson).join(",")}]`;
+  const record = value as Record<string, unknown>;
+  return `{${Object.keys(record).sort().map(key => `${JSON.stringify(key)}:${stableJson(record[key])}`).join(",")}}`;
 }
 
-async function main(): Promise<void> {
-  await testLocalCommunityUpdateFansOutToAcceptedRemoteSubscribers();
-  await testLocalCommunityDeleteFansOutToAcceptedRemoteSubscribers();
-  console.log("verify:local-community-update-delete passed");
-}
-
-/**
- * Action: `/update` is called for a Discord-backed local community object.
- * Expected: every accepted remote subscriber receives Announce(Update(Note)).
- */
-async function testLocalCommunityUpdateFansOutToAcceptedRemoteSubscribers(): Promise<void> {
-  const config = await buildConfig();
-  const deliveries: DeliveryRecord[] = [];
-  const restoreFetch = installFetchRecorder(deliveries);
-
-  try {
-    await updateContent({} as never, config, {
-      actorUsername: "alice",
-      communityActorUrl: COMMUNITY_ACTOR,
-      apObjectId: `${TEST_ORIGIN}users/alice/comment/1`,
-      kind: "comment",
-      bodyMarkdown: "Edited from Discord",
-      title: null,
-      inReplyToObjectId: `${TEST_ORIGIN}users/alice/post/1`,
-    });
-  } finally {
-    restoreFetch();
-  }
-
-  assert.deepEqual(
-    deliveries.map((delivery) => delivery.inboxId).sort(),
-    [
-      "https://lemmy.example/u/alice/inbox",
-      "https://mastodon.example/ap/users/bob/inbox",
-    ],
-  );
-  for (const delivery of deliveries) {
-    assert.equal(delivery.payload.type, "Announce");
-    assert.equal(delivery.payload.actor, COMMUNITY_ACTOR);
-    const embeddedUpdate = delivery.payload.object as Record<string, unknown>;
-    const embeddedObject = embeddedUpdate.object as Record<string, unknown>;
-    assert.equal(embeddedUpdate.type, "Update");
-    assert.equal(embeddedUpdate.actor, USER_ACTOR);
-    assert.equal(embeddedObject.type, "Note");
-    assert.equal(embeddedObject.id, `${TEST_ORIGIN}users/alice/comment/1`);
-    assert.equal(embeddedObject.attributedTo, USER_ACTOR);
-  }
-}
-
-/**
- * Action: `/delete` is called for a Discord-backed local community object.
- * Expected: every accepted remote subscriber receives Announce(Delete(...)).
- */
-async function testLocalCommunityDeleteFansOutToAcceptedRemoteSubscribers(): Promise<void> {
-  const config = await buildConfig();
-  const deliveries: DeliveryRecord[] = [];
-  const restoreFetch = installFetchRecorder(deliveries);
-
-  try {
-    await deleteContent({} as never, config, {
-      actorUsername: "alice",
-      communityActorUrl: COMMUNITY_ACTOR,
-      apObjectId: `${TEST_ORIGIN}users/alice/comment/1`,
-    });
-  } finally {
-    restoreFetch();
-  }
-
-  assert.equal(deliveries.length, 2);
-  for (const delivery of deliveries) {
-    assert.equal(delivery.payload.type, "Announce");
-    assert.equal(delivery.payload.actor, COMMUNITY_ACTOR);
-    const embeddedDelete = delivery.payload.object as Record<string, unknown>;
-    assert.equal(embeddedDelete.type, "Delete");
-    assert.equal(embeddedDelete.actor, USER_ACTOR);
-    assert.equal(embeddedDelete.object, `${TEST_ORIGIN}users/alice/comment/1`);
-  }
-}
-
-/** Record signed Update/Delete fanout requests at the transport boundary. */
-function installFetchRecorder(deliveries: DeliveryRecord[]): () => void {
-  /** Capture Update/Delete fanout without opening external sockets. */
-  return installSignedJsonSocketFixture((request) => {
-    deliveries.push({
-      inboxId: request.url,
-      payload: JSON.parse(request.body) as Record<string, unknown>,
-    });
-    return { status: 202 };
-  });
-}
-
-async function buildConfig(): Promise<GatewayConfig> {
-  /** Build a temporary SQLite snapshot with one local community and followers. */
-  const sqlJs = await initSqlJs();
-  const tempDir = await mkdtemp(path.join(tmpdir(), "fedify-local-community-update-delete-"));
-  const databasePath = path.join(tempDir, "bridge.db");
-  let pythonBridgeInternalUrl = "";
-  const bridgeKeys = await importFixedRsaKeyPair();
-  const communityKeys = await importFixedRsaKeyPair();
-  const db = new sqlJs.Database();
-
-  try {
-    db.run(`
-      CREATE TABLE local_communities (
-        id INTEGER PRIMARY KEY AUTOINCREMENT,
-        discord_guild_id INTEGER NOT NULL,
-        discord_forum_channel_id INTEGER NOT NULL,
-        slug VARCHAR(255) NOT NULL,
-        display_name VARCHAR(255) NOT NULL,
-        summary TEXT NOT NULL,
-        actor_url VARCHAR(512) NOT NULL,
-        inbox_url VARCHAR(512) NOT NULL,
-        outbox_url VARCHAR(512) NOT NULL,
-        followers_url VARCHAR(512) NOT NULL,
-        public_key_pem TEXT NOT NULL,
-        private_key_pem TEXT NOT NULL,
-        status VARCHAR(32) NOT NULL
-      )
-    `);
-    db.run(`
-      CREATE TABLE remote_subscribers (
-        id INTEGER PRIMARY KEY AUTOINCREMENT,
-        local_community_id INTEGER NOT NULL,
-        remote_actor_id VARCHAR(512) NOT NULL,
-        remote_inbox_url VARCHAR(512) NOT NULL,
-        follow_activity_id VARCHAR(512) NOT NULL,
-        status VARCHAR(32) NOT NULL,
-        delivery_profile VARCHAR(64) NOT NULL DEFAULT 'threadiverse_group',
-        created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
-        updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
-      )
-    `);
-    db.run(
-      `
-        INSERT INTO local_communities (
-          discord_guild_id,
-          discord_forum_channel_id,
-          slug,
-          display_name,
-          summary,
-          actor_url,
-          inbox_url,
-          outbox_url,
-          followers_url,
-          public_key_pem,
-          private_key_pem,
-          status
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-      `,
-      [
-        10,
-        100,
-        "hackers",
-        "Hackers",
-        "A local hackerspace forum.",
-        COMMUNITY_ACTOR,
-        `${COMMUNITY_ACTOR}/inbox`,
-        `${COMMUNITY_ACTOR}/outbox`,
-        `${COMMUNITY_ACTOR}/followers`,
-        await exportPublicKeyPem(communityKeys.publicKey),
-        await exportPrivateKeyPem(communityKeys.privateKey),
-        "active",
-      ],
-    );
-    db.run(
-      `
-        INSERT INTO remote_subscribers (
-          local_community_id,
-          remote_actor_id,
-          remote_inbox_url,
-          follow_activity_id,
-          status,
-          delivery_profile
-        ) VALUES
-          (1, 'https://lemmy.example/u/alice', 'https://lemmy.example/u/alice/inbox', 'follow-1', 'accepted', 'threadiverse_group'),
-          (1, 'https://mastodon.example/ap/users/bob', 'https://mastodon.example/ap/users/bob/inbox', 'follow-2', 'accepted', 'mastodon_compat')
-      `,
-    );
-    seedBridgeActorJwk(
-      db,
-      `${TEST_ORIGIN}actors/services/bridge`,
-      JSON.stringify(await exportJwk(bridgeKeys.privateKey)),
-      JSON.stringify(await exportJwk(bridgeKeys.publicKey)),
-    );
-    await writeFile(databasePath, Buffer.from(db.export()));
-    pythonBridgeInternalUrl = await startPythonBridgeFixture(databasePath);
-  } finally {
-    db.close();
-  }
-
-  return {
-    actorIdentifier: "bridge",
-    actorName: "Bridge",
-    actorSummary: "Bridge summary",
-    pythonBridgeInternalUrl,
-    fedifyOrigin: TEST_ORIGIN,
-    port: 3000,
-        pythonBridgeSharedSecret: "secret",
-    logLevel: "info",
+/** Build the exact mutation receipt Python commits before any delivery worker. */
+function requestFor(kind: "content_update" | "content_delete") {
+  const update = kind === "content_update";
+  const requestShape = {
+    actorUsername: "alice", publicationContext: "community", communityActorUrl: community,
+    conversationRootObjectId: null, apObjectId: objectId,
+    kind: update ? "comment" : null, title: null,
+    bodyMarkdown: update ? "Edited from Discord" : null,
+    inReplyToObjectId: update ? `${actor}/objects/posts/1` : null,
+    mutationTimestamp: "2026-10-25T10:00:00Z",
   };
+  const operationId = createHash("sha256").update(stableJson({
+    objectId, kind, expectedRevision: 1, nextRevision: 2, request: requestShape,
+  })).digest("hex");
+  const base = {
+    actorUsername: "alice", communityActorUrl: community, apObjectId: objectId,
+    mutationTimestamp: requestShape.mutationTimestamp,
+    expectedRevision: 1, nextRevision: 2, operationId,
+    activityId: `${actor}/activities/${update ? "update" : "delete"}/comments/${operationId}`,
+  };
+  return {base, update: {...base, kind: "comment" as const, title: null,
+    bodyMarkdown: "Edited from Discord", inReplyToObjectId: requestShape.inReplyToObjectId}};
 }
 
-async function exportPrivateKeyPem(privateKey: CryptoKey): Promise<string> {
-  return toPem("PRIVATE KEY", Buffer.from(await webcrypto.subtle.exportKey("pkcs8", privateKey)));
-}
-
-async function exportPublicKeyPem(publicKey: CryptoKey): Promise<string> {
-  return toPem("PUBLIC KEY", Buffer.from(await webcrypto.subtle.exportKey("spki", publicKey)));
-}
-
-function toPem(label: string, bytes: Buffer): string {
-  const base64 = bytes.toString("base64");
-  const wrapped = base64.match(/.{1,64}/g)?.join("\n") ?? base64;
-  return `-----BEGIN ${label}-----\n${wrapped}\n-----END ${label}-----\n`;
-}
-
+// Neither signed delivery nor Python recipient enumeration is permitted here.
+const restore = installSignedJsonSocketFixture(() => {
+  throw new Error("rendering must not dispatch a pre-commit mutation");
+});
 try {
-  await main();
-} catch (error) {
-  console.error(error);
-  process.exitCode = 1;
+  const update = requestFor("content_update");
+  const rendered = await updateContent({} as never, config, update.update);
+  assert.equal(rendered.activityId, update.base.activityId);
+  assert.equal(rendered.objectId, objectId);
+  assert.equal(rendered.activityJson.type, "Update");
+  assert.equal(rendered.activityJson.actor, actor);
+  const note = rendered.activityJson.object as Record<string, unknown>;
+  assert.equal(note.id, objectId);
+  assert.equal(note.type, "Note");
+  assert.equal(note.attributedTo, actor);
+  assert.equal(note.audience, community);
+  assert.equal(note.inReplyTo, `${actor}/objects/posts/1`);
+  assert.deepEqual((await updateContent({} as never, config, update.update)).activityJson,
+                   rendered.activityJson);
+
+  const deletion = requestFor("content_delete");
+  const deleted = await deleteContent({} as never, config, deletion.base);
+  assert.equal(deleted.activityId, deletion.base.activityId);
+  assert.equal(deleted.activityJson.type, "Delete");
+  assert.equal(deleted.activityJson.actor, actor);
+  assert.equal(deleted.activityJson.object, objectId);
+  assert.deepEqual((await deleteContent({} as never, config, deletion.base)).activityJson,
+                   deleted.activityJson);
+  console.log("verify:local-community-update-delete passed");
 } finally {
-  await closeAllPythonBridgeFixtures();
+  restore();
 }

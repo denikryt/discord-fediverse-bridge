@@ -7,6 +7,8 @@ This document is a short, feature-oriented index of the test suite. It helps mai
 - `docs/development/stage04_s01_legacy_create_audit.md` inventories the
   normalized production call graph, 14 test files with 62 direct raw runtime
   invocations, external/dynamic compatibility risk and staged deletion gate.
+- `tests/support/community_events.py` supplies observed typed source events and
+  physical boundary fakes for the final raw-consumer migration.
 - `tests/test_stage04_single_community_create_route_contract.py` rejects a
   reintroduced raw `DiscordEventRouter` Create entry; the migrated router cases
   in three Local Community behavior modules verify Local/Remote selection,

@@ -1,3 +1,5 @@
+
+from support.community_events import configure_renderer, ScenarioDiscord, physical_forum
 """Released SQLite upgrade preserves identities through one atomic public transition."""
 
 import shutil
@@ -305,7 +307,7 @@ def test_populated_release_upgrades_in_one_startup(legacy):
     legacy.migrate()
     assert len(stamps) == 1 and stamps[0].replace(" ", "").endswith("=1")
     after = _evidence(legacy)
-    assert after[0] == 1 and len(after[2]) == 45
+    assert after[0] == 1 and len(after[2]) == 47
     for name, rows in before[2].items():
         for row, new in zip(rows, after[2][name], strict=True):
             for col, value in row.items():
@@ -746,6 +748,7 @@ async def test_migrated_remote_delivery_and_local_publish(legacy):
             database=legacy,
             bot=bot,
             community_runtime=remote,
+            discord_adapter=ScenarioDiscord(remote),
             bridge_policy_service=policy,
         ),
     )
@@ -755,8 +758,9 @@ async def test_migrated_remote_delivery_and_local_publish(legacy):
             "https://remote.test/post/new"
         ).id
     )
-    assert {r.discord_channel_id for r in copies} == {902}
+    assert {physical_forum(legacy, r) for r in copies} == {902}
     gateway = build_gateway_mock()
+    configure_renderer(gateway, legacy)
     gateway.publish_local_community_content = AsyncMock(
         return_value=PublishLocalCommunityContentResult(
             "https://bridge.test/actors/communities/news/activities/new",
@@ -786,16 +790,20 @@ async def test_migrated_remote_delivery_and_local_publish(legacy):
             bridge_policy_service=policy,
         ),
     )
-    published = await runtime.handle_discord_thread_create(
-        thread=build_thread(thread_id=6000, channel_id=900),
-        starter_message=build_starter_message(message_id=6000, author_id=1),
-    )
+    from support.community_events import observe_thread
+    from dataclasses import replace
+    from src.platform_types import ThreadRef
+    observed, view = observe_thread(thread=build_thread(thread_id=6000, channel_id=900),
+                                    starter_message=build_starter_message(message_id=6000, author_id=1))
+    observed = replace(observed, external_guild_id='1',
+                       thread=ThreadRef(replace(observed.thread.channel, external_guild_id='1'), '6000'))
+    published = await runtime.handle_normalized_thread_create(observed, view, adapter=ScenarioDiscord(runtime))
     assert published.status == "published"
     thread = legacy.local_community_content.get_local_community_thread_by_ap_object_id(
-        "https://bridge.test/actors/communities/news/objects/new"
+        published.object_id
     )
     assert {
-        s.discord_forum_channel_id
+        physical_forum(legacy, s)
         for s in legacy.local_community_surfaces.list_local_community_thread_surfaces(
             thread.id
         )
@@ -1004,3 +1012,57 @@ def test_release_snapshot_loaded_once_per_inspection_and_kept_immutable(legacy, 
     assert all(snapshot == original for _, _, snapshot, original in captures)
     legacy.migrate()
     assert len(captures) == 2  # Current-v1 admission does not reload legacy rows.
+
+
+def test_migrated_unknown_container_source_rejects_second_object(legacy):
+    """A migrated source without a container cannot acquire a second AP identity."""
+    from sqlalchemy import select, func
+    from src.models import MessageMapping
+
+    legacy.migrate()
+    receipt = dict(
+        source_platform='discord', source_id='opaque-source',
+        activity_id='https://bridge.test/a/first', object_id='https://bridge.test/o/first',
+        actor_url='https://bridge.test/actors/users/alice',
+        community_actor_url='https://remote.test/c/news',
+        discord_channel_id=None, discord_message_id=None,
+    )
+    first = legacy.message_mappings.create_message_mapping(**receipt)
+    # An exact retry stays idempotent, whereas NULL must not weaken dedup.
+    assert legacy.message_mappings.create_message_mapping(**receipt).id == first.id
+    with pytest.raises(ValueError, match='source'):
+        legacy.message_mappings.create_message_mapping(**{
+            **receipt, 'activity_id': 'https://bridge.test/a/second',
+            'object_id': 'https://bridge.test/o/second',
+        })
+    with legacy.session() as session:
+        assert session.scalar(select(func.count()).select_from(MessageMapping)) == 1
+
+
+def test_migrated_unknown_container_source_serializes_competing_writers(legacy):
+    """Two independent writers cannot assign two AP objects to an unknown source."""
+    from sqlalchemy import select, func
+    from src.models import MessageMapping
+
+    legacy.migrate()
+
+    def write(index):
+        """Compete through repository writer reservations, not a shared session."""
+        try:
+            legacy.message_mappings.create_message_mapping(
+                source_platform='discord', source_id='concurrent-opaque',
+                activity_id=f'https://bridge.test/a/{index}',
+                object_id=f'https://bridge.test/o/{index}',
+                actor_url='https://bridge.test/actors/users/alice',
+                community_actor_url='https://remote.test/c/news',
+                discord_channel_id=None, discord_message_id=None,
+            )
+            return 'created'
+        except ValueError as exc:
+            assert 'source' in str(exc)
+            return 'conflict'
+
+    with ThreadPoolExecutor(max_workers=2) as writers:
+        assert sorted(writers.map(write, (1, 2))) == ['conflict', 'created']
+    with legacy.session() as session:
+        assert session.scalar(select(func.count()).select_from(MessageMapping)) == 1

@@ -11,11 +11,13 @@ for Community publication. The former raw SDK `handle_thread_create` /
 `handle_message` router methods have been removed; neither would persist a
 `PlatformDeliveryIntent` before physical fanout. These names remain **absent**
 from the production router API. Personal Feed and physical Update/Delete retain
-their separate existing owners. A follow-up migration of direct runtime method
-calls in legacy tests is still needed before raw `CommunityRuntime` and
-`LocalCommunityRuntime` Create methods (and their SDK-only collaborators) can be
-fully deleted; they have no explicit production ingress caller. This partial
-cutover does not claim that the obsolete implementation has been deleted yet.
+their separate existing owners. `CommunityRuntime` and `LocalCommunityRuntime`
+also expose only typed Create entry points. The four raw runtime methods,
+raw host/subscriber Create handlers and SDK-only Create fanout helpers were
+removed after migrating all in-repository consumers. Tests observe source
+messages at the transport boundary and exercise real canonical admission and
+coordinator persistence. External callers of the removed raw APIs must migrate
+to the verified platform ingress; there is no compatibility fallback.
 
 ## Stage 04 typed forum source admission (checkpoint 57 foundation)
 

@@ -86,6 +86,27 @@ class MessageMappingRepository(BaseRepository):
             if source_message is not None:
                 placement['source_connector_id'] = connector.id
                 placement['source_external_container_id'] = source_message.external_container_id
+            # SQLite UNIQUE treats NULL containers as distinct. Reserve the
+            # writer before checking so independent retries cannot attach a
+            # second AP identity to an incomplete legacy source. A typed row
+            # must also refuse a potentially identical unknown-container row.
+            candidates = session.scalars(select(MessageMapping).where(
+                MessageMapping.source_platform == source_platform,
+                MessageMapping.source_id == source_id,
+            ))
+            incoming_connector = placement.get('source_connector_id')
+            incoming_container = placement.get('source_external_container_id')
+            for candidate in candidates:
+                same_connector = (
+                    candidate.source_connector_id == incoming_connector
+                    or candidate.source_connector_id is None
+                    or incoming_connector is None
+                )
+                if same_connector and (
+                    candidate.source_external_container_id is None
+                    or incoming_container is None
+                ):
+                    raise ValueError('Ambiguous legacy source identity conflict')
             mapping = MessageMapping(
                 **placement,
                 source_platform=source_platform,

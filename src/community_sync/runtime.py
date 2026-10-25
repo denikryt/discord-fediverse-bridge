@@ -15,43 +15,15 @@ import json
 from typing import TYPE_CHECKING
 
 from ..inbound_activity_outcomes import InboundActivityOutcome
-from .delivery_mapping import (
-    remote_thread_receipt, remote_thread_is_current,
-    get_message_group_for_ap_object,
-    get_message_group_for_delivered_message,
-    get_message_group_for_source_message,
-    get_sibling_thread_deliveries,
-    get_thread_group_for_any_thread,
-    get_thread_group_for_ap_object,
-    get_thread_group_for_source_thread,
-)
-from .edit_delete import (
-    get_inbound_comment_edit_deliveries,
-    get_outbound_delete_deliveries,
-    get_outbound_edit_deliveries,
-    propagate_inbound_comment_delete,
-    propagate_inbound_comment_update,
-    propagate_inbound_post_delete,
-    propagate_inbound_post_update,
-    resolve_actor_username,
-)
-from .inbound_mapping import (
-    get_accepted_subscriptions,
-    get_parent_message_group,
-    needs_backfill,
-)
-from .reply_mapping import (
-    resolve_inbound_reference, resolve_normalized_reply_context, resolve_reply_context,
-)
+from .delivery_mapping import remote_thread_receipt, remote_thread_is_current, get_message_group_for_ap_object, get_message_group_for_delivered_message, get_sibling_thread_deliveries, get_thread_group_for_any_thread, get_thread_group_for_ap_object
+from .edit_delete import get_inbound_comment_edit_deliveries, get_outbound_delete_deliveries, get_outbound_edit_deliveries, resolve_actor_username
+from .inbound_mapping import get_accepted_subscriptions, get_parent_message_group
+from .reply_mapping import resolve_normalized_reply_context
 from ..discord_legacy_projection import discord_id_to_legacy_int
-from ..platform_types import (
-    ChannelRef, ContentDocument, CreateAttempt, DeliveryPresentation,
-    MessageCreated, MessageRef, MessageView, PlatformOperationError, ThreadCreated, ThreadRef,
-)
+from ..platform_types import ChannelRef, ContentDocument, DeliveryPresentation, MessageCreated, MessageRef, MessageView, PlatformOperationError, ThreadCreated
 from ..runtime_ports import DiscordDeliveryClientPort, DiscordMutationContext, PlatformDeliveryPort
 
 if TYPE_CHECKING:
-    import discord  # Only legacy SDK-shaped annotations; typed paths need no SDK.
     from ..activitypub_handlers import HandlerResult
     from ..activitypub_models import ActivityPubEvent
     from ..db import Database
@@ -161,9 +133,8 @@ class CommunityRuntime:
     ) -> PublishResult:
         """Publish one verified remote-community forum starter and persist all receipts.
 
-        Source/mirror ownership remains the existing CommunityThreadGroup
-        schema; physical sends use only the typed adapter. The legacy SDK path
-        stays unbound until the complete forum ingress cutover.
+        Source/mirror ownership remains in CommunityThreadGroup. Physical
+        creates use only the typed adapter and durable fanout coordinator.
         """
         if (event.connector_key != 'discord-primary'
             or event.thread.channel.kind != 'forum'
@@ -306,192 +277,6 @@ class CommunityRuntime:
             # together; no follow-up insert can lose their correlation.
         return result
 
-    async def handle_discord_thread_create(
-        self,
-        thread: discord.Thread,
-        starter_message: discord.Message,
-    ) -> PublishResult:
-        """Handle a new Discord forum thread from a subscribed channel.
-
-        Deduplicates via CommunityThreadGroup, publishes to AP, creates the
-        canonical thread-group row, records source delivery, then fans out to
-        all sibling subscribed channels and records each mirror delivery.
-
-        Returns status="ignored" with reason="duplicate_discord_thread" if this
-        thread was already processed (e.g. a Discord reconnect re-fires the event).
-        """
-        # Dedup: if a thread group already exists for this source thread,
-        # a reconnect or duplicate event fired — skip without re-publishing.
-        if get_thread_group_for_source_thread(self.database, thread.id) is not None:
-            logger.info(
-                "Thread %s already has a thread group — skipping duplicate", thread.id
-            )
-            return _ignored_result("duplicate_discord_thread")
-
-        # Publish to AP via existing service; return early on non-publish outcomes.
-        result = await self.content_publish_service.publish_thread_starter(
-            thread=thread,
-            starter_message=starter_message,
-        )
-        if result.status != "published":
-            return result
-
-        # Resolve subscription for the source channel to get community_actor_id.
-        # subscription is guaranteed non-None here: publish_thread_starter already
-        # validated it and returned status="published" only when it was accepted.
-        subscription = self.database.remote_subscriptions.get_subscription_by_channel(
-            thread.parent_id
-        )
-
-        # Create the canonical thread group for this source event.
-        thread_group = self.database.discord_fanout_groups.create_thread_group(
-            community_actor_id=subscription.lemmy_community_actor_id,
-            source_channel_id=thread.parent_id,
-            source_thread_id=thread.id,
-            source_starter_message_id=starter_message.id,
-            ap_activity_id=result.activity_id,
-            ap_object_id=result.object_id,
-        )
-
-        # Record source delivery row for this channel.
-        self.database.discord_fanout_groups.add_thread_delivery(
-            thread_group_id=thread_group.id,
-            discord_channel_id=thread.parent_id,
-            discord_thread_id=thread.id,
-            discord_starter_message_id=starter_message.id,
-            role="source",
-        )
-
-        # Resolve sibling subscriptions: all accepted subscriptions for the same
-        # community except the source channel.
-        all_subs = self.database.remote_subscriptions.list_discord_accepted_subscriptions_for_community(
-            subscription.lemmy_community_actor_id
-        )
-        sibling_channel_ids = [
-            s.discord_channel_id
-            for s in all_subs
-            if s.discord_channel_id != thread.parent_id
-        ]
-
-        if sibling_channel_ids and self.discord_fanout is not None:
-            mirror_results = await self.discord_fanout.mirror_thread_to_siblings(
-                source_thread=thread,
-                source_starter_message=starter_message,
-                sibling_channel_ids=sibling_channel_ids,
-            )
-            for mirror in mirror_results:
-                # Record each mirror delivery so the on_message guard can
-                # identify mirror threads and skip re-publishing to AP.
-                self.database.discord_fanout_groups.add_thread_delivery(
-                    thread_group_id=thread_group.id,
-                    discord_channel_id=mirror.channel_id,
-                    discord_thread_id=mirror.thread_id,
-                    discord_starter_message_id=mirror.starter_message_id,
-                    role="mirror",
-                )
-
-        return result
-
-    async def handle_discord_message(
-        self,
-        message: discord.Message,
-    ) -> PublishResult:
-        """Handle a new Discord thread message from a subscribed channel.
-
-        Deduplicates via CommunityMessageGroup, publishes to AP via
-        ContentPublishService, creates the canonical message-group row, records
-        source delivery, then fans out to all sibling mirror threads and records
-        each mirror delivery. If the source thread has no CommunityThreadGroup
-        (pre-Phase-2 / legacy thread), AP publish happens but no message-group
-        rows are written and no fanout is attempted.
-
-        Returns status='ignored' with reason='duplicate_discord_message' if this
-        message was already processed (e.g. a Discord reconnect re-fires the event).
-        """
-        # Dedup: if a message group already exists for this source message,
-        # a reconnect or duplicate Discord event fired — skip without re-publishing.
-        if get_message_group_for_source_message(self.database, message.id) is not None:
-            logger.info(
-                "Message %s already has a message group — skipping duplicate",
-                message.id,
-            )
-            return _ignored_result("duplicate_discord_message")
-
-        # AP publish via existing service; return early on non-publish outcomes.
-        result = await self.content_publish_service.publish_thread_message(
-            message=message
-        )
-        if result.status != "published":
-            return result
-
-        # Resolve the thread group for the originating thread. If none exists (pre-Phase-2
-        # thread or legacy path), skip message-group creation and fanout entirely.
-        thread = message.channel
-        thread_group = get_thread_group_for_any_thread(self.database, thread.id)
-        if thread_group is None:
-            return result
-
-        # Phase 9: Compute sibling deliveries = all threads in the group except the
-        # originating thread (regardless of role). This enables mirror and inbound
-        # threads to fan out to all other threads, not just source threads receiving
-        # from mirrors.
-        sibling_deliveries = get_sibling_thread_deliveries(
-            self.database, thread_group_id=thread_group.id, source_thread_id=thread.id
-        )
-
-        # Resolve reply context from the source message's Discord reference.
-        # This determines parent_message_group_id and the per-thread reference IDs
-        # that each sibling thread send will use.
-        reply_context = resolve_reply_context(
-            self.database, message, thread_group, sibling_deliveries
-        )
-
-        # Create the canonical message group for this source event, recording the
-        # parent message group when this is a reply to a known mirrored message.
-        message_group = self.database.discord_fanout_groups.create_message_group(
-            community_actor_id=thread_group.community_actor_id,
-            thread_group_id=thread_group.id,
-            source_channel_id=thread.parent_id,
-            source_thread_id=thread.id,
-            source_message_id=message.id,
-            ap_activity_id=result.activity_id,
-            ap_object_id=result.object_id,
-            parent_message_group_id=reply_context.parent_message_group_id,
-        )
-        # Record the source delivery so reply-chain resolution and dedup can find
-        # this message by its Discord message ID later.
-        self.database.discord_fanout_groups.add_message_delivery(
-            message_group_id=message_group.id,
-            discord_channel_id=thread.parent_id,
-            discord_thread_id=thread.id,
-            discord_message_id=message.id,
-            role="source",
-            parent_discord_message_id=getattr(
-                getattr(message, "reference", None), "message_id", None
-            ),
-        )
-
-        # Fan out to sibling mirror threads with per-thread Discord references.
-        if self.discord_fanout is not None and sibling_deliveries:
-            mirror_results = await self.discord_fanout.mirror_message_to_siblings(
-                source_message=message,
-                sibling_thread_deliveries=sibling_deliveries,
-                reply_context=reply_context,
-            )
-            for mirror in mirror_results:
-                # Each successfully delivered mirror message gets its own
-                # delivery row so the on_message guard can identify mirror-thread
-                # messages and the reply chain can be resolved correctly.
-                self.database.discord_fanout_groups.add_message_delivery(
-                    message_group_id=message_group.id,
-                    discord_channel_id=mirror.channel_id,
-                    discord_thread_id=mirror.thread_id,
-                    discord_message_id=mirror.message_id,
-                    role="mirror",
-                    parent_discord_message_id=mirror.parent_message_id,
-                )
-
-        return result
 
     async def handle_normalized_inbound_post(
         self, event: ActivityPubEvent, *, adapter: PlatformDeliveryPort,
@@ -1278,7 +1063,7 @@ class CommunityRuntime:
 def _ignored_result(reason: str) -> PublishResult:
     """Build a PublishResult for events that are intentionally skipped.
 
-    Used when handle_discord_thread_create detects a duplicate and exits early
+    Used when normalized Create admission rejects a duplicate or unauthorized source
     without touching the AP gateway or creating any DB rows.
     """
     from ..content_publish_service import PublishResult

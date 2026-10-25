@@ -1,19 +1,19 @@
 """local subscriber publishing scenarios for local-subscriber-originated local-community creates."""
 
 from __future__ import annotations
+
+from support.community_events import create_thread, create_message, configure_renderer, physical_forum, message_copy, ScenarioDiscord, admit_thread, mutation_runtime, OBSERVED_AT
 from support.runtime import build_test_policy_service
 
 from pathlib import Path
-from types import SimpleNamespace
 from unittest.mock import AsyncMock
 
 import pytest
 from sqlalchemy import func, select
 
 from src.discord_event_router import DiscordEventRouter
-from support.typed_forum_creates import route_verified_forum_thread, verified_forum_reply
+from support.typed_forum_creates import route_verified_forum_thread
 from src.content_publish_service import ContentPublishService
-from src.fedify_gateway_client import PublishLocalCommunityContentResult
 from src.local_communities.runtime import LocalCommunityRuntime
 from src.local_communities.service import LocalCommunityService
 from src.models import (
@@ -37,6 +37,7 @@ def _runtime(tmp_path: Path) -> tuple[object, LocalCommunityRuntime]:
     """Build a local subscriber publishing runtime with real persistence and fake outer services."""
     database = build_database(tmp_path, "local subscriber publishing-local-subscriber-origin.db")
     gateway = AsyncMock()
+    configure_renderer(gateway, database)
     publish_service = ContentPublishService(
         database=database,
         fedify_gateway=gateway,
@@ -50,6 +51,7 @@ def _runtime(tmp_path: Path) -> tuple[object, LocalCommunityRuntime]:
         bridge_prefix="[bridge]",
         bridge_policy_service=build_test_policy_service(database),
     )
+    runtime.bind_discord_adapter(ScenarioDiscord(runtime))
     return database, runtime
 
 
@@ -91,16 +93,6 @@ def _add_local_subscribers(
     return source, sibling
 
 
-def _publish_results(
-    *pairs: tuple[str, str],
-) -> list[PublishLocalCommunityContentResult]:
-    """Build gateway publish results for deterministic AP ids in scenarios."""
-    return [
-        PublishLocalCommunityContentResult(
-            a, o, "https://bridge.example/actors/communities/hackers", 0, 0
-        )
-        for a, o in pairs
-    ]
 
 
 def _canonical_thread(
@@ -194,20 +186,14 @@ async def test_local_subscriber_thread_create_creates_source_host_and_sibling_su
             ),
         }
     )
-    runtime.fedify_gateway.publish_local_community_content.return_value = (
-        _publish_results(("a-post", "o-post"))[0]
-    )
 
-    result = await runtime.handle_discord_thread_create(
-        thread=build_thread(thread_id=2200, channel_id=200, name="Subscriber topic"),
-        starter_message=build_starter_message(
+    result = await create_thread(runtime, thread=build_thread(thread_id=2200, channel_id=200, name="Subscriber topic"), starter_message=build_starter_message(
             message_id=2300, content="subscriber body"
-        ),
-    )
+        ))
 
     thread_row = (
         database.local_community_content.get_local_community_thread_by_ap_object_id(
-            "o-post"
+            result.object_id
         )
     )
     surfaces = database.local_community_surfaces.list_local_community_thread_surfaces(
@@ -215,13 +201,13 @@ async def test_local_subscriber_thread_create_creates_source_host_and_sibling_su
     )
     assert result.status == "published"
     assert [
-        (s.discord_forum_channel_id, s.role, s.local_subscriber_id) for s in surfaces
+        (physical_forum(database, s), s.role, s.local_subscriber_id) for s in surfaces
     ] == [
         (200, "local_subscriber", source.id),
         (100, "host", None),
         (300, "local_subscriber", sibling.id),
     ]
-    assert runtime.fedify_gateway.publish_local_community_content.await_count == 1
+    assert runtime.fedify_gateway.render_community.await_count == 1
 
 
 @pytest.mark.asyncio
@@ -240,16 +226,10 @@ async def test_local_subscriber_thread_create_renders_author_header_on_other_dis
         channel_id=300, thread_id=3300, starter_message_id=3400
     )
     runtime.bot = build_bot(forum_channels={100: host_forum, 300: sibling_forum})
-    runtime.fedify_gateway.publish_local_community_content.return_value = (
-        _publish_results(("a-post", "o-post"))[0]
-    )
 
-    await runtime.handle_discord_thread_create(
-        thread=build_thread(thread_id=2200, channel_id=200, name="Subscriber topic"),
-        starter_message=build_starter_message(
+    await create_thread(runtime, thread=build_thread(thread_id=2200, channel_id=200, name="Subscriber topic"), starter_message=build_starter_message(
             message_id=2300, content="subscriber body", display_name="Alice"
-        ),
-    )
+        ))
 
     assert (
         host_forum.create_thread.await_args.kwargs["content"]
@@ -270,23 +250,9 @@ async def test_duplicate_local_subscriber_thread_retries_missing_targets_without
     local_community = _local_community(database)
     source, sibling = _add_local_subscribers(database, local_community)
     add_registered_user(database)
-    thread_row = (
-        database.local_community_content.create_local_community_thread_canonical(
-            local_community_id=local_community.id,
-            ap_activity_id="a-post",
-            ap_object_id="o-post",
-            direction="discord_to_ap",
-            origin_kind="discord_local_subscriber",
-        )
-    )
-    database.local_community_surfaces.create_local_community_thread_surface(
-        local_community_thread_id=thread_row.id,
-        discord_forum_channel_id=200,
-        discord_thread_id=2200,
-        discord_starter_message_id=2300,
-        role="local_subscriber",
-        local_subscriber_id=source.id,
-    )
+    thread_row = await admit_thread(runtime, community=local_community,
+        thread=build_thread(thread_id=2200, channel_id=200, name="Subscriber topic"),
+        starter_message=build_starter_message(message_id=2300))
     database.local_community_surfaces.create_local_community_thread_surface(
         local_community_thread_id=thread_row.id,
         discord_forum_channel_id=300,
@@ -303,10 +269,7 @@ async def test_duplicate_local_subscriber_thread_retries_missing_targets_without
         }
     )
 
-    await runtime.handle_discord_thread_create(
-        thread=build_thread(thread_id=2200, channel_id=200, name="Subscriber topic"),
-        starter_message=build_starter_message(message_id=2300),
-    )
+    await create_thread(runtime, thread=build_thread(thread_id=2200, channel_id=200, name="Subscriber topic"), starter_message=build_starter_message(message_id=2300))
 
     with database.session() as session:
         assert (
@@ -324,7 +287,7 @@ async def test_duplicate_local_subscriber_thread_retries_missing_targets_without
         )
         is not None
     )
-    runtime.fedify_gateway.publish_local_community_content.assert_not_awaited()
+    runtime.fedify_gateway.render_community.assert_awaited_once()
 
 
 @pytest.mark.asyncio
@@ -359,17 +322,12 @@ async def test_local_subscriber_root_reply_fans_out_with_target_local_starter_pa
             3300: build_send_thread(thread_id=3300, sent_message_id=3500),
         }
     )
-    runtime.fedify_gateway.publish_local_community_content.return_value = (
-        _publish_results(("a-comment", "o-comment"))[0]
-    )
 
-    result = await runtime.handle_discord_message(
-        message=build_thread_message(message_id=2400, thread_id=2200, channel_id=200)
-    )
+    result = await create_message(runtime, message=build_thread_message(message_id=2400, thread_id=2200, channel_id=200))
 
     message_row = (
         database.local_community_content.get_local_community_message_by_ap_object_id(
-            "o-comment"
+            result.object_id
         )
     )
     source_message_surface = (
@@ -378,17 +336,13 @@ async def test_local_subscriber_root_reply_fans_out_with_target_local_starter_pa
             local_community_thread_surface_id=source_surface.id,
         )
     )
-    host_surface = database.local_community_surfaces.get_local_community_message_surface_by_discord_message_id(
-        1300
-    )
-    sibling_surface = database.local_community_surfaces.get_local_community_message_surface_by_discord_message_id(
-        3500
-    )
+    host_surface = message_copy(database, 1300)
+    sibling_surface = message_copy(database, 3500)
     assert result.status == "published"
     assert source_message_surface.discord_message_id == 2400
-    assert source_message_surface.parent_discord_message_id == 2300
-    assert host_surface.parent_discord_message_id == 1200
-    assert sibling_surface.parent_discord_message_id == 3400
+    assert (source_message_surface.external_parent_message_id or str(source_message_surface.parent_discord_message_id)) == "2300"
+    assert (host_surface.external_parent_message_id or str(host_surface.parent_discord_message_id)) == "1200"
+    assert (sibling_surface.external_parent_message_id or str(sibling_surface.parent_discord_message_id)) == "3400"
 
 
 @pytest.mark.asyncio
@@ -419,19 +373,14 @@ async def test_local_subscriber_reply_renders_author_header_on_other_discord_sur
     host_thread = build_send_thread(thread_id=1100, sent_message_id=1300)
     sibling_thread = build_send_thread(thread_id=3300, sent_message_id=3500)
     runtime.bot = build_bot(threads={1100: host_thread, 3300: sibling_thread})
-    runtime.fedify_gateway.publish_local_community_content.return_value = (
-        _publish_results(("a-comment", "o-comment"))[0]
-    )
 
-    await runtime.handle_discord_message(
-        message=build_thread_message(
+    await create_message(runtime, message=build_thread_message(
             message_id=2400,
             thread_id=2200,
             channel_id=200,
             content="subscriber reply",
             display_name="Alice",
-        )
-    )
+        ))
 
     assert host_thread.send.await_args.args[0] == "`Alice`\n\nsubscriber reply"
     assert sibling_thread.send.await_args.args[0] == "`Alice`\n\nsubscriber reply"
@@ -484,30 +433,21 @@ async def test_local_subscriber_nested_reply_maps_parent_surface_per_target(
             3300: build_send_thread(thread_id=3300, sent_message_id=3501),
         }
     )
-    runtime.fedify_gateway.publish_local_community_content.return_value = (
-        _publish_results(("a-child", "o-child"))[0]
-    )
 
-    await runtime.handle_discord_message(
-        message=build_thread_message(
+    await create_message(runtime, message=build_thread_message(
             message_id=2401, thread_id=2200, channel_id=200, reference_message_id=2400
-        )
-    )
+        ))
 
     assert (
-        database.local_community_surfaces.get_local_community_message_surface_by_discord_message_id(
-            1301
-        ).parent_discord_message_id
-        == 1300
+        message_copy(database, 1301).external_parent_message_id
+        == "1300"
     )
     assert (
-        database.local_community_surfaces.get_local_community_message_surface_by_discord_message_id(
-            3501
-        ).parent_discord_message_id
-        == 3500
+        message_copy(database, 3501).external_parent_message_id
+        == "3500"
     )
     assert (
-        runtime.fedify_gateway.publish_local_community_content.await_args.args[
+        runtime.fedify_gateway.render_community.await_args.args[
             0
         ].in_reply_to_object_id
         == "o-parent"
@@ -530,27 +470,21 @@ async def test_duplicate_local_subscriber_reply_retries_missing_target_surface_o
     _thread_surface(
         database, thread_row, 300, 3300, 3400, "local_subscriber", sibling.id
     )
-    message_row = _canonical_message(
-        database, thread_row, activity="a-comment", obj="o-comment", parent="o-post"
-    )
-    _message_surface(
-        database,
-        message_row,
-        source_thread,
-        200,
-        2400,
-        2300,
-        "local_subscriber",
-        source.id,
-    )
+    add_registered_user(database)
+    from support.community_events import observe_message
+    source_event = observe_message(build_thread_message(message_id=2400, thread_id=2200, channel_id=200))
+    admitted = await runtime.content_publish_service.publish_normalized_comment_to_community(
+        event=source_event, community_actor_url=local_community.actor_url,
+        parent_object_id=thread_row.ap_object_id,
+        publish_call=runtime.fedify_gateway.publish_local_community_content,
+        notice_adapter=ScenarioDiscord(runtime))
+    message_row = database.local_community_content.get_local_community_message_by_ap_object_id(admitted.object_id)
     _message_surface(database, message_row, host_thread, 100, 1300, 1200, "host", None)
     runtime.bot = build_bot(
         threads={3300: build_send_thread(thread_id=3300, sent_message_id=3500)}
     )
 
-    await runtime.handle_discord_message(
-        message=build_thread_message(message_id=2400, thread_id=2200, channel_id=200)
-    )
+    await create_message(runtime, message=build_thread_message(message_id=2400, thread_id=2200, channel_id=200))
 
     with database.session() as session:
         assert (
@@ -562,7 +496,7 @@ async def test_duplicate_local_subscriber_reply_retries_missing_target_surface_o
             )
             == 3
         )
-    runtime.fedify_gateway.publish_local_community_content.assert_not_awaited()
+    runtime.fedify_gateway.render_community.assert_awaited_once()
 
 
 @pytest.mark.asyncio
@@ -648,7 +582,7 @@ async def test_local_subscriber_source_edit_delete_uses_canonical_surface(
     )
     database.activitypub_objects.create_published_activity_object(
         actor_username="alice",
-        actor_url="https://bridge.example/actors/users/alice",
+        actor_url=database.users.get_user_by_discord_user_id("123").actor_url,
         community_actor_url=local_community.actor_url,
         activity_id="a-post",
         object_id="o-post",
@@ -660,13 +594,15 @@ async def test_local_subscriber_source_edit_delete_uses_canonical_surface(
         discord_message_id=2300,
     )
 
+    mutation_ns = mutation_runtime(runtime)
     await runtime.handle_discord_message_edit(
         message_id=2300,
         new_content="edited",
-        runtime=SimpleNamespace(fedify_gateway=runtime.fedify_gateway),
+        runtime=mutation_ns,
+        edited_timestamp=OBSERVED_AT,
     )
     await runtime.handle_discord_message_delete(
-        message_id=2300, runtime=SimpleNamespace(fedify_gateway=runtime.fedify_gateway)
+        message_id=2300, runtime=mutation_ns
     )
 
     runtime.fedify_gateway.update_content.assert_awaited_once()

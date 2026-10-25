@@ -9,7 +9,7 @@ from pathlib import Path
 from sqlalchemy.exc import IntegrityError
 from src.db.database import Database
 from src.platform_types import MessageRef
-from src.models import MessageMapping, PublishedActivityObject
+from src.models import PublishedActivityObject
 
 
 class ExactSourceMappingScenarios(unittest.TestCase):
@@ -139,6 +139,35 @@ class ExactSourceMappingScenarios(unittest.TestCase):
                     activity_id='https://bridge.test/a/3',object_id='https://bridge.test/o/3',
                     kind='comment',body_markdown='body',discord_message_id=777,
                 ))
+
+
+class IncompleteSourceMappingScenarios(unittest.TestCase):
+    """Unknown legacy containers cannot be reinterpreted as a second source."""
+
+    setUp = ExactSourceMappingScenarios.setUp
+
+    def test_unknown_and_typed_source_conflict_in_either_order(self):
+        """A known container cannot disambiguate an already incomplete receipt."""
+        for typed_first in (True, False):
+            source_id = f'opaque-{typed_first}'
+            receipt = dict(
+                source_platform='discord', source_id=source_id,
+                actor_url='https://bridge.test/actors/users/alice',
+                community_actor_url='https://remote.test/c/news',
+                discord_channel_id=None, discord_message_id=None,
+            )
+            source = MessageRef('discord-primary', 'thread-A', source_id)
+            self.db.message_mappings.create_message_mapping(
+                **receipt, source_message=source if typed_first else None,
+                activity_id=f'https://bridge.test/a/{source_id}/first',
+                object_id=f'https://bridge.test/o/{source_id}/first',
+            )
+            with self.assertRaisesRegex(ValueError, 'source'):
+                self.db.message_mappings.create_message_mapping(
+                    **receipt, source_message=None if typed_first else source,
+                    activity_id=f'https://bridge.test/a/{source_id}/second',
+                    object_id=f'https://bridge.test/o/{source_id}/second',
+                )
 
 
 if __name__ == '__main__':

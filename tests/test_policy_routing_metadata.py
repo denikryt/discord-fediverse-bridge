@@ -6,6 +6,7 @@ from types import SimpleNamespace
 
 import pytest
 
+from support.fake_platform_adapter import FakeDiscordPort
 from src.community_sync.discord_fanout import DiscordFanout
 from src.local_communities.discord_fanout import LocalCommunityDiscordFanout
 
@@ -78,43 +79,44 @@ class _RemoteSubscriptions:
 
 
 @pytest.mark.asyncio
-async def test_remote_thread_fanout_isolates_missing_and_malformed_targets(
-    caplog: pytest.LogCaptureFixture,
-) -> None:
-    bot = _RemoteBot()
-    database = SimpleNamespace(
-        remote_subscriptions=_RemoteSubscriptions(
-            {
-                20: SimpleNamespace(discord_guild_id=None),
-                30: SimpleNamespace(discord_guild_id=300),
-                40: SimpleNamespace(discord_guild_id=400),
-            },
-            failing={10},
-        )
-    )
-    fanout = DiscordFanout(
-        bot=bot,
-        mutation_tracker=_Tracker(),
-        database=database,
-        policy_service=_Policy(denied={400}),
-    )
+async def test_remote_thread_fanout_isolates_missing_and_malformed_targets(tmp_path, caplog):
+    """Malformed and unavailable routing metadata cannot block a healthy sibling."""
+    from test_normalized_community_runtime import world, starter
+    from src.models import ChannelCommunitySubscription, ChannelSurface
+    from sqlalchemy import select
 
-    results = await fanout.mirror_thread_to_siblings(
-        source_thread=SimpleNamespace(id=1, name="topic"),
-        source_starter_message=SimpleNamespace(
-            content="body", author=SimpleNamespace(display_name="author")
-        ),
-        sibling_channel_ids=[10, 20, 25, 30, 40],
-    )
-
-    assert [result.channel_id for result in results] == [30]
-    assert bot.calls == [30]
-    assert (
-        "Failed to validate Discord fanout routing metadata channel_id=10"
-        in caplog.text
-    )
-    assert "missing subscription channel_id=25" in caplog.text
-    assert "invalid guild metadata channel_id=20" in caplog.text
+    db, runtime, gateway, adapter = world(tmp_path, forum_ids=(100, 10, 20, 30, 40))
+    try:
+        community = db.remote_subscriptions.get_subscription_by_channel(100).lemmy_community_actor_id
+        with db.immediate_session() as session:
+            malformed = session.scalar(select(ChannelCommunitySubscription).where(
+                ChannelCommunitySubscription.discord_channel_id == 20))
+            malformed.discord_guild_id = None
+        original = db.remote_subscriptions.get_subscription_by_channel
+        def lookup(channel):
+            """Model a failed repository read for one target only."""
+            if channel == 10:
+                raise RuntimeError('repository unavailable')
+            return original(channel)
+        db.remote_subscriptions.get_subscription_by_channel = lookup
+        # Deny a separate target via its current guild metadata.
+        with db.immediate_session() as session:
+            sub = session.scalar(select(ChannelCommunitySubscription).where(
+                ChannelCommunitySubscription.discord_channel_id == 40))
+            sub.discord_guild_id = 400
+            session.scalar(select(ChannelSurface).where(ChannelSurface.remote_subscription_id == sub.id)).external_guild_id = '400'
+        runtime.discord_fanout.policy_service = _Policy(denied={400})
+        event, view = starter()
+        assert (await runtime.handle_normalized_thread_create(event, view, adapter=adapter)).status == 'published'
+        assert [call[0].external_channel_id for call in adapter.posts] == ['30']
+        group = db.discord_fanout_groups.get_thread_group_by_ap_object(gateway.requests[0].object_id)
+        assert len(db.discord_fanout_groups.get_thread_deliveries(group.id)) == 2
+        assert runtime.discord_fanout._normalized_target(25, community) is None
+        assert runtime.discord_fanout._normalized_target(20, community) is None
+        assert runtime.discord_fanout._normalized_target(40, community) is None
+        assert 'Could not authorize community sibling forum 10' in caplog.text
+    finally:
+        db.close()
 
 
 @pytest.mark.parametrize("guild_id", [None, 0, -1, True, "123"])
@@ -185,45 +187,22 @@ class _LocalSurfaces:
 
 
 @pytest.mark.asyncio
-async def test_local_thread_fanout_skips_invalid_target_and_continues_healthy_target() -> (
-    None
-):
-    bot = _RemoteBot()
-    surfaces = _LocalSurfaces()
-    database = SimpleNamespace(
-        local_subscribers=_LocalSubscribers(
-            [
-                SimpleNamespace(
-                    id=1, status="active", discord_channel_id=20, discord_guild_id=None
-                ),
-                SimpleNamespace(
-                    id=2, status="active", discord_channel_id=30, discord_guild_id=300
-                ),
-            ]
-        ),
-        local_communities=_LocalCommunities(),
-        local_community_surfaces=surfaces,
-        platform_surfaces=SimpleNamespace(get_discord_host_placement=lambda _: None),
-    )
-    fanout = LocalCommunityDiscordFanout(
-        database=database, bot=bot, policy_service=_Policy()
-    )
+async def test_local_thread_fanout_skips_invalid_target_and_continues_healthy_target(tmp_path):
+    """A malformed subscriber is skipped while a healthy copy is committed."""
+    from test_normalized_local_community_runtime import world, starter
+    from src.models import LocalSubscriber
 
-    summary = await fanout.fanout_thread_to_local_subscribers(
-        local_community=SimpleNamespace(
-            id=7, discord_forum_channel_id=10, discord_guild_id=100
-        ),
-        thread_row=SimpleNamespace(id=8),
-        title="topic",
-        content="body",
-        author_display_name="author",
-        source_forum_channel_id=10,
-    )
-
-    assert summary.attempted == 1
-    assert summary.delivered == 1
-    assert bot.calls == [30]
-    assert surfaces.created == [30]
+    db, community, subscribers, runtime, gateway, adapter = world(tmp_path)
+    try:
+        with db.immediate_session() as session:
+            session.get(LocalSubscriber, subscribers[200].id).discord_guild_id = None
+        event, view = starter()
+        assert (await runtime.handle_normalized_thread_create(event, view, adapter=adapter)).status == 'published'
+        assert [call[0].external_channel_id for call in adapter.posts] == ['300']
+        row = db.local_community_content.get_local_community_thread_by_ap_object_id(gateway.requests[0].object_id)
+        assert len(db.local_community_surfaces.list_local_community_thread_surfaces(row.id)) == 2
+    finally:
+        db.close()
 
 
 def test_local_surface_missing_or_malformed_metadata_is_fail_closed() -> None:
@@ -290,11 +269,13 @@ async def test_local_subscriber_listing_failure_propagates_before_discord_side_e
     )
 
     with pytest.raises(RuntimeError, match="repository unavailable"):
-        await fanout.fanout_thread_to_local_subscribers(
+        await fanout.fanout_normalized_thread(
+            adapter=FakeDiscordPort(),
+            include_host=False,
             local_community=SimpleNamespace(
                 id=7, discord_forum_channel_id=10, discord_guild_id=100
             ),
-            thread_row=SimpleNamespace(id=8),
+            thread_row=SimpleNamespace(id=8, local_community_id=7),
             title="topic",
             content="body",
             author_display_name="author",
