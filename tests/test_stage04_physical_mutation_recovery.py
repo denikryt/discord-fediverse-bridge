@@ -15,7 +15,7 @@ from src.models import (
     ChannelSurface, LocalCommunity, LocalCommunityThread,
     LocalCommunityThreadSurface, PlatformConnector,
 )
-from src.platform_types import ContentDocument, MessageRef
+from src.platform_types import AuthorRef, ContentDocument, MessageRef, MessageView
 
 
 class PhysicalMutationRecoveryScenarios(unittest.TestCase):
@@ -84,6 +84,9 @@ class PhysicalMutationRecoveryScenarios(unittest.TestCase):
         calls = []
         class Adapter:
             """Expose exact typed message edit/delete boundary."""
+            async def fetch_message(self, message):
+                """Resolve this scenario's exact bot-owned physical copy."""
+                return MessageView(message, AuthorRef(message.connector_key, 'bot', 'bot', 'Bridge', True))
             async def edit_message(self, message, content):
                 """Record one physical edit, possibly losing the ACK."""
                 calls.append(('edit', message, content.body))
@@ -235,6 +238,9 @@ class PhysicalMutationRecoveryScenarios(unittest.TestCase):
 
         class PausedAdapter:
             """Simulate cancellation after the first external send begins."""
+            async def fetch_message(self, message):
+                """Resolve this scenario's exact bot-owned physical copy."""
+                return MessageView(message, AuthorRef(message.connector_key, 'bot', 'bot', 'Bridge', True))
             async def edit_message(self, message, _content):
                 """Only the first copy may cross the adapter boundary."""
                 wire_calls.append(message)
@@ -588,6 +594,36 @@ class PhysicalMutationRecoveryScenarios(unittest.TestCase):
             self.assertIn('ContentDocument', row.mutation_last_error)
 
 
+
+    def test_cancelled_ownership_read_releases_provably_unsent_claim(self) -> None:
+        """Cancellation of a read cannot strand a possibly-written mutation."""
+        from types import SimpleNamespace
+        entered = asyncio.Event()
+        worker, calls = self._worker()
+
+        class ReadingAdapter:
+            """Pause at the read boundary before any write can start."""
+            async def fetch_message(self, message):
+                """Signal the controlled cancellation point."""
+                entered.set()
+                await asyncio.Event().wait()
+
+        worker.registry = SimpleNamespace(get=lambda key: ReadingAdapter())
+
+        async def cancel_read():
+            """Cancel after entering the ownership lookup, then inspect SQLite."""
+            task = asyncio.create_task(worker.drain())
+            await asyncio.wait_for(entered.wait(), 5)
+            task.cancel()
+            with self.assertRaises(asyncio.CancelledError):
+                await task
+
+        asyncio.run(cancel_read())
+        with self.db.session() as session:
+            copy = session.get(LocalCommunityThreadSurface, self.copy_id)
+            self.assertEqual(copy.mutation_state, 'failed_definite')
+            self.assertIsNone(copy.applied_revision)
+        self.assertEqual(calls, [])
 
 if __name__ == '__main__':
     unittest.main()

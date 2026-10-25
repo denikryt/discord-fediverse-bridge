@@ -12,7 +12,7 @@ import sys
 import pytest
 
 # The legacy module imports discord.py for type-only paths; no physical SDK is used here.
-sys.modules.setdefault('discord', ModuleType('discord'))
+import discord  # Load the installed SDK; never leave a global placeholder for other suites.
 from src.community_sync.runtime import CommunityRuntime
 from src.platform_types import ContentDocument, MessageRef, MessageView, PlatformOperationError
 from support.db import add_accepted_subscription, build_database

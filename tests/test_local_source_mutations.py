@@ -11,9 +11,8 @@ from types import ModuleType, SimpleNamespace
 
 import pytest
 
-# Import-only stub: the SDK is unavailable in this environment. Nothing in the
-# runtime scenario may call an SDK method or rely on this stub for transport.
-sys.modules.setdefault('discord', ModuleType('discord'))
+# The SDK is importable; physical I/O still belongs to the scenario fake.
+import discord  # Load the installed SDK; never leave a global placeholder for other suites.
 
 from src.local_communities.runtime import LocalCommunityRuntime
 from src.local_communities.service import LocalCommunityService

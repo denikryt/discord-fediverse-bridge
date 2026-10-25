@@ -220,3 +220,17 @@ only because the preceding physical write did not happen. A cancelled or
 ambiguous physical POST continues to latch `unknown_delivery` and cannot be
 replayed blindly. This coordinator remains process-local, not a durable fan-out
 recovery ledger.
+
+
+## Physical mutation ownership preflight
+
+`PlatformPhysicalMutationCoordinator` resolves every target using
+`fetch_message(MessageRef)` before `edit_message`/`delete_message`. The returned
+view must identify the exact message and a non-null `AuthorRef` whose
+`is_bridge_owned` is true on that connector. A copy role or absence of canonical
+source coordinates is insufficient, including for migrated v0 receipts. After
+this awaited read, the coordinator rechecks the canonical revision, physical
+target, current forum owner and policy before entering the write method.
+Ownership refusal is a durable pre-send failure; unknown write outcomes retain
+the existing unresolved barrier. Permission to manage a message is not evidence
+that the bridge owns it.

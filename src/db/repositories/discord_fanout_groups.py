@@ -15,6 +15,7 @@ from ...models import (
     PlatformConnector,
 )
 from .base import BaseRepository
+from .legacy_mutation_provenance import LegacyMutationProvenanceRequired, source_identity
 from .platform_delivery_intents import cancel_deleted_source_intents, validate_authenticated_update
 from ...platform_types import MessageRef, ThreadRef
 
@@ -47,7 +48,9 @@ class DiscordFanoutGroupRepository(BaseRepository):
                 if thread is None or thread.deleted_at is not None:
                     raise ValueError('comment Update has deleted remote canonical parent')
             snapshot, order, identity, changed = validate_authenticated_update(
-                current_content_json=row.current_content_json,
+                current_content_json=source_identity(
+                    session, row, domain='remote', kind=kind,
+                    community_actor_id=community_actor_id),
                 new_content_json=new_content_json, ap_object_id=ap_object_id,
                 actor_id=actor_id, updated_at=updated_at, source_activity_id=source_activity_id,
                 previous_order_key=row.last_source_update_order_key,
@@ -75,7 +78,11 @@ class DiscordFanoutGroupRepository(BaseRepository):
             if row is None or row.community_actor_id != community_actor_id:
                 raise ValueError('unknown or foreign remote canonical object')
             try:
-                snapshot = json.loads(row.current_content_json or '')
+                snapshot = json.loads(source_identity(
+                    session, row, domain='remote', kind=kind,
+                    community_actor_id=community_actor_id))
+            except LegacyMutationProvenanceRequired:
+                raise
             except (ValueError, TypeError) as exc:
                 raise ValueError('missing authenticated remote source provenance') from exc
             if (not isinstance(snapshot, dict) or snapshot.get('authorActorId') != actor_id
@@ -142,6 +149,8 @@ class DiscordFanoutGroupRepository(BaseRepository):
                 CommunityThreadGroup.ap_object_id == ap_object_id,
             )) if ap_object_id else None
             if existing is not None:
+                if existing.deleted_at is not None:
+                    raise ValueError('cannot Create a deleted canonical AP object')
                 if ((existing.community_actor_id, existing.ap_activity_id,
                      existing.source_channel_id,existing.source_thread_id,
                      existing.source_starter_message_id)
@@ -337,6 +346,8 @@ class DiscordFanoutGroupRepository(BaseRepository):
                     CommunityMessageGroup.ap_object_id == ap_object_id,
                 ))
                 if existing is not None:
+                    if existing.deleted_at is not None:
+                        raise ValueError('cannot Create a deleted canonical AP object')
                     if (existing.ap_activity_id, existing.community_actor_id,
                         existing.thread_group_id, existing.source_channel_id,
                         existing.source_thread_id, existing.source_message_id,

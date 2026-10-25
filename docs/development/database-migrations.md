@@ -77,3 +77,36 @@ writer and rejects another AP object for the same potentially identical source,
 including incoming typed evidence that cannot disambiguate the older row.
 Exact immutable receipt retries remain idempotent. Fully scoped sources from
 different containers or connectors retain independent identities.
+
+
+## First mutations of legacy Community objects
+
+Migration preserves unknown content and ownership as unknown. It does not
+reconstruct `current_content_json`, invent an applied revision or infer comment
+authorship from physical copy roles.
+
+The first authenticated Update/Delete may use independent evidence already in
+SQLite: a matching `published_activity_objects` entry (exact object, original
+Create activity, object kind and community), or a Local Community original
+Create in `local_community_relay_source_activities` whose envelope, object,
+actor and community agree. All available evidence must identify the same author.
+These reads occur inside the canonical writer transaction. The incoming event's
+author alone, a URL prefix, a mapping's relay actor or a forum role is insufficient.
+Unknown/conflicting evidence returns an explicit provenance/operator-review
+refusal without advancing the canonical revision. No historical body is invented.
+Update still requires a timezone-aware source version and stable activity ID;
+once admitted, the usual revision/replay checks apply. Delete remains monotonic.
+
+Before each physical edit/delete, recovery fetches the exact `MessageRef` and
+requires a positively identified bridge-owned author. Missing source coordinates
+never grant permission to edit a human message. Unverified ownership is recorded
+as `failed_definite` with an `unverified physical ownership:` reason and no applied
+revision; that revision remains blocked until operator inspection or a newer
+canonical revision. Read failures remain provably unsent; a lost write ACK stays
+`unresolved` across restart. A successful mirror ACK advances only that copy.
+
+`tests/behavior/test_stage04_tagged_legacy_mutations.py` executes the authentic
+`v0.1.0` Database and ORM in a subprocess, migrates the populated database and
+enters real Local/Remote Update/Delete handlers. It covers independent author
+proof, missing/conflicting evidence, host/subscriber human sources, nested
+comments, lost ACKs and restart. It requires the release tag in the local checkout.

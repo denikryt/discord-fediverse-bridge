@@ -12,8 +12,8 @@ from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, Mock
 
-# No Discord SDK is required for these real SQLite ingress scenarios.
-sys.modules.setdefault('discord', types.ModuleType('discord'))
+# Import the real dependency without constructing a live Discord client.
+import discord  # Load the installed SDK; never leave a global placeholder for other suites.
 
 from sqlalchemy import select
 

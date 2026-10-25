@@ -419,8 +419,6 @@ class CoordinatorConcurrencyScenarios(PhysicalCreateIntentScenarios):
             self.assertEqual(s.scalar(select(LocalCommunityThreadSurface)).external_thread_id,'987')
 
 
-if __name__=="__main__":
-    unittest.main(verbosity=2)
 
     def test_authorized_delete_cancels_unsent_create_in_same_writer_commit(self):
         """A tombstone and pending intent cancellation survive the same restart."""
@@ -522,3 +520,7 @@ class OrphanOperatorRecoveryScenarios(PhysicalCreateIntentScenarios):
             self.assertIn('ops@example.test', row.orphan_cleanup_evidence_json)
             self.assertIn('654', row.orphan_receipt_json)
         self.assertEqual(self._repo().inspect_orphans(), [])
+
+
+if __name__ == "__main__":
+    unittest.main()

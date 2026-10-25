@@ -5,9 +5,8 @@ from __future__ import annotations
 import sys
 from types import ModuleType
 
-# These scenarios fake only network edges; importing the legacy fanout does not
-# require a live discord.py installation or SDK instance.
-sys.modules.setdefault("discord", ModuleType("discord"))
+# These scenarios fake network edges and never construct a live SDK client.
+import discord  # Load the installed SDK; never leave a global placeholder for other suites.
 
 from dataclasses import replace
 from datetime import datetime, timezone

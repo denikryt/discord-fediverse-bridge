@@ -24,7 +24,7 @@ from ..models import (
     LocalCommunityMessageSurface, LocalCommunityThread, LocalCommunityThreadSurface,
     LocalSubscriber, PlatformConnector,
 )
-from ..platform_types import ContentDocument, MessageRef
+from ..platform_types import ContentDocument, MessageRef, MessageView
 
 logger = logging.getLogger(__name__)
 
@@ -205,12 +205,14 @@ class PlatformPhysicalMutationCoordinator:
                             continue
                         if copy.applied_revision is not None and copy.applied_revision >= revision:
                             continue
-                        # A known deterministic render refusal is not a
+                        # A deterministic render or ownership refusal is not a
                         # transport retry. Do not busy-loop on the same invalid
-                        # canonical snapshot; a new revision re-opens admission.
+                        # canonical snapshot/ownership; a new revision or operator
+                        # inspection can re-open admission.
                         if (copy.mutation_state == 'failed_definite'
                             and copy.mutation_target_revision == revision
-                            and (copy.mutation_last_error or '').startswith('invalid canonical content: ')):
+                            and (copy.mutation_last_error or '').startswith((
+                                'invalid canonical content: ', 'unverified physical ownership: '))):
                             continue
                         message = self._physical_target(session, domain, kind, canonical, copy, connector.connector_key)
                         if message is None:
@@ -320,6 +322,20 @@ class PlatformPhysicalMutationCoordinator:
                                  definitely_unsent=True, error='revoked before transport')
                     continue
                 adapter = self.registry.get(claim.message.connector_key)
+                # Copy roles and absent source coordinates cannot establish
+                # bridge ownership, especially for migrated human comments.
+                view = await adapter.fetch_message(claim.message)
+                if (not isinstance(view, MessageView) or view.message != claim.message
+                    or view.author is None
+                    or view.author.connector_key != claim.message.connector_key
+                    or not view.author.is_bridge_owned):
+                    raise ValueError('unverified physical ownership: operator review required')
+                # Ownership reads await network I/O. Recheck canonical revision
+                # and surface policy after that yield before invoking a write.
+                if not self._revalidate(claim) or not self.target_policy(
+                    claim.message.connector_key, claim.surface_id
+                ):
+                    raise ValueError('revoked during physical ownership verification')
                 if claim.deleted:
                     # Deletion of forum starters would destroy the discussion
                     # thread. Preserve pre-Stage04 tombstone-edit semantics.
@@ -342,6 +358,9 @@ class PlatformPhysicalMutationCoordinator:
                 # in-flight attempt for expiry/reconciliation. All subsequent
                 # claims are still in this worker's private batch and never
                 # crossed I/O; release only those as proven unsent.
+                if not io_started:
+                    self._settle(claim, delivered=False, definitely_unsent=True,
+                                 error='worker cancelled before physical write')
                 for unstarted in claims[index + 1:]:
                     self._settle(unstarted, delivered=False,
                                  definitely_unsent=True,

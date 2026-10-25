@@ -12,10 +12,10 @@ import sys
 
 import pytest
 
-sys.modules.setdefault('discord', ModuleType('discord'))
+import discord  # Load the installed SDK; never leave a global placeholder for other suites.
 from src.local_communities.runtime import LocalCommunityRuntime
 from src.local_communities.service import LocalCommunityService
-from src.platform_types import ContentDocument, MessageRef, MessageView, PlatformOperationError
+from src.platform_types import AuthorRef, ContentDocument, MessageRef, MessageView, PlatformOperationError
 from support.fake_platform_adapter import FakeDiscordPort
 from datetime import datetime, timezone
 from src.content_sync.platform_mutations import PlatformPhysicalMutationCoordinator
@@ -49,7 +49,8 @@ class PhysicalEdits(FakeDiscordPort):
         value = self.contents.get((ref.external_container_id, ref.external_message_id))
         if value is None:
             raise PlatformOperationError('not_found', 'no physical receipt')
-        return MessageView(ref, content=ContentDocument(value))
+        return MessageView(ref, author=AuthorRef(ref.connector_key, 'bot', 'bot', 'Bridge', True),
+                           content=ContentDocument(value))
 
     async def edit_message(self, ref, content):
         """Edit only an exact copy, recording observable physical effects."""

@@ -411,3 +411,18 @@ Behavior coverage lives in `test_user_profile_persistence_scenarios.py`, `test_p
 
 These tests use local transport fakes and are not a replacement for the
 full Python/Node suites or live Discord/Fedify integration acceptance.
+
+
+## Stage 04 inherited v0 mutations
+
+- `tests/behavior/test_stage04_tagged_legacy_mutations.py`: authentic release-code
+  database creation and startup migration followed by real Local/Remote first
+  Update/Delete handlers; original-author evidence, rejected forgery, missing or
+  conflicting provenance, human host/subscriber sources, nested replies, durable
+  mirror ACKs, unknown write outcomes and restart.
+- `tests/test_stage04_physical_mutation_recovery.py`: positive physical author
+  lookup, cancellation before writes, exact mutation claims and replay barriers.
+- `tests/test_stage04_inbound_canonical_snapshots.py` and
+  `tests/test_stage04_delivery_intents.py`: all five formerly hidden scenarios
+  now belong to collected test classes; canonical tombstones and unsent/unknown
+  Create cancellation remain distinct.

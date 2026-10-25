@@ -68,8 +68,6 @@ class InboundCanonicalSnapshotScenarios(unittest.TestCase):
             assert json.loads(session.get(CommunityMessageGroup, comment.id).current_content_json)['bodyMarkdown'] == 'original'
 
 
-if __name__ == '__main__':
-    unittest.main()
 
     def test_remote_post_delete_without_copies_is_monotonic_and_authenticated(self) -> None:
         """Canonical post tombstone survives zero targets and refuses a forged actor."""
@@ -163,3 +161,7 @@ if __name__ == '__main__':
             current = session.get(CommunityThreadGroup, row.id)
             assert current.content_revision == 1
             assert json.loads(current.current_content_json)['bodyMarkdown'] == 'new'
+
+
+if __name__ == "__main__":
+    unittest.main()

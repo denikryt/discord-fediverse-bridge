@@ -448,3 +448,18 @@ Fedify-native security integration remains blocked by missing dependencies.
 - Verification uses real Python/Discord/Hypothesis and Node/Fedify dependencies.
   The delivered report records baseline/full-suite failures separately. Live
   Discord/Fedify credentials and delivery are not exercised by offline tests.
+
+
+## Stage 04 independent migration review — legacy mutations
+
+- Fixed first legacy Update/Delete admission when an independently persisted
+  original publication or Local Community Create proves the exact author/object/
+  activity/community. Missing/conflicting evidence explicitly requires review.
+- Physical mutation recovery now verifies bridge ownership of each exact message;
+  ambiguous human sources remain untouched. Lost write ACKs stay unresolved.
+- Restored all five previously uncollected tests. Remote Create-after-Delete now
+  refuses canonical reuse for both posts and comments.
+- Behavioral coverage creates the database with the authentic v0.1.0 code,
+  migrates it, enters real handlers and checks mirrors, human sources and restart.
+- Removed process-global empty `discord` placeholders from six scenario modules;
+  combined runs load the installed SDK while retaining network-edge fakes.

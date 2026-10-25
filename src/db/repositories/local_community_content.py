@@ -13,6 +13,7 @@ from ...models import (
     LocalCommunityThreadSurface,
 )
 from .base import BaseRepository
+from .legacy_mutation_provenance import LegacyMutationProvenanceRequired, source_identity
 from .platform_delivery_intents import cancel_deleted_source_intents, validate_authenticated_update
 from ...platform_types import MessageRef
 from .platform_surfaces import discord_copy_query
@@ -62,10 +63,15 @@ class LocalCommunityContentRepository(BaseRepository):
             if row is None or row.deleted_at is not None:
                 raise ValueError('missing or deleted local canonical AP object')
             thread = row if kind == 'post' else session.get(LocalCommunityThread, row.local_community_thread_id)
-            if thread is None or thread.deleted_at is not None or thread.local_community_id != local_community_id:
+            community = session.get(LocalCommunity, local_community_id)
+            if (thread is None or thread.deleted_at is not None
+                or thread.local_community_id != local_community_id or community is None):
                 raise ValueError('local Update has wrong or deleted owning thread')
             snapshot, order, identity, changed = validate_authenticated_update(
-                current_content_json=row.current_content_json,
+                current_content_json=source_identity(
+                    session, row, domain='local', kind=kind,
+                    community_actor_id=community.actor_url,
+                    local_community_id=local_community_id),
                 new_content_json=new_content_json, ap_object_id=ap_object_id,
                 actor_id=actor_id, updated_at=updated_at, source_activity_id=source_activity_id,
                 previous_order_key=row.last_source_update_order_key,
@@ -94,10 +100,17 @@ class LocalCommunityContentRepository(BaseRepository):
             if row is None:
                 raise ValueError('unknown local canonical object')
             thread = row if kind == 'post' else session.get(LocalCommunityThread, row.local_community_thread_id)
-            if thread is None or thread.local_community_id != local_community_id:
+            community = session.get(LocalCommunity, local_community_id)
+            if (thread is None or thread.local_community_id != local_community_id
+                or community is None):
                 raise ValueError('local canonical source community mismatch')
             try:
-                snapshot = json.loads(row.current_content_json or '')
+                snapshot = json.loads(source_identity(
+                    session, row, domain='local', kind=kind,
+                    community_actor_id=community.actor_url,
+                    local_community_id=local_community_id))
+            except LegacyMutationProvenanceRequired:
+                raise
             except (ValueError, TypeError) as exc:
                 raise ValueError('missing authenticated local source provenance') from exc
             if (not isinstance(snapshot, dict) or snapshot.get('authorActorId') != actor_id
