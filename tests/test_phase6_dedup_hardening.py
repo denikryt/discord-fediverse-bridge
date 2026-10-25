@@ -18,6 +18,7 @@ Dedup paths covered:
 """
 
 from __future__ import annotations
+from support.runtime import build_runtime_namespace
 from support.runtime import build_test_policy_service
 
 from datetime import datetime, timezone
@@ -54,7 +55,7 @@ def _database(tmp_path: Path) -> Database:
 
 def _accepted_subscription(database: Database, *, channel_id: int = 100) -> None:
     """Insert one accepted community subscription for the shared hackers community."""
-    database.remote_subscriptions.create_subscription(
+    database.remote_subscriptions.create_subscription(discord_guild_id=10,
         discord_channel_id=channel_id,
         lemmy_community_actor_id=COMMUNITY_ACTOR_URL,
         lemmy_community_name="hackers",
@@ -230,7 +231,7 @@ async def test_replayed_inbound_post_returns_skipped(tmp_path: Path) -> None:
     )
     bot = _fake_bot(forum_channels={100: forum_channel})
     runtime = _community_runtime(database, bot=bot)
-    fake_runtime = SimpleNamespace(
+    fake_runtime = build_runtime_namespace(
         database=database,
         bot=bot,
         community_runtime=runtime,
@@ -283,7 +284,7 @@ async def test_partial_delivery_retry_returns_skipped_not_delivered(
     )
     bot = _fake_bot(forum_channels={101: forum_channel_101})
     runtime = _community_runtime(database, bot=bot)
-    fake_runtime = SimpleNamespace(
+    fake_runtime = build_runtime_namespace(
         database=database,
         bot=bot,
         community_runtime=runtime,
@@ -340,7 +341,7 @@ async def test_replayed_inbound_comment_returns_skipped(tmp_path: Path) -> None:
     fake_thread = SimpleNamespace(id=200, send=AsyncMock())
     bot = _fake_bot(threads={200: fake_thread})
     runtime = _community_runtime(database, bot=bot)
-    fake_runtime = SimpleNamespace(
+    fake_runtime = build_runtime_namespace(
         database=database,
         bot=bot,
         community_runtime=runtime,
@@ -478,7 +479,7 @@ async def test_source_message_passes_mirror_guard(tmp_path: Path) -> None:
 # ---------------------------------------------------------------------------
 
 
-def test_double_insert_thread_delivery_raises_integrity_error(tmp_path: Path) -> None:
+def test_conflicting_thread_delivery_is_rejected_before_overwrite(tmp_path: Path) -> None:
     """A second add_thread_delivery for the same (thread_group_id, discord_channel_id) must fail.
 
     The UNIQUE constraint on CommunityThreadGroupDelivery.(thread_group_id, discord_channel_id)
@@ -502,7 +503,7 @@ def test_double_insert_thread_delivery_raises_integrity_error(tmp_path: Path) ->
         role="inbound",
     )
     # Second insert with same (thread_group_id, discord_channel_id) must raise.
-    with pytest.raises(sqlalchemy.exc.IntegrityError):
+    with pytest.raises(ValueError, match="identity conflict"):
         database.discord_fanout_groups.add_thread_delivery(
             thread_group_id=thread_group.id,
             discord_channel_id=100,
@@ -512,7 +513,7 @@ def test_double_insert_thread_delivery_raises_integrity_error(tmp_path: Path) ->
         )
 
 
-def test_double_insert_message_delivery_raises_integrity_error(tmp_path: Path) -> None:
+def test_identical_message_delivery_is_idempotent_and_conflict_is_rejected(tmp_path: Path) -> None:
     """A second add_message_delivery for the same discord_message_id must fail.
 
     The UNIQUE constraint on CommunityMessageGroupDelivery.discord_message_id
@@ -543,15 +544,16 @@ def test_double_insert_message_delivery_raises_integrity_error(tmp_path: Path) -
         discord_message_id=900,
         role="inbound",
     )
-    # Second insert with same discord_message_id must raise regardless of other fields.
-    with pytest.raises(sqlalchemy.exc.IntegrityError):
+    # An exact receipt replay is idempotent; conflicting bytes still fail closed.
+    replay = database.discord_fanout_groups.add_message_delivery(
+        message_group_id=message_group.id, discord_channel_id=100,
+        discord_thread_id=200, discord_message_id=900, role="inbound")
+    assert replay.external_message_id == '900'
+    assert len(database.discord_fanout_groups.get_message_deliveries(message_group.id)) == 1
+    with pytest.raises(ValueError, match='receipt conflict'):
         database.discord_fanout_groups.add_message_delivery(
-            message_group_id=message_group.id,
-            discord_channel_id=100,
-            discord_thread_id=200,
-            discord_message_id=900,
-            role="inbound",
-        )
+            message_group_id=message_group.id, discord_channel_id=100,
+            discord_thread_id=201, discord_message_id=900, role='inbound')
 
 
 # ---------------------------------------------------------------------------
@@ -611,7 +613,7 @@ async def test_inbound_post_from_own_actor_is_suppressed_before_handler(
         fetch_forum_channel=AsyncMock(),
     )
     community_rt = _community_runtime(database, bot=fake_bot)
-    runtime = SimpleNamespace(
+    runtime = build_runtime_namespace(
         database=database,
         bot=fake_bot,
         community_runtime=community_rt,

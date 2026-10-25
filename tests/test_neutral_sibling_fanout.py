@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from types import SimpleNamespace
+from datetime import datetime, timezone
 
 import pytest
 
@@ -12,10 +13,12 @@ from src.platform_types import (
     CreatedMessage, CreatedThread, DeliveryPresentation, MessageCreated, MessageRef,
     MessageView, PlatformOperationError, ThreadCreated, ThreadRef,
 )
-from support.db import COMMUNITY_ACTOR_URL, add_accepted_subscription, build_database
+from support.fake_platform_adapter import FakeDiscordPort
+from support.db import (COMMUNITY_ACTOR_URL, add_accepted_subscription,
+                        build_database, create_source_thread_group)
 
 
-class PhysicalAdapter:
+class PhysicalAdapter(FakeDiscordPort):
     """Observe exact neutral transport requests, including physical failures."""
 
     def __init__(self, *, fail_channel=None):
@@ -46,11 +49,26 @@ class PhysicalAdapter:
 def world(tmp_path, *, active=(101, 102), wrong_community=()):
     """Create actual persisted subscription ownership for selected sibling forums."""
     db = build_database(tmp_path, 'neutral-sibling.sqlite3')
+    # These are direct fan-out tests: the domain owns a canonical source and
+    # a verified physical starter BEFORE the coordinator may reserve mirrors.
+    add_accepted_subscription(db, channel_id=100)
     for channel in active:
         add_accepted_subscription(db, channel_id=channel)
     for channel in wrong_community:
         add_accepted_subscription(db, channel_id=channel,
                                   community_actor_url='https://other.example/c/foreign')
+    thread = create_source_thread_group(db, starter_message_id=301)
+    message = db.discord_fanout_groups.create_message_group(
+        community_actor_id=COMMUNITY_ACTOR_URL, thread_group_id=thread.id,
+        source_channel_id=100, source_thread_id=200, source_message_id=302,
+        ap_activity_id='https://bridge.example/ap/activities/source-comment-302',
+        ap_object_id='https://bridge.example/ap/objects/source-comment-302',
+    )
+    db.discord_fanout_groups.add_message_delivery(
+        message_group_id=message.id, discord_channel_id=100,
+        discord_thread_id=200, discord_message_id=302,
+        role='source', parent_discord_message_id=301,
+    )
     policy = SimpleNamespace(is_discord_guild_allowed=lambda guild_id: guild_id == 1)
     fanout = DiscordFanout(bot=SimpleNamespace(), mutation_tracker=SimpleNamespace(),
                            database=db, policy_service=policy)
@@ -65,7 +83,7 @@ def post_event():
     return ThreadCreated('discord-primary', thread, 'Subject', starter=starter,
                          external_guild_id='1'), MessageView(
                              starter, AuthorRef('discord-primary', '123', 'human', 'Alice'),
-                             ContentDocument('Body'))
+                             ContentDocument('Body'), created_at=datetime(2026, 10, 20, tzinfo=timezone.utc))
 
 
 def reply_event():
@@ -75,7 +93,7 @@ def reply_event():
                           AuthorRef('discord-primary', '123', 'human', 'Alice'),
                           ContentDocument('Reply'), reply_to=MessageRef('discord-primary', '200', '301'),
                           parent_channel=forum, thread_context=ThreadRef(forum, '200'),
-                          external_guild_id='1')
+                          external_guild_id='1', created_at=datetime(2026, 10, 20, tzinfo=timezone.utc))
 
 
 @pytest.mark.asyncio
@@ -87,7 +105,8 @@ async def test_verified_source_fans_out_to_each_accepted_sibling_with_true_recei
         created, starter = post_event()
         copies = await fanout.mirror_normalized_thread_to_siblings(
             adapter=adapter, source=created, starter=starter,
-            community_actor_id=COMMUNITY_ACTOR_URL, sibling_channel_ids=[101,102])
+            community_actor_id=COMMUNITY_ACTOR_URL, sibling_channel_ids=[101,102],
+            canonical_thread_group_id=db.discord_fanout_groups.get_thread_group_by_source_thread(200).id)
         assert [(v.channel_id, v.thread_id, v.starter_message_id) for v in copies] == [
             (101,1101,2101),(102,1102,2102)]
         assert all(item[1].body == '`Alice`\n\nBody' for item in adapter.threads)
@@ -107,7 +126,8 @@ async def test_invalid_or_unsubscribed_targets_cannot_receive_mirror(tmp_path):
         copies = await fanout.mirror_normalized_thread_to_siblings(
             adapter=adapter, source=created, starter=starter,
             community_actor_id=COMMUNITY_ACTOR_URL,
-            sibling_channel_ids=[101,101,103,104])
+            sibling_channel_ids=[101,101,103,104],
+            canonical_thread_group_id=db.discord_fanout_groups.get_thread_group_by_source_thread(200).id)
         assert len(copies) == 1 and len(adapter.threads) == 1
         assert adapter.threads[0][0].external_channel_id == '101'
     finally:
@@ -123,7 +143,8 @@ async def test_one_sibling_failure_does_not_block_other(tmp_path):
         created, starter = post_event()
         copies = await fanout.mirror_normalized_thread_to_siblings(
             adapter=adapter, source=created, starter=starter,
-            community_actor_id=COMMUNITY_ACTOR_URL, sibling_channel_ids=[101,102])
+            community_actor_id=COMMUNITY_ACTOR_URL, sibling_channel_ids=[101,102],
+            canonical_thread_group_id=db.discord_fanout_groups.get_thread_group_by_source_thread(200).id)
         assert [v.channel_id for v in copies] == [102]
         assert len(adapter.threads) == 2
     finally:
@@ -136,13 +157,22 @@ async def test_reply_mirrors_preserve_destination_specific_reference(tmp_path):
     db, fanout = world(tmp_path)
     try:
         adapter = PhysicalAdapter()
-        deliveries = [SimpleNamespace(discord_channel_id=101,discord_thread_id=1101),
-                      SimpleNamespace(discord_channel_id=102,discord_thread_id=1102)]
-        context = SimpleNamespace(get_reference_for_thread=lambda thread_id: {1101:2101,1102:2102}[thread_id])
+        thread_id = db.discord_fanout_groups.get_thread_group_by_source_thread(200).id
+        db.discord_fanout_groups.add_thread_delivery(
+            thread_group_id=thread_id, discord_channel_id=101,
+            discord_thread_id=1101, discord_starter_message_id=2101, role='mirror')
+        db.discord_fanout_groups.add_thread_delivery(
+            thread_group_id=thread_id, discord_channel_id=102,
+            discord_thread_id=1102, discord_starter_message_id=2102, role='mirror')
+        deliveries = [d for d in db.discord_fanout_groups.get_thread_deliveries(thread_id)
+                      if d.role == 'mirror']
+        context = SimpleNamespace(parent_message_group_id=None,
+            get_reference_for_thread=lambda thread_id: {1101:2101, 1102:2102}[thread_id])
         copies = await fanout.mirror_normalized_message_to_siblings(
             adapter=adapter, source=reply_event(),
             community_actor_id=COMMUNITY_ACTOR_URL,
-            sibling_thread_deliveries=deliveries, reply_context=context)
+            sibling_thread_deliveries=deliveries, reply_context=context,
+            canonical_message_group_id=db.discord_fanout_groups.get_message_group_by_source_message(302).id)
         assert [(r.thread_id,r.parent_message_id) for r in copies] == [(1101,2101),(1102,2102)]
         assert [v[2].external_message_id for v in adapter.messages] == ['2101','2102']
         assert all(v[1].body == '`Alice`\n\nReply' for v in adapter.messages)
@@ -164,11 +194,12 @@ async def test_cross_connector_source_is_rejected_before_physical_write(tmp_path
                                 starter=foreign_starter, external_guild_id='1')
         starter = MessageView(foreign_starter,
                               AuthorRef('fluxer-a', '123', 'human', 'Alice'),
-                              ContentDocument('Body'))
+                              ContentDocument('Body'), created_at=datetime(2026, 10, 20, tzinfo=timezone.utc))
         with pytest.raises(PlatformOperationError):
             await fanout.mirror_normalized_thread_to_siblings(
                 adapter=adapter, source=foreign, starter=starter,
-                community_actor_id=COMMUNITY_ACTOR_URL, sibling_channel_ids=[101])
+                community_actor_id=COMMUNITY_ACTOR_URL, sibling_channel_ids=[101],
+            canonical_thread_group_id=db.discord_fanout_groups.get_thread_group_by_source_thread(200).id)
         assert adapter.threads == []
     finally:
         db.close()
@@ -186,7 +217,8 @@ async def test_revoked_subscription_blocks_new_mirror_send(tmp_path):
         created, starter = post_event()
         copies = await fanout.mirror_normalized_thread_to_siblings(
             adapter=adapter, source=created, starter=starter,
-            community_actor_id=COMMUNITY_ACTOR_URL, sibling_channel_ids=[101])
+            community_actor_id=COMMUNITY_ACTOR_URL, sibling_channel_ids=[101],
+            canonical_thread_group_id=db.discord_fanout_groups.get_thread_group_by_source_thread(200).id)
         assert copies == [] and adapter.threads == []
     finally:
         db.close()
@@ -211,7 +243,8 @@ async def test_wrong_physical_receipt_is_not_persistable(tmp_path):
         created, starter = post_event()
         copies = await fanout.mirror_normalized_thread_to_siblings(
             adapter=adapter, source=created, starter=starter,
-            community_actor_id=COMMUNITY_ACTOR_URL, sibling_channel_ids=[101])
+            community_actor_id=COMMUNITY_ACTOR_URL, sibling_channel_ids=[101],
+            canonical_thread_group_id=db.discord_fanout_groups.get_thread_group_by_source_thread(200).id)
         assert copies == [] and len(adapter.threads) == 1
     finally:
         db.close()
@@ -223,12 +256,17 @@ async def test_invalid_destination_reply_reference_does_not_send(tmp_path):
     db, fanout = world(tmp_path, active=(101,))
     try:
         adapter = PhysicalAdapter()
-        delivery = SimpleNamespace(discord_channel_id=101, discord_thread_id=1101)
-        context = SimpleNamespace(get_reference_for_thread=lambda _: 0)
+        thread_id = db.discord_fanout_groups.get_thread_group_by_source_thread(200).id
+        delivery = db.discord_fanout_groups.add_thread_delivery(
+            thread_group_id=thread_id, discord_channel_id=101,
+            discord_thread_id=1101, discord_starter_message_id=2101, role='mirror')
+        context = SimpleNamespace(parent_message_group_id=None,
+                                  get_reference_for_thread=lambda _: 0)
         assert await fanout.mirror_normalized_message_to_siblings(
             adapter=adapter, source=reply_event(),
             community_actor_id=COMMUNITY_ACTOR_URL,
-            sibling_thread_deliveries=[delivery], reply_context=context) == []
+            sibling_thread_deliveries=[delivery], reply_context=context,
+            canonical_message_group_id=db.discord_fanout_groups.get_message_group_by_source_message(302).id) == []
         assert adapter.messages == []
     finally:
         db.close()

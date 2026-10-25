@@ -32,12 +32,19 @@ class _Policy:
 class _DeliveryService:
     """Accept raw personal-feed mutation submissions in handler tests."""
 
+    def __init__(self):
+        """Retain typed service requests for boundary assertions."""
+        self.updates = []
+        self.deletes = []
+
     async def submit_update(self, **_kwargs: object) -> str:
         """Accept one Update admission."""
+        self.updates.append(_kwargs)
         return "accepted"
 
     async def submit_delete(self, **_kwargs: object) -> str:
         """Accept one Delete admission."""
+        self.deletes.append(_kwargs)
         return "accepted"
 
 
@@ -396,12 +403,13 @@ async def test_raw_personal_feed_edit_and_delete_route_to_user_actor_mutations(
     bot._message_mutation_handler = None
     bot.get_channel = lambda _id: None
     bot.fetch_channel = AsyncMock()
+    context = _mutation_context()
     bot.set_message_mutation_handler(
         DiscordMessageMutationHandler(
             database=database,
             event_router=router,
             discord_fetcher=bot,
-            mutation_context_provider=_mutation_context,
+            mutation_context_provider=lambda: context,
         )
     )
     from support.typed_mutation_ingress import TypedMutationIngress
@@ -426,11 +434,14 @@ async def test_raw_personal_feed_edit_and_delete_route_to_user_actor_mutations(
         bot, SimpleNamespace(message_id=100, channel_id=10, guild_id=1)
     )
 
-    edit.assert_awaited_once()
-    delete.assert_awaited_once()
-    assert delete.await_args.kwargs["message_id"] == 100
-    assert delete.await_args.kwargs["guild_id"] == 1
-    assert "mutation_context" in delete.await_args.kwargs
+    edit.assert_not_awaited()
+    delete.assert_not_awaited()
+    service = context.user_actor_delivery_service
+    assert len(service.updates) == 1
+    assert service.updates[0]["object_id"] == "https://bridge.example/o/root"
+    assert service.updates[0]["body_markdown"] == "edited"
+    assert service.deletes == [{"object_id": "https://bridge.example/o/root"}]
+
 
 
 @pytest.mark.asyncio

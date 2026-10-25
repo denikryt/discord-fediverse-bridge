@@ -56,6 +56,33 @@ class PublishContentRequest:
     mutation_timestamp: str | None = None
 
 
+@dataclass(frozen=True, slots=True)
+class RenderCommunityRequest:
+    """Deterministic, side-effect-free community Create inputs."""
+
+    actor_username: str
+    community_actor_url: str
+    kind: str
+    title: str | None
+    body_markdown: str
+    in_reply_to_object_id: str | None
+    operation_id: str
+    activity_id: str
+    object_id: str
+    published_at: str
+
+
+@dataclass(frozen=True, slots=True)
+class RenderCommunityResult:
+    """Stable Page/Note and Create JSON, never a delivery receipt."""
+
+    activity_id: str
+    object_id: str
+    community_actor_url: str
+    published_at: str
+    activity_json: dict
+
+
 @dataclass(slots=True)
 class PublishContentResult:
     """Return the exact canonical Create rendered and sent by the gateway."""
@@ -133,7 +160,7 @@ class UpdateContentRequest:
     # in_reply_to_object_id is required for comments to identify the parent post.
     # Lemmy will not process comment updates without this field.
     in_reply_to_object_id: str | None = None
-    target_inbox_urls: list[str] | None = None
+    conversation_root_object_id: str | None = None
     operation_id: str | None = None
     activity_id: str | None = None
     mutation_timestamp: str | None = None
@@ -148,7 +175,7 @@ class DeleteContentRequest:
     community_actor_url: str | None
     ap_object_id: str
     publication_context: str = "community"
-    target_inbox_urls: list[str] | None = None
+    conversation_root_object_id: str | None = None
     operation_id: str | None = None
     activity_id: str | None = None
     mutation_timestamp: str | None = None
@@ -298,6 +325,36 @@ class FedifyGatewayClient:
             activity_json=payload["activityJson"],
         )
 
+    async def render_community(
+        self, request: RenderCommunityRequest,
+    ) -> RenderCommunityResult:
+        """Construct deterministic authored Create without network delivery."""
+        response = await self._client.post(
+            "/render-community",
+            headers={"Authorization": f"Bearer {self._shared_secret}"},
+            json={
+                "actorUsername": request.actor_username,
+                "communityActorUrl": request.community_actor_url,
+                "kind": request.kind,
+                "title": request.title,
+                "bodyMarkdown": request.body_markdown,
+                "inReplyToObjectId": request.in_reply_to_object_id,
+                "operationId": request.operation_id,
+                "activityId": request.activity_id,
+                "objectId": request.object_id,
+                "publishedAt": request.published_at,
+            },
+        )
+        response.raise_for_status()
+        payload = response.json()
+        return RenderCommunityResult(
+            activity_id=payload["activityId"],
+            object_id=payload["objectId"],
+            community_actor_url=payload["communityActorUrl"],
+            published_at=payload["publishedAt"],
+            activity_json=payload["activityJson"],
+        )
+
     async def publish_content(
         self, request: PublishContentRequest
     ) -> PublishContentResult:
@@ -411,7 +468,7 @@ class FedifyGatewayClient:
                 "bodyMarkdown": request.body_markdown,
                 "title": request.title,
                 "inReplyToObjectId": request.in_reply_to_object_id,
-                "targetInboxUrls": request.target_inbox_urls,
+                "conversationRootObjectId": request.conversation_root_object_id,
                 "operationId": request.operation_id,
                 "activityId": request.activity_id,
                 "mutationTimestamp": request.mutation_timestamp,
@@ -439,7 +496,7 @@ class FedifyGatewayClient:
                 "communityActorUrl": request.community_actor_url,
                 "publicationContext": request.publication_context,
                 "apObjectId": request.ap_object_id,
-                "targetInboxUrls": request.target_inbox_urls,
+                "conversationRootObjectId": request.conversation_root_object_id,
                 "operationId": request.operation_id,
                 "activityId": request.activity_id,
                 "mutationTimestamp": request.mutation_timestamp,

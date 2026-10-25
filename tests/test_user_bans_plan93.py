@@ -455,19 +455,20 @@ async def test_community_ban_blocks_only_selected_local_community_and_global_ban
     database = build_database(tmp_path, "plan93-community-scope.db")
     cats = _local_community(database, slug="cats")
     dogs = _local_community(database, slug="dogs")
-    user = _registered_local_user(database)
+    user = _registered_local_user(database, username="alice")
     database.management_actions.create_or_reactivate_ban(
         actor_discord_user_id="111",
         local_community_id=cats.id,
-        actor_handle="Alice@bridge.example:8443",
+        actor_handle="alice@bridge.example:8443",
         actor_url=user.actor_url,
         target_discord_user_id="123",
         reason="cats-only",
     )
     gateway = AsyncMock()
-    gateway.publish_local_community_content.return_value = build_publish_result(
-        kind="post"
-    )
+    from support.community_events import configure_renderer, create_thread
+    from src.local_communities.runtime import LocalCommunityRuntime
+    from src.platform_types import MessageRef
+    configure_renderer(gateway, database)
     service = ContentPublishService(
         database=database,
         fedify_gateway=gateway,
@@ -475,25 +476,25 @@ async def test_community_ban_blocks_only_selected_local_community_and_global_ban
         settings=_settings(),
         bridge_policy_service=build_test_policy_service(database),
     )
+    runtime = LocalCommunityRuntime(database=database, fedify_gateway=gateway,
+        content_publish_service=service, bridge_prefix='[bridge]',
+        bridge_policy_service=build_test_policy_service(database))
     cats_message = build_starter_message(message_id=310)
     dogs_message = build_starter_message(message_id=311)
 
-    cats_result = await service.publish_local_thread_starter(
+    cats_result = await create_thread(runtime,
         thread=build_thread(thread_id=210),
         starter_message=cats_message,
-        community_actor_url=cats.actor_url,
     )
-    dogs_result = await service.publish_local_thread_starter(
-        thread=build_thread(thread_id=211),
+    dogs_result = await create_thread(runtime,
+        thread=build_thread(thread_id=211, channel_id=101),
         starter_message=dogs_message,
-        community_actor_url=dogs.actor_url,
     )
     _global_ban(database, reason="global")
     global_message = build_starter_message(message_id=312)
-    global_result = await service.publish_local_thread_starter(
+    global_result = await create_thread(runtime,
         thread=build_thread(thread_id=212),
         starter_message=global_message,
-        community_actor_url=cats.actor_url,
     )
 
     assert cats_result.reason == "user_banned"
@@ -502,7 +503,7 @@ async def test_community_ban_blocks_only_selected_local_community_and_global_ban
     )
     assert dogs_result.status == "published"
     assert (
-        database.message_mappings.get_message_mapping_by_discord_message_id(311)
+        database.message_mappings.get_by_source_ref(MessageRef("discord-primary", "211", "311"))
         is not None
     )
     assert global_result.reason == "user_banned"
@@ -553,7 +554,7 @@ async def test_discord_fanout_uses_registered_handle_not_mutable_nickname(
 ) -> None:
     """A real mirror delivery renders the canonical local handle in its header."""
     database = build_database(tmp_path, "plan93-header.db")
-    _registered_local_user(database)
+    _registered_local_user(database, username="alice")
     add_accepted_subscription(database, channel_id=500, guild_id=1)
     forum = build_forum_channel_object_result(
         channel_id=500, thread_id=600, starter_message_id=700
@@ -580,17 +581,30 @@ async def test_discord_fanout_uses_registered_handle_not_mutable_nickname(
     )
     source = build_starter_message(content="hello", display_name="Changed nickname")
 
-    results = await fanout.mirror_thread_to_siblings(
-        source_thread=build_thread(name="Topic"),
-        source_starter_message=source,
-        sibling_channel_ids=[500],
-    )
-
-    assert len(results) == 1
+    from support.community_events import observe_thread, ScenarioDiscord
+    from src.content_publish_service import ContentPublishService
+    from support.community_events import configure_renderer
+    from src.community_sync.runtime import CommunityRuntime
+    from support.gateway import build_gateway_mock
+    from dataclasses import replace
+    from src.platform_types import ThreadRef
+    add_accepted_subscription(database, channel_id=100, guild_id=1)
+    gateway = build_gateway_mock()
+    configure_renderer(gateway, database)
+    publisher = ContentPublishService(database=database, fedify_gateway=gateway,
+        bridge_prefix='[bridge]', bridge_policy_service=build_test_policy_service(database, _settings()))
+    runtime = CommunityRuntime(database=database, content_publish_service=publisher,
+                               discord_fanout=fanout, bot=fanout.bot)
+    event, view = observe_thread(thread=build_thread(name='Topic'), starter_message=source)
+    event = replace(event, external_guild_id='1',
+                    thread=ThreadRef(replace(event.thread.channel, external_guild_id='1'), event.thread.external_thread_id))
+    result = await runtime.handle_normalized_thread_create(event, view, adapter=ScenarioDiscord(runtime))
+    assert result.status == 'published'
+    group = database.discord_fanout_groups.get_thread_group_by_ap_object(result.object_id)
+    assert len(database.discord_fanout_groups.get_thread_deliveries(group.id)) == 2
     forum.create_thread.assert_awaited_once_with(
-        name="Topic",
-        content="`Alice@bridge.example:8443`\n\nhello",
-    )
+        name="Topic", content="`alice@bridge.example:8443`\n\nhello")
+
 
 
 def test_legacy_schema_is_rejected_without_modification(

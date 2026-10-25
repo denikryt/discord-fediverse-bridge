@@ -5,6 +5,8 @@ remote document retrieval and Discord HTTP are replaced by deterministic fakes.
 """
 from __future__ import annotations
 
+from support.fake_platform_adapter import FakeDiscordPort
+
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from types import ModuleType
@@ -16,6 +18,7 @@ from src.community_sync.backfill import backfill_normalized_post_as_thread_group
 from src.community_sync.inbound_mapping import needs_backfill
 from src.community_sync.runtime import CommunityRuntime
 from src.platform_types import CreatedThread, MessageRef, ThreadRef
+from src.models import ChannelSurface
 from support.db import add_accepted_subscription, build_database
 from tests_constants import LEMMY_EXAMPLE_DOMAIN
 
@@ -49,7 +52,7 @@ def document(*, ap_id=POST):
     }
 
 
-class DiscordCreates:
+class DiscordCreates(FakeDiscordPort):
     """Emulate confirmed per-forum Discord thread/starter pairs."""
 
     def __init__(self, *, bad_forum=None):
@@ -110,13 +113,14 @@ async def test_missing_parent_is_created_once_with_distinct_thread_starter_ids(t
     discord = DiscordCreates()
     group = await restore(db, runtime, discord)
     assert group is not None
-    assert {(r.discord_channel_id, r.discord_thread_id, r.discord_starter_message_id)
+    assert {(confirmed_forum(db, r), int(r.external_thread_id), int(r.external_starter_message_id))
             for r in db.discord_fanout_groups.get_thread_deliveries(group.id)} == {
                 (100, 1100, 2100), (200, 1200, 2200),
             }
     assert {call[3].key for call in discord.calls} == {
-        f'inbound-ap:post:{POST}:discord-primary:100',
-        f'inbound-ap:post:{POST}:discord-primary:200',
+        f'fanout:v1:remote:post:{group.id}:discord-primary:'
+        f'{db.platform_surfaces.resolve_claim("discord-primary", channel).id}'
+        for channel in ('100', '200')
     }
     assert (await restore(db, runtime, discord)).id == group.id
     assert len(discord.calls) == 2
@@ -130,7 +134,7 @@ async def test_partial_backfill_defers_unproven_missing_destination(tmp_path):
     # The missing receipt could be a committed thread whose HTTP response was lost.
     assert await restore(db, runtime, discord) is None
     rows = db.discord_fanout_groups.get_thread_deliveries(existing.id)
-    assert {(r.discord_channel_id, r.discord_thread_id) for r in rows} == {(100, 1100)}
+    assert {(confirmed_forum(db, r), int(r.external_thread_id)) for r in rows} == {(100, 1100)}
     assert discord.calls == []
     assert needs_backfill(thread_group=existing, community_actor_id=COMMUNITY, database=db) is True
 
@@ -269,11 +273,11 @@ async def test_initial_parent_partial_send_still_delivers_child_to_confirmed_for
     assert [call[0].external_thread_id for call in adapter.message_calls] == ['1100']
     group = db.discord_fanout_groups.get_thread_group_by_ap_object(POST)
     assert group is not None
-    assert {row.discord_channel_id for row in
+    assert {confirmed_forum(db, row) for row in
             db.discord_fanout_groups.get_thread_deliveries(group.id)} == {100}
     msg_group = db.discord_fanout_groups.get_message_group_by_ap_object(comment().object.ap_id)
     assert msg_group is not None
-    assert {row.discord_channel_id for row in
+    assert {confirmed_forum(db, row) for row in
             db.discord_fanout_groups.get_message_deliveries(msg_group.id)} == {100}
 
 
@@ -296,9 +300,9 @@ async def test_new_subscriber_does_not_block_confirmed_existing_comment_targets(
     assert {call[0].external_thread_id for call in adapter.message_calls} == {'1100', '1200'}
     msg_group = db.discord_fanout_groups.get_message_group_by_ap_object(event.object.ap_id)
     assert msg_group is not None
-    assert {delivery.discord_channel_id for delivery in
+    assert {confirmed_forum(db, delivery) for delivery in
             db.discord_fanout_groups.get_message_deliveries(msg_group.id)} == {100, 200}
-    assert {delivery.discord_channel_id for delivery in
+    assert {confirmed_forum(db, delivery) for delivery in
             db.discord_fanout_groups.get_thread_deliveries(group.id)} == {100, 200}
     assert (await runtime.handle_normalized_inbound_comment_with_backfill(
         event, adapter=adapter,
@@ -320,7 +324,7 @@ async def test_missing_one_receipt_does_not_block_other_confirmed_comment_target
     assert [call[0].external_thread_id for call in adapter.message_calls] == ['1100']
     msg_group = db.discord_fanout_groups.get_message_group_by_ap_object(event.object.ap_id)
     assert msg_group is not None
-    assert {delivery.discord_channel_id for delivery in
+    assert {confirmed_forum(db, delivery) for delivery in
             db.discord_fanout_groups.get_message_deliveries(msg_group.id)} == {100}
     assert len(db.discord_fanout_groups.get_thread_deliveries(group.id)) == 1
 
@@ -360,7 +364,7 @@ async def test_incomplete_parent_only_delivers_child_to_verified_thread(tmp_path
     assert [call[0].external_thread_id for call in adapter.message_calls] == ['1100']
     msg_group = db.discord_fanout_groups.get_message_group_by_ap_object(comment().object.ap_id)
     assert msg_group is not None
-    assert [row.discord_channel_id for row in db.discord_fanout_groups.get_message_deliveries(msg_group.id)] == [100]
+    assert [confirmed_forum(db, row) for row in db.discord_fanout_groups.get_message_deliveries(msg_group.id)] == [100]
     assert db.discord_fanout_groups.get_thread_group_by_ap_object(POST).id == existing.id
 
 
@@ -415,3 +419,168 @@ async def test_incomplete_group_does_not_refetch_ap_or_create_thread(tmp_path):
     assert requests == []
     assert adapter.calls == []
     assert len(db.discord_fanout_groups.get_thread_deliveries(existing.id)) == 1
+
+@pytest.mark.asyncio
+async def test_deleted_canonical_parent_is_not_returned_by_backfill(tmp_path):
+    """A retained physical starter is not permission to recover a deleted post."""
+    db, group, runtime = world(tmp_path, only_first=True)
+    db.discord_fanout_groups.add_thread_delivery(
+        thread_group_id=group.id, discord_channel_id=200,
+        discord_thread_id=1200, discord_starter_message_id=2200, role='inbound',
+    )
+    from src.models import CommunityThreadGroup
+    with db.immediate_session() as session:
+        session.get(CommunityThreadGroup, group.id).deleted_at = datetime.now(timezone.utc)
+
+    adapter = DiscordPostsAndComments()
+    assert await restore(db, runtime, adapter) is None
+    assert adapter.calls == adapter.message_calls == []
+    assert len(db.discord_fanout_groups.get_thread_deliveries(group.id)) == 2
+
+
+@pytest.mark.asyncio
+async def test_deleted_canonical_parent_rejects_late_child_before_admission(tmp_path):
+    """Late AP comment cannot create a new canonical child under a tombstone."""
+    db, group, runtime = world(tmp_path, only_first=True)
+    from src.models import CommunityThreadGroup
+    with db.immediate_session() as session:
+        session.get(CommunityThreadGroup, group.id).deleted_at = datetime.now(timezone.utc)
+
+    adapter = DiscordPostsAndComments()
+    event = comment()
+    response = await runtime.handle_normalized_inbound_comment_with_backfill(
+        event, adapter=adapter,
+    )
+    assert response.status == 'skipped'
+    assert adapter.calls == adapter.message_calls == []
+    assert db.discord_fanout_groups.get_message_group_by_ap_object(event.object.ap_id) is None
+    assert db.discord_fanout_groups.get_thread_group_by_ap_object(POST).deleted_at is not None
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize('kind', ['post', 'comment'])
+async def test_remote_authenticated_delete_with_zero_copies_commits_tombstone(tmp_path, kind):
+    """Inbound Delete of a canonically retained object is durable without forums."""
+    import json
+    from types import SimpleNamespace
+    from src.models import CommunityThreadGroup, CommunityMessageGroup
+
+    db, _, runtime = world(tmp_path)
+    actor = f'https://{LEMMY_EXAMPLE_DOMAIN}/u/bob'
+    root_id = 'https://remote.example/root-for-delete'
+    root = db.discord_fanout_groups.create_thread_group(
+        community_actor_id=COMMUNITY, source_channel_id=None, source_thread_id=None,
+        source_starter_message_id=None, ap_activity_id='https://remote.example/create/root',
+        ap_object_id=root_id, current_content_json=json.dumps({
+            'schemaVersion': 1, 'kind': 'post', 'apObjectId': root_id,
+            'authorActorId': actor, 'bodyMarkdown': 'Root',
+        }))
+    target_id = root_id
+    if kind == 'comment':
+        target_id = 'https://remote.example/comment-for-delete'
+        db.discord_fanout_groups.create_message_group(
+            community_actor_id=COMMUNITY, thread_group_id=root.id,
+            source_channel_id=None, source_thread_id=None, source_message_id=None,
+            ap_activity_id='https://remote.example/create/comment', ap_object_id=target_id,
+            current_content_json=json.dumps({
+                'schemaVersion': 1, 'kind': 'comment', 'apObjectId': target_id,
+                'authorActorId': actor, 'bodyMarkdown': 'Comment',
+            }))
+    event = SimpleNamespace(
+        object=SimpleNamespace(ap_id=target_id),
+        community_actor_id=COMMUNITY, actor_id=actor,
+    )
+    adapter = DiscordPostsAndComments()
+    fake_runtime = SimpleNamespace(discord_adapter=adapter, bot=None)
+    handler = (runtime.handle_inbound_post_delete if kind == 'post'
+               else runtime.handle_inbound_comment_delete)
+    response = await handler(event, fake_runtime)
+    assert response.status == 'processed'
+    assert (await handler(event, fake_runtime)).status == 'skipped'
+    model = CommunityThreadGroup if kind == 'post' else CommunityMessageGroup
+    with db.session() as session:
+        from sqlalchemy import select
+        row = session.scalar(select(model).where(model.ap_object_id == target_id))
+        assert row.deleted_at is not None and row.content_revision == 1
+    assert adapter.calls == adapter.message_calls == []
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize('kind', ['post', 'comment'])
+async def test_remote_update_without_copies_commits_authoritative_revision(tmp_path, kind):
+    """Authenticated AP edits remain durable even when no forum can receive them."""
+    from src.activitypub_models import ActivityPubEvent
+    from src.community_sync.runtime import _inbound_content_snapshot
+    from src.models import CommunityThreadGroup, CommunityMessageGroup
+    from types import SimpleNamespace
+    from sqlalchemy import select
+
+    db, _, runtime = world(tmp_path)
+    actor = f'https://{LEMMY_EXAMPLE_DOMAIN}/u/bob'
+    original_time = '2026-10-20T09:00:00+00:00'
+    revision_time = '2026-10-23T09:00:00+00:00'
+    obj_id = 'https://remote.example/comment/no-copies' if kind == 'comment' else POST
+    root = db.discord_fanout_groups.create_thread_group(
+        community_actor_id=COMMUNITY, source_channel_id=None,
+        source_thread_id=None, source_starter_message_id=None,
+        ap_activity_id='https://remote.example/create/post/1', ap_object_id=POST,
+        current_content_json=_inbound_content_snapshot(ActivityPubEvent.model_validate({
+            'event_type': 'post.created', 'delivery_id': 'https://remote.example/create/post/1',
+            'occurred_at': original_time, 'community_actor_id': COMMUNITY,
+            'actor_id': actor, 'object': {
+                'ap_id': POST, 'kind': 'post', 'lemmy_id': 1, 'title': 'Title',
+                'body_markdown': 'old', 'author_name': 'bob',
+                'published_at': original_time,
+            },
+        })),
+    )
+    if kind == 'comment':
+        db.discord_fanout_groups.create_message_group(
+            community_actor_id=COMMUNITY, thread_group_id=root.id,
+            source_channel_id=None, source_thread_id=None, source_message_id=None,
+            ap_activity_id='https://remote.example/create/comment/1', ap_object_id=obj_id,
+            current_content_json=_inbound_content_snapshot(ActivityPubEvent.model_validate({
+                'event_type': 'comment.created', 'delivery_id': 'https://remote.example/create/comment/1',
+                'occurred_at': original_time, 'community_actor_id': COMMUNITY,
+                'actor_id': actor, 'object': {
+                    'ap_id': obj_id, 'kind': 'comment', 'lemmy_id': 2,
+                    'post_lemmy_id': 1, 'post_ap_id': POST, 'parent_ap_id': POST,
+                    'body_markdown': 'old comment', 'author_name': 'bob',
+                    'published_at': original_time,
+                },
+            })),
+        )
+    event = ActivityPubEvent.model_validate({
+        'event_type': f'{kind}.updated',
+        'delivery_id': f'https://remote.example/delivery/{kind}-edit',
+        'source_activity_id': f'https://remote.example/update/{kind}-1',
+        'occurred_at': revision_time, 'community_actor_id': COMMUNITY, 'actor_id': actor,
+        'object': {
+            'ap_id': obj_id, 'kind': kind, 'lemmy_id': 1,
+            'post_ap_id': POST if kind == 'comment' else None,
+            'post_lemmy_id': 1 if kind == 'comment' else None,
+            'parent_ap_id': POST if kind == 'comment' else None,
+            'title': 'Title' if kind == 'post' else None,
+            'body_markdown': 'edited', 'author_name': 'bob',
+            'published_at': original_time, 'updated_at': revision_time,
+        },
+    })
+    adapter = DiscordPostsAndComments()
+    fake_runtime = SimpleNamespace(discord_adapter=adapter, bot=None)
+    handler = (runtime.handle_inbound_post_update if kind == 'post'
+               else runtime.handle_inbound_comment_update)
+    assert (await handler(event, fake_runtime)).status == 'processed'
+    assert (await handler(event, fake_runtime)).status == 'skipped'
+    model = CommunityThreadGroup if kind == 'post' else CommunityMessageGroup
+    with db.session() as session:
+        row = session.scalar(select(model).where(model.ap_object_id == obj_id))
+        assert row.content_revision == 1
+        assert row.last_source_update_order_key is not None
+        assert 'edited' in row.current_content_json
+    assert adapter.calls == adapter.message_calls == []
+
+
+def confirmed_forum(db, receipt):
+    """Resolve the actual connector-scoped forum claim of one durable receipt."""
+    with db.session() as session:
+        surface = session.get(ChannelSurface, receipt.channel_surface_id)
+        assert surface is not None and surface.connector_id == receipt.connector_id
+        return int(surface.external_channel_id)

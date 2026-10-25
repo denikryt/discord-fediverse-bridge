@@ -8,6 +8,7 @@ forum_channel.create_thread, thread.send, FedifyGatewayClient.
 
 from __future__ import annotations
 from support.runtime import build_test_policy_service
+from support.community_events import ScenarioDiscord
 
 from datetime import datetime, timezone
 from pathlib import Path
@@ -45,6 +46,7 @@ def _accepted_subscription(database: Database, *, channel_id: int) -> None:
     """Insert one accepted community subscription for the shared hackers community."""
     database.remote_subscriptions.create_subscription(
         discord_channel_id=channel_id,
+        discord_guild_id=10,
         lemmy_community_actor_id=COMMUNITY_ACTOR_URL,
         lemmy_community_name="hackers",
         lemmy_community_id=42,
@@ -276,6 +278,7 @@ async def test_phase5_inbound_post_creates_thread_group_and_deliveries(
         database=database,
         bot=bot,
         community_runtime=runtime,
+        discord_adapter=ScenarioDiscord(runtime),
         bridge_policy_service=build_test_policy_service(database),
     )
 
@@ -292,7 +295,7 @@ async def test_phase5_inbound_post_creates_thread_group_and_deliveries(
     deliveries = database.discord_fanout_groups.get_thread_deliveries(thread_group.id)
     assert len(deliveries) == 2
     assert all(d.role == "inbound" for d in deliveries)
-    thread_ids = {d.discord_thread_id for d in deliveries}
+    thread_ids = {int(d.external_thread_id) for d in deliveries}
     assert thread_ids == {200, 500}
     # Remote post starters must use the same full fediverse handle as comments
     # so authors are not ambiguous across remote instances.
@@ -345,6 +348,7 @@ async def test_phase5_inbound_post_dedup_skips_on_existing_thread_group(
         database=database,
         bot=bot,
         community_runtime=runtime,
+        discord_adapter=ScenarioDiscord(runtime),
         bridge_policy_service=build_test_policy_service(database),
     )
 
@@ -390,6 +394,7 @@ async def test_phase5_inbound_comment_root_creates_message_group_flat(
         database=database,
         bot=bot,
         community_runtime=runtime,
+        discord_adapter=ScenarioDiscord(runtime),
         bridge_policy_service=build_test_policy_service(database),
     )
 
@@ -406,7 +411,7 @@ async def test_phase5_inbound_comment_root_creates_message_group_flat(
 
     deliveries = database.discord_fanout_groups.get_message_deliveries(message_group.id)
     assert len(deliveries) == 1
-    assert deliveries[0].discord_thread_id == 200
+    assert deliveries[0].external_thread_id == "200"
     assert deliveries[0].role == "inbound"
 
     # Flat send: reference must be None.
@@ -496,6 +501,7 @@ async def test_phase5_inbound_comment_reply_chain_resolves_to_prior_delivery(
         database=database,
         bot=bot,
         community_runtime=runtime,
+        discord_adapter=ScenarioDiscord(runtime),
         bridge_policy_service=build_test_policy_service(database),
     )
 
@@ -559,6 +565,7 @@ async def test_phase5_inbound_comment_dedup_skips_on_existing_message_group(
         database=database,
         bot=bot,
         community_runtime=runtime,
+        discord_adapter=ScenarioDiscord(runtime),
         bridge_policy_service=build_test_policy_service(database),
     )
 
@@ -570,70 +577,25 @@ async def test_phase5_inbound_comment_dedup_skips_on_existing_message_group(
 
 
 @pytest.mark.asyncio
-async def test_phase5_outbound_publish_does_not_create_post_link(
-    tmp_path: Path,
-) -> None:
-    """Outbound Discord message publish no longer writes PostLink or CommentLink rows.
-
-    System state: one accepted subscription, one registered user, CommunityThreadGroup
-    for thread 200 (with source delivery).
-    Action: handle_discord_message for message 400.
-    Assert: result status='published', no PostLink rows, no CommentLink rows,
-    CommunityMessageGroup exists, gateway called once.
-    """
-    database = _database(tmp_path)
-    _accepted_subscription(database, channel_id=100)
-    _registered_user(database)
-
-    ap_object_id = f"https://{BRIDGE_HOST_DOMAIN}/objects/post/1"
-    ap_activity_id = f"https://{BRIDGE_HOST_DOMAIN}/actors/users/alice/activities/create/posts/1"
-    thread_group = database.discord_fanout_groups.create_thread_group(
-        community_actor_id=COMMUNITY_ACTOR_URL,
-        source_channel_id=100,
-        source_thread_id=200,
-        source_starter_message_id=300,
-        ap_activity_id=ap_activity_id,
-        ap_object_id=ap_object_id,
-    )
-    database.discord_fanout_groups.add_thread_delivery(
-        thread_group_id=thread_group.id,
-        discord_channel_id=100,
-        discord_thread_id=200,
-        discord_starter_message_id=300,
-        role="source",
-    )
-
-    gateway = _publish_gateway()
-    bot = _fake_bot()
-    runtime = _community_runtime(database, gateway, bot=bot)
-
-    from types import SimpleNamespace as NS
-
-    channel = NS(id=200, parent_id=100)
-    author = NS(id=123, display_name="Alice", name="alice")
-    message = NS(
-        id=400,
-        content="hello",
-        author=author,
-        channel=channel,
-        reference=None,
-    )
-
-    result = await runtime.handle_discord_message(message=message)
-
-    assert result.status == "published"
-    message_group = database.discord_fanout_groups.get_message_group_by_source_message(
-        400
-    )
-    assert message_group is not None
-    gateway.publish_content.assert_awaited_once()
-
-    # No PostLink or CommentLink rows must exist.
-    from src.models import PostLink, CommentLink
+async def test_phase5_outbound_publish_does_not_create_post_link(tmp_path):
+    """Typed source post and comment never recreate the retired legacy link ledger."""
     from sqlalchemy import select
+    from src.models import PostLink, CommentLink
+    from test_normalized_community_runtime import reply, starter, world
 
-    with database.session() as session:
-        post_links = list(session.scalars(select(PostLink)))
-        comment_links = list(session.scalars(select(CommentLink)))
-    assert len(post_links) == 0
-    assert len(comment_links) == 0
+    database, runtime, gateway, adapter = world(tmp_path, forum_ids=(100,))
+    try:
+        event, view = starter()
+        post = await runtime.handle_normalized_thread_create(event, view, adapter=adapter)
+        comment = await runtime.handle_normalized_message_create(reply(), adapter=adapter)
+        group = database.discord_fanout_groups.get_message_group_by_source_message(400)
+        assert post.status == 'published' and comment.status == 'published'
+        assert group is not None and group.ap_object_id == comment.object_id
+        assert len(gateway.requests) == 2  # One render per canonical object.
+        assert adapter.posts == [] and adapter.replies == []
+        # The current-v1 source graph is authoritative; legacy links remain empty.
+        with database.session() as session:
+            assert session.scalars(select(PostLink)).all() == []
+            assert session.scalars(select(CommentLink)).all() == []
+    finally:
+        database.close()

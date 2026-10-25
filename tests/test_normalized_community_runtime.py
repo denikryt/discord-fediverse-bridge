@@ -7,39 +7,66 @@ subscription ownership, thread/message groups and delivery rows use SQLite.
 from __future__ import annotations
 
 from types import SimpleNamespace
+from datetime import datetime, timezone
+from dataclasses import replace
 
 import pytest
 
 from src.community_sync.discord_fanout import DiscordFanout
 from src.community_sync.runtime import CommunityRuntime
 from src.content_publish_service import ContentPublishService
-from src.fedify_gateway_client import PublishContentResult
+from src.fedify_gateway_client import RenderCommunityResult
+from src.content_sync.persistence import PublicationConflictError
 from src.platform_types import (
     AuthorRef, ChannelRef, ConnectorRef, ContentDocument, CreatedMessage,
     CreatedThread, MessageCreated, MessageRef, MessageView, ThreadCreated, ThreadRef,
     PlatformOperationError,
 )
+from support.fake_platform_adapter import FakeDiscordPort
 from support.db import COMMUNITY_ACTOR_URL, add_accepted_subscription, add_registered_user, build_database
 
 
 class RecordingGateway:
-    """Emulate confirmed AP publishes and expose the exact parent chosen by runtime."""
+    """Pure Create renderer: return exactly the supplied IDs without any delivery.
 
-    def __init__(self):
+    The renderer is an external boundary; SQLite admission and outbound sends
+    must never be replaced by a mock gateway's implicit side effects.
+    """
+
+    def __init__(self, actor_url):
+        self.actor_url = actor_url
         self.requests = []
 
-    async def publish_content(self, request):
-        """Return deterministic receipts while observing actual publish requests."""
+    async def render_community(self, request):
+        """Render a stable Create/Page/Note while recording its exact input."""
         self.requests.append(request)
-        n = len(self.requests)
-        return PublishContentResult(
-            activity_id=f'https://bridge.example/actors/users/alice/activities/{n}',
-            object_id=f'https://bridge.example/objects/{n}',
-            community_actor_url=COMMUNITY_ACTOR_URL,
+        created_object = {
+            'id': request.object_id,
+            'type': 'Page' if request.kind == 'post' else 'Note',
+            'attributedTo': self.actor_url,
+            'published': request.published_at,
+            'source': {'content': request.body_markdown, 'mediaType': 'text/markdown'},
+        }
+        if request.kind == 'post':
+            created_object['name'] = request.title
+        else:
+            created_object['inReplyTo'] = request.in_reply_to_object_id
+        activity = {
+            'id': request.activity_id, 'type': 'Create', 'actor': self.actor_url,
+            'to': [request.community_actor_url], 'object': created_object,
+        }
+        return RenderCommunityResult(
+            activity_id=request.activity_id, object_id=request.object_id,
+            community_actor_url=request.community_actor_url,
+            published_at=request.published_at, activity_json=activity,
         )
 
+    async def publish_content(self, request):
+        """Refuse the retired publish-and-send contract in these typed tests."""
+        raise AssertionError('Community canonical admission must render before SQLite commit')
 
-class PhysicalTransport:
+
+class PhysicalTransport(FakeDiscordPort):
     """Record forum/reply writes with distinct confirmed thread and starter IDs."""
 
     def __init__(self, *, fail_forum=None):
@@ -63,18 +90,24 @@ class PhysicalTransport:
         n = int(destination.external_thread_id)
         # Every new source message gets its own physical receipt; different
         # recipients of that source share a logical generation, not an ID.
-        generation = (len(self.replies) - 1) // 2
+        # Message snowflakes must be unique inside each immediate thread;
+        # a test with one sibling cannot reuse the first receipt on its next
+        # comment merely because the fake was built for two recipients.
+        generation = sum(
+            1 for prior, _parent, _attempt in self.replies[:-1]
+            if prior.external_thread_id == destination.external_thread_id
+        )
         return CreatedMessage(MessageRef('discord-primary', str(n),
                                          str(n + 3000 + generation * 10000)), 'bot')
 
 
-def world(tmp_path, *, fail_forum=None):
+def world(tmp_path, *, fail_forum=None, forum_ids=(100, 101, 102)):
     """Configure authorized Discord forums and real persisted canonical mappings."""
     db = build_database(tmp_path, 'canonical-neutral.sqlite3')
     add_registered_user(db)
-    for channel_id in (100, 101, 102):
+    for channel_id in forum_ids:
         add_accepted_subscription(db, channel_id=channel_id)
-    gateway = RecordingGateway()
+    gateway = RecordingGateway(db.users.get_user_by_discord_user_id('123').actor_url)
     policy = SimpleNamespace(
         federation_decision=lambda actor: SimpleNamespace(allowed=True),
         is_discord_guild_allowed=lambda guild: guild == 1,
@@ -96,7 +129,7 @@ def starter(*, forum_id='100', guild='1'):
     event = ThreadCreated('discord-primary', thread, 'Subject', starter=opening,
                           external_guild_id=guild)
     observation = MessageView(opening, AuthorRef('discord-primary', '123', 'human', 'Alice'),
-                              ContentDocument('Post body'))
+                              ContentDocument('Post body'), created_at=datetime(2026, 10, 20, tzinfo=timezone.utc))
     return event, observation
 
 
@@ -107,8 +140,54 @@ def reply(*, forum='100', thread='200', message='400', parent='300'):
                           AuthorRef('discord-primary', '123', 'human', 'Alice'),
                           ContentDocument('Reply body'),
                           parent_channel=channel, thread_context=ThreadRef(channel, thread),
-                          external_guild_id='1',
+                          external_guild_id='1', created_at=datetime(2026, 10, 20, tzinfo=timezone.utc),
                           reply_to=MessageRef('discord-primary', thread, parent) if parent else None)
+
+
+@pytest.mark.asyncio
+async def test_missing_starter_timestamp_rejects_before_ap_render_or_physical_post(tmp_path):
+    """An unproven THREAD_CREATE timestamp may not become a canonical AP Create."""
+    db, runtime, gateway, adapter = world(tmp_path)
+    try:
+        event, observed = starter()
+        missing = replace(observed, created_at=None)
+        with pytest.raises(PlatformOperationError):
+            await runtime.handle_normalized_thread_create(event, missing, adapter=adapter)
+        assert gateway.requests == [] and adapter.posts == []
+        assert db.discord_fanout_groups.get_thread_group_by_source_thread(200) is None
+    finally:
+        db.close()
+
+
+def test_naive_starter_creation_time_is_rejected_by_typed_boundary():
+    """Source time must be timezone-aware before entering runtime admission."""
+    _, observed = starter()
+    with pytest.raises(ValueError, match='timezone-aware'):
+        replace(observed, created_at=datetime(2026, 10, 20))
+
+
+@pytest.mark.asyncio
+async def test_gateway_render_identity_mismatch_cannot_commit_or_send(tmp_path):
+    """A tampered render response is rejected without SQLite or physical writes."""
+    db, runtime, gateway, adapter = world(tmp_path)
+    try:
+        original_render = gateway.render_community
+
+        async def tampered_render(request):
+            """Simulate a remote renderer changing the canonical AP object ID."""
+            result = await original_render(request)
+            changed = dict(result.activity_json)
+            changed['object'] = {**changed['object'], 'id': 'https://foreign.example/unowned'}
+            return replace(result, activity_json=changed)
+
+        gateway.render_community = tampered_render
+        event, opening = starter()
+        with pytest.raises(PublicationConflictError):
+            await runtime.handle_normalized_thread_create(event, opening, adapter=adapter)
+        assert len(gateway.requests) == 1 and adapter.posts == []
+        assert db.discord_fanout_groups.get_thread_group_by_source_thread(200) is None
+    finally:
+        db.close()
 
 
 @pytest.mark.asyncio
@@ -124,10 +203,21 @@ async def test_normalized_starter_creates_one_source_and_independent_siblings(tm
         assert len(gateway.requests) == 1 and len(adapter.posts) == 2
         group = db.discord_fanout_groups.get_thread_group_by_source_thread(200)
         deliveries = db.discord_fanout_groups.get_thread_deliveries(group.id)
-        assert sorted((d.discord_channel_id, d.discord_thread_id,
-                       d.discord_starter_message_id, d.role) for d in deliveries) == [
-                           (100, 200, 300, 'source'), (101, 1101, 2101, 'mirror'),
-                           (102, 1102, 2102, 'mirror')]
+        # Current v1 mirrors carry typed physical receipts, not legacy Discord projections.
+        expected = {
+            '100': ('200', '300', 'source'),
+            '101': ('1101', '2101', 'mirror'),
+            '102': ('1102', '2102', 'mirror'),
+        }
+        for forum_id, (thread_id, starter_id, role) in expected.items():
+            placement = db.platform_surfaces.resolve_claim('discord-primary', forum_id)
+            matched = [d for d in deliveries if d.channel_surface_id == placement.id]
+            assert len(matched) == 1
+            assert (matched[0].external_thread_id,
+                    matched[0].external_starter_message_id, matched[0].role) == (
+                        thread_id, starter_id, role)
+            if role == 'mirror':
+                assert matched[0].discord_thread_id is None
     finally:
         db.close()
 
@@ -159,7 +249,7 @@ async def test_normalized_reply_maps_starter_and_nested_parent_per_sibling(tmp_p
         assert group.parent_message_group_id is None
         assert [r[1].external_message_id for r in adapter.replies] == ['2101', '2102']
         assert len(gateway.requests) == 2
-        assert gateway.requests[1].in_reply_to_object_id == 'https://bridge.example/objects/1'
+        assert gateway.requests[1].in_reply_to_object_id == gateway.requests[0].object_id
         # A nested local reply resolves the newly-persisted canonical parent.
         second = await runtime.handle_normalized_message_create(
             reply(message='401', parent='400'), adapter=adapter)
@@ -167,7 +257,7 @@ async def test_normalized_reply_maps_starter_and_nested_parent_per_sibling(tmp_p
         nested = db.discord_fanout_groups.get_message_group_by_source_message(401)
         assert nested.parent_message_group_id == group.id
         assert [r[1].external_message_id for r in adapter.replies[2:]] == ['4101', '4102']
-        assert gateway.requests[2].in_reply_to_object_id == 'https://bridge.example/objects/2'
+        assert gateway.requests[2].in_reply_to_object_id == gateway.requests[1].object_id
     finally:
         db.close()
 
@@ -188,8 +278,10 @@ async def test_duplicate_and_foreign_parent_reply_have_no_untrusted_side_effects
         from dataclasses import replace
         foreign = replace(foreign, parent_channel=ChannelRef('discord-primary', '102', 'forum', '1'),
                           thread_context=ThreadRef(ChannelRef('discord-primary', '102', 'forum', '1'), '200'))
-        with pytest.raises(PlatformOperationError):
-            await runtime.handle_normalized_message_create(foreign, adapter=adapter)
+        # A mismatched forum/thread is ignored before AP admission or network I/O.
+        outcome = await runtime.handle_normalized_message_create(foreign, adapter=adapter)
+        assert outcome.status == 'ignored'
+        assert db.discord_fanout_groups.get_message_group_by_source_message(402) is None
         assert len(gateway.requests) == 2 and len(adapter.replies) == 2
     finally:
         db.close()
@@ -205,7 +297,10 @@ async def test_failed_sibling_does_not_block_healthy_target(tmp_path):
         assert result.status == 'published' and len(gateway.requests) == 1
         group = db.discord_fanout_groups.get_thread_group_by_source_thread(200)
         delivered = db.discord_fanout_groups.get_thread_deliveries(group.id)
-        assert sorted(d.discord_channel_id for d in delivered) == [100, 102]
+        assert {d.channel_surface_id for d in delivered} == {
+            db.platform_surfaces.resolve_claim('discord-primary', '100').id,
+            db.platform_surfaces.resolve_claim('discord-primary', '102').id,
+        }
     finally:
         db.close()
 
@@ -222,9 +317,12 @@ async def test_human_reply_originating_in_mirror_is_a_new_canonical_comment(tmp_
         assert len(gateway.requests) == 2
         group = db.discord_fanout_groups.get_message_group_by_source_message(700)
         deliveries = db.discord_fanout_groups.get_message_deliveries(group.id)
-        assert sorted((d.discord_channel_id, d.discord_thread_id)
-                      for d in deliveries) == [(100, 200), (101, 1101), (102, 1102)]
-        assert [r[1].external_message_id for r in adapter.replies] == ['300', '2102']
+        assert {(d.channel_surface_id, d.external_thread_id) for d in deliveries} == {
+            (db.platform_surfaces.resolve_claim('discord-primary', '100').id, '200'),
+            (db.platform_surfaces.resolve_claim('discord-primary', '101').id, '1101'),
+            (db.platform_surfaces.resolve_claim('discord-primary', '102').id, '1102'),
+        }
+        assert {r[0].external_thread_id: r[1].external_message_id for r in adapter.replies} == {'200': '300', '1102': '2102'}
         # The previously-created bot mirror message must not be republished.
         mirrored = reply(forum='100', thread='200', message='3200', parent='300')
         replay = await runtime.handle_normalized_message_create(mirrored, adapter=adapter)
@@ -255,7 +353,7 @@ async def test_unregistered_source_author_cannot_publish_or_create_group(tmp_pat
         event, opening = starter()
         invalid = MessageView(opening.message,
                               AuthorRef('discord-primary', '999', 'human', 'Unknown'),
-                              opening.content)
+                              opening.content, created_at=opening.created_at)
         result = await runtime.handle_normalized_thread_create(event, invalid, adapter=adapter)
         assert result.status == 'ignored' and result.reason == 'unregistered_user'
         assert len(gateway.requests) == len(adapter.posts) == 0
@@ -290,9 +388,13 @@ async def test_remote_community_thread_receipt_mode_controls_durable_mirror(tmp_
         assert len(gateway.requests) == 1 and len(adapter.posts) == 2
         group = db.discord_fanout_groups.get_thread_group_by_source_thread(200)
         deliveries = db.discord_fanout_groups.get_thread_deliveries(group.id)
-        assert sorted(row.discord_channel_id for row in deliveries) == expected_channels
-        assert next(row.discord_starter_message_id for row in deliveries
-                    if row.discord_channel_id == 102) == 2102
+        assert {row.channel_surface_id for row in deliveries} == {
+            db.platform_surfaces.resolve_claim('discord-primary', str(n)).id
+            for n in expected_channels
+        }
+        assert next(row.external_starter_message_id for row in deliveries
+                    if row.channel_surface_id == db.platform_surfaces.resolve_claim(
+                        'discord-primary', '102').id) == '2102'
     finally:
         db.close()
 
@@ -326,9 +428,39 @@ async def test_remote_community_reply_receipt_mode_controls_durable_mirror(tmp_p
         assert len(gateway.requests) == 2 and len(adapter.replies) == 2
         group = db.discord_fanout_groups.get_message_group_by_source_message(400)
         deliveries = db.discord_fanout_groups.get_message_deliveries(group.id)
-        assert sorted(row.discord_channel_id for row in deliveries) == expected_channels
-        assert next(row.discord_message_id for row in deliveries
-                    if row.discord_channel_id == 102) == 4102
+        assert {row.channel_surface_id for row in deliveries} == {
+            db.platform_surfaces.resolve_claim('discord-primary', str(n)).id
+            for n in expected_channels
+        }
+        assert next(row.external_message_id for row in deliveries
+                    if row.channel_surface_id == db.platform_surfaces.resolve_claim(
+                        'discord-primary', '102').id) == '4102'
         assert adapter.replies[1][1].external_message_id == '2102'
+    finally:
+        db.close()
+
+@pytest.mark.asyncio
+async def test_normalized_root_reply_without_explicit_reference_admits_once(tmp_path):
+    """A plain human forum reply is not rejected by duplicate source receipt writers.
+
+    The canonical persistence layer may normalize a root's physical parent to
+    the starter. The runtime must use that checked SQLite source receipt rather
+    than writing a contradictory second row with a missing reply reference.
+    """
+    db, runtime, gateway, adapter = world(tmp_path, forum_ids=(100, 101))
+    try:
+        event, opening = starter()
+        await runtime.handle_normalized_thread_create(event, opening, adapter=adapter)
+        result = await runtime.handle_normalized_message_create(
+            reply(message='400', parent=None), adapter=adapter,
+        )
+        row = db.discord_fanout_groups.get_message_group_by_source_message(400)
+        assert result.status == 'published' and row is not None
+        source = db.discord_fanout_groups.get_message_delivery_by_ref(
+            MessageRef('discord-primary', '200', '400'),
+        )
+        assert source is not None and source.message_group_id == row.id
+        assert len(db.discord_fanout_groups.get_message_deliveries(row.id)) == 2
+        assert len(gateway.requests) == 2 and len(adapter.replies) == 1
     finally:
         db.close()

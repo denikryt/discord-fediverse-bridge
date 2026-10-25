@@ -1,6 +1,9 @@
 """Runtime scenarios for personal feed control plane Discord-originated ActivityPub publishing."""
 
 from __future__ import annotations
+from src.platform_types import MessageRef
+from support.community_events import configure_renderer, source_ids, OBSERVED_AT
+
 from support.runtime import build_test_policy_service
 
 from pathlib import Path
@@ -17,6 +20,7 @@ from tests_constants import BRIDGE_HOST_DOMAIN, LEMMY_EXAMPLE_DOMAIN
 
 def _service(database, fedify_gateway: AsyncMock) -> ContentPublishService:
     """Build the personal feed control plane publish service with one fake gateway boundary."""
+    configure_renderer(fedify_gateway, database)
     return ContentPublishService(
         database=database,
         fedify_gateway=fedify_gateway,
@@ -33,9 +37,9 @@ async def test_thread_starter_from_registered_user_publishes_and_persists_mappin
     database = build_database(tmp_path, "bridge-personal feed control plane.db")
     add_accepted_subscription(database)
     add_registered_user(database)
-    post_object_url = f"https://{BRIDGE_HOST_DOMAIN}/actors/users/alice/objects/posts/1"
+    post_object_url = source_ids(database, kind='post', message=300)[2]
     post_activity_url = (
-        f"https://{BRIDGE_HOST_DOMAIN}/actors/users/alice/activities/create/posts/1"
+        source_ids(database, kind='post', message=300)[1]
     )
     fedify_gateway = AsyncMock()
     fedify_gateway.publish_content.return_value = build_publish_result(
@@ -50,9 +54,7 @@ async def test_thread_starter_from_registered_user_publishes_and_persists_mappin
         starter_message=starter_message,
     )
 
-    mapping = database.message_mappings.get_message_mapping_by_discord_message_id(
-        starter_message.id
-    )
+    mapping = database.message_mappings.get_by_source_ref(MessageRef('discord-primary', '200', str(starter_message.id)))
     stored_object = (
         database.activitypub_objects.get_published_activity_object_by_object_id(
             post_object_url
@@ -61,7 +63,7 @@ async def test_thread_starter_from_registered_user_publishes_and_persists_mappin
 
     assert result.status == "published"
     assert result.reason == "published"
-    fedify_gateway.publish_content.assert_awaited_once()
+    fedify_gateway.render_community.assert_awaited_once()
     assert mapping is not None
     assert mapping.activity_id == post_activity_url
     assert stored_object is not None
@@ -89,7 +91,7 @@ async def test_thread_starter_from_unregistered_user_is_ignored_and_replied_to(
 
     assert result.status == "ignored"
     assert result.reason == "unregistered_user"
-    fedify_gateway.publish_content.assert_not_awaited()
+    fedify_gateway.render_community.assert_not_awaited()
     starter_message.reply.assert_awaited_once_with(UNREGISTERED_REPLY)
 
 
@@ -102,17 +104,17 @@ async def test_thread_message_from_registered_user_publishes_as_comment(
     add_accepted_subscription(database)
     add_registered_user(database)
     thread = build_thread()
-    post_object_url = f"https://{BRIDGE_HOST_DOMAIN}/actors/users/alice/objects/posts/1"
-    comment_object_url = f"https://{BRIDGE_HOST_DOMAIN}/actors/users/alice/objects/comments/1"
+    post_object_url = source_ids(database, kind='post', message=300)[2]
+    comment_object_url = source_ids(database, kind='comment', message=301)[2]
     comment_activity_url = (
-        f"https://{BRIDGE_HOST_DOMAIN}/actors/users/alice/activities/create/comments/1"
+        source_ids(database, kind='comment', message=301)[1]
     )
     thread_group = database.discord_fanout_groups.create_thread_group(
         community_actor_id=f"https://{LEMMY_EXAMPLE_DOMAIN}/c/hackers",
         source_channel_id=100,
         source_thread_id=thread.id,
         source_starter_message_id=300,
-        ap_activity_id=f"https://{BRIDGE_HOST_DOMAIN}/actors/users/alice/activities/create/posts/1",
+        ap_activity_id=source_ids(database, kind='post', message=300)[1],
         ap_object_id=post_object_url,
     )
     database.discord_fanout_groups.add_thread_delivery(
@@ -131,9 +133,7 @@ async def test_thread_message_from_registered_user_publishes_as_comment(
 
     result = await service.publish_thread_message(message=message)
 
-    mapping = database.message_mappings.get_message_mapping_by_discord_message_id(
-        message.id
-    )
+    mapping = database.message_mappings.get_by_source_ref(MessageRef('discord-primary', '200', str(message.id)))
     stored_object = (
         database.activitypub_objects.get_published_activity_object_by_object_id(
             comment_object_url
@@ -142,7 +142,7 @@ async def test_thread_message_from_registered_user_publishes_as_comment(
 
     assert result.status == "published"
     assert result.reason == "published"
-    fedify_gateway.publish_content.assert_awaited_once()
+    fedify_gateway.render_community.assert_awaited_once()
     assert mapping is not None
     assert mapping.object_id == comment_object_url
     assert stored_object is not None
@@ -159,7 +159,7 @@ async def test_thread_reply_uses_parent_comment_object_id_when_available(
     add_accepted_subscription(database)
     add_registered_user(database)
     thread = build_thread()
-    post_object_url = f"https://{BRIDGE_HOST_DOMAIN}/actors/users/alice/objects/posts/1"
+    post_object_url = source_ids(database, kind='post', message=300)[2]
     parent_comment_object_url = (
         f"https://{BRIDGE_HOST_DOMAIN}/actors/users/alice/objects/comments/parent"
     )
@@ -168,7 +168,7 @@ async def test_thread_reply_uses_parent_comment_object_id_when_available(
         source_channel_id=100,
         source_thread_id=thread.id,
         source_starter_message_id=300,
-        ap_activity_id=f"https://{BRIDGE_HOST_DOMAIN}/actors/users/alice/activities/create/posts/1",
+        ap_activity_id=source_ids(database, kind='post', message=300)[1],
         ap_object_id=post_object_url,
     )
     database.discord_fanout_groups.add_thread_delivery(
@@ -198,7 +198,7 @@ async def test_thread_reply_uses_parent_comment_object_id_when_available(
     fedify_gateway.publish_content.return_value = build_publish_result(
         kind="comment",
         activity_id=f"https://{BRIDGE_HOST_DOMAIN}/actors/users/alice/activities/create/comments/2",
-        object_id=f"https://{BRIDGE_HOST_DOMAIN}/actors/users/alice/objects/comments/2",
+        object_id=source_ids(database, message=402, kind='comment')[2],
     )
     service = _service(database, fedify_gateway)
     message = build_thread_message(
@@ -210,10 +210,10 @@ async def test_thread_reply_uses_parent_comment_object_id_when_available(
 
     await service.publish_thread_message(message=message)
 
-    request = fedify_gateway.publish_content.await_args.args[0]
+    request = fedify_gateway.render_community.await_args.args[0]
     stored_object = (
         database.activitypub_objects.get_published_activity_object_by_object_id(
-            f"https://{BRIDGE_HOST_DOMAIN}/actors/users/alice/objects/comments/2"
+            source_ids(database, message=402, kind='comment')[2]
         )
     )
     assert request.in_reply_to_object_id == parent_comment_object_url
@@ -244,7 +244,7 @@ async def test_thread_message_in_pending_subscription_is_ignored(
 
     assert result.status == "ignored"
     assert result.reason == "subscription_not_active"
-    fedify_gateway.publish_content.assert_not_awaited()
+    fedify_gateway.render_community.assert_not_awaited()
 
 
 @pytest.mark.asyncio
@@ -266,7 +266,7 @@ async def test_message_without_thread_group_returns_no_post_context(
 
     assert result.status == "ignored"
     assert result.reason == "no_post_context"
-    fedify_gateway.publish_content.assert_not_awaited()
+    fedify_gateway.render_community.assert_not_awaited()
 
 
 @pytest.mark.asyncio
@@ -278,8 +278,8 @@ async def test_gateway_publish_failure_does_not_store_false_success_mapping(
     add_accepted_subscription(database)
     add_registered_user(database)
     fedify_gateway = AsyncMock()
-    fedify_gateway.publish_content.side_effect = RuntimeError("boom")
     service = _service(database, fedify_gateway)
+    fedify_gateway.render_community.side_effect = RuntimeError("boom")
     thread = build_thread()
     starter_message = build_starter_message()
 
@@ -290,8 +290,6 @@ async def test_gateway_publish_failure_does_not_store_false_success_mapping(
         )
 
     assert (
-        database.message_mappings.get_message_mapping_by_discord_message_id(
-            starter_message.id
-        )
+        database.message_mappings.get_by_source_ref(MessageRef('discord-primary', '200', str(starter_message.id)))
         is None
     )

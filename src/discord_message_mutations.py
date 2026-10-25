@@ -18,7 +18,7 @@ import discord
 from .db import Database
 from .discord_event_router import DiscordEventRouter
 from .runtime_ports import DiscordMutationContext, PlatformAdapterPort
-from .platform_types import MessageDeleted, MessageUpdated, PlatformOperationError
+from .platform_types import MessageDeleted, MessageUpdated, PlatformOperationError, MessageRef
 from .discord_legacy_projection import discord_id_to_legacy_int
 
 logger = logging.getLogger(__name__)
@@ -100,6 +100,14 @@ class DiscordMessageMutationHandler:
         A partial edit is reconciled via an adapter-owned neutral read; never
         pass a Discord SDK message through to the federation runtime.
         """
+        # Community mutations are admitted by exact source identity before any
+        # Discord-integer projection. Only the independent Personal Feed route
+        # retains the old numeric ID boundary until its own neutral migration.
+        if hasattr(self.database, "activitypub_objects"):
+            await self._handle_typed_mutation(event, reader, is_delete=False)
+            return
+        # Personal Feed retains legacy Discord-integer mutation routing.
+        # Community mutations resolve typed canonical sources and copies.
         channel_id, message_id, guild_id = self._validate_platform_identity(event, reader)
         if self._was_recent(self._recent_edits, message_id):
             return
@@ -146,6 +154,11 @@ class DiscordMessageMutationHandler:
         self, event: MessageDeleted, reader: PlatformAdapterPort,
     ) -> None:
         """Admit ID-only normalized deletion without fetching an SDK message."""
+        if hasattr(self.database, "activitypub_objects"):
+            await self._handle_typed_mutation(event, reader, is_delete=True)
+            return
+        # Personal Feed retains legacy Discord-integer mutation routing.
+        # Community mutations resolve typed canonical sources and copies.
         _, message_id, guild_id = self._validate_platform_identity(event, reader)
         if self._was_recent(self._recent_deletes, message_id):
             return
@@ -163,6 +176,139 @@ class DiscordMessageMutationHandler:
             )
         except Exception:
             logger.exception("[platform_message_delete] failed for message %s", message_id)
+
+    async def _handle_typed_mutation(
+        self, event: MessageUpdated | MessageDeleted,
+        reader: PlatformAdapterPort, *, is_delete: bool,
+    ) -> None:
+        """Route exact Community source refs; retain only Personal Feed legacy routing.
+
+        Read-only source and current surface validation happen before any
+        content fetch or author mutation reservation. A numeric collision in
+        another thread must never fall through to the old Community router.
+        """
+        if event.connector_key != reader.connector.key or event.connector_key != "discord-primary":
+            raise PlatformOperationError("invalid_request", "mutation connector mismatch")
+        seen = self._recent_deletes if is_delete else self._recent_edits
+        if self._was_recent(seen, event.message):
+            return
+        if event.external_guild_id is not None and not event.external_guild_id.isdecimal():
+            raise PlatformOperationError("invalid_request", "invalid mutation guild")
+
+        published = self.database.activitypub_objects.get_by_source_ref(event.message)
+        if published is None:
+            # An unrecognized source is not a reason to mutate a numeric-ID
+            # Community delivery in another thread. Only legacy Personal Feed
+            # mappings are eligible for the separate integer-owned path.
+            try:
+                legacy = self.database.message_mappings.get_message_mapping_by_discord_message_id(
+                    int(event.message.external_message_id)
+                ) if event.message.external_message_id.isdecimal() else None
+            except ValueError:
+                return
+            if legacy is None or legacy.publication_context != "personal_feed":
+                return
+            await self._handle_personal_feed_mutation(event, legacy.object_id, reader, is_delete=is_delete)
+            return
+        if published.publication_context == "personal_feed":
+            await self._handle_personal_feed_mutation(event, published.object_id, reader, is_delete=is_delete)
+            return
+        if published.publication_context != "community":
+            return
+        from .db.repositories.activitypub_objects import resolve_community_mutation_source
+
+        actor = event.actor if is_delete else event.author
+        if actor is not None and (actor.kind != "human" or actor.is_bridge_owned):
+            return
+        with self.database.session() as session:
+            proof = resolve_community_mutation_source(
+                session, event.message,
+                external_guild_id=event.external_guild_id,
+                actor_external_id=actor.external_actor_id if actor else None,
+            )
+        if proof is None or not self.event_router._is_guild_allowed(proof.guild_id):
+            return
+        context = self._mutation_context_provider()
+        if context is None or context.user_actor_delivery_service is None:
+            return
+        try:
+            if is_delete:
+                outcome = await context.user_actor_delivery_service.submit_delete(
+                    object_id=proof.object_id, source_message=event.message,
+                )
+            else:
+                content = event.content
+                edited_at = event.edited_at
+                if content is None or edited_at is None:
+                    try:
+                        view = await reader.fetch_message(event.message)
+                    except PlatformOperationError as exc:
+                        # The durable exact-source flag is not shared by an
+                        # unrelated message with the same Discord snowflake.
+                        self.database.content_mutations.request_discord_reconciliation_by_source_ref(
+                            source=event.message, error=str(exc),
+                        )
+                        context.user_actor_delivery_wake.wake()
+                        return
+                    if view.message != event.message:
+                        raise PlatformOperationError("invalid_request", "Discord read returned another message")
+                    if (view.author is None or view.author.kind != "human"
+                        or view.author.is_bridge_owned):
+                        return
+                    with self.database.session() as session:
+                        if resolve_community_mutation_source(
+                            session, event.message,
+                            external_guild_id=event.external_guild_id,
+                            actor_external_id=view.author.external_actor_id,
+                        ) is None:
+                            return
+                    content, edited_at = view.content, view.edited_at
+                if content is None or not content.body or edited_at is None:
+                    return
+                outcome = await context.user_actor_delivery_service.submit_update(
+                    object_id=proof.object_id,
+                    title=proof.title,
+                    body_markdown=content.body,
+                    edited_timestamp=edited_at,
+                    source_message=event.message,
+                )
+            if outcome == "accepted":
+                context.user_actor_delivery_wake.wake()
+        except PlatformOperationError:
+            raise
+        except Exception:
+            # The author mutation must stay in its persisted desired state;
+            # do not retry any physical effect through the old SDK router.
+            logger.exception("[typed_community_mutation] failed for %s", event.message)
+
+    async def _handle_personal_feed_mutation(
+        self, event: MessageUpdated | MessageDeleted, object_id: str,
+        reader: PlatformAdapterPort, *, is_delete: bool,
+    ) -> None:
+        """Reserve a Personal Feed mutation without enabling numeric Community fanout."""
+        context = self._mutation_context_provider()
+        if context is None or context.user_actor_delivery_service is None:
+            return
+        if is_delete:
+            outcome = await context.user_actor_delivery_service.submit_delete(object_id=object_id)
+        else:
+            content, edited_at = event.content, event.edited_at
+            if content is None or edited_at is None:
+                try:
+                    view = await reader.fetch_message(event.message)
+                except PlatformOperationError:
+                    return  # Personal Feed legacy reconciliation has its own worker.
+                if view.message != event.message:
+                    raise PlatformOperationError("invalid_request", "wrong Personal Feed message")
+                content, edited_at = view.content, view.edited_at
+            if content is None or edited_at is None or not content.body:
+                return
+            outcome = await context.user_actor_delivery_service.submit_update(
+                object_id=object_id, title=None,
+                body_markdown=content.body, edited_timestamp=edited_at,
+            )
+        if outcome == "accepted":
+            context.user_actor_delivery_wake.wake()
 
     def track_message_edit(self, message_id: int) -> None:
         """Record one bridge-originated Discord edit for raw-event suppression."""

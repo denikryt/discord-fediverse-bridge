@@ -2,6 +2,128 @@
 
 This document explains the major runtime traces through the bridge: user/platform action, important preconditions, modules called, database effects, and outbound effects. It owns step-by-step behavior flow descriptions, not exhaustive function internals.
 
+## Single production Community Create entry
+
+`BridgeBot` submits observed SDK creates only through `DiscordAdapter` and
+`PlatformEventIngress`. `DiscordEventRouter` now exposes only its normalized
+`handle_platform_thread_create` / `handle_platform_message_create` entry points
+for Community publication. The former raw SDK `handle_thread_create` /
+`handle_message` router methods have been removed; neither would persist a
+`PlatformDeliveryIntent` before physical fanout. These names remain **absent**
+from the production router API. Personal Feed and physical Update/Delete retain
+their separate existing owners. `CommunityRuntime` and `LocalCommunityRuntime`
+also expose only typed Create entry points. The four raw runtime methods,
+raw host/subscriber Create handlers and SDK-only Create fanout helpers were
+removed after migrating all in-repository consumers. Tests observe source
+messages at the transport boundary and exercise real canonical admission and
+coordinator persistence. External callers of the removed raw APIs must migrate
+to the verified platform ingress; there is no compatibility fallback.
+
+## Typed forum source admission
+
+A verified forum `ChannelRef` enters `content_sync.surface_resolution` with
+the actual connector, parent forum kind, and guild identity. The resolver
+queries `ChannelSurface` and the owner row together: active Local host, active
+Local subscriber with active owning community, or accepted Remote subscription.
+Unknown metadata and an inactive/rebound claim cannot publish. The frozen
+`ResolvedForumSource` is a candidate: persistence and later sends must
+revalidate it in the SQLite writer transaction. Exact authored source lookups
+use `(connector, immediate container, message id)` rather than global Discord
+message IDs. The raw Community Create routes are removed during the typed
+ingress cutover, rather than kept as a parallel live ingress.
+
+## Community Create — render, atomic admission, signed send
+
+1. A verified Discord forum starter or reply enters the single normalized
+   `PlatformEventIngress`; the runtime selects the exact current Local or
+   Remote Community owner by connector, forum surface and policy. Bot, webhook,
+   unknown and mismatched starter/reply sources cannot claim canonical authorship.
+2. `ContentPublishService` derives stable Page/Note/Create IDs from the exact
+   `(connector, immediate container, physical message)` source and uses its
+   original timezone-aware `created_at` rather than Gateway receipt time.
+   Fedify `/render-community` validates these IDs and returns JSON, **without**
+   signed network delivery. Legacy `/publish` routes now reject send-before-save.
+3. One SQLite writer transaction saves the source mapping, authored AP object,
+   Local/Remote canonical post or comment, source physical receipt and
+   `UserActorOutboundSource`. The same commit adds authorized Remote Group
+   direct recipients and/or immutable Local Group Announce snapshots. If source
+   ownership, parent or any identity changes, the whole graph rolls back.
+4. After commit, the existing User Actor worker may send a stored signed User
+   activity to a verified direct community actor; Local Group announcements
+   use the existing federation worker and Group signing identity. A current
+   accepted Follow incarnation and inbox remain required at both claim and
+   pre-POST checks. No followers is a valid committed canonical publication.
+5. Duplicate Gateway ingress adopts the original canonical graph; a failed
+   recipient does not authorize a fresh ActivityPub Create ID. Physical fanout,
+   edits and crash recovery use the delivery and mutation coordinators described
+   below.
+
+## Canonical parent tombstone gate
+
+An inbound remote AP comment with a mapped canonical parent is admitted only
+when the owning post belongs to the expected remote community **and has no
+`deleted_at` tombstone**. A known nested comment parent must also be live and
+belong to that same canonical post. These checks occur before retaining the
+child's AP provenance or creating a delivery intent. An existing physical
+starter/message row is historical receipt evidence, **not** authorization to
+resurrect a deleted parent. Remote post backfill refuses an already-deleted
+canonical group before fetching or reusing its physical copies.
+
+The Local Community inbound handler enforces the same boundary before
+recording the new child's AP source, including where a deleted nested parent's
+old host message still exists. A late or forged child is skipped without
+physical POST or a poisoned canonical admission; the intent repository repeats
+these constraints transactionally when the physical request is reserved.
+
+The unused legacy Discord-SDK-only parent-backfill helper has been removed;
+normalized runtime delivery always uses the durable typed coordinator.
+
+## Physical Community Create and restart recovery
+
+1. After canonical Local/Remote Community admission, each eligible forum is
+   reserved by `(connector, surface, canonical object)` in the existing SQLite
+   v1 `platform_delivery_intents` table. An unavailable identified nested
+   parent leaves an immutable logical `blocked` dependency, never a guess at
+   a physical reply target.
+2. The coordinator materializes the complete typed DTO and commits a `pending`
+   intent before any adapter Create. Its exact authorized claim changes
+   `pending → dispatching`; the SDK call occurs outside the writer lock.
+3. A checked thread + distinct starter receipt, or checked message receipt,
+   commits the physical copy and `delivered` in one transaction. Revocation
+   after a successful send retains an original-owner orphan receipt instead of
+   assigning the copy to a rebound forum. An unknown send remains `unresolved`.
+4. Confirmed parent delivery wakes children only when the same target thread
+   has a verified physical parent. The pre-POST gate rechecks current owner,
+   canonical tombstone, active community and accepted subscription.
+5. After Discord SDK READY, the existing Discord delivery scheduler runs
+   `PlatformFanoutCoordinator.recover_pending()` in its own joined lifecycle.
+   Only verified `pending` and parent-unblocked materializations may initiate
+   a physical Create. Expired `dispatching` becomes `unresolved`; missing HTTP
+   receipts, worker restarts and duplicate AP ingress never prove safe retry.
+
+## Inbound AP Update/Delete — persist and physical reconciliation
+
+An authenticated inbound Local or Remote Community post/comment Update commits
+the normalized complete content, trusted source version and monotonic revision
+in the owning canonical SQLite row **even when there are zero physical copies**.
+An authorized Delete commits a permanent tombstone and cancels definitely-unsent
+Create intents before any network side effect. A duplicate or stale Update
+cannot overwrite this state. The eight AP mutation handlers request a physical
+mutation recovery pass, never call the old direct Discord SDK fanout.
+
+`content_sync.platform_mutations.PlatformPhysicalMutationCoordinator` inspects
+all four physical-copy tables, including copies retained from released v0 that
+have no Create intent. It verifies bot ownership, current surface authorization
+and the exact connector/container/message location; under one SQLite writer
+transaction it claims an eligible lagging revision. The Discord app supplies a
+pure content renderer and current guild policy check at the provider boundary.
+A successful typed `edit_message` acknowledges `copy.applied_revision` with a
+CAS; a deletion is presented as a tombstone edit to preserve discussion history.
+An unknown response, expired dispatch or racing ownership/revision change
+remains explicitly unresolved or unacknowledged rather than causing a blind
+retry. The existing Discord-ready scheduler scans outstanding copy revisions
+after restart; no second mutation queue or worker is introduced.
+
 ## Registration flow
 
 1. `/register` starts in `src/commands/register.py` and browser routes in `src/http_api.py`.
@@ -36,14 +158,35 @@ subscriptions accepted.
 3. If it was the last channel for the community, Python calls gateway `/unfollow-community`.
 4. The bridge follow row is removed or preserved according to Undo(Follow) delivery outcome.
 
-## Discord Local Community source edit/delete (local subscriber synchronization Checkpoint 39)
+## Typed Discord Community author Update/Delete
 
-1. Typed Discord Gateway mutation ingress retains the original physical message ID; `DiscordEventRouter` resolves a persisted Local Community starter or comment surface before invoking `LocalCommunityRuntime`.
-2. `LocalCommunityMutationHandler` verifies source community lifecycle and active subscriber-origin authority (if applicable), finds the persisted canonical AP object, and submits its Update/Delete through the existing federation service.
-3. The runtime-bound `DiscordAdapter` is passed to `LocalCommunitySurfaceFanout`, which enumerates canonical host and subscriber surface receipts. It omits the physical source copy.
-4. Before each target edit/tombstone, `LocalCommunityDiscordFanout` rechecks current host placement or active local subscriber identity, including original subscriber row ID, community, guild policy and parent thread mapping. Historical receipts alone never authorize a mutation.
-5. Edits fetch an exact scoped `MessageRef`, preserve each copy's existing attribution header, and refuse a mismatched/unknown read. Deletes keep the visible `*deleted by creator*` marker. Per-target failure does not issue a legacy SDK fallback or block healthy copies.
-6. These are best-effort mutations; there is no new delivery queue or local subscriber participation recovery. Direct SDK test callers without a bound adapter remain supported until the final dependency-audit cutover.
+1. Raw SDK edit/delete enters `DiscordAdapter` and the single normalized
+   `PlatformEventIngress` as a `MessageUpdated`/`MessageDeleted` whose source is
+   `(connector, immediate thread, message ID)`. Neither source resolution nor
+   Community AP mutation submission casts that tuple into one numeric ID.
+2. `DiscordMessageMutationHandler` resolves `PublishedActivityObject` and
+   `MessageMapping` by the **exact** source tuple. The neutral forum source
+   resolver validates its current channel-surface owner, guild, live
+   Local/Remote Community and canonical post/comment source metadata. Unknown,
+   rebound, mirrored, inbound and foreign-author refs produce no authored AP
+   mutation. A stale numeric-ID collision cannot fall through to Community.
+3. For a complete authorized edit, the existing User Actor delivery service
+   reserves an Update to the original published AP object. For an ID-only
+   authorized delete, it reserves Delete without a content fetch. A partial
+   edit with unavailable Discord read marks durable reconciliation on the
+   **exact** published source, not on another message in a sibling thread.
+   Deferred reads after restart use the immediate thread container, not the
+   parent forum. Current source ownership is rechecked before the read **and**
+   in the SQLite writer; an unknown/404 partial read cannot invent an author
+   Delete or overwrite an unrelated physical message.
+4. Once the User Actor mutation is committed, the existing Community physical
+   mutation worker reconciles current canonical revisions to bot-owned copies.
+   No old `DiscordFanout.propagate_edit/delete` runs before canonical admission;
+   unknown physical effects stay `unresolved` until positive proof.
+5. Personal Feed is a separate owner of numeric-only legacy source mappings.
+   Community source events are never offered to the old numeric router. The
+   remaining Personal Feed compatibility is explicitly scoped to its own
+   future typed source/mutation conversion, not a second Community publisher.
 
 ## Discord Personal Feed root -> ActivityPub Create (local subscriber synchronization)
 
@@ -312,3 +455,69 @@ and transport cutover of community fanout are still in progress.
 4. A failure of one Discord surface does not block the others. The existing
    `LocalCommunityFederationFanout` relays to eligible remote subscribers.
    SDK-backed Discord-originated mutations remain a separate pending cutover.
+
+## Physical target Create admission
+
+A canonical Local/Remote object can have multiple physical forum targets. For
+normalized Local/Remote sibling targets, the current owner/surface is resolved
+from `(connector, forum)` before a `PlatformDeliveryIntent` is inserted. A
+complete typed Create request and immutable fingerprint are committed before
+sending; only one worker transitions `pending → dispatching` for a target. A
+verified response commits a typed copy mapping and `delivered` atomically.
+If the owner has rebound, the returned thread/starter or message identity
+stays on the original intent as a verified orphan, never on the new owner.
+Unknown results and expired dispatches remain unresolved, with no automatic
+Create replay. Nested-parent materialization, inbound AP destinations and
+startup reconciliation have separate admission and recovery paths; this
+section describes target reservation and receipt ownership.
+
+## Remote Community typed physical receipt continuation
+
+The physical Create coordinator commits Remote Community post copies with
+`(connector_id, channel_surface_id, external_thread_id,
+external_starter_message_id)` and leaves legacy nullable `discord_*` columns
+unset. On a later verified normalized Discord reply, the Remote Community
+runtime resolves the **exact** `ThreadRef` under the current forum claim,
+then enumerates sibling copies using their typed IDs and accepted subscription
+owner. A human in a mirrored thread is still a valid source, but a matching
+thread ID from another forum or a revoked/rebound claim cannot become one.
+For each destination, the actual starter `MessageRef` or the actual parent
+comment `MessageRef` is resolved **within that thread**, not by bare Discord
+message ID. If an identified canonical nested parent has no target copy, the
+coordinator reserves a `blocked` intent without a physical request. Its
+immutable DTO is constructed only after the exact parent receipt appears;
+unknown source references retain the established root fallback. Inbound
+ActivityPub comments and post backfill consult the same typed thread receipts.
+
+
+## Author mutation: rendered activity awaiting local commit
+
+1. `UserActorDeliveryService.drain_mutations` persists the verified renderer JSON
+   as `canonical_ready` before applying the local canonical transaction. The
+   existing claim token/lease continues to own this local commit; another worker
+   may claim it only after release or expiry.
+2. A commit exception or revision-CAS refusal retains that exact JSON, activity
+   ID and desired intent. The repository records `last_error`, clears ownership
+   and schedules bounded exponential `next_attempt_at`. It does not classify a
+   verified render as ambiguous or abort it as an unsent request.
+3. A recovery claim counts another attempt and retries the stored local commit,
+   without calling render or inbox transport again. A successful commit clears
+   the error/backoff and atomically advances the publication, domain canonical
+   row and durable outbound source. A stale owner cannot release a newer token.
+
+`tests/behavior/test_canonical_ready_commit_recovery.py` covers missing canonical
+rows, an actual SQL flush failure on an otherwise verified source, lease theft
+and a refused revision CAS. The tests repair state and reopen the database to
+verify recovery without duplicate rendering or outbound source creation.
+
+## Inherited runtime integration corrections
+
+An authenticated Local Group Undo removes only the matching current Follow
+incarnation. The handler reports `processed/applied` after that transactional
+removal; a stale Undo remains skipped and cannot remove a newer Follow.
+
+An authenticated child Delete may deliver its tombstone to existing bot-owned
+copies even when the owning post has already been deleted. The current surface
+owner, policy and positive transport ownership checks still apply. A pending
+live child Update remains blocked by the parent tombstone. Recovery uses the
+persisted child revision ACK, so restarting does not repeat the physical edit.

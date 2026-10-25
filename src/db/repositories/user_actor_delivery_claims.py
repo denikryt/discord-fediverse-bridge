@@ -16,6 +16,11 @@ from ...models import (
     UserActorOutboundDelivery,
     UserActorOutboundDeliveryFollower,
     UserActorOutboundSource,
+    ChannelCommunitySubscription,
+    ChannelSurface,
+    PublishedActivityObject,
+    InboundConversationObject,
+    RemoteActor,
 )
 from .user_actor_delivery_types import ClaimedUserActorDelivery
 
@@ -79,9 +84,10 @@ class UserActorDeliveryClaimRepository:
 
                 # Historical audience rows are transportable only while an
                 # exact snapshotted follower incarnation remains accepted.
-                represented_actor_ids = self._eligible_actor_ids(
-                    session, delivery.id, source.user_id
-                )
+                represented_actor_ids = tuple(dict.fromkeys((
+                    *self._eligible_actor_ids(session, delivery.id, source.user_id),
+                    *self._eligible_direct_actor_ids(session, delivery, source),
+                )))
                 user = session.get(User, source.user_id)
                 if not represented_actor_ids or user is None:
                     self._mark_terminal_without_claim(delivery, status="ineligible")
@@ -103,6 +109,26 @@ class UserActorDeliveryClaimRepository:
                     break
 
         return claimed
+
+    def revalidate_claim(self, delivery_id: int, token: str) -> tuple[str, ...]:
+        """Recheck current follower and direct grants just before signed transport.
+
+        A revoked Follow or re-bound forum after claim must never reuse the old
+        recipient snapshot to initiate a new HTTP send. An empty result denies
+        this claim; unrelated endpoint claims remain independent.
+        """
+        with self._immediate_session_provider() as session:
+            delivery = session.get(UserActorOutboundDelivery, delivery_id)
+            if (delivery is None or delivery.status != 'sending'
+                or delivery.claim_token != token):
+                return ()
+            source = session.get(UserActorOutboundSource, delivery.source_id)
+            if source is None or source.state != 'ready':
+                return ()
+            return tuple(dict.fromkeys((
+                *self._eligible_actor_ids(session, delivery.id, source.user_id),
+                *self._eligible_direct_actor_ids(session, delivery, source),
+            )))
 
     @staticmethod
     def _load_due_candidates(
@@ -286,6 +312,82 @@ class UserActorDeliveryClaimRepository:
             activity_json=json.loads(source.activity_json),
             claim_token=token,
         )
+
+    @staticmethod
+    def _eligible_direct_actor_ids(
+        session: Session, delivery: UserActorOutboundDelivery,
+        source: UserActorOutboundSource,
+    ) -> tuple[str, ...]:
+        """Revalidate remote Group subscription provenance for direct dispatch.
+
+        A URL alone cannot grant a send. This check binds the originally
+        published object, accepted Follow incarnation and currently owned
+        forum to the immutable target endpoint before each claim.
+        """
+        if not delivery.direct_authorizations_json or source.published_object_id is None:
+            return ()
+        try:
+            records = json.loads(delivery.direct_authorizations_json)
+        except (TypeError, ValueError):
+            return ()
+        published = session.get(PublishedActivityObject, source.published_object_id)
+        if published is None or not isinstance(records, list):
+            return ()
+        # An authorized terminal Delete requires a *committed* tombstone.
+        # Simply labeling an outbound source as Delete cannot authorize a
+        # network effect for an object that is still canonical-live.
+        if source.source_kind == 'content_delete':
+            if published.deleted_at is None:
+                return ()
+        elif published.deleted_at is not None:
+            return ()
+        authorized: set[str] = set()
+        for record in records:
+            if not isinstance(record, dict) or record.get('schemaVersion') != 1:
+                continue
+            if record.get('publishedObjectId') != published.id:
+                continue
+            if record.get('contextKind') == 'personal_feed_reply':
+                # An inbound parent proves direct reply context, while the
+                # current actor metadata binds the actual signed target inbox.
+                root = session.scalar(select(PublishedActivityObject).where(
+                    PublishedActivityObject.object_id == record.get('conversationRootObjectId'),
+                    PublishedActivityObject.publication_context == 'personal_feed',
+                    PublishedActivityObject.deleted_at.is_(None),
+                ))
+                parent = session.scalar(select(InboundConversationObject).where(
+                    InboundConversationObject.object_id == record.get('parentObjectId'),
+                    InboundConversationObject.conversation_root_object_id == record.get('conversationRootObjectId'),
+                    InboundConversationObject.actor_id == record.get('recipientActorId'),
+                    InboundConversationObject.deleted_at.is_(None),
+                ))
+                actor = session.scalar(select(RemoteActor).where(
+                    RemoteActor.actor_url == record.get('recipientActorId'),
+                ))
+                if (published.publication_context == 'personal_feed'
+                    and published.conversation_root_object_id == record.get('conversationRootObjectId')
+                    and published.in_reply_to_object_id == record.get('parentObjectId')
+                    and root is not None and parent is not None and actor is not None
+                    and delivery.target_endpoint_url == record.get('targetEndpointUrl')
+                    and (actor.shared_inbox_url or actor.inbox_url) == delivery.target_endpoint_url):
+                    authorized.add(parent.actor_id)
+                continue
+            if record.get('contextKind') != 'remote_community_publication':
+                continue
+            current = session.get(ChannelCommunitySubscription, record.get('subscriptionId'))
+            surface = session.get(ChannelSurface, record.get('sourceSurfaceId'))
+            if (current is None or surface is None
+                or current.status != 'accepted'
+                or surface.remote_subscription_id != current.id
+                or current.lemmy_community_actor_id != record.get('recipientActorId')
+                or published.community_actor_url != record.get('recipientActorId')
+                or current.follow_activity_id != record.get('followActivityId')
+                or current.community_inbox_url != record.get('targetEndpointUrl')
+                or delivery.target_endpoint_url != record.get('targetEndpointUrl')
+                or published.source_channel_surface_id != surface.id):
+                continue
+            authorized.add(current.lemmy_community_actor_id)
+        return tuple(sorted(authorized))
 
     @staticmethod
     def _eligible_actor_ids(

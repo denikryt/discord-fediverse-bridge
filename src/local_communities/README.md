@@ -73,6 +73,24 @@ mapping can be overwritten. A message surface must also belong to the
 canonical parent thread carried by its parent physical surface. There is no
 new queue or database schema.
 
+### Typed physical receipt handoff (post-review fix)
+
+Coordinator-created Local Community thread/starter and message receipts own their
+identities in `connector_id`, `channel_surface_id` and `external_*` columns.
+New physical copies deliberately leave the historical `discord_*` projections
+NULL; the sibling fan-out and inbound AP comment handlers therefore locate the
+root using the exact typed forum surface and use the physical thread's
+`external_thread_id` and `external_starter_message_id`. They do not infer a
+starter ID from a thread ID. A target's role and subscriber identity must still
+match the snapshot of that copy; a rebound forum cannot adopt an old root.
+
+For a known canonical nested parent missing on **one** destination, the
+handler persists a `blocked` Create intent in SQLite (no request JSON, claim,
+or POST). Once that same target thread has the independently verified parent
+receipt, the existing coordinator can materialize and deliver this child after
+restart; unrelated destinations continue. A deleted, unidentified, foreign,
+or cross-thread parent never grants a new intent or flat root fallback.
+
 ### local subscriber synchronization normalized Local Community source (Checkpoints 31–32)
 
 `LocalCommunityRuntime.handle_normalized_thread_create()` and
@@ -112,3 +130,22 @@ cannot authorize an overwrite. Deletes use the existing visible tombstone
 (`*deleted by creator*`). Per-surface failures are isolated and currently
 remain best-effort. Legacy Discord-originated mutation methods retain their
 SDK route until the separate remaining-dependency cutover.
+
+## Authored Group Announce lease recovery
+
+The Group-signed authored `Announce(Create/Update/Delete)` delivery ledger is
+scoped to the canonical AP object and the exact accepted Follow incarnation.
+Its existing federation scheduler reserves one attempt at a time; a confirmed
+Create is required before an Update. Claim expiry is **not** proof that a
+signed HTTP send was refused: the repository transitions an expired
+`dispatching` row to durable `ambiguous` and retains its attempt token and
+generation. This fences later Update/Delete across process restart without
+re-POSTing the activity. A positive response from the same recorded attempt
+can settle it; a late failure or mismatched attempt cannot. The scheduler's
+`limit=0` must not reserve any work. On **graceful cancellation** of a
+multi-recipient scheduler batch, only attempts *after* the currently awaited
+gateway send can be proven never started and returned to `failed_proven_unsent`.
+The in-flight signed HTTP request stays `dispatching` until a matching receipt
+or `ambiguous` lease expiration; a hard process kill cannot make non-send
+claims on the unexecuted remainder. See
+`tests/test_local_community_authored_announces.py` for SQLite regressions.

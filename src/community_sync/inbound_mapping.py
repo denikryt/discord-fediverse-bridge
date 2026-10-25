@@ -7,6 +7,8 @@ plumbing.
 
 from __future__ import annotations
 
+from .delivery_mapping import remote_thread_receipt, remote_thread_is_current
+
 
 def get_accepted_subscriptions(
     database: object, community_actor_id: str
@@ -54,10 +56,9 @@ def needs_backfill(
     if thread_group is None:
         return True
 
-    delivered_channel_ids = {
-        delivery.discord_channel_id
-        for delivery in database.discord_fanout_groups.get_thread_deliveries(
-            thread_group.id
-        )
-    }
+    delivered_channel_ids = set()
+    for delivery in database.discord_fanout_groups.get_thread_deliveries(thread_group.id):
+        refs = remote_thread_receipt(database, delivery)
+        if refs is not None and remote_thread_is_current(database, delivery, community_actor_id):
+            delivered_channel_ids.add(int(refs[0].channel.external_channel_id))
     return bool(accepted_channel_ids - delivered_channel_ids)

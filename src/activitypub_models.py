@@ -23,6 +23,9 @@ class ActivityPubObject(BaseModel):
     body_markdown: str | None = None
     url: str | None = None
     published_at: datetime
+    # Publication time is immutable. Update order is independent and must not
+    # be synthesized from transport receipt time when the remote source omits it.
+    updated_at: datetime | None = None
     author_name: str
     attributed_to_actor_id: str | None = None
 

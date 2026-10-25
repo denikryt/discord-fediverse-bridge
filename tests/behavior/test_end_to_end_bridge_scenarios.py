@@ -1,6 +1,8 @@
 """cross-workflow scenarios that exercise registration, follow, publish, and dedup together."""
 
 from __future__ import annotations
+from support.community_events import configure_renderer, OBSERVED_AT
+from src.platform_types import MessageRef
 from support.runtime import build_test_policy_service
 
 from datetime import UTC, datetime
@@ -17,7 +19,6 @@ from src.commands import subscribe
 from src.community_sync.runtime import CommunityRuntime
 from src.db import Database
 from src.content_publish_service import ContentPublishService
-from src.fedify_gateway_client import PublishContentResult
 from src.http_api import create_http_app
 from src.registration_service import RegistrationService
 from tests_constants import (
@@ -128,6 +129,7 @@ def _starter_message() -> SimpleNamespace:
     """Return one fake Discord starter message authored by the registered user."""
     return SimpleNamespace(
         id=300,
+        created_at=OBSERVED_AT,
         content="hello from discord",
         author=SimpleNamespace(id=1234567890, display_name="Denchik", name="denchik"),
         reply=AsyncMock(),
@@ -232,11 +234,7 @@ async def test_register_subscribe_accept_publish_then_echo_is_suppressed(
     assert accepted_subscription.status == "accepted"
 
     publish_gateway = AsyncMock()
-    publish_gateway.publish_content.return_value = PublishContentResult(
-        activity_id=f"https://{BRIDGE_HOST_DOMAIN}/actors/users/alice/activities/create/posts/1",
-        object_id=f"https://{BRIDGE_HOST_DOMAIN}/actors/users/alice/objects/posts/1",
-        community_actor_url=community_actor_url,
-    )
+    configure_renderer(publish_gateway, database)
     publish_service = ContentPublishService(
         database=database,
         fedify_gateway=publish_gateway,
@@ -430,11 +428,7 @@ async def test_failed_subscribe_retry_then_accept_allows_publish(
     assert accepted_subscription.status == "accepted"
 
     publish_gateway = AsyncMock()
-    publish_gateway.publish_content.return_value = PublishContentResult(
-        activity_id=f"https://{BRIDGE_HOST_DOMAIN}/actors/users/alice/activities/create/posts/2",
-        object_id=f"https://{BRIDGE_HOST_DOMAIN}/actors/users/alice/objects/posts/2",
-        community_actor_url=community_actor_url,
-    )
+    configure_renderer(publish_gateway, database)
     publish_service = ContentPublishService(
         database=database,
         fedify_gateway=publish_gateway,
@@ -446,7 +440,8 @@ async def test_failed_subscribe_retry_then_accept_allows_publish(
         thread=_thread(),
         starter_message=_starter_message(),
     )
-    mapping = database.message_mappings.get_message_mapping_by_discord_message_id(300)
+    mapping = database.message_mappings.get_by_source_ref(
+        MessageRef("discord-primary", "200", "300"))
 
     assert publish_result.status == "published"
     assert mapping is not None

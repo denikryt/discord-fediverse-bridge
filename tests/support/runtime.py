@@ -51,4 +51,5 @@ def build_community_runtime(
 
 def build_runtime_namespace(**kwargs: object) -> SimpleNamespace:
     """Build one lightweight runtime namespace for HTTP/handler tests."""
-    return SimpleNamespace(**kwargs)
+    from support.scenario_graph import wire
+    return wire(SimpleNamespace(**kwargs))

@@ -138,12 +138,25 @@ class UserActorDeliveryService:
         if self.discord_message_reader is None:
             return 0
         rows = self.database.content_mutations.due_reconciliations(limit=limit)
-        for channel_id, message_id, object_id, title in rows:
+        for channel_id, message_id, object_id, title, source_message in rows:
             try:
+                if source_message is not None:
+                    from .db.repositories.activitypub_objects import resolve_community_mutation_source
+                    with self.database.session() as session:
+                        proof = resolve_community_mutation_source(
+                            session, source_message, external_guild_id=None,
+                            actor_external_id=None,
+                        )
+                    if proof is None or proof.object_id != object_id:
+                        raise ValueError('stale Community source before reconciliation read')
                 status, message = await self.discord_message_reader.fetch_message_state(
                     channel_id, message_id
                 )
                 if status == "missing":
+                    if source_message is not None:
+                        # A missing physical object after a *partial edit* is
+                        # not authenticated source-author intent to delete AP.
+                        raise ValueError('Community partial-read 404 is not author Delete evidence')
                     outcome = self.database.content_mutations.record_desired_delete(
                         object_id=object_id
                     )
@@ -154,13 +167,12 @@ class UserActorDeliveryService:
                         raise ValueError(
                             "Discord message state lacks edited timestamp or content"
                         )
-                    target_inbox_urls = self._replay_target_inboxes(object_id)
                     outcome = self.database.content_mutations.reconcile_authoritative_update_and_reserve(
                         object_id=object_id,
                         title=title,
                         body_markdown=content,
                         edited_timestamp=edited_at,
-                        target_inbox_urls=target_inbox_urls,
+                        **({'source_message': source_message} if source_message is not None else {}),
                     )
                     if outcome not in {
                         "accepted",
@@ -174,10 +186,8 @@ class UserActorDeliveryService:
                     continue
                 if outcome not in {"accepted", "duplicate", "deleted"}:
                     raise ValueError(f"Discord reconciliation unresolved: {outcome}")
-                target_inbox_urls = self._replay_target_inboxes(object_id)
                 self.database.content_mutations.reserve_next(
                     object_id=object_id,
-                    target_inbox_urls=target_inbox_urls,
                 )
                 self.database.content_mutations.clear_reconciliation(
                     object_id=object_id
@@ -188,33 +198,6 @@ class UserActorDeliveryService:
                 )
         return len(rows)
 
-    def _replay_target_inboxes(self, object_id: str) -> list[str] | None:
-        """Recompute the mode-specific safe gateway target snapshot for recovery."""
-        published = self.database.activitypub_objects.get_published_activity_object_by_object_id(
-            object_id
-        )
-        if published is None:
-            return []
-        local_community = (
-            self.database.local_communities.get_local_community_by_actor_url(
-                published.community_actor_url
-            )
-        )
-        if local_community is None:
-            return None
-        # Recompute through the same accepted-subscriber and policy boundary as
-        # the normal local-community path.  None means unrestricted fanout in the
-        # gateway, so recovery must return an explicit list for local communities.
-        return [
-            str(row.remote_inbox_url)
-            for row in self.database.remote_subscribers.list_remote_subscribers(
-                local_community.id, status="accepted"
-            )
-            if self.policy_service.federation_decision(
-                str(row.remote_inbox_url)
-            ).allowed
-        ]
-
     async def submit_update(
         self,
         *,
@@ -222,32 +205,35 @@ class UserActorDeliveryService:
         title: str | None,
         body_markdown: str,
         edited_timestamp,
-        target_inbox_urls: list[str] | None = None,
+        source_message: "MessageRef | None" = None,
     ) -> str:
         """Durably admit one Discord edit and wake replayable orchestration."""
+        kwargs = {'source_message': source_message} if source_message is not None else {}
         outcome = self.database.content_mutations.record_desired_update(
             object_id=object_id,
             title=title,
             body_markdown=body_markdown,
             edited_timestamp=edited_timestamp,
+            **kwargs,
         )
         if outcome == "accepted":
             self.database.content_mutations.reserve_next(
-                object_id=object_id, target_inbox_urls=target_inbox_urls
+                object_id=object_id
             )
             await self.drain_mutations(limit=1)
         return outcome
 
     async def submit_delete(
-        self, *, object_id: str, target_inbox_urls: list[str] | None = None
+        self, *, object_id: str, source_message: "MessageRef | None" = None,
     ) -> str:
         """Durably admit terminal deletion and start replayable orchestration."""
+        kwargs = {'source_message': source_message} if source_message is not None else {}
         outcome = self.database.content_mutations.record_desired_delete(
-            object_id=object_id
+            object_id=object_id, **kwargs,
         )
         if outcome == "accepted":
             self.database.content_mutations.reserve_next(
-                object_id=object_id, target_inbox_urls=target_inbox_urls
+                object_id=object_id
             )
             await self.drain_mutations(limit=1)
         return outcome
@@ -278,7 +264,7 @@ class UserActorDeliveryService:
                                     "publicationContext", "community"
                                 ),
                                 ap_object_id=request["apObjectId"],
-                                target_inbox_urls=request.get("targetInboxUrls"),
+                                conversation_root_object_id=request.get("conversationRootObjectId"),
                                 operation_id=claim.operation_id,
                                 activity_id=claim.activity_id,
                                 mutation_timestamp=request.get("mutationTimestamp"),
@@ -295,11 +281,11 @@ class UserActorDeliveryService:
                                     "publicationContext", "community"
                                 ),
                                 ap_object_id=request["apObjectId"],
+                                conversation_root_object_id=request.get("conversationRootObjectId"),
                                 kind=request["kind"],
                                 title=request.get("title"),
                                 body_markdown=request.get("bodyMarkdown") or "",
                                 in_reply_to_object_id=request.get("inReplyToObjectId"),
-                                target_inbox_urls=request.get("targetInboxUrls"),
                                 operation_id=claim.operation_id,
                                 activity_id=claim.activity_id,
                                 mutation_timestamp=request.get("mutationTimestamp"),
@@ -308,6 +294,10 @@ class UserActorDeliveryService:
                             )
                         )
                     canonical = result.activity_json
+                    # A gateway response is not proof of this reserved AP identity.
+                    # Reject substituted actors/objects before making any
+                    # canonical revision or outbound audience durable.
+                    self._validate_rendered_mutation(claim, result)
                     if not self.database.content_mutations.record_canonical_result(
                         claim.mutation_id, claim.claim_token, canonical
                     ):
@@ -322,7 +312,13 @@ class UserActorDeliveryService:
                     _source_id, object_id = committed
                     self.database.content_mutations.reserve_next(
                         object_id=object_id,
-                        target_inbox_urls=claim.request.get("targetInboxUrls"),
+                    )
+                else:
+                    # A CAS refusal must not spin forever with an unreported
+                    # canonical-ready claim. Stale tokens cannot alter a new owner.
+                    self.database.content_mutations.record_retryable_failure(
+                        claim.mutation_id, claim.claim_token,
+                        "canonical commit refused: revision or ownership changed",
                     )
             except ValueError as exc:
                 self.database.content_mutations.abort_local_validation(
@@ -330,7 +326,6 @@ class UserActorDeliveryService:
                 )
                 self.database.content_mutations.reserve_next(
                     object_id=claim.request["apObjectId"],
-                    target_inbox_urls=claim.request.get("targetInboxUrls"),
                 )
             except asyncio.CancelledError:
                 self.database.content_mutations.record_retryable_failure(
@@ -344,6 +339,23 @@ class UserActorDeliveryService:
                     claim.mutation_id, claim.claim_token, str(exc)
                 )
         return len(claims)
+
+    @staticmethod
+    def _validate_rendered_mutation(claim, result) -> None:
+        """Bind render-only JSON-LD to the exact committed mutation reservation."""
+        activity = result.activity_json
+        expected_type = 'Delete' if claim.kind == 'content_delete' else 'Update'
+        if not isinstance(activity, dict):
+            raise ValueError('gateway returned non-object canonical mutation')
+        obj = activity.get('object')
+        actual_id = obj.get('id') if isinstance(obj, dict) else obj
+        if (result.activity_id != claim.activity_id
+            or result.object_id != claim.request['apObjectId']
+            or activity.get('id') != claim.activity_id
+            or activity.get('type') != expected_type
+            or activity.get('actor') != claim.actor_url
+            or actual_id != claim.request['apObjectId']):
+            raise ValueError('rendered canonical mutation identity mismatch')
 
     @staticmethod
     def _validate_mutation_request(claim) -> None:
@@ -410,6 +422,21 @@ class UserActorDeliveryService:
                 )
                 self.database.user_actor_deliveries.release_terminal_source_media(
                     claim.source_id
+                )
+                continue
+            # Claim-time authorization is not sufficient if a Follow or
+            # surface owner changes while federation policy is being read.
+            # Recheck immediately before committing the transport boundary.
+            live_actors = self.database.user_actor_deliveries.revalidate_claim(
+                claim.delivery_id, claim.claim_token
+            )
+            if not live_actors or not any(
+                self.policy_service.federation_decision(actor_id).allowed
+                for actor_id in live_actors
+            ):
+                self.database.user_actor_deliveries.mark_ineligible(
+                    claim.delivery_id, claim.claim_token,
+                    'actor or direct-recipient authorization changed before send',
                 )
                 continue
             if not self.database.user_actor_deliveries.mark_submitted(

@@ -5,6 +5,8 @@ receipt persistence and replay decisions run through the actual runtime.
 """
 from __future__ import annotations
 
+from support.fake_platform_adapter import FakeDiscordPort
+
 from datetime import datetime, timezone
 from dataclasses import dataclass
 from types import ModuleType
@@ -15,6 +17,7 @@ import pytest
 from src.activitypub_models import ActivityPubEvent
 from src.community_sync.runtime import CommunityRuntime
 from src.platform_types import CreatedThread, MessageRef, ThreadRef
+from src.models import ChannelSurface
 from support.db import add_accepted_subscription, build_database
 from tests_constants import LEMMY_EXAMPLE_DOMAIN
 
@@ -22,7 +25,7 @@ from tests_constants import LEMMY_EXAMPLE_DOMAIN
 COMMUNITY = f'https://{LEMMY_EXAMPLE_DOMAIN}/c/hackers'
 
 
-class RecordingDiscord:
+class RecordingDiscord(FakeDiscordPort):
     """Return per-forum physical receipts while exposing attempted operations."""
 
     def __init__(self, *, fail_forum=None):
@@ -85,12 +88,13 @@ async def test_inbound_post_uses_one_canonical_group_and_distinct_physical_recei
     group = db.discord_fanout_groups.get_thread_group_by_ap_object(event.object.ap_id)
     assert group.ap_activity_id == event.delivery_id
     deliveries = db.discord_fanout_groups.get_thread_deliveries(group.id)
-    assert {(d.discord_channel_id, d.discord_thread_id, d.discord_starter_message_id)
+    assert {(confirmed_forum(db, d), int(d.external_thread_id), int(d.external_starter_message_id))
             for d in deliveries} == {(100, 1100, 2100), (200, 1200, 2200)}
-    assert {call[4].key for call in transport.calls} == {
-        f'inbound-ap:post:{event.object.ap_id}:discord-primary:100',
-        f'inbound-ap:post:{event.object.ap_id}:discord-primary:200',
-    }
+    # The durable target key is tied to the canonical row and exact surface,
+    # never to the event delivery ID or a transient process nonce.
+    keys={call[4].key for call in transport.calls}
+    assert len(keys)==2
+    assert all(key.startswith(f'fanout:v1:remote:post:{group.id}:discord-primary:') for key in keys)
     assert transport.calls[0][1].body.startswith('**Hello world**')
     assert transport.calls[0][2] == 'Hello world'
     assert (await runtime.handle_normalized_inbound_post(event, adapter=transport)).status == 'skipped'
@@ -140,12 +144,16 @@ async def test_inbound_post_refuses_wrong_target_receipt_before_mapping(tmp_path
             thread = ThreadRef(other, '1500')
             return CreatedThread(thread, MessageRef('discord-primary', '1500', '2500'), 'bot')
 
-    from src.platform_types import PlatformOperationError
-    with pytest.raises(PlatformOperationError, match='receipt does not match forum'):
-        await runtime.handle_normalized_inbound_post(post(), adapter=WrongReceipt())
+    from src.models import PlatformDeliveryIntent
+    from sqlalchemy import select
+    result=await runtime.handle_normalized_inbound_post(post(), adapter=WrongReceipt())
     group = db.discord_fanout_groups.get_thread_group_by_ap_object(post().object.ap_id)
+    assert result.status == 'processed'
     assert group is not None
     assert db.discord_fanout_groups.get_thread_deliveries(group.id) == []
+    with db.session() as session:
+        intents=list(session.scalars(select(PlatformDeliveryIntent)))
+        assert len(intents)==1 and intents[0].state=='unresolved'
 
 
 @pytest.mark.asyncio
@@ -185,7 +193,7 @@ async def test_failed_first_remote_post_target_does_not_block_healthy_second(tmp
         group = db.discord_fanout_groups.get_thread_group_by_ap_object(post().object.ap_id)
         assert result.status == 'processed'
         assert [c[0].external_channel_id for c in discord.calls] == ['100', '200']
-        assert {(d.discord_channel_id, d.discord_thread_id) for d in
+        assert {(confirmed_forum(db, d), int(d.external_thread_id)) for d in
                 db.discord_fanout_groups.get_thread_deliveries(group.id)} == {(200, 1200)}
         # Ordinary replays do not blindly POST again, since an earlier create
         # might have landed without returning a confirmed receipt.
@@ -210,7 +218,7 @@ async def test_existing_partial_parent_cannot_repost_missing_remote_target(tmp_p
         assert outcome.status == 'skipped'
         assert later.calls == []
         group = db.discord_fanout_groups.get_thread_group_by_ap_object(post().object.ap_id)
-        assert {d.discord_channel_id for d in db.discord_fanout_groups.get_thread_deliveries(group.id)} == {200}
+        assert {confirmed_forum(db, d) for d in db.discord_fanout_groups.get_thread_deliveries(group.id)} == {200}
     finally:
         db.close()
 
@@ -243,7 +251,7 @@ async def test_lost_receipt_cannot_repost_missing_forum_on_restart_backfill(tmp_
 
         await runtime.handle_normalized_inbound_post(event, adapter=LostResponse())
         group = db.discord_fanout_groups.get_thread_group_by_ap_object(event.object.ap_id)
-        assert {d.discord_channel_id for d in db.discord_fanout_groups.get_thread_deliveries(group.id)} == {200}
+        assert {confirmed_forum(db, d) for d in db.discord_fanout_groups.get_thread_deliveries(group.id)} == {200}
         assert physical == ['100', '200']
         # A fresh adapter/process has forgotten its in-process attempt receipts.
         # An AP object re-fetch cannot prove the first physical thread was absent.
@@ -256,3 +264,11 @@ async def test_lost_receipt_cannot_repost_missing_forum_on_restart_backfill(tmp_
         assert physical.count('100') == 1
     finally:
         db.close()
+
+
+def confirmed_forum(db, receipt):
+    """Resolve the actual connector-scoped forum claim of one durable receipt."""
+    with db.session() as session:
+        surface = session.get(ChannelSurface, receipt.channel_surface_id)
+        assert surface is not None and surface.connector_id == receipt.connector_id
+        return int(surface.external_channel_id)

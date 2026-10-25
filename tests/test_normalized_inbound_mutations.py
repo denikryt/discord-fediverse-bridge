@@ -5,6 +5,10 @@ its SDK-dependent handler-result import are replaced at the outer boundary.
 """
 from __future__ import annotations
 
+import json
+from datetime import datetime, timezone
+from support.fake_platform_adapter import FakeDiscordPort
+from src.content_sync.platform_mutations import PlatformPhysicalMutationCoordinator
 from dataclasses import dataclass
 from types import ModuleType, SimpleNamespace
 import sys
@@ -12,9 +16,9 @@ import sys
 import pytest
 
 # The legacy module imports discord.py for type-only paths; no physical SDK is used here.
-sys.modules.setdefault('discord', ModuleType('discord'))
+import discord  # Load the installed SDK; never leave a global placeholder for other suites.
 from src.community_sync.runtime import CommunityRuntime
-from src.platform_types import ContentDocument, MessageRef, MessageView, PlatformOperationError
+from src.platform_types import AuthorRef, ContentDocument, MessageRef, MessageView, PlatformOperationError
 from support.db import add_accepted_subscription, build_database
 from tests_constants import LEMMY_EXAMPLE_DOMAIN
 
@@ -39,13 +43,14 @@ def result_without_discord_sdk(monkeypatch):
     monkeypatch.setitem(sys.modules, 'src.activitypub_handlers', module)
 
 
-class PhysicalEdits:
+class PhysicalEdits(FakeDiscordPort):
     """Model known physical Discord messages with mutable content and failures."""
 
     def __init__(self, *, failed_container=None):
         """Create two forum starter/message copies with independent bodies."""
         self.contents = {
             ('1100', '2100'): 'old starter A', ('1200', '2200'): 'old starter B',
+            ('1300', '2300'): 'old starter C',
             ('1100', '3100'): '`bob`\n\nold A', ('1200', '3200'): '`bob`\n\nold B',
             ('1300', '3300'): 'source authored',
         }
@@ -60,7 +65,8 @@ class PhysicalEdits:
             raise PlatformOperationError('not_found', 'unknown message')
         if ref.external_container_id == self.failed_container:
             raise PlatformOperationError('unavailable', 'temporary Discord failure')
-        return MessageView(ref, content=ContentDocument(self.contents[(ref.external_container_id, ref.external_message_id)]))
+        return MessageView(ref, AuthorRef(ref.connector_key, 'bot', 'bot', 'Bridge', True),
+                           content=ContentDocument(self.contents[(ref.external_container_id, ref.external_message_id)]))
 
     async def edit_message(self, ref, content):
         """Record physical edits after optional transport failure."""
@@ -80,6 +86,8 @@ def world(tmp_path):
         community_actor_id=COMMUNITY, source_channel_id=None,
         source_thread_id=None, source_starter_message_id=None,
         ap_activity_id='https://remote.example/create/post', ap_object_id=POST,
+        current_content_json=json.dumps({'schemaVersion': 1, 'kind': 'post', 'apObjectId': POST,
+            'authorActorId': 'https://remote.example/u/bob', 'authorName': 'bob', 'bodyMarkdown': 'old'}),
     )
     for channel, thread, starter in ((100, 1100, 2100), (200, 1200, 2200), (300, 1300, 2300)):
         db.discord_fanout_groups.add_thread_delivery(
@@ -90,6 +98,8 @@ def world(tmp_path):
         community_actor_id=COMMUNITY, thread_group_id=thread_group.id,
         source_channel_id=None, source_thread_id=None, source_message_id=None,
         ap_activity_id='https://remote.example/create/comment', ap_object_id=COMMENT,
+        current_content_json=json.dumps({'schemaVersion': 1, 'kind': 'comment', 'apObjectId': COMMENT,
+            'authorActorId': 'https://remote.example/u/bob', 'authorName': 'bob', 'bodyMarkdown': 'old'}),
     )
     for channel, thread, message, role in (
         (100, 1100, 3100, 'inbound'), (200, 1200, 3200, 'mirror'),
@@ -102,13 +112,25 @@ def world(tmp_path):
     runtime = CommunityRuntime(database=db, content_publish_service=object())
     physical = PhysicalEdits()
     # Legacy bot is deliberately unusable: production must use adapter operations.
-    context = SimpleNamespace(discord_adapter=physical, bot=object())
+    worker = PlatformPhysicalMutationCoordinator(db, SimpleNamespace(get=lambda key: physical),
+        target_policy=lambda connector, surface: True,
+        content_renderer=lambda domain, kind, snapshot: ContentDocument(
+            snapshot['bodyMarkdown'] if kind == 'post' else
+            f"`{snapshot['authorName']}`\n\n{snapshot['bodyMarkdown']}"),
+        tombstone_renderer=lambda domain, kind: ContentDocument('*deleted by creator*'))
+    context = SimpleNamespace(discord_adapter=physical, bot=object(), physical_mutation_coordinator=worker)
     return runtime, physical, context
 
 
 def event(ap_id, body='New body'):
     """Supply the original AP object identity and content to the runtime."""
-    return SimpleNamespace(object=SimpleNamespace(ap_id=ap_id, body_markdown=body))
+    return SimpleNamespace(community_actor_id=COMMUNITY, actor_id='https://remote.example/u/bob',
+        source_activity_id='https://remote.example/update/' + ap_id.rsplit('/', 1)[-1],
+        object=SimpleNamespace(ap_id=ap_id, body_markdown=body,
+            kind='post' if ap_id == POST else 'comment', title='Post', author_name='bob', url=ap_id,
+            published_at=datetime(2025, 1, 1, tzinfo=timezone.utc),
+            updated_at=datetime(2026, 1, 5, tzinfo=timezone.utc),
+            parent_ap_id=POST if ap_id != POST else None, post_ap_id=POST if ap_id != POST else None))
 
 
 @pytest.mark.asyncio

@@ -10,6 +10,7 @@ from ...models import (
     LocalCommunityMessageSurface,
     LocalCommunityThread,
     LocalCommunityThreadSurface,
+    ChannelSurface,
 )
 from .base import BaseRepository
 
@@ -87,11 +88,14 @@ class LocalCommunitySurfaceRepository(BaseRepository):
         """Return one thread surface for a canonical thread and forum target."""
         with self.session() as session:
             return session.scalar(
-                discord_copy_query(LocalCommunityThreadSurface).where(
+                discord_copy_query(LocalCommunityThreadSurface)
+                .join(ChannelSurface, ChannelSurface.id == LocalCommunityThreadSurface.channel_surface_id)
+                .where(
                     LocalCommunityThreadSurface.local_community_thread_id
                     == local_community_thread_id,
-                    LocalCommunityThreadSurface.discord_forum_channel_id
-                    == discord_forum_channel_id,
+                    ChannelSurface.external_channel_id == str(discord_forum_channel_id),
+                    ChannelSurface.connector_id == LocalCommunityThreadSurface.connector_id,
+                    ChannelSurface.kind == 'forum',
                 )
             )
 

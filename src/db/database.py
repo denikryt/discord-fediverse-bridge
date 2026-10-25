@@ -12,6 +12,8 @@ from ..management_actions import ManagementActions
 from ..management_audit_recorder import ManagementAuditRecorder
 from . import migrations, schema
 from .repositories.platform_surfaces import PlatformSurfaceRepository
+from .repositories.platform_delivery_intents import PlatformDeliveryIntentRepository
+from .repositories.local_community_authored_announces import LocalCommunityAuthoredAnnounceRepository
 from .repositories import (
     ActivityPubObjectRepository,
     BridgeActorKeyRepository,
@@ -66,6 +68,7 @@ class Database:
             self.engine, expire_on_commit=False, class_=Session
         )
         self.platform_surfaces = PlatformSurfaceRepository(self.session)
+        self.platform_delivery_intents = PlatformDeliveryIntentRepository(self.session, self.immediate_session)
         self.bridge_actor_keys = BridgeActorKeyRepository(self.session)
         self.local_communities = LocalCommunityRepository(
             self.session, self.immediate_session
@@ -80,6 +83,9 @@ class Database:
         self.local_community_content = LocalCommunityContentRepository(self.session, self.immediate_session)
         self.local_community_surfaces = LocalCommunitySurfaceRepository(self.session, self.immediate_session)
         self.local_community_relay = LocalCommunityRelayRepository(
+            self.session, self.immediate_session
+        )
+        self.local_community_authored_announces = LocalCommunityAuthoredAnnounceRepository(
             self.session, self.immediate_session
         )
         self.remote_subscriptions = RemoteSubscriptionRepository(
@@ -107,7 +113,7 @@ class Database:
         self.activitypub_objects = ActivityPubObjectRepository(self.session)
         self.remote_actors = RemoteActorRepository(self.session)
         self.legacy_lemmy_mappings = LegacyLemmyMappingRepository(self.session)
-        self.discord_fanout_groups = DiscordFanoutGroupRepository(self.session)
+        self.discord_fanout_groups = DiscordFanoutGroupRepository(self.session, self.immediate_session)
         self.discord_directory = DiscordDirectoryRepository(self.session)
         self.guild_invite_publications = GuildInvitePublicationRepository(self.session)
         self.management_actions = ManagementActions(

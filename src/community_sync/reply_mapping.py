@@ -12,8 +12,9 @@ from dataclasses import dataclass
 from types import SimpleNamespace
 
 from ..content_sync.inbound_references import build_message_reference
+from .delivery_mapping import remote_thread_receipt
 from ..discord_legacy_projection import discord_id_to_legacy_int
-from ..platform_types import MessageCreated, PlatformOperationError
+from ..platform_types import MessageCreated, MessageRef, PlatformOperationError
 
 
 @dataclass(slots=True)
@@ -66,26 +67,49 @@ def resolve_normalized_reply_context(
         or thread.channel.external_guild_id != event.external_guild_id
         or event.message.external_container_id != thread.external_thread_id):
         raise PlatformOperationError('invalid_request', 'unverified community reply source')
-    thread_id = discord_id_to_legacy_int(thread)
-    forum_id = discord_id_to_legacy_int(thread, component='parent')
-    # Only a delivery belonging to this canonical group authorizes resolving
-    # references from the claimed physical source thread.
-    group_deliveries = database.discord_fanout_groups.get_thread_deliveries(thread_group.id)
-    if not any(d.discord_thread_id == thread_id and d.discord_channel_id == forum_id
-               for d in group_deliveries):
+    repository = database.discord_fanout_groups
+    source = repository.get_thread_delivery_by_ref(thread)
+    if source is None or source.thread_group_id != thread_group.id:
         raise PlatformOperationError('invalid_request', 'source thread not in canonical group')
     if any(d.thread_group_id != thread_group.id for d in sibling_deliveries):
         raise PlatformOperationError('invalid_request', 'sibling belongs to another group')
-    reference_id = None
-    if event.reply_to is not None:
-        if (event.reply_to.connector_key != event.connector_key
-            or event.reply_to.external_container_id != thread.external_thread_id):
-            raise PlatformOperationError('invalid_request', 'cross-thread reply parent')
-        reference_id = discord_id_to_legacy_int(event.reply_to)
-    return _resolve_reference_context(
-        database, reference_id, thread_group, sibling_deliveries,
-        source_thread_id=thread_id,
-    )
+    targets = {}
+    for row in sibling_deliveries:
+        physical = remote_thread_receipt(database, row)
+        if physical is None:
+            raise PlatformOperationError('invalid_request', 'sibling lacks a verified physical thread')
+        targets[discord_id_to_legacy_int(physical[0])] = (row, physical[0], physical[1])
+    if event.reply_to is None:
+        return ReplyContext(None, {thread_id: None for thread_id in targets})
+    if (event.reply_to.connector_key != thread.connector_key
+        or event.reply_to.external_container_id != thread.external_thread_id):
+        raise PlatformOperationError('invalid_request', 'cross-thread reply parent')
+    # A starter is owned by this exact source thread, not by any bare ID.
+    source_starter = remote_thread_receipt(database, source)
+    if source_starter is None:
+        raise PlatformOperationError('invalid_request', 'source starter has no physical evidence')
+    if event.reply_to == source_starter[1]:
+        return ReplyContext(None, {
+            thread_id: discord_id_to_legacy_int(starter)
+            for thread_id, (_row, _thread, starter) in targets.items()
+        })
+    parent_copy = repository.get_message_delivery_by_ref(event.reply_to)
+    parent_group = (repository.get_message_group_by_id(parent_copy.message_group_id)
+                    if parent_copy is not None else None)
+    if parent_group is not None and parent_group.thread_group_id != thread_group.id:
+        # Recognized foreign canonical references must not be silently
+        # flattened into an unrelated community's post.
+        raise PlatformOperationError('invalid_request', 'parent belongs to a foreign canonical thread')
+    if parent_group is None:
+        # Only a genuinely unknown source-side reference uses root fallback.
+        return ReplyContext(None, {thread_id: None for thread_id in targets})
+    references = {}
+    for thread_id, (_row, physical_thread, _starter) in targets.items():
+        copy = repository.get_message_delivery_in_thread_ref(parent_group.id, physical_thread)
+        references[thread_id] = (discord_id_to_legacy_int(MessageRef(
+            physical_thread.connector_key, physical_thread.external_thread_id,
+            copy.external_message_id)) if copy is not None else None)
+    return ReplyContext(parent_group.id, references)
 
 
 def _resolve_reference_context(

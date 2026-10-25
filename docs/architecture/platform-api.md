@@ -67,6 +67,47 @@ All three create operations take a core-generated `CreateAttempt(key, connector_
 
 **Personal Feed exception:** Discord threads created *from* an existing text/announcement-channel root message share its ID; there can be only one. A verified existing `ThreadRef` with the root ID, correct parent connector/channel and compatible thread kind can be adopted even when it predates the attempt. This is proof of the intended **target**, not proof the current attempt created it. `create_reply_thread` may return such a preexisting thread rather than issuing a second create; `reconcile_create` may return it when verified with a network/platform lookup. The exception never extends to forum posts or arbitrary messages, nor does it authorize sending a reply without permissions. Other platforms must verify any equivalent guarantee rather than assuming Discord semantics.
 
+## Durable physical Create dispatch and cache ACK
+
+`CreateAttempt.key` beginning with `fanout:v1:` is reserved for the SQLite-backed
+`PlatformFanoutCoordinator`. After a committed intent `pending → dispatching`
+claim, the intent repository first verifies that this exact claim remains
+`dispatching` with its original immutable DTO and a live canonical/target
+owner, then issues a process-local, sealed `CommittedCreateDispatchProof`.
+The adapter requires this proof to mint a one-use `CoordinatorDispatchPermit`
+bound to the concrete registered adapter, connector, physical request, intent
+ID, fingerprint and dispatch token. Reusing that same live proof to mint
+multiple permits is rejected; a claim that has already become `unresolved`
+or `delivered` cannot produce a new proof. `DiscordAdapter` refuses reserved-key Create without a
+matching issued permit **before consulting its singleflight registry**; a raw
+caller cannot replay even after an ACK or adapter restart. Nonreserved direct
+Create callers retain their existing process-local fail-closed cache.
+
+Only the existing `PlatformDeliveryIntentRepository` may issue a
+`CommittedCreateAckProof` after verifying the matching durable `delivered` or
+`unresolved` terminal row. The adapter accepts that proof only for the exact
+completed physical future and its original one-use permit. A verified success
+may release a completed `delivered` flight; a lost response may release a
+completed `unknown_delivery` flight **without asserting physical success**.
+Neither a transport error alone, a fabricated receipt nor expiry of a
+`dispatching` lease authorizes a second automatic POST. When the adapter
+retains a completed **positive** result but the receipt/mapping SQLite commit
+fails, the intent remains `unresolved`: `reconcile_unknown()` obtains a sealed
+receipt/attempt/generation proof from that **same original transport flight**,
+checks it again in the writer transaction, then adopts the original receipt
+without another POST. An unknown SDK result, a restarted adapter with no
+original positive flight, or a merely similar historical message has no such
+proof and stays unresolved. This is not general cross-restart forum lookup.
+A verified orphan receipt on `cancelled_after_send` is exposed by the intent repository's
+read-only `inspect_orphans()` and logged during startup recovery. An operator
+can record an audited `retained` decision; no automatic cleanup, synthetic
+`removed_verified`, or forum-thread deletion is available through the
+message-only typed port. Full deletion requires a separate authorized platform
+admin procedure with independent thread-level proof. Reconciliation of
+unknown Discord forum/message Creates remains read-only and cannot guess from
+message history. No extra durable queue or adapter-owned SQLite connection is
+introduced.
+
 ## Activation boundaries and coverage
 
 Discord adapter integration will wrap the existing Discord transport, translate the six events atomically at Gateway ingress, and keep text/announcement Personal Feed behavior. durable fan-out will implement durable delivery intents, claim/source ownership, cross-forum routing, dedup, target-specific parent lookup, verified receipt adoption, and unresolved deliveries. participant mutation support verifies Fluxer APIs/permissions/endpoint discovery against a real instance; personal feed control plane connects heterogeneous communities. The old Discord ports are deliberately retained until their last live consumers are migrated.
@@ -179,3 +220,17 @@ only because the preceding physical write did not happen. A cancelled or
 ambiguous physical POST continues to latch `unknown_delivery` and cannot be
 replayed blindly. This coordinator remains process-local, not a durable fan-out
 recovery ledger.
+
+
+## Physical mutation ownership preflight
+
+`PlatformPhysicalMutationCoordinator` resolves every target using
+`fetch_message(MessageRef)` before `edit_message`/`delete_message`. The returned
+view must identify the exact message and a non-null `AuthorRef` whose
+`is_bridge_owned` is true on that connector. A copy role or absence of canonical
+source coordinates is insufficient, including for migrated v0 receipts. After
+this awaited read, the coordinator rechecks the canonical revision, physical
+target, current forum owner and policy before entering the write method.
+Ownership refusal is a durable pre-send failure; unknown write outcomes retain
+the existing unresolved barrier. Permission to manage a message is not evidence
+that the bridge owns it.

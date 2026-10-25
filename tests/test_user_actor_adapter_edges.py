@@ -1,6 +1,7 @@
 """User Actor follow notices and Discord reconciliation through physical adapter."""
 
 from __future__ import annotations
+from support.authored_publication import publication
 
 from datetime import datetime, timezone
 import sys
@@ -244,7 +245,7 @@ async def test_user_actor_durable_reconciliation_uses_adapter_without_sdk_leak(t
         public_key_pem='public', private_key_pem='private',
     )
     object_id = 'https://bridge.example/posts/11'
-    db.activitypub_objects.create_published_activity_object(
+    publication(db,
         actor_username='alice', actor_url=user.actor_url,
         community_actor_url='https://remote.example/c/community',
         activity_id='https://bridge.example/actors/users/alice/activities/create/11',
@@ -310,7 +311,7 @@ async def test_user_actor_durable_reconciliation_retries_transient_fetch(tmp_pat
         followers_url='https://bridge.example/actors/users/alice/followers',
         public_key_pem='public', private_key_pem='private',
     )
-    db.activitypub_objects.create_published_activity_object(
+    publication(db,
         actor_username='alice', actor_url=user.actor_url,
         community_actor_url='https://remote.example/c/community',
         activity_id='https://bridge.example/actors/users/alice/activities/create/11',

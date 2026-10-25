@@ -8,6 +8,7 @@ HTTP-signature delivery to the gateway.
 
 from __future__ import annotations
 
+import asyncio
 import logging
 from dataclasses import dataclass
 
@@ -42,6 +43,84 @@ class LocalCommunityFederationFanout:
         self.database = database
         self.fedify_gateway = fedify_gateway
         self.policy_service = policy_service
+
+    async def drain_authored(self, *, limit: int = 20) -> RelayFanoutSummary:
+        """Deliver already-committed authored Group Announce work after persistence.
+
+        The gateway only receives frozen Group-signed ActivityPub JSON and an
+        exact current Follow target. Network ambiguity remains durable and
+        blocks later Update/Delete; it is never retried as a fresh Announce.
+        """
+        from ..fedify_gateway_client import SendLocalCommunityRelayDelivery
+
+        repository = self.database.local_community_authored_announces
+        attempts = repository.claim_due(limit=limit)
+        delivered = failed = attempted = 0
+        for index, attempt in enumerate(attempts):
+            # Claim-time policy and the final Follow check both precede I/O.
+            if not repository.revalidate(attempt):
+                repository.record_result(
+                    attempt, delivered=False, definitely_unsent=True,
+                    error='Group Follow or causal prerequisite revoked before send',
+                )
+                continue
+            try:
+                allowed = (
+                    self.policy_service.federation_decision(attempt.inbox_url).allowed
+                    and self.policy_service.federation_decision(attempt.remote_actor_id).allowed
+                )
+            except Exception as exc:
+                repository.record_result(
+                    attempt, delivered=False, definitely_unsent=True,
+                    error=f'Group federation policy unavailable: {exc}',
+                )
+                continue
+            if not allowed:
+                repository.record_result(
+                    attempt, delivered=False, definitely_unsent=True,
+                    error='Group federation policy denied recipient',
+                )
+                continue
+            attempted += 1
+            try:
+                result = await self.fedify_gateway.send_local_community_relay(
+                    signing_actor_url=attempt.group_actor_id,
+                    deliveries=[SendLocalCommunityRelayDelivery(
+                        delivery_id=attempt.id,
+                        target_remote_actor_id=attempt.remote_actor_id,
+                        target_inbox_url=attempt.inbox_url,
+                        activity_json=attempt.activity_json,
+                    )],
+                )
+                match = [x for x in result.outcomes if x.delivery_id == attempt.id]
+                ok = (len(match) == 1 and match[0].ok
+                      and match[0].activity_id == attempt.activity_id
+                      and match[0].target_remote_actor_id == attempt.remote_actor_id)
+                repository.record_result(
+                    attempt, delivered=ok,
+                    error=None if ok else 'unverified Group Announce receipt',
+                )
+                if ok:
+                    delivered += 1
+                else:
+                    failed += 1
+            except asyncio.CancelledError:
+                # This attempt may have reached the signed gateway. Keep its
+                # existing dispatch claim for unknown-outcome reconciliation.
+                # Later frozen attempts in this private batch never reached
+                # the gateway, so this worker can safely release only those.
+                for unstarted in attempts[index + 1:]:
+                    repository.record_result(
+                        unstarted, delivered=False, definitely_unsent=True,
+                        error='Group delivery worker cancelled before network send',
+                    )
+                raise
+            except Exception as exc:
+                # Gateway exceptions may mean a signed activity was accepted.
+                # Preserve the ambiguity instead of silently replaying POST.
+                repository.record_result(attempt, delivered=False, error=str(exc))
+                failed += 1
+        return RelayFanoutSummary(attempted, delivered, failed)
 
     async def relay_create(
         self, *, event: object, local_community: object, object_kind: str

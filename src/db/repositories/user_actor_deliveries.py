@@ -81,9 +81,9 @@ class UserActorDeliveryRepository(BaseRepository):
         activity_json: dict,
         snapshot: dict,
         followers: list[UserActorFollower],
-        direct_target_inbox_urls: list[str] | None = None,
+        direct_authorizations: list[dict] | None = None,
     ) -> UserActorOutboundSource:
-        """Insert one already-rendered content source and immutable audience."""
+        """Insert one already-rendered content source and independently verified audience."""
         return UserActorDeliverySourceRepository.insert_ready_content_source(
             session,
             user_id=user_id,
@@ -95,7 +95,7 @@ class UserActorDeliveryRepository(BaseRepository):
             activity_json=activity_json,
             snapshot=snapshot,
             followers=followers,
-            direct_target_inbox_urls=direct_target_inbox_urls,
+            direct_authorizations=direct_authorizations,
         )
 
     def get_source(self, source_id: int) -> UserActorOutboundSource | None:
@@ -178,6 +178,10 @@ class UserActorDeliveryRepository(BaseRepository):
             per_user_limit=per_user_limit,
             stale_after_seconds=stale_after_seconds,
         )
+
+    def revalidate_claim(self, delivery_id: int, claim_token: str) -> tuple[str, ...]:
+        """Return live actor grants before the side-effectful transport boundary."""
+        return self._claims.revalidate_claim(delivery_id, claim_token)
 
     def mark_ineligible(self, delivery_id: int, claim_token: str, reason: str) -> None:
         """Terminally suppress one currently claimed endpoint without transport."""

@@ -13,6 +13,8 @@ from datetime import datetime
 from sqlalchemy import or_, select
 from sqlalchemy.exc import IntegrityError
 
+from ..platform_types import MessageRef
+
 from ..models import (
     MessageMapping,
     ChannelSurface,
@@ -20,11 +22,49 @@ from ..models import (
     PublishedActivityObject,
     User,
     UserActorOutboundSource,
+    ChannelCommunitySubscription,
+    LocalCommunity,
+    InboundConversationObject,
+    RemoteActor,
 )
 
 
 class PublicationConflictError(RuntimeError):
     """Signal that durable identity conflicts with an attempted publication."""
+
+
+def _mapping_by_source(session, source_id: str, source_message: MessageRef | None) -> MessageMapping | None:
+    """Select a verified immediate source, refusing ambiguous historical queries.
+
+    The legacy callers can still read an unambiguous Discord projection, but
+    cannot ever adopt an arbitrary sibling source with the same message ID.
+    """
+    if source_message is not None:
+        if source_message.connector_key != 'discord-primary':
+            # Community publication requires authenticated Discord human sources.
+            # Other connectors need equivalent registration and author verification.
+            raise PublicationConflictError('Community authored source requires Discord primary connector')
+        if source_message.external_message_id != source_id:
+            raise PublicationConflictError('Source ID differs from verified MessageRef')
+        query = (
+            select(MessageMapping)
+            .join(PlatformConnector, MessageMapping.source_connector_id == PlatformConnector.id)
+            .where(
+                PlatformConnector.connector_key == source_message.connector_key,
+                PlatformConnector.platform == 'discord',
+                MessageMapping.source_external_container_id == source_message.external_container_id,
+                MessageMapping.source_id == source_message.external_message_id,
+            )
+        )
+    else:
+        query = discord_copy_query(MessageMapping, source=True).where(
+            MessageMapping.source_platform == 'discord',
+            MessageMapping.source_id == source_id,
+        )
+    matches = list(session.scalars(query.limit(2)))
+    if len(matches) > 1:
+        raise PublicationConflictError('Ambiguous source: exact MessageRef is required')
+    return matches[0] if matches else None
 
 
 @dataclass(frozen=True, slots=True)
@@ -63,7 +103,7 @@ def _matches(
     )
 
 
-def _scope_matches(session, mapping, channel_id):
+def _scope_matches(session, mapping, channel_id, source_message: MessageRef | None = None):
     """Reject duplicate publications belonging to another physical connector."""
     if mapping.source_connector_id is None:
         return False
@@ -73,6 +113,17 @@ def _scope_matches(session, mapping, channel_id):
         or connector.connector_key != "discord-primary"
         or connector.platform != "discord"
     ):
+        return False
+    if source_message is not None:
+        if (
+            source_message.connector_key != connector.connector_key
+            or source_message.external_message_id != mapping.source_id
+            or source_message.external_container_id != mapping.source_external_container_id
+        ):
+            return False
+    elif mapping.source_external_container_id is not None:
+        # A legacy numeric-only lookup may not accidentally adopt a typed
+        # forum starter/reply whose immediate container was never supplied.
         return False
     if channel_id is None:
         return mapping.source_channel_surface_id is None
@@ -104,6 +155,7 @@ def _existing_result(
     conversation_root_object_id: str | None = None,
     source_kind: str = "content_create",
     logical_version: int = 1,
+    source_message: MessageRef | None = None,
 ) -> PersistPublishResult:
     """Resolve only a complete, internally consistent durable publication graph."""
     published = session.scalar(
@@ -118,6 +170,11 @@ def _existing_result(
     expected_published = (
         published.source_connector_id == mapping.source_connector_id
         and published.source_channel_surface_id == mapping.source_channel_surface_id
+        and published.source_external_container_id == mapping.source_external_container_id
+        and (source_message is None or (
+            published.source_external_message_id == source_message.external_message_id
+            and published.source_external_container_id == source_message.external_container_id
+        ))
         and published.actor_url == actor_url
         and published.publication_context == publication_context
         and published.community_actor_url == community_actor_url
@@ -180,6 +237,7 @@ def inspect_publish_artifacts(
     kind: str = "post",
     in_reply_to_object_id: str | None = None,
     conversation_root_object_id: str | None = None,
+    source_message: MessageRef | None = None,
 ) -> PersistPublishResult | None:
     """Return an exact durable duplicate or fail closed on partial/conflicting state."""
     expected = dict(
@@ -194,16 +252,11 @@ def inspect_publish_artifacts(
         object_id=object_id,
     )
     with database.session() as session:
-        mapping = session.scalar(
-            discord_copy_query(MessageMapping, source=True).where(
-                MessageMapping.source_platform == "discord",
-                MessageMapping.source_id == source_id,
-            )
-        )
+        mapping = _mapping_by_source(session, source_id, source_message)
         if mapping is None:
             return None
         if not _matches(mapping, **expected) or not _scope_matches(
-            session, mapping, discord_channel_id
+            session, mapping, discord_channel_id, source_message
         ):
             raise PublicationConflictError(
                 "Discord source is already mapped to incompatible canonical identity"
@@ -223,6 +276,7 @@ def inspect_publish_artifacts(
             kind=kind,
             in_reply_to_object_id=in_reply_to_object_id,
             conversation_root_object_id=conversation_root_object_id,
+            source_message=source_message,
         )
 
 
@@ -246,7 +300,7 @@ def persist_publish_artifacts(
     publication_context: str = "community",
     discord_guild_id: int | None = None,
     published_at: datetime | None = None,
-    direct_target_inbox_urls: list[str] | None = None,
+    source_message: MessageRef | None = None,
 ) -> PersistPublishResult:
     """Commit mapping, public object, and fixed follower audience atomically.
 
@@ -265,6 +319,12 @@ def persist_publish_artifacts(
         activity_id=activity_id,
         object_id=object_id,
     )
+    if source_message is not None and (
+        source_message.connector_key != 'discord-primary'
+        or source_message.external_message_id != source_id
+        or (discord_message_id is not None and str(discord_message_id) != source_message.external_message_id)
+    ):
+        raise PublicationConflictError('Authored source is inconsistent with verified physical reference')
     try:
         with database.immediate_session() as session:
             user = session.scalar(select(User).where(User.actor_url == actor_url))
@@ -272,15 +332,10 @@ def persist_publish_artifacts(
                 raise ValueError(
                     "canonical actor does not match a registered User Actor"
                 )
-            existing = session.scalar(
-                discord_copy_query(MessageMapping, source=True).where(
-                    MessageMapping.source_platform == "discord",
-                    MessageMapping.source_id == source_id,
-                )
-            )
+            existing = _mapping_by_source(session, source_id, source_message)
             if existing is not None:
                 if not _matches(existing, **expected) or not _scope_matches(
-                    session, existing, discord_channel_id
+                    session, existing, discord_channel_id, source_message
                 ):
                     raise PublicationConflictError(
                         "Discord source is already mapped to incompatible canonical identity"
@@ -300,6 +355,7 @@ def persist_publish_artifacts(
                     kind=kind,
                     in_reply_to_object_id=in_reply_to_object_id,
                     conversation_root_object_id=conversation_root_object_id,
+                    source_message=source_message,
                 )
 
             mapping = MessageMapping(
@@ -308,6 +364,9 @@ def persist_publish_artifacts(
                 ),
                 source_platform="discord",
                 source_id=source_id,
+                source_external_container_id=(
+                    source_message.external_container_id if source_message is not None else None
+                ),
                 activity_id=activity_id,
                 object_id=object_id,
                 actor_url=actor_url,
@@ -321,7 +380,13 @@ def persist_publish_artifacts(
                 **PlatformSurfaceRepository.discord_source_location(
                     session, discord_channel_id, discord_guild_id
                 ),
-                source_external_message_id=str(discord_message_id),
+                source_external_container_id=(
+                    source_message.external_container_id if source_message is not None else None
+                ),
+                source_external_message_id=(
+                    source_message.external_message_id if source_message is not None
+                    else (str(discord_message_id) if discord_message_id is not None else None)
+                ),
                 actor_username=actor_username,
                 actor_url=actor_url,
                 publication_context=publication_context,
@@ -341,9 +406,91 @@ def persist_publish_artifacts(
             )
             session.add_all([mapping, published])
             session.flush()
+            # The domain row/source physical receipt is equally part of this
+            # publication graph, not an independent post-network commit.
+            if publication_context == 'community' and source_message is not None:
+                from .canonical_admission import admit_authored_comment, admit_authored_post
+                if kind == 'post':
+                    admit_authored_post(
+                        session,published=published,source=source_message,
+                        forum_channel_id=discord_channel_id,
+                        source_thread_id=int(source_message.external_container_id),
+                        source_starter_message_id=int(source_message.external_message_id),
+                    )
+                elif kind == 'comment':
+                    admit_authored_comment(
+                        session, published=published, source=source_message,
+                        forum_channel_id=discord_channel_id,
+                    )
+                else:
+                    raise ValueError('unsupported community publication kind')
+            # Group-authored relay targets are part of the same canonical
+            # transaction; a failed commit cannot leave an orphaned Announce.
+            local_community = session.scalar(select(LocalCommunity).where(
+                LocalCommunity.actor_url == community_actor_url,
+                LocalCommunity.status == 'active',
+            )) if community_actor_url else None
+            if local_community is not None:
+                database.local_community_authored_announces.stage_create(
+                    session, published=published, community=local_community,
+                    activity_json=activity_json,
+                )
             followers = database.user_actor_followers.list_accepted_for_snapshot(
                 session, user_id=user.id
             )
+            # A current accepted remote Group Follow, bound to the original
+            # forum claim, is independent evidence for direct User Actor
+            # delivery. Bare targetInboxUrls cannot grant audience rights.
+            direct_authorizations = []
+            if community_actor_url and discord_channel_id is not None:
+                current = session.scalar(select(ChannelCommunitySubscription).where(
+                    ChannelCommunitySubscription.discord_channel_id == discord_channel_id,
+                    ChannelCommunitySubscription.lemmy_community_actor_id == community_actor_url,
+                    ChannelCommunitySubscription.status == 'accepted',
+                ))
+                if current is not None and current.community_inbox_url and current.follow_activity_id:
+                    surface = session.get(ChannelSurface, mapping.source_channel_surface_id)
+                    if surface is None or surface.remote_subscription_id != current.id:
+                        raise PublicationConflictError('remote community lacks its current forum ownership')
+                    direct_authorizations.append({
+                        'schemaVersion': 1,
+                        'contextKind': 'remote_community_publication',
+                        'publishedObjectId': published.id,
+                        'subscriptionId': current.id,
+                        'recipientActorId': community_actor_url,
+                        'followActivityId': current.follow_activity_id,
+                        'targetEndpointUrl': current.community_inbox_url,
+                        'sourceSurfaceId': surface.id,
+                    })
+            if publication_context == 'personal_feed' and in_reply_to_object_id:
+                # The parent is authenticated inbound AP state, not a URL
+                # supplied by an arbitrary Discord reply. A public reply may
+                # address this exact parent without explicit AP to/cc.
+                parent = session.scalar(select(InboundConversationObject).where(
+                    InboundConversationObject.object_id == in_reply_to_object_id,
+                    InboundConversationObject.publication_context == 'personal_feed',
+                    InboundConversationObject.conversation_root_object_id == conversation_root_object_id,
+                    InboundConversationObject.deleted_at.is_(None),
+                ))
+                root = session.scalar(select(PublishedActivityObject).where(
+                    PublishedActivityObject.object_id == conversation_root_object_id,
+                    PublishedActivityObject.publication_context == 'personal_feed',
+                    PublishedActivityObject.deleted_at.is_(None),
+                ))
+                if parent is not None and root is not None:
+                    remote_actor = session.scalar(select(RemoteActor).where(
+                        RemoteActor.actor_url == parent.actor_id,
+                    ))
+                    if remote_actor is not None:
+                        direct_authorizations.append({
+                            'schemaVersion': 1,
+                            'contextKind': 'personal_feed_reply',
+                            'publishedObjectId': published.id,
+                            'conversationRootObjectId': root.object_id,
+                            'parentObjectId': parent.object_id,
+                            'recipientActorId': parent.actor_id,
+                            'targetEndpointUrl': remote_actor.shared_inbox_url or remote_actor.inbox_url,
+                        })
             source = database.user_actor_deliveries.insert_ready_content_source(
                 session,
                 user_id=user.id,
@@ -360,37 +507,43 @@ def persist_publish_artifacts(
                     "contentRevision": 1,
                 },
                 followers=followers,
-                direct_target_inbox_urls=direct_target_inbox_urls,
+                direct_authorizations=direct_authorizations,
             )
             return PersistPublishResult(source.id, True)
     except IntegrityError:
         # The winner may commit after our preflight. The failed transaction must
         # be fully rolled back before a fresh session classifies the collision.
         with database.session() as session:
-            mappings = list(
-                session.scalars(
-                    select(MessageMapping).where(
-                        or_(
-                            (MessageMapping.source_platform == "discord")
-                            & (MessageMapping.source_id == source_id),
-                            MessageMapping.activity_id == activity_id,
-                            MessageMapping.object_id == object_id,
-                            (MessageMapping.discord_message_id == discord_message_id)
-                            & MessageMapping.source_connector_id.in_(
-                                select(PlatformConnector.id).where(
-                                    PlatformConnector.connector_key
-                                    == "discord-primary",
-                                    PlatformConnector.platform == "discord",
-                                )
-                            ),
+            if source_message is not None:
+                source_condition = (
+                    (MessageMapping.source_id == source_message.external_message_id)
+                    & (MessageMapping.source_external_container_id == source_message.external_container_id)
+                    & MessageMapping.source_connector_id.in_(
+                        select(PlatformConnector.id).where(
+                            PlatformConnector.connector_key == source_message.connector_key,
+                            PlatformConnector.platform == 'discord',
                         )
                     )
                 )
-            )
+            else:
+                # Legacy callers have no authenticated immediate container;
+                # never guess among multiple typed sources after a race.
+                source_condition = (
+                    (MessageMapping.source_platform == 'discord')
+                    & (MessageMapping.source_id == source_id)
+                    & MessageMapping.source_external_container_id.is_(None)
+                )
+            mappings = list(session.scalars(
+                select(MessageMapping).where(or_(
+                    source_condition,
+                    MessageMapping.activity_id == activity_id,
+                    MessageMapping.object_id == object_id,
+                ))
+            ))
             if (
                 len(mappings) == 1
                 and _matches(mappings[0], **expected)
-                and _scope_matches(session, mappings[0], discord_channel_id)
+                and _scope_matches(session, mappings[0], discord_channel_id, source_message)
             ):
                 return _existing_result(
                     session,
@@ -407,6 +560,7 @@ def persist_publish_artifacts(
                     kind=kind,
                     in_reply_to_object_id=in_reply_to_object_id,
                     conversation_root_object_id=conversation_root_object_id,
+                    source_message=source_message,
                 )
         raise PublicationConflictError(
             "uniqueness collision did not resolve to the expected canonical publication"

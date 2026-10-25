@@ -1,9 +1,11 @@
 """Behavior scenarios for inbound ActivityPub delivery and dedup outcomes."""
 
 from __future__ import annotations
+from support.runtime import build_runtime_namespace
 from support.runtime import build_test_policy_service
 
 from pathlib import Path
+from support.community_events import physical_forum
 from types import SimpleNamespace
 from unittest.mock import AsyncMock
 
@@ -43,7 +45,7 @@ def _community_runtime(
 
 def _accepted_subscription(database: Database) -> None:
     """Insert one accepted community subscription used for inbound routing."""
-    database.remote_subscriptions.create_subscription(
+    database.remote_subscriptions.create_subscription(discord_guild_id=10,
         discord_channel_id=100,
         lemmy_community_actor_id=f"https://{LEMMY_EXAMPLE_DOMAIN}/c/hackers",
         lemmy_community_name="hackers",
@@ -57,7 +59,7 @@ def _accepted_subscription(database: Database) -> None:
 
 def _accepted_subscription_for_channel(database: Database, *, channel_id: int) -> None:
     """Insert one accepted subscription row for a specific Discord forum channel."""
-    database.remote_subscriptions.create_subscription(
+    database.remote_subscriptions.create_subscription(discord_guild_id=10,
         discord_channel_id=channel_id,
         lemmy_community_actor_id=f"https://{LEMMY_EXAMPLE_DOMAIN}/c/hackers",
         lemmy_community_name="hackers",
@@ -159,7 +161,7 @@ def test_accepted_subscription_inbound_post_creates_discord_thread_and_receipt(
         wait_until_bridge_ready=AsyncMock(),
         fetch_forum_channel=AsyncMock(return_value=forum_channel),
     )
-    runtime = SimpleNamespace(
+    runtime = build_runtime_namespace(
         settings=SimpleNamespace(fedify_shared_secret="secret"),
         database=database,
         bot=bot,
@@ -189,7 +191,7 @@ def test_accepted_subscription_inbound_post_creates_discord_thread_and_receipt(
     assert thread_group.ap_object_id == event.object.ap_id
     deliveries = database.discord_fanout_groups.get_thread_deliveries(thread_group.id)
     assert len(deliveries) == 1
-    assert deliveries[0].discord_thread_id == 200
+    assert int(deliveries[0].external_thread_id) == 200
     assert receipt is not None
     assert receipt.status == "processed"
     assert receipt.outcome == "applied"
@@ -251,7 +253,7 @@ def test_inbound_post_and_comment_fan_out_to_all_accepted_subscriptions(
         fetch_forum_channel=AsyncMock(side_effect=_fetch_forum_channel),
         get_thread_by_id=AsyncMock(side_effect=_get_thread_by_id),
     )
-    runtime = SimpleNamespace(
+    runtime = build_runtime_namespace(
         settings=SimpleNamespace(fedify_shared_secret="secret"),
         database=database,
         bot=bot,
@@ -298,13 +300,13 @@ def test_inbound_post_and_comment_fan_out_to_all_accepted_subscriptions(
     thread_deliveries = database.discord_fanout_groups.get_thread_deliveries(
         thread_group.id
     )
-    assert {d.discord_thread_id for d in thread_deliveries} == {200, 201}
+    assert {int(d.external_thread_id) for d in thread_deliveries} == {200, 201}
 
     assert message_group is not None
     msg_deliveries = database.discord_fanout_groups.get_message_deliveries(
         message_group.id
     )
-    assert {d.discord_thread_id for d in msg_deliveries} == {200, 201}
+    assert {int(d.external_thread_id) for d in msg_deliveries} == {200, 201}
 
     assert thread_a.send.await_count == 1
     assert thread_b.send.await_count == 1
@@ -345,7 +347,7 @@ def test_accepted_subscription_inbound_comment_creates_discord_message_and_recei
         wait_until_bridge_ready=AsyncMock(),
         get_thread_by_id=AsyncMock(return_value=thread),
     )
-    runtime = SimpleNamespace(
+    runtime = build_runtime_namespace(
         settings=SimpleNamespace(fedify_shared_secret="secret"),
         database=database,
         bot=bot,
@@ -390,7 +392,7 @@ async def test_no_accepted_subscription_inbound_post_is_skipped(
         wait_until_bridge_ready=AsyncMock(),
         fetch_forum_channel=AsyncMock(),
     )
-    runtime = SimpleNamespace(
+    runtime = build_runtime_namespace(
         database=database,
         bot=bot,
         community_runtime=_community_runtime(database, bot=bot),
@@ -425,7 +427,7 @@ def test_duplicate_delivery_id_returns_idempotent_duplicate_without_side_effects
         wait_until_bridge_ready=AsyncMock(),
         fetch_forum_channel=AsyncMock(return_value=forum_channel),
     )
-    runtime = SimpleNamespace(
+    runtime = build_runtime_namespace(
         settings=SimpleNamespace(fedify_shared_secret="secret"),
         database=database,
         bot=bot,
@@ -479,7 +481,7 @@ async def test_discord_originated_echo_is_skipped_without_creating_duplicate(
         wait_until_bridge_ready=AsyncMock(),
         fetch_forum_channel=AsyncMock(),
     )
-    runtime = SimpleNamespace(
+    runtime = build_runtime_namespace(
         database=database,
         bot=bot,
         community_runtime=_community_runtime(database, bot=bot),
@@ -510,7 +512,7 @@ def test_comment_before_parent_mapping_becomes_deferred_then_retries_processed(
         wait_until_bridge_ready=AsyncMock(),
         get_thread_by_id=AsyncMock(return_value=thread),
     )
-    runtime = SimpleNamespace(
+    runtime = build_runtime_namespace(
         settings=SimpleNamespace(fedify_shared_secret="secret"),
         database=database,
         bot=bot,
@@ -576,10 +578,10 @@ def test_comment_before_parent_mapping_becomes_deferred_then_retries_processed(
     assert message_group is not None
 
 
-def test_discord_target_failure_marks_inbound_receipt_failed(
+def test_discord_target_failure_retains_canonical_without_blind_retry(
     tmp_path: Path,
 ) -> None:
-    """A Discord-side failure must not leave a false processed inbound receipt."""
+    """A possibly sent POST preserves canonical work and never fabricates an ACK."""
     database = _database(tmp_path)
     _accepted_subscription(database)
     bot = SimpleNamespace(
@@ -593,7 +595,7 @@ def test_discord_target_failure_marks_inbound_receipt_failed(
             )
         ),
     )
-    runtime = SimpleNamespace(
+    runtime = build_runtime_namespace(
         settings=SimpleNamespace(fedify_shared_secret="secret"),
         database=database,
         bot=bot,
@@ -615,7 +617,14 @@ def test_discord_target_failure_marks_inbound_receipt_failed(
     )
     receipt = database.event_receipts.get_event_receipt(event.delivery_id)
 
-    assert response.status_code == 500
-    assert receipt is not None
-    assert receipt.status == "failed"
-    assert receipt.outcome == "processing_failed"
+    assert response.status_code == 200 and response.json()['status'] == 'processed'
+    assert receipt is not None and receipt.status == 'processed'
+    from src.models import PlatformDeliveryIntent
+    from sqlalchemy import select
+    with database.session() as session:
+        intent = session.scalar(select(PlatformDeliveryIntent))
+        assert intent.state == 'unresolved' and intent.applied_revision is None and intent.orphan_receipt_json is None
+    again = client.post('/internal/activitypub/events', headers=_event_headers(event.delivery_id),
+                        json=event.model_dump(mode='json'))
+    assert again.status_code == 200
+    bot.fetch_forum_channel.return_value.create_thread.assert_awaited_once()

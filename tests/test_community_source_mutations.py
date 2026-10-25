@@ -11,7 +11,7 @@ from types import ModuleType, SimpleNamespace
 
 import pytest
 
-sys.modules.setdefault('discord', ModuleType('discord'))
+import discord  # Load the installed SDK; never leave a global placeholder for other suites.
 
 from src.community_sync.discord_fanout import DiscordFanout
 from src.community_sync.runtime import CommunityRuntime

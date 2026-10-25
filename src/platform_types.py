@@ -6,7 +6,11 @@ IDs belong to exactly one connector and never stand in for ActivityPub IDs.
 
 from __future__ import annotations
 
-from dataclasses import dataclass, field
+import hashlib
+import hmac
+import json
+import secrets
+from dataclasses import asdict, dataclass, field
 from datetime import datetime, timezone
 from typing import Literal, TypeAlias
 from urllib.parse import urlsplit, urlunsplit
@@ -280,6 +284,190 @@ class CreateAttempt:
             raise ValueError('create attempt targets another connector')
 
 
+class CoordinatorDispatchPermit:
+    """Opaque single-use physical Create authority bound to one adapter claim.
+
+    The coordinator obtains this only after a durable dispatch CAS. A caller
+    can construct a similarly shaped object, but the adapter accepts only a
+    permit in its private issued-permit registry. This object is not serializable
+    and never represents a durable retry authorization by itself.
+    """
+
+    __slots__ = ('__weakref__',)
+
+    def __new__(cls):
+        """Reject direct construction; adapters use private object allocation."""
+        raise TypeError('CoordinatorDispatchPermit cannot be constructed by callers')
+
+    def __reduce__(self):
+        """Prevent accidental persistence of a process-local authorization."""
+        raise TypeError('CoordinatorDispatchPermit must never be serialized')
+
+
+_ACK_PROOF_SECRET = secrets.token_bytes(32)
+_DISPATCH_PROOF_SECRET = secrets.token_bytes(32)
+
+
+@dataclass(frozen=True, slots=True, weakref_slot=True)
+class CommittedCreateDispatchProof:
+    """Opaque claim evidence issued only for the exact live SQLite dispatch row.
+
+    A reserved CreateAttempt and an adapter reference cannot authorize a POST
+    by themselves. The repository verifies committed state and signs these
+    immutable fields before the adapter is allowed to issue its local permit.
+    """
+
+    intent_id: int
+    attempt_key: str
+    request_fingerprint: str
+    dispatch_token: str
+    _seal: bytes
+
+    def __reduce__(self):
+        """Refuse to serialize a short-lived, process-local dispatch authority."""
+        raise TypeError('Create dispatch proofs cannot be serialized')
+
+
+def _issue_committed_create_dispatch_proof(intent_id: int, attempt_key: str,
+                                           request_fingerprint: str,
+                                           dispatch_token: str) -> CommittedCreateDispatchProof:
+    """Issue repository-only claim evidence after the DB dispatching CAS."""
+    if intent_id <= 0 or not attempt_key.startswith('fanout:v1:') or not request_fingerprint or not dispatch_token:
+        raise ValueError('invalid durable Create dispatch proof')
+    payload = _ack_payload(intent_id, attempt_key, request_fingerprint,
+                           dispatch_token, 'dispatching')
+    return CommittedCreateDispatchProof(
+        intent_id, attempt_key, request_fingerprint, dispatch_token,
+        hmac.new(_DISPATCH_PROOF_SECRET, payload, hashlib.sha256).digest(),
+    )
+
+
+def _verify_committed_create_dispatch_proof(proof: object) -> bool:
+    """Reject a fabricated claim even when its apparent fields match."""
+    if not isinstance(proof, CommittedCreateDispatchProof):
+        return False
+    if proof.intent_id <= 0 or not proof.attempt_key.startswith('fanout:v1:'):
+        return False
+    payload = _ack_payload(proof.intent_id, proof.attempt_key,
+                           proof.request_fingerprint, proof.dispatch_token, 'dispatching')
+    return hmac.compare_digest(
+        hmac.new(_DISPATCH_PROOF_SECRET, payload, hashlib.sha256).digest(), proof._seal,
+    )
+
+
+@dataclass(frozen=True, slots=True)
+class CommittedCreateAckProof:
+    """Process-local evidence issued only after matching SQLite terminal commit.
+
+    A copied/dataclass-shaped object is not enough: the seal is tied to this
+    process's private proof issuer and all immutable claim components.
+    """
+
+    intent_id: int
+    attempt_key: str
+    request_fingerprint: str
+    dispatch_token: str
+    terminal_status: str
+    _seal: bytes
+
+    def __reduce__(self):
+        """Prevent treating a process-local terminal proof as durable state."""
+        raise TypeError('committed Create ACK proofs are process-local')
+
+
+def _ack_payload(intent_id: int, attempt_key: str, fingerprint: str,
+                 token: str, terminal: str) -> bytes:
+    """Encode claim fields without delimiter collisions for ACK proof signing."""
+    return json.dumps([intent_id, attempt_key, fingerprint, token, terminal],
+                      ensure_ascii=False, separators=(',', ':')).encode('utf-8')
+
+
+def _issue_committed_create_ack_proof(intent_id: int, attempt_key: str,
+                                      request_fingerprint: str, dispatch_token: str,
+                                      terminal_status: str) -> CommittedCreateAckProof:
+    """Internal repository-issued evidence; requires prior SQLite state check."""
+    if terminal_status not in ('delivered', 'unresolved') or intent_id <= 0:
+        raise ValueError('invalid persisted Create ACK')
+    payload = _ack_payload(intent_id, attempt_key, request_fingerprint,
+                           dispatch_token, terminal_status)
+    return CommittedCreateAckProof(intent_id, attempt_key, request_fingerprint,
+                                   dispatch_token, terminal_status,
+                                   hmac.new(_ACK_PROOF_SECRET, payload, hashlib.sha256).digest())
+
+
+def _verify_committed_create_ack_proof(proof: object) -> bool:
+    """Recognize only genuine repository-issued proof for this current process."""
+    if not isinstance(proof, CommittedCreateAckProof):
+        return False
+    if proof.terminal_status not in ('delivered', 'unresolved') or proof.intent_id <= 0:
+        return False
+    payload = _ack_payload(proof.intent_id, proof.attempt_key,
+                           proof.request_fingerprint, proof.dispatch_token,
+                           proof.terminal_status)
+    return hmac.compare_digest(
+        hmac.new(_ACK_PROOF_SECRET, payload, hashlib.sha256).digest(), proof._seal,
+    )
+
+
+_RECONCILE_PROOF_SECRET = secrets.token_bytes(32)
+
+
+@dataclass(frozen=True, slots=True)
+class VerifiedCreateReconciliationProof:
+    """Ephemeral authenticated evidence from one completed adapter Create flight.
+
+    The physical receipt must be exact, and the original durable claim token
+    must still identify the persisted unresolved intent. This is not proof
+    that an arbitrary historical Discord object belongs to an attempt.
+    """
+
+    intent_id: int
+    attempt_key: str
+    request_fingerprint: str
+    dispatch_token: str
+    _seal: bytes
+
+    def __reduce__(self):
+        """Never persist process-local evidence as a durable receipt."""
+        raise TypeError('reconciliation evidence cannot be serialized')
+
+
+def _reconciliation_payload(intent_id: int, key: str, fingerprint: str,
+                            token: str, receipt: CreatedThread | CreatedMessage) -> bytes:
+    """Bind proof to every typed physical ID, mode and original claim."""
+    return json.dumps([intent_id, key, fingerprint, token,
+                       type(receipt).__name__, asdict(receipt)], sort_keys=True,
+                      separators=(',', ':')).encode('utf-8')
+
+
+def _issue_verified_create_reconciliation_proof(
+    intent_id: int, key: str, fingerprint: str, token: str,
+    receipt: CreatedThread | CreatedMessage,
+) -> VerifiedCreateReconciliationProof:
+    """Sign only adapter-observed exact same-attempt Create results."""
+    if intent_id <= 0 or not key.startswith('fanout:v1:'):
+        raise ValueError('invalid Create reconciliation attempt')
+    payload = _reconciliation_payload(intent_id, key, fingerprint, token, receipt)
+    return VerifiedCreateReconciliationProof(intent_id, key, fingerprint, token,
+                                            hmac.new(_RECONCILE_PROOF_SECRET, payload,
+                                                     hashlib.sha256).digest())
+
+
+def _verify_verified_create_reconciliation_proof(
+    proof: object, intent_id: int, key: str, fingerprint: str, token: str,
+    receipt: CreatedThread | CreatedMessage,
+) -> bool:
+    """Reject forged proof, stale generation and substituted physical IDs."""
+    if not isinstance(proof, VerifiedCreateReconciliationProof):
+        return False
+    if (proof.intent_id, proof.attempt_key, proof.request_fingerprint,
+        proof.dispatch_token) != (intent_id, key, fingerprint, token):
+        return False
+    payload = _reconciliation_payload(intent_id, key, fingerprint, token, receipt)
+    return hmac.compare_digest(hmac.new(_RECONCILE_PROOF_SECRET, payload,
+                                        hashlib.sha256).digest(), proof._seal)
+
+
 @dataclass(frozen=True, slots=True)
 class PlatformCapabilities:
     """Technical support flags; never authorization or a promise of ACL permission."""
@@ -437,6 +625,7 @@ class MessageView:
     author: AuthorRef | None = None
     content: ContentDocument | None = None
     edited_at: datetime | None = None
+    created_at: datetime | None = None
 
     def __post_init__(self) -> None:
         """Reject a resolved author from another connector."""
@@ -449,6 +638,7 @@ class MessageView:
         if self.content is not None and not isinstance(self.content, ContentDocument):
             raise ValueError('message view content must be neutral content')
         _aware_datetime(self.edited_at, 'message view edited_at')
+        _aware_datetime(self.created_at, 'message view created_at')
 
 
 def _aware_datetime(value: datetime | None, name: str, *, optional: bool = True) -> None:

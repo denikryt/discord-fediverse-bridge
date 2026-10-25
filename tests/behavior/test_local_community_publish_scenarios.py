@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from support.community_events import create_thread, create_message, configure_renderer, source_ids
+
 import json
 from pathlib import Path
 from unittest.mock import AsyncMock
@@ -12,10 +14,7 @@ from support.runtime import build_test_policy_service
 from sqlalchemy import func, select
 
 from src.content_publish_service import ContentPublishService
-from src.fedify_gateway_client import (
-    FedifyGatewayClient,
-    PublishLocalCommunityContentResult,
-)
+from src.fedify_gateway_client import FedifyGatewayClient
 from src.local_communities.runtime import LocalCommunityRuntime
 from src.local_communities.service import LocalCommunityService
 from src.models import MessageMapping, PublishedActivityObject
@@ -27,6 +26,7 @@ def _runtime(tmp_path: Path) -> tuple[object, LocalCommunityRuntime]:
     """Build a real local-community runtime with only the gateway mocked."""
     database = build_database(tmp_path, "local-community-publish.db")
     gateway = AsyncMock()
+    configure_renderer(gateway, database)
     publish_service = ContentPublishService(
         database=database,
         fedify_gateway=gateway,
@@ -70,23 +70,19 @@ def _real_gateway_runtime(
         """Record the outbound payload and return one successful gateway response."""
         payload = json.loads(request.content)
         requests.append({"path": request.url.path, "payload": payload})
-        return httpx.Response(
-            200,
-            json={
-                "activityId": "https://bridge.example/actors/users/alice/activities/create/posts/1",
-                "objectId": "https://bridge.example/actors/users/alice/objects/posts/1",
-                "communityActorUrl": payload["communityActorUrl"],
-                "deliveredFollowerCount": 1,
-                "failedFollowerCount": 0,
-                "activityJson": {
-                    "id": "https://bridge.example/actors/users/alice/activities/create/posts/1",
-                    "type": "Create",
-                    "object": {
-                        "id": "https://bridge.example/actors/users/alice/objects/posts/1"
-                    },
-                },
-            },
-        )
+        from support.community_events import render_create
+        from src.fedify_gateway_client import RenderCommunityRequest
+        rendered = render_create(RenderCommunityRequest(
+            actor_username=payload['actorUsername'], community_actor_url=payload['communityActorUrl'],
+            kind=payload['kind'], title=payload['title'], body_markdown=payload['bodyMarkdown'],
+            in_reply_to_object_id=payload['inReplyToObjectId'], operation_id=payload['operationId'],
+            activity_id=payload['activityId'], object_id=payload['objectId'], published_at=payload['publishedAt'],
+        ), database.users.get_user_by_activitypub_username(payload['actorUsername']).actor_url)
+        return httpx.Response(200, json={
+            'activityId': rendered.activity_id, 'objectId': rendered.object_id,
+            'communityActorUrl': rendered.community_actor_url,
+            'publishedAt': rendered.published_at, 'activityJson': rendered.activity_json,
+        })
 
     database = build_database(tmp_path, "local-community-publish-real.db")
     gateway = object.__new__(FedifyGatewayClient)
@@ -122,20 +118,8 @@ async def test_registered_user_thread_starter_in_local_community_publishes_post(
     runtime.fedify_gateway.publish_content.side_effect = AssertionError(
         "local-community thread starters must use the dedicated local-community publish path"
     )
-    runtime.fedify_gateway.publish_local_community_content.return_value = (
-        PublishLocalCommunityContentResult(
-            activity_id="https://bridge.example/actors/users/alice/activities/create/posts/1",
-            object_id="https://bridge.example/actors/users/alice/objects/posts/1",
-            community_actor_url="https://bridge.example/actors/communities/hackers",
-            delivered_follower_count=1,
-            failed_follower_count=0,
-        )
-    )
 
-    result = await runtime.handle_discord_thread_create(
-        thread=build_thread(),
-        starter_message=build_starter_message(),
-    )
+    result = await create_thread(runtime, thread=build_thread(), starter_message=build_starter_message())
     thread_surface = database.local_community_surfaces.get_local_community_thread_surface_by_discord_thread_id(
         200
     )
@@ -146,8 +130,8 @@ async def test_registered_user_thread_starter_in_local_community_publishes_post(
 
     assert result.status == "published"
     assert created is not None
-    assert created.ap_object_id == "https://bridge.example/actors/users/alice/objects/posts/1"
-    runtime.fedify_gateway.publish_local_community_content.assert_awaited_once()
+    assert created.ap_object_id == source_ids(database, message=300, kind='post')[2]
+    runtime.fedify_gateway.render_community.assert_awaited_once()
     with database.session() as session:
         assert session.scalar(select(func.count()).select_from(MessageMapping)) == 1
         assert (
@@ -165,10 +149,7 @@ async def test_unregistered_user_thread_starter_in_local_community_is_rejected(
     _local_community(database)
     starter_message = build_starter_message(author_id=999)
 
-    result = await runtime.handle_discord_thread_create(
-        thread=build_thread(),
-        starter_message=starter_message,
-    )
+    result = await create_thread(runtime, thread=build_thread(), starter_message=starter_message)
 
     assert result.reason == "unregistered_user"
     assert (
@@ -193,27 +174,9 @@ async def test_discord_reply_in_local_community_thread_publishes_comment_with_pa
     runtime.fedify_gateway.publish_content.side_effect = AssertionError(
         "local-community replies must use the dedicated local-community publish path"
     )
-    runtime.fedify_gateway.publish_local_community_content.side_effect = [
-        PublishLocalCommunityContentResult(
-            activity_id="https://bridge.example/actors/users/alice/activities/create/posts/1",
-            object_id="https://bridge.example/actors/users/alice/objects/posts/1",
-            community_actor_url="https://bridge.example/actors/communities/hackers",
-            delivered_follower_count=1,
-            failed_follower_count=0,
-        ),
-        PublishLocalCommunityContentResult(
-            activity_id="https://bridge.example/actors/users/alice/activities/create/comments/1",
-            object_id="https://bridge.example/actors/users/alice/objects/comments/1",
-            community_actor_url="https://bridge.example/actors/communities/hackers",
-            delivered_follower_count=1,
-            failed_follower_count=0,
-        ),
-    ]
-    await runtime.handle_discord_thread_create(thread=thread, starter_message=starter)
+    await create_thread(runtime, thread=thread, starter_message=starter)
 
-    result = await runtime.handle_discord_message(
-        message=build_thread_message(),
-    )
+    result = await create_message(runtime, message=build_thread_message())
     message_surface = database.local_community_surfaces.get_local_community_message_surface_by_discord_message_id(
         301
     )
@@ -224,8 +187,8 @@ async def test_discord_reply_in_local_community_thread_publishes_comment_with_pa
 
     assert result.status == "published"
     assert created is not None
-    assert created.parent_ap_object_id == "https://bridge.example/actors/users/alice/objects/posts/1"
-    assert runtime.fedify_gateway.publish_local_community_content.await_count == 2
+    assert created.parent_ap_object_id == source_ids(database, message=300, kind='post')[2]
+    assert runtime.fedify_gateway.render_community.await_count == 2
 
 
 @pytest.mark.asyncio
@@ -238,65 +201,31 @@ async def test_local_community_reply_semantics_preserve_nested_and_unknown_fallb
     add_registered_user(database)
     thread = build_thread()
     starter = build_starter_message()
-    runtime.fedify_gateway.publish_local_community_content.side_effect = [
-        PublishLocalCommunityContentResult(
-            activity_id="https://bridge.example/actors/users/alice/activities/create/posts/1",
-            object_id="https://bridge.example/actors/users/alice/objects/posts/1",
-            community_actor_url="https://bridge.example/actors/communities/hackers",
-            delivered_follower_count=1,
-            failed_follower_count=0,
-        ),
-        PublishLocalCommunityContentResult(
-            activity_id="https://bridge.example/actors/users/alice/activities/create/comments/0",
-            object_id="https://bridge.example/actors/users/alice/objects/comments/0",
-            community_actor_url="https://bridge.example/actors/communities/hackers",
-            delivered_follower_count=1,
-            failed_follower_count=0,
-        ),
-        PublishLocalCommunityContentResult(
-            activity_id="https://bridge.example/actors/users/alice/activities/create/comments/1",
-            object_id="https://bridge.example/actors/users/alice/objects/comments/1",
-            community_actor_url="https://bridge.example/actors/communities/hackers",
-            delivered_follower_count=1,
-            failed_follower_count=0,
-        ),
-        PublishLocalCommunityContentResult(
-            activity_id="https://bridge.example/actors/users/alice/activities/create/comments/2",
-            object_id="https://bridge.example/actors/users/alice/objects/comments/2",
-            community_actor_url="https://bridge.example/actors/communities/hackers",
-            delivered_follower_count=1,
-            failed_follower_count=0,
-        ),
-    ]
-    await runtime.handle_discord_thread_create(thread=thread, starter_message=starter)
-    await runtime.handle_discord_message(message=build_thread_message(message_id=301))
+    await create_thread(runtime, thread=thread, starter_message=starter)
+    await create_message(runtime, message=build_thread_message(message_id=301))
 
-    nested_result = await runtime.handle_discord_message(
-        message=build_thread_message(message_id=302, reference_message_id=301),
-    )
-    unknown_result = await runtime.handle_discord_message(
-        message=build_thread_message(message_id=303, reference_message_id=999),
-    )
+    nested_result = await create_message(runtime, message=build_thread_message(message_id=302, reference_message_id=301))
+    unknown_result = await create_message(runtime, message=build_thread_message(message_id=303, reference_message_id=999))
 
     assert nested_result.status == "published"
     assert unknown_result.status == "published"
     nested_request = (
-        runtime.fedify_gateway.publish_local_community_content.await_args_list[2].args[
+        runtime.fedify_gateway.render_community.await_args_list[2].args[
             0
         ]
     )
     unknown_request = (
-        runtime.fedify_gateway.publish_local_community_content.await_args_list[3].args[
+        runtime.fedify_gateway.render_community.await_args_list[3].args[
             0
         ]
     )
     assert (
         nested_request.in_reply_to_object_id
-        == "https://bridge.example/actors/users/alice/objects/comments/0"
+        == source_ids(database, message=301, kind='comment')[2]
     )
     assert (
         unknown_request.in_reply_to_object_id
-        == "https://bridge.example/actors/users/alice/objects/posts/1"
+        == source_ids(database, message=300, kind='post')[2]
     )
 
 
@@ -322,37 +251,11 @@ async def test_local_community_create_preserves_canonical_create_for_direct_foll
             follow_activity_id="https://remote.example/follows/1",
         )
 
-    canonical = {
-        "id": "https://bridge.example/actors/users/alice/activities/create/posts/1",
-        "type": "Create",
-        "actor": user.actor_url,
-        "to": [
-            "https://www.w3.org/ns/activitystreams#Public",
-            "https://bridge.example/actors/communities/hackers",
-        ],
-        "cc": [user.followers_url],
-        "object": {
-            "id": "https://bridge.example/actors/users/alice/objects/posts/1",
-            "type": "Page",
-            "attributedTo": user.actor_url,
-            "audience": "https://bridge.example/actors/communities/hackers",
-        },
-    }
-    runtime.fedify_gateway.publish_local_community_content.return_value = (
-        PublishLocalCommunityContentResult(
-            activity_id=canonical["id"],
-            object_id=canonical["object"]["id"],
-            community_actor_url="https://bridge.example/actors/communities/hackers",
-            delivered_follower_count=1,
-            failed_follower_count=0,
-            activity_json=canonical,
-        )
-    )
 
-    result = await runtime.handle_discord_thread_create(
-        thread=build_thread(), starter_message=build_starter_message()
-    )
+    result = await create_thread(runtime, thread=build_thread(), starter_message=build_starter_message())
 
+    from support.community_events import render_create
+    canonical = render_create(runtime.fedify_gateway.render_community.await_args.args[0], user.actor_url).activity_json
     assert result.status == "published"
     with database.session() as session:
         source = session.scalar(
@@ -382,28 +285,20 @@ async def test_registered_user_thread_starter_uses_real_gateway_client_payload(
     add_registered_user(database)
 
     try:
-        result = await runtime.handle_discord_thread_create(
-            thread=build_thread(),
-            starter_message=build_starter_message(),
-        )
+        result = await create_thread(runtime, thread=build_thread(), starter_message=build_starter_message())
     finally:
         await runtime.fedify_gateway.close()
 
     assert result.status == "published"
-    assert requests == [
-        {
-            "path": "/publish-local-community",
-            "payload": {
-                "actorUsername": "alice",
-                "communityActorUrl": "https://bridge.example/actors/communities/hackers",
-                "kind": "post",
-                "title": "Thread title",
-                "bodyMarkdown": "hello from discord",
-                "inReplyToObjectId": None,
-                "targetInboxUrls": [],
-                "operationId": None,
-                "activityId": None,
-                "mutationTimestamp": None,
-            },
-        }
-    ]
+    assert len(requests) == 1
+    request = requests[0]
+    assert request['path'] == '/render-community'
+    assert request['payload'] == {
+        'actorUsername': 'alice',
+        'communityActorUrl': 'https://bridge.example/actors/communities/hackers',
+        'kind': 'post', 'title': 'Thread title', 'bodyMarkdown': 'hello from discord',
+        'inReplyToObjectId': None,
+        'operationId': source_ids(database)[0],
+        'activityId': source_ids(database)[1], 'objectId': source_ids(database)[2],
+        'publishedAt': '2026-10-20T00:00:00.000Z',
+    }

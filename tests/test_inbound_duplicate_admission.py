@@ -8,6 +8,10 @@ from types import SimpleNamespace, ModuleType
 from dataclasses import dataclass
 
 import pytest
+from support.fake_platform_adapter import FakeDiscordPort
+from src.platform_types import CreatedThread, CreatedMessage, ThreadRef, MessageRef
+from src.models import PlatformDeliveryIntent
+from sqlalchemy import select
 
 from test_local_receipt_persistence import world, thread_arguments, message_arguments
 
@@ -18,6 +22,7 @@ class ExternalEffects:
     def __init__(self):
         """Observe actual attempted physical/federated side effects."""
         self.calls = []
+        self.policy_service = SimpleNamespace(is_discord_guild_allowed=lambda guild: guild == 10)
 
     async def fanout_thread_to_local_subscribers(self, **kwargs):
         """Record any attempted sibling Discord thread creation."""
@@ -34,22 +39,24 @@ class ExternalEffects:
 
 def _handler(db, effects, monkeypatch):
     """Instantiate real inbound handler with only missing SDK/network edges faked."""
-    monkeypatch.setitem(sys.modules, 'discord', SimpleNamespace(MessageReference=object))
-    # Isolate the HTTP handler's result type: importing the full app composition
-    # transitively requires the unavailable Discord SDK command tree.
-    fake_handlers = ModuleType('src.activitypub_handlers')
-    @dataclass
-    class HandlerResult:
-        """Capture actual inbound admission status without importing production SDK."""
-        status: str
-        outcome: object
-        detail: str
-    fake_handlers.HandlerResult = HandlerResult
-    monkeypatch.setitem(sys.modules, 'src.activitypub_handlers', fake_handlers)
     handler_cls = importlib.import_module(
         'src.local_communities.inbound_create').LocalCommunityInboundCreateHandler
-    return handler_cls(database=db, surface_fanout=effects,
+    class Transport(FakeDiscordPort):
+        """Accept only exact typed subscriber destinations, never a duplicate host."""
+        async def create_forum_thread(self, forum, content, *, title, presentation, attempt):
+            """Return one subscriber thread/starter receipt."""
+            assert forum.external_channel_id == '500'
+            effects.calls.append(('discord-thread', forum))
+            return CreatedThread(ThreadRef(forum, '501'), MessageRef('discord-primary', '501', '502'), 'bot')
+        async def send_message(self, destination, content, *, reply_to, presentation, attempt):
+            """Acknowledge the exact reply in the existing subscriber thread."""
+            assert destination.external_thread_id == '501'
+            effects.calls.append(('discord-message', destination))
+            return CreatedMessage(MessageRef('discord-primary', '501', '503'), 'bot')
+    handler = handler_cls(database=db, surface_fanout=effects,
                        federation_fanout=effects, discord_client_provider=lambda: None)
+    handler.bind_discord_adapter(Transport())
+    return handler
 
 
 def _post(*, activity_id='https://remote.test/create/post',
@@ -147,6 +154,8 @@ async def test_matching_post_with_retained_source_can_resume_fanout(tmp_path, mo
     """A proven canonical replay restores missing sibling/relay work without host POST."""
     db, community_id = world(tmp_path)
     db.local_community_content.create_local_community_thread(**thread_arguments(community_id))
+    subscriber = db.local_subscribers.create_local_subscriber(local_community_id=community_id,
+        discord_guild_id=10, discord_channel_id=500, initiated_by_discord_user_id=None)
     _accepted(db, community_id)
     event = _post()
     db.local_community_relay.get_or_create_local_community_relay_source_activity(
@@ -158,6 +167,9 @@ async def test_matching_post_with_retained_source_can_resume_fanout(tmp_path, mo
     result = await _handler(db, effects, monkeypatch).handle_post(event, None)
     assert result.detail == 'post already mapped'
     assert [kind for kind, _ in effects.calls] == ['discord-thread', 'relay']
+    with db.session() as session:
+        intent = session.scalar(select(PlatformDeliveryIntent))
+        assert intent is not None and intent.state == 'delivered'
     db.close()
 
 
@@ -167,7 +179,13 @@ async def test_matching_comment_repairs_missing_generic_mapping_without_host_sen
     db, community_id = world(tmp_path)
     thread = db.local_community_content.create_local_community_thread(**thread_arguments(community_id))
     db.local_community_content.create_local_community_message(**message_arguments(thread.id))
+    subscriber = db.local_subscribers.create_local_subscriber(local_community_id=community_id,
+        discord_guild_id=10, discord_channel_id=500, initiated_by_discord_user_id=None)
     _accepted(db, community_id)
+    db.local_community_surfaces.create_local_community_thread_surface(
+        local_community_thread_id=thread.id, discord_forum_channel_id=500,
+        discord_thread_id=501, discord_starter_message_id=502,
+        local_subscriber_id=subscriber.id, role='local_subscriber')
     event = _post(activity_id='https://remote.test/create/comment',
                   obj_id='https://remote.test/comment')
     event.object.kind = 'comment'
@@ -187,4 +205,7 @@ async def test_matching_comment_repairs_missing_generic_mapping_without_host_sen
     assert mapping is not None
     assert mapping.discord_message_id == 700
     assert [kind for kind, _ in effects.calls] == ['discord-message', 'relay']
+    with db.session() as session:
+        intent = session.scalar(select(PlatformDeliveryIntent))
+        assert intent is not None and intent.state == 'delivered'
     db.close()

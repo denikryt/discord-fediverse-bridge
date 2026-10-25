@@ -309,3 +309,179 @@ Fedify-native security integration remains blocked by missing dependencies.
   already matching generic identity/physical receipt while persisting its
   distinct local-community surface. Full Python regression requires the
   project's `discord.py`/`hypothesis` environment before a merge decision.
+
+- **Durable physical Create implementation snapshot (2026-10-23):** SQLite-backed
+  immutable physical Create intents, one-claim coordinator and atomic
+  thread/starter/message receipts are implemented for normalized Local/Remote
+  copy fanout. Blocked nested parents, complete runtime recovery/wake and
+  original inbound AP physical creation remain to be migrated before treating
+  this checkpoint as production-complete. No full dependency-backed suite or
+  live Discord transport verification was available during this step.
+
+- Physical Create implementation snapshot: physical Create pending/recovery and incoming Remote Community canonical snapshots have focused SQLite coverage, but legacy inbound Local/Remote AP→Discord direct sends and full production runtime cutover remain unverified; never claim completed durable community fan-out before converting those paths.
+
+- **Typed Community mutation ingress snapshot (2026-10-24):** normalized Discord edits/deletes now resolve original Local/Remote authored post/comment by exact `(connector, immediate container, message)` and verify current forum owner and linked author before reserving a User Actor mutation. Partial edits flag reconciliation on the exact source; old numeric Community routing no longer runs for real DB ingress. Fifteen real-SQLite scenarios pass, including writer-side revocation checks and
+  exact deferred-read container selection. Complete author-mutation transport/restart and full SDK-backed regression suite remain to be verified; do not claim complete mutation delivery verification.
+
+## Durable community fanout verification snapshot (2026-10-24)
+
+- **Partially verified:** real SQLite three-forum Create, per-target uncertainty,
+  restart, typed source boundaries, delayed nested-parent materialization and
+  deterministic state transitions pass focused regressions. Shared Create
+  repository no longer writes Discord-only numeric physical-copy projections;
+  authored-source numeric validation stays within the published-object owner.
+- **Not verified:** complete Python/Node dependency-backed suites and actual
+  Discord/Fedify end-to-end sends. Do not interpret a lost Discord receipt,
+  missing local copy or expiry of a claim as permission to re-POST. These
+  remain part of the durable community fanout acceptance checklist, not completed checks.
+
+## 2026-10-24 — physical mutation recovery pagination (fixed)
+
+- A fixed `LIMIT (requested_claims * 8)` scanned only the oldest candidate copy
+  rows. Eight already-applied historical rows ahead of an overdue copy caused
+  permanent starvation across repeated drains with `limit=1`; a real SQLite
+  regression reproduced `drain()==0` despite a pending canonical revision.
+- The existing physical-copy scanner now walks bounded ID-keyset pages under
+  the writer lock and limits **successful claims**, not inspected rows. Tests
+  confirm late-copy delivery, non-send on revoked ownership, one-claim budget,
+  and zero-limit no-op. No schema, queue or background worker was added.
+- Full dependency-backed test suite and live Discord/Fedify remain unverified.
+
+## 2026-10-24 — Group Announce expired-claim classification (fixed)
+
+- Previously, a Group-signed `Announce(Update)` interrupted in `dispatching`
+  remained indefinitely active after its lease expired; restart did not
+  classify the unknown outcome. SQLite regressions reproduced the missing
+  `ambiguous` transition and accidental claim at `limit=0`.
+- The existing authored repository now marks expired sends `ambiguous`, keeps
+  their exact attempt proof for a verified late positive outcome, blocks
+  younger Delete until settlement, and never retries solely on expiry.
+- Full dependency-backed and live federation integration is still unverified.
+
+## 2026-10-24 — physical mutation formatter isolation (fixed)
+
+- Previously, a pure domain renderer raising `ValueError` or returning an
+  invalid ContentDocument aborted the entire SQLite mutation claim scan, so
+  healthy destinations were never reached. Real SQLite tests reproduced both
+  errors and confirm independent delivery after the fix.
+- Invalid canonical JSON/schema and explicitly refused formatter output now
+  produce an inspectable `failed_definite` on that copy without POST; the
+  identical revision is not repeatedly rendered, while a later validated
+  canonical revision remains recoverable. Full SDK integration is unverified.
+
+## 2026-10-24 — physical mutation pre-send and cancellation boundaries (fixed)
+
+- A local connector-registry/policy lookup or tombstone formatting exception was
+  incorrectly recorded as `unresolved`, permanently fencing an edit that never
+  reached the adapter. Three red SQLite tests reproduced the failure; the
+  coordinator now classifies refusal by whether adapter I/O actually began.
+- Group-signed `Announce(Create/Update/Delete)` had the same batched-claim
+  cancellation problem; a real SQLite Follow-F1/F2 test reproduces it. The
+  original in-flight signed send stays uncertain while the later unstarted
+  recipient is released, without reusing an old Follow's Create evidence.
+- Cancelling one in-flight mutation previously stranded *later, unstarted*
+  already-claimed copies in `dispatching` until lease expiry, which then
+  persisted an unnecessary uncertain-send barrier. A new SQLite task-cancel
+  regression proves the in-flight copy remains uncertain, while the later
+  never-sent copy can be safely retried after graceful cancellation. A hard
+  process kill retains conservative unknown classification for every claimed
+  but unsettled attempt; it cannot prove non-send across process death.
+- Independent Python SQLite tests and Node render-only tests pass. Complete
+  dependency-backed Python/TypeScript checks and live Discord/Fedify remain
+  unverified; these do not establish production readiness.
+
+## 2026-10-24 — review: typed Local Community receipt handoff
+
+- **FIXED (P1):** `PlatformDeliveryIntentRepository.commit_receipt()` writes
+  typed `external_thread_id`/starter IDs and leaves old `discord_*` projections
+  nullable, but the local sibling reply fan-out searched only the numeric
+  projection. A real SQLite domain test originally produced two confirmed
+  threads but zero comment intents. The handler and typed surface lookup now
+  resolve by exact connector/forum claim/thread; the inbound AP runtime also
+  consumes these typed host receipts. Receipt role/owner remains checked.
+- **FIXED (P1):** for a known nested comment whose physical parent is missing
+  in one target, Local Community fan-out now stores a `blocked` intent instead
+  of skipping the target forever. It only awakens after same-thread receipt
+  proof; unknown/foreign parents remain refused.
+- **CONTRACT CLEANUP (P2):** unused `direct_target_inbox_urls` arguments were
+  removed from Python canonical admission, and render-only Fedify mutation
+  routes no longer forward `targetInboxUrls`. The separate obsolete
+  `/publish-local-community` **Create** gateway still has a scoped
+  `targetInboxUrls` selector; this is not Update/Delete rendering and its
+  retirement requires verifying and migrating its remaining callers.
+- Focused SQLite and runtime tests are available. Full pytest/TypeScript and
+  live Discord/Fedify remain unverified without project dependencies and
+  external test services; this does not establish release readiness for durable community fanout.
+
+## 2026-10-24 — Remote Community typed physical receipt handoff
+
+- **FIXED (P1):** the Remote Community normalized sibling thread and comment
+  paths used nullable legacy `discord_channel_id`/`discord_thread_id` rather
+  than the coordinator's authoritative connector/surface/`external_*` receipt.
+  Confirmed new threads could therefore be invisible to subsequent comments,
+  yielding zero fanout targets or `committed remote receipt without copy`.
+  Exact typed lookups now bind the current accepted subscription, source thread,
+  destination forum and the separate actual starter/message IDs.
+- **FIXED (related nested reply):** Remote known nested parent without a
+  recipient-local message receipt now reserves a `blocked` Create intent
+  instead of sending a flattened reply. The parent must later arrive in the
+  exact destination physical thread to materialize the child.
+- New SQLite domain/runtime scenarios verify typed-only B/C root comments,
+  a reply authored inside a typed mirror, an inbound AP comment, a missing
+  destination nested parent and a wrong-forum identity denial. Legacy tests
+  asserting non-NULL `discord_*` columns on newly created copies do not match
+  the durable fanout schema contract; those assertions were not rewritten solely
+  to make an obsolete projection pass.
+- Full Python/TypeScript dependency-backed and live Discord/Fedify verification
+  remain outstanding. Focused tests alone are not production acceptance.
+
+
+## Single Community Create pipeline
+
+- Implemented: migrated the remaining 32 direct raw runtime calls, removed all
+  four raw runtime Create APIs, four local Create handlers and unused SDK-only
+  fanout Create methods. Typed ingress and durable coordinator are the only
+  Community Create path. Personal Feed and physical mutations retain their owners.
+- Fixed MIG-01: writer-serialized source checks reject conflicting incomplete
+  legacy mappings, including typed/unknown-container collisions. Exact retries
+  remain idempotent. Fixed MIG-02: migration regression expects 47 current tables.
+- Verification uses real Python/Discord/Hypothesis and Node/Fedify dependencies.
+  The delivered report records baseline/full-suite failures separately. Live
+  Discord/Fedify credentials and delivery are not exercised by offline tests.
+
+
+## Independent migration review — legacy mutations
+
+- Fixed first legacy Update/Delete admission when an independently persisted
+  original publication or Local Community Create proves the exact author/object/
+  activity/community. Missing/conflicting evidence explicitly requires review.
+- Physical mutation recovery now verifies bridge ownership of each exact message;
+  ambiguous human sources remain untouched. Lost write ACKs stay unresolved.
+- Restored all five previously uncollected tests. Remote Create-after-Delete now
+  refuses canonical reuse for both posts and comments.
+- Behavioral coverage creates the database with the authentic v0.1.0 code,
+  migrates it, enters real handlers and checks mirrors, human sources and restart.
+- Removed process-global empty `discord` placeholders from six scenario modules;
+  combined runs load the installed SDK while retaining network-edge fakes.
+
+
+## Canonical-ready commit recovery
+
+- Fixed: a failed local canonical commit now preserves its rendered activity,
+  records the error and schedules bounded retry instead of immediately spinning.
+- Canonical-ready ownership respects the current lease; recovery counts commit
+  attempts, retries only stored JSON and clears diagnostics after success.
+- Four real-SQLite behavioral cases cover missing ownership rows, SQL flush
+  failure, claim fencing and commit-CAS refusal. No schema change is required.
+
+- Fixed: matching Local Group Undo previously removed its subscriber but returned
+  skipped; stale Follow incarnation fencing remains transactional.
+- Fixed: a deleted Local parent blocked recovery of an authenticated child
+  tombstone. Existing bot copies now settle that Delete once; pending live
+  child content remains blocked by the parent tombstone.
+- Integration fixtures now exercise real durable delivery coordinators and DB-backed
+  recipients with explicit original authors/timestamps. This does not grant
+  unknown legacy authorship or relax production mutation validation.
+
+- Replaced numbered roadmap labels with feature names in code comments,
+  diagnostics, documentation and test paths; updated imports and references.

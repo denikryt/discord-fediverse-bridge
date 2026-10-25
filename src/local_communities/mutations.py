@@ -93,21 +93,7 @@ class LocalCommunityMutationHandler:
         """Durably admit one local-community edit before gateway I/O."""
         service = mutation_context.user_actor_delivery_service
         if service is None:
-            await mutation_context.fedify_gateway.update_content(
-                UpdateContentRequest(
-                    actor_username=published.actor_username,
-                    community_actor_url=published.community_actor_url,
-                    ap_object_id=published.object_id,
-                    kind=published.kind,
-                    title=published.title,
-                    body_markdown=new_content,
-                    in_reply_to_object_id=published.in_reply_to_object_id,
-                    target_inbox_urls=self._allowed_remote_inboxes(
-                        published.community_actor_url
-                    ),
-                )
-            )
-            return
+            raise RuntimeError('author Update requires durable User Actor delivery')
         if edited_timestamp is None:
             logger.warning(
                 "Ignoring durable local-community edit without Discord edited_timestamp object=%s",
@@ -120,9 +106,6 @@ class LocalCommunityMutationHandler:
                 title=published.title,
                 body_markdown=new_content,
                 edited_timestamp=edited_timestamp,
-                target_inbox_urls=self._allowed_remote_inboxes(
-                    published.community_actor_url
-                ),
             )
             if outcome == "accepted":
                 mutation_context.user_actor_delivery_wake.wake()
@@ -138,23 +121,10 @@ class LocalCommunityMutationHandler:
         """Durably admit one terminal local-community delete."""
         service = mutation_context.user_actor_delivery_service
         if service is None:
-            await mutation_context.fedify_gateway.delete_content(
-                DeleteContentRequest(
-                    actor_username=published.actor_username,
-                    community_actor_url=published.community_actor_url,
-                    ap_object_id=published.object_id,
-                    target_inbox_urls=self._allowed_remote_inboxes(
-                        published.community_actor_url
-                    ),
-                )
-            )
-            return
+            raise RuntimeError('author Delete requires durable User Actor delivery')
         try:
             outcome = await service.submit_delete(
                 object_id=published.object_id,
-                target_inbox_urls=self._allowed_remote_inboxes(
-                    published.community_actor_url
-                ),
             )
             if outcome == "accepted":
                 mutation_context.user_actor_delivery_wake.wake()
@@ -397,12 +367,37 @@ class LocalCommunityMutationHandler:
                 getattr(event, "community_actor_id")
             )
         )
-        await self.surface_fanout.fanout_thread_edit(
-            thread_row=thread_row,
-            source_surface_id=None,
-            new_content=format_inbound_post_body(event),
-            adapter=getattr(runtime, 'discord_adapter', None),
-        )
+        # Durable canonical Update admission must precede every physical
+        # edit and Group relay, including with zero Discord target surfaces.
+        if local_community is None:
+            return _HandlerResult(
+                'skipped', InboundActivityOutcome.IGNORED_UNMAPPED_CONTEXT,
+                'local community Update has no owner',
+            )
+        from .inbound_create import LocalCommunityInboundCreateHandler
+        try:
+            first_update = self.database.local_community_content.admit_authenticated_update(
+                kind='post', ap_object_id=event.object.ap_id,
+                local_community_id=local_community.id, actor_id=event.actor_id,
+                new_content_json=LocalCommunityInboundCreateHandler._inbound_snapshot(
+                    event, kind='post'),
+                updated_at=getattr(event.object, 'updated_at', None),
+                source_activity_id=getattr(event, 'source_activity_id', None),
+            )
+        except ValueError as exc:
+            return _HandlerResult(
+                'skipped', InboundActivityOutcome.IGNORED_UNMAPPED_CONTEXT, str(exc),
+            )
+        if not first_update:
+            return _HandlerResult(
+                'skipped', InboundActivityOutcome.IGNORED_ALREADY_APPLIED,
+                'canonical local post Update already admitted',
+            )
+        mutation_coordinator = getattr(runtime, 'physical_mutation_coordinator', None)
+        if mutation_coordinator is not None:
+            await mutation_coordinator.drain()
+        # Retain canonical work for startup recovery when adapter is absent;
+        # do not re-enable the legacy direct Discord edit/delete path.
         if local_community is not None:
             await self.federation_fanout.relay_update_or_delete(
                 event=event,
@@ -436,11 +431,32 @@ class LocalCommunityMutationHandler:
                 getattr(event, "community_actor_id")
             )
         )
-        await self.surface_fanout.fanout_thread_delete(
-            thread_row=thread_row,
-            source_surface_id=None,
-            adapter=getattr(runtime, 'discord_adapter', None),
-        )
+        if local_community is None:
+            return _HandlerResult(
+                status='skipped', outcome=InboundActivityOutcome.IGNORED_UNMAPPED_CONTEXT,
+                detail='local community Delete does not match owning actor',
+            )
+        try:
+            first_delete = self.database.local_community_content.mark_inbound_deleted_if_live(
+                kind='post', ap_object_id=event.object.ap_id,
+                local_community_id=local_community.id, actor_id=event.actor_id,
+            )
+        except ValueError as exc:
+            return _HandlerResult(
+                status='skipped', outcome=InboundActivityOutcome.IGNORED_UNMAPPED_CONTEXT,
+                detail=str(exc),
+            )
+        if not first_delete:
+            return _HandlerResult(
+                status='skipped', outcome=InboundActivityOutcome.IGNORED_ALREADY_APPLIED,
+                detail='canonical local post already deleted',
+            )
+        # Physical edit and federation relay follow the durable writer commit.
+        mutation_coordinator = getattr(runtime, 'physical_mutation_coordinator', None)
+        if mutation_coordinator is not None:
+            await mutation_coordinator.drain()
+        # Retain canonical work for startup recovery when adapter is absent;
+        # do not re-enable the legacy direct Discord edit/delete path.
         if local_community is not None:
             await self.federation_fanout.relay_update_or_delete(
                 event=event,
@@ -485,12 +501,37 @@ class LocalCommunityMutationHandler:
                 getattr(event, "community_actor_id")
             )
         )
-        await self.surface_fanout.fanout_message_edit(
-            message_row=message_row,
-            source_surface_id=None,
-            new_content=format_inbound_comment_body(event),
-            adapter=getattr(runtime, 'discord_adapter', None),
-        )
+        # Durable canonical Update admission must precede every physical
+        # edit and Group relay, including with zero Discord target surfaces.
+        if local_community is None:
+            return _HandlerResult(
+                'skipped', InboundActivityOutcome.IGNORED_UNMAPPED_CONTEXT,
+                'local community Update has no owner',
+            )
+        from .inbound_create import LocalCommunityInboundCreateHandler
+        try:
+            first_update = self.database.local_community_content.admit_authenticated_update(
+                kind='comment', ap_object_id=event.object.ap_id,
+                local_community_id=local_community.id, actor_id=event.actor_id,
+                new_content_json=LocalCommunityInboundCreateHandler._inbound_snapshot(
+                    event, kind='comment'),
+                updated_at=getattr(event.object, 'updated_at', None),
+                source_activity_id=getattr(event, 'source_activity_id', None),
+            )
+        except ValueError as exc:
+            return _HandlerResult(
+                'skipped', InboundActivityOutcome.IGNORED_UNMAPPED_CONTEXT, str(exc),
+            )
+        if not first_update:
+            return _HandlerResult(
+                'skipped', InboundActivityOutcome.IGNORED_ALREADY_APPLIED,
+                'canonical local comment Update already admitted',
+            )
+        mutation_coordinator = getattr(runtime, 'physical_mutation_coordinator', None)
+        if mutation_coordinator is not None:
+            await mutation_coordinator.drain()
+        # Retain canonical work for startup recovery when adapter is absent;
+        # do not re-enable the legacy direct Discord edit/delete path.
         if local_community is not None:
             await self.federation_fanout.relay_update_or_delete(
                 event=event,
@@ -535,11 +576,32 @@ class LocalCommunityMutationHandler:
                 getattr(event, "community_actor_id")
             )
         )
-        await self.surface_fanout.fanout_message_delete(
-            message_row=message_row,
-            source_surface_id=None,
-            adapter=getattr(runtime, 'discord_adapter', None),
-        )
+        if local_community is None:
+            return _HandlerResult(
+                status='skipped', outcome=InboundActivityOutcome.IGNORED_UNMAPPED_CONTEXT,
+                detail='local community Delete does not match owning actor',
+            )
+        try:
+            first_delete = self.database.local_community_content.mark_inbound_deleted_if_live(
+                kind='comment', ap_object_id=event.object.ap_id,
+                local_community_id=local_community.id, actor_id=event.actor_id,
+            )
+        except ValueError as exc:
+            return _HandlerResult(
+                status='skipped', outcome=InboundActivityOutcome.IGNORED_UNMAPPED_CONTEXT,
+                detail=str(exc),
+            )
+        if not first_delete:
+            return _HandlerResult(
+                status='skipped', outcome=InboundActivityOutcome.IGNORED_ALREADY_APPLIED,
+                detail='canonical local comment already deleted',
+            )
+        # Physical edit and federation relay follow the durable writer commit.
+        mutation_coordinator = getattr(runtime, 'physical_mutation_coordinator', None)
+        if mutation_coordinator is not None:
+            await mutation_coordinator.drain()
+        # Retain canonical work for startup recovery when adapter is absent;
+        # do not re-enable the legacy direct Discord edit/delete path.
         if local_community is not None:
             await self.federation_fanout.relay_update_or_delete(
                 event=event,

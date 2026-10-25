@@ -66,7 +66,7 @@ class LocalCommunityRuntime:
         self.discord_create_handler = LocalCommunityDiscordCreateHandler(
             database=database,
             content_publish_service=content_publish_service,
-            surface_fanout=self.surface_fanout,
+            federation_fanout=self.federation_fanout,
         )
         self.inbound_create_handler = LocalCommunityInboundCreateHandler(
             database=database,
@@ -209,60 +209,7 @@ class LocalCommunityRuntime:
             event=event, source=source, adapter=adapter, fanout=fanout,
         )
 
-    async def handle_discord_thread_create(
-        self,
-        *,
-        thread: object,
-        starter_message: object,
-    ) -> LocalCommunityRuntimeResult:
-        """Publish one Discord thread starter into a local community as a post."""
-        source = resolve_local_community_source_for_forum(
-            self.database, getattr(thread, "parent_id", None)
-        )
-        if source is None:
-            return LocalCommunityRuntimeResult(
-                status="ignored", reason="not_local_community"
-            )
-        disabled = self._disabled_result_if_needed(source.local_community)
-        if disabled is not None:
-            return disabled
-        if source.source_kind == "local_subscriber":
-            return await self.discord_create_handler.handle_local_subscriber_thread_create(
-                thread=thread,
-                starter_message=starter_message,
-                local_community=source.local_community,
-                local_subscriber=source.local_subscriber,
-            )
-        return await self.discord_create_handler.handle_host_thread_create(
-            thread=thread,
-            starter_message=starter_message,
-            local_community=source.local_community,
-        )
 
-    async def handle_discord_message(
-        self, *, message: object
-    ) -> LocalCommunityRuntimeResult:
-        """Publish one Discord reply inside a local-community thread as a comment."""
-        thread = getattr(message, "channel")
-        source = resolve_local_community_source_for_forum(
-            self.database, getattr(thread, "parent_id", None)
-        )
-        if source is None:
-            return LocalCommunityRuntimeResult(
-                status="ignored", reason="not_local_community"
-            )
-        disabled = self._disabled_result_if_needed(source.local_community)
-        if disabled is not None:
-            return disabled
-        if source.source_kind == "local_subscriber":
-            return await self.discord_create_handler.handle_local_subscriber_message(
-                message=message,
-                local_community=source.local_community,
-                local_subscriber=source.local_subscriber,
-            )
-        return await self.discord_create_handler.handle_host_message(
-            message=message, local_community=source.local_community
-        )
 
     async def handle_inbound_post(
         self, event: object, runtime: object

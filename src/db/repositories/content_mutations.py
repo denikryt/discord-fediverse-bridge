@@ -17,6 +17,10 @@ from ...models import (
     User,
     UserActorContentMutation,
     UserActorFollower,
+    LocalCommunity, LocalCommunityThread, LocalCommunityMessage,
+    CommunityThreadGroup, CommunityMessageGroup,
+    ChannelCommunitySubscription, ChannelSurface, RemoteActor,
+    InboundConversationObject,
 )
 from ...activitypub_identity_urls import (
     build_user_delete_comment_activity_id,
@@ -25,6 +29,8 @@ from ...activitypub_identity_urls import (
     build_user_update_post_activity_id,
 )
 from .base import BaseRepository
+from .platform_delivery_intents import cancel_deleted_source_intents
+from .local_community_authored_announces import LocalCommunityAuthoredAnnounceRepository
 
 
 @dataclass(frozen=True, slots=True)
@@ -70,8 +76,9 @@ class ContentMutationRepository(BaseRepository):
         title: str | None,
         body_markdown: str,
         edited_timestamp: datetime,
+        source_message: "MessageRef | None" = None,
     ) -> str:
-        """Durably accept a content-relevant Discord edit by external timestamp."""
+        """Admit an edited source with current Community owner proof at SQLite writer."""
         fingerprint = self.fingerprint("update", title, body_markdown)
         with self._immediate_session_provider() as session:
             published = session.scalar(
@@ -81,6 +88,16 @@ class ContentMutationRepository(BaseRepository):
             )
             if published is None:
                 return "missing"
+            if source_message is not None:
+                from .activitypub_objects import resolve_community_mutation_source
+                # Repeat source authorization under the same writer reservation
+                # as the desired revision. A forum may rebound after ingress.
+                proof = resolve_community_mutation_source(
+                    session, source_message, external_guild_id=None,
+                    actor_external_id=None,
+                )
+                if proof is None or proof.object_id != published.object_id:
+                    return "ineligible"
             if published.deleted_at is not None or published.desired_kind == "delete":
                 return "deleted"
             current_ts = published.desired_edited_timestamp
@@ -107,8 +124,10 @@ class ContentMutationRepository(BaseRepository):
             published.desired_fingerprint = fingerprint
             return "accepted"
 
-    def record_desired_delete(self, *, object_id: str) -> str:
-        """Durably accept terminal deletion independently of edit timestamps."""
+    def record_desired_delete(
+        self, *, object_id: str, source_message: "MessageRef | None" = None,
+    ) -> str:
+        """Admit terminal source deletion with optional exact Community ref."""
         with self._immediate_session_provider() as session:
             published = session.scalar(
                 select(PublishedActivityObject).where(
@@ -117,6 +136,16 @@ class ContentMutationRepository(BaseRepository):
             )
             if published is None:
                 return "missing"
+            if source_message is not None:
+                from .activitypub_objects import resolve_community_mutation_source
+                # Repeat source authorization under the same writer reservation
+                # as the desired revision. A forum may rebound after ingress.
+                proof = resolve_community_mutation_source(
+                    session, source_message, external_guild_id=None,
+                    actor_external_id=None,
+                )
+                if proof is None or proof.object_id != published.object_id:
+                    return "ineligible"
             if published.deleted_at is not None or published.desired_kind == "delete":
                 return "duplicate"
             published.desired_kind = "delete"
@@ -130,7 +159,6 @@ class ContentMutationRepository(BaseRepository):
         session,
         *,
         published: PublishedActivityObject,
-        target_inbox_urls: list[str] | None,
     ) -> int | None:
         """Reserve the current desired transition inside an existing writer transaction."""
         if published.desired_kind == "none":
@@ -161,7 +189,6 @@ class ContentMutationRepository(BaseRepository):
             "title": published.desired_title,
             "bodyMarkdown": published.desired_body_markdown,
             "inReplyToObjectId": published.in_reply_to_object_id,
-            "targetInboxUrls": target_inbox_urls,
             "mutationTimestamp": (
                 published.desired_edited_timestamp.isoformat()
                 if published.desired_edited_timestamp is not None
@@ -184,7 +211,6 @@ class ContentMutationRepository(BaseRepository):
             "inReplyToObjectId": (
                 request["inReplyToObjectId"] if kind == "content_update" else None
             ),
-            "targetInboxUrls": request["targetInboxUrls"],
             "mutationTimestamp": request["mutationTimestamp"],
         }
         identity = json.dumps(
@@ -256,7 +282,7 @@ class ContentMutationRepository(BaseRepository):
         return mutation.id
 
     def reserve_next(
-        self, *, object_id: str, target_inbox_urls: list[str] | None
+        self, *, object_id: str
     ) -> int | None:
         """Reserve one transition from committed state to current desired state."""
         with self._immediate_session_provider() as session:
@@ -270,7 +296,6 @@ class ContentMutationRepository(BaseRepository):
             return self._reserve_next_in_session(
                 session,
                 published=published,
-                target_inbox_urls=target_inbox_urls,
             )
 
     def reconcile_authoritative_update_and_reserve(
@@ -280,7 +305,7 @@ class ContentMutationRepository(BaseRepository):
         title: str | None,
         body_markdown: str,
         edited_timestamp: datetime,
-        target_inbox_urls: list[str] | None,
+        source_message: "MessageRef | None" = None,
     ) -> str:
         """Converge one durable reconciliation item to fetched Discord state atomically."""
         fingerprint = self.fingerprint("update", title, body_markdown)
@@ -292,6 +317,14 @@ class ContentMutationRepository(BaseRepository):
             )
             if published is None:
                 return "missing"
+            if source_message is not None:
+                from .activitypub_objects import resolve_community_mutation_source
+                proof = resolve_community_mutation_source(
+                    session, source_message, external_guild_id=None,
+                    actor_external_id=None,
+                )
+                if proof is None or proof.object_id != published.object_id:
+                    return "ineligible"
             if not published.discord_reconciliation_needed:
                 return "not_needed"
             if published.deleted_at is not None or published.desired_kind == "delete":
@@ -329,7 +362,6 @@ class ContentMutationRepository(BaseRepository):
             self._reserve_next_in_session(
                 session,
                 published=published,
-                target_inbox_urls=target_inbox_urls,
             )
             published.discord_reconciliation_needed = False
             published.discord_reconciliation_next_attempt_at = None
@@ -361,6 +393,13 @@ class ContentMutationRepository(BaseRepository):
                                 UserActorContentMutation.next_attempt_at.is_(None),
                                 UserActorContentMutation.next_attempt_at <= now,
                             ),
+                            # A persisted render still belongs to its current
+                            # local-commit owner until release or lease expiry.
+                            or_(
+                                UserActorContentMutation.state != "canonical_ready",
+                                UserActorContentMutation.lease_expires_at.is_(None),
+                                UserActorContentMutation.lease_expires_at <= now,
+                            ),
                         ),
                         and_(
                             UserActorContentMutation.state == "dispatching",
@@ -376,10 +415,12 @@ class ContentMutationRepository(BaseRepository):
                 mutation.claim_token = token
                 mutation.claimed_at = now
                 mutation.lease_expires_at = now + timedelta(seconds=stale_after_seconds)
+                # Local commit retries count too: their bounded backoff must
+                # grow without discarding or rendering the frozen activity.
+                mutation.attempt_count += 1
                 if mutation.state != "canonical_ready":
                     mutation.state = "dispatching"
                     mutation.side_effect_classification = "not_dispatched"
-                    mutation.attempt_count += 1
                 claims.append(
                     ClaimedContentMutation(
                         mutation_id=mutation.id,
@@ -439,40 +480,51 @@ class ContentMutationRepository(BaseRepository):
     def record_retryable_failure(
         self, mutation_id: int, claim_token: str, error: str
     ) -> None:
-        """Release an ambiguous gateway attempt for stable-identity replay."""
+        """Release a failed attempt while preserving a durably received render."""
         with self.session() as session:
             mutation = session.scalar(
                 select(UserActorContentMutation).where(
                     UserActorContentMutation.id == mutation_id,
                     UserActorContentMutation.claim_token == claim_token,
-                    UserActorContentMutation.state == "dispatching",
+                    UserActorContentMutation.state.in_(("dispatching", "canonical_ready")),
                 )
             )
             if mutation is None:
                 return
+            self._release_retryable(mutation, error)
+
+    @staticmethod
+    def _release_retryable(mutation: UserActorContentMutation, error: str) -> None:
+        """Retain canonical-ready JSON; retry only its local commit after backoff."""
+        if mutation.state != "canonical_ready":
             mutation.state = "ambiguous"
             mutation.side_effect_classification = "send_possible"
-            mutation.claim_token = None
-            mutation.claimed_at = None
-            mutation.lease_expires_at = None
-            mutation.last_error = error[:500]
-            mutation.next_attempt_at = datetime.now(timezone.utc) + timedelta(
-                seconds=min(300, 2 ** min(mutation.attempt_count, 8))
-            )
+        mutation.claim_token = None
+        mutation.claimed_at = None
+        mutation.lease_expires_at = None
+        mutation.last_error = error[:500]
+        mutation.next_attempt_at = datetime.now(timezone.utc) + timedelta(
+            seconds=min(300, 2 ** min(mutation.attempt_count, 8))
+        )
 
     def abort_local_validation(
         self, mutation_id: int, claim_token: str, error: str
     ) -> None:
-        """Abort a pre-send invalid transition without advancing revision."""
+        """Abort pre-render validation, or park a failed already-rendered commit."""
         with self.session() as session:
             mutation = session.scalar(
                 select(UserActorContentMutation).where(
                     UserActorContentMutation.id == mutation_id,
                     UserActorContentMutation.claim_token == claim_token,
-                    UserActorContentMutation.state == "dispatching",
+                    UserActorContentMutation.state.in_(("dispatching", "canonical_ready")),
                 )
             )
             if mutation is None:
+                return
+            if mutation.state == "canonical_ready":
+                # A local invariant failure after render is not pre-send abort.
+                # Preserve JSON and desired intent for repair and commit-only retry.
+                self._release_retryable(mutation, error)
                 return
             mutation.state = "aborted_pre_send"
             mutation.side_effect_classification = "not_dispatched"
@@ -494,6 +546,161 @@ class ContentMutationRepository(BaseRepository):
                 published.desired_body_markdown = None
                 published.desired_edited_timestamp = None
                 published.desired_fingerprint = None
+
+    @staticmethod
+    def _current_direct_grants(session, published: PublishedActivityObject) -> list[dict]:
+        """Build a fresh immutable, evidence-backed audience for one mutation.
+
+        Old Create inbox URLs and caller parameters are not authorization. A
+        rebound or revoked community forum produces zero direct deliveries,
+        while an exact admitted Personal Feed parent author may receive a reply.
+        """
+        if published.publication_context == 'community':
+            if published.source_channel_surface_id is None:
+                return []
+            surface = session.get(ChannelSurface, published.source_channel_surface_id)
+            if (surface is None or surface.kind != 'forum'
+                or surface.connector_id != published.source_connector_id
+                or surface.remote_subscription_id is None):
+                return []
+            subscription = session.get(ChannelCommunitySubscription, surface.remote_subscription_id)
+            if (subscription is None or subscription.status != 'accepted'
+                or subscription.lemmy_community_actor_id != published.community_actor_url
+                or not subscription.community_inbox_url or not subscription.follow_activity_id):
+                return []
+            return [{
+                'schemaVersion': 1,
+                'contextKind': 'remote_community_publication',
+                'publishedObjectId': published.id,
+                'subscriptionId': subscription.id,
+                'recipientActorId': subscription.lemmy_community_actor_id,
+                'followActivityId': subscription.follow_activity_id,
+                'targetEndpointUrl': subscription.community_inbox_url,
+                'sourceSurfaceId': surface.id,
+            }]
+        if published.publication_context == 'personal_feed':
+            if not published.in_reply_to_object_id or not published.conversation_root_object_id:
+                return []
+            parent = session.scalar(select(InboundConversationObject).where(
+                InboundConversationObject.object_id == published.in_reply_to_object_id,
+                InboundConversationObject.conversation_root_object_id == published.conversation_root_object_id,
+                InboundConversationObject.deleted_at.is_(None),
+            ))
+            root = session.scalar(select(PublishedActivityObject).where(
+                PublishedActivityObject.object_id == published.conversation_root_object_id,
+                PublishedActivityObject.publication_context == 'personal_feed',
+                PublishedActivityObject.deleted_at.is_(None),
+            ))
+            if parent is None or root is None:
+                return []
+            actor = session.scalar(select(RemoteActor).where(RemoteActor.actor_url == parent.actor_id))
+            if actor is None:
+                return []
+            endpoint = actor.shared_inbox_url or actor.inbox_url
+            return [{
+                'schemaVersion': 1,
+                'contextKind': 'personal_feed_reply',
+                'publishedObjectId': published.id,
+                'conversationRootObjectId': root.object_id,
+                'parentObjectId': parent.object_id,
+                'recipientActorId': parent.actor_id,
+                'targetEndpointUrl': endpoint,
+            }]
+        return []
+
+    @staticmethod
+    def _apply_community_canonical_mutation(
+        session, *, published: PublishedActivityObject,
+        mutation: UserActorContentMutation, request: dict,
+        canonical_activity_json: dict, now: datetime,
+    ) -> None:
+        """Advance the existing Local/Remote canonical source in the author commit.
+
+        The published AP object and the community post/comment are one logical
+        source. Advancing only the former would silently strand every physical
+        mirror at its old revision after a crash or a zero-recipient Update.
+        """
+        if published.publication_context != 'community':
+            return  # Personal Feed is independently owned.
+        if published.kind not in ('post', 'comment') or not published.community_actor_url:
+            raise ValueError('invalid authored community publication identity')
+        is_post = published.kind == 'post'
+        local_model = LocalCommunityThread if is_post else LocalCommunityMessage
+        remote_model = CommunityThreadGroup if is_post else CommunityMessageGroup
+        local_row = session.scalar(select(local_model).where(
+            local_model.ap_object_id == published.object_id))
+        remote_row = session.scalar(select(remote_model).where(
+            remote_model.ap_object_id == published.object_id))
+        if local_row is not None and remote_row is not None:
+            raise ValueError('authored AP object has conflicting canonical domains')
+        row = local_row if local_row is not None else remote_row
+        if row is None:
+            # Released-v0 publications can lack provable typed canonical
+            # attribution. Never manufacture an arbitrary community row.
+            if published.source_channel_surface_id is not None:
+                raise ValueError('typed community source lacks its canonical row')
+            return
+        local_community = None
+        if local_row is not None:
+            local_community_id = (local_row.local_community_id if is_post else
+                session.get(LocalCommunityThread, local_row.local_community_thread_id).local_community_id)
+            local_community = session.get(LocalCommunity, local_community_id)
+            if (local_community is None or local_community.actor_url != published.community_actor_url):
+                raise ValueError('authored Local Community ownership changed')
+            if not is_post:
+                parent = session.get(LocalCommunityThread, local_row.local_community_thread_id)
+                if parent is None or parent.deleted_at is not None:
+                    raise ValueError('authored comment has a deleted Local Community parent')
+        else:
+            if remote_row.community_actor_id != published.community_actor_url:
+                raise ValueError('authored Remote Community ownership changed')
+            if not is_post:
+                parent = session.get(CommunityThreadGroup, remote_row.thread_group_id)
+                if (parent is None or parent.deleted_at is not None
+                    or parent.community_actor_id != published.community_actor_url):
+                    raise ValueError('authored comment has a wrong Remote Community parent')
+        if row.deleted_at is not None:
+            raise ValueError('authored canonical source was already deleted')
+
+        # A published author revision starts at 1, while the domain's
+        # content revision starts at 0. Advance each exactly once under the
+        # same writer/CAS transaction instead of guessing historical baselines.
+        row.content_revision += 1
+        if mutation.kind == 'content_delete':
+            row.deleted_at = now
+            cancel_deleted_source_intents(
+                session, domain='local' if local_row is not None else 'remote',
+                kind=published.kind, canonical_id=row.id,
+                revision=row.content_revision,
+            )
+        else:
+            snapshot = {
+                'schemaVersion': 1, 'kind': published.kind,
+                'sourceKind': 'discord_human',
+                'apObjectId': published.object_id,
+                'title': request.get('title') if is_post else None,
+                'bodyMarkdown': str(request.get('bodyMarkdown') or ''),
+                'authorActorId': published.actor_url,
+                'authorName': published.actor_username,
+            }
+            if not is_post:
+                snapshot['inReplyTo'] = published.in_reply_to_object_id
+            row.current_content_json = json.dumps(
+                snapshot, sort_keys=True, separators=(',', ':'), ensure_ascii=False,
+            )
+            row.last_source_update_order_key = request.get('mutationTimestamp')
+            row.last_source_update_identity = mutation.activity_id
+
+        # The Group-signed authored mutation shares the same atomic writer
+        # boundary as the User Actor activity, but keeps its own immutable
+        # signature and per-Follow causal delivery ledger.
+        if local_community is not None:
+            LocalCommunityAuthoredAnnounceRepository.stage_mutation(
+                session, published=published, community=local_community,
+                activity_kind='delete' if mutation.kind == 'content_delete' else 'update',
+                content_revision=mutation.next_revision,
+                activity_json=canonical_activity_json,
+            )
 
     def commit_canonical(
         self,
@@ -530,6 +737,10 @@ class ContentMutationRepository(BaseRepository):
                 published.title = request.get("title")
                 published.body_markdown = str(request.get("bodyMarkdown") or "")
             published.content_revision = mutation.next_revision
+            self._apply_community_canonical_mutation(
+                session, published=published, mutation=mutation, request=request,
+                canonical_activity_json=canonical_activity_json, now=now,
+            )
             if mutation.kind == "content_delete":
                 published.desired_kind = "none"
             elif (
@@ -537,6 +748,9 @@ class ContentMutationRepository(BaseRepository):
                 and published.desired_fingerprint == mutation.request_fingerprint
             ):
                 published.desired_kind = "none"
+            # Addressing is resolved against current exact source ownership in
+            # the same writer transaction as this canonical revision.
+            direct_grants = self._current_direct_grants(session, published)
             followers = list(
                 session.scalars(
                     select(UserActorFollower).where(
@@ -563,12 +777,14 @@ class ContentMutationRepository(BaseRepository):
                     "contentRevision": mutation.next_revision,
                 },
                 followers=followers,
+                direct_authorizations=direct_grants,
             )
             mutation.state = "committed"
             mutation.claim_token = None
             mutation.claimed_at = None
             mutation.lease_expires_at = None
             mutation.next_attempt_at = None
+            mutation.last_error = None
             return source.id, published.object_id
 
     def load_canonical_ready(self, mutation_id: int, claim_token: str) -> dict | None:
@@ -607,9 +823,58 @@ class ContentMutationRepository(BaseRepository):
             )
             return "accepted"
 
+    def request_discord_reconciliation_by_source_ref(
+        self, *, source: "MessageRef", error: str,
+    ) -> str:
+        """Park an incomplete Community edit by full physical source identity.
+
+        Raw Discord message ID alone cannot identify a safe reconciliation
+        after several threads reuse the same message number. A deleted source
+        cannot be reactivated by this request.
+        """
+        from ...platform_types import MessageRef
+        from ...models import PlatformConnector
+
+        if not isinstance(source, MessageRef):
+            raise TypeError('exact MessageRef required')
+        with self._immediate_session_provider() as session:
+            published = session.scalar(
+                select(PublishedActivityObject)
+                .join(PlatformConnector, PublishedActivityObject.source_connector_id == PlatformConnector.id)
+                .where(
+                    PlatformConnector.connector_key == source.connector_key,
+                    PublishedActivityObject.source_external_container_id == source.external_container_id,
+                    PublishedActivityObject.source_external_message_id == source.external_message_id,
+                    PublishedActivityObject.publication_context == 'community',
+                )
+            )
+            if published is None:
+                return 'missing'
+            from .activitypub_objects import resolve_community_mutation_source
+            verified = resolve_community_mutation_source(
+                session, source, external_guild_id=None, actor_external_id=None,
+            )
+            if verified is None or verified.object_id != published.object_id:
+                return 'ineligible'
+            if published.deleted_at is not None or published.desired_kind == 'delete':
+                return 'deleted'
+            published.discord_reconciliation_needed = True
+            published.discord_reconciliation_last_error = error[:500]
+            published.discord_reconciliation_next_attempt_at = datetime.now(timezone.utc)
+            return 'accepted'
+
     def due_reconciliations(
         self, *, limit: int
-    ) -> list[tuple[int, int, str, str | None]]:
+    ) -> list[tuple[int, int, str, str | None, "MessageRef | None"]]:
+        """Return exact immediate Discord containers for pending source reads.
+
+        The legacy Personal Feed still uses its numeric channel projection;
+        a typed Community post's actual message container is its *thread*,
+        not the parent forum stored in `discord_channel_id`.
+        """
+        from ...models import PlatformConnector
+        from ...platform_types import MessageRef
+
         now = datetime.now(timezone.utc)
         with self.session() as session:
             rows = session.scalars(
@@ -617,26 +882,38 @@ class ContentMutationRepository(BaseRepository):
                 .where(
                     PublishedActivityObject.discord_reconciliation_needed.is_(True),
                     or_(
-                        PublishedActivityObject.discord_reconciliation_next_attempt_at.is_(
-                            None
-                        ),
-                        PublishedActivityObject.discord_reconciliation_next_attempt_at
-                        <= now,
+                        PublishedActivityObject.discord_reconciliation_next_attempt_at.is_(None),
+                        PublishedActivityObject.discord_reconciliation_next_attempt_at <= now,
                     ),
                 )
                 .order_by(PublishedActivityObject.id)
                 .limit(limit)
             ).all()
-            return [
-                (
-                    int(r.discord_channel_id),
-                    int(r.discord_message_id),
-                    r.object_id,
-                    r.title,
-                )
-                for r in rows
-                if r.discord_channel_id is not None and r.discord_message_id is not None
-            ]
+            items = []
+            for row in rows:
+                if (row.publication_context == 'community'
+                    and row.source_connector_id is not None
+                    and row.source_external_container_id is not None
+                    and row.source_external_message_id is not None):
+                    connector = session.get(PlatformConnector, row.source_connector_id)
+                    if (connector is None or connector.connector_key != 'discord-primary'
+                        or not row.source_external_container_id.isdecimal()
+                        or not row.source_external_message_id.isdecimal()):
+                        # Keep invalid/foreign source evidence pending for an
+                        # operator; never substitute the parent forum channel.
+                        continue
+                    ref = MessageRef(
+                        connector.connector_key, row.source_external_container_id,
+                        row.source_external_message_id,
+                    )
+                    items.append((int(ref.external_container_id), int(ref.external_message_id),
+                                  row.object_id, row.title, ref))
+                elif (row.publication_context == 'personal_feed'
+                      and row.discord_channel_id is not None
+                      and row.discord_message_id is not None):
+                    items.append((int(row.discord_channel_id), int(row.discord_message_id),
+                                  row.object_id, row.title, None))
+            return items
 
     def record_reconciliation_failure(self, *, object_id: str, error: str) -> None:
         with self._immediate_session_provider() as session:

@@ -1,10 +1,9 @@
 /**
- * Canonical Update/Delete construction and delivery mode dispatch.
+ * Render-only canonical Update/Delete construction.
  *
- * This module owns deterministic mutation identity verification and the exact
- * ActivityPub Update/Delete shapes. Local-community recipient fanout is
- * delegated to the fanout module and remote-community fallback remains Fedify
- * sendActivity, preserving existing behavior.
+ * This module must never send an activity: the caller atomically stores the
+ * canonical mutation, exact activity and its authorized recipient snapshot
+ * before the signed User Actor/Group worker performs network delivery.
  */
 
 import { createHash } from "node:crypto";
@@ -17,9 +16,7 @@ import type { GatewayConfig } from "../config.js";
 import type { CanonicalMutationResult, DeleteContentRequest, UpdateContentRequest } from "../types.js";
 import { buildGatewayUrl, buildUserActorUri } from "./gateway-url.js";
 import { renderPublicActivityJson } from "./activity-json.js";
-import { fetchRemoteCommunity } from "./remote-actor.js";
 import { markdownToHtml } from "./content-publish.js";
-import { maybeDeliverLocalCommunityMutation } from "./local-community-fanout.js";
 
 function stableJson(value: unknown): string {
   if (value === null || typeof value !== "object") return JSON.stringify(value);
@@ -30,19 +27,19 @@ function stableJson(value: unknown): string {
 
 /** Verify deterministic mutation operation and activity identity fields. */
 export function verifyMutationIdentity(config: GatewayConfig, request: UpdateContentRequest | DeleteContentRequest, kind: "content_update" | "content_delete"): void {
-  if (request.operationId == null && request.activityId == null) return;
   if (request.operationId == null || request.activityId == null || request.expectedRevision == null || request.nextRevision == null) {
     throw new Error("mutation idempotency fields must be supplied together");
   }
   const requestShape: Record<string, unknown> = {
     actorUsername: request.actorUsername,
+    publicationContext: request.publicationContext ?? "community",
     communityActorUrl: request.communityActorUrl,
+    conversationRootObjectId: request.conversationRootObjectId ?? null,
     apObjectId: request.apObjectId,
     kind: "kind" in request ? request.kind : null,
     title: "title" in request ? request.title ?? null : null,
     bodyMarkdown: "bodyMarkdown" in request ? request.bodyMarkdown : null,
     inReplyToObjectId: "inReplyToObjectId" in request ? request.inReplyToObjectId ?? null : null,
-    targetInboxUrls: request.targetInboxUrls ?? null,
     mutationTimestamp: request.mutationTimestamp ?? null,
   };
   const identity = stableJson({
@@ -71,12 +68,8 @@ function buildUpdateActivity(
   verifyMutationIdentity(config, request, "content_update");
   const actorUri = buildUserActorUri(config, request.actorUsername);
   const objectId = new URL(request.apObjectId);
-  const activityId = request.activityId == null
-    ? buildGatewayUrl(
-        config,
-        `/actors/users/${request.actorUsername}/activities/update/${request.kind === "comment" ? "comments" : "posts"}/${Date.now()}-${Math.random().toString(36).slice(2)}`,
-      )
-    : new URL(request.activityId);
+  // Identity was fully validated above. Never mint a new AP ID on retry.
+  const activityId = new URL(request.activityId!);
   const htmlContent = markdownToHtml(request.bodyMarkdown);
   const source = new Source({
     content: request.bodyMarkdown,
@@ -92,9 +85,8 @@ function buildUpdateActivity(
     throw new Error("personal-feed mutation cannot carry communityActorUrl");
   }
   const followers = buildGatewayUrl(config, `/actors/users/${request.actorUsername}/followers`);
-  const updated = request.mutationTimestamp == null
-    ? Temporal.Now.instant()
-    : Temporal.Instant.from(request.mutationTimestamp);
+  if (request.mutationTimestamp == null) throw new Error("verified Update timestamp required");
+  const updated = Temporal.Instant.from(request.mutationTimestamp);
 
   let object;
   if (request.kind === "post") {
@@ -146,13 +138,8 @@ function buildDeleteActivity(
   /** Build one user-authored Delete using the Lemmy URL-object convention. */
   verifyMutationIdentity(config, request, "content_delete");
   const actorUri = buildUserActorUri(config, request.actorUsername);
-  const deleteKindSegment = request.apObjectId.includes("/comments/") ? "comments" : "posts";
-  const activityId = request.activityId == null
-    ? buildGatewayUrl(
-        config,
-        `/actors/users/${request.actorUsername}/activities/delete/${deleteKindSegment}/${Date.now()}-${Math.random().toString(36).slice(2)}`,
-      )
-    : new URL(request.activityId);
+  // Delete activity remains stable across restart and receipt loss.
+  const activityId = new URL(request.activityId!);
   const PUBLIC = new URL("https://www.w3.org/ns/activitystreams#Public");
   const personalFeed = request.publicationContext === "personal_feed";
   const community = request.communityActorUrl == null ? null : new URL(request.communityActorUrl);
@@ -175,114 +162,30 @@ function buildDeleteActivity(
   };
 }
 
-/** Build and deliver or render one canonical content Update activity. */
+/** Render one immutable Update, with no recipient lookup or signed network send. */
 export async function updateContent(
-  federation: Federation<GatewayConfig>,
+  _federation: Federation<GatewayConfig>,
   config: GatewayConfig,
   request: UpdateContentRequest,
 ): Promise<CanonicalMutationResult> {
-  // Update delivery mirrors publish delivery: same actor URI, same community
-  // fetch, but wraps the object in an Update activity instead of Create.
-  const builtUpdate = buildUpdateActivity(config, request);
-  if (request.publicationContext === "personal_feed") {
-    return {
-      activityId: builtUpdate.activityId.href,
-      objectId: request.apObjectId,
-      activityJson: await renderPublicActivityJson(builtUpdate.activity),
-    };
-  }
-  if (request.communityActorUrl == null) throw new Error("community mutation requires communityActorUrl");
-  if (await maybeDeliverLocalCommunityMutation(config, request.communityActorUrl, builtUpdate.activity, request.targetInboxUrls)) {
-    return {
-      activityId: builtUpdate.activityId.href,
-      objectId: request.apObjectId,
-      activityJson: await renderPublicActivityJson(builtUpdate.activity),
-    };
-  }
-
-  const ctx = federation.createContext(new URL(config.fedifyOrigin), config);
-  const { communityId, inboxUrl } = await fetchRemoteCommunity(ctx, request.communityActorUrl);
-
-  console.log("[Update] Sending Update activity:", {
-    actorUsername: request.actorUsername,
-    kind: request.kind,
-    apObjectId: request.apObjectId,
-    inReplyToObjectId: request.inReplyToObjectId,
-    bodyMarkdown: request.bodyMarkdown,
-    communityId,
-    activityId: builtUpdate.activityId.toString(),
-  });
-
-  try {
-    const activityJson = await builtUpdate.activity.toJsonLd();
-    console.log("[Update] Activity JSON-LD (before sendActivity):", JSON.stringify(activityJson, null, 2));
-
-    await ctx.sendActivity(
-      { username: request.actorUsername },
-      { id: new URL(communityId), inboxId: new URL(inboxUrl) },
-      builtUpdate.activity,
-    );
-    console.log("[Update] sendActivity completed successfully");
-    return {
-      activityId: builtUpdate.activityId.href,
-      objectId: request.apObjectId,
-      activityJson: await renderPublicActivityJson(builtUpdate.activity),
-    };
-  } catch (err) {
-    console.error("[Update] sendActivity failed:", err);
-    throw err;
-  }
+  const { activity, activityId } = buildUpdateActivity(config, request);
+  return {
+    activityId: activityId.href,
+    objectId: request.apObjectId,
+    activityJson: await renderPublicActivityJson(activity),
+  };
 }
 
-/** Build and deliver or render one canonical content Delete activity. */
+/** Render one immutable Delete; dispatch is owned by a post-commit worker. */
 export async function deleteContent(
-  federation: Federation<GatewayConfig>,
+  _federation: Federation<GatewayConfig>,
   config: GatewayConfig,
   request: DeleteContentRequest,
 ): Promise<CanonicalMutationResult> {
-  // Delete delivery uses the AP object URL as the object field (string form, not
-  // a full object), matching the Lemmy federation protocol for Delete activities.
-  const builtDelete = buildDeleteActivity(config, request);
-  if (request.publicationContext === "personal_feed") {
-    return {
-      activityId: builtDelete.activityId.href,
-      objectId: request.apObjectId,
-      activityJson: await renderPublicActivityJson(builtDelete.activity),
-    };
-  }
-  if (request.communityActorUrl == null) throw new Error("community mutation requires communityActorUrl");
-  if (await maybeDeliverLocalCommunityMutation(config, request.communityActorUrl, builtDelete.activity, request.targetInboxUrls)) {
-    return {
-      activityId: builtDelete.activityId.href,
-      objectId: request.apObjectId,
-      activityJson: await renderPublicActivityJson(builtDelete.activity),
-    };
-  }
-
-  const ctx = federation.createContext(new URL(config.fedifyOrigin), config);
-  const { communityId, inboxUrl } = await fetchRemoteCommunity(ctx, request.communityActorUrl);
-
-  console.log("[Delete] Sending Delete activity:", {
-    actorUsername: request.actorUsername,
-    apObjectId: request.apObjectId,
-    communityId,
-    activityId: builtDelete.activityId.toString(),
-  });
-
-  try {
-    await ctx.sendActivity(
-      { username: request.actorUsername },
-      { id: new URL(communityId), inboxId: new URL(inboxUrl) },
-      builtDelete.activity,
-    );
-    console.log("[Delete] sendActivity completed successfully");
-    return {
-      activityId: builtDelete.activityId.href,
-      objectId: request.apObjectId,
-      activityJson: await renderPublicActivityJson(builtDelete.activity),
-    };
-  } catch (err) {
-    console.error("[Delete] sendActivity failed:", err);
-    throw err;
-  }
+  const { activity, activityId } = buildDeleteActivity(config, request);
+  return {
+    activityId: activityId.href,
+    objectId: request.apObjectId,
+    activityJson: await renderPublicActivityJson(activity),
+  };
 }

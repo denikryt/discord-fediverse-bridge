@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+from collections.abc import Awaitable, Callable
 
 from .user_actor_delivery import UserActorDeliveryService
 
@@ -21,6 +22,17 @@ class UserActorDeliveryWorker:
         self._task: asyncio.Task[None] | None = None
         self._wake = asyncio.Event()
         self._stopping = False
+        self._extra_drains: list[Callable[[], Awaitable[object]]] = []
+
+    def add_drain(self, drain: Callable[[], Awaitable[object]]) -> None:
+        """Reuse the existing signed-delivery scheduler for other durable fanout.
+
+        No new background worker is created: all registered drains are joined
+        before Fedify Gateway or the SQLite database may be closed.
+        """
+        if self._task is not None:
+            raise RuntimeError('cannot bind an additional federation drain after start')
+        self._extra_drains.append(drain)
 
     def start(self) -> None:
         """Start one recovery owner and reject duplicate starts."""
@@ -90,6 +102,15 @@ class UserActorDeliveryWorker:
                 raise
             except Exception:
                 logger.exception("User Actor delivery recovery pass failed")
+            # Local Community authored Announce uses a distinct Group key but
+            # shares this process-owned wake/restart/shutdown lifecycle.
+            for drain in self._extra_drains:
+                try:
+                    await drain()
+                except asyncio.CancelledError:
+                    raise
+                except Exception:
+                    logger.exception('Additional signed federation drain failed')
             try:
                 await asyncio.wait_for(self._wake.wait(), timeout=self.INTERVAL_SECONDS)
             except TimeoutError:

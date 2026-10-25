@@ -14,6 +14,7 @@ import pytest
 from src.activitypub_models import ActivityPubEvent
 from src.content_publish_service import ContentPublishService
 from src.local_communities.runtime import LocalCommunityRuntime
+from support.community_events import ScenarioDiscord
 from src.local_communities.service import LocalCommunityService
 from support.db import build_database
 from support.discord import (
@@ -40,6 +41,7 @@ def _runtime(tmp_path: Path) -> tuple[object, LocalCommunityRuntime]:
         bridge_prefix="[bridge]",
         bridge_policy_service=build_test_policy_service(database),
     )
+    runtime.bind_discord_adapter(ScenarioDiscord(runtime))
     return database, runtime
 
 
@@ -379,7 +381,7 @@ async def test_remote_follower_nested_reply_uses_real_discord_message_reference(
         )
     )
     assert created_surface is not None
-    assert created_surface.parent_discord_message_id == 401
+    assert created_surface.external_parent_message_id == "401"
 
 
 @pytest.mark.asyncio
@@ -605,3 +607,26 @@ async def test_follow_after_unfollow_recreates_local_community_remote_subscriber
         remote_subscriber.follow_activity_id
         == "https://lemmy.example/activities/follow/new"
     )
+
+
+@pytest.mark.asyncio
+async def test_stale_undo_preserves_new_follow_and_matching_undo_is_reported_processed(tmp_path):
+    """Handler results match the atomic incarnation-aware removal, including duplicates."""
+    database, runtime = _runtime(tmp_path)
+    community = _local_community(database)
+    actor = 'https://remote.example/u/follower'
+    database.remote_subscribers.create_remote_subscriber(local_community_id=community.id,
+        remote_actor_id=actor, remote_inbox_url=f'{actor}/inbox',
+        follow_activity_id=f'{actor}/follow/F2', status='accepted')
+    stale = await runtime.handle_unfollow_request(local_community_actor_id=community.actor_url,
+        remote_actor_id=actor, follow_activity_id=f'{actor}/follow/F1')
+    assert stale.status == 'skipped' and stale.outcome.value == 'ignored_already_applied'
+    assert database.remote_subscribers.get_remote_subscriber(
+        local_community_id=community.id, remote_actor_id=actor).follow_activity_id == f'{actor}/follow/F2'
+    removed = await runtime.handle_unfollow_request(local_community_actor_id=community.actor_url,
+        remote_actor_id=actor, follow_activity_id=f'{actor}/follow/F2')
+    assert removed.status == 'processed' and removed.outcome.value == 'applied'
+    assert database.remote_subscribers.get_remote_subscriber(local_community_id=community.id, remote_actor_id=actor) is None
+    duplicate = await runtime.handle_unfollow_request(local_community_actor_id=community.actor_url,
+        remote_actor_id=actor, follow_activity_id=f'{actor}/follow/F2')
+    assert duplicate.status == 'skipped' and duplicate.outcome.value == 'ignored_unknown_follow'

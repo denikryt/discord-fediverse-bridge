@@ -7,6 +7,7 @@ receipts prevent concurrent duplicate POSTs but are not a durable outbox.
 from __future__ import annotations
 
 import asyncio
+import weakref
 from dataclasses import dataclass
 from datetime import datetime
 from functools import wraps
@@ -17,6 +18,9 @@ from .runtime_ports import PlatformInboundSinkPort
 
 from .platform_types import (
     AuthorRef, ChannelRef, ChannelView, ConnectorRef, ContentDocument, CreateAttempt,
+    CoordinatorDispatchPermit, CommittedCreateAckProof, CommittedCreateDispatchProof,
+    _verify_committed_create_ack_proof, _verify_committed_create_dispatch_proof,
+    _issue_verified_create_reconciliation_proof,
     CreatedMessage, CreatedThread, DeliveryPresentation, MessageRef, MessageView,
     PlatformAction, PlatformCapabilities, PlatformOperationError, PermissionResult,
     ThreadRef, ThreadView, validate_create_attempt, validate_created_receipt,
@@ -62,6 +66,8 @@ class _CreateFlight:
 
     fingerprint: tuple[object, ...]
     future: asyncio.Future[object]
+    coordinator_permit: CoordinatorDispatchPermit | None = None
+    durable_claim: tuple[int, str, str, str] | None = None
 
 
 def _physical_identity(value: object) -> object:
@@ -116,6 +122,12 @@ class DiscordAdapter:
         self._max_create_attempts = max_create_attempts
         self._create_lock = asyncio.Lock()
         self._creates: dict[tuple[str, str], _CreateFlight] = {}
+        # Only objects issued by this concrete adapter are valid capabilities.
+        # Weak keys avoid retaining unused permits if the coordinator cancels.
+        self._issued_create_permits: weakref.WeakKeyDictionary[CoordinatorDispatchPermit, tuple] = weakref.WeakKeyDictionary()
+        # While the claim proof is reachable, no second permit can be minted
+        # from it, even after the first completed flight is acknowledged.
+        self._used_dispatch_proofs: weakref.WeakSet[CommittedCreateDispatchProof] = weakref.WeakSet()
         self._io_admission_open = True
         self._io_tasks: set[asyncio.Task] = set()
         self._ingress_admission_open = True
@@ -335,12 +347,86 @@ class DiscordAdapter:
             # MULTIPLATFORM_DISCORD_ADAPTER_TEMP_NO_WEBHOOK: Discord physical delivery is bot-only until a verified webhook send/edit/delete implementation can preserve explicit requested delivery mode without downgrade.
             raise PlatformOperationError('unsupported', 'Discord webhook send not implemented')
 
+    def _mint_coordinator_dispatch_permit(
+        self, *, proof: CommittedCreateDispatchProof,
+        intent_id: int, attempt: CreateAttempt,
+        request_fingerprint: str, dispatch_token: str, operation: str,
+        destination: ChannelRef | ThreadRef | MessageRef,
+        content: ContentDocument | None, presentation: DeliveryPresentation | None,
+        title: str | None, reply_to: MessageRef | None,
+    ) -> CoordinatorDispatchPermit:
+        """Issue a local one-use capability after coordinator SQLite claim CAS.
+
+        This is an internal adapter/coordinator integration point, not a public
+        CreateAttempt retry API. No receipt-cache ACK is available for attempts
+        that were not admitted by the durable coordinator.
+        """
+        validate_create_attempt(attempt, operation, destination)
+        self._check_connector(attempt.connector_key)
+        if (not _verify_committed_create_dispatch_proof(proof)
+            or (proof.intent_id, proof.attempt_key, proof.request_fingerprint,
+                proof.dispatch_token) != (intent_id, attempt.key,
+                                          request_fingerprint, dispatch_token)
+            or not attempt.key.startswith('fanout:v1:') or intent_id <= 0
+            or not dispatch_token or not request_fingerprint):
+            raise PlatformOperationError('invalid_request', 'invalid coordinator claim')
+        if proof in self._used_dispatch_proofs:
+            raise PlatformOperationError('invalid_request', 'coordinator claim proof already used')
+        self._used_dispatch_proofs.add(proof)
+        permit = object.__new__(CoordinatorDispatchPermit)
+        signature = (attempt.connector_key, operation, _physical_identity(destination),
+                     title, content, _physical_identity(reply_to), presentation)
+        self._issued_create_permits[permit] = (
+            intent_id, attempt.key, request_fingerprint, dispatch_token, signature,
+        )
+        return permit
+
+    async def acknowledge_persisted_create(
+        self, *, permit: CoordinatorDispatchPermit, proof: CommittedCreateAckProof,
+        intent_id: int, attempt: CreateAttempt, request_fingerprint: str,
+        dispatch_token: str, terminal_status: str,
+        receipt: CreatedThread | ThreadRef | CreatedMessage | None = None,
+    ) -> bool:
+        """Release only a completed matching coordinator flight after DB commit.
+
+        The caller must first verify and commit `delivered` or `unresolved` in
+        the existing SQLite intent. Raw/unowned creates cannot ACK or evict a
+        sticky unknown; fresh reserved-key calls still require a new DB claim.
+        """
+        if (terminal_status not in ('delivered', 'unresolved')
+            or not _verify_committed_create_ack_proof(proof)
+            or (proof.intent_id, proof.attempt_key, proof.request_fingerprint,
+                proof.dispatch_token, proof.terminal_status)
+               != (intent_id, attempt.key, request_fingerprint,
+                   dispatch_token, terminal_status)):
+            return False
+        key = (attempt.connector_key, attempt.key)
+        async with self._create_lock:
+            flight = self._creates.get(key)
+            if (flight is None or not flight.future.done()
+                or flight.coordinator_permit is not permit
+                or flight.durable_claim != (intent_id, attempt.key,
+                                            request_fingerprint, dispatch_token)):
+                return False
+            result = flight.future.result()
+            if terminal_status == 'unresolved':
+                if not (isinstance(result, PlatformOperationError)
+                        and result.reason == 'unknown_delivery' and receipt is None):
+                    return False
+            elif isinstance(result, PlatformOperationError) or receipt != result:
+                return False
+            # Existing waiters already hold this settled Future; only a fresh
+            # correctly admitted durable claim could create another entry.
+            del self._creates[key]
+            return True
+
     async def _begin_create_attempt(
         self, attempt: CreateAttempt, *, operation: str,
         destination: ChannelRef | ThreadRef | MessageRef,
         content: ContentDocument | None, presentation: DeliveryPresentation | None,
         title: str | None, reply_to: MessageRef | None,
         send: Callable[[], Awaitable[CreatedMessage | CreatedThread | ThreadRef]],
+        dispatch_permit: CoordinatorDispatchPermit | None = None,
     ) -> CreatedMessage | CreatedThread | ThreadRef:
         """Share one physical POST and its verified/ambiguous outcome by immutable key.
 
@@ -352,20 +438,38 @@ class DiscordAdapter:
         signature = (attempt.connector_key, operation, _physical_identity(destination),
                      title, content, _physical_identity(reply_to), presentation)
         key = (attempt.connector_key, attempt.key)
+        durable_claim = None
+        if attempt.key.startswith('fanout:v1:'):
+            # This gate executes before consulting even a cached receipt.
+            # An untrusted raw CreateAttempt can never replay after eviction.
+            issued = (self._issued_create_permits.get(dispatch_permit)
+                      if isinstance(dispatch_permit, CoordinatorDispatchPermit) else None)
+            if (issued is None or issued[1] != attempt.key or issued[4] != signature):
+                raise PlatformOperationError('invalid_request', 'reserved Create requires a coordinator permit')
+            durable_claim = issued[:4]
+            del self._issued_create_permits[dispatch_permit]
+        elif dispatch_permit is not None:
+            raise PlatformOperationError('invalid_request', 'direct Create cannot borrow a coordinator permit')
         async with self._create_lock:
             existing = self._creates.get(key)
             if existing is not None:
                 if existing.fingerprint != signature:
                     raise PlatformOperationError('invalid_request', 'create attempt payload changed')
+                if durable_claim is not None and existing.durable_claim != durable_claim:
+                    # A differently claimed coordinator generation cannot borrow
+                    # an in-flight or completed future from an older attempt.
+                    raise PlatformOperationError('invalid_request', 'create dispatch claim generation changed')
                 owner = False
                 flight = existing
             else:
                 if not self._io_admission_open:
                     raise PlatformOperationError('unavailable', 'adapter is closing')
                 if len(self._creates) >= self._max_create_attempts:
-                    # MULTIPLATFORM_DISCORD_ADAPTER_TEMP_CREATE_ATTEMPT_CAPACITY: Fail closed when process-local verified or unknown create receipts fill the bounded registry; durable delivery must replace this with durable keyed intent and receipt lookup before permitting more creates.
+                    # Legacy/direct creates remain capped and fail closed; coordinator-owned
+                    # completed flights release capacity only with persisted SQLite ACK.
                     raise PlatformOperationError('unavailable', 'create receipt registry full')
-                flight = _CreateFlight(signature, asyncio.get_running_loop().create_future())
+                flight = _CreateFlight(signature, asyncio.get_running_loop().create_future(),
+                                       dispatch_permit, durable_claim)
                 self._creates[key] = flight
                 owner = True
         if not owner:
@@ -415,6 +519,34 @@ class DiscordAdapter:
             flight.future.set_result(receipt)
             return receipt
 
+    async def _reconcile_persisted_create(
+        self, *, intent_id: int, attempt: CreateAttempt,
+        request_fingerprint: str, dispatch_token: str,
+    ):
+        """Read a verified same-generation flight; never query history or POST.
+
+        For Discord forum/message creates, lost responses lack durable
+        provider-side correlation. Only a positive locally retained exact
+        transport future is sufficient for this conservative recovery path.
+        """
+        self._check_connector(attempt.connector_key)
+        async with self._create_lock:
+            flight = self._creates.get((attempt.connector_key, attempt.key))
+            if (flight is None or not flight.future.done()
+                or flight.durable_claim != (intent_id, attempt.key,
+                                             request_fingerprint, dispatch_token)
+                or flight.coordinator_permit is None):
+                return None
+            receipt = flight.future.result()
+            if not isinstance(receipt, (CreatedThread, CreatedMessage)):
+                return None
+            if not (flight.fingerprint[1] == attempt.operation
+                    and flight.fingerprint[2] == _physical_identity(attempt.destination)):
+                return None
+            proof = _issue_verified_create_reconciliation_proof(
+                intent_id, attempt.key, request_fingerprint, dispatch_token, receipt)
+            return receipt, proof, flight.coordinator_permit
+
     @_tracked_io
     async def reconcile_create(
         self, attempt: CreateAttempt,
@@ -459,9 +591,11 @@ class DiscordAdapter:
                         resolved.set_result(verified)
                         self._creates[(attempt.connector_key, attempt.key)] = _CreateFlight(
                             flight.fingerprint, resolved,
+                            flight.coordinator_permit, flight.durable_claim,
                         )
             return verified
-        # MULTIPLATFORM_DISCORD_ADAPTER_TEMP_UNKNOWN_CREATE: Discord has no verified durable receipt lookup for these attempts; return unresolved without replay until durable delivery owns durable intents and receipt reconciliation.
+        # Creates without durable evidence from the same attempt stay unresolved.
+        # Matching content or history scans cannot prove delivery or absence.
         return None
 
     @staticmethod
@@ -673,9 +807,20 @@ class DiscordAdapter:
         physical = await self._get_message(message)
         if getattr(physical, 'attachments', ()):
             raise PlatformOperationError('unsupported', 'fetching attached Discord message as text is unsupported')
+        # A fetched message must prove both its exact physical identity and
+        # original creation instant; an edit timestamp is not publication time.
+        physical_container = getattr(getattr(physical, 'channel', None), 'id', None)
+        if (str(getattr(physical, 'id', '')) != message.external_message_id
+            or str(physical_container) != message.external_container_id):
+            raise PlatformOperationError('invalid_request', 'Discord message receipt identity mismatch')
+        created_at = getattr(physical, 'created_at', None)
+        if (not isinstance(created_at, datetime) or created_at.tzinfo is None
+            or created_at.utcoffset() is None):
+            raise PlatformOperationError('invalid_request', 'Discord message source timestamp is not verified')
         edited_at = getattr(physical, 'edited_at', None)
         return MessageView(message, self._author(physical),
-                           ContentDocument(str(getattr(physical, 'content', ''))), edited_at)
+                           ContentDocument(str(getattr(physical, 'content', ''))), edited_at,
+                           created_at)
 
     @_tracked_io
     async def capabilities(self, channel: ChannelRef) -> PlatformCapabilities:
@@ -749,6 +894,7 @@ class DiscordAdapter:
     async def create_forum_thread(
         self, forum: ChannelRef, content: ContentDocument, *, title: str,
         presentation: DeliveryPresentation, attempt: CreateAttempt,
+        dispatch_permit: CoordinatorDispatchPermit | None = None,
     ) -> CreatedThread:
         """Create one forum post and return observed, distinct thread/starter IDs."""
         validate_create_attempt(attempt, 'forum_thread', forum)
@@ -784,7 +930,7 @@ class DiscordAdapter:
         return await self._begin_create_attempt(
             attempt, operation='forum_thread', destination=forum,
             content=content, presentation=presentation, title=title, reply_to=None,
-            send=physical,
+            send=physical, dispatch_permit=dispatch_permit,
         )
 
     async def _verified_root_thread(
@@ -813,7 +959,8 @@ class DiscordAdapter:
 
     @_tracked_io
     async def create_reply_thread(self, root: MessageRef, *, title: str,
-                                  attempt: CreateAttempt) -> ThreadRef:
+                                  attempt: CreateAttempt,
+                                  dispatch_permit: CoordinatorDispatchPermit | None = None) -> ThreadRef:
         """Start a thread attached to an exact text/announcement root message."""
         validate_create_attempt(attempt, 'reply_thread', root)
         if not title.strip():
@@ -859,6 +1006,7 @@ class DiscordAdapter:
         return await self._begin_create_attempt(
             attempt, operation='reply_thread', destination=root, content=None,
             presentation=None, title=title, reply_to=None, send=physical,
+            dispatch_permit=dispatch_permit,
         )
 
     @_tracked_io
@@ -866,6 +1014,7 @@ class DiscordAdapter:
         self, destination: ThreadRef | ChannelRef, content: ContentDocument, *,
         reply_to: MessageRef | None, presentation: DeliveryPresentation,
         attempt: CreateAttempt,
+        dispatch_permit: CoordinatorDispatchPermit | None = None,
     ) -> CreatedMessage:
         """Send a single physical message without implicit reply-parent fallback."""
         validate_create_attempt(attempt, 'message', destination)
@@ -905,6 +1054,7 @@ class DiscordAdapter:
             attempt, operation='message', destination=destination,
             content=content, presentation=presentation, title=None,
             reply_to=reply_to, send=physical,
+            dispatch_permit=dispatch_permit,
         )
 
     async def _require_message_mutation_permission(self, message: MessageRef, sdk_message: object) -> None:

@@ -13,6 +13,8 @@ export interface BridgeObject {
   post_ap_id: string | null;
   post_lemmy_id: number | null;
   published_at: string;
+  /** Optional verified source Update clock, distinct from original publication. */
+  updated_at?: string | null;
   title: string | null;
   url: string;
   attributed_to_actor_id?: string | null;
@@ -117,6 +119,28 @@ export interface RenderPersonalFeedResult {
   activityJson: Record<string, unknown>;
 }
 
+/** Pure community Create build request; immutable source coordinates come from Python. */
+export interface RenderCommunityRequest {
+  actorUsername: string;
+  communityActorUrl: string;
+  kind: "post" | "comment";
+  title: string | null;
+  bodyMarkdown: string;
+  inReplyToObjectId: string | null;
+  operationId: string;
+  activityId: string;
+  objectId: string;
+  publishedAt: string;
+}
+
+export interface RenderCommunityResult {
+  activityId: string;
+  objectId: string;
+  communityActorUrl: string;
+  publishedAt: string;
+  activityJson: Record<string, unknown>;
+}
+
 export interface PublishContentRequest {
   actorUsername: string;
   communityActorUrl: string;
@@ -173,7 +197,6 @@ export interface UpdateContentRequest {
   // inReplyToObjectId is required for comments to identify the parent post.
   // Lemmy will not process comment updates without this field.
   inReplyToObjectId?: string | null;
-  targetInboxUrls?: string[] | null;
   operationId?: string | null;
   activityId?: string | null;
   mutationTimestamp?: string | null;
@@ -188,7 +211,6 @@ export interface DeleteContentRequest {
   communityActorUrl: string | null;
   conversationRootObjectId?: string | null;
   apObjectId: string;
-  targetInboxUrls?: string[] | null;
   operationId?: string | null;
   activityId?: string | null;
   mutationTimestamp?: string | null;

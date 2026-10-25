@@ -262,53 +262,6 @@ class DiscordEventRouter:
             is not None
         )
 
-    async def handle_thread_create(
-        self, *, thread: object, starter_message: object
-    ) -> object:
-        """Route one thread-create event into the owning bridge mode."""
-        guild = getattr(thread, "guild", None)
-        guild_id = getattr(guild, "id", None) or getattr(thread, "guild_id", None)
-        if not self._is_guild_allowed(guild_id):
-            return None
-        forum_channel_id = getattr(thread, "parent_id", None)
-        personal = self.handle_personal_feed_thread_create(thread=thread)
-        if personal is not None and getattr(personal, "status", None) != "ignored":
-            return personal
-        if self.is_local_community_forum(forum_channel_id):
-            return await self.local_community_runtime.handle_discord_thread_create(
-                thread=thread,
-                starter_message=starter_message,
-            )
-        return await self.community_runtime.handle_discord_thread_create(
-            thread=thread,
-            starter_message=starter_message,
-        )
-
-    async def handle_message(self, *, message: object) -> object:
-        """Route one message event into the owning bridge mode."""
-        guild = getattr(message, "guild", None)
-        guild_id = getattr(guild, "id", None) or getattr(message, "guild_id", None)
-        if not self._is_guild_allowed(guild_id):
-            return None
-        thread = getattr(message, "channel")
-        if self.is_personal_feed_thread(getattr(thread, "id", None)):
-            if self.personal_feed_conversation_runtime is None:
-                return None
-            return await self.personal_feed_conversation_runtime.publish_local_reply(
-                message=message
-            )
-        forum_channel_id = getattr(thread, "parent_id", None)
-        personal = self.handle_personal_feed_thread_create(thread=thread)
-        if personal is not None and getattr(personal, "status", None) != "ignored":
-            return personal
-        if self.is_local_community_forum(forum_channel_id):
-            return await self.local_community_runtime.handle_discord_message(
-                message=message,
-            )
-        return await self.community_runtime.handle_discord_message(
-            message=message,
-        )
-
     async def handle_message_edit(
         self,
         *,

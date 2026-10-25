@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from support.community_events import configure_renderer, OBSERVED_AT
+from support.db import add_accepted_subscription
 from types import SimpleNamespace
 from unittest.mock import AsyncMock
 
@@ -29,6 +31,8 @@ def world(tmp_path):
     gateway = SimpleNamespace(publish_content=AsyncMock(return_value=PublishContentResult(
         activity_id=f'{ACTOR}/activities/create/posts/1', object_id=f'{ACTOR}/objects/posts/1',
         community_actor_url=COMMUNITY)))
+    add_accepted_subscription(database, community_actor_url=COMMUNITY)
+    configure_renderer(gateway, database)
     service = ContentPublishService(database=database, fedify_gateway=gateway,
                                     bridge_prefix='[bridge]', bridge_policy_service=SimpleNamespace())
     return database, gateway, service
@@ -42,7 +46,7 @@ def payload(*, connector='discord-primary', author_id='123', kind='human',
     starter = MessageRef(connector, '200', starter_id)
     event = ThreadCreated(connector, thread, 'Topic', starter=starter, external_guild_id='1')
     snapshot = MessageView(starter, AuthorRef(connector, author_id, kind, 'Alice'),
-                           ContentDocument(content))
+                           ContentDocument(content), created_at=OBSERVED_AT)
     return event, snapshot
 
 
@@ -56,10 +60,10 @@ async def test_verified_starter_publishes_original_two_ids_and_mapping(tmp_path)
             event=event, starter=starter, community_actor_url=COMMUNITY,
             publish_call=gateway.publish_content)
         assert result.status == 'published'
-        mapping = db.message_mappings.get_message_mapping_by_discord_message_id(301)
+        mapping = db.message_mappings.get_by_source_ref(MessageRef('discord-primary', '200', str(301)))
         assert mapping is not None and mapping.discord_channel_id == 100
-        assert db.message_mappings.get_message_mapping_by_discord_message_id(200) is None
-        request = gateway.publish_content.await_args.args[0]
+        assert db.message_mappings.get_by_source_ref(MessageRef('discord-primary', '200', str(200))) is None
+        request = gateway.render_community.await_args.args[0]
         assert request.body_markdown.endswith('body')
         assert request.title == 'Topic'
     finally:
@@ -87,7 +91,7 @@ async def test_invalid_starter_fails_before_gateway_and_storage(tmp_path, change
                 event=event, starter=starter, community_actor_url=COMMUNITY,
                 publish_call=gateway.publish_content)
         gateway.publish_content.assert_not_awaited()
-        assert db.message_mappings.get_message_mapping_by_discord_message_id(301) is None
+        assert db.message_mappings.get_by_source_ref(MessageRef('discord-primary', '200', str(301))) is None
     finally:
         db.close()
 
@@ -109,7 +113,7 @@ async def test_unregistered_starter_sends_only_one_adapter_notice(tmp_path):
         assert kwargs['attempt'].key.endswith(':200:301')
         assert kwargs['attempt'].destination == event.thread
         gateway.publish_content.assert_not_awaited()
-        assert db.message_mappings.get_message_mapping_by_discord_message_id(301) is None
+        assert db.message_mappings.get_by_source_ref(MessageRef('discord-primary', '200', str(301))) is None
     finally:
         db.close()
 
@@ -148,7 +152,7 @@ async def test_ban_or_unknown_ban_state_fails_closed_before_ap(tmp_path, ban_err
         assert result.status == 'rejected'
         assert result.reason == ('ban_check_failed' if ban_error else 'user_banned')
         gateway.publish_content.assert_not_awaited()
-        assert db.message_mappings.get_message_mapping_by_discord_message_id(301) is None
+        assert db.message_mappings.get_by_source_ref(MessageRef('discord-primary', '200', str(301))) is None
     finally:
         db.close()
 
@@ -180,7 +184,7 @@ def comment_event(*, connector='discord-primary', author_id='123', kind='human',
         ContentDocument('reply body'),
         reply_to=(MessageRef(connector, thread_id, reference) if reference else None),
         parent_channel=forum, thread_context=thread,
-        external_guild_id='1',
+        external_guild_id='1', created_at=OBSERVED_AT,
     )
 
 
@@ -192,16 +196,31 @@ async def test_verified_comment_persists_reply_to_approved_parent(tmp_path):
         gateway.publish_content.return_value = PublishContentResult(
             activity_id=f'{ACTOR}/activities/create/comments/2',
             object_id=f'{ACTOR}/objects/comments/2', community_actor_url=COMMUNITY)
+        # The approved parent is backed by a real source thread and reply receipt.
+        root = db.discord_fanout_groups.create_thread_group(
+            community_actor_id=COMMUNITY, source_channel_id=100,
+            source_thread_id=200, source_starter_message_id=300,
+            ap_activity_id=f'{ACTOR}/activities/create/posts/root',
+            ap_object_id='https://bridge.example/objects/posts/root')
+        db.discord_fanout_groups.add_thread_delivery(thread_group_id=root.id,
+            discord_channel_id=100, discord_thread_id=200, discord_starter_message_id=300, role='source')
+        parent = db.discord_fanout_groups.create_message_group(
+            community_actor_id=COMMUNITY, thread_group_id=root.id,
+            source_channel_id=100, source_thread_id=200, source_message_id=401,
+            ap_activity_id=f'{ACTOR}/activities/create/comments/parent',
+            ap_object_id='https://bridge.example/objects/comments/parent')
+        db.discord_fanout_groups.add_message_delivery(message_group_id=parent.id,
+            discord_channel_id=100, discord_thread_id=200, discord_message_id=401, role='source')
         result = await service.publish_normalized_comment_to_community(
             event=comment_event(), community_actor_url=COMMUNITY,
             parent_object_id='https://bridge.example/objects/comments/parent',
             publish_call=gateway.publish_content)
         assert result.status == 'published'
-        mapping = db.message_mappings.get_message_mapping_by_discord_message_id(402)
+        mapping = db.message_mappings.get_by_source_ref(MessageRef('discord-primary', '200', str(402)))
         assert mapping is not None and mapping.discord_channel_id == 100
         stored = db.activitypub_objects.get_published_activity_object_by_object_id(result.object_id)
         assert stored.in_reply_to_object_id == 'https://bridge.example/objects/comments/parent'
-        request = gateway.publish_content.await_args.args[0]
+        request = gateway.render_community.await_args.args[0]
         assert request.body_markdown.endswith('reply body')
         assert request.kind == 'comment'
     finally:
@@ -231,7 +250,7 @@ async def test_invalid_normalized_comment_does_not_federate(tmp_path, change):
                 parent_object_id='https://bridge.example/objects/posts/1',
                 publish_call=gateway.publish_content)
         gateway.publish_content.assert_not_awaited()
-        assert db.message_mappings.get_message_mapping_by_discord_message_id(402) is None
+        assert db.message_mappings.get_by_source_ref(MessageRef('discord-primary', '200', str(402))) is None
     finally:
         db.close()
 

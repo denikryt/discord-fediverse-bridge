@@ -1,6 +1,7 @@
 """Tests for federation allowlist enforcement in activitypub_handlers."""
 
 from __future__ import annotations
+from support.runtime import build_runtime_namespace
 from support.runtime import build_test_policy_service
 
 from datetime import UTC, datetime
@@ -57,7 +58,7 @@ def _create_accepted_remote_subscription(db: Database, community_actor_id: str) 
         community_inbox_url=f"{community_actor_id}/inbox",
         status="accepted",
     )
-    db.remote_subscriptions.create_subscription(
+    db.remote_subscriptions.create_subscription(discord_guild_id=10,
         discord_channel_id=123,
         lemmy_community_actor_id=community_actor_id,
         lemmy_community_name="hackers",
@@ -89,7 +90,7 @@ async def test_dispatch_skips_event_from_unlisted_instance(tmp_path: Path) -> No
     # When a non-empty allowlist is configured and the event's community is on
     # an instance not in the list, the event must be skipped without processing.
     db = _database(tmp_path)
-    runtime = SimpleNamespace(
+    runtime = build_runtime_namespace(
         database=db,
         settings=_settings(["allowed.example"]),
         bot=AsyncMock(),
@@ -115,14 +116,15 @@ async def test_dispatch_allows_event_from_listed_instance(tmp_path: Path) -> Non
     # normal routing (echo suppression and community lookup).
     db = _database(tmp_path)
     community_runtime = AsyncMock()
-    community_runtime.handle_inbound_post.return_value = SimpleNamespace(
+    community_runtime.handle_normalized_inbound_post.return_value = SimpleNamespace(
         status="processed", detail="ok"
     )
-    runtime = SimpleNamespace(
+    runtime = build_runtime_namespace(
         database=db,
         settings=_settings([LEMMY_EXAMPLE_DOMAIN]),
         bot=AsyncMock(),
         community_runtime=community_runtime,
+        discord_adapter=object(),
         bridge_policy_service=build_test_policy_service(
             db, _settings([LEMMY_EXAMPLE_DOMAIN])
         ),
@@ -134,7 +136,7 @@ async def test_dispatch_allows_event_from_listed_instance(tmp_path: Path) -> Non
     result = await dispatch_activitypub_event(event, runtime)
 
     # Allowlist passed — routed to the community runtime handler.
-    community_runtime.handle_inbound_post.assert_awaited_once()
+    community_runtime.handle_normalized_inbound_post.assert_awaited_once()
     assert result.status == "processed"
 
 
@@ -143,14 +145,15 @@ async def test_dispatch_allows_all_when_allowlist_empty(tmp_path: Path) -> None:
     # An empty allowlist means open federation — events from any instance pass through.
     db = _database(tmp_path)
     community_runtime = AsyncMock()
-    community_runtime.handle_inbound_post.return_value = SimpleNamespace(
+    community_runtime.handle_normalized_inbound_post.return_value = SimpleNamespace(
         status="processed", detail="ok"
     )
-    runtime = SimpleNamespace(
+    runtime = build_runtime_namespace(
         database=db,
         settings=_settings([]),
         bot=AsyncMock(),
         community_runtime=community_runtime,
+        discord_adapter=object(),
         bridge_policy_service=build_test_policy_service(db, _settings([])),
     )
     community_actor_id = "https://some.random.instance/c/news"
@@ -159,7 +162,7 @@ async def test_dispatch_allows_all_when_allowlist_empty(tmp_path: Path) -> None:
 
     result = await dispatch_activitypub_event(event, runtime)
 
-    community_runtime.handle_inbound_post.assert_awaited_once()
+    community_runtime.handle_normalized_inbound_post.assert_awaited_once()
     assert result.status == "processed"
 
 
@@ -175,7 +178,7 @@ async def test_dispatch_follow_accepted_respects_allowlist(tmp_path: Path) -> No
         community_inbox_url=f"{community_actor_id}/inbox",
         status="pending",
     )
-    db.remote_subscriptions.create_subscription(
+    db.remote_subscriptions.create_subscription(discord_guild_id=10,
         discord_channel_id=123,
         lemmy_community_actor_id=community_actor_id,
         lemmy_community_name="hackers",
@@ -187,7 +190,7 @@ async def test_dispatch_follow_accepted_respects_allowlist(tmp_path: Path) -> No
         status="pending",
     )
     dm_user = SimpleNamespace(send=AsyncMock())
-    runtime = SimpleNamespace(
+    runtime = build_runtime_namespace(
         database=db,
         # Allowlist explicitly excludes LEMMY_EXAMPLE_DOMAIN.
         settings=_settings(["allowed.example"]),

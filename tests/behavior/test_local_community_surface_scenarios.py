@@ -7,6 +7,8 @@ of runtime routing until later work.
 """
 
 from __future__ import annotations
+
+from support.community_events import create_thread, create_message, configure_renderer, source_ids
 from support.runtime import build_test_policy_service
 
 from pathlib import Path
@@ -17,6 +19,7 @@ import pytest
 from sqlalchemy import text
 
 from src.discord_event_router import DiscordEventRouter
+from support.typed_forum_creates import route_verified_forum_thread
 from src.content_publish_service import ContentPublishService
 from src.local_communities.runtime import LocalCommunityRuntime
 from src.local_communities.service import LocalCommunityService
@@ -28,6 +31,7 @@ def _runtime(tmp_path: Path) -> tuple[object, LocalCommunityRuntime]:
     """Build one real local-community runtime with only gateway IO mocked."""
     database = build_database(tmp_path, "local-community-community surface mapping.db")
     gateway = AsyncMock()
+    configure_renderer(gateway, database)
     publish_service = ContentPublishService(
         database=database,
         fedify_gateway=gateway,
@@ -83,32 +87,13 @@ async def test_host_forum_create_paths_write_exactly_one_host_surface_per_canoni
         initiated_by_discord_user_id="456",
     )
     add_registered_user(database)
-    runtime.fedify_gateway.publish_local_community_content.side_effect = [
-        SimpleNamespace(
-            activity_id="https://bridge.example/actors/users/alice/activities/create/posts/1",
-            object_id="https://bridge.example/actors/users/alice/objects/posts/1",
-            community_actor_url="https://bridge.example/actors/communities/hackers",
-            delivered_follower_count=0,
-            failed_follower_count=0,
-        ),
-        SimpleNamespace(
-            activity_id="https://bridge.example/actors/users/alice/activities/create/comments/1",
-            object_id="https://bridge.example/actors/users/alice/objects/comments/1",
-            community_actor_url="https://bridge.example/actors/communities/hackers",
-            delivered_follower_count=0,
-            failed_follower_count=0,
-        ),
-    ]
 
-    await runtime.handle_discord_thread_create(
-        thread=build_thread(),
-        starter_message=build_starter_message(),
-    )
-    await runtime.handle_discord_message(message=build_thread_message())
+    await create_thread(runtime, thread=build_thread(), starter_message=build_starter_message())
+    await create_message(runtime, message=build_thread_message())
 
     canonical_thread = (
         database.local_community_content.get_local_community_thread_by_ap_object_id(
-            "https://bridge.example/actors/users/alice/objects/posts/1"
+            source_ids(database)[2]
         )
     )
     assert canonical_thread is not None
@@ -130,7 +115,7 @@ async def test_host_forum_create_paths_write_exactly_one_host_surface_per_canoni
 
     canonical_message = (
         database.local_community_content.get_local_community_message_by_ap_object_id(
-            "https://bridge.example/actors/users/alice/objects/comments/1"
+            source_ids(database, message=301, kind="comment")[2]
         )
     )
     assert canonical_message is not None
@@ -256,10 +241,10 @@ async def test_local_subscriber_forum_is_runtime_source(
         initiated_by_discord_user_id="456",
     )
     community_runtime = SimpleNamespace(
-        handle_discord_thread_create=AsyncMock(return_value="community")
+        handle_normalized_thread_create=AsyncMock(return_value="community")
     )
     local_runtime = SimpleNamespace(
-        handle_discord_thread_create=AsyncMock(return_value="local")
+        handle_normalized_thread_create=AsyncMock(return_value="local")
     )
     router = DiscordEventRouter(
         database=database,
@@ -268,12 +253,9 @@ async def test_local_subscriber_forum_is_runtime_source(
         bridge_policy_service=build_test_policy_service(database),
     )
 
-    result = await router.handle_thread_create(
-        thread=build_thread(thread_id=501, channel_id=101),
-        starter_message=build_starter_message(message_id=601),
-    )
+    result = await route_verified_forum_thread(router, forum_id=101, thread_id=501, starter_id=601)
 
     assert router.is_local_community_forum(101) is True
     assert result == "local"
-    local_runtime.handle_discord_thread_create.assert_awaited_once()
-    community_runtime.handle_discord_thread_create.assert_not_awaited()
+    local_runtime.handle_normalized_thread_create.assert_awaited_once()
+    community_runtime.handle_normalized_thread_create.assert_not_awaited()

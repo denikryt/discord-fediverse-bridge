@@ -9,6 +9,7 @@ no longer tied to the older Discord-only service label.
 from __future__ import annotations
 
 import logging
+from datetime import datetime, timezone
 from dataclasses import dataclass
 from typing import Awaitable, Callable
 
@@ -25,8 +26,9 @@ from .platform_types import (
 from .content_sync.outbound_publish import (
     build_discord_comment_body,
     build_discord_post_title,
+    canonical_community_create_ids,
 )
-from .content_sync.persistence import persist_publish_artifacts
+from .content_sync.persistence import persist_publish_artifacts, PublicationConflictError
 
 logger = logging.getLogger(__name__)
 
@@ -207,6 +209,7 @@ class ContentPublishService:
             or starter.author.external_actor_id is None
             or starter.author.connector_key != event.connector_key
             or starter.content is None or starter.content.format != 'plain'
+            or starter.created_at is None
             or starter.content.attachments):
             raise PlatformOperationError('invalid_request', 'unverified Discord forum starter')
         # The historic message mapping schema has Discord integer columns.
@@ -231,6 +234,8 @@ class ContentPublishService:
             starter_message_id=starter_id,
             community_actor_url=community_actor_url, publish_call=publish_call,
             target_inbox_urls=target_inbox_urls,
+            published_at=starter.created_at.astimezone(timezone.utc),
+            source_message=starter.message,
         )
 
     async def publish_normalized_comment_to_community(
@@ -257,7 +262,8 @@ class ContentPublishService:
             or event.author.kind != 'human'
             or event.author.external_actor_id is None
             or event.author.connector_key != event.connector_key
-            or event.content.format != 'plain' or event.content.attachments):
+            or event.content.format != 'plain' or event.content.attachments
+            or event.created_at is None):
             raise PlatformOperationError('invalid_request', 'unverified Discord forum reply')
         validate_message_reply(thread, event.reply_to)
         # The existing Discord-only SQLite mapping columns must not accept
@@ -280,6 +286,8 @@ class ContentPublishService:
             community_actor_url=community_actor_url,
             parent_object_id=parent_object_id, publish_call=publish_call,
             target_inbox_urls=target_inbox_urls,
+            published_at=event.created_at.astimezone(timezone.utc),
+            source_message=event.message,
         )
 
     async def _resolve_normalized_author(
@@ -373,7 +381,61 @@ class ContentPublishService:
             starter_message_id=getattr(starter_message, "id"),
             community_actor_url=community_actor_url, publish_call=publish_call,
             target_inbox_urls=target_inbox_urls,
+            published_at=getattr(starter_message, 'created_at', None),
         )
+
+    async def _render_community_create(
+        self, *, source_message: MessageRef, user: object,
+        community_actor_url: str, kind: str, title: str | None,
+        body_markdown: str, in_reply_to_object_id: str | None,
+        published_at: datetime,
+    ) -> object:
+        """Render a source-stable AP Create without permitting gateway network I/O.
+
+        The caller must persist the checked output before waking the separate
+        signed User Actor delivery worker. No old publish/send fallback is safe.
+        """
+        from .fedify_gateway_client import RenderCommunityRequest
+
+        if published_at.tzinfo is None or published_at.utcoffset() is None:
+            raise PlatformOperationError('invalid_request', 'source creation time must be timezone-aware')
+        if not isinstance(source_message, MessageRef):
+            raise PlatformOperationError('invalid_request', 'community Create lacks verified source location')
+        timestamp = published_at.astimezone(timezone.utc).isoformat(timespec='milliseconds').replace('+00:00', 'Z')
+        operation_id, activity_id, object_id = canonical_community_create_ids(
+            source=source_message,
+            actor_username=user.activitypub_username,
+            actor_url=user.actor_url,
+            kind=kind,
+        )
+        result = await self.fedify_gateway.render_community(RenderCommunityRequest(
+            actor_username=user.activitypub_username,
+            community_actor_url=community_actor_url,
+            kind=kind, title=title, body_markdown=body_markdown,
+            in_reply_to_object_id=in_reply_to_object_id,
+            operation_id=operation_id, activity_id=activity_id,
+            object_id=object_id, published_at=timestamp,
+        ))
+        # The renderer is a network trust boundary: the caller-provided IDs,
+        # actor and exact parent must not be silently replaced by its response.
+        ap = result.activity_json
+        rendered_object = ap.get('object') if isinstance(ap, dict) else None
+        if (result.activity_id != activity_id or result.object_id != object_id
+            or result.community_actor_url != community_actor_url
+            or result.published_at != timestamp
+            or not isinstance(rendered_object, dict)
+            or ap.get('id') != activity_id or ap.get('type') != 'Create'
+            or ap.get('actor') != user.actor_url
+            or rendered_object.get('id') != object_id
+            or rendered_object.get('attributedTo') != user.actor_url
+            or rendered_object.get('published') != timestamp
+            or rendered_object.get('type') != ('Page' if kind == 'post' else 'Note')
+            or rendered_object.get('source', {}).get('content') != body_markdown
+            or (kind == 'comment' and rendered_object.get('inReplyTo') != in_reply_to_object_id)
+            or (kind == 'post' and rendered_object.get('name') != title)
+            or community_actor_url not in ap.get('to', [])):
+            raise PublicationConflictError('community renderer changed canonical identity, body or audience')
+        return result
 
     async def _publish_post_fields(
         self, *, user: object, author_name: str, content: str,
@@ -381,19 +443,21 @@ class ContentPublishService:
         source_thread_id: int, starter_message_id: int,
         community_actor_url: str, publish_call: Callable[[object], Awaitable[object]],
         target_inbox_urls: list[str] | None,
+        published_at: datetime | None = None,
+        source_message: MessageRef | None = None,
     ) -> PublishResult:
         """Share one canonical AP render/persistence contract across both ingress paths."""
         body = build_discord_comment_body(
             author_name=author_name, content=content, bridge_prefix=self.bridge_prefix,
         )
         title = build_discord_post_title(thread_name=thread_name)
-        publish_result = await publish_call(
-            self._build_publish_request(
-                actor_username=user.activitypub_username,
-                community_actor_url=community_actor_url,
-                kind="post", title=title, body_markdown=body,
-                in_reply_to_object_id=None, target_inbox_urls=target_inbox_urls,
-            )
+        if source_message is None:
+            source_message = MessageRef('discord-primary', str(source_thread_id), str(starter_message_id))
+        publish_result = await self._render_community_create(
+            source_message=source_message, user=user,
+            community_actor_url=community_actor_url, kind='post',
+            title=title, body_markdown=body, in_reply_to_object_id=None,
+            published_at=published_at,
         )
         persisted = persist_publish_artifacts(
             self.database, source_id=str(starter_message_id),
@@ -404,6 +468,7 @@ class ContentPublishService:
             kind="post", title=title, body_markdown=body,
             in_reply_to_object_id=None, discord_channel_id=forum_channel_id,
             discord_message_id=starter_message_id,
+            published_at=published_at, source_message=source_message,
         )
         if self.delivery_worker is not None and persisted.created:
             self.delivery_worker.wake()
@@ -443,6 +508,7 @@ class ContentPublishService:
             community_actor_url=community_actor_url,
             parent_object_id=parent_object_id, publish_call=publish_call,
             target_inbox_urls=target_inbox_urls,
+            published_at=getattr(message, 'created_at', None),
         )
 
     async def _publish_comment_fields(
@@ -452,19 +518,21 @@ class ContentPublishService:
         community_actor_url: str, parent_object_id: str,
         publish_call: Callable[[object], Awaitable[object]],
         target_inbox_urls: list[str] | None,
+        published_at: datetime | None = None,
+        source_message: MessageRef | None = None,
     ) -> PublishResult:
         """Render and persist one canonical comment for SDK or typed callers."""
         body = build_discord_comment_body(
             author_name=author_name, content=content, bridge_prefix=self.bridge_prefix,
         )
-        publish_result = await publish_call(
-            self._build_publish_request(
-                actor_username=user.activitypub_username,
-                community_actor_url=community_actor_url,
-                kind="comment", title=None, body_markdown=body,
-                in_reply_to_object_id=parent_object_id,
-                target_inbox_urls=target_inbox_urls,
-            )
+        if source_message is None:
+            source_message = MessageRef('discord-primary', str(source_thread_id), str(source_message_id))
+        publish_result = await self._render_community_create(
+            source_message=source_message, user=user,
+            community_actor_url=community_actor_url, kind='comment',
+            title=None, body_markdown=body,
+            in_reply_to_object_id=parent_object_id,
+            published_at=published_at,
         )
         persist_publish_artifacts(
             self.database, source_id=str(source_message_id),
@@ -476,6 +544,7 @@ class ContentPublishService:
             in_reply_to_object_id=parent_object_id,
             discord_channel_id=forum_channel_id,
             discord_message_id=source_message_id,
+            published_at=published_at, source_message=source_message,
         )
         if self.delivery_worker is not None:
             self.delivery_worker.wake()

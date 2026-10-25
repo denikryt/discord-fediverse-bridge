@@ -10,19 +10,17 @@ import type { GatewayConfig } from "../config.js";
 import type { createGatewayFederation } from "../federation.js";
 import {
   deleteContent,
-  publishContent,
-  publishLocalCommunityContent,
   renderPersonalFeedCreate,
   updateContent,
 } from "../federation-outbound.js";
 import type {
   DeleteContentRequest,
-  PublishContentRequest,
-  PublishLocalCommunityContentRequest,
   RenderPersonalFeedRequest,
+  RenderCommunityRequest,
   UpdateContentRequest,
 } from "../types.js";
 import { hasValidInternalAuthorization } from "./internal-auth.js";
+import { renderCommunityCreate } from "../outbound/community-renderer.js";
 
 export interface InternalPublishRouteDependencies {
   config: GatewayConfig;
@@ -59,86 +57,42 @@ export function registerInternalPublishRoutes(
     }
   });
 
-  app.post("/publish", async (context) => {
-    // Python owns the Discord-side publish policy, while this endpoint owns the
-    // signed user-actor Create delivery through Fedify.
+  app.post("/render-community", async (context) => {
+    // Source identity and full audience are decided by Python, not a network
+    // lookup. This endpoint cannot access the Fedify delivery context.
     if (!hasValidInternalAuthorization(config, context.req.header("Authorization") ?? null)) {
       return context.json({ error: "invalid authorization" }, { status: 401 });
     }
-
-    const payload = (await context.req.json()) as Partial<PublishContentRequest>;
-    if (
-      typeof payload.actorUsername !== "string" ||
-      typeof payload.communityActorUrl !== "string" ||
-      (payload.kind !== "post" && payload.kind !== "comment") ||
-      typeof payload.bodyMarkdown !== "string"
-    ) {
-      return context.json(
-        { error: "actorUsername, communityActorUrl, kind, and bodyMarkdown are required" },
-        { status: 400 },
-      );
+    const request = (await context.req.json()) as Partial<RenderCommunityRequest>;
+    if (typeof request.actorUsername !== "string"
+        || typeof request.communityActorUrl !== "string"
+        || (request.kind !== "post" && request.kind !== "comment")
+        || typeof request.bodyMarkdown !== "string"
+        || typeof request.operationId !== "string"
+        || typeof request.activityId !== "string"
+        || typeof request.objectId !== "string"
+        || typeof request.publishedAt !== "string") {
+      return context.json({ error: "invalid render-only community Create request" }, { status: 400 });
     }
-    if (payload.kind === "comment" && typeof payload.inReplyToObjectId !== "string") {
-      return context.json({ error: "comment publish requires inReplyToObjectId" }, { status: 400 });
-    }
-
     try {
-      const result = await publishContent(fedify, config, {
-        actorUsername: payload.actorUsername,
-        communityActorUrl: payload.communityActorUrl,
-        kind: payload.kind,
-        title: typeof payload.title === "string" && payload.title.length > 0 ? payload.title : null,
-        bodyMarkdown: payload.bodyMarkdown,
-        inReplyToObjectId: typeof payload.inReplyToObjectId === "string" ? payload.inReplyToObjectId : null,
-      });
-      return context.json(result);
+      return context.json(renderCommunityCreate(config, request as RenderCommunityRequest));
     } catch (error) {
-      const message = error instanceof Error ? error.message : String(error);
-      return context.json({ error: message }, { status: 500 });
+      return context.json({ error: error instanceof Error ? error.message : String(error) }, { status: 400 });
     }
   });
 
-  app.post("/publish-local-community", async (context) => {
-    // Local-community publishes fan out one signed Create to every accepted
-    // follower inbox of the Discord-backed community.
-    if (!hasValidInternalAuthorization(config, context.req.header("Authorization") ?? null)) {
-      return context.json({ error: "invalid authorization" }, { status: 401 });
-    }
-
-    const payload = (await context.req.json()) as Partial<PublishLocalCommunityContentRequest>;
-    if (
-      typeof payload.actorUsername !== "string" ||
-      typeof payload.communityActorUrl !== "string" ||
-      (payload.kind !== "post" && payload.kind !== "comment") ||
-      typeof payload.bodyMarkdown !== "string"
-    ) {
-      return context.json(
-        { error: "actorUsername, communityActorUrl, kind, and bodyMarkdown are required" },
-        { status: 400 },
-      );
-    }
-    if (payload.kind === "comment" && typeof payload.inReplyToObjectId !== "string") {
-      return context.json({ error: "comment publish requires inReplyToObjectId" }, { status: 400 });
-    }
-
-    try {
-      const result = await publishLocalCommunityContent(fedify, config, {
-        actorUsername: payload.actorUsername,
-        communityActorUrl: payload.communityActorUrl,
-        kind: payload.kind,
-        title: typeof payload.title === "string" && payload.title.length > 0 ? payload.title : null,
-        bodyMarkdown: payload.bodyMarkdown,
-        inReplyToObjectId: typeof payload.inReplyToObjectId === "string" ? payload.inReplyToObjectId : null,
-        targetInboxUrls: Array.isArray(payload.targetInboxUrls)
-          ? payload.targetInboxUrls.filter((value): value is string => typeof value === "string")
-          : null,
-      });
-      return context.json(result);
-    } catch (error) {
-      const message = error instanceof Error ? error.message : String(error);
-      return context.json({ error: message }, { status: 500 });
-    }
-  });
+  // Community publication must persist canonical content before sending.
+  // Canonical authored Create must be rendered and committed in Python first,
+  // then dispatched as frozen JSON via /send-user-actor-deliveries or the
+  // Group-signed relay route. These obsolete routes cannot emit network I/O.
+  for (const path of ["/publish", "/publish-local-community"]) {
+    app.post(path, (context) => {
+      if (!hasValidInternalAuthorization(config, context.req.header("Authorization") ?? null)) {
+        return context.json({ error: "invalid authorization" }, { status: 401 });
+      }
+      return context.json({ error: "community publication requires durable render-first admission" }, { status: 410 });
+    });
+  }
 
   app.post("/update", async (context) => {
     // Python owns the edit policy; this endpoint owns the signed Update delivery.
@@ -178,9 +132,6 @@ export function registerInternalPublishRoutes(
           typeof payload.inReplyToObjectId === "string" && payload.inReplyToObjectId.length > 0
             ? payload.inReplyToObjectId
             : null,
-        targetInboxUrls: Array.isArray(payload.targetInboxUrls)
-          ? payload.targetInboxUrls.filter((value): value is string => typeof value === "string")
-          : null,
         operationId: typeof payload.operationId === "string" ? payload.operationId : null,
         activityId: typeof payload.activityId === "string" ? payload.activityId : null,
         mutationTimestamp: typeof payload.mutationTimestamp === "string" ? payload.mutationTimestamp : null,
@@ -223,9 +174,6 @@ export function registerInternalPublishRoutes(
         communityActorUrl: typeof payload.communityActorUrl === "string" ? payload.communityActorUrl : null,
         conversationRootObjectId: typeof payload.conversationRootObjectId === "string" ? payload.conversationRootObjectId : null,
         apObjectId: payload.apObjectId,
-        targetInboxUrls: Array.isArray(payload.targetInboxUrls)
-          ? payload.targetInboxUrls.filter((value): value is string => typeof value === "string")
-          : null,
         operationId: typeof payload.operationId === "string" ? payload.operationId : null,
         activityId: typeof payload.activityId === "string" ? payload.activityId : null,
         mutationTimestamp: typeof payload.mutationTimestamp === "string" ? payload.mutationTimestamp : null,

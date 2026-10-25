@@ -223,9 +223,8 @@ def test_known_discord_source_without_channel_keeps_scoped_dedup_identity(tmp_pa
         actual.source_connector_id is not None
         and actual.source_channel_surface_id is None
     )
-    from sqlalchemy.exc import IntegrityError
-
-    with pytest.raises(IntegrityError):
+    # The repository detects ambiguous NULL-container identity before INSERT.
+    with pytest.raises(ValueError, match="source"):
         database.message_mappings.create_message_mapping(
             source_platform="discord",
             source_id="opaque-source",
@@ -236,6 +235,10 @@ def test_known_discord_source_without_channel_keeps_scoped_dedup_identity(tmp_pa
             discord_channel_id=None,
             discord_message_id=None,
         )
+
+    assert database.message_mappings.get_message_mapping_by_source("discord", "opaque-source").id == row.id
+    assert database.message_mappings.get_message_mapping_by_object_id("https://bridge.test/objects/other") is None
+    database.close()
 
 
 def test_v1_upgrade_and_fresh_bootstrap_have_equivalent_schema(tmp_path):

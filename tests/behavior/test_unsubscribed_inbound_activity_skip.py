@@ -1,6 +1,7 @@
 """Regression tests for ignoring remote content after unsubscribe."""
 
 from __future__ import annotations
+from support.runtime import build_runtime_namespace
 from support.runtime import build_test_policy_service
 
 from pathlib import Path
@@ -21,7 +22,7 @@ class _NoopCommunityRuntime:
         self.post_events = []
         self.comment_events = []
 
-    async def handle_inbound_post(self, event, runtime):
+    async def handle_normalized_inbound_post(self, event, *, adapter):
         """Record one post event."""
         self.post_events.append(event)
         return HandlerResult(
@@ -30,7 +31,7 @@ class _NoopCommunityRuntime:
             detail="post created",
         )
 
-    async def handle_inbound_comment(self, event, runtime):
+    async def handle_normalized_inbound_comment_with_backfill(self, event, *, adapter):
         """Record one comment event."""
         self.comment_events.append(event)
         return HandlerResult(
@@ -43,20 +44,21 @@ class _NoopCommunityRuntime:
 class _NoopLocalCommunityRuntime:
     """Reject incorrect local-community routing in these tests."""
 
-    async def handle_inbound_post(self, event, runtime):
+    async def handle_normalized_inbound_post(self, event, *, adapter):
         """Reject unexpected local post routing."""
         raise AssertionError("local community post route should not be used")
 
-    async def handle_inbound_comment(self, event, runtime):
+    async def handle_normalized_inbound_comment_with_backfill(self, event, *, adapter):
         """Reject unexpected local comment routing."""
         raise AssertionError("local community comment route should not be used")
 
 
 def _runtime(database, community_runtime):
     """Build the minimal runtime namespace used by dispatch."""
-    return SimpleNamespace(
+    return build_runtime_namespace(
         database=database,
         community_runtime=community_runtime,
+        discord_adapter=object(),
         local_community_runtime=_NoopLocalCommunityRuntime(),
         settings=SimpleNamespace(federation_allowlist=[]),
         bot=SimpleNamespace(),
@@ -134,7 +136,7 @@ async def test_pending_follow_still_implicit_accepts_before_unsubscribed_skip(
         community_inbox_url=f"{community_actor_id}/inbox",
         status="pending",
     )
-    database.remote_subscriptions.create_subscription(
+    database.remote_subscriptions.create_subscription(discord_guild_id=10,
         discord_channel_id=123,
         lemmy_community_actor_id=community_actor_id,
         lemmy_community_name="news",

@@ -6,6 +6,7 @@ import json
 from urllib.parse import urlparse
 
 from sqlalchemy.orm import Session
+from sqlalchemy import select
 
 from ...models import (
     UserActorFollower,
@@ -74,9 +75,9 @@ class UserActorDeliverySourceRepository:
         activity_json: dict,
         snapshot: dict,
         followers: list[UserActorFollower],
-        direct_target_inbox_urls: list[str] | None = None,
+        direct_authorizations: list[dict] | None = None,
     ) -> UserActorOutboundSource:
-        """Insert one already-rendered content source and immutable audience."""
+        """Insert one already-rendered content source and verified audience."""
         source = UserActorOutboundSource(
             user_id=user_id,
             source_kind=source_kind,
@@ -99,18 +100,36 @@ class UserActorDeliverySourceRepository:
             )
             for follower in followers
         }
-        # Direct target endpoints are sorted and deduplicated so replayed content
-        # fanout preserves the current deterministic row identities.
-        for endpoint_url in sorted(set(direct_target_inbox_urls or [])):
-            endpoint = UserActorDeliverySourceRepository.validate_endpoint(endpoint_url)
-            if endpoint not in existing_endpoints:
-                session.add(
-                    UserActorOutboundDelivery(
-                        source_id=source.id,
-                        target_endpoint_url=endpoint,
-                        status="pending",
-                    )
-                )
+        # Only caller-verified context evidence is a direct grant. The old
+        # untyped URLs are never promoted to deliverable recipients here.
+        by_endpoint: dict[str, list[dict]] = {}
+        for evidence in direct_authorizations or []:
+            if (evidence.get('schemaVersion') != 1
+                or evidence.get('contextKind') not in {'remote_community_publication', 'personal_feed_reply'}
+                or evidence.get('publishedObjectId') != published_object_id
+                or not evidence.get('recipientActorId')):
+                raise ValueError('invalid direct recipient authorization evidence')
+            endpoint = UserActorDeliverySourceRepository.validate_endpoint(
+                evidence['targetEndpointUrl'])
+            by_endpoint.setdefault(endpoint, []).append(evidence)
+        for endpoint, evidence in sorted(by_endpoint.items()):
+            snapshot = json.dumps(sorted(evidence, key=lambda x: (x['contextKind'], x['recipientActorId'])),
+                                  sort_keys=True, separators=(',', ':'))
+            if endpoint in existing_endpoints:
+                delivery = session.scalar(select(UserActorOutboundDelivery).where(
+                    UserActorOutboundDelivery.source_id == source.id,
+                    UserActorOutboundDelivery.target_endpoint_url == endpoint,
+                ))
+                if delivery is None:
+                    raise ValueError('missing follower delivery during direct merge')
+                delivery.direct_authorizations_json = snapshot
+            else:
+                session.add(UserActorOutboundDelivery(
+                    source_id=source.id,
+                    target_endpoint_url=endpoint,
+                    direct_authorizations_json=snapshot,
+                    status='pending',
+                ))
                 existing_endpoints.add(endpoint)
         return source
 

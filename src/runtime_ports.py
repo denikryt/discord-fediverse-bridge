@@ -12,7 +12,7 @@ from typing import Protocol, runtime_checkable
 
 from .platform_types import (
     AuthorRef, ChannelRef, ChannelView, ConnectorRef, ContentDocument,
-    CreateAttempt, CreatedMessage, CreatedThread, DeliveryPresentation,
+    CreateAttempt, CoordinatorDispatchPermit, CreatedMessage, CreatedThread, DeliveryPresentation,
     MessageRef, MessageView, PlatformAction, PlatformCapabilities,
     PlatformInboundEvent, PermissionResult, ThreadRef, ThreadView,
 )
@@ -53,11 +53,13 @@ class PlatformDeliveryPort(Protocol):
     async def create_forum_thread(
         self, forum: ChannelRef, content: ContentDocument, *, title: str,
         presentation: DeliveryPresentation, attempt: CreateAttempt,
+        dispatch_permit: CoordinatorDispatchPermit | None = None,
     ) -> CreatedThread:
         """Create a forum post and return observed thread/starter IDs."""
 
     async def create_reply_thread(
         self, root: MessageRef, *, title: str, attempt: CreateAttempt,
+        dispatch_permit: CoordinatorDispatchPermit | None = None,
     ) -> ThreadRef:
         """Create or adopt a verified unique root-anchored message thread."""
 
@@ -65,6 +67,7 @@ class PlatformDeliveryPort(Protocol):
         self, destination: ThreadRef | ChannelRef, content: ContentDocument, *,
         reply_to: MessageRef | None, presentation: DeliveryPresentation,
         attempt: CreateAttempt,
+        dispatch_permit: CoordinatorDispatchPermit | None = None,
     ) -> CreatedMessage:
         """Send in one immediate container; forbid implicit cross-parent fallback."""
 
@@ -143,7 +146,6 @@ class UserActorDeliverySubmitPort(Protocol):
         title: str | None,
         body_markdown: str,
         edited_timestamp,
-        target_inbox_urls: list[str] | None = None,
     ) -> str:
         """Persist one desired Update and return the existing admission outcome."""
 
@@ -151,7 +153,6 @@ class UserActorDeliverySubmitPort(Protocol):
         self,
         *,
         object_id: str,
-        target_inbox_urls: list[str] | None = None,
     ) -> str:
         """Persist one desired Delete and return the existing admission outcome."""
 

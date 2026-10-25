@@ -8,9 +8,11 @@ System state -> action -> observable result pattern per AGENTS.md.
 """
 
 from __future__ import annotations
+from support.runtime import build_runtime_namespace
 from support.runtime import build_test_policy_service
 
 from pathlib import Path
+from support.community_events import physical_forum
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, patch
 
@@ -91,7 +93,7 @@ def _community_runtime(database: Database, *, bot: object) -> CommunityRuntime:
 
 def _accepted_subscription(database: Database, *, channel_id: int = 100) -> None:
     """Insert one accepted subscription for the test community and channel."""
-    database.remote_subscriptions.create_subscription(
+    database.remote_subscriptions.create_subscription(discord_guild_id=10,
         discord_channel_id=channel_id,
         lemmy_community_actor_id=_COMMUNITY_ACTOR_ID,
         lemmy_community_name="hackers",
@@ -183,7 +185,7 @@ def test_inbound_comment_creates_post_thread_when_post_not_yet_mapped(
         fetch_forum_channel=AsyncMock(side_effect=_fetch_forum_channel),
         get_thread_by_id=AsyncMock(side_effect=_get_thread_by_id),
     )
-    runtime = SimpleNamespace(
+    runtime = build_runtime_namespace(
         settings=SimpleNamespace(fedify_shared_secret="secret"),
         database=database,
         bot=bot,
@@ -221,8 +223,8 @@ def test_inbound_comment_creates_post_thread_when_post_not_yet_mapped(
         thread_group.id
     )
     assert len(thread_deliveries) == 1
-    assert thread_deliveries[0].discord_thread_id == 200
-    assert thread_deliveries[0].discord_channel_id == 100
+    assert int(thread_deliveries[0].external_thread_id) == 200
+    assert physical_forum(database, thread_deliveries[0]) == 100
 
     # Comment must be mapped in CommunityMessageGroup.
     message_group = database.discord_fanout_groups.get_message_group_by_ap_object(
@@ -233,20 +235,17 @@ def test_inbound_comment_creates_post_thread_when_post_not_yet_mapped(
         message_group.id
     )
     assert len(msg_deliveries) == 1
-    assert msg_deliveries[0].discord_thread_id == 200
-    assert msg_deliveries[0].discord_message_id == 900
+    assert int(msg_deliveries[0].external_thread_id) == 200
+    assert int(msg_deliveries[0].external_message_id) == 900
 
 
-def test_inbound_comment_only_backfills_channels_without_existing_delivery(
+def test_inbound_comment_never_recreates_missing_copy_of_known_parent(
     tmp_path: Path,
 ) -> None:
-    """Backfill must only create threads in channels that have no delivery row yet.
+    """A missing copy of a known parent is not proof that a fresh POST is safe.
 
-    System state: two accepted subscriptions (ch 100, ch 101); thread group exists
-    for the post with a delivery only for channel 100.
-    Action: comment.created arrives; HTTP fetch succeeds.
-    Expected: new thread delivery created for channel 101 only; channel 100 delivery
-    unchanged; comment delivered into both threads.
+    Only the confirmed channel-100 thread receives this comment. The missing
+    channel-101 copy stays excluded; no parent or child POST is guessed there.
     """
     database = _database(tmp_path)
     _accepted_subscription(database, channel_id=100)
@@ -303,7 +302,7 @@ def test_inbound_comment_only_backfills_channels_without_existing_delivery(
         fetch_forum_channel=AsyncMock(side_effect=_fetch_forum_channel),
         get_thread_by_id=AsyncMock(side_effect=_get_thread_by_id),
     )
-    runtime = SimpleNamespace(
+    runtime = build_runtime_namespace(
         settings=SimpleNamespace(fedify_shared_secret="secret"),
         database=database,
         bot=bot,
@@ -338,16 +337,16 @@ def test_inbound_comment_only_backfills_channels_without_existing_delivery(
     thread_deliveries = database.discord_fanout_groups.get_thread_deliveries(
         thread_group.id
     )
-    thread_ids = {d.discord_thread_id for d in thread_deliveries}
-    # Channel 100 already had thread 200; channel 101 should now have thread 201.
-    assert thread_ids == {200, 201}
+    thread_ids = {int(d.external_thread_id) for d in thread_deliveries}
+    # Only the confirmed physical parent may receive a child.
+    assert thread_ids == {200}
 
     # Channel 100's original delivery row must be unchanged.
     ch100_delivery = next(d for d in thread_deliveries if d.discord_channel_id == 100)
-    assert ch100_delivery.discord_thread_id == 200
-    assert ch100_delivery.discord_starter_message_id == 300
+    assert int(ch100_delivery.external_thread_id) == 200
+    assert int(ch100_delivery.external_starter_message_id) == 300
 
-    # Comment delivered into both threads.
+    # Comment delivered into the confirmed thread only.
     message_group = database.discord_fanout_groups.get_message_group_by_ap_object(
         _COMMENT_AP_ID
     )
@@ -355,7 +354,9 @@ def test_inbound_comment_only_backfills_channels_without_existing_delivery(
     msg_deliveries = database.discord_fanout_groups.get_message_deliveries(
         message_group.id
     )
-    assert {d.discord_thread_id for d in msg_deliveries} == {200, 201}
+    assert {int(d.external_thread_id) for d in msg_deliveries} == {200}
+    forum_channel_b.create_thread.assert_not_awaited()
+    thread_b.send.assert_not_awaited()
 
 
 def test_inbound_comment_deferred_when_post_fetch_fails(
@@ -375,7 +376,7 @@ def test_inbound_comment_deferred_when_post_fetch_fails(
         fetch_forum_channel=AsyncMock(),
         get_thread_by_id=AsyncMock(),
     )
-    runtime = SimpleNamespace(
+    runtime = build_runtime_namespace(
         settings=SimpleNamespace(fedify_shared_secret="secret"),
         database=database,
         bot=bot,
