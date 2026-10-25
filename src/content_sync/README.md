@@ -52,3 +52,24 @@ Local Community Group Announce destinations are independently snapshot-bound
 to an accepted Follow incarnation in the same writer commit. Revocation is
 checked again before transport. Failed renders and invalid reply parents
 leave no canonical graph or signed network send.
+
+## Stage 04 physical Create coordination (Checkpoint 59)
+
+`platform_fanout.PlatformFanoutCoordinator` and the
+`PlatformDeliveryIntentRepository` own the single immutable physical Create
+request for each canonical target surface. Reservation and the fully materialized
+DTO commit **before** a typed adapter call; a successful returned thread/starter
+or message receipt commits its physical mapping in the same SQLite writer
+transaction as `delivered`. Dispatching rows that lose an answer are
+`unresolved` and are never blindly replayed. The original target and verified
+orphan receipt remain in the intent if forum ownership changes in flight.
+The coordinator selects the adapter via connector registry and never imports
+Discord. A blocked child has no executable request until its exact parent is
+verified. A confirmed parent receipt wakes its blocked descendants from the
+canonical SQLite content snapshot; the SDK-ready Personal Feed Discord worker
+also runs `PlatformFanoutCoordinator.recover_pending()` on startup and its
+existing periodic cadence. Only definitely unsent, authorized `pending`
+requests enter transport; expired `dispatching` becomes `unresolved` and
+cannot be replayed merely because the worker restarted. Authored physical
+Update/Delete recovery and exclusive adapter dispatch permits are subsequent
+Stage 04 checkpoints, not implied by this Create recovery.

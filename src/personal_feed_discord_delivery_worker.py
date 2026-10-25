@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+from collections.abc import Awaitable, Callable
 
 from .platform_types import (
     ChannelRef, ContentDocument, CreateAttempt, DeliveryPresentation, MessageRef,
@@ -27,6 +28,17 @@ class PersonalFeedDiscordDeliveryWorker:
         self._wake = asyncio.Event()
         self._task: asyncio.Task[None] | None = None
         self._stopping = False
+        self._extra_drains: list[Callable[[], Awaitable[object]]] = []
+
+    def add_drain(self, drain: Callable[[], Awaitable[object]]) -> None:
+        """Register an SDK-ready durable physical recovery pass before start.
+
+        The existing personal-feed worker is the sole Discord delivery owner;
+        adding a drain does not create another task or an unjoined SDK user.
+        """
+        if self._task is not None:
+            raise RuntimeError('cannot register community recovery after worker startup')
+        self._extra_drains.append(drain)
 
     def start(self) -> None:
         """Recover interrupted claims and start one process-local scheduler."""
@@ -79,16 +91,26 @@ class PersonalFeedDiscordDeliveryWorker:
     async def _run(self) -> None:
         """Drain due rows while keeping Discord calls outside DB transactions."""
         while not self._stopping:
+            # Clear before reading SQLite; a wake during either drain remains
+            # visible and starts a subsequent pass instead of getting lost.
+            self._wake.clear()
             claims = self.database.personal_feed_conversations.claim_due()
+            for claim in claims:
+                await self._deliver(claim)
+            # Both types of work use the same SDK-ready lifecycle; one failed
+            # target must not prevent another community's safe pending work.
+            for drain in self._extra_drains:
+                try:
+                    await drain()
+                except asyncio.CancelledError:
+                    raise
+                except Exception:
+                    logger.exception('Durable community physical recovery failed')
             if not claims:
-                self._wake.clear()
                 try:
                     await asyncio.wait_for(self._wake.wait(), timeout=5.0)
                 except TimeoutError:
                     pass
-                continue
-            for claim in claims:
-                await self._deliver(claim)
 
     async def _deliver(self, claim: object) -> None:
         """Apply one immutable inbound AP revision to an exact Discord receipt.

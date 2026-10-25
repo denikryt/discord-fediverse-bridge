@@ -2,6 +2,28 @@
 
 This document is a short, feature-oriented index of the test suite. It helps maintainers find existing coverage before adding a new test. It intentionally links to files rather than line numbers or individual test functions, because those change more often.
 
+## Stage 04 durable Create admission and recovery (Checkpoints 56–60)
+
+- Current-v1 bootstrap and released-v0→v1 migration preservation, including
+  nullable legacy mutation baselines and exact source/surface identities —
+  `tests/test_v0_to_v1_message_fanout_schema.py`.
+- Local/Remote AP Create canonical-before-physical-POST, duplicate AP source,
+  content snapshot, orphan/unknown transport, correct recipient and exact
+  nested parent/wake-up — `tests/test_stage04_delivery_intents.py`,
+  `tests/test_stage04_local_inbound_admission.py`,
+  `tests/test_stage04_parent_mapping.py`,
+  `tests/test_local_inbound_adapter_delivery.py`,
+  `tests/test_normalized_inbound_remote_posts.py` and
+  `tests/test_normalized_inbound_remote_comments.py`.
+- No raw Discord SDK fallback without a bound normalized adapter, no
+  unverified Local Community lifecycle after reservation, current typed
+  router source selection and SDK-ready recovery on the existing worker —
+  `tests/test_stage04_no_sdk_ap_fallback.py`,
+  `tests/test_stage04_physical_recovery_schedule.py`.
+
+These are focused tests and do not substitute for full Python/Node or live
+Discord integration tests, which require the project dependencies.
+
 ## Test layers
 
 - **Behavior** — user or platform action in a defined system state, verified through observable runtime effects.

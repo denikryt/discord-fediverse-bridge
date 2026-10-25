@@ -1310,7 +1310,7 @@ class CommunityMessageGroupDelivery(Base):
             ondelete="RESTRICT",
             onupdate="RESTRICT",
         ),
-        UniqueConstraint("connector_id", "external_message_id"),
+        UniqueConstraint("connector_id", "external_thread_id", "external_message_id"),
         UniqueConstraint("message_group_id", "channel_surface_id"),
         UniqueConstraint("message_group_id", "discord_channel_id"),
     )
@@ -1895,7 +1895,7 @@ class LocalCommunityMessageSurface(Base):
             ondelete="RESTRICT",
             onupdate="RESTRICT",
         ),
-        UniqueConstraint("connector_id", "external_message_id"),
+        UniqueConstraint("connector_id", "local_community_thread_surface_id", "external_message_id"),
         ForeignKeyConstraint(
             ["local_community_thread_surface_id", "channel_surface_id"],
             [

@@ -40,6 +40,29 @@ not shadowed by a parallel live ingress.
    recipient does not authorize a fresh ActivityPub Create ID. Later physical
    fanout, edits and crash recovery belong to subsequent Stage 04 checkpoints.
 
+## Stage 04 physical Community Create and restart recovery
+
+1. After canonical Local/Remote Community admission, each eligible forum is
+   reserved by `(connector, surface, canonical object)` in the existing SQLite
+   v1 `platform_delivery_intents` table. An unavailable identified nested
+   parent leaves an immutable logical `blocked` dependency, never a guess at
+   a physical reply target.
+2. The coordinator materializes the complete typed DTO and commits a `pending`
+   intent before any adapter Create. Its exact authorized claim changes
+   `pending → dispatching`; the SDK call occurs outside the writer lock.
+3. A checked thread + distinct starter receipt, or checked message receipt,
+   commits the physical copy and `delivered` in one transaction. Revocation
+   after a successful send retains an original-owner orphan receipt instead of
+   assigning the copy to a rebound forum. An unknown send remains `unresolved`.
+4. Confirmed parent delivery wakes children only when the same target thread
+   has a verified physical parent. The pre-POST gate rechecks current owner,
+   canonical tombstone, active community and accepted subscription.
+5. After Discord SDK READY, the existing Discord delivery scheduler runs
+   `PlatformFanoutCoordinator.recover_pending()` in its own joined lifecycle.
+   Only verified `pending` and parent-unblocked materializations may initiate
+   a physical Create. Expired `dispatching` becomes `unresolved`; missing HTTP
+   receipts, worker restarts and duplicate AP ingress never prove safe retry.
+
 ## Registration flow
 
 1. `/register` starts in `src/commands/register.py` and browser routes in `src/http_api.py`.
@@ -350,3 +373,18 @@ and transport cutover of community fanout are still in progress.
 4. A failure of one Discord surface does not block the others. The existing
    `LocalCommunityFederationFanout` relays to eligible remote subscribers.
    SDK-backed Discord-originated mutations remain a separate pending cutover.
+
+## Stage 04 physical target Create admission (Checkpoint 59 work in progress)
+
+A canonical Local/Remote object can have multiple physical forum targets. For
+normalized Local/Remote sibling targets, the current owner/surface is resolved
+from `(connector, forum)` before a `PlatformDeliveryIntent` is inserted. A
+complete typed Create request and immutable fingerprint are committed before
+sending; only one worker transitions `pending → dispatching` for a target. A
+verified response commits a typed copy mapping and `delivered` atomically.
+If the owner has rebound, the returned thread/starter or message identity
+stays on the original intent as a verified orphan, never on the new owner.
+Unknown results and expired dispatches remain unresolved, with no automatic
+Create replay. Missing nested parent materialization, inbound AP destinations
+and full startup wake/reconciliation are later Stage 04 boundaries; this
+section does not claim those paths have been cut over yet.

@@ -17,6 +17,7 @@ import discord
 
 from ..bridge_policy import BridgePolicyService
 from ..db import Database
+from ..content_sync.platform_fanout import PlatformFanoutCoordinator
 from ..discord_legacy_projection import discord_id_to_legacy_int
 from ..platform_types import (
     ChannelRef, ContentDocument, CreateAttempt, DeliveryPresentation,
@@ -211,6 +212,7 @@ class DiscordFanout:
     async def mirror_normalized_thread_to_siblings(
         self, *, adapter: PlatformDeliveryPort, source: ThreadCreated,
         starter: MessageView, community_actor_id: str, sibling_channel_ids: list[int],
+        canonical_thread_group_id: int,
     ) -> list[MirrorResult]:
         """Mirror one verified source starter using typed transport and independent receipts.
 
@@ -240,31 +242,19 @@ class DiscordFanout:
             if forum is None:
                 continue
             try:
-                attempt = CreateAttempt(
-                    f'community-mirror-thread:{source_id}:{channel_id}',
-                    'discord-primary', 'forum_thread', forum,
-                )
-                presentation = DeliveryPresentation()
-                receipt = await adapter.create_forum_thread(
-                    forum, body, title=source.name, presentation=presentation,
-                    attempt=attempt,
-                )
-                try:
-                    # A sibling receipt proves an actual bot-mode physical copy
-                    # only when it matches the requested CreateAttempt and
-                    # positively verifies this forum's guild and kind.
-                    validate_created_receipt(attempt, receipt, presentation=presentation)
-                    if (receipt.thread.channel.kind != 'forum'
-                        or receipt.thread.channel.external_guild_id != forum.external_guild_id):
-                        raise PlatformOperationError('invalid_request', 'unverified community mirror forum')
-                except (PlatformOperationError, ValueError, TypeError, AttributeError) as exc:
-                    # A mismatch after transport might still represent a sent
-                    # Discord object; refuse persistence but never infer non-send.
-                    raise PlatformOperationError('unknown_delivery', 'community mirror thread receipt mismatch') from exc
-                copies.append(MirrorResult(
-                    channel_id, discord_id_to_legacy_int(receipt.thread),
-                    discord_id_to_legacy_int(receipt.starter),
-                ))
+                # Persist a single immutable coordinator-owned Create before
+                # transport; its receipt commits the physical copy mapping.
+                delivered=await PlatformFanoutCoordinator.from_adapter(
+                    self.database,adapter).stage_and_deliver(
+                    domain='remote',kind='post',canonical_id=canonical_thread_group_id,
+                    forum=forum,operation='forum_thread',destination=forum,
+                    content=body,presentation=DeliveryPresentation(),title=source.name)
+                if delivered:
+                    delivery=next((row for row in self.database.discord_fanout_groups.get_thread_deliveries(
+                        canonical_thread_group_id) if row.discord_channel_id==channel_id),None)
+                    if delivery is None:raise ValueError('committed remote receipt without copy')
+                    copies.append(MirrorResult(channel_id,delivery.discord_thread_id,
+                                               delivery.discord_starter_message_id))
             except Exception:
                 logger.exception('Could not mirror source thread %s to forum %s', source_id, channel_id)
         return copies
@@ -272,7 +262,7 @@ class DiscordFanout:
     async def mirror_normalized_message_to_siblings(
         self, *, adapter: PlatformDeliveryPort, source: MessageCreated,
         community_actor_id: str, sibling_thread_deliveries: list[CommunityThreadGroupDelivery],
-        reply_context: object,
+        reply_context: object, canonical_message_group_id: int,
     ) -> list[MirrorMessageResult]:
         """Send verified replies with per-sibling parent references using the adapter."""
         if (source.connector_key != 'discord-primary'
@@ -309,25 +299,17 @@ class DiscordFanout:
                             if parent_id is not None else None)
                 if reply_to is not None:
                     discord_id_to_legacy_int(reply_to)
-                attempt = CreateAttempt(
-                    f'community-mirror-message:{source_id}:{thread_id}',
-                    'discord-primary', 'message', destination,
-                )
-                presentation = DeliveryPresentation()
-                receipt = await adapter.send_message(
-                    destination, body, reply_to=reply_to,
-                    presentation=presentation, attempt=attempt,
-                )
-                try:
-                    # A correct thread ID is insufficient if the transport
-                    # returned a different delivery mode or receipt operation.
-                    validate_created_receipt(attempt, receipt, presentation=presentation)
-                except (PlatformOperationError, ValueError, TypeError, AttributeError) as exc:
-                    # Avoid claiming delivery without a verified physical result.
-                    raise PlatformOperationError('unknown_delivery', 'community mirror message receipt mismatch') from exc
-                copies.append(MirrorMessageResult(
-                    channel_id, thread_id, discord_id_to_legacy_int(receipt.message), parent_id,
-                ))
+                delivered=await PlatformFanoutCoordinator.from_adapter(
+                    self.database,adapter).stage_and_deliver(
+                    domain='remote',kind='comment',canonical_id=canonical_message_group_id,
+                    forum=forum,operation='message',destination=destination,
+                    content=body,presentation=DeliveryPresentation(),reply_to=reply_to)
+                if delivered:
+                    delivery=next((row for row in self.database.discord_fanout_groups.get_message_deliveries(
+                        canonical_message_group_id) if row.discord_channel_id==channel_id),None)
+                    if delivery is None:raise ValueError('committed remote message receipt without copy')
+                    copies.append(MirrorMessageResult(channel_id,thread_id,
+                                                      delivery.discord_message_id,parent_id))
             except Exception:
                 logger.exception('Could not mirror source message %s to thread %s', source_id, thread_id)
         return copies
@@ -403,7 +385,7 @@ class DiscordFanout:
         *,
         source_message: object,
         sibling_thread_deliveries: list[CommunityThreadGroupDelivery],
-        reply_context: object,
+        reply_context: object, canonical_message_group_id: int,
     ) -> list[MirrorMessageResult]:
         """Deliver one mirror copy of source_message into each sibling thread.
 

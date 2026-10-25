@@ -5,6 +5,8 @@ remote document retrieval and Discord HTTP are replaced by deterministic fakes.
 """
 from __future__ import annotations
 
+from support.fake_platform_adapter import FakeDiscordPort
+
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from types import ModuleType
@@ -49,7 +51,7 @@ def document(*, ap_id=POST):
     }
 
 
-class DiscordCreates:
+class DiscordCreates(FakeDiscordPort):
     """Emulate confirmed per-forum Discord thread/starter pairs."""
 
     def __init__(self, *, bad_forum=None):
@@ -115,8 +117,9 @@ async def test_missing_parent_is_created_once_with_distinct_thread_starter_ids(t
                 (100, 1100, 2100), (200, 1200, 2200),
             }
     assert {call[3].key for call in discord.calls} == {
-        f'inbound-ap:post:{POST}:discord-primary:100',
-        f'inbound-ap:post:{POST}:discord-primary:200',
+        f'fanout:v1:remote:post:{group.id}:discord-primary:'
+        f'{db.platform_surfaces.resolve_claim("discord-primary", channel).id}'
+        for channel in ('100', '200')
     }
     assert (await restore(db, runtime, discord)).id == group.id
     assert len(discord.calls) == 2

@@ -5,6 +5,8 @@ Discord transport and the import-time SDK-dependent handler result type.
 """
 from __future__ import annotations
 
+from support.fake_platform_adapter import FakeDiscordPort
+
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from types import ModuleType
@@ -72,7 +74,7 @@ def world(tmp_path):
     return db, group, CommunityRuntime(database=db, content_publish_service=object())
 
 
-class DiscordMessages:
+class DiscordMessages(FakeDiscordPort):
     """Record each physical send and return the ID actually created there."""
 
     def __init__(self):
@@ -98,10 +100,10 @@ async def test_mapped_inbound_comment_uses_distinct_thread_receipts_and_replay(t
     assert mapped.thread_group_id == thread_group.id
     assert [call[0].external_thread_id for call in discord.calls] == ['1100','1200']
     assert all(call[2] is None for call in discord.calls)
-    assert {(call[4].key) for call in discord.calls} == {
-        f'inbound-ap:comment:{event.object.ap_id}:discord-primary:100:1100',
-        f'inbound-ap:comment:{event.object.ap_id}:discord-primary:200:1200',
-    }
+    keys={call[4].key for call in discord.calls}
+    assert len(keys)==2
+    assert all(key.startswith(f'fanout:v1:remote:comment:{mapped.id}:discord-primary:')
+               for key in keys)
     assert (await runtime.handle_normalized_inbound_comment(event, adapter=discord)).status == 'skipped'
     assert len(discord.calls) == 2
 
@@ -179,12 +181,16 @@ async def test_comment_receipt_from_wrong_thread_never_persists(tmp_path):
             self.calls.append((destination, content, reply_to, presentation, attempt))
             return CreatedMessage(MessageRef('discord-primary', '9000', '9999'), 'bot')
 
-    from src.platform_types import PlatformOperationError
-    with pytest.raises(PlatformOperationError, match='receipt thread mismatch'):
-        await runtime.handle_normalized_inbound_comment(comment(), adapter=WrongThread())
+    from src.models import PlatformDeliveryIntent
+    from sqlalchemy import select
+    result=await runtime.handle_normalized_inbound_comment(comment(), adapter=WrongThread())
     message = db.discord_fanout_groups.get_message_group_by_ap_object(comment().object.ap_id)
+    assert result.status=='processed'
     assert message is not None
     assert db.discord_fanout_groups.get_message_deliveries(message.id) == []
+    with db.session() as session:
+        attempts=list(session.scalars(select(PlatformDeliveryIntent)))
+        assert len(attempts)==2 and all(a.state=='unresolved' for a in attempts)
 
 
 @pytest.mark.asyncio

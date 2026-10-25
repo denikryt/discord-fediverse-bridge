@@ -2,6 +2,7 @@ from __future__ import annotations
 
 
 from sqlalchemy import select
+import json
 
 from ...models import (
     PlatformConnector,
@@ -26,6 +27,102 @@ class LocalCommunityContentRepository(BaseRepository):
         """Keep ordinary reads but serialize canonical receipt writes at SQLite admission."""
         super().__init__(session_provider)
         self._immediate_session_provider = immediate_session_provider
+
+    @staticmethod
+    def _verified_inbound_snapshot(snapshot: str, *, kind: str, object_id: str) -> str:
+        """Reject incomplete or conflicting canonical content before physical I/O."""
+        if not isinstance(snapshot, str) or len(snapshot.encode('utf-8')) > 131072:
+            raise ValueError('invalid bounded inbound content snapshot')
+        try:
+            data = json.loads(snapshot)
+        except (TypeError, ValueError) as exc:
+            raise ValueError('invalid inbound canonical JSON') from exc
+        if (not isinstance(data, dict) or data.get('schemaVersion') != 1
+            or data.get('kind') != kind or data.get('apObjectId') != object_id
+            or not isinstance(data.get('bodyMarkdown'), str)
+            or not isinstance(data.get('authorActorId'), str)
+            or not data.get('authorActorId')
+            or not isinstance(data.get('authorName'), str)
+            or not data.get('authorName')):
+            raise ValueError('inbound canonical snapshot does not match object')
+        return json.dumps(data, sort_keys=True, separators=(',', ':'), ensure_ascii=False,
+                          allow_nan=False)
+
+    def admit_inbound_post(self, *, local_community_id: int, ap_activity_id: str,
+                           ap_object_id: str, current_content_json: str) -> LocalCommunityThread:
+        """Commit an authenticated AP post *before* any Discord Create.
+
+        The existing canonical LocalCommunityThread is the sole durable AP
+        identity; a second handler may reuse it only with identical origin,
+        community, activity and normalized payload. No host receipt is invented.
+        """
+        snapshot = self._verified_inbound_snapshot(
+            current_content_json, kind='post', object_id=ap_object_id)
+        with self._immediate_session_provider() as session:
+            community = session.get(LocalCommunity, local_community_id)
+            if community is None or community.status != 'active':
+                raise ValueError('inactive or unknown local community')
+            row = session.scalar(select(LocalCommunityThread).where(
+                LocalCommunityThread.ap_object_id == ap_object_id))
+            owner = session.scalar(select(LocalCommunityThread).where(
+                LocalCommunityThread.ap_activity_id == ap_activity_id))
+            if row is not None or owner is not None:
+                if (row is None or owner is None or row.id != owner.id
+                    or row.local_community_id != local_community_id
+                    or row.direction != 'ap_to_discord'
+                    or row.origin_kind != 'remote_follower'
+                    or row.deleted_at is not None
+                    or row.current_content_json != snapshot):
+                    raise ValueError('conflicting inbound AP post admission')
+                return row
+            row = LocalCommunityThread(
+                local_community_id=local_community_id, ap_activity_id=ap_activity_id,
+                ap_object_id=ap_object_id, direction='ap_to_discord',
+                origin_kind='remote_follower', current_content_json=snapshot)
+            session.add(row)
+            session.flush()
+            return row
+
+    def admit_inbound_comment(self, *, local_community_thread_id: int,
+                              ap_activity_id: str, ap_object_id: str,
+                              parent_ap_object_id: str | None,
+                              current_content_json: str) -> LocalCommunityMessage:
+        """Commit one canonical inbound reply with same-thread AP parent proof."""
+        snapshot = self._verified_inbound_snapshot(
+            current_content_json, kind='comment', object_id=ap_object_id)
+        with self._immediate_session_provider() as session:
+            thread = session.get(LocalCommunityThread, local_community_thread_id)
+            if thread is None or thread.deleted_at is not None:
+                raise ValueError('missing or deleted canonical reply thread')
+            community = session.get(LocalCommunity, thread.local_community_id)
+            if community is None or community.status != 'active':
+                raise ValueError('inactive local community')
+            if parent_ap_object_id and parent_ap_object_id != thread.ap_object_id:
+                parent = session.scalar(select(LocalCommunityMessage).where(
+                    LocalCommunityMessage.ap_object_id == parent_ap_object_id,
+                    LocalCommunityMessage.local_community_thread_id == thread.id))
+                if parent is None or parent.deleted_at is not None:
+                    raise ValueError('nested AP parent is absent or foreign')
+            row = session.scalar(select(LocalCommunityMessage).where(
+                LocalCommunityMessage.ap_object_id == ap_object_id))
+            owner = session.scalar(select(LocalCommunityMessage).where(
+                LocalCommunityMessage.ap_activity_id == ap_activity_id))
+            if row is not None or owner is not None:
+                if (row is None or owner is None or row.id != owner.id
+                    or row.local_community_thread_id != thread.id
+                    or row.direction != 'ap_to_discord'
+                    or row.parent_ap_object_id != parent_ap_object_id
+                    or row.deleted_at is not None
+                    or row.current_content_json != snapshot):
+                    raise ValueError('conflicting inbound AP comment admission')
+                return row
+            row = LocalCommunityMessage(
+                local_community_thread_id=thread.id, ap_activity_id=ap_activity_id,
+                ap_object_id=ap_object_id, parent_ap_object_id=parent_ap_object_id,
+                direction='ap_to_discord', current_content_json=snapshot)
+            session.add(row)
+            session.flush()
+            return row
 
     def create_local_community_thread(
         self,

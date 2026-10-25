@@ -17,6 +17,7 @@ from ..content_sync.edit_delete import (
     mark_discord_message_deleted,
 )
 from ..content_sync.inbound_references import build_message_reference
+from ..content_sync.platform_fanout import PlatformFanoutCoordinator
 from ..formatting import apply_edit_to_discord_message
 from ..db import Database
 from ..discord_legacy_projection import discord_id_to_legacy_int
@@ -243,35 +244,16 @@ class LocalCommunityDiscordFanout:
                     'discord-primary', str(target.discord_forum_channel_id),
                     'forum', str(target.discord_guild_id),
                 )
-                attempt = CreateAttempt(
-                    f'local-community-thread:{thread_row.id}:{target.discord_forum_channel_id}',
-                    'discord-primary', 'forum_thread', forum,
-                )
-                presentation = DeliveryPresentation()
-                receipt = await adapter.create_forum_thread(
-                    forum, body, title=title,
-                    presentation=presentation, attempt=attempt,
-                )
-                try:
-                    # A persisted sibling surface must prove both its physical
-                    # target and the actual delivery mode requested by the caller.
-                    validate_created_receipt(attempt, receipt, presentation=presentation)
-                    if (receipt.thread.channel.kind != 'forum'
-                        or receipt.thread.channel.external_guild_id != forum.external_guild_id):
-                        raise PlatformOperationError('invalid_request', 'unverified sibling forum metadata')
-                except (PlatformOperationError, ValueError, TypeError, AttributeError) as exc:
-                    # The SDK write may have completed despite an unusable
-                    # receipt. Do not persist it as delivered or infer non-send.
-                    raise PlatformOperationError('unknown_delivery', 'local thread receipt mismatch') from exc
-                thread_id = discord_id_to_legacy_int(receipt.thread)
-                starter_id = discord_id_to_legacy_int(receipt.starter)
-                self.database.local_community_surfaces.create_local_community_thread_surface(
-                    local_community_thread_id=thread_row.id,
-                    discord_forum_channel_id=target.discord_forum_channel_id,
-                    discord_thread_id=thread_id,
-                    discord_starter_message_id=starter_id,
-                    role=target.role, local_subscriber_id=target.local_subscriber_id,
-                )
+                # The intent and frozen body must commit before the Discord POST;
+                # the coordinator atomically records verified thread+starter IDs.
+                delivered = await PlatformFanoutCoordinator.from_adapter(
+                    self.database,adapter).stage_and_deliver(
+                    domain='local',kind='post',canonical_id=thread_row.id,
+                    forum=forum,operation='forum_thread',destination=forum,
+                    content=body,presentation=DeliveryPresentation(),title=title)
+                if not delivered:
+                    summary.failed += 1
+                    continue
                 summary.delivered += 1
             except Exception:
                 summary.failed += 1
@@ -346,31 +328,16 @@ class LocalCommunityDiscordFanout:
                     MessageRef('discord-primary', destination.external_thread_id, str(parent_id))
                     if parent_id is not None else None
                 )
-                attempt = CreateAttempt(
-                    f'local-community-message:{message_row.id}:{surface.id}',
-                    'discord-primary', 'message', destination,
-                )
-                presentation = DeliveryPresentation()
-                receipt = await adapter.send_message(
-                    destination, body, reply_to=reply_to,
-                    presentation=presentation, attempt=attempt,
-                )
-                try:
-                    # The same transport contract protects sibling comments:
-                    # a valid thread ID does not attest bot/webhook semantics.
-                    validate_created_receipt(attempt, receipt, presentation=presentation)
-                except (PlatformOperationError, ValueError, TypeError, AttributeError) as exc:
-                    # The remote side may have committed a physical message.
-                    raise PlatformOperationError('unknown_delivery', 'local message receipt mismatch') from exc
-                message_id = discord_id_to_legacy_int(receipt.message)
-                self.database.local_community_surfaces.create_local_community_message_surface(
-                    local_community_message_id=message_row.id,
-                    local_community_thread_surface_id=surface.id,
-                    discord_forum_channel_id=target.discord_forum_channel_id,
-                    discord_message_id=message_id,
-                    parent_discord_message_id=parent_id,
-                    role=target.role, local_subscriber_id=target.local_subscriber_id,
-                )
+                # One physical reply copy is recorded in the same SQLite
+                # transaction as its verified delivery receipt.
+                delivered = await PlatformFanoutCoordinator.from_adapter(
+                    self.database,adapter).stage_and_deliver(
+                    domain='local',kind='comment',canonical_id=message_row.id,
+                    forum=forum,operation='message',destination=destination,
+                    content=body,presentation=DeliveryPresentation(),reply_to=reply_to)
+                if not delivered:
+                    summary.failed += 1
+                    continue
                 summary.delivered += 1
             except Exception:
                 summary.failed += 1

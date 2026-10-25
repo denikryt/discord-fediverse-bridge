@@ -248,6 +248,12 @@ def _build_live_runtime(settings: Settings, deployment_lease: FileLock) -> Runti
         personal_feed_discord_delivery_worker = PersonalFeedDiscordDeliveryWorker(
             database=database, adapter=discord_adapter, personal_feed_service=personal_feed_service
         )
+        # The adapter is usable only after Discord READY. Reuse the existing
+        # SDK-owned periodic worker to recover durable community Create claims;
+        # starting a separate scheduler would weaken close/quiesce ordering.
+        from .content_sync.platform_fanout import PlatformFanoutCoordinator
+        physical_coordinator = PlatformFanoutCoordinator(database, adapter_registry)
+        personal_feed_discord_delivery_worker.add_drain(physical_coordinator.recover_pending)
         personal_feed_conversation_runtime.bind_delivery_wake(
             personal_feed_discord_delivery_worker
         )

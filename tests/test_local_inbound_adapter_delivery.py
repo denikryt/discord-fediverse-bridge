@@ -11,10 +11,11 @@ import pytest
 from src.platform_types import ChannelRef, CreatedMessage, CreatedThread, MessageRef, ThreadRef
 from src.local_communities.runtime import LocalCommunityRuntime
 from test_local_receipt_persistence import world
+from support.fake_platform_adapter import FakeDiscordPort
 from test_inbound_duplicate_admission import _post, _accepted
 
 
-class Delivery:
+class Delivery(FakeDiscordPort):
     """Record genuine per-target physical writes and return independent confirmed IDs."""
 
     def __init__(self):
@@ -47,6 +48,27 @@ class Delivery:
         base = 700 if destination.external_thread_id == '400' else 800
         return CreatedMessage(MessageRef('discord-primary', destination.external_thread_id,
                               str(base + count)), 'bot')
+
+
+def assert_unresolved_without_host(db, object_id: str, *, kind: str) -> None:
+    """An unverified POST is durable uncertainty, never a valid host receipt."""
+    from sqlalchemy import select
+    from src.models import PlatformDeliveryIntent
+    canonical = (db.local_community_content.get_local_community_thread_by_ap_object_id(object_id)
+                 if kind == 'post' else
+                 db.local_community_content.get_local_community_message_by_ap_object_id(object_id))
+    assert canonical is not None and canonical.current_content_json is not None
+    with db.session() as session:
+        rows = list(session.scalars(select(PlatformDeliveryIntent).where(
+            PlatformDeliveryIntent.domain == 'local',
+            PlatformDeliveryIntent.object_kind == kind,
+            PlatformDeliveryIntent.canonical_row_id == canonical.id,
+        )))
+        assert len(rows) == 1 and rows[0].state == 'unresolved'
+    if kind == 'post':
+        assert db.local_community_surfaces.get_host_local_community_thread_surface(canonical.id) is None
+    else:
+        assert db.local_community_surfaces.get_host_local_community_message_surface(canonical.id) is None
 
 
 @pytest.fixture(autouse=True)
@@ -140,9 +162,9 @@ async def test_untrusted_host_receipt_never_persists_or_relays(tmp_path):
     db, runtime, adapter, relays = setup(tmp_path)
     try:
         adapter.bad_receipt = True
-        with pytest.raises(Exception):
-            await runtime.handle_inbound_post(_post(), SimpleNamespace())
-        assert db.local_community_content.get_local_community_thread_by_ap_object_id('https://remote.test/post') is None
+        result = await runtime.handle_inbound_post(_post(), SimpleNamespace())
+        assert result.status == 'processed'
+        assert_unresolved_without_host(db, 'https://remote.test/post', kind='post')
         assert relays == []
     finally:
         db.close()
@@ -182,14 +204,19 @@ async def test_two_subscriber_surfaces_isolate_failed_target_and_resume_only_mis
         adapter.blocked_forum = None
         second = await runtime.handle_inbound_post(_post(), SimpleNamespace())
         assert second.status == 'skipped'
-        # Only the previously failed subscriber is attempted again.
+        # An exception after a committed dispatch does not prove Discord did
+        # not create the thread: no automatic retry is safe on AP replay.
         assert [forum for operation, forum, _ in adapter.writes if operation == 'post'].count('300') == 1
         assert [forum for operation, forum, _ in adapter.writes if operation == 'post'].count('200') == 1
-        assert [forum for operation, forum, _ in adapter.writes if operation == 'post'].count('201') == 2
-        row = db.local_community_content.get_local_community_thread_by_ap_object_id('https://remote.test/post')
-        assert db.local_community_surfaces.get_local_community_thread_surface(
-            local_community_thread_id=row.id, discord_forum_channel_id=201,
-        ).discord_thread_id == 600
+        assert [forum for operation, forum, _ in adapter.writes if operation == 'post'].count('201') == 1
+        from sqlalchemy import select
+        from src.models import PlatformDeliveryIntent
+        with db.session() as session:
+            missing = session.scalar(select(PlatformDeliveryIntent).where(
+                PlatformDeliveryIntent.domain == 'local',
+                PlatformDeliveryIntent.state == 'unresolved',
+            ))
+            assert missing is not None and missing.channel_surface_id is not None
     finally:
         db.close()
 
@@ -288,9 +315,20 @@ async def test_host_rebinding_during_create_rejects_old_receipt(tmp_path):
                     ChannelSurface.external_channel_id == '300'))
                 surface.external_channel_id = '301'
         adapter.after_post = rebind
-        with pytest.raises(Exception):
-            await runtime.handle_inbound_post(_post(), SimpleNamespace())
-        assert db.local_community_content.get_local_community_thread_by_ap_object_id('https://remote.test/post') is None
+        result = await runtime.handle_inbound_post(_post(), SimpleNamespace())
+        assert result.status == 'processed'
+        row = db.local_community_content.get_local_community_thread_by_ap_object_id('https://remote.test/post')
+        assert row is not None
+        assert db.local_community_surfaces.get_host_local_community_thread_surface(row.id) is None
+        from sqlalchemy import select
+        from src.models import PlatformDeliveryIntent
+        with db.session() as session:
+            intent = session.scalar(select(PlatformDeliveryIntent).where(
+                PlatformDeliveryIntent.canonical_row_id == row.id,
+                PlatformDeliveryIntent.object_kind == 'post',
+                PlatformDeliveryIntent.domain == 'local'))
+            assert intent is not None and intent.state == 'cancelled_after_send'
+            assert '400' in intent.orphan_receipt_json and '401' in intent.orphan_receipt_json
         assert relays == []
     finally:
         db.close()
@@ -414,9 +452,8 @@ async def test_receipt_delivery_mode_must_match_requested_bot_presentation(tmp_p
             return CreatedThread(receipt.thread, receipt.starter, 'webhook')
         adapter.create_forum_thread = forged_post
         from src.platform_types import PlatformOperationError
-        with pytest.raises(PlatformOperationError):
-            await runtime.handle_inbound_post(_post(), SimpleNamespace())
-        assert db.local_community_content.get_local_community_thread_by_ap_object_id('https://remote.test/post') is None
+        assert (await runtime.handle_inbound_post(_post(), SimpleNamespace())).status == 'processed'
+        assert_unresolved_without_host(db, 'https://remote.test/post', kind='post')
         assert relays == []
     finally:
         db.close()
@@ -436,9 +473,8 @@ async def test_comment_receipt_delivery_mode_must_match_requested_bot_presentati
             return CreatedMessage(receipt.message, 'webhook')
         adapter.send_message = forged_send
         from src.platform_types import PlatformOperationError
-        with pytest.raises(PlatformOperationError):
-            await runtime.handle_inbound_comment(comment(), SimpleNamespace())
-        assert db.local_community_content.get_local_community_message_by_ap_object_id('https://remote.test/comment') is None
+        assert (await runtime.handle_inbound_comment(comment(), SimpleNamespace())).status == 'processed'
+        assert_unresolved_without_host(db, 'https://remote.test/comment', kind='comment')
         assert relays == ['post']
     finally:
         db.close()
@@ -502,9 +538,124 @@ async def test_unknown_forum_metadata_never_becomes_a_host_receipt(tmp_path):
                                  receipt.starter, 'bot')
         adapter.create_forum_thread = unverified_post
         from src.platform_types import PlatformOperationError
-        with pytest.raises(PlatformOperationError):
-            await runtime.handle_inbound_post(_post(), SimpleNamespace())
-        assert db.local_community_content.get_local_community_thread_by_ap_object_id('https://remote.test/post') is None
+        assert (await runtime.handle_inbound_post(_post(), SimpleNamespace())).status == 'processed'
+        assert_unresolved_without_host(db, 'https://remote.test/post', kind='post')
         assert relays == []
+    finally:
+        db.close()
+
+@pytest.mark.asyncio
+async def test_known_nested_parent_blocks_until_same_thread_receipt_is_verified(tmp_path):
+    """A known AP comment cannot flatten or send before its exact host parent."""
+    from sqlalchemy import select
+    from src.models import PlatformDeliveryIntent
+    from src.content_sync.platform_fanout import PlatformFanoutCoordinator
+    from src.platform_types import ContentDocument, DeliveryPresentation, CreateAttempt
+    from src.local_communities.rendering import format_inbound_comment_body
+
+    db, runtime, adapter, relays = setup(tmp_path)
+    try:
+        await runtime.handle_inbound_post(_post(), SimpleNamespace())
+        thread = db.local_community_content.get_local_community_thread_by_ap_object_id(
+            'https://remote.test/post')
+        parent_event = comment(parent='https://remote.test/post',
+                               obj='https://remote.test/comment/parent')
+        parent_event.delivery_id = 'https://remote.test/create/comment/parent'
+        parent_event.source_activity_id = parent_event.delivery_id
+        parent_event.source_activity_json = {
+            'id': parent_event.delivery_id, 'actor': parent_event.actor_id,
+            'type': 'Create', 'object': {'id': parent_event.object.ap_id},
+        }
+        # This real canonical row exists, but no Discord message has been
+        # confirmed; the reply must retain its exact dependency in SQLite.
+        parent = db.local_community_content.admit_inbound_comment(
+            local_community_thread_id=thread.id,
+            ap_activity_id=parent_event.delivery_id,
+            ap_object_id=parent_event.object.ap_id,
+            parent_ap_object_id=thread.ap_object_id,
+            current_content_json=runtime.inbound_create_handler._inbound_snapshot(
+                parent_event, kind='comment'),
+        )
+        child_event = comment(parent=parent.ap_object_id,
+                              obj='https://remote.test/comment/child')
+        child_event.delivery_id = 'https://remote.test/create/comment/child'
+        child_event.source_activity_id = child_event.delivery_id
+        child_event.source_activity_json = {
+            'id': child_event.delivery_id, 'actor': child_event.actor_id,
+            'type': 'Create', 'object': {'id': child_event.object.ap_id},
+        }
+        baseline = len(adapter.writes)
+        outcome = await runtime.handle_inbound_comment(child_event, SimpleNamespace())
+        assert outcome.status == 'processed' and 'blocked' in outcome.detail
+        child = db.local_community_content.get_local_community_message_by_ap_object_id(
+            child_event.object.ap_id)
+        with db.session() as session:
+            intent = session.scalar(select(PlatformDeliveryIntent).where(
+                PlatformDeliveryIntent.domain == 'local',
+                PlatformDeliveryIntent.object_kind == 'comment',
+                PlatformDeliveryIntent.canonical_row_id == child.id))
+            assert intent is not None and intent.state == 'blocked'
+            assert intent.blocked_parent_canonical_id == parent.id
+            assert intent.request_json is None and intent.dispatch_token is None
+            blocked_id, intent_key = intent.id, intent.attempt_key
+        assert len(adapter.writes) == baseline
+        forum = ChannelRef('discord-primary', '300', 'forum', '10')
+        destination = ThreadRef(forum, '400')
+        coordinator = PlatformFanoutCoordinator.from_adapter(db, adapter)
+        # A forged parent ID cannot materialize or dispatch the blocked child.
+        attempt = CreateAttempt(intent_key, 'discord-primary', 'message', destination)
+        with pytest.raises(ValueError):
+            db.platform_delivery_intents.materialize(
+                blocked_id, attempt=attempt,
+                content=ContentDocument(format_inbound_comment_body(child_event)),
+                presentation=DeliveryPresentation(),
+                reply_to=MessageRef('discord-primary', '400', '999999'),
+                title=None)
+        assert await coordinator.stage_and_deliver(
+            domain='local', kind='comment', canonical_id=parent.id,
+            forum=forum, destination=destination, operation='message',
+            content=ContentDocument(format_inbound_comment_body(parent_event)),
+            presentation=DeliveryPresentation(),
+            reply_to=MessageRef('discord-primary', '400', '401'),
+        )
+        # A verified parent receipt wakes exactly the persisted dependent
+        # intent. The child is materialized from canonical SQLite content and
+        # sent with its *actual* parent message reference, not a flat reply.
+        with db.session() as session:
+            final_intent = session.get(PlatformDeliveryIntent, blocked_id)
+            assert final_intent.state == 'delivered'
+            assert final_intent.blocked_parent_canonical_id is None
+            assert final_intent.request_json is not None
+        host = db.local_community_surfaces.get_host_local_community_message_surface(child.id)
+        assert host is not None and host.discord_message_id == 701
+        assert adapter.writes[-1] == ('comment', '400', '700')
+        assert not await coordinator.deliver(blocked_id)
+    finally:
+        db.close()
+
+@pytest.mark.asyncio
+async def test_canonical_tombstones_block_replayed_local_ap_create(tmp_path):
+    """A once-valid signed AP Create replay cannot revive a deleted post/comment."""
+    from datetime import datetime, timezone
+    from src.models import LocalCommunityThread, LocalCommunityMessage
+    db, runtime, adapter, relays = setup(tmp_path)
+    try:
+        post = _post()
+        await runtime.handle_inbound_post(post, SimpleNamespace())
+        reply = comment()
+        await runtime.handle_inbound_comment(reply, SimpleNamespace())
+        prior = tuple(adapter.writes)
+        source_post = db.local_community_content.get_local_community_thread_by_ap_object_id(post.object.ap_id)
+        source_comment = db.local_community_content.get_local_community_message_by_ap_object_id(reply.object.ap_id)
+        with db.immediate_session() as session:
+            session.get(LocalCommunityMessage, source_comment.id).deleted_at = datetime.now(timezone.utc)
+        comment_replay = await runtime.handle_inbound_comment(reply, SimpleNamespace())
+        assert comment_replay.status == 'skipped'
+        with db.immediate_session() as session:
+            session.get(LocalCommunityThread, source_post.id).deleted_at = datetime.now(timezone.utc)
+        post_replay = await runtime.handle_inbound_post(post, SimpleNamespace())
+        assert post_replay.status == 'skipped'
+        assert tuple(adapter.writes) == prior
+        assert relays == ['post', 'comment']
     finally:
         db.close()

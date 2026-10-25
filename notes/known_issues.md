@@ -309,3 +309,13 @@ Fedify-native security integration remains blocked by missing dependencies.
   already matching generic identity/physical receipt while persisting its
   distinct local-community surface. Full Python regression requires the
   project's `discord.py`/`hypothesis` environment before a merge decision.
+
+- **Stage 04 Checkpoint 59 work in progress (2026-10-23):** SQLite-backed
+  immutable physical Create intents, one-claim coordinator and atomic
+  thread/starter/message receipts are implemented for normalized Local/Remote
+  copy fanout. Blocked nested parents, complete runtime recovery/wake and
+  original inbound AP physical creation remain to be migrated before treating
+  this checkpoint as production-complete. No full dependency-backed suite or
+  live Discord transport verification was available during this step.
+
+- Stage 04 Checkpoint 59 WIP: physical Create pending/recovery and incoming Remote Community canonical snapshots have focused SQLite coverage, but legacy inbound Local/Remote AP→Discord direct sends and full production runtime cutover remain unverified; never claim completed durable community fan-out before converting those paths.

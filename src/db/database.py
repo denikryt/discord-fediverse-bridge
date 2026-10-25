@@ -12,6 +12,7 @@ from ..management_actions import ManagementActions
 from ..management_audit_recorder import ManagementAuditRecorder
 from . import migrations, schema
 from .repositories.platform_surfaces import PlatformSurfaceRepository
+from .repositories.platform_delivery_intents import PlatformDeliveryIntentRepository
 from .repositories.local_community_authored_announces import LocalCommunityAuthoredAnnounceRepository
 from .repositories import (
     ActivityPubObjectRepository,
@@ -67,6 +68,7 @@ class Database:
             self.engine, expire_on_commit=False, class_=Session
         )
         self.platform_surfaces = PlatformSurfaceRepository(self.session)
+        self.platform_delivery_intents = PlatformDeliveryIntentRepository(self.session, self.immediate_session)
         self.bridge_actor_keys = BridgeActorKeyRepository(self.session)
         self.local_communities = LocalCommunityRepository(
             self.session, self.immediate_session

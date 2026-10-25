@@ -34,6 +34,22 @@ class ExactPublicationSourceScenarios(unittest.TestCase):
         self.addCleanup(self.db.close)
         _seed(self.db)
         self.db.migrate()
+        # Both source comments must have their own verified physical root.
+        # Non-numeric Discord thread IDs are invalid; a fake second connector
+        # would belong to the connector-neutral identity tests instead.
+        for thread, starter in ((501,601),(502,602)):
+            group=self.db.discord_fanout_groups.create_thread_group(
+                community_actor_id='https://remote.test/c/news',
+                source_channel_id=None,source_thread_id=None,
+                source_starter_message_id=None,
+                ap_activity_id=f'https://remote.test/a/parent/{thread}',
+                ap_object_id=f'https://remote.test/o/parent/{thread}',
+            )
+            self.db.discord_fanout_groups.add_thread_delivery(
+                thread_group_id=group.id,discord_channel_id=902,
+                discord_thread_id=thread,discord_starter_message_id=starter,
+                role='inbound',
+            )
 
     @staticmethod
     def payload(thread: str, index: int) -> dict:
@@ -47,35 +63,35 @@ class ExactPublicationSourceScenarios(unittest.TestCase):
             activity_id=activity_id,object_id=object_id,
             activity_json={'id':activity_id,'type':'Create','actor':'https://bridge.test/actors/users/alice'},
             kind='comment',title=None,body_markdown='hello',
-            in_reply_to_object_id=None,discord_channel_id=902,discord_message_id=777,
+            in_reply_to_object_id=f'https://remote.test/o/parent/{thread}',discord_channel_id=902,discord_message_id=777,
         )
 
     def test_sibling_threads_reuse_same_numeric_message_without_publication_collision(self) -> None:
         """Two posts with same source message ID but different containers coexist."""
-        result_a = persist_publish_artifacts(self.db, **self.payload('thread-a',1))
+        result_a = persist_publish_artifacts(self.db, **self.payload('501',1))
         self.assertTrue(result_a.created)
-        result_b = persist_publish_artifacts(self.db, **self.payload('thread-b',2))
+        result_b = persist_publish_artifacts(self.db, **self.payload('502',2))
         self.assertTrue(result_b.created)
         self.assertNotEqual(result_a.source_id,result_b.source_id)
-        self.assertFalse(persist_publish_artifacts(self.db,**self.payload('thread-a',1)).created)
+        self.assertFalse(persist_publish_artifacts(self.db,**self.payload('501',1)).created)
         self.assertFalse(inspect_publish_artifacts(self.db,**{
-            k:v for k,v in self.payload('thread-b',2).items()
-            if k in {'source_id','source_message','actor_url','community_actor_url','activity_id','object_id','discord_channel_id','discord_message_id'}
+            k:v for k,v in self.payload('502',2).items()
+            if k in {'source_id','source_message','actor_url','community_actor_url','activity_id','object_id','in_reply_to_object_id','discord_channel_id','discord_message_id'}
         },publication_context='community',discord_guild_id=None,kind='comment').created)
         with self.assertRaises(PublicationConflictError):
-            persist_publish_artifacts(self.db,**(self.payload('thread-b',2)|{'source_message': MessageRef('discord-primary','thread-a','777')}))
+            persist_publish_artifacts(self.db,**(self.payload('502',2)|{'source_message': MessageRef('discord-primary','501','777')}))
         with self.db.engine.connect() as conn:
             rows=conn.exec_driver_sql("SELECT source_external_container_id FROM message_mappings WHERE source_id='777' ORDER BY source_external_container_id").scalars().all()
-            self.assertEqual(rows,['thread-a','thread-b'])
+            self.assertEqual(rows,['501','502'])
 
     def test_unscoped_legacy_lookup_refuses_multi_container_ambiguity(self) -> None:
         """An old numeric-only lookup can never pick a random sibling thread."""
-        persist_publish_artifacts(self.db, **self.payload('thread-a',1))
-        persist_publish_artifacts(self.db, **self.payload('thread-b',2))
+        persist_publish_artifacts(self.db, **self.payload('501',1))
+        persist_publish_artifacts(self.db, **self.payload('502',2))
         with self.assertRaises(PublicationConflictError):
             inspect_publish_artifacts(self.db,**{
-                k:v for k,v in self.payload('thread-a',1).items()
-                if k in {'source_id','actor_url','community_actor_url','activity_id','object_id','discord_channel_id','discord_message_id'}
+                k:v for k,v in self.payload('501',1).items()
+                if k in {'source_id','actor_url','community_actor_url','activity_id','object_id','in_reply_to_object_id','discord_channel_id','discord_message_id'}
             },publication_context='community',discord_guild_id=None,kind='comment')
 
 

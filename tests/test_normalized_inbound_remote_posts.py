@@ -5,6 +5,8 @@ receipt persistence and replay decisions run through the actual runtime.
 """
 from __future__ import annotations
 
+from support.fake_platform_adapter import FakeDiscordPort
+
 from datetime import datetime, timezone
 from dataclasses import dataclass
 from types import ModuleType
@@ -22,7 +24,7 @@ from tests_constants import LEMMY_EXAMPLE_DOMAIN
 COMMUNITY = f'https://{LEMMY_EXAMPLE_DOMAIN}/c/hackers'
 
 
-class RecordingDiscord:
+class RecordingDiscord(FakeDiscordPort):
     """Return per-forum physical receipts while exposing attempted operations."""
 
     def __init__(self, *, fail_forum=None):
@@ -87,10 +89,11 @@ async def test_inbound_post_uses_one_canonical_group_and_distinct_physical_recei
     deliveries = db.discord_fanout_groups.get_thread_deliveries(group.id)
     assert {(d.discord_channel_id, d.discord_thread_id, d.discord_starter_message_id)
             for d in deliveries} == {(100, 1100, 2100), (200, 1200, 2200)}
-    assert {call[4].key for call in transport.calls} == {
-        f'inbound-ap:post:{event.object.ap_id}:discord-primary:100',
-        f'inbound-ap:post:{event.object.ap_id}:discord-primary:200',
-    }
+    # The durable target key is tied to the canonical row and exact surface,
+    # never to the event delivery ID or a transient process nonce.
+    keys={call[4].key for call in transport.calls}
+    assert len(keys)==2
+    assert all(key.startswith(f'fanout:v1:remote:post:{group.id}:discord-primary:') for key in keys)
     assert transport.calls[0][1].body.startswith('**Hello world**')
     assert transport.calls[0][2] == 'Hello world'
     assert (await runtime.handle_normalized_inbound_post(event, adapter=transport)).status == 'skipped'
@@ -140,12 +143,16 @@ async def test_inbound_post_refuses_wrong_target_receipt_before_mapping(tmp_path
             thread = ThreadRef(other, '1500')
             return CreatedThread(thread, MessageRef('discord-primary', '1500', '2500'), 'bot')
 
-    from src.platform_types import PlatformOperationError
-    with pytest.raises(PlatformOperationError, match='receipt does not match forum'):
-        await runtime.handle_normalized_inbound_post(post(), adapter=WrongReceipt())
+    from src.models import PlatformDeliveryIntent
+    from sqlalchemy import select
+    result=await runtime.handle_normalized_inbound_post(post(), adapter=WrongReceipt())
     group = db.discord_fanout_groups.get_thread_group_by_ap_object(post().object.ap_id)
+    assert result.status == 'processed'
     assert group is not None
     assert db.discord_fanout_groups.get_thread_deliveries(group.id) == []
+    with db.session() as session:
+        intents=list(session.scalars(select(PlatformDeliveryIntent)))
+        assert len(intents)==1 and intents[0].state=='unresolved'
 
 
 @pytest.mark.asyncio

@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import json
+
 from .platform_surfaces import PlatformSurfaceRepository, discord_copy_query
 
 from sqlalchemy import select
@@ -20,6 +22,29 @@ from ...platform_types import MessageRef
 class DiscordFanoutGroupRepository(BaseRepository):
     """Persist the discord fanout groups domain."""
 
+    @staticmethod
+    def _validate_content_snapshot(
+        snapshot: str | None, *, kind: str, ap_object_id: str | None
+    ) -> str | None:
+        """Accept only a bounded canonical snapshot for the same AP object.
+
+        Historical rows may have no reconstructible content, but a newly
+        admitted inbound object cannot replace one snapshot with another.
+        """
+        if snapshot is None:
+            return None
+        if not isinstance(snapshot, str) or len(snapshot.encode('utf-8')) > 131072:
+            raise ValueError('unbounded inbound AP content snapshot')
+        try:
+            data = json.loads(snapshot)
+        except (TypeError, ValueError) as exc:
+            raise ValueError('invalid inbound AP content JSON') from exc
+        if (not isinstance(data, dict) or data.get('schemaVersion') != 1
+            or data.get('kind') != kind or data.get('apObjectId') != ap_object_id
+            or not isinstance(data.get('bodyMarkdown'), str)):
+            raise ValueError('inbound AP snapshot differs from canonical object')
+        return json.dumps(data, ensure_ascii=False, sort_keys=True, separators=(',', ':'))
+
     def create_thread_group(
         self,
         *,
@@ -29,12 +54,16 @@ class DiscordFanoutGroupRepository(BaseRepository):
         source_starter_message_id: int | None,
         ap_activity_id: str | None = None,
         ap_object_id: str | None = None,
+        current_content_json: str | None = None,
     ) -> CommunityThreadGroup:
         """Create the canonical thread-group record for one source thread event.
 
         source_* fields are None for inbound AP events, which create Discord threads
         in all subscribed channels simultaneously without a single source channel.
         """
+        snapshot = self._validate_content_snapshot(
+            current_content_json, kind='post', ap_object_id=ap_object_id
+        )
         with self.session() as session:
             # The authored AP Create transaction may already have admitted
             # the exact canonical group. Reuse only its immutable source and
@@ -49,6 +78,8 @@ class DiscordFanoutGroupRepository(BaseRepository):
                     != (community_actor_id,ap_activity_id,source_channel_id,
                         source_thread_id,source_starter_message_id)):
                     raise ValueError('canonical authored thread group identity conflict')
+                if snapshot is not None and existing.current_content_json != snapshot:
+                    raise ValueError('replayed AP post content snapshot conflict')
                 return existing
             group = CommunityThreadGroup(
                 **(
@@ -67,6 +98,7 @@ class DiscordFanoutGroupRepository(BaseRepository):
                 source_starter_message_id=source_starter_message_id,
                 ap_activity_id=ap_activity_id,
                 ap_object_id=ap_object_id,
+                current_content_json=snapshot,
             )
             session.add(group)
             session.flush()
@@ -199,12 +231,16 @@ class DiscordFanoutGroupRepository(BaseRepository):
         ap_activity_id: str | None = None,
         ap_object_id: str | None = None,
         parent_message_group_id: int | None = None,
+        current_content_json: str | None = None,
     ) -> CommunityMessageGroup:
         """Create the canonical message-group record for one source message event.
 
         source_* fields are None for inbound AP events, which deliver into all
         subscribed threads simultaneously without a single source message.
         """
+        snapshot = self._validate_content_snapshot(
+            current_content_json, kind='comment', ap_object_id=ap_object_id
+        )
         with self.session() as session:
             if ap_object_id is not None and ap_activity_id is not None:
                 existing = session.scalar(select(CommunityMessageGroup).where(
@@ -220,6 +256,8 @@ class DiscordFanoutGroupRepository(BaseRepository):
                         parent_message_group_id,
                     ):
                         raise ValueError('community comment canonical identity conflict')
+                    if snapshot is not None and existing.current_content_json != snapshot:
+                        raise ValueError('replayed AP comment content snapshot conflict')
                     return existing
             group = CommunityMessageGroup(
                 **(
@@ -243,6 +281,7 @@ class DiscordFanoutGroupRepository(BaseRepository):
                 ap_activity_id=ap_activity_id,
                 ap_object_id=ap_object_id,
                 parent_message_group_id=parent_message_group_id,
+                current_content_json=snapshot,
             )
             session.add(group)
             session.flush()

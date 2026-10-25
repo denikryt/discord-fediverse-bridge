@@ -286,15 +286,12 @@ async def handle_post_created(
             outcome=InboundActivityOutcome.IGNORED_NO_SUBSCRIPTION,
             detail="no subscriptions for this community",
         )
-    # Production has one registered Discord transport. The old SDK delivery
-    # entry point remains for isolated legacy tests until the local subscriber synchronization graph
-    # audit removes the remaining SDK-dependent callers.
     adapter = getattr(runtime, 'discord_adapter', None)
-    if adapter is not None:
-        return await runtime.community_runtime.handle_normalized_inbound_post(
-            event, adapter=adapter,
-        )
-    return await runtime.community_runtime.handle_inbound_post(event, runtime)
+    if adapter is None:
+        raise RuntimeError('ActivityPub post dispatch requires a bound platform adapter')
+    return await runtime.community_runtime.handle_normalized_inbound_post(
+        event, adapter=adapter,
+    )
 
 
 async def handle_comment_created(
@@ -332,14 +329,12 @@ async def handle_comment_created(
             outcome=InboundActivityOutcome.IGNORED_NO_SUBSCRIPTION,
             detail="no subscriptions for this community",
         )
-    # Production comment delivery uses one typed path, including missing-post
-    # backfill. The SDK-only entry point remains for isolated legacy callers.
     adapter = getattr(runtime, 'discord_adapter', None)
-    if adapter is not None:
-        return await runtime.community_runtime.handle_normalized_inbound_comment_with_backfill(
-            event, adapter=adapter,
-        )
-    return await runtime.community_runtime.handle_inbound_comment(event, runtime)
+    if adapter is None:
+        raise RuntimeError('ActivityPub comment dispatch requires a bound platform adapter')
+    return await runtime.community_runtime.handle_normalized_inbound_comment_with_backfill(
+        event, adapter=adapter,
+    )
 
 
 async def handle_follow_accepted(
