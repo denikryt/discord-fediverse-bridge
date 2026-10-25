@@ -32,7 +32,7 @@ class ExactSourceMappingScenarios(unittest.TestCase):
                 source_message=source,
                 activity_id=f'https://bridge.test/a/{i}',
                 object_id=f'https://bridge.test/o/{i}',
-                actor_url='https://bridge.test/actors/user/alice',
+                actor_url='https://bridge.test/actors/users/alice',
                 community_actor_url='https://remote.test/c/news',
                 discord_channel_id=None, discord_message_id=777,
             )
@@ -50,7 +50,7 @@ class ExactSourceMappingScenarios(unittest.TestCase):
                 source_platform='discord',source_id='not-777',
                 source_message=MessageRef('discord-primary','thread-A','777'),
                 activity_id='https://bridge.test/a/3',object_id='https://bridge.test/o/3',
-                actor_url='https://bridge.test/actors/user/alice',
+                actor_url='https://bridge.test/actors/users/alice',
                 community_actor_url='https://remote.test/c/news',
                 discord_channel_id=None, discord_message_id=777,
             )
@@ -67,18 +67,18 @@ class ExactSourceMappingScenarios(unittest.TestCase):
         first = self.db.message_mappings.create_message_mapping(
             source_platform='discord', source_id='same-id',
             source_message=MessageRef('discord-primary','thread-x','same-id'),
-            activity_id='https://bridge.test/activities/discord',
+            activity_id='https://bridge.test/actors/users/alice/activities/discord',
             object_id='https://bridge.test/objects/discord',
-            actor_url='https://bridge.test/actors/user/a',
+            actor_url='https://bridge.test/actors/users/a',
             community_actor_url='https://remote.test/c/g',
             discord_channel_id=None,discord_message_id=None,
         )
         second = self.db.message_mappings.create_message_mapping(
             source_platform='fluxer', source_id='same-id',
             source_message=MessageRef('fake-fluxer','thread-x','same-id'),
-            activity_id='https://bridge.test/activities/fluxer',
+            activity_id='https://bridge.test/actors/users/alice/activities/fluxer',
             object_id='https://bridge.test/objects/fluxer',
-            actor_url='https://bridge.test/actors/user/a',
+            actor_url='https://bridge.test/actors/users/a',
             community_actor_url='https://remote.test/c/g',
             discord_channel_id=None,discord_message_id=None,
         )
@@ -91,9 +91,9 @@ class ExactSourceMappingScenarios(unittest.TestCase):
             self.db.message_mappings.create_message_mapping(
                 source_platform='discord', source_id='same-id',
                 source_message=MessageRef('fake-fluxer','thread-x','same-id'),
-                activity_id='https://bridge.test/activities/other',
+                activity_id='https://bridge.test/actors/users/alice/activities/other',
                 object_id='https://bridge.test/objects/other',
-                actor_url='https://bridge.test/actors/user/a',
+                actor_url='https://bridge.test/actors/users/a',
                 community_actor_url='https://remote.test/c/g',
                 discord_channel_id=None,discord_message_id=None,
             )
@@ -103,7 +103,7 @@ class ExactSourceMappingScenarios(unittest.TestCase):
         source=MessageRef('discord-primary','thread-A','777')
         data=dict(source_platform='discord',source_id='777',source_message=source,
                   activity_id='https://bridge.test/a/1',object_id='https://bridge.test/o/1',
-                  actor_url='https://bridge.test/actors/user/alice',
+                  actor_url='https://bridge.test/actors/users/alice',
                   community_actor_url='https://remote.test/c/news',
                   discord_channel_id=None,discord_message_id=777)
         before=self.db.message_mappings.create_message_mapping(**data)
@@ -118,7 +118,7 @@ class ExactSourceMappingScenarios(unittest.TestCase):
                 session.add(PublishedActivityObject(
                     source_connector_id=1,source_external_container_id=container,
                     source_external_message_id='777',
-                    actor_username='alice',actor_url='https://bridge.test/actors/user/alice',
+                    actor_username='alice',actor_url='https://bridge.test/actors/users/alice',
                     publication_context='community',community_actor_url='https://remote.test/c/news',
                     activity_id=f'https://bridge.test/a/{i}',object_id=f'https://bridge.test/o/{i}',
                     kind='comment',body_markdown='body',discord_message_id=777,
@@ -134,7 +134,7 @@ class ExactSourceMappingScenarios(unittest.TestCase):
                 session.add(PublishedActivityObject(
                     source_connector_id=1,source_external_container_id='thread-A',
                     source_external_message_id='777',
-                    actor_username='alice',actor_url='https://bridge.test/actors/user/alice',
+                    actor_username='alice',actor_url='https://bridge.test/actors/users/alice',
                     publication_context='community',community_actor_url='https://remote.test/c/news',
                     activity_id='https://bridge.test/a/3',object_id='https://bridge.test/o/3',
                     kind='comment',body_markdown='body',discord_message_id=777,

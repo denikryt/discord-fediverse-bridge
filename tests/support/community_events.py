@@ -65,9 +65,32 @@ class ScenarioDiscord(FakeDiscordPort):
             await self.notice(content.body)
             return CreatedMessage(MessageRef('discord-primary', destination.external_thread_id, '999999'), 'bot')
         thread = await self.runtime.bot.get_thread_by_id(int(destination.external_thread_id))
-        reference = SimpleNamespace(message_id=int(reply_to.external_message_id)) if reply_to else None
+        from discord import MessageReference
+        reference = (MessageReference(message_id=int(reply_to.external_message_id),
+            channel_id=int(reply_to.external_container_id), fail_if_not_exists=False) if reply_to else None)
         result = await thread.send(content.body, reference=reference)
         return CreatedMessage(MessageRef('discord-primary', destination.external_thread_id, str(result.id)), 'bot')
+
+
+    async def fetch_message(self, ref):
+        """Resolve the exact fixture message and positively identify its bot copy."""
+        thread = await self.runtime.bot.get_thread_by_id(int(ref.external_container_id))
+        physical = await thread.fetch_message(int(ref.external_message_id))
+        body = getattr(physical, 'content', '')
+        return MessageView(ref, AuthorRef(ref.connector_key, 'bridge-bot', 'bot', 'Bridge', True),
+                           ContentDocument(body if isinstance(body, str) else ''))
+
+    async def edit_message(self, ref, content):
+        """Expose one typed physical edit at the scenario's SDK fake boundary."""
+        thread = await self.runtime.bot.get_thread_by_id(int(ref.external_container_id))
+        physical = await thread.fetch_message(int(ref.external_message_id))
+        await physical.edit(content=content.body)
+
+    async def delete_message(self, ref):
+        """Delete only the requested physical message in source-mutation scenarios."""
+        thread = await self.runtime.bot.get_thread_by_id(int(ref.external_container_id))
+        physical = await thread.fetch_message(int(ref.external_message_id))
+        await physical.delete()
 
 
 def source_author(author):

@@ -43,7 +43,7 @@ class AuthoredAnnounceScenarios(unittest.TestCase):
             published = PublishedActivityObject(
                 actor_username='alice',actor_url='https://bridge.test/actors/users/alice',
                 publication_context='community',community_actor_url=self.actor,
-                activity_id='https://bridge.test/activities/create/1',
+                activity_id='https://bridge.test/actors/users/alice/activities/create/1',
                 object_id='https://bridge.test/objects/1',
                 kind='post',title='Title',body_markdown='Hello',
                 conversation_root_object_id='https://bridge.test/objects/1',
@@ -57,7 +57,7 @@ class AuthoredAnnounceScenarios(unittest.TestCase):
                 remote_inbox_url='https://remote.test/actor/abc/inbox',
                 follow_activity_id='https://remote.test/follows/F1',status='accepted',
             ))
-        self.inner={'id':'https://bridge.test/activities/create/1','type':'Create','object':{'id':'https://bridge.test/objects/1'}}
+        self.inner={'id':'https://bridge.test/actors/users/alice/activities/create/1','type':'Create','object':{'id':'https://bridge.test/objects/1'}}
 
     def test_atomic_admission_and_frozen_follow_identity(self) -> None:
         """A committed Create reserves one immutable Group Announce for F1."""
@@ -351,7 +351,7 @@ class AuthoredMutationCausalScenarios(AuthoredAnnounceScenarios):
                 session, published=published,
                 community=session.get(LocalCommunity, self.community_id),
                 activity_kind=kind, content_revision=revision,
-                activity_json={'id': f'https://bridge.test/activities/{kind}/{revision}',
+                activity_json={'id': f'https://bridge.test/actors/users/alice/activities/{kind}/{revision}',
                                'type': kind.capitalize(), 'actor': published.actor_url,
                                'object': published.object_id},
             )

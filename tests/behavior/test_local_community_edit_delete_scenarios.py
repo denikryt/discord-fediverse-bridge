@@ -7,6 +7,9 @@ contracts for outbound Discord edits/deletes and inbound AP updates/deletes.
 """
 
 from __future__ import annotations
+from support.scenario_graph import attach, retain_original_author
+from support.community_events import OBSERVED_AT
+from datetime import timedelta
 from support.runtime import build_test_policy_service
 
 from pathlib import Path
@@ -68,6 +71,7 @@ def _local_post_event(*, event_type: str) -> ActivityPubEvent:
         {
             "event_type": event_type,
             "delivery_id": f"https://lemmy.example/activities/{event_type}/post/1",
+            "source_activity_id": f"https://lemmy.example/activities/{event_type}/post/1",
             "occurred_at": "2026-05-19T10:00:00Z",
             "community_actor_id": "https://bridge.example/actors/communities/hackers",
             "actor_id": "https://lemmy.example/u/bob",
@@ -82,6 +86,7 @@ def _local_post_event(*, event_type: str) -> ActivityPubEvent:
                 "body_markdown": "updated remote post body",
                 "url": "https://lemmy.example/post/1",
                 "published_at": "2026-05-19T10:00:00Z",
+                "updated_at": "2026-05-19T10:00:00Z",
                 "author_name": "bob",
             },
         }
@@ -94,6 +99,7 @@ def _local_comment_event(*, event_type: str) -> ActivityPubEvent:
         {
             "event_type": event_type,
             "delivery_id": f"https://lemmy.example/activities/{event_type}/comment/1",
+            "source_activity_id": f"https://lemmy.example/activities/{event_type}/comment/1",
             "occurred_at": "2026-05-19T10:05:00Z",
             "community_actor_id": "https://bridge.example/actors/communities/hackers",
             "actor_id": "https://lemmy.example/u/bob",
@@ -108,6 +114,7 @@ def _local_comment_event(*, event_type: str) -> ActivityPubEvent:
                 "body_markdown": "updated remote comment body",
                 "url": "https://lemmy.example/comment/1",
                 "published_at": "2026-05-19T10:05:00Z",
+                "updated_at": "2026-05-19T10:05:00Z",
                 "author_name": "bob",
             },
         }
@@ -121,7 +128,7 @@ async def test_local_community_thread_starter_edit_updates_ap_post(
     """Editing a Discord-backed local-community post should send one AP Update."""
     database, local_runtime = _runtime(tmp_path)
     local_community = _local_community(database)
-    add_registered_user(database)
+    add_registered_user(database, origin='https://bridge.example')
     database.message_mappings.create_message_mapping(
         source_platform="discord",
         source_id="300",
@@ -159,8 +166,8 @@ async def test_local_community_thread_starter_edit_updates_ap_post(
         message_id=300,
         new_content="edited starter body",
         author_display_name="Alice",
-        runtime=build_runtime_namespace(fedify_gateway=local_runtime.fedify_gateway),
-    )
+        runtime=attach(build_runtime_namespace(fedify_gateway=local_runtime.fedify_gateway), local_runtime),
+    edited_timestamp=OBSERVED_AT + timedelta(seconds=1),)
 
     local_runtime.fedify_gateway.update_content.assert_awaited_once()
     request = local_runtime.fedify_gateway.update_content.await_args.args[0]
@@ -174,7 +181,7 @@ async def test_local_community_comment_delete_sends_ap_delete(tmp_path: Path) ->
     """Deleting a Discord-backed local-community comment should send one AP Delete."""
     database, local_runtime = _runtime(tmp_path)
     local_community = _local_community(database)
-    add_registered_user(database)
+    add_registered_user(database, origin='https://bridge.example')
     thread_row = database.local_community_content.create_local_community_thread(
         local_community_id=local_community.id,
         discord_thread_id=200,
@@ -219,7 +226,7 @@ async def test_local_community_comment_delete_sends_ap_delete(tmp_path: Path) ->
 
     await local_runtime.handle_discord_message_delete(
         message_id=301,
-        runtime=build_runtime_namespace(fedify_gateway=local_runtime.fedify_gateway),
+        runtime=attach(build_runtime_namespace(fedify_gateway=local_runtime.fedify_gateway), local_runtime),
     )
 
     local_runtime.fedify_gateway.delete_content.assert_awaited_once()
@@ -260,6 +267,8 @@ async def test_inbound_local_community_post_update_edits_discord_starter(
         ),
     )
 
+    retain_original_author(database, domain='local', kind='post',
+        object_id='https://lemmy.example/post/1', actor_id='https://lemmy.example/u/bob', author_name='bob')
     result = await dispatch_activitypub_event(
         _local_post_event(event_type="post.updated"), runtime
     )
@@ -302,6 +311,8 @@ async def test_inbound_local_community_post_delete_marks_discord_starter_deleted
         ),
     )
 
+    retain_original_author(database, domain='local', kind='post',
+        object_id='https://lemmy.example/post/1', actor_id='https://lemmy.example/u/bob', author_name='bob')
     result = await dispatch_activitypub_event(
         _local_post_event(event_type="post.deleted"), runtime
     )
@@ -351,6 +362,8 @@ async def test_inbound_local_community_comment_update_edits_discord_message(
         ),
     )
 
+    retain_original_author(database, domain='local', kind='comment',
+        object_id='https://lemmy.example/comment/1', actor_id='https://lemmy.example/u/bob', author_name='bob')
     result = await dispatch_activitypub_event(
         _local_comment_event(event_type="comment.updated"),
         runtime,
@@ -403,6 +416,8 @@ async def test_inbound_local_community_comment_delete_marks_discord_message_dele
         ),
     )
 
+    retain_original_author(database, domain='local', kind='comment',
+        object_id='https://lemmy.example/comment/1', actor_id='https://lemmy.example/u/bob', author_name='bob')
     result = await dispatch_activitypub_event(
         _local_comment_event(event_type="comment.deleted"),
         runtime,

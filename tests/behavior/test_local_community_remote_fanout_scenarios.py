@@ -16,6 +16,7 @@ from src.fedify_gateway_client import (
 )
 from src.content_publish_service import ContentPublishService
 from src.local_communities.runtime import LocalCommunityRuntime
+from support.community_events import ScenarioDiscord
 from src.local_communities.service import LocalCommunityService
 from support.db import build_database
 from support.discord import (
@@ -45,6 +46,7 @@ def _runtime(tmp_path: Path) -> tuple[object, LocalCommunityRuntime]:
         bridge_prefix="[bridge]",
         bridge_policy_service=build_test_policy_service(database),
     )
+    runtime.bind_discord_adapter(ScenarioDiscord(runtime))
     return database, runtime
 
 
@@ -385,7 +387,7 @@ async def test_mastodon_shaped_comment_relay_to_lemmy_gets_threadiverse_payload(
         remote_inbox_url="https://lemmy.example/u/admin/inbox",
         follow_activity_id="https://lemmy.example/follows/admin",
     )
-    database.local_community_content.create_local_community_thread(
+    parent_thread = database.local_community_content.create_local_community_thread(
         local_community_id=local_community.id,
         discord_thread_id=200,
         discord_starter_message_id=300,
@@ -394,6 +396,13 @@ async def test_mastodon_shaped_comment_relay_to_lemmy_gets_threadiverse_payload(
         direction="ap_to_discord",
         origin_kind="remote_follower",
     )
+    # This is a nested reply: retain its exact canonical parent and host receipt.
+    parent_id = _mastodon_comment_event().object.parent_ap_id
+    database.local_community_content.create_local_community_message(
+        local_community_thread_id=parent_thread.id, discord_message_id=333,
+        ap_activity_id=parent_id + '/create', ap_object_id=parent_id,
+        parent_ap_object_id=parent_thread.ap_object_id,
+        parent_discord_message_id=300, direction='ap_to_discord')
     discord_thread = build_send_thread(thread_id=200, sent_message_id=301)
     runtime.bot = build_bot(threads={200: discord_thread})
 
@@ -419,7 +428,8 @@ async def test_mastodon_shaped_comment_relay_to_lemmy_gets_threadiverse_payload(
         _mastodon_comment_event(), SimpleNamespace()
     )
 
-    assert result.status == "processed"
+    assert result.status == "processed", result.detail
+    assert discord_thread.send.await_args.kwargs["reference"].message_id == 333
     request = runtime.fedify_gateway.send_local_community_relay.await_args.kwargs
     assert request["signing_actor_url"] == local_community.actor_url
     assert len(request["deliveries"]) == 1
@@ -547,7 +557,7 @@ async def test_lemmy_shaped_comment_relay_preserves_source_activity(
         remote_inbox_url="https://mastodon.example/ap/actors/users/alice/inbox",
         follow_activity_id="https://mastodon.example/follows/alice",
     )
-    database.local_community_content.create_local_community_thread(
+    parent_thread = database.local_community_content.create_local_community_thread(
         local_community_id=local_community.id,
         discord_thread_id=200,
         discord_starter_message_id=300,
@@ -556,6 +566,13 @@ async def test_lemmy_shaped_comment_relay_preserves_source_activity(
         direction="ap_to_discord",
         origin_kind="remote_follower",
     )
+    # This is a nested reply: retain its exact canonical parent and host receipt.
+    parent_id = _lemmy_comment_event().object.parent_ap_id
+    database.local_community_content.create_local_community_message(
+        local_community_thread_id=parent_thread.id, discord_message_id=333,
+        ap_activity_id=parent_id + '/create', ap_object_id=parent_id,
+        parent_ap_object_id=parent_thread.ap_object_id,
+        parent_discord_message_id=300, direction='ap_to_discord')
     discord_thread = build_send_thread(thread_id=200, sent_message_id=302)
     runtime.bot = build_bot(threads={200: discord_thread})
 
@@ -581,7 +598,8 @@ async def test_lemmy_shaped_comment_relay_preserves_source_activity(
         _lemmy_comment_event(), SimpleNamespace()
     )
 
-    assert result.status == "processed"
+    assert result.status == "processed", result.detail
+    assert discord_thread.send.await_args.kwargs["reference"].message_id == 333
     delivery = runtime.fedify_gateway.send_local_community_relay.await_args.kwargs[
         "deliveries"
     ][0]
@@ -663,6 +681,8 @@ def _post_update_event() -> ActivityPubEvent:
             "id": "https://lemmy.example/post/1",
             "attributedTo": "https://lemmy.example/u/bob",
             "name": "Remote topic edited",
+            "published": "2026-05-19T10:00:00Z",
+            "updated": "2026-05-19T10:10:00Z",
             "content": "<p>edited</p>",
         },
     }
@@ -686,7 +706,8 @@ def _post_update_event() -> ActivityPubEvent:
                 "title": "Remote topic edited",
                 "body_markdown": "edited",
                 "url": "https://lemmy.example/post/1",
-                "published_at": "2026-05-19T10:10:00Z",
+                "published_at": "2026-05-19T10:00:00Z",
+                "updated_at": "2026-05-19T10:10:00Z",
                 "author_name": "bob",
             },
         }

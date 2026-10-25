@@ -7,6 +7,9 @@ creating new canonical rows or relying on source-message-only ownership.
 """
 
 from __future__ import annotations
+from support.scenario_graph import attach, retain_original_author
+from support.community_events import OBSERVED_AT
+from datetime import timedelta
 from support.runtime import build_test_policy_service
 
 from pathlib import Path
@@ -107,7 +110,7 @@ def scenario(tmp_path: Path) -> SimpleNamespace:
         initiated_by_discord_user_id="999",
         status="active",
     )
-    add_registered_user(database)
+    add_registered_user(database, origin='https://bridge.example')
     return SimpleNamespace(
         database=database,
         runtime=runtime,
@@ -119,14 +122,14 @@ def scenario(tmp_path: Path) -> SimpleNamespace:
     )
 
 
-def _thread_with_surfaces(scenario: SimpleNamespace) -> object:
+def _thread_with_surfaces(scenario: SimpleNamespace, *, remote_origin=False) -> object:
     """Create one canonical post with host/source/sibling Discord surfaces."""
     thread_row = scenario.database.local_community_content.create_local_community_thread_canonical(
         local_community_id=scenario.community.id,
         ap_activity_id="https://bridge.example/actors/users/alice/activities/create/posts/1",
-        ap_object_id="https://bridge.example/post/1",
-        direction="discord_to_ap",
-        origin_kind="discord_local_subscriber",
+        ap_object_id="https://remote.example/post/1" if remote_origin else "https://bridge.example/post/1",
+        direction="ap_to_discord" if remote_origin else "discord_to_ap",
+        origin_kind="remote_follower" if remote_origin else "discord_local_subscriber",
     )
     scenario.database.local_community_surfaces.create_local_community_thread_surface(
         local_community_thread_id=thread_row.id,
@@ -152,23 +155,27 @@ def _thread_with_surfaces(scenario: SimpleNamespace) -> object:
         role="local_subscriber",
         local_subscriber_id=scenario.sibling.id,
     )
-    scenario.database.activitypub_objects.create_published_activity_object(
-        actor_username="alice",
-        actor_url="https://bridge.example/actors/users/alice",
-        community_actor_url=scenario.community.actor_url,
-        activity_id="https://bridge.example/actors/users/alice/activities/create/posts/1",
-        object_id="https://bridge.example/post/1",
-        kind="post",
-        title="Thread title",
-        body_markdown="old body",
-        in_reply_to_object_id=None,
-        discord_channel_id=200,
-        discord_message_id=2300,
-    )
+    if not remote_origin:
+        scenario.database.activitypub_objects.create_published_activity_object(
+            actor_username="alice",
+            actor_url="https://bridge.example/actors/users/alice",
+            community_actor_url=scenario.community.actor_url,
+            activity_id="https://bridge.example/actors/users/alice/activities/create/posts/1",
+            object_id="https://bridge.example/post/1",
+            kind="post",
+            title="Thread title",
+            body_markdown="old body",
+            in_reply_to_object_id=None,
+            discord_channel_id=200,
+            discord_message_id=2300,
+        )
+    if remote_origin:
+        retain_original_author(scenario.database, domain='local', kind='post',
+            object_id=thread_row.ap_object_id, actor_id='https://remote.example/u/bob', author_name='bob')
     return thread_row
 
 
-def _comment_with_surfaces(scenario: SimpleNamespace, thread_row: object) -> object:
+def _comment_with_surfaces(scenario: SimpleNamespace, thread_row: object, *, remote_origin=False) -> object:
     """Create one canonical comment with host/source/sibling Discord surfaces."""
     host_thread = (
         scenario.database.local_community_surfaces.get_local_community_thread_surface(
@@ -191,9 +198,9 @@ def _comment_with_surfaces(scenario: SimpleNamespace, thread_row: object) -> obj
     message_row = scenario.database.local_community_content.create_local_community_message_canonical(
         local_community_thread_id=thread_row.id,
         ap_activity_id="https://bridge.example/actors/users/alice/activities/create/comments/1",
-        ap_object_id="https://bridge.example/comment/1",
-        parent_ap_object_id="https://bridge.example/post/1",
-        direction="discord_to_ap",
+        ap_object_id="https://remote.example/comment/1" if remote_origin else "https://bridge.example/comment/1",
+        parent_ap_object_id=thread_row.ap_object_id,
+        direction="ap_to_discord" if remote_origin else "discord_to_ap",
     )
     scenario.database.local_community_surfaces.create_local_community_message_surface(
         local_community_message_id=message_row.id,
@@ -222,19 +229,23 @@ def _comment_with_surfaces(scenario: SimpleNamespace, thread_row: object) -> obj
         role="local_subscriber",
         local_subscriber_id=scenario.sibling.id,
     )
-    scenario.database.activitypub_objects.create_published_activity_object(
-        actor_username="alice",
-        actor_url="https://bridge.example/actors/users/alice",
-        community_actor_url=scenario.community.actor_url,
-        activity_id="https://bridge.example/actors/users/alice/activities/create/comments/1",
-        object_id="https://bridge.example/comment/1",
-        kind="comment",
-        title=None,
-        body_markdown="old comment",
-        in_reply_to_object_id="https://bridge.example/post/1",
-        discord_channel_id=200,
-        discord_message_id=2400,
-    )
+    if not remote_origin:
+        scenario.database.activitypub_objects.create_published_activity_object(
+            actor_username="alice",
+            actor_url="https://bridge.example/actors/users/alice",
+            community_actor_url=scenario.community.actor_url,
+            activity_id="https://bridge.example/actors/users/alice/activities/create/comments/1",
+            object_id="https://bridge.example/comment/1",
+            kind="comment",
+            title=None,
+            body_markdown="old comment",
+            in_reply_to_object_id="https://bridge.example/post/1",
+            discord_channel_id=200,
+            discord_message_id=2400,
+        )
+    if remote_origin:
+        retain_original_author(scenario.database, domain='local', kind='comment',
+            object_id=message_row.ap_object_id, actor_id='https://remote.example/u/bob', author_name='bob')
     return message_row
 
 
@@ -277,11 +288,12 @@ def _remote_post_event(event_type: str) -> ActivityPubEvent:
         {
             "event_type": event_type,
             "delivery_id": f"https://remote.example/activities/{event_type}/post/1",
+            "source_activity_id": f"https://remote.example/activities/{event_type}/post/1",
             "occurred_at": "2026-05-19T10:00:00Z",
             "community_actor_id": "https://bridge.example/actors/communities/hackers",
             "actor_id": "https://remote.example/u/bob",
             "object": {
-                "ap_id": "https://bridge.example/post/1",
+                "ap_id": "https://remote.example/post/1",
                 "kind": "post",
                 "lemmy_id": 1,
                 "post_ap_id": None,
@@ -291,6 +303,7 @@ def _remote_post_event(event_type: str) -> ActivityPubEvent:
                 "body_markdown": "remote body",
                 "url": "https://remote.example/post/1",
                 "published_at": "2026-05-19T10:00:00Z",
+                "updated_at": "2026-05-19T10:00:00Z",
                 "author_name": "bob",
             },
         }
@@ -303,20 +316,22 @@ def _remote_comment_event(event_type: str) -> ActivityPubEvent:
         {
             "event_type": event_type,
             "delivery_id": f"https://remote.example/activities/{event_type}/comment/1",
+            "source_activity_id": f"https://remote.example/activities/{event_type}/comment/1",
             "occurred_at": "2026-05-19T10:05:00Z",
             "community_actor_id": "https://bridge.example/actors/communities/hackers",
             "actor_id": "https://remote.example/u/bob",
             "object": {
-                "ap_id": "https://bridge.example/comment/1",
+                "ap_id": "https://remote.example/comment/1",
                 "kind": "comment",
                 "lemmy_id": 2,
-                "post_ap_id": "https://bridge.example/post/1",
+                "post_ap_id": "https://remote.example/post/1",
                 "post_lemmy_id": 1,
-                "parent_ap_id": "https://bridge.example/post/1",
+                "parent_ap_id": "https://remote.example/post/1",
                 "title": None,
                 "body_markdown": "remote comment",
                 "url": "https://remote.example/comment/1",
                 "published_at": "2026-05-19T10:05:00Z",
+                "updated_at": "2026-05-19T10:05:00Z",
                 "author_name": "bob",
             },
         }
@@ -333,6 +348,7 @@ async def test_host_starter_edit_updates_subscriber_starter_surfaces(
     scenario.runtime.bot = bot
 
     await scenario.runtime.handle_discord_message_edit(
+        edited_timestamp=OBSERVED_AT + timedelta(minutes=1),
         message_id=1200,
         new_content="host edit",
         runtime=_runtime_namespace(scenario, bot),
@@ -358,6 +374,7 @@ async def test_local_subscriber_starter_edit_updates_host_and_sibling_surfaces(
     scenario.runtime.bot = bot
 
     await scenario.runtime.handle_discord_message_edit(
+        edited_timestamp=OBSERVED_AT + timedelta(minutes=1),
         message_id=2300,
         new_content="subscriber edit",
         runtime=_runtime_namespace(scenario, bot),
@@ -384,6 +401,7 @@ async def test_host_and_local_subscriber_comment_edits_update_other_surfaces(
     scenario.runtime.bot = bot
 
     await scenario.runtime.handle_discord_message_edit(
+        edited_timestamp=OBSERVED_AT + timedelta(minutes=1),
         message_id=1300,
         new_content="host comment edit",
         runtime=_runtime_namespace(scenario, bot),
@@ -396,6 +414,7 @@ async def test_host_and_local_subscriber_comment_edits_update_other_surfaces(
     for message in messages.values():
         message.edit.reset_mock()
     await scenario.runtime.handle_discord_message_edit(
+        edited_timestamp=OBSERVED_AT + timedelta(minutes=2),
         message_id=2400,
         new_content="subscriber comment edit",
         runtime=_runtime_namespace(scenario, bot),
@@ -453,8 +472,8 @@ async def test_inbound_remote_updates_edit_all_local_surfaces(
     scenario: SimpleNamespace,
 ) -> None:
     """Remote post/comment updates should edit host and local subscriber copies."""
-    thread_row = _thread_with_surfaces(scenario)
-    _comment_with_surfaces(scenario, thread_row)
+    thread_row = _thread_with_surfaces(scenario, remote_origin=True)
+    _comment_with_surfaces(scenario, thread_row, remote_origin=True)
     bot, messages = _bot_for_surfaces()
     scenario.runtime.bot = bot
     runtime = _runtime_namespace(scenario, bot)
@@ -483,17 +502,33 @@ async def test_inbound_remote_deletes_mark_all_local_surfaces(
     scenario: SimpleNamespace,
 ) -> None:
     """Remote deletes should mark every persisted local Discord surface."""
-    thread_row = _thread_with_surfaces(scenario)
-    _comment_with_surfaces(scenario, thread_row)
+    thread_row = _thread_with_surfaces(scenario, remote_origin=True)
+    _comment_with_surfaces(scenario, thread_row, remote_origin=True)
     bot, messages = _bot_for_surfaces()
     scenario.runtime.bot = bot
     runtime = _runtime_namespace(scenario, bot)
 
-    await dispatch_activitypub_event(_remote_post_event("post.deleted"), runtime)
-    await dispatch_activitypub_event(_remote_comment_event("comment.deleted"), runtime)
+    post_result = await dispatch_activitypub_event(_remote_post_event("post.deleted"), runtime)
+    comment_result = await dispatch_activitypub_event(_remote_comment_event("comment.deleted"), runtime)
+    assert post_result.status == comment_result.status == "processed"
 
     for message_id in (1200, 2300, 3400, 1300, 2400, 3500):
-        messages[message_id].edit.assert_any_await(content="*deleted by creator*")
+        messages[message_id].edit.assert_awaited_once_with(content="*deleted by creator*")
+    # The durable ACK survives a new coordinator instance; tombstones do not
+    # repeat writes merely because recovery starts after the parent deletion.
+    from sqlalchemy import select
+    from src.models import LocalCommunityMessage, LocalCommunityMessageSurface
+    with scenario.database.session() as session:
+        child = session.scalar(select(LocalCommunityMessage).where(
+            LocalCommunityMessage.ap_object_id == "https://remote.example/comment/1"))
+        copies = session.scalars(select(LocalCommunityMessageSurface).where(
+            LocalCommunityMessageSurface.local_community_message_id == child.id)).all()
+        assert child.deleted_at is not None and len(copies) == 3
+        assert all(copy.applied_revision == child.content_revision for copy in copies)
+    restarted = _runtime_namespace(scenario, bot)
+    assert await restarted.physical_mutation_coordinator.drain() == 0
+    for message in messages.values():
+        assert message.edit.await_count == 1
 
 
 @pytest.mark.asyncio
@@ -506,6 +541,7 @@ async def test_partial_local_discord_failure_does_not_block_healthy_targets(
     scenario.runtime.bot = bot
 
     await scenario.runtime.handle_discord_message_edit(
+        edited_timestamp=OBSERVED_AT + timedelta(minutes=1),
         message_id=2300,
         new_content="subscriber edit with one broken target",
         runtime=_runtime_namespace(scenario, bot),
@@ -529,6 +565,7 @@ async def test_inactive_local_subscriber_source_mutation_is_contained(
     scenario.database.local_subscribers.delete_local_subscriber(200)
 
     await scenario.runtime.handle_discord_message_edit(
+        edited_timestamp=OBSERVED_AT + timedelta(minutes=1),
         message_id=2300,
         new_content="should not propagate",
         runtime=_runtime_namespace(scenario, bot),
@@ -542,3 +579,28 @@ async def test_inactive_local_subscriber_source_mutation_is_contained(
     scenario.gateway.delete_content.assert_not_awaited()
     for message in messages.values():
         message.edit.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_pending_live_comment_update_stays_fenced_after_parent_delete(
+    scenario: SimpleNamespace,
+) -> None:
+    """Deleting a parent permits child tombstones but never delayed live edits."""
+    thread = _thread_with_surfaces(scenario, remote_origin=True)
+    _comment_with_surfaces(scenario, thread, remote_origin=True)
+    bot, messages = _bot_for_surfaces()
+    scenario.runtime.bot = bot
+    runtime = _runtime_namespace(scenario, bot)
+    coordinator = runtime.physical_mutation_coordinator
+    # Pause physical dispatch while both authenticated canonical events commit,
+    # as happens when recovery starts after a period without an adapter.
+    runtime.physical_mutation_coordinator = None
+    update = await dispatch_activitypub_event(_remote_comment_event("comment.updated"), runtime)
+    deletion = await dispatch_activitypub_event(_remote_post_event("post.deleted"), runtime)
+    assert update.status == deletion.status == "processed"
+    assert await coordinator.drain() == 3
+    for message_id in (1200, 2300, 3400):
+        messages[message_id].edit.assert_awaited_once_with(content="*deleted by creator*")
+    for message_id in (1300, 2400, 3500):
+        messages[message_id].edit.assert_not_awaited()
+    assert await coordinator.drain() == 0

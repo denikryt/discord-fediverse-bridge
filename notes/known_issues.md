@@ -473,3 +473,12 @@ Fedify-native security integration remains blocked by missing dependencies.
   attempts, retries only stored JSON and clears diagnostics after success.
 - Four real-SQLite behavioral cases cover missing ownership rows, SQL flush
   failure, claim fencing and commit-CAS refusal. No schema change is required.
+
+- Fixed: matching Local Group Undo previously removed its subscriber but returned
+  skipped; stale Follow incarnation fencing remains transactional.
+- Fixed: a deleted Local parent blocked recovery of an authenticated child
+  tombstone. Existing bot copies now settle that Delete once; pending live
+  child content remains blocked by the parent tombstone.
+- Integration fixtures now exercise real Stage 04 coordinators and DB-backed
+  recipients with explicit original authors/timestamps. This does not grant
+  unknown legacy authorship or relax production mutation validation.

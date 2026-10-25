@@ -61,10 +61,11 @@ def add_registered_user(
     *,
     discord_user_id: str = "123",
     username: str = "alice",
+    origin: str | None = None,
 ) -> None:
     """Insert one registered local user actor used by outbound publish scenarios."""
     address = build_actor_address(
-        origin=f"https://{BRIDGE_HOST_DOMAIN}",
+        origin=origin or f"https://{BRIDGE_HOST_DOMAIN}",
         kind=LocalActorKind.USER,
         identifier=username,
     )

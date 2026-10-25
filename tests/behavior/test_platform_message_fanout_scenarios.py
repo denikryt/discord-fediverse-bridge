@@ -84,10 +84,10 @@ class _ThreeForumFixture(unittest.TestCase):
         with self.database.immediate_session() as session:
             community = LocalCommunity(
                 slug='multi', display_name='Multi',
-                actor_url='https://bridge.test/communities/multi',
-                inbox_url='https://bridge.test/communities/multi/inbox',
-                outbox_url='https://bridge.test/communities/multi/outbox',
-                followers_url='https://bridge.test/communities/multi/followers',
+                actor_url='https://bridge.test/actors/communities/multi',
+                inbox_url='https://bridge.test/actors/communities/multi/inbox',
+                outbox_url='https://bridge.test/actors/communities/multi/outbox',
+                followers_url='https://bridge.test/actors/communities/multi/followers',
                 public_key_pem='test-public', private_key_pem='test-private',
                 status='active',
             )
@@ -125,7 +125,7 @@ class _ThreeForumFixture(unittest.TestCase):
                 self.targets[label] = (owner_kind, owner_id, surface.id)
             source = LocalCommunityThread(
                 local_community_id=community.id,
-                ap_activity_id='https://bridge.test/activities/source',
+                ap_activity_id='https://bridge.test/actors/users/alice/activities/source',
                 ap_object_id='https://bridge.test/objects/source',
                 direction='outbound', origin_kind='discord',
             )

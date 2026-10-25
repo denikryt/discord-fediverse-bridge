@@ -1,6 +1,9 @@
 """Behavior scenarios for Discord-originated outbound federation decisions."""
 
 from __future__ import annotations
+from src.platform_types import MessageRef
+from support.community_events import configure_renderer, source_ids, OBSERVED_AT
+
 from support.runtime import build_test_policy_service
 
 from pathlib import Path
@@ -56,6 +59,7 @@ def _registered_user(database: Database) -> None:
 
 def _service(database: Database, fedify_gateway: AsyncMock) -> ContentPublishService:
     """Build the real publish service with only the gateway boundary mocked."""
+    configure_renderer(fedify_gateway, database)
     return ContentPublishService(
         database=database,
         fedify_gateway=fedify_gateway,
@@ -73,6 +77,7 @@ def _starter_message(*, author_id: int = 123) -> SimpleNamespace:
     """Return one fake starter message with the fields the service reads."""
     return SimpleNamespace(
         id=300,
+        created_at=OBSERVED_AT,
         content="hello from discord",
         author=SimpleNamespace(id=author_id, display_name="Alice", name="alice"),
         reply=AsyncMock(),
@@ -94,6 +99,7 @@ def _thread_message(
     )
     return SimpleNamespace(
         id=message_id,
+        created_at=OBSERVED_AT,
         content="hello comment",
         author=SimpleNamespace(id=author_id, display_name="Alice", name="alice"),
         channel=thread,
@@ -112,8 +118,8 @@ async def test_registered_user_with_accepted_subscription_publishes_thread_start
     _registered_user(database)
     fedify_gateway = AsyncMock()
     fedify_gateway.publish_content.return_value = PublishContentResult(
-        activity_id=f"https://{BRIDGE_HOST_DOMAIN}/actors/users/alice/activities/create/posts/1",
-        object_id=f"https://{BRIDGE_HOST_DOMAIN}/actors/users/alice/objects/posts/1",
+        activity_id=source_ids(database, kind='post', message=300)[1],
+        object_id=source_ids(database, kind='post', message=300)[2],
         community_actor_url=f"https://{LEMMY_EXAMPLE_DOMAIN}/c/hackers",
     )
     service = _service(database, fedify_gateway)
@@ -122,17 +128,17 @@ async def test_registered_user_with_accepted_subscription_publishes_thread_start
         thread=_thread(),
         starter_message=_starter_message(),
     )
-    mapping = database.message_mappings.get_message_mapping_by_discord_message_id(300)
+    mapping = database.message_mappings.get_by_source_ref(MessageRef('discord-primary', '200', str(300)))
     stored_object = (
         database.activitypub_objects.get_published_activity_object_by_object_id(
-            f"https://{BRIDGE_HOST_DOMAIN}/actors/users/alice/objects/posts/1"
+            source_ids(database, kind='post', message=300)[2]
         )
     )
 
     assert result.status == "published"
     assert mapping is not None
     assert (
-        mapping.object_id == f"https://{BRIDGE_HOST_DOMAIN}/actors/users/alice/objects/posts/1"
+        mapping.object_id == source_ids(database, kind='post', message=300)[2]
     )
     assert stored_object is not None
     assert stored_object.kind == "post"
@@ -152,13 +158,13 @@ async def test_registered_user_with_accepted_subscription_publishes_thread_reply
     database = _database(tmp_path)
     _accepted_subscription(database)
     _registered_user(database)
-    post_object_url = f"https://{BRIDGE_HOST_DOMAIN}/actors/users/alice/objects/posts/1"
+    post_object_url = source_ids(database, kind='post', message=300)[2]
     thread_group = database.discord_fanout_groups.create_thread_group(
         community_actor_id=f"https://{LEMMY_EXAMPLE_DOMAIN}/c/hackers",
         source_channel_id=100,
         source_thread_id=200,
         source_starter_message_id=300,
-        ap_activity_id=f"https://{BRIDGE_HOST_DOMAIN}/actors/users/alice/activities/create/posts/1",
+        ap_activity_id=source_ids(database, kind='post', message=300)[1],
         ap_object_id=post_object_url,
     )
     database.discord_fanout_groups.add_thread_delivery(
@@ -170,8 +176,8 @@ async def test_registered_user_with_accepted_subscription_publishes_thread_reply
     )
     fedify_gateway = AsyncMock()
     fedify_gateway.publish_content.return_value = PublishContentResult(
-        activity_id=f"https://{BRIDGE_HOST_DOMAIN}/actors/users/alice/activities/create/comments/1",
-        object_id=f"https://{BRIDGE_HOST_DOMAIN}/actors/users/alice/objects/comments/1",
+        activity_id=source_ids(database, kind='comment', message=301)[1],
+        object_id=source_ids(database, kind='comment', message=301)[2],
         community_actor_url=f"https://{LEMMY_EXAMPLE_DOMAIN}/c/hackers",
     )
     service = _service(database, fedify_gateway)
@@ -179,10 +185,10 @@ async def test_registered_user_with_accepted_subscription_publishes_thread_reply
     result = await service.publish_thread_message(
         message=_thread_message(thread=_thread()),
     )
-    mapping = database.message_mappings.get_message_mapping_by_discord_message_id(301)
+    mapping = database.message_mappings.get_by_source_ref(MessageRef('discord-primary', '200', str(301)))
     stored_object = (
         database.activitypub_objects.get_published_activity_object_by_object_id(
-            f"https://{BRIDGE_HOST_DOMAIN}/actors/users/alice/objects/comments/1"
+            source_ids(database, kind='comment', message=301)[2]
         )
     )
 
@@ -190,7 +196,7 @@ async def test_registered_user_with_accepted_subscription_publishes_thread_reply
     assert mapping is not None
     assert (
         mapping.object_id
-        == f"https://{BRIDGE_HOST_DOMAIN}/actors/users/alice/objects/comments/1"
+        == source_ids(database, kind='comment', message=301)[2]
     )
     assert stored_object is not None
     assert stored_object.kind == "comment"
@@ -204,13 +210,13 @@ async def test_remote_subscription_reply_semantics_preserve_nested_and_unknown_f
     database = _database(tmp_path)
     _accepted_subscription(database)
     _registered_user(database)
-    post_object_url = f"https://{BRIDGE_HOST_DOMAIN}/actors/users/alice/objects/posts/1"
+    post_object_url = source_ids(database, kind='post', message=300)[2]
     thread_group = database.discord_fanout_groups.create_thread_group(
         community_actor_id=f"https://{LEMMY_EXAMPLE_DOMAIN}/c/hackers",
         source_channel_id=100,
         source_thread_id=200,
         source_starter_message_id=300,
-        ap_activity_id=f"https://{BRIDGE_HOST_DOMAIN}/actors/users/alice/activities/create/posts/1",
+        ap_activity_id=source_ids(database, kind='post', message=300)[1],
         ap_object_id=post_object_url,
     )
     database.discord_fanout_groups.add_thread_delivery(
@@ -239,8 +245,8 @@ async def test_remote_subscription_reply_semantics_preserve_nested_and_unknown_f
     fedify_gateway = AsyncMock()
     fedify_gateway.publish_content.side_effect = [
         PublishContentResult(
-            activity_id=f"https://{BRIDGE_HOST_DOMAIN}/actors/users/alice/activities/create/comments/1",
-            object_id=f"https://{BRIDGE_HOST_DOMAIN}/actors/users/alice/objects/comments/1",
+            activity_id=source_ids(database, kind='comment', message=301)[1],
+            object_id=source_ids(database, kind='comment', message=301)[2],
             community_actor_url=f"https://{LEMMY_EXAMPLE_DOMAIN}/c/hackers",
         ),
         PublishContentResult(
@@ -264,8 +270,8 @@ async def test_remote_subscription_reply_semantics_preserve_nested_and_unknown_f
 
     assert nested_result.status == "published"
     assert unknown_result.status == "published"
-    nested_request = fedify_gateway.publish_content.await_args_list[0].args[0]
-    unknown_request = fedify_gateway.publish_content.await_args_list[1].args[0]
+    nested_request = fedify_gateway.render_community.await_args_list[0].args[0]
+    unknown_request = fedify_gateway.render_community.await_args_list[1].args[0]
     assert (
         nested_request.in_reply_to_object_id
         == f"https://{BRIDGE_HOST_DOMAIN}/actors/users/alice/objects/comments/0"
@@ -291,10 +297,10 @@ async def test_unregistered_user_message_is_not_federated_and_gets_register_repl
 
     assert result.status == "ignored"
     assert result.reason == "unregistered_user"
-    fedify_gateway.publish_content.assert_not_awaited()
+    fedify_gateway.render_community.assert_not_awaited()
     starter_message.reply.assert_awaited_once_with(UNREGISTERED_REPLY)
     assert (
-        database.message_mappings.get_message_mapping_by_discord_message_id(300) is None
+        database.message_mappings.get_by_source_ref(MessageRef('discord-primary', '200', str(300))) is None
     )
 
 
@@ -315,9 +321,9 @@ async def test_registered_user_without_accepted_subscription_does_not_publish(
 
     assert result.status == "ignored"
     assert result.reason == "no_subscription"
-    fedify_gateway.publish_content.assert_not_awaited()
+    fedify_gateway.render_community.assert_not_awaited()
     assert (
-        database.message_mappings.get_message_mapping_by_discord_message_id(300) is None
+        database.message_mappings.get_by_source_ref(MessageRef('discord-primary', '200', str(300))) is None
     )
 
 
@@ -330,8 +336,8 @@ async def test_gateway_publish_failure_does_not_persist_false_success(
     _accepted_subscription(database)
     _registered_user(database)
     fedify_gateway = AsyncMock()
-    fedify_gateway.publish_content.side_effect = RuntimeError("boom")
     service = _service(database, fedify_gateway)
+    fedify_gateway.render_community.side_effect = RuntimeError("boom")
 
     with pytest.raises(RuntimeError):
         await service.publish_thread_starter(
@@ -340,5 +346,5 @@ async def test_gateway_publish_failure_does_not_persist_false_success(
         )
 
     assert (
-        database.message_mappings.get_message_mapping_by_discord_message_id(300) is None
+        database.message_mappings.get_by_source_ref(MessageRef('discord-primary', '200', str(300))) is None
     )

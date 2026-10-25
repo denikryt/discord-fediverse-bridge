@@ -8,6 +8,11 @@ from __future__ import annotations
 
 import sys
 from types import ModuleType, SimpleNamespace
+from datetime import datetime, timezone
+
+EDITED_AT = datetime(2026, 10, 25, tzinfo=timezone.utc)
+from src.fedify_gateway_client import CanonicalMutationResult
+from src.user_actor_delivery import UserActorDeliveryService
 
 import pytest
 
@@ -75,10 +80,17 @@ class Gateway:
     async def update_content(self, request):
         """Accept one outgoing canonical Update."""
         self.updates.append(request)
+        return CanonicalMutationResult(request.activity_id, request.ap_object_id,
+            {'id': request.activity_id, 'type': 'Update',
+             'actor': 'https://bridge.example/actors/users/alice',
+             'object': {'id': request.ap_object_id, 'content': request.body_markdown}})
 
     async def delete_content(self, request):
         """Accept one outgoing canonical Delete."""
         self.deletes.append(request)
+        return CanonicalMutationResult(request.activity_id, request.ap_object_id,
+            {'id': request.activity_id, 'type': 'Delete',
+             'actor': 'https://bridge.example/actors/users/alice', 'object': request.ap_object_id})
 
 
 def world(tmp_path):
@@ -92,6 +104,10 @@ def world(tmp_path):
         slug='hackers', name='Hackers', description='Community',
         created_by_discord_user_id='123',
     )
+    actor = 'https://bridge.example/actors/users/alice'
+    db.users.create_user(discord_user_id='123', activitypub_username='alice', actor_url=actor,
+        inbox_url=f'{actor}/inbox', outbox_url=f'{actor}/outbox', followers_url=f'{actor}/followers',
+        public_key_pem='public', private_key_pem='private')
     community = db.local_communities.get_local_community_by_slug('hackers')
     subscriber = db.local_subscribers.create_local_subscriber(
         local_community_id=community.id, discord_guild_id=10,
@@ -150,7 +166,7 @@ def world(tmp_path):
     physical = PhysicalCopies()
     context = SimpleNamespace(
         bridge_policy_service=policy, fedify_gateway=gateway,
-        user_actor_delivery_service=None,
+        user_actor_delivery_service=UserActorDeliveryService(db, gateway, policy),
         user_actor_delivery_wake=SimpleNamespace(wake=lambda: None),
     )
     return db, runtime, physical, context, gateway, subscriber
@@ -164,7 +180,7 @@ async def test_host_edit_uses_verified_sibling_copy_and_preserves_header(tmp_pat
     try:
         runtime.bind_discord_adapter(physical)
         await runtime.handle_discord_message_edit(
-            message_id=source_id, new_content='updated', mutation_context=context,
+            message_id=source_id, new_content='updated', mutation_context=context, edited_timestamp=EDITED_AT,
         )
         assert [(ref.external_message_id, body) for ref, body in physical.edits] == [
             (target_id, '`alice`\n\nupdated'),
@@ -200,7 +216,7 @@ async def test_wrong_receipt_fails_closed_no_sdk_fallback(tmp_path):
         runtime.bind_discord_adapter(physical)
         physical.bad_read = True
         await runtime.handle_discord_message_edit(
-            message_id=1101, new_content='updated', mutation_context=context,
+            message_id=1101, new_content='updated', mutation_context=context, edited_timestamp=EDITED_AT,
         )
         assert physical.edits == []
         assert physical.contents[('2200', '2201')] == '`alice`\n\noriginal'
@@ -233,7 +249,7 @@ async def test_transport_failure_never_uses_sdk_fallback(tmp_path):
         runtime.bind_discord_adapter(physical)
         physical.fail_container = '2200'
         await runtime.handle_discord_message_edit(
-            message_id=1101, new_content='updated', mutation_context=context,
+            message_id=1101, new_content='updated', mutation_context=context, edited_timestamp=EDITED_AT,
         )
         assert physical.edits == []
         assert len(gateway.updates) == 1
@@ -247,7 +263,7 @@ async def test_subscriber_authored_edit_only_changes_host_surface(tmp_path):
     try:
         runtime.bind_discord_adapter(physical)
         await runtime.handle_discord_message_edit(
-            message_id=2201, new_content='subscriber update', mutation_context=context,
+            message_id=2201, new_content='subscriber update', mutation_context=context, edited_timestamp=EDITED_AT,
         )
         assert [(ref.external_message_id, body) for ref, body in physical.edits] == [
             ('1101', '`alice`\n\nsubscriber update'),
@@ -268,7 +284,7 @@ async def test_revoked_subscriber_origin_cannot_publish_or_mutate_host(tmp_path)
             from src.models import LocalSubscriber
             session.get(LocalSubscriber, subscriber.id).status = 'removed'
         await runtime.handle_discord_message_edit(
-            message_id=2201, new_content='unauthorized', mutation_context=context,
+            message_id=2201, new_content='unauthorized', mutation_context=context, edited_timestamp=EDITED_AT,
         )
         await runtime.handle_discord_message_delete(
             message_id=2301, mutation_context=context,
@@ -301,7 +317,7 @@ async def test_one_failed_subscriber_does_not_block_another(tmp_path):
         physical.contents[('3300', '3301')] = '`alice`\n\noriginal'
         physical.fail_container = '2200'
         await runtime.handle_discord_message_edit(
-            message_id=1101, new_content='updated', mutation_context=context,
+            message_id=1101, new_content='updated', mutation_context=context, edited_timestamp=EDITED_AT,
         )
         assert [(ref.external_container_id, body) for ref, body in physical.edits] == [
             ('3300', '`alice`\n\nupdated'),

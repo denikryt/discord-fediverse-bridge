@@ -283,10 +283,10 @@ class SQLiteCoordinatorPermitScenarios(unittest.TestCase):
         with self.db.immediate_session() as session:
             community = LocalCommunity(
                 slug='permit', display_name='Permit',
-                actor_url='https://bridge.test/communities/permit',
-                inbox_url='https://bridge.test/communities/permit/inbox',
-                outbox_url='https://bridge.test/communities/permit/outbox',
-                followers_url='https://bridge.test/communities/permit/followers',
+                actor_url='https://bridge.test/actors/communities/permit',
+                inbox_url='https://bridge.test/actors/communities/permit/inbox',
+                outbox_url='https://bridge.test/actors/communities/permit/outbox',
+                followers_url='https://bridge.test/actors/communities/permit/followers',
                 public_key_pem='public', private_key_pem='private', status='active',
             )
             session.add(community)

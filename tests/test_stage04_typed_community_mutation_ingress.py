@@ -61,16 +61,16 @@ class TypedCommunityMutationIngressScenarios(unittest.TestCase):
         self.db.migrate()
         with self.db.immediate_session() as session:
             user=User(discord_user_id='55', activitypub_username='alice',
-                actor_url='https://bridge.test/users/alice',
-                inbox_url='https://bridge.test/users/alice/inbox',
-                outbox_url='https://bridge.test/users/alice/outbox',
-                followers_url='https://bridge.test/users/alice/followers',
+                actor_url='https://bridge.test/actors/users/alice',
+                inbox_url='https://bridge.test/actors/users/alice/inbox',
+                outbox_url='https://bridge.test/actors/users/alice/outbox',
+                followers_url='https://bridge.test/actors/users/alice/followers',
                 public_key_pem='public', private_key_pem='private')
             community=LocalCommunity(slug='town',display_name='Town',
-                actor_url='https://bridge.test/communities/town',
-                inbox_url='https://bridge.test/communities/town/inbox',
-                outbox_url='https://bridge.test/communities/town/outbox',
-                followers_url='https://bridge.test/communities/town/followers',
+                actor_url='https://bridge.test/actors/communities/town',
+                inbox_url='https://bridge.test/actors/communities/town/inbox',
+                outbox_url='https://bridge.test/actors/communities/town/outbox',
+                followers_url='https://bridge.test/actors/communities/town/followers',
                 public_key_pem='public',private_key_pem='private',status='active')
             session.add_all((user,community));session.flush()
             self.community_id=community.id
@@ -161,13 +161,13 @@ class TypedCommunityMutationIngressScenarios(unittest.TestCase):
             session.add_all((comment,
                 PublishedActivityObject(actor_username='alice',actor_url=user.actor_url,
                     activity_id=comment.ap_activity_id,object_id=comment.ap_object_id,
-                    publication_context='community',community_actor_url='https://bridge.test/communities/town',
+                    publication_context='community',community_actor_url='https://bridge.test/actors/communities/town',
                     kind='comment',title=None,body_markdown='previous',
                     source_connector_id=self.connector_id,source_channel_surface_id=self.surface_id,
                     source_external_container_id='900',source_external_message_id='902'),
                 MessageMapping(source_platform='discord',source_id='902',
                     activity_id=comment.ap_activity_id,object_id=comment.ap_object_id,
-                    actor_url=user.actor_url,community_actor_url='https://bridge.test/communities/town',
+                    actor_url=user.actor_url,community_actor_url='https://bridge.test/actors/communities/town',
                     source_connector_id=self.connector_id,source_channel_surface_id=self.surface_id,
                     source_external_container_id='900',discord_channel_id=100,discord_message_id=902)))
         asyncio.run(self.handler.handle_platform_message_edit(self._edit(comment_ref),_Reader()))

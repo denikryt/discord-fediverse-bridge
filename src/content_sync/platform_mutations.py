@@ -91,7 +91,10 @@ class PlatformPhysicalMutationCoordinator:
             community_id = canonical.local_community_id
         else:
             owning_thread = session.get(LocalCommunityThread, canonical.local_community_thread_id)
-            if owning_thread is None or owning_thread.deleted_at is not None:
+            # A verified child tombstone must still reach existing copies after
+            # its parent was deleted. Live content remains fenced by that parent.
+            if owning_thread is None or (owning_thread.deleted_at is not None
+                                         and canonical.deleted_at is None):
                 return False
             community_id = owning_thread.local_community_id
         community = session.get(LocalCommunity, community_id)

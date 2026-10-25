@@ -508,3 +508,15 @@ ActivityPub comments and post backfill consult the same typed thread receipts.
 rows, an actual SQL flush failure on an otherwise verified source, lease theft
 and a refused revision CAS. The tests repair state and reopen the database to
 verify recovery without duplicate rendering or outbound source creation.
+
+## Stage 04 inherited runtime integration corrections
+
+An authenticated Local Group Undo removes only the matching current Follow
+incarnation. The handler reports `processed/applied` after that transactional
+removal; a stale Undo remains skipped and cannot remove a newer Follow.
+
+An authenticated child Delete may deliver its tombstone to existing bot-owned
+copies even when the owning post has already been deleted. The current surface
+owner, policy and positive transport ownership checks still apply. A pending
+live child Update remains blocked by the parent tombstone. Recovery uses the
+persisted child revision ACK, so restarting does not repeat the physical edit.

@@ -31,10 +31,10 @@ class PhysicalMutationRecoveryScenarios(unittest.TestCase):
         with self.db.immediate_session() as session:
             community = LocalCommunity(
                 slug='local', display_name='Local',
-                actor_url='https://bridge.test/communities/local',
-                inbox_url='https://bridge.test/communities/local/inbox',
-                outbox_url='https://bridge.test/communities/local/outbox',
-                followers_url='https://bridge.test/communities/local/followers',
+                actor_url='https://bridge.test/actors/communities/local',
+                inbox_url='https://bridge.test/actors/communities/local/inbox',
+                outbox_url='https://bridge.test/actors/communities/local/outbox',
+                followers_url='https://bridge.test/actors/communities/local/followers',
                 public_key_pem='public', private_key_pem='private', status='active',
             )
             session.add(community)

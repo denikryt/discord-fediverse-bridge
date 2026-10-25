@@ -434,3 +434,19 @@ full Python/Node suites or live Discord/Fedify integration acceptance.
   after render, durable error/backoff, immutable canonical JSON across restart,
   a confirmed typed source with injected SQL failure, active lease protection,
   stale-owner CAS and a revision conflict without overwriting newer content.
+
+## Stage 04 post-patch integration regression
+
+- Legacy Community scenarios now supply observed creation/edit timestamps,
+  accepted surface metadata, original authenticated author snapshots and exact
+  source references. Their runtime composition uses real canonical admission,
+  intent repositories and coordinators with fake gateway/SDK transport edges.
+- `tests/behavior/test_local_community_inbound_scenarios.py` covers a stale Undo
+  followed by the matching Undo and its duplicate without removing a new Follow.
+- `tests/behavior/test_local_community_participant_edit_delete_scenarios.py`
+  covers parent Delete followed by child Delete, persisted physical ACKs and
+  coordinator restart; a queued live child Update remains fenced after parent
+  deletion. Remote-author fixtures are distinct from local human publications.
+- Raw Community mutations assert exact typed service submissions; Personal Feed
+  mutations retain their independent service path. Uncertain physical Creates
+  retain an unresolved durable intent without a fabricated ACK or blind retry.

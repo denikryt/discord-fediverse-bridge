@@ -23,6 +23,9 @@ Directions covered:
 """
 
 from __future__ import annotations
+from support.scenario_graph import attach, retain_original_author
+from support.community_events import OBSERVED_AT
+from datetime import timedelta
 from support.runtime import build_test_policy_service
 
 from datetime import datetime, timezone
@@ -37,6 +40,8 @@ from src.community_sync.runtime import CommunityRuntime
 from src.community_sync.discord_fanout import DiscordFanout
 from src.db import Database
 from src.content_publish_service import ContentPublishService
+from support.db import add_accepted_subscription
+from src.formatting import format_lemmy_comment_for_discord, format_lemmy_post_for_discord
 from src.activitypub_models import ActivityPubEvent
 from src.activitypub_handlers import dispatch_activitypub_event
 from tests_constants import LEMMY_EXAMPLE_DOMAIN
@@ -240,6 +245,7 @@ def _fake_update_event(
         {
             "event_type": event_type,
             "delivery_id": f"delivery-{event_type}-1",
+            "source_activity_id": f"https://remote.example/activities/{event_type}/1",
             "occurred_at": datetime.now(timezone.utc).isoformat(),
             "community_actor_id": COMMUNITY_ACTOR_URL,
             "actor_id": f"https://{LEMMY_EXAMPLE_DOMAIN}/u/bob",
@@ -251,7 +257,8 @@ def _fake_update_event(
                 "post_lemmy_id": post_lemmy_id,
                 "body_markdown": body_markdown,
                 "url": ap_id,
-                "published_at": datetime.now(timezone.utc).isoformat(),
+                "published_at": OBSERVED_AT.isoformat(),
+                "updated_at": (OBSERVED_AT + timedelta(seconds=1)).isoformat(),
                 "author_name": "bob",
             },
         }
@@ -646,14 +653,16 @@ async def test_inbound_comment_update_edits_all_discord_deliveries(
         post_lemmy_id=1,
     )
     runtime_obj = _fake_runtime(database=database)
-    result = await community_runtime.handle_inbound_comment_update(event, runtime_obj)
+    retain_original_author(database, domain='remote', kind='comment',
+        object_id=COMMENT_AP_ID, actor_id=f'https://{LEMMY_EXAMPLE_DOMAIN}/u/bob', author_name='bob')
+    result = await community_runtime.handle_inbound_comment_update(event, attach(runtime_obj, community_runtime))
 
     assert result.status == "processed"
     # Both Discord messages must have been edited.
-    thread1.fetch_message.assert_awaited_once_with(msg_id_1)
-    msg1.edit.assert_awaited_once_with(content="New comment body")
-    thread2.fetch_message.assert_awaited_once_with(msg_id_2)
-    msg2.edit.assert_awaited_once_with(content="New comment body")
+    thread1.fetch_message.assert_any_await(msg_id_1)
+    msg1.edit.assert_awaited_once_with(content=format_lemmy_comment_for_discord('bob', 'New comment body', COMMENT_AP_ID, f'https://{LEMMY_EXAMPLE_DOMAIN}/u/bob'))
+    thread2.fetch_message.assert_any_await(msg_id_2)
+    msg2.edit.assert_awaited_once_with(content=format_lemmy_comment_for_discord('bob', 'New comment body', COMMENT_AP_ID, f'https://{LEMMY_EXAMPLE_DOMAIN}/u/bob'))
 
 
 @pytest.mark.asyncio
@@ -674,7 +683,7 @@ async def test_inbound_comment_update_for_unknown_ap_id_returns_skipped(
         post_lemmy_id=1,
     )
     runtime_obj = _fake_runtime(database=database)
-    result = await community_runtime.handle_inbound_comment_update(event, runtime_obj)
+    result = await community_runtime.handle_inbound_comment_update(event, attach(runtime_obj, community_runtime))
 
     assert result.status == "skipped"
 
@@ -771,14 +780,16 @@ async def test_inbound_comment_delete_marks_all_discord_deliveries_deleted(
         post_lemmy_id=1,
     )
     runtime_obj = _fake_runtime(database=database)
-    result = await community_runtime.handle_inbound_comment_delete(event, runtime_obj)
+    retain_original_author(database, domain='remote', kind='comment',
+        object_id=COMMENT_AP_ID, actor_id=f'https://{LEMMY_EXAMPLE_DOMAIN}/u/bob', author_name='bob')
+    result = await community_runtime.handle_inbound_comment_delete(event, attach(runtime_obj, community_runtime))
 
     assert result.status == "processed"
     # Both Discord messages must be edited to the deletion placeholder, not deleted.
-    thread1.fetch_message.assert_awaited_once_with(msg_id_1)
+    thread1.fetch_message.assert_any_await(msg_id_1)
     msg1.edit.assert_awaited_once_with(content="*deleted by creator*")
     msg1.delete.assert_not_awaited()
-    thread2.fetch_message.assert_awaited_once_with(msg_id_2)
+    thread2.fetch_message.assert_any_await(msg_id_2)
     msg2.edit.assert_awaited_once_with(content="*deleted by creator*")
     msg2.delete.assert_not_awaited()
 
@@ -843,14 +854,16 @@ async def test_inbound_post_delete_marks_all_thread_starters_deleted(
         kind="post",
     )
     runtime_obj = _fake_runtime(database=database)
-    result = await community_runtime.handle_inbound_post_delete(event, runtime_obj)
+    retain_original_author(database, domain='remote', kind='post',
+        object_id=POST_AP_ID, actor_id=f'https://{LEMMY_EXAMPLE_DOMAIN}/u/bob', author_name='bob')
+    result = await community_runtime.handle_inbound_post_delete(event, attach(runtime_obj, community_runtime))
 
     assert result.status == "processed"
     # Both starter messages must be edited to the deletion placeholder, not threads deleted.
-    thread1.fetch_message.assert_awaited_once_with(starter_msg_id_1)
+    thread1.fetch_message.assert_any_await(starter_msg_id_1)
     starter1.edit.assert_awaited_once_with(content="*deleted by creator*")
     thread1.delete.assert_not_awaited()
-    thread2.fetch_message.assert_awaited_once_with(starter_msg_id_2)
+    thread2.fetch_message.assert_any_await(starter_msg_id_2)
     starter2.edit.assert_awaited_once_with(content="*deleted by creator*")
     thread2.delete.assert_not_awaited()
 
@@ -934,7 +947,9 @@ async def test_dispatch_routes_post_deleted_with_existing_thread_group(
         bot=SimpleNamespace(wait_until_bridge_ready=wait_until_bridge_ready),
         bridge_policy_service=build_test_policy_service(database),
     )
-    result = await dispatch_activitypub_event(event, runtime_obj)
+    retain_original_author(database, domain='remote', kind='post',
+        object_id=POST_AP_ID, actor_id=f'https://{LEMMY_EXAMPLE_DOMAIN}/u/bob', author_name='bob')
+    result = await dispatch_activitypub_event(event, attach(runtime_obj, community_runtime))
 
     assert result.status == "processed"
     fake_thread.delete.assert_not_awaited()
@@ -1007,14 +1022,16 @@ async def test_inbound_post_update_edits_discord_thread_starters(
         body_markdown="New post body",
     )
     runtime_obj = _fake_runtime(database=database)
-    result = await community_runtime.handle_inbound_post_update(event, runtime_obj)
+    retain_original_author(database, domain='remote', kind='post',
+        object_id=POST_AP_ID, actor_id=f'https://{LEMMY_EXAMPLE_DOMAIN}/u/bob', author_name='bob')
+    result = await community_runtime.handle_inbound_post_update(event, attach(runtime_obj, community_runtime))
 
     assert result.status == "processed"
     # Both starter messages must have been fetched and edited.
-    thread1.fetch_message.assert_awaited_once_with(starter_msg_id_1)
-    starter1.edit.assert_awaited_once_with(content="New post body")
-    thread2.fetch_message.assert_awaited_once_with(starter_msg_id_2)
-    starter2.edit.assert_awaited_once_with(content="New post body")
+    thread1.fetch_message.assert_any_await(starter_msg_id_1)
+    starter1.edit.assert_awaited_once_with(content=format_lemmy_post_for_discord('bob', 'Untitled remote post', 'New post body', POST_AP_ID, f'https://{LEMMY_EXAMPLE_DOMAIN}/u/bob'))
+    thread2.fetch_message.assert_any_await(starter_msg_id_2)
+    starter2.edit.assert_awaited_once_with(content=format_lemmy_post_for_discord('bob', 'Untitled remote post', 'New post body', POST_AP_ID, f'https://{LEMMY_EXAMPLE_DOMAIN}/u/bob'))
 
 
 @pytest.mark.asyncio
@@ -1033,7 +1050,7 @@ async def test_inbound_post_update_for_unknown_ap_id_returns_skipped(
         body_markdown="Updated",
     )
     runtime_obj = _fake_runtime(database=database)
-    result = await community_runtime.handle_inbound_post_update(event, runtime_obj)
+    result = await community_runtime.handle_inbound_post_update(event, attach(runtime_obj, community_runtime))
 
     assert result.status == "skipped"
 
@@ -1185,7 +1202,9 @@ async def test_inbound_comment_update_preserves_username_header(tmp_path: Path) 
         post_lemmy_id=1,
     )
     runtime_obj = _fake_runtime(database=database)
-    result = await community_runtime.handle_inbound_comment_update(event, runtime_obj)
+    retain_original_author(database, domain='remote', kind='comment',
+        object_id=COMMENT_AP_ID, actor_id=f'https://{LEMMY_EXAMPLE_DOMAIN}/u/bob', author_name='bob')
+    result = await community_runtime.handle_inbound_comment_update(event, attach(runtime_obj, community_runtime))
 
     assert result.status == "processed"
     # Header must be preserved; only the body below it is replaced.

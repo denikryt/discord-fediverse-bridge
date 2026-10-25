@@ -1,7 +1,7 @@
 """Runtime scenarios for personal feed publication deduplication and inbound hardening."""
 
 from __future__ import annotations
-from support.runtime import build_test_policy_service
+from support.runtime import build_test_policy_service, build_runtime_namespace
 
 from pathlib import Path
 from types import SimpleNamespace
@@ -44,6 +44,7 @@ def _accepted_subscription(database: Database) -> None:
     """Insert one active accepted subscription for inbound community routing."""
     database.remote_subscriptions.create_subscription(
         discord_channel_id=100,
+        discord_guild_id=1,
         lemmy_community_actor_id=f"https://{LEMMY_EXAMPLE_DOMAIN}/c/hackers",
         lemmy_community_name="hackers",
         lemmy_community_id=42,
@@ -130,7 +131,7 @@ async def test_inbound_post_with_discord_originated_mapping_is_skipped_as_echo(
         discord_channel_id=100,
         discord_message_id=300,
     )
-    runtime = SimpleNamespace(
+    runtime = build_runtime_namespace(
         database=database,
         bot=SimpleNamespace(
             wait_until_bridge_ready=AsyncMock(),
@@ -168,7 +169,7 @@ async def test_inbound_comment_with_discord_originated_mapping_is_skipped_as_ech
         discord_channel_id=100,
         discord_message_id=301,
     )
-    runtime = SimpleNamespace(
+    runtime = build_runtime_namespace(
         database=database,
         bot=SimpleNamespace(
             wait_until_bridge_ready=AsyncMock(),
@@ -198,7 +199,7 @@ def test_out_of_order_comment_receipt_becomes_deferred_and_retries_successfully(
     """A comment that arrives before its parent mapping should be retryable."""
     database = _database(tmp_path)
     _accepted_subscription(database)
-    runtime = SimpleNamespace(
+    runtime = build_runtime_namespace(
         settings=SimpleNamespace(fedify_shared_secret="secret"),
         database=database,
         bot=SimpleNamespace(
@@ -276,11 +277,11 @@ def test_out_of_order_comment_receipt_becomes_deferred_and_retries_successfully(
     assert created_message_group is not None
 
 
-def test_failed_inbound_discord_fanout_marks_receipt_failed(tmp_path: Path) -> None:
-    """A Discord-side failure must leave the delivery receipt in `failed`."""
+def test_ambiguous_inbound_discord_fanout_retains_unresolved_intent(tmp_path: Path) -> None:
+    """A possibly sent physical Create retains canonical admission and durable uncertainty."""
     database = _database(tmp_path)
     _accepted_subscription(database)
-    runtime = SimpleNamespace(
+    runtime = build_runtime_namespace(
         settings=SimpleNamespace(fedify_shared_secret="secret"),
         database=database,
         bot=SimpleNamespace(
@@ -314,10 +315,19 @@ def test_failed_inbound_discord_fanout_marks_receipt_failed(tmp_path: Path) -> N
     )
     receipt = database.event_receipts.get_event_receipt(event.delivery_id)
 
-    assert response.status_code == 500
-    assert receipt is not None
-    assert receipt.status == "failed"
-    assert receipt.outcome == "processing_failed"
+    assert response.status_code == 200
+    assert receipt is not None and receipt.status == "processed"
+    from sqlalchemy import select
+    from src.models import PlatformDeliveryIntent
+    with database.session() as session:
+        intent = session.scalar(select(PlatformDeliveryIntent))
+        assert intent.state == "unresolved"
+        assert intent.applied_revision is None and intent.orphan_receipt_json is None
+    again = client.post("/internal/activitypub/events", headers={
+        "Authorization": "Bearer secret", "X-Bridge-Delivery-Id": event.delivery_id,
+    }, json=event.model_dump(mode="json"))
+    assert again.status_code == 200
+    runtime.bot.fetch_forum_channel.return_value.create_thread.assert_awaited_once()
 
 
 def test_duplicate_inbound_delivery_returns_duplicate_without_side_effects(
@@ -335,7 +345,7 @@ def test_duplicate_inbound_delivery_returns_duplicate_without_side_effects(
             )
         ),
     )
-    runtime = SimpleNamespace(
+    runtime = build_runtime_namespace(
         settings=SimpleNamespace(fedify_shared_secret="secret"),
         database=database,
         bot=SimpleNamespace(

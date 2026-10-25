@@ -7,6 +7,7 @@ different `create_thread()` return shapes and several distinct bot surfaces.
 from __future__ import annotations
 
 from types import SimpleNamespace
+from support.community_events import OBSERVED_AT
 from unittest.mock import AsyncMock
 
 
@@ -28,6 +29,7 @@ def build_starter_message(
     """Build a fake thread starter message."""
     return SimpleNamespace(
         id=message_id,
+        created_at=OBSERVED_AT,
         content=content,
         author=SimpleNamespace(id=author_id, display_name=display_name, name=name),
         reply=AsyncMock(),
@@ -53,6 +55,7 @@ def build_thread_message(
     )
     return SimpleNamespace(
         id=message_id,
+        created_at=OBSERVED_AT,
         content=content,
         author=SimpleNamespace(id=author_id, display_name=display_name, name=name),
         channel=SimpleNamespace(id=thread_id, parent_id=channel_id),

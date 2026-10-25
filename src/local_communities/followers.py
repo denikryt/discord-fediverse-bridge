@@ -173,30 +173,12 @@ class LocalCommunityFollowerHandler:
                 status='skipped',
                 outcome=InboundActivityOutcome.IGNORED_UNKNOWN_FOLLOW if outcome == 'missing'
                         else InboundActivityOutcome.IGNORED_ALREADY_APPLIED,
-                detail='local community remote Follow missing or incarnation mismatch',
+                detail=('local community remote subscriber not found' if outcome == 'missing'
+                        else 'local community remote Follow incarnation mismatch'),
             )
+        # The writer already removed the matching incarnation and fenced its
+        # unsent deliveries. Report that committed result, not a stale lookup.
         return _HandlerResult(
-                status="skipped",
-                outcome=InboundActivityOutcome.IGNORED_UNKNOWN_FOLLOW,
-                detail="local community remote subscriber not found",
-            )
-        if (
-            follow_activity_id is not None
-            and getattr(remote_subscriber, "follow_activity_id") != follow_activity_id
-        ):
-            logger.info(
-                "Local-community unfollow Follow ID mismatch community=%s remote_actor=%s stored=%s incoming=%s",
-                getattr(local_community, "slug"),
-                remote_actor_id,
-                getattr(remote_subscriber, "follow_activity_id"),
-                follow_activity_id,
-            )
-        self.database.remote_subscribers.delete_remote_subscriber(
-            local_community_id=getattr(local_community, "id"),
-            remote_actor_id=remote_actor_id,
-        )
-        return _HandlerResult(
-            status="processed",
-            outcome=InboundActivityOutcome.APPLIED,
+            status="processed", outcome=InboundActivityOutcome.APPLIED,
             detail="local community remote subscriber removed",
         )

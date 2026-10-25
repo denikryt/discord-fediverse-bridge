@@ -2,6 +2,9 @@
 
 from __future__ import annotations
 
+from support.authored_publication import publication
+from support.community_events import configure_renderer, OBSERVED_AT, source_ids, render_create
+from src.platform_types import MessageRef
 from types import SimpleNamespace
 from unittest.mock import AsyncMock
 
@@ -61,6 +64,8 @@ async def test_remote_publish_commits_exact_canonical_create_and_shared_inbox_on
                 remote_shared_inbox_url="https://remote.example/inbox",
                 follow_activity_id=f"https://remote.example/follows/{suffix}",
             )
+    from support.db import add_accepted_subscription
+    add_accepted_subscription(database, channel_id=33, community_actor_url='https://remote.example/c/group')
     canonical = {
         "id": "https://bridge.example/actors/users/alice/activities/create/posts/1",
         "type": "Create",
@@ -74,6 +79,7 @@ async def test_remote_publish_commits_exact_canonical_create_and_shared_inbox_on
         community_actor_url="https://remote.example/c/group",
         activity_json=canonical,
     )
+    configure_renderer(gateway, database)
     wake = WakeRecorder()
     service = ContentPublishService(
         database=database,
@@ -83,7 +89,7 @@ async def test_remote_publish_commits_exact_canonical_create_and_shared_inbox_on
         delivery_worker=wake,
     )
     author = SimpleNamespace(id=1, display_name="Alice", name="Alice")
-    message = SimpleNamespace(id=11, author=author, content="hello", reply=AsyncMock())
+    message = SimpleNamespace(id=11, author=author, content="hello", reply=AsyncMock(), created_at=OBSERVED_AT)
     thread = SimpleNamespace(id=22, parent_id=33, name="Topic")
 
     result = await service.publish_post_to_community(
@@ -95,18 +101,18 @@ async def test_remote_publish_commits_exact_canonical_create_and_shared_inbox_on
 
     assert result.status == "published"
     assert wake.count == 1
+    request = gateway.render_community.await_args.args[0]
+    canonical = render_create(request, user.actor_url).activity_json
+    gateway.publish_content.assert_not_awaited()
     with database.session() as session:
         source = session.scalar(select(UserActorOutboundSource))
         deliveries = list(session.scalars(select(UserActorOutboundDelivery)))
         assert source.source_kind == "content_create"
         assert source.activity_id == canonical["id"]
-        assert (
-            source.activity_json
-            == '{"actor":"https://bridge.example/actors/users/alice","id":"https://bridge.example/actors/users/alice/activities/create/posts/1","object":{"id":"https://bridge.example/posts/1","type":"Page"},"type":"Create"}'
-        )
-        assert [row.target_endpoint_url for row in deliveries] == [
-            "https://remote.example/inbox"
-        ]
+        assert __import__('json').loads(source.activity_json) == canonical
+        assert {row.target_endpoint_url for row in deliveries} == {
+            "https://remote.example/inbox", "https://remote.example/c/group/inbox"
+        }
 
 
 @pytest.mark.asyncio
@@ -130,7 +136,7 @@ async def test_update_is_reserved_once_and_duplicate_discord_edit_is_noop(
         public_key_pem="public",
         private_key_pem="private",
     )
-    database.activitypub_objects.create_published_activity_object(
+    publication(database,
         actor_username=user.activitypub_username,
         actor_url=user.actor_url,
         community_actor_url="https://remote.example/c/group",
@@ -229,7 +235,7 @@ async def test_delete_waits_for_ambiguous_update_then_commits_terminal_revision(
         public_key_pem="public",
         private_key_pem="private",
     )
-    database.activitypub_objects.create_published_activity_object(
+    publication(database,
         actor_username=user.activitypub_username,
         actor_url=user.actor_url,
         community_actor_url="https://remote.example/c/group",
@@ -333,7 +339,7 @@ async def test_python_reservation_uses_gateway_user_activity_namespace(
         public_key_pem="public",
         private_key_pem="private",
     )
-    database.activitypub_objects.create_published_activity_object(
+    publication(database,
         actor_username="alice",
         actor_url=user.actor_url,
         community_actor_url="https://remote.example/c/group",
@@ -353,7 +359,7 @@ async def test_python_reservation_uses_gateway_user_activity_namespace(
         edited_timestamp=datetime(2026, 6, 16, 10, 0, tzinfo=timezone.utc),
     )
     database.content_mutations.reserve_next(
-        object_id="https://bridge.example/posts/1", target_inbox_urls=[]
+        object_id="https://bridge.example/posts/1"
     )
     with database.session() as session:
         mutation = session.scalar(select(UserActorContentMutation))
@@ -380,13 +386,13 @@ async def test_pre_send_invalid_update_does_not_block_later_delete(tmp_path) -> 
         public_key_pem="public",
         private_key_pem="private",
     )
-    database.activitypub_objects.create_published_activity_object(
+    publication(database,
         actor_username="alice",
         actor_url=user.actor_url,
         community_actor_url="https://remote.example/c/group",
         activity_id="https://bridge.example/actors/users/alice/activities/create/posts/1",
         object_id="https://bridge.example/posts/1",
-        kind="unsupported",
+        kind="post",
         title="Topic",
         body_markdown="old",
         in_reply_to_object_id=None,
@@ -414,15 +420,18 @@ async def test_pre_send_invalid_update_does_not_block_later_delete(tmp_path) -> 
             return []
 
     service = UserActorDeliveryService(database, Gateway(), AllowAllPolicy())
-    assert (
-        await service.submit_update(
-            object_id="https://bridge.example/posts/1",
-            title="Topic",
-            body_markdown="bad",
-            edited_timestamp=datetime(2026, 6, 16, 10, 0, tzinfo=timezone.utc),
-        )
-        == "accepted"
-    )
+    assert database.content_mutations.record_desired_update(
+        object_id="https://bridge.example/posts/1", title="Topic", body_markdown="bad",
+        edited_timestamp=datetime(2026, 6, 16, 10, 0, tzinfo=timezone.utc)) == "accepted"
+    database.content_mutations.reserve_next(object_id="https://bridge.example/posts/1")
+    # Corrupt only the pending Update payload; the original publication and
+    # its author/domain identity must stay valid for the later Delete.
+    with database.immediate_session() as session:
+        mutation = session.scalar(select(UserActorContentMutation))
+        payload = __import__('json').loads(mutation.request_json)
+        payload['kind'] = 'unsupported'
+        mutation.request_json = __import__('json').dumps(payload)
+    await service.drain_mutations()
     assert (
         await service.submit_delete(object_id="https://bridge.example/posts/1")
         == "accepted"
@@ -459,7 +468,7 @@ async def test_durable_partial_edit_reconciles_after_restart(tmp_path) -> None:
         public_key_pem="public",
         private_key_pem="private",
     )
-    database.activitypub_objects.create_published_activity_object(
+    publication(database,
         actor_username="alice",
         actor_url=user.actor_url,
         community_actor_url="https://remote.example/c/group",
@@ -472,8 +481,8 @@ async def test_durable_partial_edit_reconciles_after_restart(tmp_path) -> None:
         discord_channel_id=10,
         discord_message_id=11,
     )
-    database.content_mutations.request_discord_reconciliation(
-        channel_id=10, message_id=11, error="temporary fetch failure"
+    database.content_mutations.request_discord_reconciliation_by_source_ref(
+        source=MessageRef('discord-primary', '10', '11'), error="temporary fetch failure"
     )
 
     class Reader:
@@ -543,7 +552,7 @@ async def test_reconciliation_conflict_converges_to_authoritative_fetch(
         public_key_pem="public",
         private_key_pem="private",
     )
-    database.activitypub_objects.create_published_activity_object(
+    publication(database,
         actor_username="alice",
         actor_url=user.actor_url,
         community_actor_url="https://remote.example/c/group",
@@ -566,8 +575,8 @@ async def test_reconciliation_conflict_converges_to_authoritative_fetch(
         )
         == "accepted"
     )
-    database.content_mutations.request_discord_reconciliation(
-        channel_id=10, message_id=11, error="equal timestamp conflict"
+    database.content_mutations.request_discord_reconciliation_by_source_ref(
+        source=MessageRef('discord-primary', '10', '11'), error="equal timestamp conflict"
     )
 
     class Reader:
@@ -636,7 +645,7 @@ async def test_authoritative_reconciliation_does_not_overwrite_newer_update_or_d
         public_key_pem="public",
         private_key_pem="private",
     )
-    database.activitypub_objects.create_published_activity_object(
+    publication(database,
         actor_username="alice",
         actor_url=user.actor_url,
         community_actor_url="https://remote.example/c/group",
@@ -660,8 +669,8 @@ async def test_authoritative_reconciliation_does_not_overwrite_newer_update_or_d
         )
         == "accepted"
     )
-    database.content_mutations.request_discord_reconciliation(
-        channel_id=10, message_id=11, error="conflict"
+    database.content_mutations.request_discord_reconciliation_by_source_ref(
+        source=MessageRef('discord-primary', '10', '11'), error="conflict"
     )
     assert (
         database.content_mutations.record_desired_update(
@@ -678,7 +687,6 @@ async def test_authoritative_reconciliation_does_not_overwrite_newer_update_or_d
         title=None,
         body_markdown="stale-fetched",
         edited_timestamp=old_ts,
-        target_inbox_urls=[],
     )
     assert outcome == "stale"
     with database.session() as session:
@@ -698,7 +706,6 @@ async def test_authoritative_reconciliation_does_not_overwrite_newer_update_or_d
         title=None,
         body_markdown="stale-fetched",
         edited_timestamp=old_ts,
-        target_inbox_urls=[],
     )
     assert outcome == "deleted"
     with database.session() as session:
@@ -750,7 +757,7 @@ async def test_local_community_reconciliation_preserves_policy_filtered_targets(
             remote_inbox_url=inbox,
             follow_activity_id=f"https://remote.example/follows/{index}",
         )
-    database.activitypub_objects.create_published_activity_object(
+    publication(database,
         actor_username="alice",
         actor_url=user.actor_url,
         community_actor_url=community.actor_url,
@@ -763,8 +770,8 @@ async def test_local_community_reconciliation_preserves_policy_filtered_targets(
         discord_channel_id=10,
         discord_message_id=11,
     )
-    database.content_mutations.request_discord_reconciliation(
-        channel_id=10, message_id=11, error="temporary fetch failure"
+    database.content_mutations.request_discord_reconciliation_by_source_ref(
+        source=MessageRef('discord-primary', '10', '11'), error="temporary fetch failure"
     )
 
     class SelectivePolicy:
@@ -778,17 +785,48 @@ async def test_local_community_reconciliation_preserves_policy_filtered_targets(
                 edited_at=datetime(2026, 6, 16, 10, 0, tzinfo=timezone.utc),
             )
 
-    service = UserActorDeliveryService(
-        database, AsyncMock(), SelectivePolicy(), discord_message_reader=Reader()
-    )
+    from support.community_events import mutation_runtime
+    from src.models import PublishedActivityObject, LocalCommunityAuthoredAnnounceDelivery
+    from src.local_communities.federation_fanout import LocalCommunityFederationFanout
+    gateway = AsyncMock()
+    # Establish confirmed Create proof for both current Follow identities.
+    with database.immediate_session() as session:
+        published = session.scalar(select(PublishedActivityObject))
+        database.local_community_authored_announces.stage_create(session,
+            published=published, community=community,
+            activity_json={'id': published.activity_id, 'type': 'Create',
+                           'actor': user.actor_url, 'object': {'id': published.object_id}})
+    for claim in database.local_community_authored_announces.claim_due():
+        assert database.local_community_authored_announces.record_result(claim, delivered=True)
+    service = mutation_runtime(SimpleNamespace(database=database, fedify_gateway=gateway,
+        bridge_policy_service=SelectivePolicy())).user_actor_delivery_service
+    service.discord_message_reader = Reader()
     await service.drain_reconciliations()
-
     with database.session() as session:
         mutation = session.scalar(select(UserActorContentMutation))
         assert mutation is not None
-        assert __import__("json").loads(mutation.request_json)["targetInboxUrls"] == [
-            allowed
-        ]
+        assert 'targetInboxUrls' not in __import__('json').loads(mutation.request_json)
+    await service.drain_mutations()
+
+    async def send_relay(**kwargs):
+        """Acknowledge only the exact Group-signed transport request."""
+        deliveries = kwargs['deliveries']
+        return SimpleNamespace(outcomes=[SimpleNamespace(delivery_id=d.delivery_id,
+            ok=True, activity_id=d.activity_json['id'], target_remote_actor_id=d.target_remote_actor_id)
+            for d in deliveries])
+    gateway.send_local_community_relay.side_effect = send_relay
+    fanout = LocalCommunityFederationFanout(database=database, fedify_gateway=gateway,
+        policy_service=SelectivePolicy())
+    summary = await fanout.drain_authored()
+    assert summary.delivered == 1
+    sent = gateway.send_local_community_relay.await_args.kwargs['deliveries']
+    assert [d.target_inbox_url for d in sent] == [allowed]
+    with database.session() as session:
+        updates = list(session.scalars(select(LocalCommunityAuthoredAnnounceDelivery).where(
+            LocalCommunityAuthoredAnnounceDelivery.activity_kind == 'update')))
+        assert len(updates) == 2
+        assert {r.target_remote_inbox_url: r.status for r in updates} == {
+            allowed: 'delivered', blocked: 'failed_proven_unsent'}
 
 
 def _content_delivery_lifecycle(tmp_path):
@@ -816,7 +854,7 @@ def _content_delivery_lifecycle(tmp_path):
             remote_shared_inbox_url=None,
             follow_activity_id="https://remote.example/follows/a",
         )
-    database.activitypub_objects.create_published_activity_object(
+    publication(database,
         actor_username="alice",
         actor_url=user.actor_url,
         community_actor_url="https://remote.example/c/group",
@@ -994,7 +1032,7 @@ async def test_worker_cancellation_after_dispatch_keeps_same_reservation_recover
         public_key_pem="public",
         private_key_pem="private",
     )
-    database.activitypub_objects.create_published_activity_object(
+    publication(database,
         actor_username="alice",
         actor_url=user.actor_url,
         community_actor_url="https://remote.example/c/group",
@@ -1026,7 +1064,7 @@ async def test_worker_cancellation_after_dispatch_keeps_same_reservation_recover
         == "accepted"
     )
     database.content_mutations.reserve_next(
-        object_id="https://bridge.example/posts/1", target_inbox_urls=[]
+        object_id="https://bridge.example/posts/1"
     )
     with pytest.raises(asyncio.CancelledError):
         await service.drain_mutations()
@@ -1125,7 +1163,7 @@ async def test_canonical_ready_reservation_commits_after_restart_without_gateway
         public_key_pem="public",
         private_key_pem="private",
     )
-    database.activitypub_objects.create_published_activity_object(
+    publication(database,
         actor_username="alice",
         actor_url=user.actor_url,
         community_actor_url="https://remote.example/c/group",
@@ -1148,7 +1186,7 @@ async def test_canonical_ready_reservation_commits_after_restart_without_gateway
         == "accepted"
     )
     database.content_mutations.reserve_next(
-        object_id="https://bridge.example/posts/1", target_inbox_urls=[]
+        object_id="https://bridge.example/posts/1"
     )
     claim = database.content_mutations.claim_due(limit=1, stale_after_seconds=300)[0]
     assert database.content_mutations.mark_send_possible(
@@ -1174,6 +1212,8 @@ async def test_canonical_ready_reservation_commits_after_restart_without_gateway
         async def send_user_actor_deliveries(self, **_kwargs):
             return []
 
+    with database.immediate_session() as session:
+        session.get(UserActorContentMutation, claim.mutation_id).lease_expires_at = datetime(2020, 1, 1, tzinfo=timezone.utc)
     recovered = UserActorDeliveryService(database, Gateway(), AllowAllPolicy())
     await recovered.drain_mutations()
 
@@ -1210,7 +1250,7 @@ async def test_post_commit_restart_re_evaluates_newer_desired_delete(tmp_path) -
         public_key_pem="public",
         private_key_pem="private",
     )
-    database.activitypub_objects.create_published_activity_object(
+    publication(database,
         actor_username="alice",
         actor_url=user.actor_url,
         community_actor_url="https://remote.example/c/group",
@@ -1233,7 +1273,7 @@ async def test_post_commit_restart_re_evaluates_newer_desired_delete(tmp_path) -
         == "accepted"
     )
     database.content_mutations.reserve_next(
-        object_id="https://bridge.example/posts/1", target_inbox_urls=[]
+        object_id="https://bridge.example/posts/1"
     )
     assert (
         database.content_mutations.record_desired_delete(
@@ -1281,7 +1321,7 @@ async def test_post_commit_restart_re_evaluates_newer_desired_delete(tmp_path) -
     # Simulate process death before the in-process follow-up drain.  A fresh
     # service discovers the durable desired Delete and completes it.
     database.content_mutations.reserve_next(
-        object_id="https://bridge.example/posts/1", target_inbox_urls=[]
+        object_id="https://bridge.example/posts/1"
     )
     recovered = UserActorDeliveryService(database, gateway, AllowAllPolicy())
     await recovered.drain_mutations(limit=10)
@@ -1323,7 +1363,7 @@ async def test_cancellation_before_mutation_drain_leaves_reserved_work_restartab
         public_key_pem="public",
         private_key_pem="private",
     )
-    database.activitypub_objects.create_published_activity_object(
+    publication(database,
         actor_username="alice",
         actor_url=user.actor_url,
         community_actor_url="https://remote.example/c/group",
@@ -1346,7 +1386,7 @@ async def test_cancellation_before_mutation_drain_leaves_reserved_work_restartab
         == "accepted"
     )
     database.content_mutations.reserve_next(
-        object_id="https://bridge.example/posts/1", target_inbox_urls=[]
+        object_id="https://bridge.example/posts/1"
     )
 
     class Gateway:

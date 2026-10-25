@@ -22,7 +22,7 @@ class PhysicalCreateIntentScenarios(unittest.TestCase):
         self.db=Database(f'sqlite:///{Path(t.name)/"bridge.db"}'); self.addCleanup(self.db.close)
         self.db.migrate()
         with self.db.immediate_session() as s:
-            c=LocalCommunity(slug='demo',display_name='Demo',actor_url='https://bridge.test/communities/demo',inbox_url='https://bridge.test/communities/demo/inbox',outbox_url='https://bridge.test/communities/demo/outbox',followers_url='https://bridge.test/communities/demo/followers',public_key_pem='public',private_key_pem='private',status='active')
+            c=LocalCommunity(slug='demo',display_name='Demo',actor_url='https://bridge.test/actors/communities/demo',inbox_url='https://bridge.test/actors/communities/demo/inbox',outbox_url='https://bridge.test/actors/communities/demo/outbox',followers_url='https://bridge.test/actors/communities/demo/followers',public_key_pem='public',private_key_pem='private',status='active')
             s.add(c);s.flush();self.owner=c.id
             connector=s.scalar(select(PlatformConnector).where(PlatformConnector.connector_key=='discord-primary'))
             surface=ChannelSurface(connector_id=connector.id,external_channel_id='321',external_guild_id='1',kind='forum',local_community_id=c.id)
