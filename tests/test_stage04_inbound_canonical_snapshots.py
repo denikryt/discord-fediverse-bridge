@@ -70,3 +70,96 @@ class InboundCanonicalSnapshotScenarios(unittest.TestCase):
 
 if __name__ == '__main__':
     unittest.main()
+
+    def test_remote_post_delete_without_copies_is_monotonic_and_authenticated(self) -> None:
+        """Canonical post tombstone survives zero targets and refuses a forged actor."""
+        actor = 'https://remote.test/u/actor'
+        community = 'https://remote.test/c/group'
+        object_id = 'https://remote.test/post/zero'
+        fields = dict(community_actor_id=community, source_channel_id=None,
+                      source_thread_id=None, source_starter_message_id=None,
+                      ap_activity_id='https://remote.test/create/zero', ap_object_id=object_id)
+        original = self.db.discord_fanout_groups.create_thread_group(
+            **fields, current_content_json=json.dumps({
+                'schemaVersion': 1, 'kind': 'post', 'apObjectId': object_id,
+                'authorActorId': actor, 'bodyMarkdown': 'Original',
+            }))
+        with self.assertRaises(ValueError):
+            self.db.discord_fanout_groups.mark_inbound_deleted_if_live(
+                kind='post', ap_object_id=object_id, community_actor_id=community,
+                actor_id='https://wrong.test/actor')
+        assert self.db.discord_fanout_groups.mark_inbound_deleted_if_live(
+            kind='post', ap_object_id=object_id, community_actor_id=community,
+            actor_id=actor)
+        assert not self.db.discord_fanout_groups.mark_inbound_deleted_if_live(
+            kind='post', ap_object_id=object_id, community_actor_id=community,
+            actor_id=actor)
+        from src.models import CommunityThreadGroup
+        with self.db.session() as session:
+            row = session.get(CommunityThreadGroup, original.id)
+            assert row.deleted_at is not None and row.content_revision == 1
+        with self.assertRaises(ValueError):
+            self.db.discord_fanout_groups.create_thread_group(
+                **fields, current_content_json=original.current_content_json)
+
+    def test_remote_comment_delete_with_zero_targets_preserves_parent(self) -> None:
+        """A child-only remote Delete cannot tombstone its canonical parent."""
+        actor = 'https://remote.test/u/actor'
+        community = 'https://remote.test/c/group'
+        root = self.db.discord_fanout_groups.create_thread_group(
+            community_actor_id=community, source_channel_id=None,
+            source_thread_id=None, source_starter_message_id=None,
+            ap_activity_id='https://remote.test/create/root', ap_object_id='https://remote.test/root')
+        comment_id = 'https://remote.test/comment/zero'
+        child = self.db.discord_fanout_groups.create_message_group(
+            community_actor_id=community, thread_group_id=root.id, source_channel_id=None,
+            source_thread_id=None, source_message_id=None,
+            ap_activity_id='https://remote.test/create/comment', ap_object_id=comment_id,
+            current_content_json=json.dumps({
+                'schemaVersion': 1, 'kind': 'comment', 'apObjectId': comment_id,
+                'authorActorId': actor, 'bodyMarkdown': 'Comment',
+            }))
+        assert self.db.discord_fanout_groups.mark_inbound_deleted_if_live(
+            kind='comment', ap_object_id=comment_id,
+            community_actor_id=community, actor_id=actor)
+        from src.models import CommunityMessageGroup, CommunityThreadGroup
+        with self.db.session() as session:
+            assert session.get(CommunityMessageGroup, child.id).deleted_at is not None
+            assert session.get(CommunityMessageGroup, child.id).content_revision == 1
+            assert session.get(CommunityThreadGroup, root.id).deleted_at is None
+
+    def test_remote_update_persists_without_copies_and_rejects_stale_revision(self) -> None:
+        """Only a provably newer author Update replaces the canonical snapshot."""
+        from datetime import datetime, timedelta, timezone
+        actor = 'https://remote.test/u/actor'
+        community = 'https://remote.test/c/group'
+        ap_id = 'https://remote.test/post/update'
+        initial = {'schemaVersion': 1, 'kind': 'post', 'apObjectId': ap_id,
+                   'authorActorId': actor, 'bodyMarkdown': 'initial'}
+        row = self.db.discord_fanout_groups.create_thread_group(
+            community_actor_id=community, source_channel_id=None,
+            source_thread_id=None, source_starter_message_id=None,
+            ap_activity_id='https://remote.test/create/update', ap_object_id=ap_id,
+            current_content_json=json.dumps(initial))
+        t0 = datetime(2026, 10, 23, 10, 0, tzinfo=timezone.utc)
+        fields = dict(kind='post', ap_object_id=ap_id,
+                      community_actor_id=community, actor_id=actor,
+                      new_content_json=json.dumps(initial | {'bodyMarkdown': 'new'}),
+                      updated_at=t0, source_activity_id='https://remote.test/update/1')
+        assert self.db.discord_fanout_groups.admit_authenticated_update(**fields)
+        assert not self.db.discord_fanout_groups.admit_authenticated_update(**fields)
+        for changed in (
+            {'actor_id': 'https://forged.test/u/other'},
+            {'updated_at': t0 - timedelta(seconds=1)},
+            {'updated_at': datetime(2026, 10, 23, 11, 0)},
+            {'updated_at': None},
+            {'source_activity_id': None},
+            {'new_content_json': json.dumps(initial | {'bodyMarkdown': 'other'})},
+        ):
+            with self.assertRaises(ValueError):
+                self.db.discord_fanout_groups.admit_authenticated_update(**(fields | changed))
+        from src.models import CommunityThreadGroup
+        with self.db.session() as session:
+            current = session.get(CommunityThreadGroup, row.id)
+            assert current.content_revision == 1
+            assert json.loads(current.current_content_json)['bodyMarkdown'] == 'new'

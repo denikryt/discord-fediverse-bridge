@@ -319,3 +319,6 @@ Fedify-native security integration remains blocked by missing dependencies.
   live Discord transport verification was available during this step.
 
 - Stage 04 Checkpoint 59 WIP: physical Create pending/recovery and incoming Remote Community canonical snapshots have focused SQLite coverage, but legacy inbound Local/Remote AP→Discord direct sends and full production runtime cutover remain unverified; never claim completed durable community fan-out before converting those paths.
+
+- **Stage 04 Checkpoint 61 typed Community mutation ingress (2026-10-24, WIP):** normalized Discord edits/deletes now resolve original Local/Remote authored post/comment by exact `(connector, immediate container, message)` and verify current forum owner and linked author before reserving a User Actor mutation. Partial edits flag reconciliation on the exact source; old numeric Community routing no longer runs for real DB ingress. Fifteen real-SQLite scenarios pass, including writer-side revocation checks and
+  exact deferred-read container selection. Complete author-mutation transport/restart and full SDK-backed regression suite remain to be verified; do not mark Stage 04 complete.

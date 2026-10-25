@@ -14,6 +14,7 @@ from ...models import (
     PlatformConnector,
 )
 from .base import BaseRepository
+from .platform_delivery_intents import cancel_deleted_source_intents, validate_authenticated_update
 from ...platform_types import MessageRef
 
 """Discord fanout group and delivery persistence."""
@@ -21,6 +22,74 @@ from ...platform_types import MessageRef
 
 class DiscordFanoutGroupRepository(BaseRepository):
     """Persist the discord fanout groups domain."""
+
+    def __init__(self, session_provider, immediate_session_provider) -> None:
+        """Reuse regular reads while serializing authenticated canonical Deletes."""
+        super().__init__(session_provider)
+        self._immediate_session_provider = immediate_session_provider
+
+    def admit_authenticated_update(self, *, kind: str, ap_object_id: str,
+                                   community_actor_id: str, actor_id: str,
+                                   new_content_json: str, updated_at,
+                                   source_activity_id: str | None) -> bool:
+        """Persist a verified inbound AP Update independently of physical copies."""
+        if kind not in ('post', 'comment'):
+            raise ValueError('invalid remote canonical Update kind')
+        model = CommunityThreadGroup if kind == 'post' else CommunityMessageGroup
+        with self._immediate_session_provider() as session:
+            row = session.scalar(select(model).where(model.ap_object_id == ap_object_id))
+            if (row is None or row.community_actor_id != community_actor_id
+                or row.deleted_at is not None):
+                raise ValueError('unknown or deleted remote canonical AP object')
+            if kind == 'comment':
+                thread = session.get(CommunityThreadGroup, row.thread_group_id)
+                if thread is None or thread.deleted_at is not None:
+                    raise ValueError('comment Update has deleted remote canonical parent')
+            snapshot, order, identity, changed = validate_authenticated_update(
+                current_content_json=row.current_content_json,
+                new_content_json=new_content_json, ap_object_id=ap_object_id,
+                actor_id=actor_id, updated_at=updated_at, source_activity_id=source_activity_id,
+                previous_order_key=row.last_source_update_order_key,
+                previous_identity=row.last_source_update_identity,
+            )
+            if changed:
+                row.current_content_json = snapshot
+                row.content_revision += 1
+                row.last_source_update_order_key = order
+                row.last_source_update_identity = identity
+            return changed
+
+    def mark_inbound_deleted_if_live(self, *, kind: str, ap_object_id: str,
+                                    community_actor_id: str, actor_id: str) -> bool:
+        """Commit a Remote Community tombstone and all unsent intent cancellations.
+
+        An inbound author's identity comes from the previously authenticated
+        canonical AP Create snapshot, not from a naked Delete object URL.
+        """
+        if kind not in ('post', 'comment'):
+            raise ValueError('invalid remote canonical object kind')
+        model = CommunityThreadGroup if kind == 'post' else CommunityMessageGroup
+        with self._immediate_session_provider() as session:
+            row = session.scalar(select(model).where(model.ap_object_id == ap_object_id))
+            if row is None or row.community_actor_id != community_actor_id:
+                raise ValueError('unknown or foreign remote canonical object')
+            try:
+                snapshot = json.loads(row.current_content_json or '')
+            except (ValueError, TypeError) as exc:
+                raise ValueError('missing authenticated remote source provenance') from exc
+            if (not isinstance(snapshot, dict) or snapshot.get('authorActorId') != actor_id
+                or not actor_id or snapshot.get('apObjectId') != ap_object_id):
+                raise ValueError('unauthorized remote canonical Delete')
+            if row.deleted_at is not None:
+                return False
+            from datetime import datetime, timezone
+            row.deleted_at = datetime.now(timezone.utc)
+            row.content_revision += 1
+            cancel_deleted_source_intents(
+                session, domain='remote', kind=kind, canonical_id=row.id,
+                revision=row.content_revision,
+            )
+            return True
 
     @staticmethod
     def _validate_content_snapshot(

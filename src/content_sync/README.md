@@ -36,6 +36,13 @@ The owning Local/Remote Community lifecycle is checked on the same read. A
 consumer must revalidate the claim in its own writer transaction before a
 canonical admission or physical send; a candidate is not a persistent permit.
 
+`resolve_community_mutation_source(session, MessageRef, ...)` extends the
+source resolver to authored Update/Delete: immutable AP publication, physical
+mapping, live forum ownership, registered user, exact source coordinates and
+canonical Local/Remote row must all agree. It returns no authorization when
+only an old numeric source message ID is known; the Personal Feed keeps its
+own separate legacy mutation projection.
+
 `MessageMapping` and `PublishedActivityObject` distinguish the source's
 immediate message container from its parent forum surface. New neutral callers
 look up exact `MessageRef`s. The old numeric-only Discord read methods reject
@@ -70,6 +77,15 @@ canonical SQLite content snapshot; the SDK-ready Personal Feed Discord worker
 also runs `PlatformFanoutCoordinator.recover_pending()` on startup and its
 existing periodic cadence. Only definitely unsent, authorized `pending`
 requests enter transport; expired `dispatching` becomes `unresolved` and
-cannot be replayed merely because the worker restarted. Authored physical
-Update/Delete recovery and exclusive adapter dispatch permits are subsequent
-Stage 04 checkpoints, not implied by this Create recovery.
+cannot be replayed merely because the worker restarted. Durable physical Update/Delete recovery is owned separately by
+`platform_mutations.PlatformPhysicalMutationCoordinator` and uses the four
+existing persisted physical-copy rows, never a fabricated Create intent. A
+canonical verified revision or tombstone is committed before any I/O; the
+copy's CAS `applied_revision` advances only after an acknowledged typed edit
+(or tombstone edit) result. A lost response, expired dispatch, or unknown
+transport effect remains `unresolved` across restart and cannot be blindly
+retried. The app supplies the connector-specific Discord content renderer and
+permission evaluator; the shared coordinator imports no Discord SDK.
+Both the Create recovery and mutation recovery drain in the existing
+Discord-ready scheduler, preserving shutdown order. Exclusive adapter Create
+dispatch permits are a subsequent Stage 04 checkpoint.

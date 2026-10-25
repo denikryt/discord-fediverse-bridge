@@ -454,3 +454,124 @@ async def test_deleted_canonical_parent_rejects_late_child_before_admission(tmp_
     assert adapter.calls == adapter.message_calls == []
     assert db.discord_fanout_groups.get_message_group_by_ap_object(event.object.ap_id) is None
     assert db.discord_fanout_groups.get_thread_group_by_ap_object(POST).deleted_at is not None
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize('kind', ['post', 'comment'])
+async def test_remote_authenticated_delete_with_zero_copies_commits_tombstone(tmp_path, kind):
+    """Inbound Delete of a canonically retained object is durable without forums."""
+    import json
+    from types import SimpleNamespace
+    from src.models import CommunityThreadGroup, CommunityMessageGroup
+
+    db, _, runtime = world(tmp_path)
+    actor = f'https://{LEMMY_EXAMPLE_DOMAIN}/u/bob'
+    root_id = 'https://remote.example/root-for-delete'
+    root = db.discord_fanout_groups.create_thread_group(
+        community_actor_id=COMMUNITY, source_channel_id=None, source_thread_id=None,
+        source_starter_message_id=None, ap_activity_id='https://remote.example/create/root',
+        ap_object_id=root_id, current_content_json=json.dumps({
+            'schemaVersion': 1, 'kind': 'post', 'apObjectId': root_id,
+            'authorActorId': actor, 'bodyMarkdown': 'Root',
+        }))
+    target_id = root_id
+    if kind == 'comment':
+        target_id = 'https://remote.example/comment-for-delete'
+        db.discord_fanout_groups.create_message_group(
+            community_actor_id=COMMUNITY, thread_group_id=root.id,
+            source_channel_id=None, source_thread_id=None, source_message_id=None,
+            ap_activity_id='https://remote.example/create/comment', ap_object_id=target_id,
+            current_content_json=json.dumps({
+                'schemaVersion': 1, 'kind': 'comment', 'apObjectId': target_id,
+                'authorActorId': actor, 'bodyMarkdown': 'Comment',
+            }))
+    event = SimpleNamespace(
+        object=SimpleNamespace(ap_id=target_id),
+        community_actor_id=COMMUNITY, actor_id=actor,
+    )
+    adapter = DiscordPostsAndComments()
+    fake_runtime = SimpleNamespace(discord_adapter=adapter, bot=None)
+    handler = (runtime.handle_inbound_post_delete if kind == 'post'
+               else runtime.handle_inbound_comment_delete)
+    response = await handler(event, fake_runtime)
+    assert response.status == 'processed'
+    assert (await handler(event, fake_runtime)).status == 'skipped'
+    model = CommunityThreadGroup if kind == 'post' else CommunityMessageGroup
+    with db.session() as session:
+        from sqlalchemy import select
+        row = session.scalar(select(model).where(model.ap_object_id == target_id))
+        assert row.deleted_at is not None and row.content_revision == 1
+    assert adapter.calls == adapter.message_calls == []
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize('kind', ['post', 'comment'])
+async def test_remote_update_without_copies_commits_authoritative_revision(tmp_path, kind):
+    """Authenticated AP edits remain durable even when no forum can receive them."""
+    from src.activitypub_models import ActivityPubEvent
+    from src.community_sync.runtime import _inbound_content_snapshot
+    from src.models import CommunityThreadGroup, CommunityMessageGroup
+    from types import SimpleNamespace
+    from sqlalchemy import select
+
+    db, _, runtime = world(tmp_path)
+    actor = f'https://{LEMMY_EXAMPLE_DOMAIN}/u/bob'
+    original_time = '2026-10-20T09:00:00+00:00'
+    revision_time = '2026-10-23T09:00:00+00:00'
+    obj_id = 'https://remote.example/comment/no-copies' if kind == 'comment' else POST
+    root = db.discord_fanout_groups.create_thread_group(
+        community_actor_id=COMMUNITY, source_channel_id=None,
+        source_thread_id=None, source_starter_message_id=None,
+        ap_activity_id='https://remote.example/create/post/1', ap_object_id=POST,
+        current_content_json=_inbound_content_snapshot(ActivityPubEvent.model_validate({
+            'event_type': 'post.created', 'delivery_id': 'https://remote.example/create/post/1',
+            'occurred_at': original_time, 'community_actor_id': COMMUNITY,
+            'actor_id': actor, 'object': {
+                'ap_id': POST, 'kind': 'post', 'lemmy_id': 1, 'title': 'Title',
+                'body_markdown': 'old', 'author_name': 'bob',
+                'published_at': original_time,
+            },
+        })),
+    )
+    if kind == 'comment':
+        db.discord_fanout_groups.create_message_group(
+            community_actor_id=COMMUNITY, thread_group_id=root.id,
+            source_channel_id=None, source_thread_id=None, source_message_id=None,
+            ap_activity_id='https://remote.example/create/comment/1', ap_object_id=obj_id,
+            current_content_json=_inbound_content_snapshot(ActivityPubEvent.model_validate({
+                'event_type': 'comment.created', 'delivery_id': 'https://remote.example/create/comment/1',
+                'occurred_at': original_time, 'community_actor_id': COMMUNITY,
+                'actor_id': actor, 'object': {
+                    'ap_id': obj_id, 'kind': 'comment', 'lemmy_id': 2,
+                    'post_lemmy_id': 1, 'post_ap_id': POST, 'parent_ap_id': POST,
+                    'body_markdown': 'old comment', 'author_name': 'bob',
+                    'published_at': original_time,
+                },
+            })),
+        )
+    event = ActivityPubEvent.model_validate({
+        'event_type': f'{kind}.updated',
+        'delivery_id': f'https://remote.example/delivery/{kind}-edit',
+        'source_activity_id': f'https://remote.example/update/{kind}-1',
+        'occurred_at': revision_time, 'community_actor_id': COMMUNITY, 'actor_id': actor,
+        'object': {
+            'ap_id': obj_id, 'kind': kind, 'lemmy_id': 1,
+            'post_ap_id': POST if kind == 'comment' else None,
+            'post_lemmy_id': 1 if kind == 'comment' else None,
+            'parent_ap_id': POST if kind == 'comment' else None,
+            'title': 'Title' if kind == 'post' else None,
+            'body_markdown': 'edited', 'author_name': 'bob',
+            'published_at': original_time, 'updated_at': revision_time,
+        },
+    })
+    adapter = DiscordPostsAndComments()
+    fake_runtime = SimpleNamespace(discord_adapter=adapter, bot=None)
+    handler = (runtime.handle_inbound_post_update if kind == 'post'
+               else runtime.handle_inbound_comment_update)
+    assert (await handler(event, fake_runtime)).status == 'processed'
+    assert (await handler(event, fake_runtime)).status == 'skipped'
+    model = CommunityThreadGroup if kind == 'post' else CommunityMessageGroup
+    with db.session() as session:
+        row = session.scalar(select(model).where(model.ap_object_id == obj_id))
+        assert row.content_revision == 1
+        assert row.last_source_update_order_key is not None
+        assert 'edited' in row.current_content_json
+    assert adapter.calls == adapter.message_calls == []

@@ -254,6 +254,54 @@ def _build_live_runtime(settings: Settings, deployment_lease: FileLock) -> Runti
         from .content_sync.platform_fanout import PlatformFanoutCoordinator
         physical_coordinator = PlatformFanoutCoordinator(database, adapter_registry)
         personal_feed_discord_delivery_worker.add_drain(physical_coordinator.recover_pending)
+
+        # Durable physical edit/delete copies have no separate queue, including
+        # copies retained from released v0 without a Create intent.  This work
+        # is drained by the existing Discord-ready scheduler.
+        from .content_sync.platform_mutations import PlatformPhysicalMutationCoordinator
+        from .models import ChannelSurface
+        from .platform_types import ContentDocument
+        from .formatting import (
+            format_lemmy_post_for_discord, format_lemmy_comment_for_discord,
+        )
+
+        def physical_mutation_policy(connector_key: str, surface_id: int) -> bool:
+            """Recheck the live Discord policy outside SQLite writer claims."""
+            if connector_key != discord_adapter.connector.key:
+                return False
+            with database.session() as session:
+                surface = session.get(ChannelSurface, surface_id)
+                if (surface is None or surface.kind != 'forum'
+                    or not surface.external_guild_id):
+                    return False
+                guild_id = surface.external_guild_id
+            return bridge_policy_service.is_discord_guild_allowed(guild_id)
+
+        def physical_mutation_content(domain: str, kind: str, snapshot: dict) -> ContentDocument:
+            """Translate canonical snapshots at the domain/Discord boundary."""
+            author = snapshot.get('authorName') or 'remote'
+            body = snapshot['bodyMarkdown']
+            if snapshot.get('sourceKind') == 'discord_human':
+                # Author-sourced content retains its existing attribution.
+                return ContentDocument(f'`{author}`\n\n{body}' if body else f'`{author}`')
+            url = snapshot.get('url') or snapshot['apObjectId']
+            actor_id = snapshot.get('authorActorId') or ''
+            if kind == 'post':
+                rendered = format_lemmy_post_for_discord(
+                    author, snapshot.get('title') or 'Untitled remote post',
+                    body, url, actor_id,
+                )
+            else:
+                rendered = format_lemmy_comment_for_discord(author, body, url, actor_id)
+            return ContentDocument(rendered)
+
+        physical_mutation_coordinator = PlatformPhysicalMutationCoordinator(
+            database, adapter_registry,
+            target_policy=physical_mutation_policy,
+            content_renderer=physical_mutation_content,
+            tombstone_renderer=lambda _domain, _kind: ContentDocument('*deleted by creator*'),
+        )
+        personal_feed_discord_delivery_worker.add_drain(physical_mutation_coordinator.drain)
         personal_feed_conversation_runtime.bind_delivery_wake(
             personal_feed_discord_delivery_worker
         )
@@ -304,6 +352,7 @@ def _build_live_runtime(settings: Settings, deployment_lease: FileLock) -> Runti
             bot=bot,
             discord_adapter=discord_adapter,
             adapter_registry=adapter_registry,
+            physical_mutation_coordinator=physical_mutation_coordinator,
             community_runtime=community_runtime,
             local_community_runtime=local_community_runtime,
             profile_media_store=media_store,
@@ -338,6 +387,8 @@ def _validate_runtime_graph(runtime: Runtime) -> None:
         raise RuntimeError("Runtime Discord adapter is not bound to BridgeBot")
     if runtime.adapter_registry.get(runtime.discord_adapter.connector.key) is not runtime.discord_adapter:
         raise RuntimeError('Live Discord adapter is not registered for persisted connector')
+    if runtime.physical_mutation_coordinator.registry is not runtime.adapter_registry:
+        raise RuntimeError('Physical mutation coordinator must use live registered adapters')
     if runtime.discord_adapter._sink is None:
         raise RuntimeError("Discord normalized ingress is not configured")
     runtime.bot._require_personal_feed_delivery_worker()

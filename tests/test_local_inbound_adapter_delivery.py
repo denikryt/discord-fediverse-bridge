@@ -715,3 +715,87 @@ async def test_deleted_local_nested_comment_rejects_new_child(tmp_path):
         assert db.personal_feed_conversations.get_inbound_object(reply.object.ap_id) is None
     finally:
         db.close()
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize('kind', ['post', 'comment'])
+async def test_local_authenticated_delete_with_zero_copies_commits_tombstone(tmp_path, kind):
+    """Local inbound Delete is monotonic before target fanout or Group relay."""
+    from types import SimpleNamespace
+    from sqlalchemy import select
+    from src.models import LocalCommunityThread, LocalCommunityMessage
+
+    db, runtime, adapter, relays = setup(tmp_path)
+    event_post = _post()
+    community = db.local_communities.get_local_community_by_actor_url(event_post.community_actor_id)
+    post = db.local_community_content.admit_inbound_post(
+        local_community_id=community.id, ap_activity_id=event_post.delivery_id,
+        ap_object_id=event_post.object.ap_id,
+        current_content_json=runtime.inbound_create_handler._inbound_snapshot(event_post, kind='post'),
+    )
+    event = event_post
+    if kind == 'comment':
+        event = comment()
+        db.local_community_content.admit_inbound_comment(
+            local_community_thread_id=post.id,
+            ap_activity_id=event.delivery_id, ap_object_id=event.object.ap_id,
+            parent_ap_object_id=event.object.parent_ap_id,
+            current_content_json=runtime.inbound_create_handler._inbound_snapshot(event, kind='comment'),
+        )
+    calls = []
+
+    async def relay(**kwargs):
+        """Record a postcommit Group relay without making network requests."""
+        calls.append(kwargs['operation'])
+
+    runtime.federation_fanout.relay_update_or_delete = relay
+    handler = runtime.handle_inbound_post_delete if kind == 'post' else runtime.handle_inbound_comment_delete
+    response = await handler(event, SimpleNamespace(discord_adapter=adapter))
+    assert response.status == 'processed'
+    assert (await handler(event, SimpleNamespace(discord_adapter=adapter))).status == 'skipped'
+    model = LocalCommunityThread if kind == 'post' else LocalCommunityMessage
+    with db.session() as session:
+        row = session.scalar(select(model).where(model.ap_object_id == event.object.ap_id))
+        assert row.deleted_at is not None and row.content_revision == 1
+    assert calls == ['delete']
+    assert adapter.writes == []
+    db.close()
+
+@pytest.mark.asyncio
+async def test_local_update_without_copies_commits_before_relay(tmp_path):
+    """An authenticated local-community Update is durable with no host message."""
+    from datetime import datetime, timezone
+    from src.models import LocalCommunityThread
+    from sqlalchemy import select
+
+    db, runtime, adapter, relays = setup(tmp_path)
+    original = _post()
+    community = db.local_communities.get_local_community_by_actor_url(original.community_actor_id)
+    db.local_community_content.admit_inbound_post(
+        local_community_id=community.id, ap_activity_id=original.delivery_id,
+        ap_object_id=original.object.ap_id,
+        current_content_json=runtime.inbound_create_handler._inbound_snapshot(
+            original, kind='post'),
+    )
+    edited = _post(body='edited')
+    edited.delivery_id = 'https://remote.test/update/post/1'
+    edited.source_activity_id = edited.delivery_id
+    edited.object.updated_at = datetime(2026, 10, 23, 12, tzinfo=timezone.utc)
+    seen_revisions = []
+
+    async def relay(**kwargs):
+        """Observe the canonical revision before allowing Group relay."""
+        with db.session() as session:
+            row = session.scalar(select(LocalCommunityThread).where(
+                LocalCommunityThread.ap_object_id == edited.object.ap_id))
+            seen_revisions.append(row.content_revision)
+
+    runtime.federation_fanout.relay_update_or_delete = relay
+    result = await runtime.handle_inbound_post_update(
+        edited, SimpleNamespace(discord_adapter=adapter),
+    )
+    assert result.status == 'processed'
+    assert (await runtime.handle_inbound_post_update(
+        edited, SimpleNamespace(discord_adapter=adapter))).status == 'skipped'
+    assert seen_revisions == [1]
+    assert adapter.writes == []
+    db.close()

@@ -113,7 +113,7 @@ class Database:
         self.activitypub_objects = ActivityPubObjectRepository(self.session)
         self.remote_actors = RemoteActorRepository(self.session)
         self.legacy_lemmy_mappings = LegacyLemmyMappingRepository(self.session)
-        self.discord_fanout_groups = DiscordFanoutGroupRepository(self.session)
+        self.discord_fanout_groups = DiscordFanoutGroupRepository(self.session, self.immediate_session)
         self.discord_directory = DiscordDirectoryRepository(self.session)
         self.guild_invite_publications = GuildInvitePublicationRepository(self.session)
         self.management_actions = ManagementActions(

@@ -78,21 +78,23 @@ export async function normalizeUpdateActivityFromJson(
 
   if (object.type === "Page" || object.type === "Article") {
     const event = normalizePostActivityFromJson(activity, object);
-    // Override event_type: the object shape is identical to Create but this is an edit.
-    return { ...event, event_type: "post.updated" };
+    // Never replace immutable publication time with the arrival timestamp.
+    // An unversioned Update is retained without inventing a source clock;
+    // Python's canonical admission must reject it as order-ambiguous.
+    const updatedAt = asString(object.updated) ?? asString(activity.updated);
+    return { ...event, event_type: "post.updated",
+      object: { ...event.object, updated_at: updatedAt ?? null } };
   }
 
   if (object.type === "Note") {
     const event = await normalizeCommentActivityFromJson(activity, object, options);
-    const revisionTime = asString(object.updated) ?? asString(activity.updated)
-      ?? asString(activity.published) ?? event.occurred_at;
-    // For Update, published_at carries the accepted remote revision timestamp
-    // used by the Python ownership+ordering transaction.
+    // Note and Page use the same verified source version contract. Neither
+    // delivery time nor the original published instant proves an edit is newer.
+    const updatedAt = asString(object.updated) ?? asString(activity.updated);
     return {
       ...event,
       event_type: "comment.updated",
-      occurred_at: revisionTime,
-      object: { ...event.object, published_at: revisionTime },
+      object: { ...event.object, updated_at: updatedAt ?? null },
     };
   }
 

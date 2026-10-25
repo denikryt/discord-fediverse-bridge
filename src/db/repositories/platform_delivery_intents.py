@@ -117,6 +117,34 @@ class ClaimedCreate:
     fingerprint: str
 
 
+def cancel_deleted_source_intents(session: Session, *, domain: str, kind: str,
+                                  canonical_id: int, revision: int) -> None:
+    """Atomically fence all physical Creates after a canonical source Delete.
+
+    Definitely-unsent requests are terminally cancelled. A possibly sent
+    request cannot be retried or declared unsent merely because it expired.
+    The caller already owns the SQLite writer transaction and canonical row.
+    """
+    rows = session.scalars(select(PlatformDeliveryIntent).where(
+        PlatformDeliveryIntent.domain == domain,
+        PlatformDeliveryIntent.object_kind == kind,
+        PlatformDeliveryIntent.canonical_row_id == canonical_id,
+    )).all()
+    for row in rows:
+        row.desired_deleted = True
+        row.desired_revision = max(row.desired_revision, revision)
+        if row.state in ('blocked', 'pending', 'failed_definite'):
+            # No physical Create could have started from these states.
+            row.state = 'cancelled'
+            row.dispatch_token = None
+            row.lease_until = None
+        elif row.state == 'dispatching':
+            # Committed claims may have transmitted a POST. Keep the token
+            # and frozen request for exact receipt reconciliation only.
+            row.state = 'unresolved'
+        # delivered, unresolved and orphan receipts remain durable evidence.
+
+
 class PlatformDeliveryIntentRepository:
     """Validate canonical/surface ownership and persist every Create transition."""
 
@@ -570,3 +598,53 @@ class PlatformDeliveryIntentRepository:
             session.add(copy);session.flush()
             row.state='delivered';row.applied_revision=row.request_revision
             return True
+
+
+def validate_authenticated_update(*, current_content_json: str | None,
+                                  new_content_json: str, ap_object_id: str,
+                                  actor_id: str, updated_at: datetime | None,
+                                  source_activity_id: str | None,
+                                  previous_order_key: str | None,
+                                  previous_identity: str | None) -> tuple[str, str, str, bool]:
+    """Verify an ordered AP Update without substituting its receive timestamp.
+
+    This is an admission-time pure check shared by the two owning canonical
+    domains. The caller must reserve the writer and atomically save its result.
+    """
+    if updated_at is None or updated_at.tzinfo is None or updated_at.utcoffset() is None:
+        raise ValueError('Update requires a verified timezone-aware source revision')
+    if not isinstance(source_activity_id, str) or not source_activity_id.strip():
+        raise ValueError('Update requires a stable source activity identity')
+    if len(source_activity_id) > 512:
+        raise ValueError('Update source activity identity is unbounded')
+    if not isinstance(new_content_json, str) or len(new_content_json.encode()) > 131072:
+        raise ValueError('Update canonical payload exceeds size limit')
+    try:
+        current = json.loads(current_content_json or '')
+        desired = json.loads(new_content_json)
+    except (TypeError, ValueError) as exc:
+        raise ValueError('Update has no verified existing and desired AP content') from exc
+    if (not isinstance(current, dict) or not isinstance(desired, dict)
+        or current.get('authorActorId') != actor_id or not actor_id
+        or current.get('apObjectId') != ap_object_id
+        or desired.get('authorActorId') != actor_id
+        or desired.get('apObjectId') != ap_object_id
+        or current.get('kind') != desired.get('kind')
+        or desired.get('schemaVersion') != 1
+        or not isinstance(desired.get('bodyMarkdown'), str)):
+        raise ValueError('Update changes authenticated AP object ownership')
+    normalized = _json(desired)
+    clock = updated_at.astimezone(timezone.utc).isoformat(timespec='microseconds')
+    # Keep both identity and bytes to reject same-ID conflicting content.
+    identity = _json({'sourceActivityId': source_activity_id,
+                      'payloadSha256': hashlib.sha256(normalized.encode()).hexdigest()})
+    if previous_order_key is not None:
+        if clock < previous_order_key:
+            raise ValueError('stale AP Update would overwrite newer content')
+        if clock == previous_order_key:
+            if previous_identity != identity:
+                raise ValueError('conflicting AP Update with identical source clock')
+            return normalized, clock, identity, False
+        if previous_identity is not None and json.loads(previous_identity).get('sourceActivityId') == source_activity_id:
+            raise ValueError('reused AP activity ID for a different revision')
+    return normalized, clock, identity, True

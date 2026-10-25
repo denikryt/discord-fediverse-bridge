@@ -333,7 +333,13 @@ class UserActorDeliveryClaimRepository:
         published = session.get(PublishedActivityObject, source.published_object_id)
         if published is None or not isinstance(records, list):
             return ()
-        if source.source_kind != 'content_delete' and published.deleted_at is not None:
+        # An authorized terminal Delete requires a *committed* tombstone.
+        # Simply labeling an outbound source as Delete cannot authorize a
+        # network effect for an object that is still canonical-live.
+        if source.source_kind == 'content_delete':
+            if published.deleted_at is None:
+                return ()
+        elif published.deleted_at is not None:
             return ()
         authorized: set[str] = set()
         for record in records:

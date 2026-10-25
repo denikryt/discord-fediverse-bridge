@@ -83,6 +83,29 @@ normalized runtime delivery always uses the durable typed coordinator.
    a physical Create. Expired `dispatching` becomes `unresolved`; missing HTTP
    receipts, worker restarts and duplicate AP ingress never prove safe retry.
 
+## Stage 04 inbound AP Update/Delete — persist and physical reconciliation
+
+An authenticated inbound Local or Remote Community post/comment Update commits
+the normalized complete content, trusted source version and monotonic revision
+in the owning canonical SQLite row **even when there are zero physical copies**.
+An authorized Delete commits a permanent tombstone and cancels definitely-unsent
+Create intents before any network side effect. A duplicate or stale Update
+cannot overwrite this state. The eight AP mutation handlers request a physical
+mutation recovery pass, never call the old direct Discord SDK fanout.
+
+`content_sync.platform_mutations.PlatformPhysicalMutationCoordinator` inspects
+all four physical-copy tables, including copies retained from released v0 that
+have no Create intent. It verifies bot ownership, current surface authorization
+and the exact connector/container/message location; under one SQLite writer
+transaction it claims an eligible lagging revision. The Discord app supplies a
+pure content renderer and current guild policy check at the provider boundary.
+A successful typed `edit_message` acknowledges `copy.applied_revision` with a
+CAS; a deletion is presented as a tombstone edit to preserve discussion history.
+An unknown response, expired dispatch or racing ownership/revision change
+remains explicitly unresolved or unacknowledged rather than causing a blind
+retry. The existing Discord-ready scheduler scans outstanding copy revisions
+after restart; no second mutation queue or worker is introduced.
+
 ## Registration flow
 
 1. `/register` starts in `src/commands/register.py` and browser routes in `src/http_api.py`.
@@ -117,14 +140,35 @@ subscriptions accepted.
 3. If it was the last channel for the community, Python calls gateway `/unfollow-community`.
 4. The bridge follow row is removed or preserved according to Undo(Follow) delivery outcome.
 
-## Discord Local Community source edit/delete (local subscriber synchronization Checkpoint 39)
+## Stage 04 typed Discord Community author Update/Delete (Checkpoint 61 in progress)
 
-1. Typed Discord Gateway mutation ingress retains the original physical message ID; `DiscordEventRouter` resolves a persisted Local Community starter or comment surface before invoking `LocalCommunityRuntime`.
-2. `LocalCommunityMutationHandler` verifies source community lifecycle and active subscriber-origin authority (if applicable), finds the persisted canonical AP object, and submits its Update/Delete through the existing federation service.
-3. The runtime-bound `DiscordAdapter` is passed to `LocalCommunitySurfaceFanout`, which enumerates canonical host and subscriber surface receipts. It omits the physical source copy.
-4. Before each target edit/tombstone, `LocalCommunityDiscordFanout` rechecks current host placement or active local subscriber identity, including original subscriber row ID, community, guild policy and parent thread mapping. Historical receipts alone never authorize a mutation.
-5. Edits fetch an exact scoped `MessageRef`, preserve each copy's existing attribution header, and refuse a mismatched/unknown read. Deletes keep the visible `*deleted by creator*` marker. Per-target failure does not issue a legacy SDK fallback or block healthy copies.
-6. These are best-effort mutations; there is no new delivery queue or local subscriber participation recovery. Direct SDK test callers without a bound adapter remain supported until the final dependency-audit cutover.
+1. Raw SDK edit/delete enters `DiscordAdapter` and the single normalized
+   `PlatformEventIngress` as a `MessageUpdated`/`MessageDeleted` whose source is
+   `(connector, immediate thread, message ID)`. Neither source resolution nor
+   Community AP mutation submission casts that tuple into one numeric ID.
+2. `DiscordMessageMutationHandler` resolves `PublishedActivityObject` and
+   `MessageMapping` by the **exact** source tuple. The neutral forum source
+   resolver validates its current channel-surface owner, guild, live
+   Local/Remote Community and canonical post/comment source metadata. Unknown,
+   rebound, mirrored, inbound and foreign-author refs produce no authored AP
+   mutation. A stale numeric-ID collision cannot fall through to Community.
+3. For a complete authorized edit, the existing User Actor delivery service
+   reserves an Update to the original published AP object. For an ID-only
+   authorized delete, it reserves Delete without a content fetch. A partial
+   edit with unavailable Discord read marks durable reconciliation on the
+   **exact** published source, not on another message in a sibling thread.
+   Deferred reads after restart use the immediate thread container, not the
+   parent forum. Current source ownership is rechecked before the read **and**
+   in the SQLite writer; an unknown/404 partial read cannot invent an author
+   Delete or overwrite an unrelated physical message.
+4. Once the User Actor mutation is committed, the existing Community physical
+   mutation worker reconciles current canonical revisions to bot-owned copies.
+   No old `DiscordFanout.propagate_edit/delete` runs before canonical admission;
+   unknown physical effects stay `unresolved` until positive proof.
+5. Personal Feed is a separate owner of numeric-only legacy source mappings.
+   Community source events are never offered to the old numeric router. The
+   remaining Personal Feed compatibility is explicitly scoped to its own
+   future typed source/mutation conversion, not a second Community publisher.
 
 ## Discord Personal Feed root -> ActivityPub Create (local subscriber synchronization)
 

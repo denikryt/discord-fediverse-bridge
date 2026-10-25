@@ -13,6 +13,7 @@ from ...models import (
     LocalCommunityThreadSurface,
 )
 from .base import BaseRepository
+from .platform_delivery_intents import cancel_deleted_source_intents, validate_authenticated_update
 from ...platform_types import MessageRef
 from .platform_surfaces import discord_copy_query
 from ...models import ChannelSurface, PlatformConnector
@@ -47,6 +48,71 @@ class LocalCommunityContentRepository(BaseRepository):
             raise ValueError('inbound canonical snapshot does not match object')
         return json.dumps(data, sort_keys=True, separators=(',', ':'), ensure_ascii=False,
                           allow_nan=False)
+
+    def admit_authenticated_update(self, *, kind: str, ap_object_id: str,
+                                   local_community_id: int, actor_id: str,
+                                   new_content_json: str, updated_at,
+                                   source_activity_id: str | None) -> bool:
+        """Commit the latest author-verified AP content with no recipient count gate."""
+        if kind not in ('post', 'comment'):
+            raise ValueError('invalid local canonical Update kind')
+        model = LocalCommunityThread if kind == 'post' else LocalCommunityMessage
+        with self._immediate_session_provider() as session:
+            row = session.scalar(select(model).where(model.ap_object_id == ap_object_id))
+            if row is None or row.deleted_at is not None:
+                raise ValueError('missing or deleted local canonical AP object')
+            thread = row if kind == 'post' else session.get(LocalCommunityThread, row.local_community_thread_id)
+            if thread is None or thread.deleted_at is not None or thread.local_community_id != local_community_id:
+                raise ValueError('local Update has wrong or deleted owning thread')
+            snapshot, order, identity, changed = validate_authenticated_update(
+                current_content_json=row.current_content_json,
+                new_content_json=new_content_json, ap_object_id=ap_object_id,
+                actor_id=actor_id, updated_at=updated_at, source_activity_id=source_activity_id,
+                previous_order_key=row.last_source_update_order_key,
+                previous_identity=row.last_source_update_identity,
+            )
+            if changed:
+                row.current_content_json = snapshot
+                row.content_revision += 1
+                row.last_source_update_order_key = order
+                row.last_source_update_identity = identity
+            return changed
+
+    def mark_inbound_deleted_if_live(self, *, kind: str, ap_object_id: str,
+                                    local_community_id: int, actor_id: str) -> bool:
+        """Tombstone one authenticated inbound object before physical effects.
+
+        A matching persisted canonical actor is required: neither a guessed
+        source row nor an unauthenticated AP ID grants deletion permission.
+        Returns False on a verified duplicate Delete without new revision.
+        """
+        if kind not in ('post', 'comment'):
+            raise ValueError('invalid local canonical object kind')
+        model = LocalCommunityThread if kind == 'post' else LocalCommunityMessage
+        with self._immediate_session_provider() as session:
+            row = session.scalar(select(model).where(model.ap_object_id == ap_object_id))
+            if row is None:
+                raise ValueError('unknown local canonical object')
+            thread = row if kind == 'post' else session.get(LocalCommunityThread, row.local_community_thread_id)
+            if thread is None or thread.local_community_id != local_community_id:
+                raise ValueError('local canonical source community mismatch')
+            try:
+                snapshot = json.loads(row.current_content_json or '')
+            except (ValueError, TypeError) as exc:
+                raise ValueError('missing authenticated local source provenance') from exc
+            if (not isinstance(snapshot, dict) or snapshot.get('authorActorId') != actor_id
+                or not actor_id or snapshot.get('apObjectId') != ap_object_id):
+                raise ValueError('unauthorized local canonical Delete')
+            if row.deleted_at is not None:
+                return False
+            from datetime import datetime, timezone
+            row.deleted_at = datetime.now(timezone.utc)
+            row.content_revision += 1
+            cancel_deleted_source_intents(
+                session, domain='local', kind=kind, canonical_id=row.id,
+                revision=row.content_revision,
+            )
+            return True
 
     def admit_inbound_post(self, *, local_community_id: int, ap_activity_id: str,
                            ap_object_id: str, current_content_json: str) -> LocalCommunityThread:

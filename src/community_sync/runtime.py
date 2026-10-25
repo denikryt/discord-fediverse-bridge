@@ -1063,24 +1063,35 @@ class CommunityRuntime:
                 detail="post not yet mapped",
             )
 
+        # The source version and latest content are committed even if no
+        # subscriber has a physical post yet. A transport failure cannot
+        # erase or roll back the canonical Update revision.
+        try:
+            first_update = self.database.discord_fanout_groups.admit_authenticated_update(
+                kind='post', ap_object_id=event.object.ap_id,
+                community_actor_id=event.community_actor_id, actor_id=event.actor_id,
+                new_content_json=_inbound_content_snapshot(event),
+                updated_at=getattr(event.object, 'updated_at', None),
+                source_activity_id=getattr(event, 'source_activity_id', None),
+            )
+        except ValueError as exc:
+            return _HandlerResult(
+                'skipped', InboundActivityOutcome.IGNORED_UNMAPPED_CONTEXT, str(exc),
+            )
+        if not first_update:
+            return _HandlerResult(
+                'skipped', InboundActivityOutcome.IGNORED_ALREADY_APPLIED,
+                'canonical post Update already admitted',
+            )
         thread_deliveries = self.database.discord_fanout_groups.get_thread_deliveries(
             thread_group.id
         )
-        if not thread_deliveries:
-            return _HandlerResult(
-                status="skipped",
-                outcome=InboundActivityOutcome.IGNORED_UNMAPPED_CONTEXT,
-                detail="no thread deliveries",
-            )
 
-        adapter = getattr(runtime, 'discord_adapter', None)
-        bot = None if adapter is not None else (self.bot or runtime.bot)
-        new_content = event.object.body_markdown or ""
-
-        await propagate_inbound_post_update(
-            adapter=adapter,
-            bot=bot, thread_deliveries=thread_deliveries, new_content=new_content
-        )
+        mutation_coordinator = getattr(runtime, 'physical_mutation_coordinator', None)
+        if mutation_coordinator is not None:
+            await mutation_coordinator.drain()
+        # When worker/adapter is unavailable the committed canonical revision
+        # remains scan-visible; never fall back to a direct SDK edit.
 
         return _HandlerResult(
             status="processed",
@@ -1113,17 +1124,31 @@ class CommunityRuntime:
                 detail="post not yet mapped",
             )
 
+        # Authentication and canonical Delete must commit before any physical
+        # HTTP mutation, including when there are no subscribed forums.
+        try:
+            first_delete = self.database.discord_fanout_groups.mark_inbound_deleted_if_live(
+                kind='post', ap_object_id=event.object.ap_id,
+                community_actor_id=event.community_actor_id, actor_id=event.actor_id,
+            )
+        except ValueError as exc:
+            return _HandlerResult(
+                'skipped', InboundActivityOutcome.IGNORED_UNMAPPED_CONTEXT, str(exc),
+            )
+        if not first_delete:
+            return _HandlerResult(
+                'skipped', InboundActivityOutcome.IGNORED_ALREADY_APPLIED,
+                'canonical post already deleted',
+            )
         thread_deliveries = self.database.discord_fanout_groups.get_thread_deliveries(
             thread_group.id
         )
 
-        adapter = getattr(runtime, 'discord_adapter', None)
-        bot = None if adapter is not None else (self.bot or runtime.bot)
-
-        await propagate_inbound_post_delete(
-            adapter=adapter,
-            bot=bot, thread_deliveries=thread_deliveries
-        )
+        mutation_coordinator = getattr(runtime, 'physical_mutation_coordinator', None)
+        if mutation_coordinator is not None:
+            await mutation_coordinator.drain()
+        # When worker/adapter is unavailable the committed canonical revision
+        # remains scan-visible; never fall back to a direct SDK edit.
 
         return _HandlerResult(
             status="processed",
@@ -1157,28 +1182,30 @@ class CommunityRuntime:
                 detail="comment not yet mapped",
             )
 
-        all_deliveries = self.database.discord_fanout_groups.get_message_deliveries(
-            message_group.id
-        )
-        # Only edit messages the bot itself wrote: inbound (created by bot from AP)
-        # and mirror (bot-owned copies in sibling channels).
-        # Source messages are user-authored — editing them returns 403 Forbidden.
-        deliveries = get_inbound_comment_edit_deliveries(all_deliveries)
-        if not deliveries:
-            return _HandlerResult(
-                status="skipped",
-                outcome=InboundActivityOutcome.IGNORED_UNMAPPED_CONTEXT,
-                detail="no message deliveries",
+        # Persist the author-verified revision before enumerating physical
+        # copies. An empty recipient set is not a reason to lose the update.
+        try:
+            first_update = self.database.discord_fanout_groups.admit_authenticated_update(
+                kind='comment', ap_object_id=event.object.ap_id,
+                community_actor_id=event.community_actor_id, actor_id=event.actor_id,
+                new_content_json=_inbound_content_snapshot(event),
+                updated_at=getattr(event.object, 'updated_at', None),
+                source_activity_id=getattr(event, 'source_activity_id', None),
             )
-
-        adapter = getattr(runtime, 'discord_adapter', None)
-        bot = None if adapter is not None else (self.bot or runtime.bot)
-        new_content = event.object.body_markdown or ""
-
-        await propagate_inbound_comment_update(
-            adapter=adapter,
-            bot=bot, deliveries=deliveries, new_content=new_content
-        )
+        except ValueError as exc:
+            return _HandlerResult(
+                'skipped', InboundActivityOutcome.IGNORED_UNMAPPED_CONTEXT, str(exc),
+            )
+        if not first_update:
+            return _HandlerResult(
+                'skipped', InboundActivityOutcome.IGNORED_ALREADY_APPLIED,
+                'canonical comment Update already admitted',
+            )
+        mutation_coordinator = getattr(runtime, 'physical_mutation_coordinator', None)
+        if mutation_coordinator is not None:
+            await mutation_coordinator.drain()
+        # When worker/adapter is unavailable the committed canonical revision
+        # remains scan-visible; never fall back to a direct SDK edit.
 
         return _HandlerResult(
             status="processed",
@@ -1213,17 +1240,33 @@ class CommunityRuntime:
                 detail="comment not yet mapped",
             )
 
+        # The canonical row and its pending Create cancellations are committed
+        # together even if this AP comment has zero physical recipients.
+        try:
+            first_delete = self.database.discord_fanout_groups.mark_inbound_deleted_if_live(
+                kind='comment', ap_object_id=event.object.ap_id,
+                community_actor_id=event.community_actor_id, actor_id=event.actor_id,
+            )
+        except ValueError as exc:
+            return _HandlerResult(
+                'skipped', InboundActivityOutcome.IGNORED_UNMAPPED_CONTEXT, str(exc),
+            )
+        if not first_delete:
+            return _HandlerResult(
+                'skipped', InboundActivityOutcome.IGNORED_ALREADY_APPLIED,
+                'canonical comment already deleted',
+            )
         all_deliveries = self.database.discord_fanout_groups.get_message_deliveries(
             message_group.id
         )
         # Only edit messages the bot itself wrote — source messages are user-authored.
         deliveries = get_inbound_comment_edit_deliveries(all_deliveries)
 
-        adapter = getattr(runtime, 'discord_adapter', None)
-        await propagate_inbound_comment_delete(
-            adapter=adapter, bot=None if adapter is not None else (self.bot or runtime.bot),
-            deliveries=deliveries,
-        )
+        mutation_coordinator = getattr(runtime, 'physical_mutation_coordinator', None)
+        if mutation_coordinator is not None:
+            await mutation_coordinator.drain()
+        # When worker/adapter is unavailable the committed canonical revision
+        # remains scan-visible; never fall back to a direct SDK edit.
 
         return _HandlerResult(
             status="processed",

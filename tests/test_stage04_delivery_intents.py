@@ -421,3 +421,50 @@ class CoordinatorConcurrencyScenarios(PhysicalCreateIntentScenarios):
 
 if __name__=="__main__":
     unittest.main(verbosity=2)
+
+    def test_authorized_delete_cancels_unsent_create_in_same_writer_commit(self):
+        """A tombstone and pending intent cancellation survive the same restart."""
+        import json
+        from src.models import LocalCommunityThread
+        with self.db.immediate_session() as session:
+            row = session.get(LocalCommunityThread, self.canonical)
+            row.current_content_json = json.dumps({
+                'schemaVersion': 1, 'kind': 'post', 'apObjectId': row.ap_object_id,
+                'authorActorId': 'https://remote.test/u/actor', 'bodyMarkdown': 'content',
+            })
+        intent_id = self._prepare()
+        assert self.db.local_community_content.mark_inbound_deleted_if_live(
+            kind='post', ap_object_id='https://bridge.test/objects/1',
+            local_community_id=self.owner, actor_id='https://remote.test/u/actor')
+        with self.db.session() as session:
+            intent = session.get(PlatformDeliveryIntent, intent_id)
+            canonical = session.get(LocalCommunityThread, self.canonical)
+            self.assertIsNotNone(canonical.deleted_at)
+            self.assertEqual(canonical.content_revision, 1)
+            self.assertEqual(intent.state, 'cancelled')
+            self.assertTrue(intent.desired_deleted)
+            self.assertEqual(intent.desired_revision, 1)
+        self.assertIsNone(self._repo().claim(intent_id))
+
+    def test_authorized_delete_keeps_possibly_sent_claim_unresolved(self):
+        """A claimed POST is not incorrectly pronounced cancelled by Delete."""
+        import json
+        from src.models import LocalCommunityThread
+        with self.db.immediate_session() as session:
+            row = session.get(LocalCommunityThread, self.canonical)
+            row.current_content_json = json.dumps({
+                'schemaVersion': 1, 'kind': 'post', 'apObjectId': row.ap_object_id,
+                'authorActorId': 'https://remote.test/u/actor', 'bodyMarkdown': 'content',
+            })
+        intent_id = self._prepare()
+        claimed = self._repo().claim(intent_id)
+        assert claimed is not None
+        assert self.db.local_community_content.mark_inbound_deleted_if_live(
+            kind='post', ap_object_id='https://bridge.test/objects/1',
+            local_community_id=self.owner, actor_id='https://remote.test/u/actor')
+        with self.db.session() as session:
+            row = session.get(PlatformDeliveryIntent, intent_id)
+            self.assertEqual(row.state, 'unresolved')
+            self.assertTrue(row.desired_deleted)
+            self.assertEqual(row.dispatch_token, claimed.token)
+        self.assertIsNone(self._repo().claim(intent_id))

@@ -24,6 +24,17 @@ This document is a short, feature-oriented index of the test suite. It helps mai
 These are focused tests and do not substitute for full Python/Node or live
 Discord integration tests, which require the project dependencies.
 
+## Stage 04 typed Community source mutations (Checkpoint 61 WIP)
+
+- Real SQLite source post/comment + current surface and author validation,
+  two distinct immediate thread containers, partial refetch authorization,
+  scoped durable reconciliation, owner rebinding before writer admission and
+  before deferred read, ID-only delete, no forged Delete on partial-read 404,
+  and separate legacy Personal Feed delivery —
+  `tests/test_stage04_typed_community_mutation_ingress.py`.
+- These tests exercise the admission/repository boundary, not end-to-end
+  Discord SDK or the complete authored mutation transport and restart matrix.
+
 ## Test layers
 
 - **Behavior** — user or platform action in a defined system state, verified through observable runtime effects.

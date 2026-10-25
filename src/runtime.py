@@ -11,6 +11,7 @@ from .db import Database
 from .discord_bot import BridgeBot
 from .discord_adapter import DiscordAdapter
 from .platform_adapters import PlatformAdapterRegistry
+from .content_sync.platform_mutations import PlatformPhysicalMutationCoordinator
 from .discord_oauth_client import DiscordOAuthClient
 from .content_publish_service import ContentPublishService
 from .fedify_gateway_client import FedifyGatewayClient
@@ -45,6 +46,7 @@ class Runtime:
     bot: BridgeBot
     discord_adapter: DiscordAdapter
     adapter_registry: PlatformAdapterRegistry
+    physical_mutation_coordinator: PlatformPhysicalMutationCoordinator
     community_runtime: CommunityRuntime
     local_community_runtime: LocalCommunityRuntime
     profile_media_store: ProfileMediaStore

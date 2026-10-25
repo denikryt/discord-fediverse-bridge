@@ -259,3 +259,148 @@ class AuthoredCanonicalAdmissionScenarios(unittest.TestCase):
                 assert row.status=='delivered'
             gateway.publish_content.assert_not_awaited()
             db.close()
+
+class AuthoredMutationCausalScenarios(AuthoredAnnounceScenarios):
+    """Real SQLite validates Create acknowledgements and terminal Delete sequencing."""
+
+    def _stage_create(self) -> None:
+        with self.db.immediate_session() as session:
+            self.db.local_community_authored_announces.stage_create(
+                session,
+                published=session.get(PublishedActivityObject, self.object_id),
+                community=session.get(LocalCommunity, self.community_id),
+                activity_json=self.inner,
+            )
+
+    def _stage(self, kind: str, revision: int) -> int:
+        from datetime import datetime, timezone
+        with self.db.immediate_session() as session:
+            published = session.get(PublishedActivityObject, self.object_id)
+            published.content_revision = revision
+            if kind == 'delete':
+                published.deleted_at = datetime.now(timezone.utc)
+            return self.db.local_community_authored_announces.stage_mutation(
+                session, published=published,
+                community=session.get(LocalCommunity, self.community_id),
+                activity_kind=kind, content_revision=revision,
+                activity_json={'id': f'https://bridge.test/activities/{kind}/{revision}',
+                               'type': kind.capitalize(), 'actor': published.actor_url,
+                               'object': published.object_id},
+            )
+
+    def test_update_requires_proven_create_for_same_follow(self) -> None:
+        """Pending Create is not evidence that remote received the AP object."""
+        self._stage_create()
+        self.assertEqual(self._stage('update', 2), 1)
+        claims = self.db.local_community_authored_announces.claim_due()
+        self.assertEqual(len(claims), 1)
+        self.assertIn('create', claims[0].activity_json['object']['type'].lower())
+        self.assertTrue(self.db.local_community_authored_announces.record_result(claims[0], delivered=True))
+        claims = self.db.local_community_authored_announces.claim_due()
+        self.assertEqual(len(claims), 1)
+        self.assertEqual(claims[0].activity_json['object']['type'], 'Update')
+
+    def test_delete_cancels_only_unsent_update_and_fences_replay(self) -> None:
+        """Delete may bypass unsent U1 but old U1 may never be revived."""
+        self._stage_create()
+        create = self.db.local_community_authored_announces.claim_due()[0]
+        self.db.local_community_authored_announces.record_result(create, delivered=True)
+        self._stage('update', 2)
+        self.assertEqual(self._stage('delete', 3), 1)
+        with self.db.session() as session:
+            pending = list(session.scalars(select(LocalCommunityAuthoredAnnounceDelivery)))
+            self.assertEqual([x.status for x in pending if x.activity_kind == 'update'], ['cancelled'])
+        deletes = self.db.local_community_authored_announces.claim_due()
+        self.assertEqual(len(deletes), 1)
+        self.assertEqual(deletes[0].activity_json['object']['type'], 'Delete')
+        self.db.local_community_authored_announces.record_result(deletes[0], delivered=True)
+        self.assertEqual(self.db.local_community_authored_announces.claim_due(), [])
+
+    def test_ambiguous_update_blocks_delete_after_restart(self) -> None:
+        """An unknown send stays a blocker even if its lease expires."""
+        self._stage_create()
+        create = self.db.local_community_authored_announces.claim_due()[0]
+        self.db.local_community_authored_announces.record_result(create, delivered=True)
+        self._stage('update', 2)
+        update = self.db.local_community_authored_announces.claim_due()[0]
+        self.db.local_community_authored_announces.record_result(update, delivered=False, error='timeout')
+        self._stage('delete', 3)
+        self.assertEqual(self.db.local_community_authored_announces.claim_due(), [])
+        self.assertEqual(self.db.local_community_authored_announces.claim_due(), [])
+
+    def test_new_follow_does_not_inherit_original_create_proof(self) -> None:
+        """F2 cannot adopt F1's Create when both point to one inbox."""
+        self._stage_create()
+        attempt = self.db.local_community_authored_announces.claim_due()[0]
+        self.db.local_community_authored_announces.record_result(attempt, delivered=True)
+        with self.db.immediate_session() as session:
+            subscriber = session.scalar(select(RemoteSubscriber))
+            subscriber.follow_activity_id = 'https://remote.test/follows/F2'
+        self.assertEqual(self._stage('update', 2), 0)
+        self.assertEqual(self.db.local_community_authored_announces.claim_due(), [])
+
+    def test_pending_create_deleted_before_send_cancels_sequence(self) -> None:
+        """A never-delivered original Create gives no remote object to Delete."""
+        self._stage_create()
+        self.assertEqual(self._stage('delete', 2), 0)
+        self.assertEqual(self.db.local_community_authored_announces.claim_due(), [])
+        with self.db.session() as session:
+            rows = list(session.scalars(select(LocalCommunityAuthoredAnnounceDelivery)))
+            self.assertEqual([(r.activity_kind, r.status) for r in rows], [('create','cancelled')])
+
+    def test_claimed_create_rejected_after_canonical_tombstone(self) -> None:
+        """A granted Create claim is not permission to send after source deletion."""
+        from datetime import datetime, timezone
+        self._stage_create()
+        attempt = self.db.local_community_authored_announces.claim_due()[0]
+        self.assertTrue(self.db.local_community_authored_announces.revalidate(attempt))
+        with self.db.immediate_session() as session:
+            row = session.get(PublishedActivityObject, self.object_id)
+            row.deleted_at = datetime.now(timezone.utc)
+            row.content_revision = 1
+        self.assertFalse(self.db.local_community_authored_announces.revalidate(attempt))
+        self.assertTrue(self.db.local_community_authored_announces.record_result(
+            attempt, delivered=False, definitely_unsent=True, error='canonical deleted before I/O'))
+        self.assertEqual(self.db.local_community_authored_announces.claim_due(), [])
+
+    def test_claimed_update_rejected_after_canonical_delete(self) -> None:
+        """A pending Delete can proceed after proven-unsent claimed Update is settled."""
+        self._stage_create()
+        create = self.db.local_community_authored_announces.claim_due()[0]
+        self.assertTrue(self.db.local_community_authored_announces.record_result(create, delivered=True))
+        self._stage('update', 2)
+        update = self.db.local_community_authored_announces.claim_due()[0]
+        self.assertTrue(self.db.local_community_authored_announces.revalidate(update))
+        self.assertEqual(self._stage('delete', 3), 1)
+        self.assertFalse(self.db.local_community_authored_announces.revalidate(update))
+        self.assertTrue(self.db.local_community_authored_announces.record_result(
+            update, delivered=False, definitely_unsent=True, error='superseded before I/O'))
+        claims = self.db.local_community_authored_announces.claim_due()
+        self.assertEqual(len(claims), 1)
+        self.assertEqual(claims[0].activity_json['object']['type'], 'Delete')
+
+    def test_wrong_author_and_duplicate_payload_are_rejected(self) -> None:
+        """A third party cannot reserve a mutation under another author's object."""
+        self._stage_create()
+        with self.db.immediate_session() as session:
+            published = session.get(PublishedActivityObject, self.object_id)
+            published.content_revision = 2
+            community = session.get(LocalCommunity, self.community_id)
+            with self.assertRaises(ValueError):
+                self.db.local_community_authored_announces.stage_mutation(
+                    session, published=published, community=community,
+                    activity_kind='update', content_revision=2,
+                    activity_json={'id':'https://bridge.test/a/wrong','type':'Update',
+                                   'actor':'https://other.test/author','object':published.object_id},
+                )
+        self.assertEqual(self._stage('update', 2), 1)
+        with self.db.immediate_session() as session:
+            published = session.get(PublishedActivityObject, self.object_id)
+            community = session.get(LocalCommunity, self.community_id)
+            with self.assertRaises(ValueError):
+                self.db.local_community_authored_announces.stage_mutation(
+                    session, published=published, community=community,
+                    activity_kind='update', content_revision=2,
+                    activity_json={'id':'https://bridge.test/a/conflict','type':'Update',
+                                   'actor':published.actor_url, 'object':published.object_id},
+                )

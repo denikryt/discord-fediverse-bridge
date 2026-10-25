@@ -160,7 +160,7 @@ class UpdateContentRequest:
     # in_reply_to_object_id is required for comments to identify the parent post.
     # Lemmy will not process comment updates without this field.
     in_reply_to_object_id: str | None = None
-    target_inbox_urls: list[str] | None = None
+    conversation_root_object_id: str | None = None
     operation_id: str | None = None
     activity_id: str | None = None
     mutation_timestamp: str | None = None
@@ -175,7 +175,7 @@ class DeleteContentRequest:
     community_actor_url: str | None
     ap_object_id: str
     publication_context: str = "community"
-    target_inbox_urls: list[str] | None = None
+    conversation_root_object_id: str | None = None
     operation_id: str | None = None
     activity_id: str | None = None
     mutation_timestamp: str | None = None
@@ -468,7 +468,7 @@ class FedifyGatewayClient:
                 "bodyMarkdown": request.body_markdown,
                 "title": request.title,
                 "inReplyToObjectId": request.in_reply_to_object_id,
-                "targetInboxUrls": request.target_inbox_urls,
+                "conversationRootObjectId": request.conversation_root_object_id,
                 "operationId": request.operation_id,
                 "activityId": request.activity_id,
                 "mutationTimestamp": request.mutation_timestamp,
@@ -496,7 +496,7 @@ class FedifyGatewayClient:
                 "communityActorUrl": request.community_actor_url,
                 "publicationContext": request.publication_context,
                 "apObjectId": request.ap_object_id,
-                "targetInboxUrls": request.target_inbox_urls,
+                "conversationRootObjectId": request.conversation_root_object_id,
                 "operationId": request.operation_id,
                 "activityId": request.activity_id,
                 "mutationTimestamp": request.mutation_timestamp,

@@ -113,3 +113,76 @@ class LocalInboundCanonicalAdmissionScenarios(unittest.TestCase):
 
 if __name__ == '__main__':
     unittest.main()
+
+class LocalInboundTombstoneScenarios(LocalInboundCanonicalAdmissionScenarios):
+    """Verify canonical Delete after valid AP admission without any host copies."""
+
+    def test_post_delete_is_irreversible_and_actor_scoped(self) -> None:
+        """A matching remote actor may delete once, a foreign actor never can."""
+        post = self.post()
+        with self.assertRaises(ValueError):
+            self.db.local_community_content.mark_inbound_deleted_if_live(
+                kind='post', ap_object_id=post.ap_object_id,
+                local_community_id=self.community_id, actor_id='https://evil.test/u/a')
+        assert self.db.local_community_content.mark_inbound_deleted_if_live(
+            kind='post', ap_object_id=post.ap_object_id,
+            local_community_id=self.community_id,
+            actor_id='https://remote.test/u/bob')
+        assert not self.db.local_community_content.mark_inbound_deleted_if_live(
+            kind='post', ap_object_id=post.ap_object_id,
+            local_community_id=self.community_id,
+            actor_id='https://remote.test/u/bob')
+        with self.db.session() as session:
+            from src.models import LocalCommunityThread
+            row = session.get(LocalCommunityThread, post.id)
+            assert row.deleted_at is not None and row.content_revision == 1
+
+    def test_comment_delete_preserves_parent_and_prevents_replay(self) -> None:
+        """A canonical comment can be deleted with no physical recipients."""
+        thread = self.post()
+        fields = dict(local_community_thread_id=thread.id,
+                      ap_activity_id='https://remote.test/create/comment',
+                      ap_object_id='https://remote.test/comment',
+                      parent_ap_object_id=thread.ap_object_id,
+                      current_content_json=snapshot('comment', 'https://remote.test/comment', 'reply'))
+        comment = self.db.local_community_content.admit_inbound_comment(**fields)
+        assert self.db.local_community_content.mark_inbound_deleted_if_live(
+            kind='comment', ap_object_id=comment.ap_object_id,
+            local_community_id=self.community_id,
+            actor_id='https://remote.test/u/bob')
+        with self.db.session() as session:
+            from src.models import LocalCommunityMessage, LocalCommunityThread
+            assert session.get(LocalCommunityMessage, comment.id).deleted_at is not None
+            assert session.get(LocalCommunityThread, thread.id).deleted_at is None
+        with self.assertRaises(ValueError):
+            self.db.local_community_content.admit_inbound_comment(**fields)
+
+class LocalInboundUpdateScenarios(LocalInboundCanonicalAdmissionScenarios):
+    """Author ordering guards apply even when no Discord physical copy exists."""
+
+    def test_authorized_update_is_durable_and_delete_is_terminal(self) -> None:
+        """A live canonical post advances once; a tombstone forbids resurrection."""
+        from datetime import datetime, timezone
+        post = self.post()
+        when = datetime(2026, 10, 23, 10, tzinfo=timezone.utc)
+        fields = dict(kind='post', ap_object_id=post.ap_object_id,
+                      local_community_id=self.community_id,
+                      actor_id='https://remote.test/u/bob',
+                      new_content_json=snapshot('post', post.ap_object_id, 'edited'),
+                      updated_at=when, source_activity_id='https://remote.test/update/2')
+        assert self.db.local_community_content.admit_authenticated_update(**fields)
+        assert not self.db.local_community_content.admit_authenticated_update(**fields)
+        with self.assertRaises(ValueError):
+            self.db.local_community_content.admit_authenticated_update(
+                **(fields | {'actor_id': 'https://evil.test/u/a'}))
+        assert self.db.local_community_content.mark_inbound_deleted_if_live(
+            kind='post', ap_object_id=post.ap_object_id,
+            local_community_id=self.community_id,
+            actor_id='https://remote.test/u/bob')
+        with self.assertRaises(ValueError):
+            self.db.local_community_content.admit_authenticated_update(
+                **(fields | {'new_content_json': snapshot('post', post.ap_object_id, 'resurrection')}))
+        with self.db.session() as session:
+            from src.models import LocalCommunityThread
+            current = session.get(LocalCommunityThread, post.id)
+            assert current.content_revision == 2 and current.deleted_at is not None
