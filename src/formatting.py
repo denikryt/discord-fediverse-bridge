@@ -61,16 +61,33 @@ def format_lemmy_post_for_discord(
     return truncate("\n\n".join(parts), DISCORD_MESSAGE_LIMIT)
 
 
-def format_lemmy_comment_for_discord(
-    author: str, body: str, url: str, actor_id: str = ""
+def format_federated_comment_message(
+    author: str, body: str, url: str, actor_id: str = "", *,
+    max_chars: int = DISCORD_MESSAGE_LIMIT,
 ) -> str:
-    """Render one remote Lemmy comment for Discord message content."""
-    # Show full fediverse handle when we can derive the instance domain from actor_id.
-    # Falls back to plain username when actor_id is absent (e.g. synthetic events).
+    """Build a bounded attribution/body for a physical community message.
+
+    The rendering is text-only and has no platform IO or identifiers. Current
+    community mirrors use a 2,000-character bound to preserve existing Discord
+    presentation; adapters for other platforms can supply their own limit.
+    """
+    if max_chars <= 0:
+        raise ValueError("physical message limit must be positive")
+    # The attributed actor is preserved even for a delayed nested Create whose
+    # parent receipt arrives on a later worker iteration or process restart.
     parts = [format_fediverse_author_for_discord(author, actor_id)]
     if body.strip():
         parts.append(body.strip())
-    return truncate("\n\n".join(parts), DISCORD_MESSAGE_LIMIT)
+    return truncate("\n\n".join(parts), max_chars)
+
+
+def format_lemmy_comment_for_discord(
+    author: str, body: str, url: str, actor_id: str = ""
+) -> str:
+    """Preserve the existing Discord-facing comment presentation contract."""
+    return format_federated_comment_message(
+        author, body, url, actor_id=actor_id, max_chars=DISCORD_MESSAGE_LIMIT,
+    )
 
 
 def apply_edit_to_discord_message(

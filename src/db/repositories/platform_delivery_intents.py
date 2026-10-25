@@ -421,7 +421,7 @@ class PlatformDeliveryIntentRepository:
         This writer transaction makes a complete immutable DTO before a claim.
         """
         from ...content_sync.parent_mapping import MissingParent, resolve_target_parent
-        from ...formatting import format_lemmy_comment_for_discord, normalize_text
+        from ...formatting import format_federated_comment_message, normalize_text
 
         ready: list[int] = []
         with self._immediate_session_provider() as session:
@@ -484,7 +484,7 @@ class PlatformDeliveryIntentRepository:
                     continue
                 if isinstance(reply_to, MissingParent):
                     continue
-                content = ContentDocument(format_lemmy_comment_for_discord(
+                content = ContentDocument(format_federated_comment_message(
                     snapshot['authorName'], normalize_text(snapshot['bodyMarkdown']),
                     snapshot.get('url') or '', actor_id=snapshot['authorActorId'],
                 ))
@@ -700,12 +700,9 @@ class PlatformDeliveryIntentRepository:
             existing=session.scalar(select(model).where(getattr(model,key)==row.canonical_row_id,
                                                      model.channel_surface_id==row.channel_surface_id))
             if existing is not None:raise ValueError('conflicting or duplicate physical receipt')
-            channel=scoped[1].external_channel_id
-            # Discord-specific historical columns are projections only. Typed
-            # identity is authoritative, and nonnumeric connector IDs remain valid.
-            discord=attempt.connector_key=='discord-primary'
-            def legacy(value):
-                return int(value) if discord and value is not None and value.isdecimal() else None
+            # Shared fanout persists only typed connector/container IDs. Older
+            # nullable numeric Discord projections are retained for released-v0
+            # rows, not synthesized for newly created multiplatform copies.
             base=dict(connector_id=row.connector_id,channel_surface_id=row.channel_surface_id,
                       applied_revision=row.request_revision,role=('host' if row.target_owner_kind=='local_host' else 'local_subscriber'
                           if row.target_owner_kind=='local_subscriber' else 'inbound'
@@ -713,32 +710,25 @@ class PlatformDeliveryIntentRepository:
             if row.object_kind=='post':
                 if not isinstance(receipt,CreatedThread):raise ValueError('post requires forum receipt')
                 base.update(external_thread_id=receipt.thread.external_thread_id,
-                            external_starter_message_id=receipt.starter.external_message_id,
-                            discord_thread_id=legacy(receipt.thread.external_thread_id),
-                            discord_starter_message_id=legacy(receipt.starter.external_message_id))
+                            external_starter_message_id=receipt.starter.external_message_id)
             else:
                 if not isinstance(receipt,CreatedMessage):raise ValueError('comment requires message receipt')
                 dest=attempt.destination
                 if not isinstance(dest,ThreadRef):raise ValueError('comment requires physical thread')
                 base.update(external_message_id=receipt.message.external_message_id,
-                            external_parent_message_id=reply_to.external_message_id if reply_to else None,
-                            discord_message_id=legacy(receipt.message.external_message_id))
+                            external_parent_message_id=reply_to.external_message_id if reply_to else None)
                 if row.domain=='remote':
                     base['external_thread_id']=dest.external_thread_id
-            if row.domain=='remote':
-                base.update(discord_channel_id=legacy(channel))
-                if row.object_kind=='comment':base.update(discord_thread_id=legacy(dest.external_thread_id))
-            else:
-                base.update(discord_forum_channel_id=legacy(channel),
-                            local_subscriber_id=row.target_owner_id if row.target_owner_kind=='local_subscriber' else None)
+            if row.domain=='local':
+                base.update(local_subscriber_id=(
+                    row.target_owner_id if row.target_owner_kind=='local_subscriber' else None))
                 if row.object_kind=='comment':
                     parent=session.scalar(select(LocalCommunityThreadSurface).where(
                         LocalCommunityThreadSurface.local_community_thread_id==scoped[0].local_community_thread_id,
                         LocalCommunityThreadSurface.channel_surface_id==row.channel_surface_id,
                         LocalCommunityThreadSurface.external_thread_id==dest.external_thread_id))
                     if parent is None:raise ValueError('canonical reply has no verified target thread surface')
-                    base.update(local_community_thread_surface_id=parent.id,
-                                parent_discord_message_id=legacy(reply_to.external_message_id) if reply_to else None)
+                    base.update(local_community_thread_surface_id=parent.id)
             copy=model(**{key:row.canonical_row_id},**base)
             session.add(copy);session.flush()
             row.state='delivered';row.applied_revision=row.request_revision

@@ -8,6 +8,7 @@ HTTP-signature delivery to the gateway.
 
 from __future__ import annotations
 
+import asyncio
 import logging
 from dataclasses import dataclass
 
@@ -55,7 +56,7 @@ class LocalCommunityFederationFanout:
         repository = self.database.local_community_authored_announces
         attempts = repository.claim_due(limit=limit)
         delivered = failed = attempted = 0
-        for attempt in attempts:
+        for index, attempt in enumerate(attempts):
             # Claim-time policy and the final Follow check both precede I/O.
             if not repository.revalidate(attempt):
                 repository.record_result(
@@ -103,6 +104,17 @@ class LocalCommunityFederationFanout:
                     delivered += 1
                 else:
                     failed += 1
+            except asyncio.CancelledError:
+                # This attempt may have reached the signed gateway. Keep its
+                # existing dispatch claim for unknown-outcome reconciliation.
+                # Later frozen attempts in this private batch never reached
+                # the gateway, so this worker can safely release only those.
+                for unstarted in attempts[index + 1:]:
+                    repository.record_result(
+                        unstarted, delivered=False, definitely_unsent=True,
+                        error='Group delivery worker cancelled before network send',
+                    )
+                raise
             except Exception as exc:
                 # Gateway exceptions may mean a signed activity was accepted.
                 # Preserve the ambiguity instead of silently replaying POST.

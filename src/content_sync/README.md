@@ -36,8 +36,8 @@ The owning Local/Remote Community lifecycle is checked on the same read. A
 consumer must revalidate the claim in its own writer transaction before a
 canonical admission or physical send; a candidate is not a persistent permit.
 
-`resolve_community_mutation_source(session, MessageRef, ...)` extends the
-source resolver to authored Update/Delete: immutable AP publication, physical
+`db.repositories.activitypub_objects.resolve_community_mutation_source(
+session, MessageRef, ...)` verifies published-object source provenance to authored Update/Delete: immutable AP publication, physical
 mapping, live forum ownership, registered user, exact source coordinates and
 canonical Local/Remote row must all agree. It returns no authorization when
 only an old numeric source message ID is known; the Personal Feed keeps its
@@ -62,7 +62,8 @@ leave no canonical graph or signed network send.
 
 ## Stage 04 physical Create coordination (Checkpoint 59)
 
-`platform_fanout.PlatformFanoutCoordinator` and the
+`platform_fanout.PlatformFanoutCoordinator`,
+`delivery_recovery.recover_pending_creates()` and the
 `PlatformDeliveryIntentRepository` own the single immutable physical Create
 request for each canonical target surface. Reservation and the fully materialized
 DTO commit **before** a typed adapter call; a successful returned thread/starter
@@ -73,7 +74,8 @@ orphan receipt remain in the intent if forum ownership changes in flight.
 The coordinator selects the adapter via connector registry and never imports
 Discord. A blocked child has no executable request until its exact parent is
 verified. A confirmed parent receipt wakes its blocked descendants from the
-canonical SQLite content snapshot; the SDK-ready Personal Feed Discord worker
+canonical SQLite content snapshot; the durable repository uses the common
+attribution/body formatter rather than any Discord SDK or ID projection; the SDK-ready Personal Feed Discord worker
 also runs `PlatformFanoutCoordinator.recover_pending()` on startup and its
 existing periodic cadence. Only definitely unsent, authorized `pending`
 requests enter transport; expired `dispatching` becomes `unresolved` and
@@ -84,8 +86,23 @@ canonical verified revision or tombstone is committed before any I/O; the
 copy's CAS `applied_revision` advances only after an acknowledged typed edit
 (or tombstone edit) result. A lost response, expired dispatch, or unknown
 transport effect remains `unresolved` across restart and cannot be blindly
-retried. The app supplies the connector-specific Discord content renderer and
+retried. Recovery scans all eligible physical-copy tables in bounded
+primary-key pages, rather than stopping at the first N already-settled rows;
+only actual mutation claims consume the per-drain limit. A pure domain
+formatter that refuses a malformed or unsupported canonical snapshot marks
+**only that copy** `failed_definite` with an inspectable reason, without
+crossing the physical transport boundary or aborting other recipients. The
+same revision does not busy-loop; a subsequent authenticated canonical
+revision can re-open recovery. A failing policy lookup, missing adapter
+binding or rejected *pure* tombstone renderer is a proven pre-transport
+refusal (`failed_definite`), not a lost-HTTP `unresolved`; a failure once an
+adapter method is invoked remains uncertain. Graceful task cancellation
+retains the in-progress send for timeout/reconciliation but releases all
+remaining claims in that private batch as never transmitted. Live surface ownership,
+canonical revision and exact physical target are checked for every selected
+copy, so paging grants no additional authorization. The app supplies the connector-specific Discord content renderer and
 permission evaluator; the shared coordinator imports no Discord SDK.
 Both the Create recovery and mutation recovery drain in the existing
-Discord-ready scheduler, preserving shutdown order. Exclusive adapter Create
-dispatch permits are a subsequent Stage 04 checkpoint.
+Discord-ready scheduler, preserving shutdown order. Exclusive adapter Create dispatch permits ensure a reserved `fanout:v1:`
+key cannot reach the adapter without a committed SQLite claim; a matching
+durable terminal ACK may release a completed cache entry after persistence.

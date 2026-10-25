@@ -35,6 +35,39 @@ Discord integration tests, which require the project dependencies.
 - These tests exercise the admission/repository boundary, not end-to-end
   Discord SDK or the complete authored mutation transport and restart matrix.
 
+## Stage 04 authored Group Announce claim/restart (Checkpoints 61–63)
+
+- Real SQLite per-object/exact-Follow Create acknowledgment before Update,
+  Delete terminal fence, original-attempt late acknowledgment, unknown send
+  after lease expiry, and zero claim capacity —
+  `tests/test_stage04_authored_announces.py`.
+- Graceful cancellation during the first Group HTTP send leaves the in-flight
+  exact Follow attempt uncertain but releases the other, never-sent recipient
+  claims for a safe retry — `tests/test_stage04_authored_announces.py`.
+- A stale `dispatching` lease transitions to persistent `ambiguous`; only a
+  verified positive result from that same token/generation can settle it.
+  Older unknown Update must block a newer Delete after restart.
+
+## Stage 04 physical mutation recovery coverage (Checkpoints 61–63)
+
+- Real SQLite canonical Update/Delete against historical bot-owned copies,
+  unknown outcomes, expired dispatch, revoked surfaces, and physical starter
+  tombstones — `tests/test_stage04_physical_mutation_recovery.py`.
+- Recovery scanner starvation: a copy beyond eight already-acknowledged rows
+  must still receive its authorized revision, while revoked destinations stay
+  blocked, `limit=1` sends only one claim, and `limit=0` performs no sends —
+  `tests/test_stage04_physical_mutation_recovery.py`.
+- A malformed canonical JSON or domain renderer refusal leaves its one copy
+  unacknowledged and diagnostic, does not block a healthy sibling, and a later
+  verified revision can recover it — `tests/test_stage04_physical_mutation_recovery.py`.
+- Pre-transport adapter/authorization/formatter failure versus uncertain
+  provider result, and cancellation of a multi-copy claim batch after one
+  adapter call (only unstarted copies become retryable) —
+  `tests/test_stage04_physical_mutation_recovery.py`.
+- Multi-forum nested parent isolation and restart error preservation —
+  `tests/behavior/test_platform_message_fanout_scenarios.py` and
+  `tests/behavior/test_platform_delivery_recovery_scenarios.py`.
+
 ## Test layers
 
 - **Behavior** — user or platform action in a defined system state, verified through observable runtime effects.
@@ -265,3 +298,30 @@ Behavior coverage lives in `test_user_profile_persistence_scenarios.py`, `test_p
 - `tests/test_local_source_mutations.py`: real SQLite host/subscriber starter and comment edit/delete, preserved attribution, source exclusion, authorized subscriber-origin edits, revoked subscriber source/destination, wrong physical fetch receipt, isolated transport failure, and forbidden SDK fallback.
 - Neighboring `test_local_inbound_mutations.py`, `test_normalized_local_community_runtime.py`, `test_neutral_local_community_fanout.py`, Remote Community and AP inbound mutation tests jointly verify canonical routing and shared surface boundary.
 - Full installed-Discord SDK behavior still requires an integration run. A test-only import stub supplies no Discord transport behavior.
+
+## Stage 04 multi-forum adversarial scenarios (Checkpoint 63, partial)
+
+- Real SQLite Local Community author in subscriber forum B, independent
+  host A and subscriber C forum receipts, no echo/duplicate POST and
+  one-target uncertainty isolation. The same canonical nested comment uses
+  **different** confirmed parent copies in A and C; a parent's ID from A
+  cannot authorize a copy in C —
+  `tests/behavior/test_platform_message_fanout_scenarios.py`.
+- Interrupted pending dispatch, unknown after accepted POST, exact
+  thread/starter receipt scope and retained orphan after surface rebinding;
+  nested comment stays blocked until the exact physical parent arrives,
+  then materializes its immutable authored body and target-local reply ref —
+  `tests/behavior/test_platform_delivery_recovery_scenarios.py`. The existing
+  `PlatformFanoutCoordinator` delegates its startup scan to the neutral
+  `delivery_recovery.py` helper, not to an additional network worker.
+- Static shared-boundary checks reject Discord integer/source projections
+  in coordinator and intent repository, while community comment rendering
+  preserves the existing attribution and bounded message presentation —
+  `tests/behavior/test_platform_message_fanout_scenarios.py`.
+- Deterministic 35-trace state-machine checks over real SQLite for
+  deleted-before-send, delivered, unknown, rebound target and mismatched
+  physical mode; terminal attempts cannot be claimed a second time —
+  `tests/model_based/test_platform_message_fanout_state_machine.py`.
+
+These tests use local transport fakes and are not a replacement for the
+full Python/Node suites or live Discord/Fedify integration acceptance.

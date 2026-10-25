@@ -260,11 +260,43 @@ class LocalCommunityAuthoredAnnounceRepository:
             return False
         return True
 
+    @staticmethod
+    def _expire_claims_in_session(session: Session, now: datetime) -> int:
+        """Mark expired Group sends uncertain, retaining exact attempt proof.
+
+        Lease expiry proves the worker stopped owning the claim, not that the
+        remote server did not accept its signed ActivityPub activity. Keep the
+        generation/token for a verified late outcome of that same attempt.
+        """
+        changed = 0
+        for row in session.scalars(select(LocalCommunityAuthoredAnnounceDelivery).where(
+            LocalCommunityAuthoredAnnounceDelivery.status == 'dispatching',
+            LocalCommunityAuthoredAnnounceDelivery.lease_until.is_not(None),
+        )):
+            lease = row.lease_until
+            # SQLite returns naive UTC even for timezone-aware ORM columns.
+            if lease is not None and (lease.replace(tzinfo=timezone.utc)
+                                      if lease.tzinfo is None else lease) <= now:
+                row.status = 'ambiguous'
+                row.last_error = 'expired Group Announce claim: send outcome unknown'
+                changed += 1
+        return changed
+
+    def expire_claims(self) -> int:
+        """Expose explicit restart inventory of potentially transmitted claims."""
+        with self.immediate_session() as session:
+            return self._expire_claims_in_session(session, datetime.now(timezone.utc))
+
     def claim_due(self, *, limit: int = 20) -> list[AuthoredAnnounceAttempt]:
         """Reserve causally eligible current Follow work, never retry unknown sends."""
+        if limit <= 0:
+            return []
         now = datetime.now(timezone.utc)
         claims: list[AuthoredAnnounceAttempt] = []
         with self.immediate_session() as session:
+            # The same writer gate handles recovery and live claims: never
+            # classify a stale in-flight operation as a definitely unsent retry.
+            self._expire_claims_in_session(session, now)
             candidates = list(session.scalars(select(LocalCommunityAuthoredAnnounceDelivery).where(
                 LocalCommunityAuthoredAnnounceDelivery.status.in_(('pending','failed_proven_unsent')),
             ).order_by(LocalCommunityAuthoredAnnounceDelivery.published_object_id,
@@ -331,8 +363,14 @@ class LocalCommunityAuthoredAnnounceRepository:
         """Settle only matching generation; uncertain HTTP is never auto-retried."""
         with self.immediate_session() as session:
             row = session.get(LocalCommunityAuthoredAnnounceDelivery, attempt.id)
-            if (row is None or row.status != 'dispatching' or row.claim_token != attempt.token
-                or row.attempt_generation != attempt.generation):
+            if (row is None or row.status not in ('dispatching', 'ambiguous')
+                or row.claim_token != attempt.token
+                or row.attempt_generation != attempt.generation
+                or row.announce_activity_id != attempt.activity_id):
+                return False
+            if row.status == 'ambiguous' and not delivered:
+                # A late exception is not proof of non-send; only the original
+                # positive signed-transport result can settle this ambiguity.
                 return False
             if delivered:
                 row.status = 'delivered'

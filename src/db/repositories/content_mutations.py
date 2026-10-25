@@ -89,7 +89,7 @@ class ContentMutationRepository(BaseRepository):
             if published is None:
                 return "missing"
             if source_message is not None:
-                from ...content_sync.surface_resolution import resolve_community_mutation_source
+                from .activitypub_objects import resolve_community_mutation_source
                 # Repeat source authorization under the same writer reservation
                 # as the desired revision. A forum may rebound after ingress.
                 proof = resolve_community_mutation_source(
@@ -137,7 +137,7 @@ class ContentMutationRepository(BaseRepository):
             if published is None:
                 return "missing"
             if source_message is not None:
-                from ...content_sync.surface_resolution import resolve_community_mutation_source
+                from .activitypub_objects import resolve_community_mutation_source
                 # Repeat source authorization under the same writer reservation
                 # as the desired revision. A forum may rebound after ingress.
                 proof = resolve_community_mutation_source(
@@ -318,7 +318,7 @@ class ContentMutationRepository(BaseRepository):
             if published is None:
                 return "missing"
             if source_message is not None:
-                from ...content_sync.surface_resolution import resolve_community_mutation_source
+                from .activitypub_objects import resolve_community_mutation_source
                 proof = resolve_community_mutation_source(
                     session, source_message, external_guild_id=None,
                     actor_external_id=None,
@@ -829,7 +829,7 @@ class ContentMutationRepository(BaseRepository):
             )
             if published is None:
                 return 'missing'
-            from ...content_sync.surface_resolution import resolve_community_mutation_source
+            from .activitypub_objects import resolve_community_mutation_source
             verified = resolve_community_mutation_source(
                 session, source, external_guild_id=None, actor_external_id=None,
             )

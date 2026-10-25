@@ -66,30 +66,11 @@ class PlatformFanoutCoordinator:
         never pending. Only pristine persisted DTOs with a live canonical
         source and owner are dispatched through the ordinary claim path.
         """
-        self.database.platform_delivery_intents.expire_claims()
-        # Verified orphan receipts are inspection work, never a trigger for
-        # automatic deletion or a second Create. Retain exact intent IDs in
-        # logs so a platform administrator can identify the original object.
-        orphans = self.database.platform_delivery_intents.inspect_orphans()
-        for orphan in orphans:
-            logger.warning('Verified orphan Create requires operator review: intent_id=%s cleanup=%s',
-                           orphan['intent_id'], orphan['cleanup_state'])
-        # Parent delivery and startup both consult the same authoritative
-        # SQLite dependency evidence; a saved blocked row alone is not a send.
-        self.database.platform_delivery_intents.materialize_ready_blocked()
-        # Reconcile only exact same-generation positive results still held by
-        # the adapter. A process restart normally has no such forum proof.
-        for uncertain_id in self.database.platform_delivery_intents.unresolved_ids():
-            try:
-                await self.reconcile_unknown(uncertain_id)
-            except Exception:
-                logger.exception('Read-only Create reconciliation failed intent_id=%s',
-                                 uncertain_id)
-        completed: list[int] = []
-        for intent_id in self.database.platform_delivery_intents.recoverable_pending_ids():
-            if await self.deliver(intent_id):
-                completed.append(intent_id)
-        return completed
+        from .delivery_recovery import recover_pending_creates
+
+        # Recovery and live sends share the same coordinator claims; there is
+        # no second queue or alternate SDK transport entry point.
+        return await recover_pending_creates(self)
 
     async def _wake_blocked_children(self) -> None:
         """Run newly provable nested deliveries, never unknown attempts.

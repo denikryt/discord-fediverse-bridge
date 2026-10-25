@@ -213,7 +213,7 @@ class DiscordMessageMutationHandler:
             return
         if published.publication_context != "community":
             return
-        from .content_sync.surface_resolution import resolve_community_mutation_source
+        from .db.repositories.activitypub_objects import resolve_community_mutation_source
 
         actor = event.actor if is_delete else event.author
         if actor is not None and (actor.kind != "human" or actor.is_bridge_owned):

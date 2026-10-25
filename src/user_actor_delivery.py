@@ -141,7 +141,7 @@ class UserActorDeliveryService:
         for channel_id, message_id, object_id, title, source_message in rows:
             try:
                 if source_message is not None:
-                    from .content_sync.surface_resolution import resolve_community_mutation_source
+                    from .db.repositories.activitypub_objects import resolve_community_mutation_source
                     with self.database.session() as session:
                         proof = resolve_community_mutation_source(
                             session, source_message, external_guild_id=None,

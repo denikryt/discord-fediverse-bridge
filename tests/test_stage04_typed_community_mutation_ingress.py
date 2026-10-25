@@ -218,7 +218,7 @@ class TypedCommunityMutationIngressScenarios(unittest.TestCase):
     def test_writer_refuses_source_after_owner_rebound(self):
         """A source verified at ingress cannot use a revoked forum claim at commit."""
         with self.db.session() as session:
-            from src.content_sync.surface_resolution import resolve_community_mutation_source
+            from src.db.repositories.activitypub_objects import resolve_community_mutation_source
             self.assertIsNotNone(resolve_community_mutation_source(
                 session,REF,external_guild_id='42',actor_external_id='55'))
         with self.db.immediate_session() as session:

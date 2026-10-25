@@ -112,3 +112,22 @@ cannot authorize an overwrite. Deletes use the existing visible tombstone
 (`*deleted by creator*`). Per-surface failures are isolated and currently
 remain best-effort. Legacy Discord-originated mutation methods retain their
 SDK route until the separate remaining-dependency cutover.
+
+## Stage 04 authored Group Announce lease recovery
+
+The Group-signed authored `Announce(Create/Update/Delete)` delivery ledger is
+scoped to the canonical AP object and the exact accepted Follow incarnation.
+Its existing federation scheduler reserves one attempt at a time; a confirmed
+Create is required before an Update. Claim expiry is **not** proof that a
+signed HTTP send was refused: the repository transitions an expired
+`dispatching` row to durable `ambiguous` and retains its attempt token and
+generation. This fences later Update/Delete across process restart without
+re-POSTing the activity. A positive response from the same recorded attempt
+can settle it; a late failure or mismatched attempt cannot. The scheduler's
+`limit=0` must not reserve any work. On **graceful cancellation** of a
+multi-recipient scheduler batch, only attempts *after* the currently awaited
+gateway send can be proven never started and returned to `failed_proven_unsent`.
+The in-flight signed HTTP request stays `dispatching` until a matching receipt
+or `ambiguous` lease expiration; a hard process kill cannot make non-send
+claims on the unexecuted remainder. See
+`tests/test_stage04_authored_announces.py` for SQLite regressions.

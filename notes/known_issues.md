@@ -322,3 +322,70 @@ Fedify-native security integration remains blocked by missing dependencies.
 
 - **Stage 04 Checkpoint 61 typed Community mutation ingress (2026-10-24, WIP):** normalized Discord edits/deletes now resolve original Local/Remote authored post/comment by exact `(connector, immediate container, message)` and verify current forum owner and linked author before reserving a User Actor mutation. Partial edits flag reconciliation on the exact source; old numeric Community routing no longer runs for real DB ingress. Fifteen real-SQLite scenarios pass, including writer-side revocation checks and
   exact deferred-read container selection. Complete author-mutation transport/restart and full SDK-backed regression suite remain to be verified; do not mark Stage 04 complete.
+
+## Stage 04 Checkpoint 63 verification status (2026-10-24)
+
+- **Partially verified:** real SQLite three-forum Create, per-target uncertainty,
+  restart, typed source boundaries, delayed nested-parent materialization and
+  deterministic state transitions pass focused regressions. Shared Create
+  repository no longer writes Discord-only numeric physical-copy projections;
+  authored-source numeric validation stays within the published-object owner.
+- **Not verified:** complete Python/Node dependency-backed suites and actual
+  Discord/Fedify end-to-end sends. Do not interpret a lost Discord receipt,
+  missing local copy or expiry of a claim as permission to re-POST. These
+  remain part of the Stage 04 acceptance checklist, not completed checks.
+
+## 2026-10-24 — Stage 04 physical mutation recovery pagination (fixed in CP63 WIP)
+
+- A fixed `LIMIT (requested_claims * 8)` scanned only the oldest candidate copy
+  rows. Eight already-applied historical rows ahead of an overdue copy caused
+  permanent starvation across repeated drains with `limit=1`; a real SQLite
+  regression reproduced `drain()==0` despite a pending canonical revision.
+- The existing physical-copy scanner now walks bounded ID-keyset pages under
+  the writer lock and limits **successful claims**, not inspected rows. Tests
+  confirm late-copy delivery, non-send on revoked ownership, one-claim budget,
+  and zero-limit no-op. No schema, queue or background worker was added.
+- Full dependency-backed test suite and live Discord/Fedify remain unverified.
+
+## 2026-10-24 — Stage 04 Group Announce expired-claim classification (fixed in CP63 WIP)
+
+- Previously, a Group-signed `Announce(Update)` interrupted in `dispatching`
+  remained indefinitely active after its lease expired; restart did not
+  classify the unknown outcome. SQLite regressions reproduced the missing
+  `ambiguous` transition and accidental claim at `limit=0`.
+- The existing authored repository now marks expired sends `ambiguous`, keeps
+  their exact attempt proof for a verified late positive outcome, blocks
+  younger Delete until settlement, and never retries solely on expiry.
+- Full dependency-backed and live federation integration is still unverified.
+
+## 2026-10-24 — Stage 04 physical mutation formatter isolation (fixed in CP63 WIP)
+
+- Previously, a pure domain renderer raising `ValueError` or returning an
+  invalid ContentDocument aborted the entire SQLite mutation claim scan, so
+  healthy destinations were never reached. Real SQLite tests reproduced both
+  errors and confirm independent delivery after the fix.
+- Invalid canonical JSON/schema and explicitly refused formatter output now
+  produce an inspectable `failed_definite` on that copy without POST; the
+  identical revision is not repeatedly rendered, while a later validated
+  canonical revision remains recoverable. Full SDK integration is unverified.
+
+## 2026-10-24 — Stage 04 physical mutation pre-send and cancellation boundaries (fixed in CP63)
+
+- A local connector-registry/policy lookup or tombstone formatting exception was
+  incorrectly recorded as `unresolved`, permanently fencing an edit that never
+  reached the adapter. Three red SQLite tests reproduced the failure; the
+  coordinator now classifies refusal by whether adapter I/O actually began.
+- Group-signed `Announce(Create/Update/Delete)` had the same batched-claim
+  cancellation problem; a real SQLite Follow-F1/F2 test reproduces it. The
+  original in-flight signed send stays uncertain while the later unstarted
+  recipient is released, without reusing an old Follow's Create evidence.
+- Cancelling one in-flight mutation previously stranded *later, unstarted*
+  already-claimed copies in `dispatching` until lease expiry, which then
+  persisted an unnecessary uncertain-send barrier. A new SQLite task-cancel
+  regression proves the in-flight copy remains uncertain, while the later
+  never-sent copy can be safely retried after graceful cancellation. A hard
+  process kill retains conservative unknown classification for every claimed
+  but unsettled attempt; it cannot prove non-send across process death.
+- Independent Python SQLite tests and Node render-only tests pass. Complete
+  dependency-backed Python/TypeScript checks and live Discord/Fedify remain
+  unverified; these do not establish production readiness.

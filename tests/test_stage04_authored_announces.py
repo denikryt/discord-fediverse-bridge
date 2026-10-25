@@ -81,6 +81,74 @@ class AuthoredAnnounceScenarios(unittest.TestCase):
         self.assertFalse(self.db.local_community_authored_announces.record_result(claims[0],delivered=True))
         self.assertEqual(self.db.local_community_authored_announces.claim_due(),[])
 
+    def test_cancelled_group_batch_releases_only_unstarted_follow_delivery(self) -> None:
+        """Cancelling a Group send must not poison another recipient's unsent claim."""
+        with self.db.immediate_session() as session:
+            session.add(RemoteSubscriber(
+                local_community_id=self.community_id,
+                remote_actor_id='https://remote.test/actor/second',
+                remote_inbox_url='https://remote.test/actor/second/inbox',
+                follow_activity_id='https://remote.test/follows/F-second',
+                status='accepted',
+            ))
+            self.assertEqual(self.db.local_community_authored_announces.stage_create(
+                session, published=session.get(PublishedActivityObject, self.object_id),
+                community=session.get(LocalCommunity, self.community_id),
+                activity_json=self.inner,
+            ), 2)
+        entered = asyncio.Event()
+        sent = []
+
+        expected_actor = self.actor
+
+        class BlockedGateway:
+            """Expose a still-running signed gateway call for the first actor."""
+            async def send_local_community_relay(self, *, signing_actor_url, deliveries):
+                """Count one wire entry, then await cancellation from shutdown."""
+                if signing_actor_url != expected_actor:
+                    raise AssertionError('wrong signing actor')
+                sent.extend(deliveries)
+                entered.set()
+                await asyncio.Event().wait()
+
+        policy = SimpleNamespace(federation_decision=lambda _target: SimpleNamespace(allowed=True))
+        fanout = LocalCommunityFederationFanout(
+            database=self.db, fedify_gateway=BlockedGateway(), policy_service=policy,
+        )
+
+        async def cancel_first_send():
+            """Cancel while one Group recipient is inside the HTTP boundary."""
+            task = asyncio.create_task(fanout.drain_authored(limit=2))
+            await asyncio.wait_for(entered.wait(), 5)
+            task.cancel()
+            with self.assertRaises(asyncio.CancelledError):
+                await task
+
+        asyncio.run(cancel_first_send())
+        self.assertEqual(len(sent), 1)
+        with self.db.session() as session:
+            deliveries = list(session.scalars(select(LocalCommunityAuthoredAnnounceDelivery).order_by(
+                LocalCommunityAuthoredAnnounceDelivery.id)))
+            self.assertEqual([row.status for row in deliveries],
+                             ['dispatching', 'failed_proven_unsent'])
+        recovered = self.db.local_community_authored_announces.claim_due(limit=2)
+        self.assertEqual(len(recovered), 1)
+        self.assertEqual(recovered[0].remote_actor_id, 'https://remote.test/actor/second')
+
+    def test_zero_budget_never_claims_a_group_delivery(self) -> None:
+        """One scheduler tick with zero slots cannot send even an eligible Create."""
+        with self.db.immediate_session() as session:
+            self.db.local_community_authored_announces.stage_create(
+                session, published=session.get(PublishedActivityObject, self.object_id),
+                community=session.get(LocalCommunity, self.community_id),
+                activity_json=self.inner,
+            )
+        self.assertEqual(self.db.local_community_authored_announces.claim_due(limit=0), [])
+        with self.db.session() as session:
+            row = session.scalar(select(LocalCommunityAuthoredAnnounceDelivery))
+            self.assertEqual(row.status, 'pending')
+            self.assertEqual(row.attempt_generation, 0)
+
     def test_follow_replacement_never_retargets_claim(self) -> None:
         """F2 must not inherit the already reserved or dispatched F1 snapshot."""
         with self.db.immediate_session() as session:
@@ -299,6 +367,52 @@ class AuthoredMutationCausalScenarios(AuthoredAnnounceScenarios):
         claims = self.db.local_community_authored_announces.claim_due()
         self.assertEqual(len(claims), 1)
         self.assertEqual(claims[0].activity_json['object']['type'], 'Update')
+
+    def test_expired_inflight_update_is_durably_ambiguous_and_fences_delete(self) -> None:
+        """Restart cannot treat elapsed lease as proof Update was never sent."""
+        from datetime import datetime, timedelta, timezone
+        from src.db.repositories.local_community_authored_announces import (
+            LocalCommunityAuthoredAnnounceRepository, AuthoredAnnounceAttempt,
+        )
+        self._stage_create()
+        create = self.db.local_community_authored_announces.claim_due()[0]
+        self.assertTrue(self.db.local_community_authored_announces.record_result(
+            create, delivered=True))
+        self.assertEqual(self._stage('update', 2), 1)
+        update = self.db.local_community_authored_announces.claim_due()[0]
+        with self.db.immediate_session() as session:
+            row = session.get(LocalCommunityAuthoredAnnounceDelivery, update.id)
+            row.lease_until = datetime.now(timezone.utc) - timedelta(seconds=5)
+        # Simulate a fresh service/repository after process death. It must
+        # preserve the original attempt identity while fencing later Delete.
+        restarted = LocalCommunityAuthoredAnnounceRepository(
+            self.db.session, self.db.immediate_session)
+        self.assertEqual(restarted.claim_due(), [])
+        with self.db.session() as session:
+            row = session.get(LocalCommunityAuthoredAnnounceDelivery, update.id)
+            self.assertEqual(row.status, 'ambiguous')
+            self.assertEqual(row.claim_token, update.token)
+            self.assertEqual(row.attempt_generation, update.generation)
+        self.assertEqual(self._stage('delete', 3), 1)
+        self.assertEqual(restarted.claim_due(), [])
+        forged = AuthoredAnnounceAttempt(
+            id=update.id, token='forged', generation=update.generation,
+            group_actor_id=update.group_actor_id,
+            remote_actor_id=update.remote_actor_id,
+            inbox_url=update.inbox_url, activity_id=update.activity_id,
+            activity_json=update.activity_json,
+        )
+        self.assertFalse(restarted.record_result(forged, delivered=True))
+        self.assertFalse(restarted.record_result(update, delivered=False,
+                                                 definitely_unsent=True))
+        with self.db.session() as session:
+            self.assertEqual(session.get(LocalCommunityAuthoredAnnounceDelivery,
+                                         update.id).status, 'ambiguous')
+        self.assertEqual(restarted.expire_claims(), 0)
+        # Only a late result of this *same* signed send may settle its
+        # uncertainty. A new HTTP attempt is never created in recovery.
+        self.assertTrue(restarted.record_result(update, delivered=True))
+        self.assertEqual(restarted.claim_due(limit=1)[0].activity_json['object']['type'], 'Delete')
 
     def test_delete_cancels_only_unsent_update_and_fences_replay(self) -> None:
         """Delete may bypass unsent U1 but old U1 may never be revived."""
