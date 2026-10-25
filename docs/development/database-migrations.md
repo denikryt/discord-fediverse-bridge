@@ -22,7 +22,7 @@ After commit or rollback, suspended enforcement is restored and verified. Failed
 
 Already-current v1 startup validates through read-only queries, including the seed connector, the complete generated-role column definition and STORED mode, defaults, composite FKs, UNIQUE/CHECK constraints and explicit index/trigger definitions. It performs no repairs or writer reservation. Concurrent initializers validate the winner instead of applying the migration twice.
 
-## Stage 04 additions to the evolving v1 target
+## Durable message fanout additions to the evolving v1 target
 
 Checkpoint 56 adds `platform_delivery_intents` and
 `local_community_authored_announce_deliveries` directly to current ORM v1.
@@ -105,7 +105,7 @@ revision; that revision remains blocked until operator inspection or a newer
 canonical revision. Read failures remain provably unsent; a lost write ACK stays
 `unresolved` across restart. A successful mirror ACK advances only that copy.
 
-`tests/behavior/test_stage04_tagged_legacy_mutations.py` executes the authentic
+`tests/behavior/test_tagged_legacy_community_mutations.py` executes the authentic
 `v0.1.0` Database and ORM in a subprocess, migrates the populated database and
 enters real Local/Remote Update/Delete handlers. It covers independent author
 proof, missing/conflicting evidence, host/subscriber human sources, nested

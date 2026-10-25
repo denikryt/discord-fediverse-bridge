@@ -1,6 +1,6 @@
-# Stage 04 S-01 — single Community Create pipeline
+# Single Community Create pipeline
 
-This status records the final S-01 implementation and its verification boundary.
+This document records the Community Create cutover and its verification boundary.
 
 ## Implemented
 
@@ -32,4 +32,4 @@ without aliases or SDK fallback. Callers must submit verified typed events.
 
 The delivered verification report contains exact dependency-backed suite results,
 comparison with the input tree, and remaining failures or environment limits.
-S-01 completion does not by itself establish live Discord/Fedify acceptance.
+Completing this cutover does not by itself establish live Discord/Fedify acceptance.

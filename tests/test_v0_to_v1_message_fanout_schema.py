@@ -1,4 +1,4 @@
-"""Stage 04 checkpoint 56 schema/upgrade regressions, runnable without Discord SDK.
+"""Message fanout schema and upgrade regressions, runnable without Discord SDK.
 
 These tests exercise SQLite rather than a mocked database. They also run as
 `python tests/test_v0_to_v1_message_fanout_schema.py` when pytest dependencies
@@ -35,7 +35,7 @@ COPIES = (
 )
 
 
-class Stage04V1SchemaTests(unittest.TestCase):
+class MessageFanoutV1SchemaTests(unittest.TestCase):
     """Prove exact current-v1 DDL and no fabricated release-v0 feature state."""
 
     def setUp(self) -> None:

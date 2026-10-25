@@ -81,7 +81,7 @@ export function registerInternalPublishRoutes(
     }
   });
 
-  // Stage 04 removes the send-before-persist publication escape hatch.
+  // Community publication must persist canonical content before sending.
   // Canonical authored Create must be rendered and committed in Python first,
   // then dispatched as frozen JSON via /send-user-actor-deliveries or the
   // Group-signed relay route. These obsolete routes cannot emit network I/O.

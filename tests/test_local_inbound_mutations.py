@@ -132,7 +132,7 @@ def world(tmp_path):
         relay.append(kwargs['operation'])
 
     runtime.federation_fanout.relay_update_or_delete = fake_relay
-    # The historical fixture has actual AP content/actor provenance: Stage 04
+    # The historical fixture has actual AP content/actor provenance: admission
     # rejects updates/deletes when those facts are not persisted on the owning
     # canonical row, regardless of the existence of physical Discord copies.
     with db.immediate_session() as session:

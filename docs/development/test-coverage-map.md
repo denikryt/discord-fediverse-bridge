@@ -2,18 +2,18 @@
 
 This document is a short, feature-oriented index of the test suite. It helps maintainers find existing coverage before adding a new test. It intentionally links to files rather than line numbers or individual test functions, because those change more often.
 
-## Stage 04 S-01 duplicate Community Create audit
+## Duplicate Community Create entry audit
 
-- `docs/development/stage04_s01_legacy_create_audit.md` inventories the
+- `docs/development/community_create_legacy_entry_audit.md` inventories the
   normalized production call graph, 14 test files with 62 direct raw runtime
   invocations, external/dynamic compatibility risk and staged deletion gate.
 - `tests/support/community_events.py` supplies observed typed source events and
   physical boundary fakes for the final raw-consumer migration.
-- `tests/test_stage04_single_community_create_route_contract.py` rejects a
+- `tests/test_single_community_create_route.py` rejects a
   reintroduced raw `DiscordEventRouter` Create entry; the migrated router cases
   in three Local Community behavior modules verify Local/Remote selection,
   inactive subscribers and exact forum reply ownership through typed events.
-- S-01 follow-up converts `tests/test_phase2_fanout_scenarios.py`,
+- The raw Create consumer migration converts `tests/test_phase2_fanout_scenarios.py`,
   `tests/test_phase3_message_fanout_scenarios.py`,
   `tests/test_phase4_reply_preservation.py`,
   `tests/test_phase9_bidirectional_mirror_messages.py`, the outbound case in
@@ -25,7 +25,7 @@ This document is a short, feature-oriented index of the test suite. It helps mai
   `test_normalized_community_runtime.py` protects root replies with no explicit
   Discord reference: canonical persistence owns the source receipt and the
   runtime must not write a contradictory second row after AP commit.
-- **Remaining S-01 migration:** 32 raw runtime Create calls in 8 behavior/
+- **Remaining raw Create migration:** 32 raw runtime Create calls in 8 behavior/
   migration suites still need case-by-case conversion before deleting the four
   SDK-shaped runtime entry points. Do not remove those tests or insert a raw
   compatibility shim to satisfy method existence.
@@ -34,40 +34,40 @@ This document is a short, feature-oriented index of the test suite. It helps mai
   sources for fully normalized Create/dedup/fanout behavior. Legacy raw runtime
   suites must be migrated before their direct SDK-shaped methods are removed.
 
-## Stage 04 durable Create admission and recovery (Checkpoints 56–60)
+## Durable Create admission and recovery
 
 - Current-v1 bootstrap and released-v0→v1 migration preservation, including
   nullable legacy mutation baselines and exact source/surface identities —
   `tests/test_v0_to_v1_message_fanout_schema.py`.
 - Local/Remote AP Create canonical-before-physical-POST, duplicate AP source,
   content snapshot, orphan/unknown transport, correct recipient and exact
-  nested parent/wake-up — `tests/test_stage04_delivery_intents.py`,
-  `tests/test_stage04_local_inbound_admission.py`,
-  `tests/test_stage04_parent_mapping.py`,
+  nested parent/wake-up — `tests/test_community_delivery_intents.py`,
+  `tests/test_local_community_inbound_admission.py`,
+  `tests/test_community_parent_mapping.py`,
   `tests/test_local_inbound_adapter_delivery.py`,
   `tests/test_normalized_inbound_remote_posts.py` and
   `tests/test_normalized_inbound_remote_comments.py`.
 - No raw Discord SDK fallback without a bound normalized adapter, no
   unverified Local Community lifecycle after reservation, current typed
   router source selection and SDK-ready recovery on the existing worker —
-  `tests/test_stage04_no_sdk_ap_fallback.py`,
-  `tests/test_stage04_physical_recovery_schedule.py`.
+  `tests/test_inbound_community_adapter_requirement.py`,
+  `tests/test_physical_delivery_recovery_schedule.py`.
 
 These are focused tests and do not substitute for full Python/Node or live
 Discord integration tests, which require the project dependencies.
 
-### Stage 04 post-review physical receipt handoff
+### Post-review physical receipt handoff
 
 - SQLite domain fan-out after coordinator-created Local Community threads with
   `NULL` historical Discord ID projections: verified distinct A/C root replies,
   durable nested `blocked` intent for a missing destination parent and wake
   after the exact parent receipt; unknown parent has zero new sends/intents —
-  `tests/behavior/test_stage04_local_receipt_handoff.py`.
+  `tests/behavior/test_local_community_receipt_handoff.py`.
 - Real Local Community inbound AP post then comment through the runtime,
   including host thread with typed-only receipt and idempotent replay;
   mutation render API rejects untyped direct inbox URL parameters — same file.
 
-### Stage 04 Remote Community typed receipt handoff (review P1)
+### Remote Community typed receipt handoff (review P1)
 
 - Real SQLite and domain handlers: new B/C coordinator-created threads with
   NULL legacy Discord projections admit later source comments, replies
@@ -75,7 +75,7 @@ Discord integration tests, which require the project dependencies.
   immutable target-local parent references. A wrong forum/thread claim is
   rejected; a known nested parent absent from one forum creates `blocked`
   without sending a flat reply —
-  `tests/test_stage04_remote_typed_receipt_regressions.py`.
+  `tests/test_remote_community_typed_receipts.py`.
 - Normalized Remote Community ingress and direct sibling fan-out fixtures use
   verified `MessageView.created_at`, side-effect-free `render_community`, and
   persisted canonical source post/comment IDs before coordinator dispatch.
@@ -90,7 +90,7 @@ Discord integration tests, which require the project dependencies.
   connector/container rejection and correct sibling parent references —
   `tests/test_neutral_reply_resolution.py`.
 
-### Stage 04 post-review Local/Remote legacy scenario contract refresh
+### Post-review Local/Remote legacy scenario contract refresh
 
 - Real Local Community source post/comment tests retain mandatory verified starter
   `MessageView.created_at`, deterministic render-only AP identity, and a
@@ -110,46 +110,46 @@ Discord integration tests, which require the project dependencies.
   real durable physical mutation worker and reject missing clock/activity or
   forged actor before any physical edit — `tests/test_local_inbound_mutations.py`.
 
-## Stage 04 typed Community source mutations (Checkpoint 61 WIP)
+## Typed Community source mutations
 
 - Real SQLite source post/comment + current surface and author validation,
   two distinct immediate thread containers, partial refetch authorization,
   scoped durable reconciliation, owner rebinding before writer admission and
   before deferred read, ID-only delete, no forged Delete on partial-read 404,
   and separate legacy Personal Feed delivery —
-  `tests/test_stage04_typed_community_mutation_ingress.py`.
+  `tests/test_typed_community_mutation_ingress.py`.
 - These tests exercise the admission/repository boundary, not end-to-end
   Discord SDK or the complete authored mutation transport and restart matrix.
 
-## Stage 04 authored Group Announce claim/restart (Checkpoints 61–63)
+## Authored Group Announce claim/restart
 
 - Real SQLite per-object/exact-Follow Create acknowledgment before Update,
   Delete terminal fence, original-attempt late acknowledgment, unknown send
   after lease expiry, and zero claim capacity —
-  `tests/test_stage04_authored_announces.py`.
+  `tests/test_local_community_authored_announces.py`.
 - Graceful cancellation during the first Group HTTP send leaves the in-flight
   exact Follow attempt uncertain but releases the other, never-sent recipient
-  claims for a safe retry — `tests/test_stage04_authored_announces.py`.
+  claims for a safe retry — `tests/test_local_community_authored_announces.py`.
 - A stale `dispatching` lease transitions to persistent `ambiguous`; only a
   verified positive result from that same token/generation can settle it.
   Older unknown Update must block a newer Delete after restart.
 
-## Stage 04 physical mutation recovery coverage (Checkpoints 61–63)
+## Physical mutation recovery coverage
 
 - Real SQLite canonical Update/Delete against historical bot-owned copies,
   unknown outcomes, expired dispatch, revoked surfaces, and physical starter
-  tombstones — `tests/test_stage04_physical_mutation_recovery.py`.
+  tombstones — `tests/test_physical_mutation_recovery.py`.
 - Recovery scanner starvation: a copy beyond eight already-acknowledged rows
   must still receive its authorized revision, while revoked destinations stay
   blocked, `limit=1` sends only one claim, and `limit=0` performs no sends —
-  `tests/test_stage04_physical_mutation_recovery.py`.
+  `tests/test_physical_mutation_recovery.py`.
 - A malformed canonical JSON or domain renderer refusal leaves its one copy
   unacknowledged and diagnostic, does not block a healthy sibling, and a later
-  verified revision can recover it — `tests/test_stage04_physical_mutation_recovery.py`.
+  verified revision can recover it — `tests/test_physical_mutation_recovery.py`.
 - Pre-transport adapter/authorization/formatter failure versus uncertain
   provider result, and cancellation of a multi-copy claim batch after one
   adapter call (only unstarted copies become retryable) —
-  `tests/test_stage04_physical_mutation_recovery.py`.
+  `tests/test_physical_mutation_recovery.py`.
 - Multi-forum nested parent isolation and restart error preservation —
   `tests/behavior/test_platform_message_fanout_scenarios.py` and
   `tests/behavior/test_platform_delivery_recovery_scenarios.py`.
@@ -385,7 +385,7 @@ Behavior coverage lives in `test_user_profile_persistence_scenarios.py`, `test_p
 - Neighboring `test_local_inbound_mutations.py`, `test_normalized_local_community_runtime.py`, `test_neutral_local_community_fanout.py`, Remote Community and AP inbound mutation tests jointly verify canonical routing and shared surface boundary.
 - Full installed-Discord SDK behavior still requires an integration run. A test-only import stub supplies no Discord transport behavior.
 
-## Stage 04 multi-forum adversarial scenarios (Checkpoint 63, partial)
+## Multi-forum adversarial scenarios
 
 - Real SQLite Local Community author in subscriber forum B, independent
   host A and subscriber C forum receipts, no echo/duplicate POST and
@@ -413,17 +413,17 @@ These tests use local transport fakes and are not a replacement for the
 full Python/Node suites or live Discord/Fedify integration acceptance.
 
 
-## Stage 04 inherited v0 mutations
+## Inherited v0 mutations
 
-- `tests/behavior/test_stage04_tagged_legacy_mutations.py`: authentic release-code
+- `tests/behavior/test_tagged_legacy_community_mutations.py`: authentic release-code
   database creation and startup migration followed by real Local/Remote first
   Update/Delete handlers; original-author evidence, rejected forgery, missing or
   conflicting provenance, human host/subscriber sources, nested replies, durable
   mirror ACKs, unknown write outcomes and restart.
-- `tests/test_stage04_physical_mutation_recovery.py`: positive physical author
+- `tests/test_physical_mutation_recovery.py`: positive physical author
   lookup, cancellation before writes, exact mutation claims and replay barriers.
-- `tests/test_stage04_inbound_canonical_snapshots.py` and
-  `tests/test_stage04_delivery_intents.py`: all five formerly hidden scenarios
+- `tests/test_inbound_community_canonical_snapshots.py` and
+  `tests/test_community_delivery_intents.py`: all five formerly hidden scenarios
   now belong to collected test classes; canonical tombstones and unsent/unknown
   Create cancellation remain distinct.
 
@@ -435,7 +435,7 @@ full Python/Node suites or live Discord/Fedify integration acceptance.
   a confirmed typed source with injected SQL failure, active lease protection,
   stale-owner CAS and a revision conflict without overwriting newer content.
 
-## Stage 04 post-patch integration regression
+## Post-patch integration regression
 
 - Legacy Community scenarios now supply observed creation/edit timestamps,
   accepted surface metadata, original authenticated author snapshots and exact

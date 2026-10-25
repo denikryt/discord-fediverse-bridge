@@ -1,4 +1,4 @@
-"""Typed Discord boundary fake shared by Stage 04 runtime scenarios.
+"""Typed Discord boundary fake shared by durable community fanout scenarios.
 
 It deliberately implements the full lookup/write port, allowing the real
 connector registry to reject mismatched or unconfigured adapters in tests.

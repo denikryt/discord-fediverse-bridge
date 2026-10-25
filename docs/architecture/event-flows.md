@@ -2,7 +2,7 @@
 
 This document explains the major runtime traces through the bridge: user/platform action, important preconditions, modules called, database effects, and outbound effects. It owns step-by-step behavior flow descriptions, not exhaustive function internals.
 
-## Stage 04 S-01 — single production Community Create entry
+## Single production Community Create entry
 
 `BridgeBot` submits observed SDK creates only through `DiscordAdapter` and
 `PlatformEventIngress`. `DiscordEventRouter` now exposes only its normalized
@@ -19,7 +19,7 @@ messages at the transport boundary and exercise real canonical admission and
 coordinator persistence. External callers of the removed raw APIs must migrate
 to the verified platform ingress; there is no compatibility fallback.
 
-## Stage 04 typed forum source admission (checkpoint 57 foundation)
+## Typed forum source admission
 
 A verified forum `ChannelRef` enters `content_sync.surface_resolution` with
 the actual connector, parent forum kind, and guild identity. The resolver
@@ -29,10 +29,10 @@ Unknown metadata and an inactive/rebound claim cannot publish. The frozen
 `ResolvedForumSource` is a candidate: persistence and later sends must
 revalidate it in the SQLite writer transaction. Exact authored source lookups
 use `(connector, immediate container, message id)` rather than global Discord
-message IDs. Remaining old Discord event routes are replaced in checkpoint 58,
-not shadowed by a parallel live ingress.
+message IDs. The raw Community Create routes are removed during the typed
+ingress cutover, rather than kept as a parallel live ingress.
 
-## Stage 04 community Create — render, atomic admission, signed send
+## Community Create — render, atomic admission, signed send
 
 1. A verified Discord forum starter or reply enters the single normalized
    `PlatformEventIngress`; the runtime selects the exact current Local or
@@ -54,10 +54,11 @@ not shadowed by a parallel live ingress.
    accepted Follow incarnation and inbox remain required at both claim and
    pre-POST checks. No followers is a valid committed canonical publication.
 5. Duplicate Gateway ingress adopts the original canonical graph; a failed
-   recipient does not authorize a fresh ActivityPub Create ID. Later physical
-   fanout, edits and crash recovery belong to subsequent Stage 04 checkpoints.
+   recipient does not authorize a fresh ActivityPub Create ID. Physical fanout,
+   edits and crash recovery use the delivery and mutation coordinators described
+   below.
 
-## Stage 04 canonical parent tombstone gate (checkpoint 60)
+## Canonical parent tombstone gate
 
 An inbound remote AP comment with a mapped canonical parent is admitted only
 when the owning post belongs to the expected remote community **and has no
@@ -77,7 +78,7 @@ these constraints transactionally when the physical request is reserved.
 The unused legacy Discord-SDK-only parent-backfill helper has been removed;
 normalized runtime delivery always uses the durable typed coordinator.
 
-## Stage 04 physical Community Create and restart recovery
+## Physical Community Create and restart recovery
 
 1. After canonical Local/Remote Community admission, each eligible forum is
    reserved by `(connector, surface, canonical object)` in the existing SQLite
@@ -100,7 +101,7 @@ normalized runtime delivery always uses the durable typed coordinator.
    a physical Create. Expired `dispatching` becomes `unresolved`; missing HTTP
    receipts, worker restarts and duplicate AP ingress never prove safe retry.
 
-## Stage 04 inbound AP Update/Delete — persist and physical reconciliation
+## Inbound AP Update/Delete — persist and physical reconciliation
 
 An authenticated inbound Local or Remote Community post/comment Update commits
 the normalized complete content, trusted source version and monotonic revision
@@ -157,7 +158,7 @@ subscriptions accepted.
 3. If it was the last channel for the community, Python calls gateway `/unfollow-community`.
 4. The bridge follow row is removed or preserved according to Undo(Follow) delivery outcome.
 
-## Stage 04 typed Discord Community author Update/Delete (Checkpoint 61 in progress)
+## Typed Discord Community author Update/Delete
 
 1. Raw SDK edit/delete enters `DiscordAdapter` and the single normalized
    `PlatformEventIngress` as a `MessageUpdated`/`MessageDeleted` whose source is
@@ -455,7 +456,7 @@ and transport cutover of community fanout are still in progress.
    `LocalCommunityFederationFanout` relays to eligible remote subscribers.
    SDK-backed Discord-originated mutations remain a separate pending cutover.
 
-## Stage 04 physical target Create admission (Checkpoint 59 work in progress)
+## Physical target Create admission
 
 A canonical Local/Remote object can have multiple physical forum targets. For
 normalized Local/Remote sibling targets, the current owner/surface is resolved
@@ -466,11 +467,11 @@ verified response commits a typed copy mapping and `delivered` atomically.
 If the owner has rebound, the returned thread/starter or message identity
 stays on the original intent as a verified orphan, never on the new owner.
 Unknown results and expired dispatches remain unresolved, with no automatic
-Create replay. Missing nested parent materialization, inbound AP destinations
-and full startup wake/reconciliation are later Stage 04 boundaries; this
-section does not claim those paths have been cut over yet.
+Create replay. Nested-parent materialization, inbound AP destinations and
+startup reconciliation have separate admission and recovery paths; this
+section describes target reservation and receipt ownership.
 
-## Stage 04 Remote Community typed physical receipt continuation
+## Remote Community typed physical receipt continuation
 
 The physical Create coordinator commits Remote Community post copies with
 `(connector_id, channel_surface_id, external_thread_id,
@@ -509,7 +510,7 @@ rows, an actual SQL flush failure on an otherwise verified source, lease theft
 and a refused revision CAS. The tests repair state and reopen the database to
 verify recovery without duplicate rendering or outbound source creation.
 
-## Stage 04 inherited runtime integration corrections
+## Inherited runtime integration corrections
 
 An authenticated Local Group Undo removes only the matching current Follow
 incarnation. The handler reports `processed/applied` after that transactional

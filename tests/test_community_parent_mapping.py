@@ -11,7 +11,7 @@ from src.models import (LocalCommunityMessage, LocalCommunityMessageSurface,
                         CommunityThreadGroupDelivery, CommunityMessageGroup,
                         CommunityMessageGroupDelivery, ChannelSurface)
 from src.platform_types import ChannelRef, MessageRef, ThreadRef, CreatedThread
-import test_stage04_delivery_intents as _intent_scenarios
+import test_community_delivery_intents as _intent_scenarios
 
 
 class ParentMappingScenarios(unittest.TestCase):

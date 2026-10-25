@@ -67,7 +67,7 @@ All three create operations take a core-generated `CreateAttempt(key, connector_
 
 **Personal Feed exception:** Discord threads created *from* an existing text/announcement-channel root message share its ID; there can be only one. A verified existing `ThreadRef` with the root ID, correct parent connector/channel and compatible thread kind can be adopted even when it predates the attempt. This is proof of the intended **target**, not proof the current attempt created it. `create_reply_thread` may return such a preexisting thread rather than issuing a second create; `reconcile_create` may return it when verified with a network/platform lookup. The exception never extends to forum posts or arbitrary messages, nor does it authorize sending a reply without permissions. Other platforms must verify any equivalent guarantee rather than assuming Discord semantics.
 
-## Stage 04 durable physical Create dispatch and cache ACK
+## Durable physical Create dispatch and cache ACK
 
 `CreateAttempt.key` beginning with `fanout:v1:` is reserved for the SQLite-backed
 `PlatformFanoutCoordinator`. After a committed intent `pending → dispatching`

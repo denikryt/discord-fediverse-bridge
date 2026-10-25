@@ -73,7 +73,7 @@ mapping can be overwritten. A message surface must also belong to the
 canonical parent thread carried by its parent physical surface. There is no
 new queue or database schema.
 
-### Stage 04 — typed physical receipt handoff (post-review fix)
+### Typed physical receipt handoff (post-review fix)
 
 Coordinator-created Local Community thread/starter and message receipts own their
 identities in `connector_id`, `channel_surface_id` and `external_*` columns.
@@ -131,7 +131,7 @@ cannot authorize an overwrite. Deletes use the existing visible tombstone
 remain best-effort. Legacy Discord-originated mutation methods retain their
 SDK route until the separate remaining-dependency cutover.
 
-## Stage 04 authored Group Announce lease recovery
+## Authored Group Announce lease recovery
 
 The Group-signed authored `Announce(Create/Update/Delete)` delivery ledger is
 scoped to the canonical AP object and the exact accepted Follow incarnation.
@@ -148,4 +148,4 @@ gateway send can be proven never started and returned to `failed_proven_unsent`.
 The in-flight signed HTTP request stays `dispatching` until a matching receipt
 or `ambiguous` lease expiration; a hard process kill cannot make non-send
 claims on the unexecuted remainder. See
-`tests/test_stage04_authored_announces.py` for SQLite regressions.
+`tests/test_local_community_authored_announces.py` for SQLite regressions.

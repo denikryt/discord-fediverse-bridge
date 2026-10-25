@@ -1,4 +1,4 @@
-"""Discord-ready recovery of Stage 04 intents on the existing worker."""
+"""Discord-ready recovery of durable delivery intents on the existing worker."""
 from __future__ import annotations
 
 import asyncio

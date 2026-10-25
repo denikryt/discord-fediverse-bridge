@@ -594,7 +594,8 @@ class DiscordAdapter:
                             flight.coordinator_permit, flight.durable_claim,
                         )
             return verified
-        # MULTIPLATFORM_STAGE04_TEMP_FORUM_RECEIPT_PROOF: Discord forum/message creates without durable same-attempt evidence stay unresolved; never infer successful or absent delivery from matching content or history scans.
+        # Creates without durable evidence from the same attempt stay unresolved.
+        # Matching content or history scans cannot prove delivery or absence.
         return None
 
     @staticmethod

@@ -61,7 +61,7 @@ class Gateway:
 
     async def publish_local_community_content(self, request):
         """Refuse the retired network-before-canonical-commit publishing API."""
-        raise AssertionError('Stage 04 must render and persist before federation sending')
+        raise AssertionError('Community content must be rendered and persisted before federation sending')
 
 
 class PhysicalTransport(FakeDiscordPort):

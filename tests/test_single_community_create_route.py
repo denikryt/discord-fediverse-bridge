@@ -1,4 +1,4 @@
-"""S-01: production Discord router exposes one typed Community Create pipeline.
+"""The production Discord router exposes one typed Community Create pipeline.
 
 Check the actual source interface without importing the SDK in a constrained
 build environment. Typed runtime behavior is exercised by SQLite scenarios.

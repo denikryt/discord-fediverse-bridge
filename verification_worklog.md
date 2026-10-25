@@ -8,7 +8,7 @@
 - Initial command sandbox failed before executing commands (`bwrap: loopback: Failed RTM_NEWADDR`); read-only Git commands and worktree creation succeeded through approved escalation.
 - Next: inspect project rules and Discord Adapter plan, provision isolated dependencies, run baseline Python and Node suites.
 
-## Stage 1 — plan and dependency inventory
+## Plan and dependency inventory
 
 - Read `AGENTS.md`, `pyproject.toml`, `fedify-gateway/package.json`, and the responsibility statement plus transport contract in `docs/architecture/platform-api.md`. This plan explicitly treats the adapter ledger as process-local; durable fan-out and cross-restart receipt recovery are outside its present scope.
 - Inspected `src/activitypub_safe_fetch.py` and `fedify-gateway/src/{federation,verified-forwarded-source}.ts`. The Python backfill fetch uses HTTPS-only admission, numeric socket checks, no redirects, no proxy environment and hostname-bound TLS. Fedify Announce handling performs separate origin dereference for embedded Create/Update/Delete. These are code findings, not yet runtime security proof.
@@ -17,7 +17,7 @@
 - Official Fedify changelog identifies 2.2.19 as a security update, including URL scheme and SSRF fixes: https://fedify.dev/changelog . Version choice will be pinned and verified after baseline.
 - Next: complete Python installation and execute complete baseline suites.
 
-## Stage 2 — baseline in progress
+## Baseline in progress
 
 - Python editable/dev installation completed inside `.venv`; `discord.py` resolved to 2.7.1, pytest to 9.1.1. Full `.venv/bin/python -m pytest -q` is running, output saved at `/tmp/discord-adapter-pytest-baseline.log`.
 - `npm test` baseline: TypeScript check and all 14 security-boundary tests passed, then per-file runner stopped at `tests/verify-follow-activity-id.ts`: `TypeError: ctx.lookupObject is not a function` in `src/outbound/remote-actor.ts:26`. This is a pre-existing baseline failure, before any source change. Output saved at `/tmp/discord-adapter-node-baseline.log`.
@@ -27,7 +27,7 @@
 - Full Python baseline is still running; progress reached 16% with multiple failures. Will collect complete summary before edits and leave unrelated baseline failures unchanged.
 - Read-only `docker ps` snapshot saved at `/tmp/discord-adapter-production-before.txt`. It lists several unrelated and bridge stacks; no container operation or configuration read was performed. Will compare IDs and states at completion.
 
-## Stage 3 — adversarial hypothesis (not yet confirmed)
+## Adversarial hypothesis (not yet confirmed)
 
 - Inspected `fedify-gateway/src/activitypub-raw-cache.ts`, `src/routes/inbox-logging.ts`, and `src/federation.ts`. The middleware stores raw bodies keyed only by caller-supplied `activity.id` before Fedify authentication; `getAnnounceEnvelope()` prefers that process-global cached body over request-local context. `verifyForwardedSourceRecord()` compares only the typed Announce's ID and actor with this cached envelope, then independently verifies the nested source. Hypothesis (HIGH): an invalid or concurrent POST can replace the raw body for a valid queued Announce with another origin-verifiable nested activity under the same outer ID/actor. This may change the event associated with the signed delivery. Must reproduce with a regression test before considering a fix. A safe correction may require preserving request-specific raw content through Fedify's queue; this may exceed the current plan, so impact and feasibility need study first.
 - Real Fedify `Announce.toJsonLd()` on an in-memory constructed activity includes its nested Create and object. This suggests a possible binding between the accepted typed object and raw cache, but no change has been made.
@@ -35,13 +35,13 @@
 - Inspected installed Fedify 2.2.0 queue implementation: inbox jobs preserve `message.activity`, but `#listenInboxMessage` reconstructs a typed activity with generic `ctxData`. Gateway `src/server.ts` initially builds `GatewayContextData` from HTTP request. The global raw cache exists because queued handling can lose request-local raw JSON. Fixing the binding without changing delivery-profile semantics needs care; no source edit yet.
 - The typed Fedify `Announce` retains `objectId` and `toJsonLd().object` (checked locally with `Announce.fromJsonLd()` using an embedded Create). Therefore the handler can bind at least nested activity identity/type to the accepted typed event without fetching or trusting the mutable cache. This is a candidate narrow fix once the baseline is complete. Remaining risk: same-ID origin content changing between delivery and dereference; origin lookup currently compares the cached body to live author content.
 
-## Stage 4 — baseline complete
+## Baseline complete
 
 - Full `.venv/bin/python -m pytest -q` completed before source edits: **1728 passed, 24 failed, 3 warnings, 445.68 s**. Complete output: `/tmp/discord-adapter-pytest-baseline.log`; exact failed test IDs are in its final summary. Failures span existing Local Community, Personal Feed, raw Discord, model-based relay, runtime, Docker contract, routing and retired-URL tests. These are baseline defects; no attempt will be made to fix unrelated ones.
 - Node baseline: `npm test` stops at `verify-follow-activity-id.ts` after successful TypeScript and 14 security boundary tests. Independent execution of every `verify-*.ts` found **7 failing files**, listed above. File-specific logs remain in `/tmp/discord-adapter-node-baseline-verify-*.log`.
 - Registry verified `@fedify/fedify`, `@fedify/hono`, `@fedify/vocab` **2.2.19** exist. Official changelog dates 2.2.19 to 2026-10-12 (https://fedify.dev/changelog). Next: exact version update, clean `npm ci`, installed-version check, TypeScript and tests.
 
-## Stage 5 — Fedify update and Announce cache regression
+## Fedify update and Announce cache regression
 
 - `npm install --save-exact @fedify/fedify@2.2.19 @fedify/hono@2.2.19 @fedify/vocab@2.2.19 --ignore-scripts --no-audit --no-fund` changed 14 installed packages and updated `fedify-gateway/package.json` plus lockfile. Registry integrity for `@fedify/fedify@2.2.19` was checked before update. A clean `npm ci` is running.
 - Added three action/state regression cases to `fedify-gateway/tests/verify-forwarded-origin.mjs`: an accepted typed Announce is queued, then a second unsigned raw inbox body with the same outer ID/actor replaces its cached nested Create, Update, or Delete. Before the fix all three tests failed with `Missing expected rejection` (8 passed, 3 failed), proving the cache collision can enter a different origin lookup.
@@ -51,36 +51,36 @@
 - Repeated `npm test`: TypeScript and all 18 security-boundary tests pass; the same pre-existing `verify-follow-activity-id.ts` fixture fails with missing `ctx.lookupObject`. Started independent full Node-file enumeration and full repeat pytest; both remain in progress.
 - Read purpose statements in `docs/FEDERATION.md`, `docs/architecture/event-flows.md`, and `notes/known_issues.md`; updated only their inbound federation/security-flow descriptions and short known-issues status. `dev/future_tasks.md` has no completed Fedify item to remove.
 
-## Stage 6 — post-update compatibility findings
+## Post-update compatibility findings
 
 - Exhaustive `verify-*.ts` rerun after Fedify 2.2.19: **10 failing files**, versus seven at baseline. The seven baseline files still fail. New failures are `verify-public-community-follow-workflow.ts` and `verify-zz-public-user-follow-workflow.ts` (the local Fedify/Hono inbox returns acceptance, but no `local.follow_requested` reaches the isolated Python fixture), plus `verify-user-canonical-actor.ts` (`406` now returned where the test expects `404`). These are real compatibility regressions in the test environment; whether the first two occur with public DNS and live HTTP signatures is **NOT VERIFIED**. File logs: `/tmp/discord-adapter-node-final-verify-*.log`.
 - `npm audit --omit=dev --json` reports **5 non-Fedify dependency findings**: one high (`hono`) and four moderate (`@hono/node-server`, OpenTelemetry core/resources/sdk-trace-base). Full machine-readable output: `/tmp/discord-adapter-npm-audit.json`. The advisories list fixes, but changing unrelated dependency families is outside the requested Fedify patch and would need separate compatibility review. Fedify 2.2.19 itself has no reported npm audit finding in this run.
 - Reviewed the two Follow fixtures. They replace global `fetch` and set `skipSignatureVerificationForTests` in an isolated Hono app; their `remote.example` identities are synthetic, so they do not prove whether a real public Fedify peer can authenticate after the security update. Do not mark signed inbox integration as verified.
 - Full post-change pytest is still running. No production credential or network endpoint has been used.
 
-## Stage 7 — isolated socket adversarial check
+## Isolated socket adversarial check
 
 - Ran a standalone Python asyncio scenario against a newly started loopback canary on an ephemeral port. Forced the production `fetch_public_ap_object('https://remote.example:<port>/post/1')` resolver to return that private socket address at dial time. Result: `ValueError remote ActivityPub socket address is not public`, **local_canary_connections=0**. This verifies the actual fetch path refuses DNS rebinding before any connection to the isolated private server; no production network or credential was involved. It does not verify successful TLS to a public peer or redirect handling over a real TLS connection.
 - Started targeted Python runtime/SQLite checks for adapter transport, singleflight, lifecycle, parent backfill SSRF, Remote Community post/comment/backfill, and Personal Feed reply ingress (`/tmp/discord-adapter-targeted-final.log`).
 - Targeted adapter/security/Remote Community/Personal Feed suite: **94 passed in 8.36 s**. Separate Local Community fanout, normalized runtime, inbound receipt/dedup, mutation and Personal Feed worker suite: **69 passed, 1 warning in 14.63 s**. These use real Python runtime and SQLite paths with fake outer Discord/network edges; they are not live Discord Gateway tests.
 - Refactored the accepted identity types after the green regression: `AcceptedAnnounceIdentity.objectId` is now required by TypeScript, while direct activities retain a narrower `AcceptedActivityIdentity`. `npm run check` passed. Added a semantic equivalence case with reordered JSON object properties and equivalent timestamp offsets; security boundary suite is now **19 passed, 0 failed**. `npm test` was restarted after this final TypeScript/test edit.
 
-## Stage 8 — final test results and production observation
+## Final test results and production observation
 
 - Full post-change `.venv/bin/python -m pytest -q`: **1728 passed, 24 failed, 3 warnings in 304.30 s**. Output: `/tmp/discord-adapter-pytest-final.log`. `diff` of `rg '^FAILED '` baseline vs final is empty: no new Python failed test ID.
-- After the last TypeScript refactor and test change, `npm run check` passed, `npm run test:security-boundaries` passed **19/19**, and `npm test` still stopped at the same `verify-follow-activity-id.ts` baseline failure. A final independent run of all `verify-*.ts` found the same **10** failing files listed in Stage 6; final logs: `/tmp/discord-adapter-node-verified-verify-*.log`.
+- After the last TypeScript refactor and test change, `npm run check` passed, `npm run test:security-boundaries` passed **19/19**, and `npm test` still stopped at the same `verify-follow-activity-id.ts` baseline failure. A final independent run of all `verify-*.ts` found the same **10** failing files listed under [Post-update compatibility findings](#post-update-compatibility-findings); final logs: `/tmp/discord-adapter-node-verified-verify-*.log`.
 - `git diff --check` passed. Wrote `verification_report.md` with results, changes, explicit NOT VERIFIED limits and production isolation evidence.
 - Read-only `docker ps` after test execution saved at `/tmp/discord-adapter-production-after.txt`. Comparing sorted ID/name/state triples with the before snapshot yielded no diff across all **15** running containers. Bridge/gateway IDs stayed the same and running; the original `issue/10-discord-adapter` checkout remained clean. No Docker write, restart, stop or exec command was issued; neither production contents nor credentials were read.
 - Next: generate Git patch including this worklog/report, create a standalone archive of the modified project with a real `.git` directory, verify artifact contents and hashes. No push/merge/deploy.
 
-## Stage 9 — artifact assembly
+## Artifact assembly
 
 - Generated `/tmp/discord-adapter-verification-20.patch` with `git diff HEAD --binary` after `git add -N` for the new report and worklog. The patch contains source, lockfile, regression tests, docs, known-issues update, report and worklog; `git apply --check --reverse` passed against the modified worktree and `git diff --check` was clean.
 - First local-clone command did not start because its requested working directory did not yet exist (`CreateProcess ... No such file or directory`). Retried from `/tmp`: `git clone --local --no-hardlinks` created `/tmp/discord-adapter-verification-20-project` with a real `.git` directory at the original commit. `git apply` of the patch and `git diff --check` succeeded. The clone is a local archive staging copy only; no commit/push/merge.
 - Next: regenerate patch after this journal entry, synchronize it to the standalone clone, create and inspect the tar archive, then report hashes and paths.
 - Regenerated the patch, copied the current worklog to the standalone clone, and created `/tmp/discord-adapter-verification-20-project.tar.gz`. Archive listing confirms `.git/HEAD`, `verification_worklog.md`, `verification_report.md`, and the changed gateway source. No build venv or production data was included. Final reproducibility check and archive refresh after this entry remain.
 
-## Stage 10 — artifact relocation requested by user
+## Artifact relocation requested by user
 
 - User requested moving deliverables into the project-root `tmp/`. The directory exists and is ignored by Git; its existing contents were listed without modification. Use the dedicated `tmp/discord-adapter-verification-20/` subdirectory to avoid name collisions. The isolated worktree and standalone Git staging clone remain outside the project root; only the four deliverables move or copy into `tmp/`.
 

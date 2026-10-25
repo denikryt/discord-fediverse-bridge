@@ -310,7 +310,7 @@ Fedify-native security integration remains blocked by missing dependencies.
   distinct local-community surface. Full Python regression requires the
   project's `discord.py`/`hypothesis` environment before a merge decision.
 
-- **Stage 04 Checkpoint 59 work in progress (2026-10-23):** SQLite-backed
+- **Durable physical Create implementation snapshot (2026-10-23):** SQLite-backed
   immutable physical Create intents, one-claim coordinator and atomic
   thread/starter/message receipts are implemented for normalized Local/Remote
   copy fanout. Blocked nested parents, complete runtime recovery/wake and
@@ -318,12 +318,12 @@ Fedify-native security integration remains blocked by missing dependencies.
   this checkpoint as production-complete. No full dependency-backed suite or
   live Discord transport verification was available during this step.
 
-- Stage 04 Checkpoint 59 WIP: physical Create pending/recovery and incoming Remote Community canonical snapshots have focused SQLite coverage, but legacy inbound Local/Remote AP→Discord direct sends and full production runtime cutover remain unverified; never claim completed durable community fan-out before converting those paths.
+- Physical Create implementation snapshot: physical Create pending/recovery and incoming Remote Community canonical snapshots have focused SQLite coverage, but legacy inbound Local/Remote AP→Discord direct sends and full production runtime cutover remain unverified; never claim completed durable community fan-out before converting those paths.
 
-- **Stage 04 Checkpoint 61 typed Community mutation ingress (2026-10-24, WIP):** normalized Discord edits/deletes now resolve original Local/Remote authored post/comment by exact `(connector, immediate container, message)` and verify current forum owner and linked author before reserving a User Actor mutation. Partial edits flag reconciliation on the exact source; old numeric Community routing no longer runs for real DB ingress. Fifteen real-SQLite scenarios pass, including writer-side revocation checks and
-  exact deferred-read container selection. Complete author-mutation transport/restart and full SDK-backed regression suite remain to be verified; do not mark Stage 04 complete.
+- **Typed Community mutation ingress snapshot (2026-10-24):** normalized Discord edits/deletes now resolve original Local/Remote authored post/comment by exact `(connector, immediate container, message)` and verify current forum owner and linked author before reserving a User Actor mutation. Partial edits flag reconciliation on the exact source; old numeric Community routing no longer runs for real DB ingress. Fifteen real-SQLite scenarios pass, including writer-side revocation checks and
+  exact deferred-read container selection. Complete author-mutation transport/restart and full SDK-backed regression suite remain to be verified; do not claim complete mutation delivery verification.
 
-## Stage 04 Checkpoint 63 verification status (2026-10-24)
+## Durable community fanout verification snapshot (2026-10-24)
 
 - **Partially verified:** real SQLite three-forum Create, per-target uncertainty,
   restart, typed source boundaries, delayed nested-parent materialization and
@@ -333,9 +333,9 @@ Fedify-native security integration remains blocked by missing dependencies.
 - **Not verified:** complete Python/Node dependency-backed suites and actual
   Discord/Fedify end-to-end sends. Do not interpret a lost Discord receipt,
   missing local copy or expiry of a claim as permission to re-POST. These
-  remain part of the Stage 04 acceptance checklist, not completed checks.
+  remain part of the durable community fanout acceptance checklist, not completed checks.
 
-## 2026-10-24 — Stage 04 physical mutation recovery pagination (fixed in CP63 WIP)
+## 2026-10-24 — physical mutation recovery pagination (fixed)
 
 - A fixed `LIMIT (requested_claims * 8)` scanned only the oldest candidate copy
   rows. Eight already-applied historical rows ahead of an overdue copy caused
@@ -347,7 +347,7 @@ Fedify-native security integration remains blocked by missing dependencies.
   and zero-limit no-op. No schema, queue or background worker was added.
 - Full dependency-backed test suite and live Discord/Fedify remain unverified.
 
-## 2026-10-24 — Stage 04 Group Announce expired-claim classification (fixed in CP63 WIP)
+## 2026-10-24 — Group Announce expired-claim classification (fixed)
 
 - Previously, a Group-signed `Announce(Update)` interrupted in `dispatching`
   remained indefinitely active after its lease expired; restart did not
@@ -358,7 +358,7 @@ Fedify-native security integration remains blocked by missing dependencies.
   younger Delete until settlement, and never retries solely on expiry.
 - Full dependency-backed and live federation integration is still unverified.
 
-## 2026-10-24 — Stage 04 physical mutation formatter isolation (fixed in CP63 WIP)
+## 2026-10-24 — physical mutation formatter isolation (fixed)
 
 - Previously, a pure domain renderer raising `ValueError` or returning an
   invalid ContentDocument aborted the entire SQLite mutation claim scan, so
@@ -369,7 +369,7 @@ Fedify-native security integration remains blocked by missing dependencies.
   identical revision is not repeatedly rendered, while a later validated
   canonical revision remains recoverable. Full SDK integration is unverified.
 
-## 2026-10-24 — Stage 04 physical mutation pre-send and cancellation boundaries (fixed in CP63)
+## 2026-10-24 — physical mutation pre-send and cancellation boundaries (fixed)
 
 - A local connector-registry/policy lookup or tombstone formatting exception was
   incorrectly recorded as `unresolved`, permanently fencing an edit that never
@@ -390,7 +390,7 @@ Fedify-native security integration remains blocked by missing dependencies.
   dependency-backed Python/TypeScript checks and live Discord/Fedify remain
   unverified; these do not establish production readiness.
 
-## 2026-10-24 — Stage 04 review: typed Local Community receipt handoff
+## 2026-10-24 — review: typed Local Community receipt handoff
 
 - **FIXED (P1):** `PlatformDeliveryIntentRepository.commit_receipt()` writes
   typed `external_thread_id`/starter IDs and leaves old `discord_*` projections
@@ -411,9 +411,9 @@ Fedify-native security integration remains blocked by missing dependencies.
   retirement requires verifying and migrating its remaining callers.
 - Focused SQLite and runtime tests are available. Full pytest/TypeScript and
   live Discord/Fedify remain unverified without project dependencies and
-  external test services; this is not a Stage 04 release approval.
+  external test services; this does not establish release readiness for durable community fanout.
 
-## 2026-10-24 — Stage 04 Remote Community typed physical receipt handoff
+## 2026-10-24 — Remote Community typed physical receipt handoff
 
 - **FIXED (P1):** the Remote Community normalized sibling thread and comment
   paths used nullable legacy `discord_channel_id`/`discord_thread_id` rather
@@ -430,13 +430,13 @@ Fedify-native security integration remains blocked by missing dependencies.
   a reply authored inside a typed mirror, an inbound AP comment, a missing
   destination nested parent and a wrong-forum identity denial. Legacy tests
   asserting non-NULL `discord_*` columns on newly created copies do not match
-  the Stage 04 schema contract; those assertions were not rewritten solely
+  the durable fanout schema contract; those assertions were not rewritten solely
   to make an obsolete projection pass.
 - Full Python/TypeScript dependency-backed and live Discord/Fedify verification
   remain outstanding. Focused tests alone are not production acceptance.
 
 
-## Stage 04 S-01: single Community Create pipeline
+## Single Community Create pipeline
 
 - Implemented: migrated the remaining 32 direct raw runtime calls, removed all
   four raw runtime Create APIs, four local Create handlers and unused SDK-only
@@ -450,7 +450,7 @@ Fedify-native security integration remains blocked by missing dependencies.
   Discord/Fedify credentials and delivery are not exercised by offline tests.
 
 
-## Stage 04 independent migration review — legacy mutations
+## Independent migration review — legacy mutations
 
 - Fixed first legacy Update/Delete admission when an independently persisted
   original publication or Local Community Create proves the exact author/object/
@@ -465,7 +465,7 @@ Fedify-native security integration remains blocked by missing dependencies.
   combined runs load the installed SDK while retaining network-edge fakes.
 
 
-## Stage 04 canonical-ready commit recovery
+## Canonical-ready commit recovery
 
 - Fixed: a failed local canonical commit now preserves its rendered activity,
   records the error and schedules bounded retry instead of immediately spinning.
@@ -479,6 +479,9 @@ Fedify-native security integration remains blocked by missing dependencies.
 - Fixed: a deleted Local parent blocked recovery of an authenticated child
   tombstone. Existing bot copies now settle that Delete once; pending live
   child content remains blocked by the parent tombstone.
-- Integration fixtures now exercise real Stage 04 coordinators and DB-backed
+- Integration fixtures now exercise real durable delivery coordinators and DB-backed
   recipients with explicit original authors/timestamps. This does not grant
   unknown legacy authorship or relax production mutation validation.
+
+- Replaced numbered roadmap labels with feature names in code comments,
+  diagnostics, documentation and test paths; updated imports and references.

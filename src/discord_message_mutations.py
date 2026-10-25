@@ -106,7 +106,8 @@ class DiscordMessageMutationHandler:
         if hasattr(self.database, "activitypub_objects"):
             await self._handle_typed_mutation(event, reader, is_delete=False)
             return
-        # MULTIPLATFORM_STAGE04_TEMP_PERSONAL_FEED_DISCORD_MUTATION: Only Personal Feed retains Discord-integer mutation routing; community mutations use typed connector-scoped canonical source and copy lookups.
+        # Personal Feed retains legacy Discord-integer mutation routing.
+        # Community mutations resolve typed canonical sources and copies.
         channel_id, message_id, guild_id = self._validate_platform_identity(event, reader)
         if self._was_recent(self._recent_edits, message_id):
             return
@@ -156,7 +157,8 @@ class DiscordMessageMutationHandler:
         if hasattr(self.database, "activitypub_objects"):
             await self._handle_typed_mutation(event, reader, is_delete=True)
             return
-        # MULTIPLATFORM_STAGE04_TEMP_PERSONAL_FEED_DISCORD_MUTATION: Only Personal Feed retains Discord-integer mutation routing; community mutations use typed connector-scoped canonical source and copy lookups.
+        # Personal Feed retains legacy Discord-integer mutation routing.
+        # Community mutations resolve typed canonical sources and copies.
         _, message_id, guild_id = self._validate_platform_identity(event, reader)
         if self._was_recent(self._recent_deletes, message_id):
             return

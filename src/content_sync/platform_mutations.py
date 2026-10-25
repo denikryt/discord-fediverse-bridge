@@ -341,7 +341,7 @@ class PlatformPhysicalMutationCoordinator:
                     raise ValueError('revoked during physical ownership verification')
                 if claim.deleted:
                     # Deletion of forum starters would destroy the discussion
-                    # thread. Preserve pre-Stage04 tombstone-edit semantics.
+                    # thread. Preserve the existing tombstone-edit behavior.
                     if self.tombstone_renderer is None:
                         io_started = True
                         await adapter.delete_message(claim.message)

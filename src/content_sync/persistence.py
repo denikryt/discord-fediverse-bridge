@@ -41,8 +41,8 @@ def _mapping_by_source(session, source_id: str, source_message: MessageRef | Non
     """
     if source_message is not None:
         if source_message.connector_key != 'discord-primary':
-            # Stage 04 publication accepts authenticated Discord humans only;
-            # Fluxer can carry the same typed IDs after Stage 05 registration.
+            # Community publication requires authenticated Discord human sources.
+            # Other connectors need equivalent registration and author verification.
             raise PublicationConflictError('Community authored source requires Discord primary connector')
         if source_message.external_message_id != source_id:
             raise PublicationConflictError('Source ID differs from verified MessageRef')

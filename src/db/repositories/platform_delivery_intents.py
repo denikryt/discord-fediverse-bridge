@@ -80,7 +80,7 @@ def _serialize_request(attempt: CreateAttempt, content: ContentDocument | None,
     if attempt.operation=='forum_thread' and (content is None or presentation is None):
         raise ValueError('forum create requires content and presentation')
     if content is not None and content.attachments:
-        raise ValueError('Stage 04 physical attachments are unsupported')
+        raise ValueError('Physical Create attachments are unsupported')
     data={'version':1,'attempt':{'key':attempt.key,'connector':attempt.connector_key,
            'operation':attempt.operation,'destination':_destination(attempt.destination)},
           'content':({'body':content.body,'format':content.format,'title':content.title,

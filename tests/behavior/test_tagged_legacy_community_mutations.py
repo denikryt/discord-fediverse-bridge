@@ -50,7 +50,7 @@ def tagged_v0(tmp_path_factory):
         bundle.extractall(root, filter='data')
     target = root / 'seed.sqlite'
     # The subprocess imports src exclusively from the release, with current dependencies.
-    seed = repo / 'tests/support/seed_stage04_tagged_v0.py'
+    seed = repo / 'tests/support/seed_tagged_v0_database.py'
     env = dict(os.environ)
     env['PYTHONPATH'] = os.pathsep.join([str(root)] + [str(Path(p).resolve()) for p in
                                       env.get('PYTHONPATH', '').split(os.pathsep) if p])

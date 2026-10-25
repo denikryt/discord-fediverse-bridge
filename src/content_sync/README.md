@@ -28,7 +28,7 @@ Importing reusable content helpers and CommunityRuntime no longer loads the
 Discord SDK. The remaining legacy SDK-based reference/edit/delete operations
 must be removed after their callers are migrated; they are not Platform API.
 
-## Stage 04 source ownership
+## Source ownership
 
 `surface_resolution.resolve_forum_source(session, ChannelRef)` returns a frozen
 owner candidate only for the exact connector, forum channel and verified guild.
@@ -47,7 +47,7 @@ own separate legacy mutation projection.
 immediate message container from its parent forum surface. New neutral callers
 look up exact `MessageRef`s. The old numeric-only Discord read methods reject
 fully typed sources rather than treating a missing container as a wildcard.
-Stage 04 community Create uses a single typed ingress: source identity and
+Community Create uses a single typed ingress: source identity and
 current surface ownership are checked before and during the SQLite writer
 transaction. `canonical_admission.py` atomically persists the community post
 or comment, its original typed physical receipt, `MessageMapping`,
@@ -60,7 +60,7 @@ to an accepted Follow incarnation in the same writer commit. Revocation is
 checked again before transport. Failed renders and invalid reply parents
 leave no canonical graph or signed network send.
 
-## Stage 04 physical Create coordination (Checkpoint 59)
+## Physical Create coordination
 
 `platform_fanout.PlatformFanoutCoordinator`,
 `delivery_recovery.recover_pending_creates()` and the

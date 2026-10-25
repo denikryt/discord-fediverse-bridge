@@ -1,4 +1,4 @@
-"""Real SQLite scenarios for per-target durable Stage 04 physical Create."""
+"""Real SQLite scenarios for per-target durable physical Create delivery."""
 from __future__ import annotations
 
 import asyncio
