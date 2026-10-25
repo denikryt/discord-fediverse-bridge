@@ -44,10 +44,19 @@ Discord integration tests, which require the project dependencies.
   rejected; a known nested parent absent from one forum creates `blocked`
   without sending a flat reply —
   `tests/test_stage04_remote_typed_receipt_regressions.py`.
-- Older Remote Community tests asserting populated `discord_*` projections on
-  new coordinator-created copies are historical expectations and do not prove
-  the authoritative typed receipt contract. Test the `external_*` columns,
-  `channel_surface_id`, durable intents and actual transport destinations.
+- Normalized Remote Community ingress and direct sibling fan-out fixtures use
+  verified `MessageView.created_at`, side-effect-free `render_community`, and
+  persisted canonical source post/comment IDs before coordinator dispatch.
+  Regressions assert exact `channel_surface_id` and `external_*` receipt fields,
+  current recipient authorization, immutable reply parents, wrong-mode receipt
+  refusal, no AP activity on missing source timestamps or renderer ID drift,
+  and no unexpected network sends — `tests/test_normalized_community_runtime.py`,
+  `tests/test_neutral_sibling_fanout.py`. New coordinator-created copies do not
+  need the nullable legacy `discord_*` projections.
+- Normalized reply-only tests seed real accepted source/target `ChannelSurface`
+  claims rather than unattached legacy copy rows, preserving strict foreign
+  connector/container rejection and correct sibling parent references —
+  `tests/test_neutral_reply_resolution.py`.
 
 ## Stage 04 typed Community source mutations (Checkpoint 61 WIP)
 

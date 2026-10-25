@@ -12,7 +12,7 @@ from src.platform_types import (
     PlatformOperationError, ThreadRef,
 )
 from support.db import (
-    add_thread_delivery, build_database, create_source_thread_group,
+    add_accepted_subscription, add_thread_delivery, build_database, create_source_thread_group,
 )
 
 
@@ -31,6 +31,10 @@ def event(*, reference=None, thread_id='200', connector='discord-primary'):
 def world(tmp_path):
     """Save two physical copies and one canonical comment across them."""
     db = build_database(tmp_path, 'normalized-reply.sqlite3')
+    # Typed delivery lookups require a current forum surface claim, not merely
+    # a legacy Discord channel ID on the physical copy row.
+    add_accepted_subscription(db, channel_id=100)
+    add_accepted_subscription(db, channel_id=101)
     group = create_source_thread_group(db, thread_id=200, starter_message_id=300)
     add_thread_delivery(db, thread_group_id=group.id, channel_id=101,
                         thread_id=201, starter_message_id=301, role='mirror')
@@ -89,6 +93,7 @@ def test_foreign_canonical_group_never_binds_typed_parent(tmp_path):
     """A copied message from another group cannot become this post's AP parent."""
     db, group, mirror, _ = world(tmp_path)
     try:
+        add_accepted_subscription(db, channel_id=103)
         foreign = create_source_thread_group(db, channel_id=103, thread_id=203,
                                              starter_message_id=303,
                                              ap_object_id='https://remote.example/post/other',
