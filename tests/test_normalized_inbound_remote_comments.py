@@ -17,6 +17,7 @@ import pytest
 from src.activitypub_models import ActivityPubEvent
 from src.community_sync.runtime import CommunityRuntime
 from src.platform_types import CreatedMessage, MessageRef
+from src.models import ChannelSurface
 from support.db import add_accepted_subscription, build_database
 from tests_constants import LEMMY_EXAMPLE_DOMAIN
 
@@ -224,9 +225,17 @@ async def test_failed_first_remote_comment_target_does_not_block_healthy_second(
         assert result.status == 'processed'
         assert [c[0].external_thread_id for c in transport.calls] == ['1100', '1200']
         mapped = db.discord_fanout_groups.get_message_group_by_ap_object(comment().object.ap_id)
-        assert {(d.discord_channel_id, d.discord_message_id) for d in
+        assert {(confirmed_forum(db, d), int(d.external_message_id)) for d in
                 db.discord_fanout_groups.get_message_deliveries(mapped.id)} == {(200, 5500)}
         assert (await runtime.handle_normalized_inbound_comment(comment(), adapter=transport)).status == 'skipped'
         assert len(transport.calls) == 2
     finally:
         db.close()
+
+
+def confirmed_forum(db, receipt):
+    """Resolve the actual connector-scoped forum claim of one durable receipt."""
+    with db.session() as session:
+        surface = session.get(ChannelSurface, receipt.channel_surface_id)
+        assert surface is not None and surface.connector_id == receipt.connector_id
+        return int(surface.external_channel_id)

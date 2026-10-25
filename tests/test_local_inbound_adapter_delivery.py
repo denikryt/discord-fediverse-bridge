@@ -129,7 +129,7 @@ async def test_verified_ap_post_creates_host_receipt_and_replay_never_posts_agai
         row = db.local_community_content.get_local_community_thread_by_ap_object_id('https://remote.test/post')
         host = db.local_community_surfaces.get_host_local_community_thread_surface(row.id)
         assert result.status == 'processed'
-        assert (host.discord_thread_id, host.discord_starter_message_id) == (400, 401)
+        assert (host.external_thread_id, host.external_starter_message_id) == ('400', '401')
         assert len(adapter.writes) == 1 and relays == ['post']
         again = await runtime.handle_inbound_post(_post(), SimpleNamespace())
         assert again.status == 'skipped'
@@ -147,7 +147,7 @@ async def test_comment_and_nested_reply_use_exact_host_thread_and_parent(tmp_pat
         result = await runtime.handle_inbound_comment(comment(), SimpleNamespace())
         row = db.local_community_content.get_local_community_message_by_ap_object_id('https://remote.test/comment')
         assert result.status == 'processed'
-        assert db.local_community_surfaces.get_host_local_community_message_surface(row.id).discord_message_id == 700
+        assert db.local_community_surfaces.get_host_local_community_message_surface(row.id).external_message_id == '700'
         assert adapter.writes[-1] == ('comment', '400', '401')
         again = await runtime.handle_inbound_comment(comment(), SimpleNamespace())
         assert again.status == 'skipped'
@@ -310,10 +310,15 @@ async def test_host_rebinding_during_create_rejects_old_receipt(tmp_path):
             """Change the authoritative channel surface while HTTP is in flight."""
             from sqlalchemy import select
             from src.models import ChannelSurface
-            with db.session() as session:
+            from src.db.repositories.platform_surfaces import PlatformSurfaceRepository
+            with db.immediate_session() as session:
                 surface = session.scalar(select(ChannelSurface).where(
                     ChannelSurface.external_channel_id == '300'))
-                surface.external_channel_id = '301'
+                assert surface is not None and surface.local_community_id is not None
+                PlatformSurfaceRepository.release_claim(
+                    session, surface.id, owner_column='local_community_id',
+                    expected_owner_id=surface.local_community_id,
+                )
         adapter.after_post = rebind
         result = await runtime.handle_inbound_post(_post(), SimpleNamespace())
         assert result.status == 'processed'
@@ -427,9 +432,15 @@ async def test_stale_host_surface_rejected_before_durable_comment_admission(tmp_
         await runtime.handle_inbound_post(_post(), SimpleNamespace())
         from sqlalchemy import select
         from src.models import ChannelSurface
-        with db.session() as session:
+        from src.db.repositories.platform_surfaces import PlatformSurfaceRepository
+        with db.immediate_session() as session:
             host = session.scalar(select(ChannelSurface).where(ChannelSurface.external_channel_id == '300'))
-            host.external_channel_id = '301'
+            assert host is not None and host.local_community_id is not None
+            # Detach the current owner; the original surface identity is immutable.
+            PlatformSurfaceRepository.release_claim(
+                session, host.id, owner_column='local_community_id',
+                expected_owner_id=host.local_community_id,
+            )
         before = list(adapter.writes)
         result = await runtime.handle_inbound_comment(comment(), SimpleNamespace())
         assert result.status == 'skipped' and adapter.writes == before
@@ -627,7 +638,7 @@ async def test_known_nested_parent_blocks_until_same_thread_receipt_is_verified(
             assert final_intent.blocked_parent_canonical_id is None
             assert final_intent.request_json is not None
         host = db.local_community_surfaces.get_host_local_community_message_surface(child.id)
-        assert host is not None and host.discord_message_id == 701
+        assert host is not None and host.external_message_id == '701'
         assert adapter.writes[-1] == ('comment', '400', '700')
         assert not await coordinator.deliver(blocked_id)
     finally:

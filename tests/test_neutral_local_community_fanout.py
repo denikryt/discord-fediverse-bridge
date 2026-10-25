@@ -13,9 +13,10 @@ from src.platform_types import (
     ThreadRef,
 )
 from support.db import build_database
+from support.fake_platform_adapter import FakeDiscordPort
 
 
-class PhysicalPort:
+class PhysicalPort(FakeDiscordPort):
     """Fake only the external network; let the real repositories own receipts."""
 
     def __init__(self, *, fail_forum=None, corrupt_forum=None):
@@ -94,7 +95,7 @@ async def test_host_post_mirrors_to_two_subscribers_once(tmp_path):
             physical = db.local_community_surfaces.get_local_community_thread_surface(
                 local_community_thread_id=post.id, discord_forum_channel_id=forum,
             )
-            assert (physical.discord_thread_id, physical.discord_starter_message_id) == (
+            assert (int(physical.external_thread_id), int(physical.external_starter_message_id)) == (
                 forum + 1000, forum + 2000
             )
             assert physical.local_subscriber_id == subscribers[forum].id
@@ -175,7 +176,7 @@ async def test_nested_reply_uses_per_recipient_parent_and_skips_missing_parent(t
         surface = db.local_community_surfaces.get_local_community_message_surface(
             local_community_message_id=reply.id, local_community_thread_surface_id=left.id,
         )
-        assert surface.parent_discord_message_id == 8200
+        assert surface.external_parent_message_id == '8200'
         again = await fanout.fanout_normalized_message(
             adapter=port, local_community=community, thread_row=post, message_row=reply,
             content='nested', author_display_name='Alice', source_forum_channel_id=100,
@@ -236,7 +237,7 @@ async def test_local_subscriber_source_mirrors_into_host_without_rewriting_sourc
             local_community_thread_id=post.id, discord_forum_channel_id=100,
         )
         assert host.role == 'host' and host.local_subscriber_id is None
-        assert host.discord_thread_id != host.discord_starter_message_id
+        assert host.external_thread_id != host.external_starter_message_id
         source = db.local_community_surfaces.get_local_community_thread_surface(
             local_community_thread_id=post.id, discord_forum_channel_id=200,
         )
@@ -389,7 +390,7 @@ async def test_sibling_thread_mode_receipt_requires_requested_bot_mode(tmp_path)
         valid = db.local_community_surfaces.get_local_community_thread_surface(
             local_community_thread_id=post.id, discord_forum_channel_id=300,
         )
-        assert valid is not None and valid.discord_starter_message_id == 2300
+        assert valid is not None and valid.external_starter_message_id == '2300'
     finally:
         db.close()
 
@@ -447,6 +448,6 @@ async def test_sibling_comment_mode_receipt_requires_requested_bot_mode(tmp_path
             local_community_thread_surface_id=target300.id,
         )
         assert valid is not None
-        assert valid.parent_discord_message_id == target300.discord_starter_message_id
+        assert valid.external_parent_message_id == target300.external_starter_message_id
     finally:
         db.close()

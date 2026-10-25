@@ -58,6 +58,26 @@ Discord integration tests, which require the project dependencies.
   connector/container rejection and correct sibling parent references —
   `tests/test_neutral_reply_resolution.py`.
 
+### Stage 04 post-review Local/Remote legacy scenario contract refresh
+
+- Real Local Community source post/comment tests retain mandatory verified starter
+  `MessageView.created_at`, deterministic render-only AP identity, and a
+  full `PlatformAdapterPort` fake; echoes from bot starters cannot republish
+  canonical content — `tests/test_normalized_local_community_runtime.py`,
+  `tests/test_neutral_local_community_fanout.py`.
+- Local/Remote inbound and backfill regression tests assert connector-scoped
+  `channel_surface_id` and `external_*` receipts, not nullable historic
+  `discord_*` projections. Host rebind tests release the existing typed claim
+  without mutating the immutable channel ID —
+  `tests/test_local_inbound_adapter_delivery.py`,
+  `tests/test_normalized_inbound_remote_posts.py`,
+  `tests/test_normalized_inbound_remote_comments.py`,
+  `tests/test_normalized_ap_backfill.py`.
+- Inbound Local Community mutation tests seed authenticated source content,
+  verified independent Update version and source activity ID; exercise the
+  real durable physical mutation worker and reject missing clock/activity or
+  forged actor before any physical edit — `tests/test_local_inbound_mutations.py`.
+
 ## Stage 04 typed Community source mutations (Checkpoint 61 WIP)
 
 - Real SQLite source post/comment + current surface and author validation,

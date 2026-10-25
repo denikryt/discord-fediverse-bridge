@@ -6,11 +6,12 @@ network boundaries faked; each scenario checks canonical and physical effects.
 from __future__ import annotations
 
 from types import SimpleNamespace
+from datetime import datetime, timezone
 
 import pytest
 
 from src.content_publish_service import ContentPublishService
-from src.fedify_gateway_client import PublishContentResult
+from src.fedify_gateway_client import RenderCommunityResult
 from src.local_communities.runtime import LocalCommunityRuntime
 from src.models import LocalSubscriber
 from src.local_communities.service import LocalCommunityService
@@ -20,27 +21,50 @@ from src.platform_types import (
     ThreadCreated, ThreadRef,
 )
 from support.db import add_registered_user, build_database
+from support.fake_platform_adapter import FakeDiscordPort
 
 
 class Gateway:
-    """Fake ActivityPub HTTP only while recording the actual publish payloads."""
+    """Record side-effect-free AP renders with exact caller-chosen Create identity."""
 
-    def __init__(self):
-        """Start with no federation requests."""
+    def __init__(self, actor_url):
+        """Bind the verified author and keep only rendered request evidence."""
+        self.actor_url = actor_url
         self.requests = []
 
-    async def publish_local_community_content(self, request):
-        """Return distinct confirmed canonical identifiers for each publish."""
+    async def render_community(self, request):
+        """Return a deterministic Create without any federation I/O."""
         self.requests.append(request)
-        n = len(self.requests)
-        return PublishContentResult(
-            activity_id=f'https://bridge.example/actors/users/alice/activities/{n}',
-            object_id=f'https://bridge.example/objects/{n}',
+        obj = {
+            'id': request.object_id,
+            'type': 'Page' if request.kind == 'post' else 'Note',
+            'attributedTo': self.actor_url,
+            'published': request.published_at,
+            'source': {'content': request.body_markdown, 'mediaType': 'text/markdown'},
+        }
+        if request.kind == 'post':
+            obj['name'] = request.title
+        else:
+            obj['inReplyTo'] = request.in_reply_to_object_id
+        activity = {
+            'id': request.activity_id, 'type': 'Create',
+            'actor': self.actor_url, 'to': [request.community_actor_url],
+            'object': obj,
+        }
+        return RenderCommunityResult(
+            activity_id=request.activity_id,
+            object_id=request.object_id,
             community_actor_url=request.community_actor_url,
+            published_at=request.published_at,
+            activity_json=activity,
         )
 
+    async def publish_local_community_content(self, request):
+        """Refuse the retired network-before-canonical-commit publishing API."""
+        raise AssertionError('Stage 04 must render and persist before federation sending')
 
-class PhysicalTransport:
+
+class PhysicalTransport(FakeDiscordPort):
     """Fake physical Discord API receipts, not routing or SQLite repositories."""
 
     def __init__(self, *, failed=None):
@@ -91,7 +115,7 @@ def world(tmp_path, *, fail=None):
             local_community_id=community.id, discord_guild_id=10,
             discord_channel_id=forum, initiated_by_discord_user_id='123',
         )
-    gateway = Gateway()
+    gateway = Gateway(db.users.get_user_by_discord_user_id('123').actor_url)
     policy = SimpleNamespace(
         is_discord_guild_allowed=lambda guild: guild == 10,
         federation_decision=lambda actor: SimpleNamespace(allowed=True),
@@ -108,14 +132,14 @@ def world(tmp_path, *, fail=None):
     return db, community, subscribers, runtime, gateway, PhysicalTransport(failed=fail)
 
 
-def starter(*, forum=100, guild=10, thread=1100, message=1101, author='123'):
+def starter(*, forum=100, guild=10, thread=1100, message=1101, author='123', kind='human'):
     """Represent a verified forum thread with independent starter identity."""
     channel = ChannelRef('discord-primary', str(forum), 'forum', str(guild))
     opening = MessageRef('discord-primary', str(thread), str(message))
     event = ThreadCreated('discord-primary', ThreadRef(channel, str(thread)),
                           'Topic', starter=opening, external_guild_id=str(guild))
-    view = MessageView(opening, AuthorRef('discord-primary', author, 'human', 'Alice'),
-                       ContentDocument('Post body'))
+    view = MessageView(opening, AuthorRef('discord-primary', author, kind, 'Alice'),
+                       ContentDocument('Post body'), created_at=datetime(2026, 1, 1, tzinfo=timezone.utc))
     return event, view
 
 
@@ -128,6 +152,7 @@ def reply(*, forum=100, guild=10, thread=1100, message=1200, parent=1101):
         parent_channel=channel, thread_context=ThreadRef(channel, str(thread)),
         external_guild_id=str(guild),
         reply_to=MessageRef('discord-primary', str(thread), str(parent)) if parent else None,
+        created_at=datetime(2026, 1, 2, tzinfo=timezone.utc),
     )
 
 
@@ -184,9 +209,9 @@ async def test_host_reply_and_nested_reply_use_target_local_parents(tmp_path):
         nested = await runtime.handle_normalized_message_create(reply(message=1201, parent=1200), adapter=port)
         assert nested.status == 'published'
         assert [r[1].external_message_id for r in port.replies[2:]] == ['7001', '7002']
-        assert gateway.requests[1].in_reply_to_object_id == 'https://bridge.example/objects/1'
+        assert gateway.requests[1].in_reply_to_object_id == gateway.requests[0].object_id
         # Nested AP reply must point at the first canonical comment, not the root.
-        assert gateway.requests[2].in_reply_to_object_id == 'https://bridge.example/objects/2'
+        assert gateway.requests[2].in_reply_to_object_id == gateway.requests[1].object_id
         replay = await runtime.handle_normalized_message_create(reply(), adapter=port)
         assert replay.reason == 'duplicate_message' and len(gateway.requests) == 3
     finally:
@@ -240,11 +265,13 @@ async def test_subscriber_mirror_gateway_replay_does_not_repair_using_untrusted_
         assert [x[0].external_channel_id for x in port.posts] == ['100', '300']
         # A mirror can receive a Gateway replay before a different subscriber
         # recovers, but it must not supply text to a new physical create.
-        mirror_event, mirror_opening = starter(forum=100, thread=1100, message=2100)
-        duplicate = await runtime.handle_normalized_thread_create(
-            mirror_event, mirror_opening, adapter=port
-        )
-        assert duplicate.reason == 'duplicate_thread'
+        mirror_event, mirror_opening = starter(forum=100, thread=1100, message=2100, kind='bot')
+        # An echoed bot starter is rejected at the source publication boundary,
+        # even if the caller has not yet received a mapping callback.
+        with pytest.raises(PlatformOperationError):
+            await runtime.handle_normalized_thread_create(
+                mirror_event, mirror_opening, adapter=port
+            )
         assert len(port.posts) == 2 and len(gateway.requests) == 1
     finally:
         db.close()
@@ -266,7 +293,7 @@ async def test_subscriber_comment_preserves_source_parent_and_host_mirror(tmp_pa
         source = db.local_community_surfaces.get_local_community_message_surface_by_discord_message_id(4500)
         assert source.role == 'local_subscriber'
         canonical = db.local_community_surfaces.get_local_community_message_for_surface(source.id)
-        assert canonical.parent_ap_object_id == 'https://bridge.example/objects/1'
+        assert canonical.parent_ap_object_id == gateway.requests[0].object_id
         again = await runtime.handle_normalized_message_create(
             reply(forum=200, thread=4400, message=4500, parent=4401), adapter=port
         )
@@ -277,19 +304,22 @@ async def test_subscriber_comment_preserves_source_parent_and_host_mirror(tmp_pa
 
 
 @pytest.mark.asyncio
-async def test_foreign_parent_mapping_is_rejected_before_federation(tmp_path):
-    """Even a valid mapped Discord parent cannot be borrowed from another forum."""
+async def test_unknown_other_container_reference_keeps_source_root_fallback(tmp_path):
+    """A reference unknown in this source thread uses only the established AP root."""
     db, _, _, runtime, gateway, port = world(tmp_path)
     try:
         original, opening = starter()
         await runtime.handle_normalized_thread_create(original, opening, adapter=port)
         await runtime.handle_normalized_message_create(reply(), adapter=port)
         before = len(gateway.requests)
-        with pytest.raises(PlatformOperationError):
-            await runtime.handle_normalized_message_create(
-                reply(message=1202, parent=7001), adapter=port
-            )
-        assert len(gateway.requests) == before
+        result = await runtime.handle_normalized_message_create(
+            reply(message=1202, parent=7001), adapter=port
+        )
+        # 7001 exists in a different physical container and cannot become
+        # this source's nested AP parent or destination reply reference.
+        assert result.status == 'published'
+        assert len(gateway.requests) == before + 1
+        assert gateway.requests[-1].in_reply_to_object_id == gateway.requests[0].object_id
     finally:
         db.close()
 

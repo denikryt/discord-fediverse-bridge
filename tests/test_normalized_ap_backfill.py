@@ -18,6 +18,7 @@ from src.community_sync.backfill import backfill_normalized_post_as_thread_group
 from src.community_sync.inbound_mapping import needs_backfill
 from src.community_sync.runtime import CommunityRuntime
 from src.platform_types import CreatedThread, MessageRef, ThreadRef
+from src.models import ChannelSurface
 from support.db import add_accepted_subscription, build_database
 from tests_constants import LEMMY_EXAMPLE_DOMAIN
 
@@ -112,7 +113,7 @@ async def test_missing_parent_is_created_once_with_distinct_thread_starter_ids(t
     discord = DiscordCreates()
     group = await restore(db, runtime, discord)
     assert group is not None
-    assert {(r.discord_channel_id, r.discord_thread_id, r.discord_starter_message_id)
+    assert {(confirmed_forum(db, r), int(r.external_thread_id), int(r.external_starter_message_id))
             for r in db.discord_fanout_groups.get_thread_deliveries(group.id)} == {
                 (100, 1100, 2100), (200, 1200, 2200),
             }
@@ -133,7 +134,7 @@ async def test_partial_backfill_defers_unproven_missing_destination(tmp_path):
     # The missing receipt could be a committed thread whose HTTP response was lost.
     assert await restore(db, runtime, discord) is None
     rows = db.discord_fanout_groups.get_thread_deliveries(existing.id)
-    assert {(r.discord_channel_id, r.discord_thread_id) for r in rows} == {(100, 1100)}
+    assert {(confirmed_forum(db, r), int(r.external_thread_id)) for r in rows} == {(100, 1100)}
     assert discord.calls == []
     assert needs_backfill(thread_group=existing, community_actor_id=COMMUNITY, database=db) is True
 
@@ -272,11 +273,11 @@ async def test_initial_parent_partial_send_still_delivers_child_to_confirmed_for
     assert [call[0].external_thread_id for call in adapter.message_calls] == ['1100']
     group = db.discord_fanout_groups.get_thread_group_by_ap_object(POST)
     assert group is not None
-    assert {row.discord_channel_id for row in
+    assert {confirmed_forum(db, row) for row in
             db.discord_fanout_groups.get_thread_deliveries(group.id)} == {100}
     msg_group = db.discord_fanout_groups.get_message_group_by_ap_object(comment().object.ap_id)
     assert msg_group is not None
-    assert {row.discord_channel_id for row in
+    assert {confirmed_forum(db, row) for row in
             db.discord_fanout_groups.get_message_deliveries(msg_group.id)} == {100}
 
 
@@ -299,9 +300,9 @@ async def test_new_subscriber_does_not_block_confirmed_existing_comment_targets(
     assert {call[0].external_thread_id for call in adapter.message_calls} == {'1100', '1200'}
     msg_group = db.discord_fanout_groups.get_message_group_by_ap_object(event.object.ap_id)
     assert msg_group is not None
-    assert {delivery.discord_channel_id for delivery in
+    assert {confirmed_forum(db, delivery) for delivery in
             db.discord_fanout_groups.get_message_deliveries(msg_group.id)} == {100, 200}
-    assert {delivery.discord_channel_id for delivery in
+    assert {confirmed_forum(db, delivery) for delivery in
             db.discord_fanout_groups.get_thread_deliveries(group.id)} == {100, 200}
     assert (await runtime.handle_normalized_inbound_comment_with_backfill(
         event, adapter=adapter,
@@ -323,7 +324,7 @@ async def test_missing_one_receipt_does_not_block_other_confirmed_comment_target
     assert [call[0].external_thread_id for call in adapter.message_calls] == ['1100']
     msg_group = db.discord_fanout_groups.get_message_group_by_ap_object(event.object.ap_id)
     assert msg_group is not None
-    assert {delivery.discord_channel_id for delivery in
+    assert {confirmed_forum(db, delivery) for delivery in
             db.discord_fanout_groups.get_message_deliveries(msg_group.id)} == {100}
     assert len(db.discord_fanout_groups.get_thread_deliveries(group.id)) == 1
 
@@ -363,7 +364,7 @@ async def test_incomplete_parent_only_delivers_child_to_verified_thread(tmp_path
     assert [call[0].external_thread_id for call in adapter.message_calls] == ['1100']
     msg_group = db.discord_fanout_groups.get_message_group_by_ap_object(comment().object.ap_id)
     assert msg_group is not None
-    assert [row.discord_channel_id for row in db.discord_fanout_groups.get_message_deliveries(msg_group.id)] == [100]
+    assert [confirmed_forum(db, row) for row in db.discord_fanout_groups.get_message_deliveries(msg_group.id)] == [100]
     assert db.discord_fanout_groups.get_thread_group_by_ap_object(POST).id == existing.id
 
 
@@ -575,3 +576,11 @@ async def test_remote_update_without_copies_commits_authoritative_revision(tmp_p
         assert row.last_source_update_order_key is not None
         assert 'edited' in row.current_content_json
     assert adapter.calls == adapter.message_calls == []
+
+
+def confirmed_forum(db, receipt):
+    """Resolve the actual connector-scoped forum claim of one durable receipt."""
+    with db.session() as session:
+        surface = session.get(ChannelSurface, receipt.channel_surface_id)
+        assert surface is not None and surface.connector_id == receipt.connector_id
+        return int(surface.external_channel_id)

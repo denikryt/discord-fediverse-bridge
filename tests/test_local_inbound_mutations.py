@@ -16,10 +16,15 @@ sys.modules.setdefault('discord', ModuleType('discord'))
 from src.local_communities.runtime import LocalCommunityRuntime
 from src.local_communities.service import LocalCommunityService
 from src.platform_types import ContentDocument, MessageRef, MessageView, PlatformOperationError
+from support.fake_platform_adapter import FakeDiscordPort
+from datetime import datetime, timezone
+from src.content_sync.platform_mutations import PlatformPhysicalMutationCoordinator
+from src.platform_adapters import PlatformAdapterRegistry
+from src.local_communities.inbound_create import LocalCommunityInboundCreateHandler
 from support.db import build_database
 
 
-class PhysicalEdits:
+class PhysicalEdits(FakeDiscordPort):
     """Hold separate real-looking Discord copies and inject per-surface failures."""
 
     def __init__(self):
@@ -126,8 +131,40 @@ def world(tmp_path):
         relay.append(kwargs['operation'])
 
     runtime.federation_fanout.relay_update_or_delete = fake_relay
+    # The historical fixture has actual AP content/actor provenance: Stage 04
+    # rejects updates/deletes when those facts are not persisted on the owning
+    # canonical row, regardless of the existence of physical Discord copies.
+    with db.immediate_session() as session:
+        from src.models import LocalCommunityThread, LocalCommunityMessage
+        for kind, model, row_id, ap_id in (
+            ('post', LocalCommunityThread, thread.id, post_id),
+            ('comment', LocalCommunityMessage, comment.id, comment_id),
+        ):
+            create = event(community.actor_url, ap_id, 'old body')
+            session.get(model, row_id).current_content_json = (
+                LocalCommunityInboundCreateHandler._inbound_snapshot(create, kind=kind)
+            )
     physical = PhysicalEdits()
-    context = SimpleNamespace(discord_adapter=physical, bot=object())
+    registry = PlatformAdapterRegistry((physical.connector,))
+    registry.register(physical)
+    def allowed_surface(surface_id):
+        """Check current guild permission for one exact persisted destination."""
+        from src.models import ChannelSurface
+        with db.session() as session:
+            location = session.get(ChannelSurface, surface_id)
+            return bool(location is not None and location.external_guild_id is not None
+                        and runtime.surface_fanout.policy_service.is_discord_guild_allowed(
+                            int(location.external_guild_id)))
+    worker = PlatformPhysicalMutationCoordinator(
+        db, registry,
+        target_policy=lambda _key, surface_id: allowed_surface(surface_id),
+        content_renderer=lambda _domain, _kind, snap: ContentDocument(
+            f'`{snap["authorName"]}`\n\n{snap["bodyMarkdown"]}'
+        ),
+        tombstone_renderer=lambda _domain, _kind: ContentDocument('*deleted by creator*'),
+    )
+    context = SimpleNamespace(discord_adapter=physical, bot=object(),
+                              physical_mutation_coordinator=worker)
     return db, runtime, physical, context, community.actor_url, post_id, comment_id, relay
 
 
@@ -135,8 +172,10 @@ def event(actor_url, ap_id, body='new body'):
     """Represent a verified inbound ActivityPub mutation of one canonical object."""
     return SimpleNamespace(
         community_actor_id=actor_url, actor_id='https://remote.example/u/alice',
+        source_activity_id='https://remote.example/update/' + ap_id.rsplit('/', 1)[-1],
         object=SimpleNamespace(ap_id=ap_id, body_markdown=body,
-                               author_name='alice', title='Post', url=ap_id),
+                               author_name='alice', title='Post', url=ap_id,
+                               updated_at=datetime(2026, 1, 5, tzinfo=timezone.utc)),
     )
 
 
@@ -176,11 +215,11 @@ async def test_ap_delete_marks_physical_copies_without_deleting(tmp_path, kind):
 
 
 @pytest.mark.asyncio
-async def test_ap_update_wrong_fetch_or_transport_failure_never_edits_foreign_copy(tmp_path):
-    """One unverifiable target must not overwrite a foreign copy or block a healthy one."""
+async def test_ap_update_failed_transport_does_not_block_healthy_sibling(tmp_path):
+    """One failed typed edit cannot overwrite its copy or suppress healthy targets."""
     db, runtime, adapter, context, actor, post, _, relay = world(tmp_path)
     try:
-        adapter.bad_fetch = True
+        adapter.fail_container = '1100'
         outcome = await runtime.handle_inbound_post_update(event(actor, post), context)
         assert outcome.status == 'processed'
         assert len(adapter.edits) == 1
@@ -231,5 +270,29 @@ async def test_disallowed_discord_guild_does_not_receive_ap_mutation(tmp_path):
         assert adapter.edits == []
         assert adapter.contents[('1100', '1201')] == '`alice`\n\nold comment'
         assert adapter.contents[('2200', '2301')] == '`alice`\n\nold comment'
+    finally:
+        db.close()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize('invalid_evidence', ['missing_clock', 'missing_activity', 'foreign_actor'])
+async def test_inbound_ap_update_without_authoritative_version_or_owner_has_no_effect(
+    tmp_path, invalid_evidence,
+):
+    """Reject absent revision proof or wrong AP author before SQLite revision and I/O."""
+    db, runtime, adapter, context, actor, post_id, _, relay = world(tmp_path)
+    try:
+        source = event(actor, post_id)
+        if invalid_evidence == 'missing_clock':
+            source.object.updated_at = None
+        elif invalid_evidence == 'missing_activity':
+            source.source_activity_id = None
+        else:
+            source.actor_id = 'https://other.example/u/forged'
+        outcome = await runtime.handle_inbound_post_update(source, context)
+        assert outcome.status == 'skipped'
+        canonical = db.local_community_content.get_local_community_thread_by_ap_object_id(post_id)
+        assert canonical.content_revision == 0 and canonical.deleted_at is None
+        assert adapter.edits == [] and relay == []
     finally:
         db.close()
