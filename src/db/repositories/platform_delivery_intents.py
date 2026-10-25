@@ -391,6 +391,20 @@ class PlatformDeliveryIntentRepository:
             scoped=self._scope(session,row)
             return scoped is not None and scoped[0].deleted_at is None
 
+    def committed_dispatch_proof(self, claim: ClaimedCreate):
+        """Grant a single SDK dispatch only for a current committed live claim.
+
+        The repository, rather than the caller's key or adapter, confirms
+        SQLite state before issuing process-local, non-serializable evidence.
+        """
+        from ...platform_types import _issue_committed_create_dispatch_proof
+        if not self.dispatch_still_authorized(claim):
+            return None
+        attempt, _, _, _, _ = decode_request(claim.request_json)
+        return _issue_committed_create_dispatch_proof(
+            claim.intent_id, attempt.key, claim.fingerprint, claim.token,
+        )
+
     def mark_unresolved(self, intent_id:int, *, token:str,reason:str) -> bool:
         """Persist possibly sent/unknown outcome without granting another POST."""
         with self._immediate_session_provider() as session:
@@ -519,11 +533,142 @@ class PlatformDeliveryIntentRepository:
                     row.state='unresolved';row.last_error_kind='expired_dispatch';changed+=1
             return changed
 
-    def commit_receipt(self, intent_id:int, *,token:str,receipt:CreatedThread | CreatedMessage) -> bool:
-        """Commit verified receipt and copy together, or retain orphan after rebind."""
+    def inspect_orphans(self) -> list[dict]:
+        """Read persistent verified orphans without creating deletion authority.
+
+        Inventory is restricted to work requiring an operator, including an
+        uncertain previous cleanup. Never infer removal from missing mappings
+        or treat the new current owner of a surface as the old receipt owner.
+        """
+        with self._session_provider() as session:
+            rows = session.scalars(select(PlatformDeliveryIntent).where(
+                PlatformDeliveryIntent.state == 'cancelled_after_send',
+                PlatformDeliveryIntent.orphan_cleanup_state.in_((
+                    'review_required', 'cleanup_unresolved',
+                )),
+            ).order_by(PlatformDeliveryIntent.id)).all()
+            results = []
+            for row in rows:
+                if not row.orphan_receipt_json or row.orphan_receipt_verified_at is None:
+                    # A malformed/corrupt row cannot be a deletion target.
+                    continue
+                results.append({
+                    'intent_id': row.id,
+                    'attempt_key': row.attempt_key,
+                    'fingerprint': row.request_fingerprint,
+                    'original_owner_kind': row.target_owner_kind,
+                    'original_owner_id': row.target_owner_id,
+                    'original_surface_id': row.channel_surface_id,
+                    'original_connector_id': row.connector_id,
+                    'receipt': json.loads(row.orphan_receipt_json),
+                    'cleanup_state': row.orphan_cleanup_state,
+                })
+            return results
+
+    def record_orphan_retention(
+        self, intent_id: int, *, operator_id: str, note: str,
+        cleanup_state: str = 'retained',
+    ) -> bool:
+        """Record a fail-closed operator decision without deleting remote data.
+
+        The current PlatformDeliveryPort cannot delete a forum thread, so
+        retention/manual platform administration is the only safe terminal
+        outcome this repository itself can authorize. Never expose an API to
+        mark a physical orphan removed without fresh independent proof.
+        """
+        if cleanup_state != 'retained':
+            raise ValueError('only audited retention is supported without verified remote cleanup')
+        if not isinstance(operator_id, str) or not operator_id.strip() or len(operator_id) > 200:
+            raise ValueError('nonempty bounded operator identity is required')
+        if not isinstance(note, str) or not note.strip() or len(note) > 1000:
+            raise ValueError('nonempty bounded operator reason is required')
+        with self._immediate_session_provider() as session:
+            row = session.get(PlatformDeliveryIntent, intent_id)
+            if (row is None or row.state != 'cancelled_after_send'
+                or row.orphan_cleanup_state != 'review_required'
+                or row.orphan_cleanup_claim_token is not None
+                or not row.orphan_receipt_json or row.orphan_receipt_verified_at is None):
+                return False
+            evidence = {'version': 1, 'operator': operator_id.strip(),
+                        'reason': note.strip(),
+                        'recorded_at': datetime.now(timezone.utc).isoformat(),
+                        'decision': 'retained'}
+            row.orphan_cleanup_evidence_json = _json(evidence)
+            row.orphan_cleanup_state = 'retained'
+            return True
+
+    def unresolved_claim(self, intent_id: int) -> ClaimedCreate | None:
+        """Expose immutable unresolved source proof for read-only reconciliation.
+
+        This does not grant a new POST. The same token and DTO are checked
+        again under the writer lock before a verified receipt can be adopted.
+        """
+        with self._session_provider() as session:
+            row = session.get(PlatformDeliveryIntent, intent_id)
+            if (row is None or row.state != 'unresolved' or not row.dispatch_token
+                or not row.request_json or not row.request_fingerprint):
+                return None
+            return ClaimedCreate(row.id, row.dispatch_token, row.request_json,
+                                 row.request_fingerprint)
+
+    def unresolved_ids(self) -> list[int]:
+        """List uncertain attempts for read-only startup reconciliation only."""
+        with self._session_provider() as session:
+            return list(session.scalars(select(PlatformDeliveryIntent.id).where(
+                PlatformDeliveryIntent.state == 'unresolved').order_by(
+                    PlatformDeliveryIntent.id)).all())
+
+    def committed_ack_kind(self, claim: ClaimedCreate) -> str | None:
+        """Prove a matching durable terminal receipt/unknown after writer commit.
+
+        This is the coordinator-side SQLite authority for cache eviction. The
+        SDK adapter must not read the database or treat an error as this proof.
+        """
+        with self._session_provider() as session:
+            row = session.get(PlatformDeliveryIntent, claim.intent_id)
+            if (row is None or row.dispatch_token != claim.token
+                or row.request_fingerprint != claim.fingerprint
+                or row.request_json != claim.request_json):
+                return None
+            if row.state in ('delivered', 'cancelled_after_send'):
+                return 'delivered'
+            if row.state == 'unresolved':
+                return 'unresolved'
+            return None
+
+    def committed_ack_proof(self, claim: ClaimedCreate):
+        """Mint an opaque ACK capability only from verified terminal SQLite state."""
+        from ...platform_types import _issue_committed_create_ack_proof
+        kind = self.committed_ack_kind(claim)
+        if kind is None:
+            return None
+        return _issue_committed_create_ack_proof(
+            claim.intent_id, decode_request(claim.request_json)[0].key,
+            claim.fingerprint, claim.token, kind,
+        )
+
+    def commit_receipt(self, intent_id:int, *,token:str,receipt:CreatedThread | CreatedMessage,
+                       reconciliation_proof=None) -> bool:
+        """Commit verified initial receipt, or adopt a proven unresolved result.
+
+        A naked physical ID cannot turn an unknown Create into delivered. For
+        `unresolved` the adapter must attest to this *same* completed attempt,
+        and the proof is validated inside the same SQLite writer transaction.
+        """
+        from ...platform_types import _verify_verified_create_reconciliation_proof
         with self._immediate_session_provider() as session:
             row=session.get(PlatformDeliveryIntent,intent_id)
-            if row is None or row.state!='dispatching' or row.dispatch_token!=token:return False
+            if row is None or row.dispatch_token!=token:return False
+            if row.state == 'dispatching':
+                if reconciliation_proof is not None:return False
+            elif row.state == 'unresolved':
+                if not _verify_verified_create_reconciliation_proof(
+                    reconciliation_proof, intent_id, row.attempt_key,
+                    row.request_fingerprint, token, receipt,
+                ):
+                    return False
+            else:
+                return False
             attempt,_,presentation,_,reply_to=decode_request(row.request_json)
             validate_created_receipt(attempt,receipt,presentation=presentation)
             if isinstance(receipt,CreatedThread):

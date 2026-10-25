@@ -468,3 +468,57 @@ if __name__=="__main__":
             self.assertTrue(row.desired_deleted)
             self.assertEqual(row.dispatch_token, claimed.token)
         self.assertIsNone(self._repo().claim(intent_id))
+
+class OrphanOperatorRecoveryScenarios(PhysicalCreateIntentScenarios):
+    """Operator inspection of an orphan must be durable and fail closed."""
+
+    def _orphan(self) -> int:
+        """Simulate the old owner losing its forum while Discord accepted Create."""
+        intent_id = self._prepare()
+        claimed = self._repo().claim(intent_id)
+        with self.db.immediate_session() as session:
+            session.get(ChannelSurface, self.surface).local_community_id = None
+        receipt = CreatedThread(
+            ThreadRef(self.forum, '987'),
+            MessageRef('discord-primary', '987', '654'), 'bot',
+        )
+        self.assertTrue(self._repo().commit_receipt(
+            intent_id, token=claimed.token, receipt=receipt,
+        ))
+        return intent_id
+
+    def test_restart_inventory_has_original_typed_receipt_and_never_redispatches(self):
+        """A rebinding leaves full thread and starter proof for inspection only."""
+        orphan_id = self._orphan()
+        pending = self._repo().recoverable_pending_ids()
+        self.assertNotIn(orphan_id, pending)
+        inventory = self._repo().inspect_orphans()
+        self.assertEqual(len(inventory), 1)
+        self.assertEqual(inventory[0]['intent_id'], orphan_id)
+        self.assertEqual(inventory[0]['cleanup_state'], 'review_required')
+        self.assertEqual(inventory[0]['receipt']['receipt']['thread']['thread'], '987')
+        self.assertEqual(inventory[0]['receipt']['receipt']['starter']['message'], '654')
+        self.assertEqual(inventory[0]['original_owner_id'], self.owner)
+        self.assertEqual(inventory[0]['original_surface_id'], self.surface)
+
+    def test_operator_may_record_retention_but_cannot_claim_unverified_removal(self):
+        """Operator decision retains full evidence without authorizing a delete."""
+        orphan_id = self._orphan()
+        with self.assertRaises(ValueError):
+            self._repo().record_orphan_retention(
+                orphan_id, operator_id='ops@example.test',
+                note='pretend remote deletion', cleanup_state='removed_verified')
+        with self.assertRaises(ValueError):
+            self._repo().record_orphan_retention(
+                orphan_id, operator_id='', note='no accountable operator')
+        self.assertTrue(self._repo().record_orphan_retention(
+            orphan_id, operator_id='ops@example.test',
+            note='Thread deletion not supported by typed port: platform admin required'))
+        self.assertFalse(self._repo().record_orphan_retention(
+            orphan_id, operator_id='ops@example.test', note='late duplicate'))
+        with self.db.session() as session:
+            row = session.get(PlatformDeliveryIntent, orphan_id)
+            self.assertEqual(row.orphan_cleanup_state, 'retained')
+            self.assertIn('ops@example.test', row.orphan_cleanup_evidence_json)
+            self.assertIn('654', row.orphan_receipt_json)
+        self.assertEqual(self._repo().inspect_orphans(), [])
