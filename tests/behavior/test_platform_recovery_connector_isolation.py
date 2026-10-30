@@ -72,6 +72,37 @@ class MissingAdapterRecoveryScenarios(PhysicalDeliveryRestartScenarios):
         ready = True
         self.assertTrue(asyncio.run(worker.deliver(intent_id)))
 
+    def test_offline_reconciliation_preserves_uncertain_receipt(self) -> None:
+        """An offline SDK never reads or clears an unknown Create outcome."""
+        intent_id = self._pending('C')
+        repo = self.database.platform_delivery_intents
+        claim = repo.claim(intent_id)
+        self.assertIsNotNone(claim)
+        self.assertTrue(repo.mark_unresolved(intent_id, token=claim.token,
+                                             reason='lost remote response'))
+        class OfflineAdapter:
+            """Model an unavailable session that must not attempt a read."""
+            def dispatch_ready(self) -> bool:
+                """Refuse all new physical and read-only RPC admission."""
+                return False
+            async def _reconcile_persisted_create(self, **kwargs):
+                """A remote lookup here would violate offline admission."""
+                raise AssertionError('offline reconciliation performed network I/O')
+        class Registry:
+            """Bind the one persisted connector without a Discord fallback."""
+            def get(self, key):
+                """Match the frozen intent identity exactly."""
+                assert key == 'discord-primary'
+                return OfflineAdapter()
+        worker = PlatformFanoutCoordinator(self.database, Registry())
+        self.assertFalse(asyncio.run(worker.reconcile_unknown(intent_id)))
+        self.assertEqual(asyncio.run(worker.recover_pending()), [])
+        with self.database.session() as session:
+            row = session.get(PlatformDeliveryIntent, intent_id)
+            self.assertEqual(row.state, 'unresolved')
+            self.assertEqual(row.dispatch_token, claim.token)
+        self.assertEqual(self.adapter.posts, [])
+
     def test_stale_token_cannot_release_another_dispatch(self) -> None:
         """An old pre-I/O witness cannot reset the row claimed by a new owner."""
         intent_id = self._pending('C')

@@ -296,6 +296,8 @@ def _build_live_runtime(
         # direct fanout/recovery coordinator; all paths inherit these slots.
         physical_dispatch_gate = ConnectorDispatchCapacity(tuple(ref.key for ref in configured))
         discord_adapter.bind_physical_dispatch_gate(physical_dispatch_gate)
+        if fluxer_adapter is not None:
+            fluxer_adapter.bind_physical_dispatch_gate(physical_dispatch_gate)
         bot.bind_discord_adapter(discord_adapter)
         event_router.bind_reply_notice_adapter(discord_adapter)
         personal_feed_discord_delivery_worker = PersonalFeedDiscordDeliveryWorker(
@@ -464,6 +466,7 @@ def _validate_runtime_graph(runtime: Runtime) -> None:
             or runtime.adapter_registry.get(fluxer.connector.key) is not fluxer
             or fluxer.connector.key not in runtime.physical_delivery_scheduler.connector_keys
             or fluxer.connector.key not in runtime.physical_dispatch_gate.connector_keys
+            or fluxer._physical_dispatch_gate is not runtime.physical_dispatch_gate
             or runtime.fluxer_ingress.connector_key != fluxer.connector.key):
             raise RuntimeError('Configured Fluxer runtime is missing exact owners or lane')
     elif runtime.fluxer_rpc is not None or runtime.fluxer_ingress is not None:

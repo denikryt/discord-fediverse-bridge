@@ -203,9 +203,17 @@ class PlatformPhysicalMutationCoordinator:
                 domain, kind, model, canonical_model, field = _COPY_MODELS[family_index]
                 cursor_key = (connector_key, family_index)
                 last_id = self._scan_cursor.get(cursor_key, 0)
+                # Filter *before* LIMIT so 32 low-ID Discord copies cannot
+                # starve a Fluxer lane (or vice versa) on every scheduler tick.
+                # This remains a read-only query; no mutation is reserved yet.
+                scope = (model.connector_id.in_(
+                    select(PlatformConnector.id).where(
+                        PlatformConnector.connector_key == connector_key
+                    )) if connector_key is not None else True)
                 query = select(model).where(
                     model.mutation_state.in_(('idle', 'pending', 'failed_definite')),
                     model.id > last_id,
+                    scope,
                 ).order_by(model.id).limit(32)
                 copies = session.scalars(query).all()
                 if not copies and last_id:
@@ -214,6 +222,7 @@ class PlatformPhysicalMutationCoordinator:
                     self._scan_cursor[cursor_key] = 0
                     copies = session.scalars(select(model).where(
                         model.mutation_state.in_(('idle', 'pending', 'failed_definite')),
+                        scope,
                     ).order_by(model.id).limit(32)).all()
                 if not copies:
                     continue

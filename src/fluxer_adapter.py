@@ -74,6 +74,18 @@ class FluxerAdapter:
         # Optimistic RPC connection is not a READY SDK session. Recovery must
         # never durably claim on the strength of configured endpoints alone.
         self._dispatch_ready = False
+        self._physical_dispatch_gate = None
+
+    def bind_physical_dispatch_gate(self, gate) -> None:
+        """Bind the process-owned slot to direct and scheduled Fluxer sends.
+
+        Creating a coordinator from this adapter must not allocate a parallel
+        capacity owner or bypass an existing sender waiting on the same slot.
+        """
+        if (self._physical_dispatch_gate is not None
+            or self._connector.key not in gate.connector_keys):
+            raise RuntimeError('Fluxer physical capacity already bound or wrong connector')
+        self._physical_dispatch_gate = gate
 
     @property
     def connector(self) -> ConnectorRef:

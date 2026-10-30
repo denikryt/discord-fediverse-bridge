@@ -185,6 +185,11 @@ class PlatformFanoutCoordinator:
             # An unavailable adapter cannot perform read-only reconciliation.
             # Keep the durable unknown-effect fence untouched for a later run.
             return False
+        ready = getattr(adapter, 'dispatch_ready', None)
+        if ready is not None and not ready():
+            # Polling Node while it is known offline delays other work on this
+            # lane and cannot prove a previously uncertain create was absent.
+            return False
         inspector = getattr(adapter, '_reconcile_persisted_create', None)
         if inspector is None:
             return False

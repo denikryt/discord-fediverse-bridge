@@ -530,3 +530,22 @@ for identity, claim and applied-revision fencing; no second mutation queue is
 introduced. This behavior is exercised by real private RPC and Python/SQLite
 scenarios over a stateful fake SDK edge; the actual installed SDK/live Fluxer
 server and production write activation remain unverified.
+
+
+## Shared runtime Fluxer dispatch admission
+
+An enabled Python `FluxerAdapter` is registered by the same `src/app.py`
+registry as Discord, but begins offline. The connector's recovery lane polls
+bearer-authenticated Node SDK health, exact instance origin and current bot ID.
+A reconnecting, unavailable or re-bound session cannot obtain a fresh Create
+claim. Physical direct `PlatformFanoutCoordinator.from_adapter` calls inherit
+the runtime's one connector slot, which is also used by scheduler Create,
+read-only reconciliation and mutation paths. An offline `unresolved` intent
+is not reconciled or retried without positive proof. Candidate discovery for
+mutation dispatch filters connector identity in SQLite before pagination,
+so unrelated lower-ID copies cannot exhaust another connector's pages.
+
+Fluxer physical copy mutation remains subject to the canonical owner and
+separate policy/read-only ownership preflight. Existing Discord-specific
+source/community policy is not implicitly granted to Fluxer, and no Fluxer
+human canonical publication is activated until issue #13.

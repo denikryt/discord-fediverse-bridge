@@ -580,3 +580,9 @@ The upstream v3.3.0 source confirms public `ThreadCreate/Update/Delete` and `Sha
   `hypothesis` are absent and PyPI DNS resolution fails. SDK v3.3.0 could
   not be installed (npm registry DNS failure); real Fluxer REST/Gateway
   contracts and production write activation are not yet accepted.
+
+- CP032 local behavioral checks: single-connector capacity inheritance,
+  offline read-only reconciliation, and real SQLite Discord/Fluxer scheduler
+  isolation verified with test-only physical owners. Full Python runtime
+  regression and production Node SDK/Compose contracts remain blocked on
+  missing dependencies, Docker and live Fluxer access.

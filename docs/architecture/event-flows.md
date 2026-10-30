@@ -535,3 +535,16 @@ without a provable stored copy are acknowledged as intentionally ignored
 observations. On shutdown HTTP admission closes and joins in-flight sink
 operations before SQLite disposal. A failed or reconnecting SDK suppresses new
 Fluxer durable claims, while the existing Discord delivery lane progresses.
+
+
+## Connector-local physical recovery
+
+The shared scheduler runs one Discord lane and optionally one Fluxer lane.
+Each lane polls its own adapter and checks capacity before entering existing
+SQLite Create or mutation claims. An offline pristine Fluxer request retains
+`pending`, without a token or physical send; Discord can complete a separate
+intent during the same tick. A later authenticated READY transition allows a
+single authorized Fluxer attempt. Previously uncertain Creates stay
+`unresolved` and skip reconciliation while their connector is offline.
+Direct coordinator calls inherit the same capacity as background recovery.
+The SQLite claim and receipt stores remain the only durable send authority.
