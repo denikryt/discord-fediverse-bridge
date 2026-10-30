@@ -495,3 +495,21 @@ Node entrypoint continues to refuse Create and advertises
 and operation-specific ACL behavior are captured live. The current server ZIP
 is unversioned and does not satisfy that acceptance gate. Issue #13's Fluxer
 inbound publication gate remains unchanged.
+
+## Fluxer message/reply physical delivery (SDK-edge acceptance only)
+
+`fluxer-connector/src/message_send.ts` maps the existing `send_message` RPC to
+the official SDK v3.3.0 `ChannelManager.send` method with one immutable
+`MessageSendOptions.replyTo` pointing at a **verified message in the same
+immediate container**. The SDK owns the wire `message_reference` mapping.
+Explicit `allowedMentions: {parse: [], repliedUser: false}` prevents new
+everyone, role, user and automatic reply notifications. Missing/cross-thread
+parents, unknown SDK bot rights, archived/locked targets and unsupported
+attachments reject before the SDK send. A returned mismatched parent, bot,
+message or container after entering send becomes `unknown_delivery`, never a
+flat-send fallback or permission to resend. The Node/Python test fixture
+models remote effects but does not enable a production write dispatcher.
+
+The supplied unversioned server source identifies the separate bit 38
+`SEND_MESSAGES_IN_THREADS`; until the actual approved build verifies this
+contract, the production SDK `capabilities.thread_replies` remains false.

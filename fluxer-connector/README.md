@@ -39,6 +39,26 @@ The SDK's public `PermissionFlags` do not expose the server's separate
 ordinary SendMessages. A definitely absent prerequisite View/Send flag can
 still produce `denied` for forum post admission.
 
+`src/message_send.ts` additionally implements an **isolated SDK-backed message
+sender** for exact text-channel messages and thread replies. It uses the
+published SDK `channels.send(container, {content,replyTo,allowedMentions})`
+API so the SDK itself serializes the `message_reference`. Every reply first
+reads the exact immediate container and existing parent message, and refuses
+stale/wrong parent or guild, archived/locked thread and unverified bot rights.
+All sends suppress `parse` mentions and reply-author notifications; attachments
+and non-plain content are deliberately rejected rather than dropped. The
+received SDK `Message` must attest the same bot, container, guild and
+`messageReference`, or the existing CreateAttempt stays `unknown_delivery`.
+The unversioned server source names `SEND_MESSAGES_IN_THREADS` as bit 38;
+this isolated executor checks it, but does not promote it to a production
+capability without the approved build's observed contract. Node IPC and
+Python adapter scenarios cover correct nested delivery and lost responses.
+
+**Production `main.ts` still has no write dispatcher for either forum Create
+or replies.** Exact live server/SDK capability, message-reply ACL and starter
+contracts remain open hard acceptance gates. Passing SDK-edge fakes is not a
+permission to enable real Fluxer bot writes.
+
 A separate `src/forum_create.ts` now implements the **narrow confirmed SDK
 REST forum-create wire contract** for testing: the SDK v3.3.0
 `ThreadManager.createPost()` calls `client.rest.post(Routes.channelThreads(id))`

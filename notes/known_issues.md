@@ -550,3 +550,13 @@ The upstream v3.3.0 source confirms public `ThreadCreate/Update/Delete` and `Sha
   `unsupported`/`forum_posts=False` until the exact trusted server build's
   bot forum/ACL/starter and Gateway evidence is captured. No live bot write,
   published SDK type-check or full Python dependency-backed suite passed.
+
+- **CP029 SDK message/reply executor — isolated local verification only:**
+  `message_send.ts` uses official SDK `channels.send` with exact `replyTo`,
+  verified container/parent and notification suppression; foreign parents,
+  absent/unknown thread write rights and unsupported media reject pre-I/O.
+  Node HTTP and two-process Python→Node SDK-edge tests show one physical
+  reply and `unknown_delivery` without re-POST on lost ACK. The server source
+  used to identify thread permission bit 38 is unversioned; real SDK and
+  server bot reply/ACL contract remain BLOCKED, so production `main.ts`
+  continues to refuse `send_message` and false capabilities remain intact.

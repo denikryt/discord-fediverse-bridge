@@ -461,3 +461,13 @@ full Python/Node suites or live Discord/Fedify integration acceptance.
   Create through the real Python adapter and Node service with stateful fake
   SDK REST side effects; an immutable repeated attempt creates no second POST.
   These tests do not replace B05 acceptance against a pinned live server.
+
+## Fluxer SDK messages and nested replies
+
+- `fluxer-connector/tests/message_send.test.mjs` checks exact SDK `replyTo`
+  and `allowedMentions` fields, guild/parent verification, missing write rights,
+  locked threads, unsupported modes and lost/mismatched physical replies.
+- `tests/behavior/test_fluxer_forum_create_node_crossprocess.py` also drives
+  a nested physical message through the actual Python-to-Node authenticated
+  boundary and checks one side-effecting SDK-edge send, parent reference and
+  no replay after a lost response. No real Fluxer server acceptance claimed.

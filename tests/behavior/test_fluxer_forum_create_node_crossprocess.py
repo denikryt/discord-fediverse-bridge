@@ -33,7 +33,7 @@ class FluxerForumCreateCrossProcess(unittest.IsolatedAsyncioTestCase):
             'node', '--experimental-strip-types',
             str(root / 'fluxer-connector/tests/fixture_sdk_forum_create.mjs'),
             str(self.effects),
-            'lose-response' if self._testMethodName == 'test_lost_remote_response_is_unresolved_and_no_repost' else 'normal',
+            ('lose-response' if self._testMethodName == 'test_lost_remote_response_is_unresolved_and_no_repost' else 'lose-message-response' if self._testMethodName == 'test_lost_reply_response_never_reposts' else 'normal'),
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.PIPE,
         )
@@ -106,3 +106,47 @@ class FluxerForumCreateCrossProcess(unittest.IsolatedAsyncioTestCase):
         effects = [json.loads(line) for line in self.effects.read_text().splitlines()]
         self.assertEqual(len(effects), 1)
         self.assertEqual(effects[0]['options']['body']['name'], 'New topic')
+
+    async def test_nested_reply_preserves_exact_thread_and_parent(self) -> None:
+        """Observe one physical reply to the confirmed starter across processes."""
+        root = await self.adapter.create_forum_thread(
+            self.forum, ContentDocument('Hello from AP'), title='New topic',
+            presentation=DeliveryPresentation('bot'), attempt=self.attempt,
+        )
+        attempt = CreateAttempt('child-reply-one', 'fx-forum', 'message', root.thread)
+        async def send():
+            return await self.adapter.send_message(
+                root.thread, ContentDocument('@everyone replied safely'),
+                reply_to=root.starter, presentation=DeliveryPresentation('bot'),
+                attempt=attempt,
+            )
+        reply = await send()
+        self.assertEqual(reply.message, MessageRef('fx-forum', 'thread-9', 'message-12'))
+        self.assertEqual(reply, await send())
+        effects = [json.loads(line) for line in self.effects.read_text().splitlines()]
+        self.assertEqual(len(effects), 2)
+        self.assertEqual(effects[1]['sdk_send']['container'], 'thread-9')
+        self.assertEqual(effects[1]['sdk_send']['options']['replyTo'],
+                         {'channelId': 'thread-9', 'messageId': 'starter-91',
+                          'guildId': 'guild-1'})
+        self.assertEqual(effects[1]['sdk_send']['options']['allowedMentions'],
+                         {'parse': [], 'repliedUser': False})
+
+    async def test_lost_reply_response_never_reposts(self) -> None:
+        """A lost reply ACK retains uncertain delivery without a second SDK send."""
+        root = await self.adapter.create_forum_thread(
+            self.forum, ContentDocument('Hello from AP'), title='New topic',
+            presentation=DeliveryPresentation('bot'), attempt=self.attempt,
+        )
+        attempt = CreateAttempt('child-reply-lost', 'fx-forum', 'message', root.thread)
+        for _ in range(2):
+            with self.assertRaises(PlatformOperationError) as caught:
+                await self.adapter.send_message(
+                    root.thread, ContentDocument('unconfirmed reply'),
+                    reply_to=root.starter, presentation=DeliveryPresentation('bot'),
+                    attempt=attempt,
+                )
+            self.assertEqual(caught.exception.reason, 'unknown_delivery')
+        effects = [json.loads(line) for line in self.effects.read_text().splitlines()]
+        self.assertEqual(len(effects), 2)
+        self.assertEqual(effects[1]['sdk_send']['options']['replyTo']['messageId'], 'starter-91')
