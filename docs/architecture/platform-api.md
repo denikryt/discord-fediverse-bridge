@@ -80,7 +80,7 @@ the fake provider validates this internal contract, not the real Fluxer API.
 ## Fluxer bot-owned physical reads
 
 The Fluxer adapter uses authenticated Node RPC `health` to verify the current
-SDK READY bot ID for the exact connector; a configured or cached bot ID alone
+SDK READY bot ID **and authenticated instance origin** for the exact connector; a configured or cached bot ID alone
 cannot confer physical message ownership. The Node SDK read returns explicit
 `webhook_id` provenance from `Message.webhookId` alongside the exact physical
 message/container and author. Only the same bot ID, kind `bot`, a READY RPC
@@ -139,7 +139,7 @@ registering or reusing exactly one immutable identity. Different saved keys
 or origins are rejected before any SDK initialization and are never silently
 rekeyed or deleted. Disabled deployments create no new Fluxer row. The SQLite
 partial unique origin index remains a separate integrity guard; it does not
-substitute for this one-instance admission. The future Node service alone
+substitute for this one-instance admission. The standalone Node SDK service alone
 reads the bot token from a read-only secret file; no bearer bot credential
 crosses `PlatformAdapterPort` or the Python RPC boundary.
 

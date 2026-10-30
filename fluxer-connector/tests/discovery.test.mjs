@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { createServer } from 'node:http';
-import { discoverInstance, validateOrigin, validateDiscoveryDocument } from '../src/discovery.ts';
+import { discoverInstance, validateOrigin, validateDiscoveryDocument, validateGatewayConnection } from '../src/discovery.ts';
 
 test('production discovery refuses userinfo, fragments, path, HTTP and metadata origin', () => {
   for (const origin of ['http://example.test', 'https://user:pass@example.test',
@@ -17,9 +17,11 @@ test('bot REST needs api_public and an approved self-hosted API host', () => {
   assert.throws(() => validateDiscoveryDocument('https://example.test',
     {endpoints: {api_public: 'https://outside.test'}}));
   const doc = validateDiscoveryDocument('https://example.test',
-    {endpoints: {api_public: 'https://api.example.test', api: 'https://web.example.test'}},
-    {allowedEndpointHosts: ['api.example.test']});
+    {endpoints: {api_public: 'https://api.example.test',
+      gateway: 'wss://gateway.example.test', api: 'https://web.example.test'}},
+    {allowedEndpointHosts: ['api.example.test', 'gateway.example.test']});
   assert.equal(doc.apiPublic, 'https://api.example.test/');
+  assert.equal(doc.gateway, 'wss://gateway.example.test/');
 });
 
 test('loopback development discovery performs an actual bounded GET without token', async () => {
@@ -27,7 +29,8 @@ test('loopback development discovery performs an actual bounded GET without toke
   const server = createServer((req, res) => {
     seen.push([req.url, req.headers.authorization]);
     res.setHeader('content-type', 'application/json');
-    res.end(JSON.stringify({endpoints: {api_public: `http://127.0.0.1:${server.address().port}`}}));
+    res.end(JSON.stringify({endpoints: {api_public: `http://127.0.0.1:${server.address().port}`,
+      gateway: `ws://127.0.0.1:${server.address().port}`}}));
   });
   await new Promise(resolve => server.listen(0, '127.0.0.1', resolve));
   const port = server.address().port;
@@ -63,4 +66,26 @@ test('redirects never followed to other API hosts', async () => {
     }));
     assert.equal(received, 1);
   } finally {await new Promise(resolve => server.close(resolve));}
+});
+
+test('unapproved or missing Gateway endpoint is rejected before any SDK login', () => {
+  for (const gateway of [undefined, 'ws://gateway.example.test',
+    'wss://other.example.test', 'wss://user:token@gateway.example.test']) {
+    const endpoints = {api_public: 'https://api.example.test'};
+    if (gateway !== undefined) endpoints.gateway = gateway;
+    assert.throws(() => validateDiscoveryDocument('https://example.test', {endpoints},
+      {allowedEndpointHosts: ['api.example.test','gateway.example.test']}));
+  }
+});
+
+test('SDK Gateway host admission checks target URL on every socket construction', () => {
+  const trusted = 'wss://gateway.example.test/';
+  assert.doesNotThrow(() => validateGatewayConnection(
+    'wss://gateway.example.test/?v=1&encoding=json', trusted));
+  for (const candidate of ['ws://gateway.example.test/?v=1&encoding=json',
+    'wss://attacker.test/?v=1&encoding=json',
+    'wss://bot:token@gateway.example.test/?v=1&encoding=json',
+    'wss://gateway.example.test/?v=1&encoding=json&redirect=evil']) {
+    assert.throws(() => validateGatewayConnection(candidate, trusted));
+  }
 });

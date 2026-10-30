@@ -515,3 +515,16 @@ The upstream v3.3.0 source confirms public `ThreadCreate/Update/Delete` and `Sha
 - **CP024 local fix (live SDK acceptance pending):** Fluxer SDK `fetch_message` now preserves explicit `webhook_id` provenance. The Python adapter checks current authenticated connector-bound Node READY/bot ID before granting `is_bridge_owned`, and rejects foreign bot/webhook/unknown identity in Edit/Delete. A two-process SDK-session/RPC/SQLite mutation scenario verifies exact bot copy revision/remote edit/delete; real Fluxer REST write methods are still pending their own checkpoint.
 
 - **CP025 locally implemented; deployment acceptance pending:** Python Fluxer settings no longer accept or carry `bot_token`; at most one trusted connector and one matching persisted SQLite row are admitted, with no automatic rebind. Private RPC is restricted to the shared namespace loopback address. The Node-only secret-file reader is implemented and independently tested, but the actual Node process entrypoint, read-only Compose secret mount, and B20/B21 two-container isolation acceptance remain open.
+
+- **CP026 local implementation (live SDK acceptance blocked):** the Node
+  standalone service now has a production SDK constructor, tokenless approved
+  discovery, exact Gateway socket host admission, Node-only secret-file use,
+  and a read-only SDK RPC dispatcher. SDK `ClientOptions.instance` receives
+  the full discovered endpoint map to prevent v3.3.0 hosted endpoint defaults.
+  Authenticated RPC health now reports exact instance origin; Python refuses
+  bot ownership if the origin differs, even when the bot ID matches. Local
+  SDK-edge / RPC / Python tests pass. The actual npm SDK is absent, TypeScript
+  against its published declarations is blocked, and no live Fluxer or Compose
+  verification has taken place. Bot REST writes/capabilities remain blocked
+  until native build-specific contracts are confirmed. No per-socket
+  DNS-rebinding/SSRF protection is claimed under the trusted-host plan.

@@ -28,6 +28,7 @@ class StatefulMutationProvider:
         self.permission = 'allowed'
         self.health_bot_id = 'bot-1'
         self.health_state = 'ready'
+        self.health_origin = 'https://fluxer.example'
         self.include_webhook_proof = True
         self.fail_write = False
 
@@ -38,7 +39,7 @@ class StatefulMutationProvider:
         op, args = body['operation'], body['args']
         if op == 'health':
             result = {'connector_key': 'fluxer-test', 'state': self.health_state,
-                      'bot_id': self.health_bot_id}
+                      'bot_id': self.health_bot_id, 'instance_origin': self.health_origin}
         elif op == 'fetch_message':
             key = args['container_id'], args['id']
             state = self.messages.get(key)
@@ -124,6 +125,16 @@ class FluxerBotMutationScenarios(unittest.IsolatedAsyncioTestCase):
             await self.adapter.edit_message(self.owned, ContentDocument('blocked'))
         self.provider.include_webhook_proof = True
         self.provider.health_bot_id = 'bot-foreign'
+        with self.assertRaises(PlatformOperationError):
+            await self.adapter.delete_message(self.owned)
+        self.assertEqual(self.provider.writes, [])
+
+    async def test_wrong_sdk_instance_origin_cannot_authorize_physical_mutation(self):
+        """A valid bot ID on another trusted instance is not a mutation authority."""
+        self.assertTrue((await self.adapter.fetch_message(self.owned)).author.is_bridge_owned)
+        self.provider.health_origin = 'https://another.fluxer.example'
+        read = await self.adapter.fetch_message(self.owned)
+        self.assertFalse(read.author.is_bridge_owned)
         with self.assertRaises(PlatformOperationError):
             await self.adapter.delete_message(self.owned)
         self.assertEqual(self.provider.writes, [])

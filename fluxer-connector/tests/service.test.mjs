@@ -65,6 +65,7 @@ test('SDK disconnect disables physical RPC without losing health diagnostics',as
     assert.equal((await request(port,'fetch_channel')).status,503);
     const health=await (await request(port,'health')).json();
     assert.equal(health.result.state,'degraded');
+    assert.equal(health.result.instance_origin,'https://example.test');
     emitter.emit('shardReady',0);
     const after=await (await request(port,'health')).json();
     assert.equal(after.result.gateway_gap,true);

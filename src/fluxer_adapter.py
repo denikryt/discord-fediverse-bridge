@@ -96,6 +96,7 @@ class FluxerAdapter:
             return None
         current = health.get('bot_id')
         if (health.get('connector_key') != self._connector.key
+            or health.get('instance_origin') != self._connector.instance_origin
             or health.get('state') != 'ready'
             or not isinstance(current, str) or not current
             or current != current.strip() or any(ord(ch) < 32 for ch in current)):

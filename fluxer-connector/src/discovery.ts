@@ -17,6 +17,7 @@ export type DiscoveryPolicy = {
 export type ValidatedDiscovery = {
   origin: string;
   apiPublic: string;
+  gateway: string;
   endpoints: Readonly<Record<string, string>>;
 };
 
@@ -83,6 +84,25 @@ export function validateDiscoveryDocument(
          api.hostname === '[::1]')))) {
     throw new Error('invalid Fluxer bot API URL');
   }
+  // The trusted instance supplies a Gateway host independently from REST.
+  // Both must be approved before an SDK client can receive the bot token.
+  if (typeof values.gateway !== 'string') {
+    throw new Error('Fluxer Gateway endpoint missing');
+  }
+  let gateway: URL;
+  try {gateway = new URL(values.gateway);}
+  catch {throw new Error('invalid Fluxer Gateway URL');}
+  const gatewayLocal = gateway.hostname === '127.0.0.1' ||
+    gateway.hostname === 'localhost' || gateway.hostname === '[::1]';
+  if (gateway.username || gateway.password || gateway.search || gateway.hash ||
+      (gateway.protocol !== 'wss:' && !(policy.allowInsecureLocalDevelopment &&
+        gatewayLocal && gateway.protocol === 'ws:'))) {
+    throw new Error('invalid Fluxer Gateway URL');
+  }
+  if (gateway.hostname !== requested.hostname &&
+      !(policy.allowedEndpointHosts ?? []).includes(gateway.hostname)) {
+    throw new Error('unapproved Fluxer Gateway host');
+  }
   if (api.hostname !== requested.hostname &&
       !(policy.allowedEndpointHosts ?? []).includes(api.hostname)) {
     throw new Error('unapproved Fluxer bot API host');
@@ -93,7 +113,8 @@ export function validateDiscoveryDocument(
     if (typeof value !== 'string') continue;
     exact[key] = value;
   }
-  return {origin: requested.origin, apiPublic: api.toString(), endpoints: exact};
+  return {origin: requested.origin, apiPublic: api.toString(),
+    gateway: gateway.toString(), endpoints: exact};
 }
 
 /** One bounded tokenless GET with pinned DNS, no redirects or bearer headers. */
@@ -144,4 +165,24 @@ export async function discoverInstance(
   try {document = JSON.parse(body);}
   catch {throw new Error('invalid Fluxer discovery JSON');}
   return validateDiscoveryDocument(origin, document, policy);
+}
+
+/** Guard the actual SDK-created Gateway socket after `/gateway/bot` discovery.
+ * SDK v3.3.0 appends `v=1&encoding=json`; no second client or heartbeat is built.
+ */
+export function validateGatewayConnection(raw: string, approvedGateway: string): void {
+  let actual: URL;
+  let approved: URL;
+  try {actual = new URL(raw); approved = new URL(approvedGateway);}
+  catch {throw new Error('invalid Fluxer Gateway socket URL');}
+  if (actual.protocol !== approved.protocol || actual.host !== approved.host ||
+      actual.username || actual.password || actual.hash ||
+      !['ws:', 'wss:'].includes(actual.protocol)) {
+    throw new Error('unapproved Fluxer Gateway socket destination');
+  }
+  const params = actual.searchParams;
+  if (params.size !== 2 || params.get('v') !== '1' ||
+      params.get('encoding') !== 'json') {
+    throw new Error('unexpected Fluxer Gateway socket query');
+  }
 }

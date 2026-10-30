@@ -121,7 +121,8 @@ class FluxerLookupAdapterScenarios(unittest.IsolatedAsyncioTestCase):
     async def test_bot_acl_requires_exact_attested_identity_and_channel(self) -> None:
         """Only a response for the connected bot and queried forum may authorize."""
         self.adapter._bot_id = 'bot-1'
-        self.answers['health'] = {'connector_key':'fluxer-test', 'state':'ready', 'bot_id':'bot-1'}
+        self.answers['health'] = {'connector_key':'fluxer-test', 'state':'ready', 'bot_id':'bot-1',
+                                  'instance_origin':'https://fluxer.example'}
         self.answers['check_permissions'] = {
             'bot_id': 'bot-1', 'channel_id': 'forum-1', 'guild_id': 'guild-1',
             'view_channel': 'allowed', 'send_message': 'denied',

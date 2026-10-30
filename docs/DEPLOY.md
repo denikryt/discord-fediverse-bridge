@@ -100,8 +100,13 @@ SQLite rows. Adding a second Fluxer instance is not supported by issue #12.
 `.env`/`env_file`, or Python container mounts.** Legacy token-bearing JSON is
 rejected. The Node sidecar will receive its credential only through a separate
 read-only secret file mounted for Node, and the IPC bearer above is independent
-of that credential. The secret-file reader is implemented, but the production
-Node entrypoint and Compose-only secret mount remain to be wired and verified.
+of that credential. The Node-only token-file reader and standalone SDK entrypoint are implemented,
+but the optional Compose service and secret mount remain to be wired and
+verified. The Node process requires explicitly approved REST/Gateway hosts,
+and reports the configured instance origin in its authenticated health result;
+Python refuses bot ownership if this origin differs from its saved connector.
+The entrypoint deliberately refuses unverified physical writes and is **not**
+yet a production-complete Fluxer deployment.
 Do not enable real Fluxer bot dispatch on the strength of configuration
 admission alone. The trusted-instance model permits the SDK's default REST
 Agent; it does not promise per-socket SSRF/DNS rebinding protection.

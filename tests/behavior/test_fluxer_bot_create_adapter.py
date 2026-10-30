@@ -43,7 +43,8 @@ class Provider:
         args = body['args']
         self.requests.append(body)
         if op == 'health':
-            result = {'connector_key': 'fluxer-test', 'state': 'ready', 'bot_id': 'bot-1'}
+            result = {'connector_key': 'fluxer-test', 'state': 'ready', 'bot_id': 'bot-1',
+                      'instance_origin': 'https://fluxer.example'}
         elif op == 'fetch_channel':
             result = {'id': args['id'], 'kind': 'forum' if args['id'] == 'forum-1' else 'text',
                       'guild_id': 'guild-1'}

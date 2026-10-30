@@ -29,8 +29,12 @@ export class FluxerNodeService {
   private gatewayFault = false;
   private gatewayContextUnverified = false;
   private shutdownRequested = false;
+  private readonly instanceOrigin: string;
 
   constructor(config: ServiceConfig) {
+    // Session-origin attestation prevents a sidecar configured for another
+    // trusted instance from inheriting this connector's physical writes.
+    this.instanceOrigin = new URL(config.origin).origin;
     // All private transports share the same exact immutable connector identity.
     this.forwarder = new GatewayEventForwarder(config);
     this.gateway = new FluxerSdkGatewayHandler({connectorKey: config.connectorKey,
@@ -55,7 +59,8 @@ export class FluxerNodeService {
     const dispatch: RpcHandler = async (operation: RpcOperation, args) => {
       if (operation === 'health') {
         const status = this.session.health();
-        return {...status, gateway_gap: status.gateway_gap || this.gatewayFault,
+        return {...status, instance_origin: this.instanceOrigin,
+          gateway_gap: status.gateway_gap || this.gatewayFault,
           gateway_context_unverified: this.gatewayContextUnverified};
       }
       // Never advertise writable bot operations until gateway and SDK are ready.
