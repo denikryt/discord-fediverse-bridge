@@ -13,7 +13,6 @@ jobs:
     runs-on: ubuntu-latest
     outputs:
       version: ${{ steps.version.outputs.value }}
-      fluxer_lock: ${{ steps.version.outputs.fluxer_lock }}
     steps:
       - uses: actions/checkout@v4
       - id: version
@@ -30,13 +29,8 @@ jobs:
             exit 1
           fi
           echo "value=$tag_version" >> "$GITHUB_OUTPUT"
-          # Detect the SDK lock after checkout, not in the job-level if
-          # expression (where no workspace files are available).
-          if [[ -f fluxer-connector/package-lock.json ]]; then
-            echo "fluxer_lock=true" >> "$GITHUB_OUTPUT"
-          else
-            echo "fluxer_lock=false" >> "$GITHUB_OUTPUT"
-          fi
+          # Release requires every declared image; a missing SDK lock is fatal.
+          node fluxer-connector/scripts/check-lock.mjs
 
   publish-images:
     needs: validate-version
@@ -81,14 +75,23 @@ jobs:
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}
 
-  # The optional SDK image is published only once the audited npm lockfile
-  # exists. Never silently build from floating/npm install dependencies.
+  # Fluxer remains an opt-in deployment profile, but its declared release image
+  # must build successfully whenever a release is published.
   publish-fluxer-image:
     needs: validate-version
-    if: ${{ needs.validate-version.outputs.fluxer_lock == 'true' }}
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - name: Verify pinned SDK on the production Node major
+        working-directory: fluxer-connector
+        run: |
+          npm run check:lock
+          npm ci --ignore-scripts --no-audit --no-fund
+          npm run check
+          npm test
       - name: Require matching Fluxer release package version
         shell: bash
         run: |
@@ -123,7 +126,7 @@ jobs:
 
   create-release:
     needs: [validate-version, publish-images, publish-fluxer-image]
-    if: ${{ always() && needs.validate-version.result == 'success' && needs.publish-images.result == 'success' && (needs.publish-fluxer-image.result == 'success' || needs.publish-fluxer-image.result == 'skipped') }}
+    if: ${{ always() && needs.validate-version.result == 'success' && needs.publish-images.result == 'success' && needs.publish-fluxer-image.result == 'success' }}
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4

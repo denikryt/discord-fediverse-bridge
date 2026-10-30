@@ -1,11 +1,11 @@
 # syntax=docker/dockerfile:1
 # A checked-in npm lockfile is required for a reproducible official SDK build.
-# Until npm registry access permits lockfile generation and full declaration
-# checking, this image intentionally fails to build rather than use npm install.
+# Missing or inconsistent locks fail the build before installing the SDK.
 FROM node:22-bookworm-slim AS dependencies
 WORKDIR /app/fluxer-connector
 COPY fluxer-connector/package.json fluxer-connector/package-lock.json ./
-RUN npm ci --ignore-scripts --no-audit --no-fund
+COPY fluxer-connector/scripts ./scripts
+RUN npm run check:lock && npm ci --ignore-scripts --no-audit --no-fund
 COPY fluxer-connector/tsconfig.json ./
 COPY fluxer-connector/src ./src
 COPY fluxer-connector/tests ./tests

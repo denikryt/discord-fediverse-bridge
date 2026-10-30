@@ -3,11 +3,19 @@
   "version": "0.1.0",
   "private": true,
   "type": "module",
-  "engines": {"node": ">=22.13.0"},
+  "engines": {
+    "node": ">=22.13.0"
+  },
   "scripts": {
     "check": "tsc --noEmit",
-    "test": "node --experimental-strip-types --test tests/*.test.mjs"
+    "test": "node --experimental-strip-types --test tests/*.test.mjs",
+    "check:lock": "node scripts/check-lock.mjs"
   },
-  "dependencies": {"@fluxerjs/core": "3.3.0"},
-  "devDependencies": {"@types/node": "25.1.0", "typescript": "5.8.3"}
+  "dependencies": {
+    "@fluxerjs/core": "3.3.0"
+  },
+  "devDependencies": {
+    "@types/node": "25.1.0",
+    "typescript": "5.8.3"
+  }
 }

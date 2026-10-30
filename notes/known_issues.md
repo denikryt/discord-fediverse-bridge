@@ -628,3 +628,7 @@ Startup/shutdown fixtures use the real Runtime and SQLite. Ready Discord admissi
 ## Official SDK type safety (CP038)
 
 The ordinary Fluxer TypeScript check now binds all dormant write factories to the real SDK Client. Send/Edit/Delete use official SDK types and channel predicates; no double assertions are used. All 108 Node tests pass, including genuine SDK Client/DM boundary tests. Live write acceptance remains open.
+
+## Reproducible SDK build (CP039)
+
+Official SDK lock committed. npm ci, tsc and 109 Node tests pass on Node 22.13.1. Release fails instead of skipping the Fluxer image when its lock is missing. CI covers Python, both Node packages and all container builds. Docker execution remains unavailable locally.

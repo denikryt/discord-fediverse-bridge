@@ -199,3 +199,7 @@ SDK-fake tests cannot establish B20/B21 or authorize production writes.
 ## Official SDK write type contracts
 
 `npm run check` includes `src/sdk_write_contracts.ts`: every isolated write factory must accept the pinned official `Client`. Message send and mutation handlers use SDK channel types and narrow guild/thread channels before reading guild-specific fields. Node tests also construct an actual SDK client and DM channel to verify rejection before message lookup or write. This does not enable production writes or replace real-server REST acceptance.
+
+## Reproducible Node 22 build
+
+Use Node 22.13 or newer in the Node 22 line: `npm run check:lock`, `npm ci --ignore-scripts`, `npm run check`, then `npm test`. The committed lock pins the official SDK and all transitive packages with integrity hashes. The Docker dependency stage runs these checks before pruning development dependencies. Release validation requires the lock and the Fluxer image; a missing lock or failing image cannot produce a successful release. Container builds are exercised in CI, while local two-container/live acceptance is a separate deployment check.

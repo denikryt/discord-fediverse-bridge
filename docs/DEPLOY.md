@@ -116,7 +116,8 @@ bearer is separate from the bot credential; assign a long random bearer.
 Set optional exact forum tag selections in the connector's
 `"forum_applied_tags"` map only when confirmed on the actual server.
 
-Once a pinned SDK lockfile, image and actual test instance are available:
+The pinned SDK lockfile is checked in and validated by CI on Node 22. Once
+the image and an actual test instance are available:
 
 ```bash
 docker compose --env-file .env --profile fluxer -f compose.yaml -f compose.build.yaml config
@@ -134,11 +135,11 @@ container runtime behavior requires a real two-container test. A port collision
 at `127.0.0.1:8769` prevents Node startup rather than routing elsewhere.
 Do **not** run two independent sidecars for one configured connector.
 
-**Current acceptance blockers:** There is no verified
-`fluxer-connector/package-lock.json` (the npm registry was unreachable),
-the official SDK declarations have not been typechecked, no Docker runtime was
-available for B20/B21, and no pinned real Fluxer build/credentials were
-provided. The `fluxer-connector/Dockerfile` intentionally requires the
+**Current acceptance blockers:** no Docker runtime was available locally for
+B20/B21, and no pinned real Fluxer build/credentials were provided. The SDK
+lockfile now supports `npm ci`, and ordinary `npm run check` verifies the actual
+SDK write-factory contracts on Node 22. Release validation fails on a missing
+or inconsistent lock; it never silently skips the declared Fluxer image. The `fluxer-connector/Dockerfile` intentionally requires the
 lockfile and fails to build without it. Production `main.ts` currently refuses
 all Create/Send/Edit/Delete operations; these must not be enabled before live
 REST/starter/permission/Gateway contract verification. The Compose layout is

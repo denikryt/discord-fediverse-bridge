@@ -67,14 +67,20 @@ class FluxerComposeTopologyContracts(unittest.TestCase):
                       dockerfile)
         self.assertIn('npm ci --ignore-scripts', dockerfile)
         self.assertNotIn('RUN npm install', dockerfile)
-        self.assertIn('if [[ -f fluxer-connector/package-lock.json ]]', workflow)
-        self.assertIn("needs.validate-version.outputs.fluxer_lock == 'true'", workflow)
+        self.assertIn('node fluxer-connector/scripts/check-lock.mjs', workflow)
+        self.assertNotIn('fluxer_lock', workflow)
+        jobs = yaml.safe_load(workflow)['jobs']
+        self.assertNotIn('if', jobs['publish-fluxer-image'])
+        self.assertNotIn("== 'skipped'", jobs['create-release']['if'])
+        self.assertIn("node-version: '22'", workflow)
         self.assertNotIn('hashFiles(', workflow)
         self.assertIn('file: fluxer-connector/Dockerfile', workflow)
         import json
         package = json.loads((node / 'package.json').read_text())
         self.assertEqual(package['version'], (ROOT / 'VERSION').read_text().strip())
-        self.assertNotIn('package-lock.json', [p.name for p in node.iterdir()])
+        lock = json.loads((node / 'package-lock.json').read_text())
+        self.assertEqual(lock['packages']['']['dependencies'], package['dependencies'])
+        self.assertEqual(lock['packages']['node_modules/@fluxerjs/core']['version'], '3.3.0')
 
     def test_bad_topology_is_rejected_by_contract(self) -> None:
         """A future accidental public bind or copied secret fails the same invariants."""
