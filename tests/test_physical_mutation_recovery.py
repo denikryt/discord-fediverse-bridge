@@ -142,7 +142,7 @@ class PhysicalMutationRecoveryScenarios(unittest.TestCase):
         """Reject before I/O without making an unresolvable transport claim."""
         worker, calls = self._worker()
         worker.target_policy = lambda _connector, _surface: False
-        self.assertEqual(asyncio.run(worker.drain()), 1)
+        self.assertEqual(asyncio.run(worker.drain()), 0)
         self.assertEqual(calls, [])
         with self.db.session() as session:
             copy = session.get(LocalCommunityThreadSurface, self.copy_id)
@@ -168,11 +168,12 @@ class PhysicalMutationRecoveryScenarios(unittest.TestCase):
                 raise LookupError(f'connector not ready: {connector_key}')
 
         worker.registry = UnavailableRegistry()
-        self.assertEqual(asyncio.run(worker.drain()), 1)
+        self.assertEqual(asyncio.run(worker.drain()), 0)
         self.assertEqual(calls, [])
         with self.db.session() as session:
             copy = session.get(LocalCommunityThreadSurface, self.copy_id)
-            self.assertEqual(copy.mutation_state, 'failed_definite')
+            self.assertEqual(copy.mutation_state, 'idle')
+            self.assertIsNone(copy.mutation_claim_token)
             self.assertIsNone(copy.applied_revision)
         # Registering the same connector recovers the exact original copy.
         worker.registry = healthy_registry
@@ -193,7 +194,7 @@ class PhysicalMutationRecoveryScenarios(unittest.TestCase):
             raise ValueError('unsupported tombstone presentation')
 
         worker.tombstone_renderer = invalid_tombstone
-        self.assertEqual(asyncio.run(worker.drain()), 1)
+        self.assertEqual(asyncio.run(worker.drain()), 0)
         self.assertEqual(calls, [])
         with self.db.session() as session:
             copy = session.get(LocalCommunityThreadSurface, self.copy_id)
@@ -214,20 +215,20 @@ class PhysicalMutationRecoveryScenarios(unittest.TestCase):
             """Represent temporary failure to resolve connector policy."""
             raise LookupError('policy lookup unavailable')
         worker.target_policy = unavailable_policy
-        self.assertEqual(asyncio.run(worker.drain()), 1)
+        self.assertEqual(asyncio.run(worker.drain()), 0)
         self.assertEqual(calls, [])
         with self.db.session() as session:
             self.assertEqual(session.get(LocalCommunityThreadSurface, self.copy_id).mutation_state,
-                             'failed_definite')
+                             'idle')
         worker.target_policy = lambda _connector, _surface: True
         self.assertEqual(asyncio.run(worker.drain()), 1)
         self.assertEqual(len(calls), 1)
 
-    def test_cancelled_batch_releases_only_unstarted_mutations(self) -> None:
+    def test_cancelled_single_slot_never_claims_unstarted_sibling(self) -> None:
         """A cancelled worker must not strand work whose transport never began.
 
-        An already-invoked edit remains potentially sent; independently
-        reserved later copies can be proven unsent by this same worker.
+        An already-invoked edit remains potentially sent; later independent
+        copies are never reserved before their own physical dispatch slot.
         """
         later_copy_id = self._add_older_settled_copies_and_new_lagging_copy()
         with self.db.immediate_session() as session:
@@ -279,7 +280,8 @@ class PhysicalMutationRecoveryScenarios(unittest.TestCase):
             current = session.get(LocalCommunityThreadSurface, self.copy_id)
             never_started = session.get(LocalCommunityThreadSurface, later_copy_id)
             self.assertEqual(current.mutation_state, 'dispatching')
-            self.assertEqual(never_started.mutation_state, 'failed_definite')
+            self.assertEqual(never_started.mutation_state, 'idle')
+            self.assertIsNone(never_started.mutation_claim_token)
             self.assertIsNone(never_started.applied_revision)
         # Next worker may retry only the definitely-unsent second copy.
         restored, restored_calls = self._worker()
@@ -329,8 +331,10 @@ class PhysicalMutationRecoveryScenarios(unittest.TestCase):
     def test_old_claim_refuses_update_after_canonical_revision_changes(self) -> None:
         """A committed newer canonical revision fences stale transport."""
         worker, calls = self._worker()
-        claims = worker._claim_due(1)
-        self.assertEqual(len(claims), 1)
+        candidates = worker._discover_due()
+        self.assertEqual(len(candidates), 1)
+        claims = [worker._claim_one(candidates[0])]
+        self.assertIsNotNone(claims[0])
         with self.db.immediate_session() as session:
             session.get(LocalCommunityThread, self.post_id).content_revision = 2
         self.assertFalse(worker._revalidate(claims[0]))
@@ -621,7 +625,8 @@ class PhysicalMutationRecoveryScenarios(unittest.TestCase):
         asyncio.run(cancel_read())
         with self.db.session() as session:
             copy = session.get(LocalCommunityThreadSurface, self.copy_id)
-            self.assertEqual(copy.mutation_state, 'failed_definite')
+            self.assertEqual(copy.mutation_state, 'idle')
+            self.assertIsNone(copy.mutation_claim_token)
             self.assertIsNone(copy.applied_revision)
         self.assertEqual(calls, [])
 

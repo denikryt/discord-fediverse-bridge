@@ -263,3 +263,21 @@ target, current forum owner and policy before entering the write method.
 Ownership refusal is a durable pre-send failure; unknown write outcomes retain
 the existing unresolved barrier. Permission to manage a message is not evidence
 that the bridge owns it.
+
+## Connector-scoped physical mutation candidates (Fluxer Support, partial)
+
+Before a physical edit or delete, the mutation coordinator traverses existing
+copy tables in stable-ID pages and renders an immutable read-only candidate.
+An adapter's exact message and bridge-owned author are verified **before**
+the SQLite `dispatching` claim. Each free dispatch slot may CAS-claim only one
+still-current `(revision, canonical snapshot, physical MessageRef, owner)`;
+no batch of physical writes is preclaimed. A failed or cancelled read can
+leave the row untouched without creating an uncertain physical effect. Once
+the adapter write method is entered, interrupted/ambiguous writes remain
+fenced as `unresolved`; expiry never authorizes blind replay. Deterministic
+invalid snapshots/foreign ownership are recorded before any physical claim
+and do not starve independent later-ID copies. The scanner retains only a
+bounded candidate page and rotates across the four copy families. This
+module-level safety does **not** yet provide the runtime-owned multi-connector
+scheduler, shared direct-path admission, or full per-connector concurrency
+bounds; those remain pending Checkpoint 5 integration.
