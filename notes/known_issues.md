@@ -560,3 +560,15 @@ The upstream v3.3.0 source confirms public `ThreadCreate/Update/Delete` and `Sha
   used to identify thread permission bit 38 is unversioned; real SDK and
   server bot reply/ACL contract remain BLOCKED, so production `main.ts`
   continues to refuse `send_message` and false capabilities remain intact.
+
+
+- **CP030 SDK bot edit/delete — local SDK-edge behavior verified, live gate open:**
+  `message_mutations.ts` uses official v3.3.0 Message.edit/delete with a fresh
+  bot-owned non-webhook message read, exact container check and current ACL.
+  Authenticated Node RPC and the Python SQLite CAS/revision scenario exercise
+  the same implementation with a stateful fake remote. Wrong author/webhook,
+  invalid content and uncertain edits cannot advance a physical revision.
+  Production main.ts remains write-disabled pending actual SDK installation,
+  pinned real Fluxer build and documented acceptance tests. No remote
+  reconciliation from body/title equality is implemented; Python's exact
+  in-process committed-attempt proof remains read-only.

@@ -513,3 +513,20 @@ models remote effects but does not enable a production write dispatcher.
 The supplied unversioned server source identifies the separate bit 38
 `SEND_MESSAGES_IN_THREADS`; until the actual approved build verifies this
 contract, the production SDK `capabilities.thread_replies` remains false.
+
+
+## Fluxer bot-owned physical mutation executor (live acceptance pending)
+
+`fluxer-connector/src/message_mutations.ts` implements Node SDK-edge Edit/Delete
+via the official SDK v3.3.0 `Message.edit()` / `Message.delete()` methods.
+The executor re-fetches the exact physical message and container through the
+SDK, verifies current authenticated bot authorship and explicit non-webhook
+provenance, and rechecks effective ViewChannel/ReadMessageHistory permissions
+before entering the write method. Returned edits must attest the same message
+and the full requested text; malformed successful results and uncertain REST
+writes are not acknowledged as completed mutations. Existing Python
+`FluxerAdapter` and `PlatformPhysicalMutationCoordinator` remain responsible
+for identity, claim and applied-revision fencing; no second mutation queue is
+introduced. This behavior is exercised by real private RPC and Python/SQLite
+scenarios over a stateful fake SDK edge; the actual installed SDK/live Fluxer
+server and production write activation remain unverified.

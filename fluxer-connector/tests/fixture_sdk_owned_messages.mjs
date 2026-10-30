@@ -6,6 +6,7 @@
 import {EventEmitter} from 'node:events';
 import {FluxerNodeService} from '../src/service.ts';
 import {createSdkReadHandler} from '../src/rest_reads.ts';
+import {createSdkMessageMutationHandler} from '../src/message_mutations.ts';
 import {PrivateRpcError} from '../src/transport.ts';
 
 /** Materialize the SDK's observed channel shape for this test build. */
@@ -31,6 +32,13 @@ const client={
   on:emitter.on.bind(emitter),off:emitter.off.bind(emitter),
   instance:{endpoints:{api_public:'https://api.fx.test/'}},
   rest:{baseUrl:'https://api.fx.test/v1'},user:null,
+  guilds:{async fetch(id,options){
+    if(id!=='guild-1'||options?.force!==true)throw new PrivateRpcError('not_found',404);
+    return {id,fetchRoles:async()=>[{id},{id:'writer'}],members:{
+      fetch:async(botId,params)=>({id:botId,guild:{id},roles:{roleIds:['writer']},
+        permissionsIn:()=>({has:flag=>['ViewChannel','ReadMessageHistory'].includes(flag)})}),
+    }};
+  }},
   channels:{
     async fetch(id,options){
       if(options?.force!==true)throw new Error('read must bypass cache');
@@ -41,14 +49,32 @@ const client={
     async fetchMessage(container,id){
       const item=messages.get(`${container}/${id}`);
       if(!item)throw new PrivateRpcError('not_found',404);
-      return item;
+      // SDK Message.fetch is a fresh REST GET and returns a Message with
+      // edit()/delete() methods, both mutating this stateful fake remote.
+      return {...item,
+        async edit(payload){
+          if(item.author.id!=='bot-one'||item.webhookId!==null){
+            throw new PrivateRpcError('forbidden',403);
+          }
+          item.content=payload.content;
+          item.editedAt=new Date('2026-10-28T12:01:00Z');
+          return {...item};
+        },
+        async delete(){
+          if(item.author.id!=='bot-one'||item.webhookId!==null){
+            throw new PrivateRpcError('forbidden',403);
+          }
+          messages.delete(`${container}/${id}`);
+        },
+      };
     },
   },
   async login(_token){this.user={id:'bot-one',bot:true};emitter.emit('ready');},
   async destroy(){},
 };
 const read=createSdkReadHandler(client);
-/** Route observed writes to a single stateful fake provider, not guessed SDK REST routes. */
+const mutate=createSdkMessageMutationHandler(client);
+/** The official SDK fake edge owns only its remote state, not another RPC sender. */
 async function execute(operation,args) {
   if(operation==='fetch_channel'||operation==='fetch_thread'||operation==='fetch_message') {
     return read(operation,args);
@@ -58,17 +84,8 @@ async function execute(operation,args) {
   if(operation==='check_permissions')return {bot_id:client.user.id,
     channel_id:args.channel_id,guild_id:'guild-1',
     ...Object.fromEntries(args.actions.map(action=>[action,'allowed']))};
-  if(operation==='edit_message'||operation==='delete_message'){
-    if(args.bot_id!==client.user.id)throw new PrivateRpcError('forbidden',403);
-    const key=`${args.container_id}/${args.message_id}`;
-    const msg=messages.get(key);
-    if(!msg)throw new PrivateRpcError('not_found',404);
-    if(msg.author.id!==client.user.id||msg.webhookId!==null){
-      throw new PrivateRpcError('forbidden',403);
-    }
-    if(operation==='edit_message')msg.content=args.content.body;
-    else messages.delete(key);
-    return {container_id:args.container_id,message_id:args.message_id};
+  if(operation==='edit_message'||operation==='delete_message') {
+    return mutate(operation,args);
   }
   throw new PrivateRpcError('unsupported');
 }

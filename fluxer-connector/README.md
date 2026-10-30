@@ -120,7 +120,9 @@ identity across sidecar restarts; a mismatch refuses mutation. Absent health,
 foreign bot or webhook provenance never authorizes Edit/Delete. Tests use a
 Node sidecar with a real SDK session lifecycle and private RPC and a stateful
 SDK-edge fake, including a SQLite mutation CAS/receipt scenario; live
-Fluxer REST mutations are **not** claimed implemented by this fixture.
+The physical SDK mutation methods are now exercised through the same RPC
+listener by `message_mutations.ts`, but the pinned SDK and real server remain
+unverified and production writes are still disabled.
 
 `permissions.ts` separately implements the `check_permissions` RPC operation
 using `GuildMember.permissionsIn(channel)` and fresh SDK guild/member/role
@@ -165,3 +167,20 @@ and production container are **not yet wired**. The Node process requires
 identity and private shared-namespace loopback RPC/ingress endpoints. HTTP/WS
 is restricted to explicitly opted-in loopback-only development. The shared
 private HTTP bearer is a separate credential, not the SDK bot token.
+
+## Fluxer bot message edits/deletes (local SDK-edge verification only)
+
+`src/message_mutations.ts` uses the public SDK v3.3.0 `Message.edit()` and
+`Message.delete()` methods after a **fresh SDK REST message read**, exact
+container/guild verification, current authenticated bot-ID confirmation,
+explicit `webhookId === null` and a fresh guild/channel ACL check. The
+Python mutation coordinator still owns the SQLite CAS claim, revision and
+unknown-effect fence. An edit ACK must preserve the original message ID,
+container, guild, bot provenance and requested text; deletion never deletes
+the surrounding thread. A lost SDK response or mismatched edit result is
+`unknown_delivery`, not proof of a completed canonical revision. Definitive
+SDK HTTP status codes (400/401/403/404/429) are classified separately.
+The Node RPC tests and the two-process Python/Node/SQLite scenario use this
+same executor with a stateful fake SDK edge. `main.ts` intentionally leaves
+mutation RPCs unsupported until a pinned real Fluxer build, actual SDK
+installation and the runtime/deployment acceptance gates have passed.
