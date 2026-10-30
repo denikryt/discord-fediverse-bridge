@@ -420,7 +420,8 @@ class FluxerDurableSqliteCreateScenarios(unittest.IsolatedAsyncioTestCase):
         self.tempdir.cleanup()
 
     async def _stage(self):
-        """Take the exact current forum owner through durable claim and physical RPC."""
+        """Take an authenticated READY sidecar through durable claim and physical RPC."""
+        assert await self.adapter.refresh_readiness()
         return await self.coordinator.stage_and_deliver(
             domain='local', kind='post', canonical_id=self.canonical_id,
             forum=self.forum, operation='forum_thread', destination=self.forum,

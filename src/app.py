@@ -18,6 +18,9 @@ from .config import Settings
 from .db import Database
 from .discord_bot import BridgeBot
 from .discord_adapter import DiscordAdapter
+from .fluxer_adapter import FluxerAdapter
+from .fluxer_ingress import FluxerInboundHandler
+from .fluxer_rpc_client import FluxerRpcClient
 from .platform_event_ingress import PlatformEventIngress
 from .platform_adapters import PlatformAdapterRegistry
 from .content_sync.platform_delivery_scheduler import (
@@ -269,12 +272,29 @@ def _build_live_runtime(
         # Physical adapter borrows BridgeBot: Runtime owns its admission/drain,
         # while the bot's async context alone closes the Discord SDK.
         connector = database.platform_surfaces.get_discord_primary_connector()
-        adapter_registry = PlatformAdapterRegistry((connector,))
+        # Registration was committed before composing any RPC/Gateway owner.
+        # No SDK is created here: the independent Node sidecar owns the sole
+        # authenticated bot token and gateway. A missing Node is offline only.
+        fluxer_rpc = FluxerRpcClient(trusted_fluxer) if trusted_fluxer else None
+        if fluxer_rpc is not None:
+            closeables.append(fluxer_rpc)
+        fluxer_adapter = (FluxerAdapter(
+            connector_key=trusted_fluxer.connector_key,
+            instance_origin=trusted_fluxer.origin,
+            rpc=fluxer_rpc,
+            forum_applied_tags=trusted_fluxer.forum_applied_tags,
+        ) if trusted_fluxer is not None else None)
+        fluxer_ingress = (FluxerInboundHandler(database, trusted_fluxer.connector_key)
+                          if trusted_fluxer is not None else None)
+        configured = (connector, fluxer_adapter.connector) if fluxer_adapter else (connector,)
+        adapter_registry = PlatformAdapterRegistry(configured)
         discord_adapter = DiscordAdapter(connector=connector, bot=bot)
         adapter_registry.register(discord_adapter)
+        if fluxer_adapter is not None:
+            adapter_registry.register(fluxer_adapter)
         # Compose the one process-local capacity owner before constructing any
         # direct fanout/recovery coordinator; all paths inherit these slots.
-        physical_dispatch_gate = ConnectorDispatchCapacity((connector.key,))
+        physical_dispatch_gate = ConnectorDispatchCapacity(tuple(ref.key for ref in configured))
         discord_adapter.bind_physical_dispatch_gate(physical_dispatch_gate)
         bot.bind_discord_adapter(discord_adapter)
         event_router.bind_reply_notice_adapter(discord_adapter)
@@ -335,7 +355,7 @@ def _build_live_runtime(
             dispatch_gate=physical_dispatch_gate,
         )
         physical_delivery_scheduler = PlatformPhysicalDeliveryScheduler(
-            connector_keys=(discord_adapter.connector.key,),
+            connector_keys=tuple(ref.key for ref in configured),
             fanout=physical_coordinator, mutations=physical_mutation_coordinator,
         )
         physical_dispatch_gate.bind_wake(physical_delivery_scheduler.wake)
@@ -389,6 +409,9 @@ def _build_live_runtime(
             bridge_policy_service=bridge_policy_service,
             bot=bot,
             discord_adapter=discord_adapter,
+            fluxer_adapter=fluxer_adapter,
+            fluxer_rpc=fluxer_rpc,
+            fluxer_ingress=fluxer_ingress,
             adapter_registry=adapter_registry,
             physical_mutation_coordinator=physical_mutation_coordinator,
             physical_delivery_scheduler=physical_delivery_scheduler,
@@ -435,6 +458,16 @@ def _validate_runtime_graph(runtime: Runtime) -> None:
         raise RuntimeError('Physical mutation coordinator must use live registered adapters')
     if runtime.discord_adapter.connector.key not in runtime.physical_delivery_scheduler.connector_keys:
         raise RuntimeError('Physical recovery scheduler lacks the Discord connector lane')
+    fluxer = runtime.fluxer_adapter
+    if fluxer is not None:
+        if (runtime.fluxer_rpc is None or runtime.fluxer_ingress is None
+            or runtime.adapter_registry.get(fluxer.connector.key) is not fluxer
+            or fluxer.connector.key not in runtime.physical_delivery_scheduler.connector_keys
+            or fluxer.connector.key not in runtime.physical_dispatch_gate.connector_keys
+            or runtime.fluxer_ingress.connector_key != fluxer.connector.key):
+            raise RuntimeError('Configured Fluxer runtime is missing exact owners or lane')
+    elif runtime.fluxer_rpc is not None or runtime.fluxer_ingress is not None:
+        raise RuntimeError('Disabled Fluxer runtime unexpectedly contains clients')
     if runtime.discord_adapter._sink is None:
         raise RuntimeError("Discord normalized ingress is not configured")
     runtime.bot._require_personal_feed_delivery_worker()

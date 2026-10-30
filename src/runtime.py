@@ -10,6 +10,9 @@ from .config import Settings
 from .db import Database
 from .discord_bot import BridgeBot
 from .discord_adapter import DiscordAdapter
+from .fluxer_adapter import FluxerAdapter
+from .fluxer_ingress import FluxerInboundHandler
+from .fluxer_rpc_client import FluxerRpcClient
 from .platform_adapters import PlatformAdapterRegistry
 from .content_sync.platform_mutations import PlatformPhysicalMutationCoordinator
 from .content_sync.platform_delivery_scheduler import (
@@ -48,6 +51,9 @@ class Runtime:
     bridge_policy_service: BridgePolicyService
     bot: BridgeBot
     discord_adapter: DiscordAdapter
+    fluxer_adapter: FluxerAdapter | None
+    fluxer_rpc: FluxerRpcClient | None
+    fluxer_ingress: FluxerInboundHandler | None
     adapter_registry: PlatformAdapterRegistry
     physical_mutation_coordinator: PlatformPhysicalMutationCoordinator
     physical_delivery_scheduler: PlatformPhysicalDeliveryScheduler
@@ -86,14 +92,24 @@ class Runtime:
             self.discord_adapter.close_ingress_admission()
         except BaseException as exc:
             errors.append(exc)
+        if self.fluxer_ingress is not None:
+            # This gate closes before stopping lanes or disposing SQLite: an
+            # already admitted HTTP callback remains owned until quiesce joins.
+            try:
+                self.fluxer_ingress.close_admission()
+            except BaseException as exc:
+                errors.append(exc)
 
         for operation in (
+            *((self.fluxer_ingress.quiesce,) if self.fluxer_ingress is not None else ()),
             self.discord_adapter.drain_ingress,
             self.physical_delivery_scheduler.stop,
             self.physical_dispatch_gate.drain,
             self.personal_feed_discord_delivery_worker.stop,
             self.user_actor_delivery_worker.stop,
             self.discord_adapter.quiesce,
+            *((self.fluxer_adapter.quiesce,) if self.fluxer_adapter is not None else ()),
+            *((self.fluxer_rpc.close,) if self.fluxer_rpc is not None else ()),
             self.discord_oauth_client.close,
             self.fedify_gateway.close,
         ):

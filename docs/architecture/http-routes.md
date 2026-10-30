@@ -17,6 +17,7 @@ This document explains HTTP route ownership between the Python bridge and the Fe
 | `/dashboard/data` | GET | Python FastAPI | public | Public bridge dashboard JSON | `src/http_api.py` | Python |
 | `/internal/activitypub/events` | POST | Python FastAPI | private | Gateway-to-Python AP event intake | `src/http_api.py` | Not publicly routed |
 | `/internal/fedify/*` | GET/POST | Python FastAPI | private | Authenticated Gateway read models and signing keys | `src/internal_fedify_api.py` | Not publicly routed |
+| `/internal/fluxer/events` | POST | Python FastAPI, opt-in only | bearer authenticated on existing listener | Connector-matched normalized Fluxer Gateway DTO; handler gates AP publication until #13 | `src/internal_fluxer_api.py`, `src/fluxer_ingress.py` | Not publicly routed; network isolation not guaranteed when bridge binds `0.0.0.0` |
 | `/healthz` | GET | Fedify gateway | public | Gateway health | `fedify-gateway/src/routes/health.ts` | Gateway |
 | `/.well-known/webfinger` | GET | Fedify gateway | public | Actor discovery | `fedify-gateway/src/routes/public-discovery.ts` | Gateway |
 | `/.well-known/discord-fediverse-bridge/communities` | GET | Fedify gateway | public | Bridge-owned public local-community discovery | `fedify-gateway/src/routes/public-discovery.ts` | Gateway |

@@ -521,3 +521,17 @@ copies even when the owning post has already been deleted. The current surface
 owner, policy and positive transport ownership checks still apply. A pending
 live child Update remains blocked by the parent tombstone. Recovery uses the
 persisted child revision ACK, so restarting does not repeat the physical edit.
+
+
+## Optional Fluxer Gateway observation (canonical publication disabled)
+
+A configured Node SDK Gateway normalizes and forwards an observed forum event
+using private bearer HTTP to Python `/internal/fluxer/events`. The HTTP handler
+authenticates and checks the exact connector before decoding a typed event;
+`FluxerInboundHandler` alone reads SQLite for current forum ownership. A
+claimed human event reaches `community_binding_not_active`, never the Discord
+source publisher or ActivityPub gateway. Unknown parents and ID-only mutations
+without a provable stored copy are acknowledged as intentionally ignored
+observations. On shutdown HTTP admission closes and joins in-flight sink
+operations before SQLite disposal. A failed or reconnecting SDK suppresses new
+Fluxer durable claims, while the existing Discord delivery lane progresses.

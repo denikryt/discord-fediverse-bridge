@@ -145,6 +145,12 @@ class PlatformPhysicalDeliveryScheduler:
             wake.clear()
             try:
                 adapter = self._fanout.registry.get(key)
+                # Health is an authenticated remote observation, not an assumed
+                # side effect of adapter registration. Poll it only on this
+                # connector lane; a blocked Fluxer RPC cannot stall Discord.
+                refresh = getattr(adapter, 'refresh_readiness', None)
+                if refresh is not None:
+                    await refresh()
                 readiness = getattr(adapter, 'dispatch_ready', None)
                 if readiness is None or readiness():
                     # Alternate priority each pass so reconciliations, Creates

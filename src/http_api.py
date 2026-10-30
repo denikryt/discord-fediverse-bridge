@@ -29,6 +29,7 @@ from .models import RegistrationSession, utcnow
 from .project_version import APP_VERSION
 from .internal_auth import validate_internal_bearer
 from .internal_fedify_api import create_internal_fedify_router
+from .internal_fluxer_api import create_internal_fluxer_router
 
 logger = logging.getLogger(__name__)
 REGISTRATION_HTML_PATH = WEB_DIR / "registration.html"
@@ -42,6 +43,15 @@ def create_http_app(runtime: Runtime) -> FastAPI:
     # private event-ingest surface.
     app = FastAPI(title="discord-lemmy-bridge-internal-api")
     app.include_router(create_internal_fedify_router(runtime))
+    # Do not expose a Fluxer route or start an SDK client when disabled.
+    # The existing 0.0.0.0 listener may make this path network-reachable;
+    # every request must pass exact connector + bearer checks before decoding.
+    handler = getattr(runtime, 'fluxer_ingress', None)
+    if handler is not None:
+        configured = runtime.settings.fluxer_connectors[0]
+        app.include_router(create_internal_fluxer_router({
+            configured.connector_key: (handler, configured.transport_secret),
+        }))
     # Dashboard assets stay under one namespace so nginx can proxy the whole
     # prefix to Python instead of learning every file name individually.
     app.mount(

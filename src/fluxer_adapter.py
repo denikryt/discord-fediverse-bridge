@@ -71,6 +71,9 @@ class FluxerAdapter:
         self._used_dispatch_proofs: WeakSet[CommittedCreateDispatchProof] = WeakSet()
         self._active: set[asyncio.Task] = set()
         self._admission_open = True
+        # Optimistic RPC connection is not a READY SDK session. Recovery must
+        # never durably claim on the strength of configured endpoints alone.
+        self._dispatch_ready = False
 
     @property
     def connector(self) -> ConnectorRef:
@@ -101,6 +104,7 @@ class FluxerAdapter:
         if (health.get('connector_key') != self._connector.key
             or health.get('instance_origin') != self._connector.instance_origin
             or health.get('state') != 'ready'
+            or health.get('gateway_gap') is True
             or not isinstance(current, str) or not current
             or current != current.strip() or any(ord(ch) < 32 for ch in current)):
             return None
@@ -109,6 +113,26 @@ class FluxerAdapter:
         if self._bot_id is None:
             self._bot_id = current
         return current
+
+    def dispatch_ready(self) -> bool:
+        """Expose last authenticated Node session readiness for pre-claim admission.
+
+        The runtime scheduler refreshes this snapshot on the connector's own
+        lane; a stopped sidecar cannot be mistaken for a configured sender.
+        """
+        return self._admission_open and self._dispatch_ready
+
+    async def refresh_readiness(self) -> bool:
+        """Poll authenticated SDK READY without blocking the Discord lane.
+
+        A changing bot ID, disconnected Gateway or missing Node RPC refuses
+        new durable claims. This is not proof of whether older writes ran.
+        """
+        self._dispatch_ready = False
+        if not self._admission_open:
+            return False
+        self._dispatch_ready = await self._attested_bot_id() is not None
+        return self._dispatch_ready
 
     @staticmethod
     def _id(data: dict[str, Any], field: str) -> str:
@@ -661,6 +685,7 @@ class FluxerAdapter:
     async def quiesce(self) -> None:
         """Close Create admission and await all physical RPC calls before DB teardown."""
         self._admission_open = False
+        self._dispatch_ready = False
         current = asyncio.current_task()
         tasks = tuple(task for task in self._active if task is not current)
         if tasks:

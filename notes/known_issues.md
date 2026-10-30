@@ -572,3 +572,11 @@ The upstream v3.3.0 source confirms public `ThreadCreate/Update/Delete` and `Sha
   pinned real Fluxer build and documented acceptance tests. No remote
   reconciliation from body/title equality is implemented; Python's exact
   in-process committed-attempt proof remains read-only.
+
+
+- Fluxer runtime composition: Python opt-in registration, authenticated HTTP
+  callback and connector-isolated readiness checks are implemented. Full
+  Python regression is BLOCKED in this environment: `discord.py` and
+  `hypothesis` are absent and PyPI DNS resolution fails. SDK v3.3.0 could
+  not be installed (npm registry DNS failure); real Fluxer REST/Gateway
+  contracts and production write activation are not yet accepted.

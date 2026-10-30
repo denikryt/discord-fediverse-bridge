@@ -24,7 +24,7 @@ Remote ActivityPub server
   -> Discord or relay fanout
 ```
 
-physical surface mapping defines an **inactive** connector-scoped [Platform API](platform-api.md) (SDK-independent references, event shapes, lookup/delivery/permission ports, and a non-owning adapter registry). initial persistence implementation physical identities live in SQLite; Discord Gateway ingress and fanout **still execute the existing Discord-specific paths** until the Discord adapter and durable fan-out integration cutover. A configured Fluxer connector row does not start an adapter or Gateway client.
+physical surface mapping defines an **inactive** connector-scoped [Platform API](platform-api.md) (SDK-independent references, event shapes, lookup/delivery/permission ports, and a non-owning adapter registry). initial persistence implementation physical identities live in SQLite; Discord Gateway ingress and fanout **still execute the existing Discord-specific paths** until the Discord adapter and durable fan-out integration cutover. An opt-in Fluxer connector row registers a token-free Python adapter with an independently deployed Node SDK sidecar; it never starts a second Python Gateway client. The current canonical Fluxer publication gate remains closed until issue #13.
 
 The Python bridge is the orchestration and persistence process. It starts the Discord bot, exposes registration and private gateway intake routes, owns SQLite state through SQLAlchemy, routes Discord events, and decides which runtime handles a bridge action.
 
@@ -107,3 +107,18 @@ The gateway renders User Actor outboxes from a fixed-size internal DTO. Python o
 Connector-scoped persistence separates domain actors from physical connector/channel locations. `src/db/repositories/platform_surfaces.py` owns placement resolution and typed claim mutations. Discord routing uses current `discord-primary` claims; connector-scoped historical copies survive release and rebinding. Fluxer rows are persistence-only at present. SQLite 3.31+ is required for stored generated roles; PostgreSQL 12+ DDL compatibility does not imply a PostgreSQL runtime migration implementation.
 
 Database startup supports released v0.1.0 SQLite sources at version 0 and the complete current model at version 1. It upgrades directly in one transaction; The direct transfer work items the released rows in SQL TEMP, creates the current ORM target once and copies them natively; no legacy schema inventory business schema is reconstructed. See [SQLite startup migrations](../development/database-migrations.md).
+
+
+## Optional Fluxer runtime composition
+
+`src/app.py` admits at most one saved trusted Fluxer connector before external
+clients are composed. With the opt-in config it registers `FluxerAdapter` and
+one `FluxerInboundHandler`, includes the authenticated `/internal/fluxer/events`
+route, and gives the existing scheduler a second, connector-specific delivery
+lane. The Node sidecar is independent: Python receives only a private RPC
+bearer, never its bot token. The Fluxer lane checks Node SDK READY and the
+attested bot identity before allowing durable dispatch claims; failed health
+checks leave pristine pending intents recoverable and do not stop Discord.
+`Runtime.close()` rejects and joins HTTP ingress before disposing SQLite, then
+joins physical lanes and RPC operations before releasing the runtime lifetime
+lease. Live forum writes remain gated by verified Node SDK contracts.

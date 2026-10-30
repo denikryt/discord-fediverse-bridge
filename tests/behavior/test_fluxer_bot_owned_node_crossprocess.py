@@ -47,6 +47,7 @@ class FluxerVerifiedBotOwnershipScenarios(unittest.IsolatedAsyncioTestCase):
         # Deliberately pass no Python bot_actor_id: only READY health can bind it.
         self.adapter = FluxerAdapter(connector_key='fx-owned',
                                      instance_origin='https://fx.test', rpc=self.rpc)
+        self.assertTrue(await self.adapter.refresh_readiness())
 
     async def asyncTearDown(self) -> None:
         """Join client/sidecar before another test can reuse any RPC resources."""

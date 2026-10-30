@@ -57,9 +57,13 @@ class FluxerInboundHandler:
         finally:
             self._inflight.discard(task)
 
+    def close_admission(self) -> None:
+        """Synchronously reject late HTTP requests before any shutdown await."""
+        self._accepting = False
+
     async def quiesce(self) -> None:
         """Refuse late intake and join already accepted SQLite sink operations."""
-        self._accepting = False
+        self.close_admission()
         current = asyncio.current_task()
         tasks = tuple(task for task in self._inflight if task is not current)
         if tasks:
