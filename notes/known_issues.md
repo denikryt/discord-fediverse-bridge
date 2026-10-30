@@ -612,3 +612,7 @@ The upstream v3.3.0 source confirms public `ThreadCreate/Update/Delete` and `Sha
   of the `validate-version` job, consumed by optional Node image publication.
   Full B01–B21/R01–R24 and live acceptance are **BLOCKED**, not PASS; see
   `docs/development/fluxer_live_verification.md`.
+
+## Runtime cleanup lock safety (CP035)
+
+Startup and shutdown retain both SQLite lifetime and deployment leases on unconfirmed teardown. Strong process-level ownership prevents GC from unlocking them; fatal errors block runtime restart in that process. Spawned-process SQLite scenarios cover restore exclusion and kernel release on process exit.

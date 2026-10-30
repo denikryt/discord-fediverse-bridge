@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
+from .runtime_cleanup import quarantine, release_quarantine
 from .community_sync.runtime import CommunityRuntime
 from .bridge_policy import BridgePolicyService
 from .config import Settings
@@ -120,23 +121,19 @@ class Runtime:
                 # Fedify/DB failure. Cancellation is preserved, not swallowed.
                 errors.append(exc)
 
-        # Lock order is reversed only after all physical/ingress work joins.
-        # Keep the lifetime lease if shutdown could not prove work stopped.
-        for operation in (self.database.close, self.deployment_state_lease.close):
-            try:
-                operation()
-            except BaseException as exc:
-                errors.append(exc)
-
+        # SQLite and restore protection share one shutdown boundary. Any failed
+        # owner may still use the DB, so neither lease is released on uncertainty.
+        try:
+            self.database.close()
+        except BaseException as exc:
+            errors.append(exc)
         if not errors:
             try:
-                # Release absolutely last, after the SQLite engine is disposed.
+                self.deployment_state_lease.close()
+                # Release absolutely last, after confirmed DB and deployment close.
                 self.runtime_lifetime_lease.close()
             except BaseException as exc:
                 errors.append(exc)
-        if len(errors) == 1:
-            raise errors[0]
         if errors:
-            # The earliest failure remains first and every subsequent error is
-            # visible; Python 3.12 ExceptionGroup preserves traceback chains.
-            raise BaseExceptionGroup('Runtime shutdown failures', errors)
+            raise quarantine(self, errors)
+        release_quarantine(self)

@@ -39,6 +39,7 @@ from .project_version import APP_VERSION
 from .runtime import Runtime
 from .runtime_ports import DiscordMutationContext
 from .profile_media import FileLock, ProfileMediaStore
+from .runtime_cleanup import quarantine, require_safe_process
 from .runtime_ownership import acquire_runtime_lifetime_lease
 from .user_profiles import UserProfileService
 from .user_actor_followers import UserActorFollowService
@@ -128,6 +129,7 @@ def build_runtime(settings: Settings) -> Runtime:
     """Recover durable state, acquire a lifetime lease, and build the runtime."""
     # Runtime ownership precedes recovery, schema validation and the existing
     # deployment exclusive -> shared handoff; shared leases alone allow peers.
+    require_safe_process()
     lifetime_lease = acquire_runtime_lifetime_lease(settings.database_url)
     try:
         deployment_lock_path = Path(settings.deployment_state_lock_path)
@@ -141,12 +143,13 @@ def build_runtime(settings: Settings) -> Runtime:
         deployment_lease = FileLock(deployment_lock_path).acquire(
             exclusive=False, timeout_seconds=settings.profile_media_lock_timeout_seconds
         )
-        return _build_live_runtime(settings, deployment_lease, lifetime_lease)
     except BaseException:
-        # This owns the lease until successful transfer to Runtime. Descriptor
-        # close is idempotent even if partial composition already cleaned up.
+        # No SQLite owner exists yet: recovery/admission failure is safe to unwind.
         lifetime_lease.close()
         raise
+    # Ownership transfers before composition begins. The outer scope must never
+    # release leases after the live builder reports an unconfirmed cleanup.
+    return _build_live_runtime(settings, deployment_lease, lifetime_lease)
 
 
 def _build_live_runtime(
@@ -432,16 +435,39 @@ def _build_live_runtime(
         )
         _validate_runtime_graph(runtime)
         return runtime
-    except BaseException:
-        # Before Runtime exists, app.py owns every opened closeable.  Close in the
-        # reverse ownership order used by Runtime.close() so failed validation or
-        # bind errors do not leak the DB engine, HTTP clients, or deployment lease.
-        if runtime is not None:
-            _close_partial_resource(runtime)
-        else:
-            for resource in reversed(closeables):
-                _close_partial_resource(resource)
-        raise
+    except BaseException as startup_error:
+        # Retry only teardown, never composition or network writes. A completed
+        # Runtime owns both leases; partial composition retains the whole list.
+        failures: list[BaseException] = [startup_error]
+        owner = runtime if runtime is not None else closeables
+        for _attempt in range(2):
+            cleanup_errors: list[BaseException] = []
+            if runtime is not None:
+                try:
+                    _close_partial_resource(runtime)
+                except BaseException as error:
+                    cleanup_errors.append(error)
+            else:
+                # Every non-lock owner is attempted even if an earlier one fails.
+                # Leases stay strongly reachable and locked on any uncertainty.
+                for resource in reversed(closeables[2:]):
+                    try:
+                        _close_partial_resource(resource)
+                    except BaseException as error:
+                        cleanup_errors.append(error)
+                if not cleanup_errors:
+                    for lease in (deployment_lease, runtime_lifetime_lease):
+                        try:
+                            lease.close()
+                        except BaseException as error:
+                            cleanup_errors.append(error)
+                            break
+            failures.extend(cleanup_errors)
+            if not cleanup_errors:
+                if len(failures) > 1:
+                    raise BaseExceptionGroup("Startup failure with recovered cleanup errors", failures)
+                raise
+        raise quarantine(owner, failures)
 
 
 def _validate_runtime_graph(runtime: Runtime) -> None:
