@@ -1,161 +1,156 @@
-/** Sole Fluxer Gateway payload → connector-scoped Python DTO wire conversion.
+/** One SDK v3.3.0 object → Python neutral DTO conversion boundary.
  *
- * Event field names are grounded in fluxer_docs gateway/events.md and
- * gateway/threads.md from the supplied Fluxer source tree. No SDK cache, DB
- * forum-ownership guess, Discord integer conversion or replay envelope exists.
- * The Python HTTP admission boundary independently checks the typed result.
+ * Fluxer ClientEvents carry camelCase Channel/ThreadChannel, Message and
+ * PartialMessage objects, NOT raw THREAD_* and MESSAGE_* Gateway payloads.
+ * Ownership and canonical publication are checked only on Python/SQLite.
  */
-export type GatewayEventName = 'THREAD_CREATE' | 'THREAD_UPDATE' | 'THREAD_DELETE' |
-  'MESSAGE_CREATE' | 'MESSAGE_UPDATE' | 'MESSAGE_DELETE';
+export type SdkEventName = 'threadCreate' | 'threadUpdate' | 'threadDelete' |
+  'messageCreate' | 'messageUpdate' | 'messageDelete';
 export type NeutralWire = Record<string, unknown> & {type: string; connector_key: string};
-export type Observation = {
-  receivedAt?: string;
-  ownedBotId?: string;
-};
+export type Observation = {receivedAt?: string; ownedBotId?: string};
 
-function record(value: unknown): Record<string, unknown> {
-  /** Reject partial or malformed objects rather than inventing physical facts. */
+function object(value: unknown): Record<string, unknown> {
+  /** Do not interpret a missing cached SDK object as a validated platform fact. */
   if (!value || typeof value !== 'object' || Array.isArray(value)) {
-    throw new Error('invalid Fluxer Gateway object');
+    throw new Error('invalid Fluxer SDK event');
   }
   return value as Record<string, unknown>;
 }
 function id(value: unknown): string {
-  /** External Fluxer IDs stay opaque strings and are never number-cast. */
-  if (typeof value !== 'string' || !value.trim() ||
-      /[\x00-\x1f\x7f]/.test(value)) {
+  /** Preserve opaque platform IDs, including non-decimal IDs, without coercion. */
+  if (typeof value !== 'string' || !value.trim() || /[\x00-\x1f\x7f]/.test(value)) {
     throw new Error('invalid Fluxer physical identifier');
   }
   return value;
 }
-function date(value: unknown): string {
-  /** Missing/naive platform timestamps are not replaced by reception time. */
-  if (typeof value !== 'string' ||
-      !/T\d{2}:\d{2}:\d{2}(?:\.\d+)?(?:Z|[+-]\d{2}:\d{2})$/.test(value) ||
-      !Number.isFinite(Date.parse(value))) {
-    throw new Error('invalid Fluxer Gateway timestamp');
+function instant(value: unknown): string {
+  /** Dates from the hydrated SDK are accepted only when actually observed. */
+  if (!(value instanceof Date) || !Number.isFinite(value.getTime())) {
+    throw new Error('invalid Fluxer SDK timestamp');
   }
-  return value;
+  return value.toISOString();
 }
-function optionalGuild(payload: Record<string, unknown>): string | undefined {
-  return payload.guild_id == null ? undefined : id(payload.guild_id);
+function maybeGuild(data: Record<string, unknown>): string | undefined {
+  return data.guildId == null ? undefined : id(data.guildId);
 }
-function messageRef(connector: string, payload: Record<string, unknown>) {
-  return {connector_key: connector, external_container_id: id(payload.channel_id),
-    external_message_id: id(payload.id)};
-}
-function threadRef(connector: string, payload: Record<string, unknown>) {
-  // Fluxer documents 10/11/12 as thread types; reject unrelated channels.
-  if (![10, 11, 12].includes(payload.type as number)) {
+function threadRef(connector: string, data: Record<string, unknown>) {
+  // SDK thread channels are 10/11/12; a forum itself is channel type 15/16.
+  if (![10, 11, 12].includes(data.type as number)) {
     throw new Error('unsupported Fluxer thread type');
   }
-  const guild = id(payload.guild_id);
-  const parent = id(payload.parent_id);
-  // Parent channel type cannot be inferred from a thread's public type 11.
+  const parent = id(data.parentId);
+  const guild = id(data.guildId);
   return {channel: {connector_key: connector, external_channel_id: parent,
-    kind: 'unknown', external_guild_id: guild},
-    external_thread_id: id(payload.id)};
+    kind: 'unknown', external_guild_id: guild}, external_thread_id: id(data.id)};
 }
-function author(connector: string, message: Record<string, unknown>, ownedBotId?: string) {
-  const raw = record(message.author);
-  const actor = id(raw.id);
-  if (raw.bot != null && typeof raw.bot !== 'boolean') {
-    throw new Error('invalid Fluxer author bot flag');
-  }
-  const isWebhook = message.webhook_id != null;
-  if (isWebhook) id(message.webhook_id);
-  const kind = isWebhook ? 'webhook' : raw.bot === true ? 'bot' : 'human';
+function messageRef(connector: string, data: Record<string, unknown>) {
+  return {connector_key: connector, external_container_id: id(data.channelId),
+    external_message_id: id(data.id)};
+}
+function author(connector: string, data: Record<string, unknown>, botId?: string) {
+  const who = object(data.author);
+  const actor = id(who.id);
+  if (typeof who.bot !== 'boolean') throw new Error('unverified Fluxer author bot flag');
+  const webhook = data.webhookId != null;
+  if (webhook) id(data.webhookId);
+  const kind = webhook ? 'webhook' : who.bot ? 'bot' : 'human';
   return {connector_key: connector, external_actor_id: actor, kind,
-    display_name: typeof raw.username === 'string' ? raw.username : '',
-    // Display names and webhook identities cannot authenticate a bridge bot.
-    is_bridge_owned: !isWebhook && kind === 'bot' && actor === ownedBotId};
+    display_name: typeof who.username === 'string' ? who.username : '',
+    is_bridge_owned: !webhook && who.bot && botId === actor};
 }
-function attachments(value: unknown): Record<string, unknown>[] {
-  if (!Array.isArray(value)) throw new Error('invalid Fluxer attachments');
-  return value.map(item => {
-    const raw = record(item);
-    if (typeof raw.url !== 'string' || !/^https?:\/\//.test(raw.url) ||
-        typeof raw.filename !== 'string' || !raw.filename.trim()) {
-      throw new Error('invalid Fluxer attachment');
+function attachmentList(input: unknown): Record<string, unknown>[] {
+  /** SDK Message.attachments is a Collection, never an API payload array. */
+  if (!input || typeof input !== 'object' ||
+      typeof (input as {values?: unknown}).values !== 'function') {
+    throw new Error('unverified Fluxer attachments');
+  }
+  const output: Record<string, unknown>[] = [];
+  for (const value of (input as Map<string, unknown>).values()) {
+    const a = object(value);
+    if (typeof a.filename !== 'string' || !a.filename ||
+        typeof a.url !== 'string' || !/^https?:\/\//.test(a.url)) {
+      throw new Error('unverified Fluxer attachment');
     }
-    const file: Record<string, unknown> = {url: raw.url, filename: raw.filename};
-    if (raw.content_type != null) {
-      if (typeof raw.content_type !== 'string') throw new Error('invalid Fluxer attachment type');
-      file.mime_type = raw.content_type;
+    const item: Record<string, unknown> = {filename: a.filename, url: a.url};
+    if (a.contentType != null) {
+      if (typeof a.contentType !== 'string') throw new Error('invalid attachment content type');
+      item.mime_type = a.contentType;
     }
-    if (raw.size != null) {
-      if (!Number.isSafeInteger(raw.size) || (raw.size as number) < 0) {
-        throw new Error('invalid Fluxer attachment size');
+    if (a.size != null) {
+      if (!Number.isSafeInteger(a.size) || (a.size as number) < 0) {
+        throw new Error('invalid attachment size');
       }
-      file.size = raw.size;
+      item.size = a.size;
     }
-    return file;
-  });
-}
-function content(payload: Record<string, unknown>) {
-  if (typeof payload.content !== 'string') throw new Error('missing Fluxer message content');
-  const body: Record<string, unknown> = {body: payload.content};
-  if (payload.attachments !== undefined) body.attachments = attachments(payload.attachments);
-  return body;
+    output.push(item);
+  }
+  return output;
 }
 
-/** Map one documented native Gateway event to the strict Python wire DTO.
+/** Convert one published SDK ClientEvent, never a raw Gateway event object.
  *
- * `null` means unrelated/system event, never a fake successful publication.
- * Unverified starter, parent forum and human identity remain absent.
+ * For update events the SDK delivers (old, new); only the new snapshot is
+ * authoritative. Missing partial content stays absent, not an empty edit.
+ * `null` represents a known non-content/system message, not successful AP work.
  */
-export function normalizeGatewayEvent(
-  connectorKey: string, eventName: string, payload: unknown,
-  observation: Observation = {},
+export function normalizeSdkEvent(
+  connectorKey: string, name: SdkEventName,
+  args: readonly unknown[], observation: Observation = {},
 ): NeutralWire | null {
   const connector = id(connectorKey);
-  const event = eventName as GatewayEventName;
-  if (!['THREAD_CREATE', 'THREAD_UPDATE', 'THREAD_DELETE', 'MESSAGE_CREATE',
-        'MESSAGE_UPDATE', 'MESSAGE_DELETE'].includes(event)) return null;
-  const data = record(payload);
-  const received_at = observation.receivedAt ? date(observation.receivedAt)
-    : new Date().toISOString();
+  const newer = name === 'threadUpdate' || name === 'messageUpdate' ? args[1] : args[0];
+  const data = object(newer);
+  const received_at = observation.receivedAt === undefined
+    ? new Date().toISOString() : instant(new Date(observation.receivedAt));
   const base = {connector_key: connector, received_at};
-  const guild = optionalGuild(data);
-  if (event.startsWith('THREAD_')) {
+  const guild = maybeGuild(data);
+  if (name.startsWith('thread')) {
     const thread = threadRef(connector, data);
-    if (event === 'THREAD_CREATE') {
-      if (typeof data.name !== 'string') throw new Error('Fluxer thread name missing');
-      if (data.newly_created !== undefined && typeof data.newly_created !== 'boolean') {
-        throw new Error('invalid Fluxer newly_created');
-      }
+    if (name === 'threadCreate') {
+      if (typeof data.name !== 'string') throw new Error('Fluxer SDK thread name missing');
+      // The SDK may discover an already existing thread via CHANNEL_CREATE.
+      // ThreadCreate is not proof of a newly created canonical forum post.
       return {...base, type: 'ThreadCreated', thread, name: data.name,
-        ...(data.newly_created !== undefined ? {newly_created: data.newly_created} : {}),
         ...(guild ? {external_guild_id: guild} : {})};
     }
-    return {...base, type: event === 'THREAD_UPDATE' ? 'ThreadUpdated' : 'ThreadDeleted',
-      thread, ...(event === 'THREAD_UPDATE' && typeof data.name === 'string'
+    return {...base, type: name === 'threadUpdate' ? 'ThreadUpdated' : 'ThreadDeleted',
+      thread, ...(name === 'threadUpdate' && typeof data.name === 'string'
         ? {name: data.name} : {}), ...(guild ? {external_guild_id: guild} : {})};
   }
   const message = messageRef(connector, data);
-  if (event === 'MESSAGE_DELETE') {
-    // A raw delete without author/content/guild is valid and needs no SDK fetch.
+  if (name === 'messageDelete') {
     return {...base, type: 'MessageDeleted', message,
       ...(guild ? {external_guild_id: guild} : {})};
   }
-  if (event === 'MESSAGE_CREATE') {
-    // Non-default Fluxer system messages are not human-written forum content.
-    if (data.type !== undefined && data.type !== 0) return null;
-    const reply = data.message_reference == null ? null : record(data.message_reference);
-    const reply_to = reply && reply.message_id != null && reply.channel_id != null
-      ? {connector_key: connector, external_container_id: id(reply.channel_id),
-        external_message_id: id(reply.message_id)} : undefined;
+  if (name === 'messageCreate') {
+    // Ordinary (0) and reply (19) are user content; system notices are not.
+    if (data.type !== 0 && data.type !== 19) return null;
+    const reply = data.messageReference == null ? null : object(data.messageReference);
+    // Forward references (type 1) are not a thread-local parent reply.
+    const reply_to = reply && (reply.type == null || reply.type === 0) &&
+      reply.messageId != null && reply.channelId != null
+      ? {connector_key: connector, external_container_id: id(reply.channelId),
+        external_message_id: id(reply.messageId)} : undefined;
+    if (typeof data.content !== 'string') throw new Error('Fluxer SDK message content missing');
+    const content: Record<string, unknown> = {body: data.content,
+      attachments: attachmentList(data.attachments)};
     return {...base, type: 'MessageCreated', message,
-      author: author(connector, data, observation.ownedBotId), content: content(data),
+      author: author(connector, data, observation.ownedBotId), content,
       ...(reply_to ? {reply_to} : {}),
-      ...(data.timestamp != null ? {created_at: date(data.timestamp)} : {}),
+      ...(data.createdAt != null ? {created_at: instant(data.createdAt)} : {}),
       ...(guild ? {external_guild_id: guild} : {})};
   }
-  // Uncached MESSAGE_UPDATE may contain only ID/channel. Absent !== empty.
+  // A cached SDK Message and a PartialMessage have different completeness.
+  // In particular PartialMessage.content=null does not imply a blank edit.
+  const contents = data.content == null ? undefined : {body: data.content};
+  if (contents && typeof contents.body !== 'string') {
+    throw new Error('invalid Fluxer SDK partial content');
+  }
   return {...base, type: 'MessageUpdated', message,
-    ...(data.content != null ? {content: content(data)} : {}),
-    ...(data.edited_timestamp != null ? {edited_at: date(data.edited_timestamp)} : {}),
+    ...(contents ? {content: contents} : {}),
+    ...(data.editedAt != null ? {edited_at: instant(data.editedAt)} : {}),
     ...(data.author != null ? {author: author(connector, data, observation.ownedBotId)} : {}),
-    ...(data.attachments != null ? {attachments: attachments(data.attachments)} : {}),
+    // PartialMessage has no attachment field. Do not infer changes to media.
+    ...(data.attachments != null ? {attachments: attachmentList(data.attachments)} : {}),
     ...(guild ? {external_guild_id: guild} : {})};
 }

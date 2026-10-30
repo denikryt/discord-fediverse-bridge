@@ -1,4 +1,4 @@
-"""Raw Fluxer Gateway observations cross the Node normalization/Python DTO contract."""
+"""Typed SDK observations cross the Node normalization/Python DTO contract."""
 
 from __future__ import annotations
 
@@ -17,36 +17,43 @@ from src.platform_types import (
 class NodeFluxerWireContractScenarios(unittest.TestCase):
     """Check actual subprocess serialization, not independently duplicated fixtures."""
 
-    def test_six_documented_gateway_events_decode_as_existing_python_types(self) -> None:
+    def test_six_sdk_events_decode_as_existing_python_types(self) -> None:
         """A bot observes six Fluxer updates; Python accepts exact typed DTOs."""
         key = 'fx-test'
         thread = {
-            'id': 'thread-1', 'guild_id': 'guild-1', 'parent_id': 'forum-1',
+            'id': 'thread-1', 'guildId': 'guild-1', 'parentId': 'forum-1',
             'type': 11, 'name': 'Topic',
         }
         message = {
-            'id': 'msg-1', 'channel_id': 'thread-1', 'guild_id': 'guild-1',
+            'id': 'msg-1', 'channelId': 'thread-1', 'guildId': 'guild-1',
             'author': {'id': 'user-1', 'username': 'Ada', 'bot': False},
             'content': 'Hello', 'type': 0,
-            'timestamp': '2026-10-27T10:00:00.000Z',
+            'createdAt': '2026-10-27T10:00:00.000Z',
         }
         observations = [
-            ('THREAD_CREATE', {**thread, 'newly_created': True}),
-            ('THREAD_UPDATE', {**thread, 'name': 'Renamed'}),
-            ('THREAD_DELETE', {key: thread[key] for key in ('id', 'guild_id', 'parent_id', 'type')}),
-            ('MESSAGE_CREATE', message),
-            ('MESSAGE_UPDATE', {'id': 'msg-1', 'channel_id': 'thread-1'}),
-            ('MESSAGE_DELETE', {'id': 'msg-1', 'channel_id': 'thread-1'}),
+            ('threadCreate', [thread]),
+            ('threadUpdate', [thread, {**thread, 'name': 'Renamed'}]),
+            ('threadDelete', [thread]),
+            ('messageCreate', [message]),
+            ('messageUpdate', [None, {'id': 'msg-1', 'channelId': 'thread-1'}]),
+            ('messageDelete', [{'id': 'msg-1', 'channelId': 'thread-1'}]),
         ]
         # Keep all observed IDs as strings across the Node/Python JSON boundary.
         script = '''
-          import {normalizeGatewayEvent} from './fluxer-connector/src/normalization.ts';
+          import {normalizeSdkEvent} from './fluxer-connector/src/normalization.ts';
           let bytes = '';
           for await (const part of process.stdin) bytes += part;
           const observations = JSON.parse(bytes);
-          console.log(JSON.stringify(observations.map(([type, body]) =>
-            normalizeGatewayEvent('fx-test', type, body,
-              {receivedAt:'2026-10-27T11:00:00.000Z'}))));
+          console.log(JSON.stringify(observations.map(([type, args]) => {
+            // JSON cannot represent Date or SDK Collection; hydrate the observed
+            // values as the corresponding public SDK model fields.
+            if (type === 'messageCreate') {
+              args[0].createdAt = new Date(args[0].createdAt);
+              args[0].attachments = new Map();
+            }
+            return normalizeSdkEvent('fx-test', type, args,
+              {receivedAt:'2026-10-27T11:00:00.000Z'});
+          })));
         '''
         root = Path(__file__).resolve().parents[2]
         completed = subprocess.run(

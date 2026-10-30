@@ -163,15 +163,14 @@ class FluxerForumObservationScenarios(unittest.IsolatedAsyncioTestCase):
         import subprocess
 
         payload = {
-            "id": "thread-1", "parent_id": "forum-1", "guild_id": "guild-one",
-            "type": 11, "name": "Topic", "owner_id": "human-1",
-            "newly_created": True,
+            "id": "thread-1", "parentId": "forum-1", "guildId": "guild-one",
+            "type": 11, "name": "Topic",
         }
         script = """
-          import {normalizeGatewayEvent} from './fluxer-connector/src/normalization.ts';
+          import {normalizeSdkEvent} from './fluxer-connector/src/normalization.ts';
           let incoming=''; for await (const chunk of process.stdin) incoming+=chunk;
-          process.stdout.write(JSON.stringify(normalizeGatewayEvent(
-            'fx-one','THREAD_CREATE',JSON.parse(incoming),
+          process.stdout.write(JSON.stringify(normalizeSdkEvent(
+            'fx-one','threadCreate',[JSON.parse(incoming)],
             {receivedAt:'2026-10-27T11:00:00.000Z'})));
         """
         root = Path(__file__).resolve().parents[2]
@@ -218,18 +217,18 @@ class FluxerForumObservationScenarios(unittest.IsolatedAsyncioTestCase):
                 await asyncio.sleep(0.01)
             self.assertTrue(server.started)
             script = """
-              import {normalizeGatewayEvent} from './fluxer-connector/src/normalization.ts';
+              import {normalizeSdkEvent} from './fluxer-connector/src/normalization.ts';
               import {GatewayEventForwarder} from './fluxer-connector/src/event_delivery.ts';
               let incoming=''; for await (const chunk of process.stdin) incoming+=chunk;
-              const wire=normalizeGatewayEvent('fx-one','THREAD_CREATE',JSON.parse(incoming),
+              const wire=normalizeSdkEvent('fx-one','threadCreate',[JSON.parse(incoming)],
                 {receivedAt:'2026-10-27T11:00:00.000Z'});
               const forwarder=new GatewayEventForwarder({connectorKey:'fx-one',
                 pythonIngressUrl:process.env.TEST_INGRESS,transportSecret:'test-secret'});
               try {await forwarder.forward(wire);} finally {await forwarder.close();}
             """
-            payload = {"id": "thread-1", "parent_id": "forum-1",
-                       "guild_id": "guild-one", "type": 11, "name": "Topic",
-                       "newly_created": True}
+            payload = {"id": "thread-1", "parentId": "forum-1",
+                       "guildId": "guild-one", "type": 11, "name": "Topic",
+                       }
             import os
             root = Path(__file__).resolve().parents[2]
             env = {**os.environ,
