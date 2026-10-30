@@ -56,13 +56,13 @@ def main(argv: Sequence[str] | None = None) -> int:
         if str(path) not in sys.path:
             sys.path.insert(0, str(path))
 
-    from support.ban_interactions import (
+    from bridge_test_support.ban_interactions import (
         BAN_FACTORS,
         MUST_TEST_BAN_INTERACTIONS,
         SELECTED_BAN_INTERACTIONS,
         VALID_BAN_INTERACTIONS,
     )
-    from support.pairwise import coverage_summary
+    from bridge_test_support.pairwise import coverage_summary
 
     report = build_interaction_report(
         factors=BAN_FACTORS,

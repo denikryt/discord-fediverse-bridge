@@ -142,7 +142,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         if str(path) not in sys.path:
             sys.path.insert(0, str(path))
 
-    from support.bridge_policy_contracts import REQUIRED_BRIDGE_POLICY_RULES
+    from bridge_test_support.bridge_policy_contracts import REQUIRED_BRIDGE_POLICY_RULES
 
     collector = BridgePolicyContractCollector()
     exit_code = pytest.main(

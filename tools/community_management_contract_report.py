@@ -53,7 +53,7 @@ def main(argv: Sequence[str] | None = None) -> int:
     for value in (root, root / "tests"):
         if str(value) not in sys.path:
             sys.path.insert(0, str(value))
-    from support.community_management_contracts import (
+    from bridge_test_support.community_management_contracts import (
         CommunityManagementCase,
         REQUIRED_COMMUNITY_MANAGEMENT_RULES,
     )

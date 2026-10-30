@@ -86,7 +86,7 @@ def main() -> int:
             sys.path.insert(0, str(candidate))
     collector = NodeCollector()
     code = pytest.main(
-        ["--collect-only", "-p", "no:terminal", "tests", "vendor/discordops/tests"],
+        ["--collect-only", "-p", "no:terminal", "tests", "vendor/discordops/discordops_tests"],
         plugins=[collector],
     )
     gateway = [

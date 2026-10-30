@@ -4,6 +4,17 @@
 transport. This report records observed local evidence without assigning
 unperformed external/real-instance checks a PASS result.
 
+## Current corrective-series evidence
+
+The original CP034 environment snapshot below is historical. The installed SDK,
+lockfile, ordinary TypeScript contracts and local runtime regression status have
+since changed; see [CP035–CP041 verification](fluxer_fix_verification_ru.md).
+Docker/real-instance acceptance remains BLOCKED. In the corrective series CP035
+means runtime lock safety; the original plan's real-instance CP035 exit gate is
+now referred to as the separate live acceptance stage, and has not been passed.
+
+## Historical CP034 environment snapshot
+
 ## Target and immutable acceptance boundary
 
 - Repository baseline: `1645689c63601ceea8b7ad98b2ab0a023b4da160`.

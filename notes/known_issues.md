@@ -636,3 +636,7 @@ Official SDK lock committed. npm ci, tsc and 109 Node tests pass on Node 22.13.1
 ## Deployment and process shutdown (CP040)
 
 A real SIGTERM/Uvicorn process test reproduced exit by signal before Runtime.close. Application-owned signals and sibling lifetime supervision now close SQLite before exit; real process scenarios cover SIGTERM and normal HTTP/Gateway return. Compose grants 60s and HTTP drains for 30s. An opt-in actual-container verifier covers isolation, readiness, restart and shutdown; execution is BLOCKED locally because Docker and test-instance credentials are unavailable. B20/B21 and live REST acceptance remain open.
+
+## Corrective-series final verification (CP041)
+
+Final Python suite: 2197 passed, 1 skipped (actual Docker deployment), 98 subtests passed. Standalone inbound report: 53 passed; tooling: 12 passed. Remaining old fixture/vendor paths in reporting tools were corrected. Actual restore now has interprocess refusal/no-replacement and post-exit success coverage (4 focused tests passed). Fluxer SDK: 109/109 tests on Node 22, tsc and npm ci verified. Fedify: 20 security tests and 51/52 script files pass; child tsx launch remains blocked by Unix-socket EPERM. Docker/live Fluxer acceptance remains unperformed, production writes disabled. See docs/development/fluxer_fix_verification_ru.md.

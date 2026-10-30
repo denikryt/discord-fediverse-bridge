@@ -102,7 +102,7 @@ def main() -> int:
     for candidate in (root, root / "tests"):
         if str(candidate) not in sys.path:
             sys.path.insert(0, str(candidate))
-    from support.technical_contract_manifest import TECHNICAL_CONTRACT_ENTRIES
+    from bridge_test_support.technical_contract_manifest import TECHNICAL_CONTRACT_ENTRIES
 
     prefixes = {
         owner
