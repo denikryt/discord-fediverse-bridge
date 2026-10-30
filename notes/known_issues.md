@@ -586,3 +586,14 @@ The upstream v3.3.0 source confirms public `ThreadCreate/Update/Delete` and `Sha
   isolation verified with test-only physical owners. Full Python runtime
   regression and production Node SDK/Compose contracts remain blocked on
   missing dependencies, Docker and live Fluxer access.
+
+- **CP033 static Compose wiring (B20/B21 live BLOCKED):** the optional
+  `fluxer-sidecar` now shares `network_mode: service:bridge`, binds one fixed
+  loopback RPC port, uses a Node-only read-only credential mount and independent
+  restart/health contract. Three source-level Compose tests pass. A real
+  two-container network namespace/secret mount/sidecar restart verification
+  was **not** possible because Docker is absent. The required SDK npm
+  `package-lock.json` could not be produced: npm registry DNS `EAI_AGAIN`.
+  Consequently the Dockerfile intentionally cannot build, and the opt-in
+  configuration is **not production-accepted**. The pinned real Fluxer
+  build/starter/Gateway/live acceptance and write dispatcher remain blocked.

@@ -158,8 +158,9 @@ connector identities are rejected without silent replacement.
 The Node entrypoint in `src/main.ts` reads the credential from its **own
 read-only secret file** using `readBotTokenFromFile()` in `token_secret.ts`.
 Only Node may mount that file; it must not be placed in the broad bridge
-`.env`/`env_file`, Python environment or DB. The optional Compose secret mount
-and production container are **not yet wired**. The Node process requires
+`.env`/`env_file`, Python environment or DB. The optional Compose secret mount and Node-only image are wired in
+`compose.yaml` / `fluxer-connector/Dockerfile`, but not yet built or tested
+inside a real Docker Compose runtime. The Node process requires
 `FLUXER_CONNECTOR_KEY`, `FLUXER_ORIGIN`, `FLUXER_BOT_TOKEN_FILE`,
 `FLUXER_INTERNAL_BEARER`, `FLUXER_APPROVED_API_HOST`,
 `FLUXER_APPROVED_GATEWAY_HOST`, `FLUXER_RPC_PORT`, and
@@ -184,3 +185,13 @@ The Node RPC tests and the two-process Python/Node/SQLite scenario use this
 same executor with a stateful fake SDK edge. `main.ts` intentionally leaves
 mutation RPCs unsupported until a pinned real Fluxer build, actual SDK
 installation and the runtime/deployment acceptance gates have passed.
+
+## Compose packaging status
+
+The opt-in `fluxer-sidecar` shares the Python `bridge` network namespace and
+uses the fixed loopback RPC port 8769; no Node port is published. Compose
+mounts `/run/secrets/fluxer-bot-token` in Node only. The release workflow
+publishes a matching image only when an audited npm lockfile is committed.
+The Dockerfile fails closed without that file. Docker, npm registry and a
+real Fluxer instance were unavailable during these checks; the existing
+SDK-fake tests cannot establish B20/B21 or authorize production writes.

@@ -79,193 +79,68 @@ curl -fsS http://127.0.0.1:3000/healthz
 
 The public service should now be available at the URL configured in `PUBLIC_BASE_URL`.
 
-## Fluxer trusted-instance opt-in (integration in progress)
+## Fluxer trusted-instance opt-in (not yet approved for production writes)
 
-The current Fluxer runtime implementation is **not yet deployed** by the
-standard Compose setup. Its Python configuration accepts zero or one trusted
-instance via `FLUXER_CONNECTORS_JSON`, for example:
+The `fluxer-sidecar` service is disabled by default (`profiles: ["fluxer"]`).
+It shares the `bridge` container's network namespace with
+`network_mode: "service:bridge"`: its private authenticated RPC listens on
+`127.0.0.1:8769`, not a published host port, and forwards authenticated
+Gateway observations to Python at `http://127.0.0.1:8080/internal/fluxer/events`.
+The Python HTTP listener still binds `0.0.0.0`; the internal ingress path is
+protected by its bearer and **must not be routed publicly**. Namespace sharing
+alone does not isolate a path on the Python listener.
 
-```json
-[{"connector_key":"fluxer-primary","origin":"https://fluxer.example",
-  "rpc_url":"http://127.0.0.1:8769","transport_secret":"separate-private-rpc-bearer"}]
-```
-
-The `origin` must be explicitly operator-approved. The RPC address must be
-`http://127.0.0.1:<port>`; the eventual Node sidecar shares the bridge network
-namespace, **not** a separate Compose loopback. Saved connector key/origin
-identity is immutable: a conflict stops startup without rewriting existing
-SQLite rows. Adding a second Fluxer instance is not supported by issue #12.
-
-**Never place a Fluxer bot token in `FLUXER_CONNECTORS_JSON`, the bridge
-`.env`/`env_file`, or Python container mounts.** Legacy token-bearing JSON is
-rejected. The Node sidecar will receive its credential only through a separate
-read-only secret file mounted for Node, and the IPC bearer above is independent
-of that credential. The Node-only token-file reader and standalone SDK entrypoint are implemented,
-but the optional Compose service and secret mount remain to be wired and
-verified. The Node process requires explicitly approved REST/Gateway hosts,
-and reports the configured instance origin in its authenticated health result;
-Python refuses bot ownership if this origin differs from its saved connector.
-A single connector may specify optional `"forum_applied_tags"` mapping exact
-forum IDs to up to five distinct tag IDs, e.g.
-`"forum_applied_tags":{"forum-123":["tag-4"]}`. The parser freezes the
-selection; the adapter rechecks current forum tag inventory and required-tag
-policy before a physical POST. Moderated/removed tags are refused without
-an independently established moderator grant, and missing tag metadata is not
-permission to post. Production composition has not yet passed these options
-to the adapter; that wiring belongs to the runtime-integration checkpoint.
-The supplied Fluxer server source describes tag requirements, but the live
-server build has not been pinned, so writable capabilities remain false.
-
-The entrypoint deliberately refuses unverified physical writes and is **not**
-yet a production-complete Fluxer deployment.
-Do not enable real Fluxer bot dispatch on the strength of configuration
-admission alone. The trusted-instance model permits the SDK's default REST
-Agent; it does not promise per-socket SSRF/DNS rebinding protection.
-
-## Development instance on the same machine
-
-The development instance uses a separate domain, Discord bot, ports, Compose project, database volume, and backup directory.
-
-### 1. Create the development environment file
-
-```bash
-cp .env.dev.example .env.dev
-```
-
-Set at least:
+For an **isolated test deployment only**, configure exactly one trusted origin
+and exactly matching connector key/IPC bearer on both services. Set the
+following nonsecret values in the bridge's `.env`:
 
 ```env
-COMPOSE_PROJECT_NAME=discord-bridge-dev
-COMPOSE_ENV_FILE=.env.dev
-
-PUBLIC_BASE_URL=https://bridge-dev.example.com
-DISCORD_TOKEN=replace-with-a-different-bot-token
-FEDIFY_SHARED_SECRET=replace-with-a-different-long-random-value
-
-BRIDGE_PUBLISHED_PORT=8181
-GATEWAY_PUBLISHED_PORT=3100
-BRIDGE_DATA_VOLUME=discord-fediverse-bridge-dev-data
-BACKUP_HOST_DIR=./backups-dev
+FLUXER_CONNECTORS_JSON=[{"connector_key":"fluxer-primary","origin":"https://trusted.example","rpc_url":"http://127.0.0.1:8769","transport_secret":"same-internal-bearer"}]
+FLUXER_IMAGE=ghcr.io/YOUR_GITHUB_OWNER/discord-fediverse-bridge-fluxer
+FLUXER_CONNECTOR_KEY=fluxer-primary
+FLUXER_ORIGIN=https://trusted.example
+FLUXER_APPROVED_API_HOST=api.trusted.example
+FLUXER_APPROVED_GATEWAY_HOST=gateway.trusted.example
+FLUXER_INTERNAL_BEARER=same-internal-bearer
+FLUXER_BOT_TOKEN_PATH=./secrets/fluxer-bot-token
 ```
 
-### 2. Build the current working tree and start it
+The file referenced by `FLUXER_BOT_TOKEN_PATH` contains the **actual bot
+credential**. It is mounted read-only at `/run/secrets/fluxer-bot-token`
+**only in the Node sidecar**; neither the file nor its value is a Python
+container mount/environment variable. Do not put the bot token in `.env`,
+`FLUXER_CONNECTORS_JSON`, Compose interpolation values or logs. A token-bearing
+legacy JSON connector configuration is rejected. Set restrictive host
+permissions on the token file and do not add it to version control. The IPC
+bearer is separate from the bot credential; assign a long random bearer.
+Set optional exact forum tag selections in the connector's
+`"forum_applied_tags"` map only when confirmed on the actual server.
 
-Use the deploy helper for the selected env file. It prepares `BACKUP_HOST_DIR`, fixes permissions, builds the working tree, and starts Compose:
+Once a pinned SDK lockfile, image and actual test instance are available:
 
 ```bash
-./scripts/deploy.sh --env-file .env.dev --build --with-nginx
+docker compose --env-file .env --profile fluxer -f compose.yaml -f compose.build.yaml config
+docker compose --env-file .env --profile fluxer up -d
+# Observe Node SDK auth, health/readiness and authenticated Python ingress.
+docker compose --env-file .env --profile fluxer ps
+docker compose --env-file .env --profile fluxer logs --tail=100 bridge fluxer-sidecar
 ```
 
+Stop in reverse ownership order through Compose (`fluxer-sidecar` depends on
+`bridge`). Sidecar restart never restarts the Python Discord client. Recreating
+`bridge` must also recreate/rejoin the sidecar's shared network namespace;
+`depends_on.restart` requests this for Compose-managed restarts, but host-level
+container runtime behavior requires a real two-container test. A port collision
+at `127.0.0.1:8769` prevents Node startup rather than routing elsewhere.
+Do **not** run two independent sidecars for one configured connector.
 
-If you start Compose manually instead of using the helper, make sure `BACKUP_HOST_DIR`
-exists and is writable by the container user (`10001:10001`) before `docker compose up`:
-
-```bash
-mkdir -p "$BACKUP_HOST_DIR"
-sudo chown 10001:10001 "$BACKUP_HOST_DIR"
-```
-
-If you want to do that from the env file directly without starting Compose yet:
-
-```bash
-BACKUP_HOST_DIR="$(grep -E '^BACKUP_HOST_DIR=' .env.dev | tail -n1 | cut -d= -f2-)"
-mkdir -p "$BACKUP_HOST_DIR"
-sudo chown 10001:10001 "$BACKUP_HOST_DIR"
-```
-
-### 3. Check the development instance
-
-```bash
-docker compose \
-  --env-file .env.dev \
-  -f compose.yaml \
-  -f compose.build.yaml \
-  ps
-
-curl -fsS http://127.0.0.1:8181/healthz
-curl -fsS http://127.0.0.1:3100/healthz
-```
-
-## Update production to another version
-
-Change only `BRIDGE_VERSION` in `.env`, for example:
-
-```env
-BRIDGE_VERSION=0.2.0
-```
-
-Then run:
-
-```bash
-./scripts/deploy.sh --env-file .env --with-nginx
-docker compose --env-file .env ps
-```
-
-Check the logs after the update:
-
-```bash
-docker compose --env-file .env logs --tail=100 bridge fedify-gateway
-```
-
-A database backup should exist before changing versions.
-
-## Return production to an earlier version
-
-Set the previous `BRIDGE_VERSION` in `.env`, then run:
-
-```bash
-./scripts/deploy.sh --env-file .env --with-nginx
-```
-
-If the newer version changed the database schema incompatibly, restore the database backup created before the update as well.
-
-## Create a backup now
-
-Automatic backups are written to `BACKUP_HOST_DIR`. To create one immediately:
-
-```bash
-docker compose --env-file .env run --rm backup \
-  python -m src.db.backup backup \
-  --database /data/bridge.db \
-  --output-dir /backups
-```
-
-## Stop an instance
-
-Production:
-
-```bash
-docker compose --env-file .env down
-```
-
-Development:
-
-```bash
-docker compose \
-  --env-file .env.dev \
-  -f compose.yaml \
-  -f compose.build.yaml \
-  down
-```
-
-Do not add `-v` for production. It deletes the database volume.
-
-## Durable user profile media
-
-The bridge stores validated profile images under `/data/profile-media` and keeps their metadata and user references in `/data/bridge.db`. Back up and restore these paths only through `python -m src.db.backup` complete-archive commands; copying or restoring the SQLite file alone is incomplete after profile media exists.
-
-The bridge process also holds an exclusive `/data/bridge.db.runtime.lock` for its lifetime (derived from the canonical SQLite pathname), preventing a second bridge runtime on the same database even across deployment lock handoff. This distinct lock file is never removed during shutdown or restore and does not replace deployment backup/restore coordination. The bridge process holds a shared lock on `/data/deployment-state.lock` for its full lifetime. Complete restore requires the exclusive form of that lock, so it fails or waits while the bridge is running. The backup service uses only explicit database, media, lock, interval, retention, and output paths; it must not receive Discord, OAuth, gateway, or signing secrets.
-
-## Discord Message Content intent and personal feeds
-
-The bot enables Discord's Message Content intent in code. Keep that privileged intent enabled and, where required by Discord, approved in the Discord Developer Portal for every production application. Personal-feed publication requires the complete message body; disabling the portal-side intent leaves binding rows intact but causes text-only roots and replies to arrive without usable content and be ignored. Attachments and embeds without text are not published.
-
-The bot also needs permission in each bound feed channel to view the channel, read message history, create public threads, send messages in threads, and manage only messages it previously rendered when applying remote Update/Delete. A retained inbound comment is not discarded when Discord is unavailable: the worker performs at most three Discord calls and then records a durable terminal failure. Moving or removing a binding intentionally prevents further synchronization to the old channel; retained history is not replayed into a replacement channel in personal feed conversations.
-
-## outbox maintenance maintenance
-
-Use `bridge-user-deliveries` for bounded, database-only diagnostics and explicit retry resets. Bulk retry requires `--username --all-failed --limit` and processes at most 100 rows. Use `bridge-profile-media cleanup` with explicit database, media root, deployment lock, and media lock paths. A complete backup must contain both the SQLite database and profile-media volume; exporting a container image is not a volume backup.
-
-## Database upgrade boundary
-
-Back up SQLite and profile media before starting a new application revision. Current startup migrates a recognized released `v0.1.0` database directly from schema version 0 to current 1. It rejects unsupported/partial schemas rather than repairing or stamping them. Do not manually change `user_version` or install an intermediate revision; see [SQLite startup migrations](development/database-migrations.md).
+**Current acceptance blockers:** There is no verified
+`fluxer-connector/package-lock.json` (the npm registry was unreachable),
+the official SDK declarations have not been typechecked, no Docker runtime was
+available for B20/B21, and no pinned real Fluxer build/credentials were
+provided. The `fluxer-connector/Dockerfile` intentionally requires the
+lockfile and fails to build without it. Production `main.ts` currently refuses
+all Create/Send/Edit/Delete operations; these must not be enabled before live
+REST/starter/permission/Gateway contract verification. The Compose layout is
+implemented and statically checked but **must not be interpreted as a passed
+production deployment or complete issue #12 acceptance**.

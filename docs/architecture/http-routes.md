@@ -43,12 +43,16 @@ This document explains HTTP route ownership between the Python bridge and the Fe
 | `/update` | POST | Fedify gateway | internal | Send Update | `fedify-gateway/src/routes/internal-publish.ts` | Internal/gateway |
 | `/delete` | POST | Fedify gateway | internal | Send Delete | `fedify-gateway/src/routes/internal-publish.ts` | Internal/gateway |
 
-**Fluxer ingress implementation in progress:** `src/internal_fluxer_api.py` supplies a
-private authenticated `POST /internal/fluxer/events` router with a closed
-neutral DTO contract, one connector-specific `FluxerInboundHandler` and
-quiesce admission. It has automated ASGI/SQLite tests but is **not yet
-registered by production `create_http_app()`** while the Node SDK connector
-lifecycle is incomplete; it must never be routed from the public host.
+**Fluxer ingress:** When the one trusted connector is enabled,
+`src/app.py` supplies `src/internal_fluxer_api.py` to `create_http_app()`.
+Its authenticated `POST /internal/fluxer/events` endpoint validates an exact
+connector-bound DTO under runtime-owned admission and calls only the
+`FluxerInboundHandler` SQLite ownership gate. Disabled deployments register
+no Fluxer endpoint. The standard Python listener binds `0.0.0.0`, so a
+sidecar's shared namespace/loopback delivery does **not** make this endpoint
+network-private: bearer authentication is mandatory and nginx must never
+route the internal path publicly. The production Node sidecar has not yet
+passed live two-container acceptance.
 
 `/healthz` exists in both processes. In the public-host deployment, public `/healthz` should stay gateway-owned unless an operator intentionally adds a Python health alias.
 
