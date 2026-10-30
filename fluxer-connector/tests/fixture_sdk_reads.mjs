@@ -43,6 +43,8 @@ const read=createSdkReadHandler(client);
 const permissions=createSdkPermissionHandler(client);
 const service=new PrivateRpcService({connectorKey:'fluxer-contract',
   transportSecret:'test-transport-secret',handler:(operation,args)=>
+    operation==='health'?Promise.resolve({connector_key:'fluxer-contract',
+      state:'ready',bot_id:client.user.id}):
     operation==='check_permissions'?permissions(operation,args):read(operation,args)});
 const port=await service.start();
 process.stdout.write(`${port}\n`);

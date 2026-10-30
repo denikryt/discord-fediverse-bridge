@@ -83,6 +83,29 @@ class FluxerAdapter:
         """Route a fixed SDK-neutral method through the verified RPC envelope."""
         return await self._rpc.call(operation, args, connector_key=self._connector.key)
 
+    async def _attested_bot_id(self) -> str | None:
+        """Check the *current* Node READY identity before claiming bot ownership.
+
+        A caller-supplied constructor ID is only an expected identity, never a
+        login proof. Once attested, a different bot after a sidecar restart
+        cannot silently inherit this connector's mutation authority.
+        """
+        try:
+            health = await self._call('health', {})
+        except PlatformOperationError:
+            return None
+        current = health.get('bot_id')
+        if (health.get('connector_key') != self._connector.key
+            or health.get('state') != 'ready'
+            or not isinstance(current, str) or not current
+            or current != current.strip() or any(ord(ch) < 32 for ch in current)):
+            return None
+        if self._bot_id is not None and current != self._bot_id:
+            return None
+        if self._bot_id is None:
+            self._bot_id = current
+        return current
+
     @staticmethod
     def _id(data: dict[str, Any], field: str) -> str:
         """Require an actual opaque identifier, never a fabricated numeric alias."""
@@ -176,10 +199,21 @@ class FluxerAdapter:
                 'human', 'bot', 'webhook', 'unknown',
             ):
                 raise PlatformOperationError('invalid_request', 'Fluxer message author malformed')
+            # Only Node can attest the bot logged in on this connector. The
+            # physical read must also explicitly confirm absent webhook origin;
+            # an omitted provenance field cannot establish bot ownership.
+            webhook_id = result.get('webhook_id')
+            if webhook_id is not None and (not isinstance(webhook_id, str) or not webhook_id):
+                raise PlatformOperationError('invalid_request', 'Fluxer webhook provenance malformed')
+            bot_id = (await self._attested_bot_id()
+                      if author_data['kind'] == 'bot' and 'webhook_id' in result
+                      and webhook_id is None else None)
             try:
                 author = AuthorRef(
                     self._connector.key, author_data.get('id'), author_data['kind'],
                     author_data.get('display_name', ''),
+                    is_bridge_owned=bool(bot_id is not None
+                        and author_data.get('id') == bot_id),
                 )
             except ValueError as exc:
                 raise PlatformOperationError('invalid_request', 'Fluxer message author malformed') from exc
@@ -214,8 +248,8 @@ class FluxerAdapter:
         self._scope(principal.connector_key)
         if not isinstance(actions, frozenset) or actions - self._ACTIONS:
             raise PlatformOperationError('invalid_request', 'invalid Fluxer permission actions')
-        if (principal.kind != 'bot' or self._bot_id is None
-            or principal.external_actor_id != self._bot_id):
+        current_bot_id = await self._attested_bot_id() if principal.kind == 'bot' else None
+        if (current_bot_id is None or principal.external_actor_id != current_bot_id):
             return {action: 'unknown' for action in actions}
         info = await self._call('check_permissions', {
             'bot_id': self._bot_id, 'channel_id': channel.external_channel_id,
@@ -254,7 +288,7 @@ class FluxerAdapter:
                          action: PlatformAction) -> None:
         """Verify live channel/capability/bot ACL without trusting request metadata."""
         self._scope(channel.connector_key)
-        if self._bot_id is None:
+        if await self._attested_bot_id() is None:
             raise PlatformOperationError('unavailable', 'Fluxer bot identity not attested')
         verified = (await self.fetch_channel(channel)).channel
         if is_forum and verified.kind != 'forum':
@@ -483,8 +517,6 @@ class FluxerAdapter:
         self._scope(message.connector_key)
         if not self._admission_open:
             raise PlatformOperationError('unavailable', 'Fluxer adapter is closing')
-        if self._bot_id is None:
-            raise PlatformOperationError('unavailable', 'Fluxer bot identity not attested')
         if operation == 'edit_message':
             self._validate_body(content)
         elif operation != 'delete_message' or content is not None:
@@ -498,6 +530,7 @@ class FluxerAdapter:
             # fresh provider read must attest bot authorship, not only ID scope.
             observed = await self.fetch_message(message)
             if (observed.author is None or observed.author.kind != 'bot'
+                or not observed.author.is_bridge_owned
                 or observed.author.external_actor_id != self._bot_id):
                 raise PlatformOperationError('forbidden', 'Fluxer message is not bot-owned')
             channel = ChannelRef(self._connector.key, message.external_container_id)

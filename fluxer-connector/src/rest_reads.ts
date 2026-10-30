@@ -153,12 +153,19 @@ export function createSdkReadHandler(client: SdkReadClient): RpcHandler {
             !Number.isFinite(edited.getTime())))) {
         throw new PrivateRpcError('invalid_request');
       }
-      const webhook = message.webhookId !== null && message.webhookId !== undefined;
+      // The public SDK Message always exposes webhookId (null when absent).
+      // Do not turn a missing field in an incomplete provider snapshot into
+      // authoritative proof that the message was sent by the bot.
+      if (!('webhookId' in message) ||
+          (message.webhookId !== null && typeof message.webhookId !== 'string')) {
+        throw new PrivateRpcError('invalid_request');
+      }
+      const webhook = message.webhookId !== null;
       if (webhook) physicalId(message.webhookId);
       return {id, container_id: containerId, content: message.content,
         author: {id: authorId, kind: webhook ? 'webhook' :
           message.author.bot ? 'bot' : 'human',
-          display_name: message.author.username},
+          display_name: message.author.username}, webhook_id: message.webhookId,
         created_at: created.toISOString(), edited_at: edited?.toISOString() ?? null,
         attachments: []};
     }

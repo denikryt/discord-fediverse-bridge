@@ -77,6 +77,20 @@ Node SDK REST mapping, live Gateway and production composition **are not
 implemented by this step**;
 the fake provider validates this internal contract, not the real Fluxer API.
 
+## Fluxer bot-owned physical reads
+
+The Fluxer adapter uses authenticated Node RPC `health` to verify the current
+SDK READY bot ID for the exact connector; a configured or cached bot ID alone
+cannot confer physical message ownership. The Node SDK read returns explicit
+`webhook_id` provenance from `Message.webhookId` alongside the exact physical
+message/container and author. Only the same bot ID, kind `bot`, a READY RPC
+session, and explicit `webhook_id: null` allow
+`MessageView.author.is_bridge_owned=True`. A different identity after sidecar
+restart, missing provenance, or a webhook does not pass the mutation
+coordinator's existing read-only ownership preflight. The normal durable
+revision/CAS/unknown-effect rules remain unchanged; this does not activate
+Fluxer→ActivityPub canonical mutation before issue #13.
+
 ## Inbound Gateway event family
 
 `ThreadCreated`, `ThreadUpdated`, `ThreadDeleted`, `MessageCreated`, `MessageUpdated`, `MessageDeleted` are frozen, connector-scoped platform events; they are **not** Fedify/ActivityPub events. Each has diagnostic, timezone-aware `received_at` and optional `external_guild_id`; the API rejects naive or non-datetime timestamps. `MessageUpdated.edited_at` and `MessageView.edited_at` require timezone-aware `datetime` when known, with `None` meaning an unknown edit time. Discord adapter integration extends `MessageCreated.created_at` to preserve the actual source message creation instant separately from diagnostic `received_at`; its optional absence keeps generic transport fakes valid, but Discord publication must obtain the source timestamp. `MessageUpdated.author` is optional best-effort `AuthorRef` metadata, rejected if its connector differs from the edited message; a missing author is not inferred from a raw cache-less edit. A resolved `thread_context` must share the message's immediate container, and any accompanying `parent_channel` must identify the same physical channel without contradicting its known kind/guild metadata. Event `external_guild_id` is checked against **both** available channel contexts, even when the first has unknown metadata. A reply reference may point into another container for Discord `THREAD_STARTER_MESSAGE`; this is not an outbound reply permission. Raw message updates/deletes require no parent channel, cache or network fetch. Missing `MessageUpdated.content is None` is **not** empty content; `ContentDocument(body='')` means explicit empty content. `ThreadCreated.newly_created=None` and `MessageCreated.is_starter=None` mean unknown, not false.

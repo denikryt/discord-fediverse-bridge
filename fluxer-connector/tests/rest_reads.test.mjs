@@ -79,7 +79,7 @@ test('message read uses explicit physical container and returns observed author 
     const response=await h.request('fetch_message',{container_id:'thread',id:'msg-1'});
     assert.equal(response.status,200);
     assert.deepEqual(response.body.result,{id:'msg-1',container_id:'thread',content:'hello',
-      author:{id:'user-1',kind:'human',display_name:'alice'},
+      author:{id:'user-1',kind:'human',display_name:'alice'},webhook_id:null,
       created_at:'2026-10-27T12:00:00.000Z',edited_at:null,attachments:[]});
     assert.deepEqual(h.fetched,[['channel','thread',{force:true}],['message','thread','msg-1']]);
   } finally {await h.stop();}
@@ -108,4 +108,26 @@ test('non-read action does not cross SDK read boundary; no physical writes occur
     assert.equal(rejected.body.error.reason,'unsupported');
     assert.equal(h.fetched.length,0);
   } finally {await h.stop();}
+});
+
+test('bot-owned read preserves explicit absence or presence of webhook provenance',async()=>{
+  const msg={id:'owned',channelId:'thread',guildId:'guild-a',content:'owned',
+    author:{id:'bot-1',bot:true,username:'Bridge'},webhookId:null,
+    createdAt:new Date('2026-10-28T12:00:00Z'),editedAt:null,attachments:new Map()};
+  const messages=new Map([['thread/owned',msg]]);
+  const h=await harness(new Map([['thread',channel('thread','thread','guild-a','forum')]]),messages);
+  try {
+    const bot=await h.request('fetch_message',{container_id:'thread',id:'owned'});
+    assert.equal(bot.status,200);
+    assert.equal(bot.body.result.author.kind,'bot');
+    assert.equal(bot.body.result.webhook_id,null);
+    msg.webhookId='hook-1';
+    const hook=await h.request('fetch_message',{container_id:'thread',id:'owned'});
+    assert.equal(hook.body.result.author.kind,'webhook');
+    assert.equal(hook.body.result.webhook_id,'hook-1');
+    delete msg.webhookId;
+    const unknown=await h.request('fetch_message',{container_id:'thread',id:'owned'});
+    assert.equal(unknown.status,422);
+    assert.equal(unknown.body.error.reason,'invalid_request');
+  }finally{await h.stop();}
 });

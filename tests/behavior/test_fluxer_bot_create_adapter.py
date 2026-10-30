@@ -42,7 +42,9 @@ class Provider:
         op = body['operation']
         args = body['args']
         self.requests.append(body)
-        if op == 'fetch_channel':
+        if op == 'health':
+            result = {'connector_key': 'fluxer-test', 'state': 'ready', 'bot_id': 'bot-1'}
+        elif op == 'fetch_channel':
             result = {'id': args['id'], 'kind': 'forum' if args['id'] == 'forum-1' else 'text',
                       'guild_id': 'guild-1'}
         elif op == 'capabilities':
@@ -57,7 +59,8 @@ class Provider:
                       'guild_id': 'guild-1', 'starter_id': 'starter-91'}
         elif op == 'fetch_message':
             result = {'id': args['id'], 'container_id': args['container_id'],
-                      'content': 'parent text', 'author': {'kind': 'bot', 'id': 'bot-1'}}
+                      'content': 'parent text', 'author': {'kind': 'bot', 'id': 'bot-1'},
+                      'webhook_id': None}
         elif op == 'create_forum_thread':
             self.remote_threads.append(args)
             self.ready.set()

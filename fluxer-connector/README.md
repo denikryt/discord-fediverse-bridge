@@ -43,6 +43,17 @@ invents a forum starter-message ID. Media-bearing read snapshots explicitly
 fail closed until their neutral contract is supported. This read handler is
 injectable into the existing `FluxerNodeService`.
 
+`rest_reads.ts` includes the SDK's explicit `webhookId` on a complete
+message read. Python `FluxerAdapter.fetch_message()` marks an author as
+`is_bridge_owned` only when the Node RPC health currently reports READY with
+an exact matching authenticated bot ID and the read explicitly reports
+`webhook_id: null`. The first attested ID remains the expected connector
+identity across sidecar restarts; a mismatch refuses mutation. Absent health,
+foreign bot or webhook provenance never authorizes Edit/Delete. Tests use a
+Node sidecar with a real SDK session lifecycle and private RPC and a stateful
+SDK-edge fake, including a SQLite mutation CAS/receipt scenario; live
+Fluxer REST mutations are **not** claimed implemented by this fixture.
+
 `permissions.ts` separately implements the `check_permissions` RPC operation
 using `GuildMember.permissionsIn(channel)` and fresh SDK guild/member/role
 reads. It confirms only view, read-history and send-message flags; forum

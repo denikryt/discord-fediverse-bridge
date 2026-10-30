@@ -26,6 +26,9 @@ class StatefulMutationProvider:
         self.requests = []
         self.writes = []
         self.permission = 'allowed'
+        self.health_bot_id = 'bot-1'
+        self.health_state = 'ready'
+        self.include_webhook_proof = True
         self.fail_write = False
 
     def serve(self, request):
@@ -33,7 +36,10 @@ class StatefulMutationProvider:
         body = json.loads(request.content)
         self.requests.append(body)
         op, args = body['operation'], body['args']
-        if op == 'fetch_message':
+        if op == 'health':
+            result = {'connector_key': 'fluxer-test', 'state': self.health_state,
+                      'bot_id': self.health_bot_id}
+        elif op == 'fetch_message':
             key = args['container_id'], args['id']
             state = self.messages.get(key)
             if state is None:
@@ -41,6 +47,8 @@ class StatefulMutationProvider:
                                                  'ok': False, 'error': {'reason': 'not_found'}})
             result = {'container_id': key[0], 'id': key[1], 'content': state['content'],
                       'author': {'id': state['author_id'], 'kind': state['kind']}}
+            if self.include_webhook_proof:
+                result['webhook_id'] = 'hook-1' if state['kind'] == 'webhook' else None
         elif op == 'fetch_channel':
             result = {'id': args['id'], 'kind': 'text', 'guild_id': 'guild-1'}
         elif op == 'capabilities':
@@ -87,6 +95,46 @@ class FluxerBotMutationScenarios(unittest.IsolatedAsyncioTestCase):
     async def asyncTearDown(self):
         """Release the private RPC client and its accepted work."""
         await self.rpc.close()
+
+    async def test_verified_sdk_bot_message_is_owned_and_webhook_provenance_is_explicit(self):
+        """Fresh authenticated RPC health + exact bot author and no webhook prove ownership."""
+        view = await self.adapter.fetch_message(self.owned)
+        self.assertEqual(view.author.kind, 'bot')
+        self.assertTrue(view.author.is_bridge_owned)
+        self.assertIn('health', [item['operation'] for item in self.provider.requests])
+
+    async def test_foreign_bot_and_webhook_echo_do_not_become_own_mutation_targets(self):
+        """A foreign bot or webhook, even bearing this bot's author ID, cannot write."""
+        for kind, actor in [('bot', 'bot-foreign'), ('webhook', 'bot-1')]:
+            with self.subTest(kind=kind):
+                self.provider.messages[('thread-1', 'bot-message')]['kind'] = kind
+                self.provider.messages[('thread-1', 'bot-message')]['author_id'] = actor
+                read = await self.adapter.fetch_message(self.owned)
+                self.assertFalse(read.author.is_bridge_owned)
+                with self.assertRaises(PlatformOperationError):
+                    await self.adapter.delete_message(self.owned)
+        self.assertEqual(self.provider.writes, [])
+
+    async def test_missing_provenance_and_restarted_different_bot_fail_closed(self):
+        """No webhook evidence or changed SDK identity can authorize mutation."""
+        self.provider.include_webhook_proof = False
+        read = await self.adapter.fetch_message(self.owned)
+        self.assertFalse(read.author.is_bridge_owned)
+        with self.assertRaises(PlatformOperationError):
+            await self.adapter.edit_message(self.owned, ContentDocument('blocked'))
+        self.provider.include_webhook_proof = True
+        self.provider.health_bot_id = 'bot-foreign'
+        with self.assertRaises(PlatformOperationError):
+            await self.adapter.delete_message(self.owned)
+        self.assertEqual(self.provider.writes, [])
+
+    async def test_degraded_sdk_health_does_not_retain_stale_bot_ownership(self):
+        """A previously attested bot cannot mutate during Node session loss."""
+        self.assertTrue((await self.adapter.fetch_message(self.owned)).author.is_bridge_owned)
+        self.provider.health_state = 'degraded'
+        with self.assertRaises(PlatformOperationError):
+            await self.adapter.delete_message(self.owned)
+        self.assertEqual(self.provider.writes, [])
 
     async def test_bot_owned_edit_only_changes_target_and_preserves_other_copy(self):
         """One verified edit has exactly one remote effect in the target container."""
@@ -136,7 +184,7 @@ class FluxerBotMutationScenarios(unittest.IsolatedAsyncioTestCase):
         with self.assertRaises(PlatformOperationError) as unsupported:
             await self.adapter.edit_message(self.owned, ContentDocument('**rich**', 'portable_markdown'))
         self.assertEqual(unsupported.exception.reason, 'unsupported')
-        self.adapter._bot_id = None
+        self.provider.health_bot_id = None
         with self.assertRaises(PlatformOperationError):
             await self.adapter.delete_message(self.owned)
         self.assertEqual(self.provider.writes, [])
