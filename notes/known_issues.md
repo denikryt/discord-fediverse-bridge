@@ -489,3 +489,15 @@ Fedify-native security integration remains blocked by missing dependencies.
 ## Fluxer SDK v3.3.0 integration — verification pending
 
 The upstream v3.3.0 source confirms public `ThreadCreate/Update/Delete` and `ShardDisconnect/Ready/Resumed` events. Local Node event normalization, authenticated forwarding and injectable service composition are covered by deterministic tests, but `@fluxerjs/core@3.3.0` could not be installed in the current environment (`registry.npmjs.org`: `EAI_AGAIN`). The published npm package, full SDK TypeScript typings and real-instance Gateway behavior remain unverified. **Do not start a production bot with an unrestricted `Client.fromDiscovery` factory:** the required SDK-owned REST/WebSocket egress enforcement and the real bot operations are not yet implemented. See `fluxer-connector/README.md`.
+
+- **OPEN (Fluxer SDK security boundary):** upstream `@fluxerjs/rest` v3.3.0
+  calls its own `undici.fetch` with a package-global Agent and exposes no
+  per-client dispatcher option; the public SDK WebSocket constructor hook
+  does not secure REST. The promised production egress-vetted client factory
+  cannot be implemented by merely reusing the existing discovery preflight.
+  No unrestricted factory or bot token transport has been activated.
+- **IMPLEMENTED locally (Fluxer SDK reads):** `rest_reads.ts` handles fresh,
+  scoped channel/thread/message lookups via the documented ChannelManager
+  methods, through the authenticated Python/Node RPC edge. An SDK-edge fake
+  and real loopback HTTP tests check physical parent/container identity.
+  Published SDK types and real Fluxer responses are still unverified.
