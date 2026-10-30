@@ -61,6 +61,8 @@ export class SdkSession {
   private botId: string | undefined;
   private readyReceived = false;
   private authenticated = false;
+  private previouslyReady = false;
+  private resumePending = false;
   private readySignal: (() => void) | undefined;
   private stopping = false;
   private starting: Promise<void> | undefined;
@@ -146,26 +148,33 @@ export class SdkSession {
           throw new Error('Fluxer SDK REST endpoint mismatch');
         }
       }
-      this.observe('ready', () => {
+      // SDK v3.3.0 public ClientEvents expose shard lifecycle, not the raw
+      // Gateway `disconnect`/`invalidSession` opcodes. READY alone is not
+      // proof that a lost session was resumed with complete event history.
+      const ready = (newSession: boolean): void => {
         this.readyReceived = true;
+        if (newSession && this.previouslyReady && this.resumePending) this.gap = true;
+        this.resumePending = false;
         this.readySignal?.();
-        if (this.authenticated && this.state === 'degraded' && !this.stopping) {
-          this.state = 'ready';
-        }
-      });
-      this.observe('disconnect', () => {
+        if (this.authenticated && !this.stopping) this.state = 'ready';
+        this.previouslyReady = true;
+      };
+      const degraded = (): void => {
         this.readyReceived = false;
+        if (this.previouslyReady) this.resumePending = true;
         if (!this.stopping) this.state = 'degraded';
+      };
+      this.observe('ready', () => ready(true));
+      this.observe('shardReady', () => {
+        // A fresh shard READY after loss does not guarantee event replay.
+        if (this.previouslyReady) ready(true);
       });
-      this.observe('invalidSession', () => {
-        this.readyReceived = false;
-        this.gap = true;
-        if (!this.stopping) this.state = 'degraded';
-      });
-      this.observe('error', () => {
-        this.readyReceived = false;
-        if (!this.stopping) this.state = 'degraded';
-      });
+      this.observe('shardResumed', () => ready(false));
+      this.observe('resumed', () => ready(false));
+      this.observe('shardDisconnect', degraded);
+      this.observe('shardReconnecting', degraded);
+      this.observe('shardError', degraded);
+      this.observe('error', degraded);
       // Endpoint identity is verified before passing the bot credential to SDK.
       await client.login(this.config.botToken);
       await this.awaitReady();
@@ -176,6 +185,7 @@ export class SdkSession {
       this.botId = client.user.id;
       this.authenticated = true;
       this.state = 'ready';
+      this.previouslyReady = true;
     } catch {
       // Provider exceptions may contain bearer tokens, paths or message bodies.
       let shutdownConfirmed = true;

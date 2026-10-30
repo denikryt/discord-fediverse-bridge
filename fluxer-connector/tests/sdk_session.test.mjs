@@ -42,9 +42,9 @@ test('verified self-hosted SDK login publishes readiness only after bot identity
   assert.deepEqual(session.health(), {state: 'ready', connector_key: undefined,
     bot_id: 'bot-777', gateway_gap: false});
   assert.deepEqual(remote.calls, [['login', options.botToken]]);
-  remote.events.emit('disconnect');
+  remote.events.emit('shardDisconnect', 0, 1006);
   assert.equal(session.health().state, 'degraded');
-  remote.events.emit('ready');
+  remote.events.emit('shardReady', 0);
   assert.equal(session.health().state, 'ready');
   await session.close();
   assert.equal(session.health().state, 'stopped');
@@ -122,14 +122,14 @@ test('explicit loopback development permits HTTP only at the selected local API'
     allowInsecureLocalDevelopment: true, createClient: remote.createClient}));
 });
 
-test('invalid Gateway session marks a visible reconnect gap without event replay claims', async () => {
+test('new Gateway shard session after disconnect marks a visible reconnect gap', async () => {
   const remote = provider();
   const session = new SdkSession({...options, createClient: remote.createClient});
   await session.start();
-  remote.events.emit('invalidSession');
+  remote.events.emit('shardDisconnect', 0, 1006);
   assert.equal(session.health().state, 'degraded');
-  assert.equal(session.health().gateway_gap, true);
-  remote.events.emit('ready');
+  assert.equal(session.health().gateway_gap, false);
+  remote.events.emit('shardReady', 0);
   assert.equal(session.health().state, 'ready');
   assert.equal(session.health().gateway_gap, true);
   await session.close();
@@ -186,7 +186,7 @@ test('READY followed by disconnect before login completes cannot advertise readi
   const starting = session.start();
   await new Promise(resolve => setImmediate(resolve));
   remote.events.emit('ready');
-  remote.events.emit('disconnect');
+  remote.events.emit('shardDisconnect', 0, 1006);
   gate.resolve();
   await new Promise(resolve => setImmediate(resolve));
   assert.notEqual(session.health().state, 'ready');
@@ -202,6 +202,45 @@ test('self-hosted bot API base paths survive the SDK endpoint identity check', a
   const session = new SdkSession({...options, apiPublic: 'https://api.example.test/bot/',
     createClient: remote.createClient});
   await session.start();
+  assert.equal(session.health().state, 'ready');
+  await session.close();
+});
+
+// Public SDK events (v3.3.0 ClientEvents): shardResume proves continuity,
+// whereas fresh shardReady following a dropped shard cannot prove it.
+test('resumed shard restores readiness without fabricating an event gap', async () => {
+  const remote = provider();
+  const session = new SdkSession({...options, createClient: remote.createClient});
+  await session.start();
+  remote.events.emit('shardReconnecting', 0);
+  assert.equal(session.health().state, 'degraded');
+  remote.events.emit('shardResumed', 0);
+  assert.equal(session.health().state, 'ready');
+  assert.equal(session.health().gateway_gap, false);
+  await session.close();
+});
+
+test('shard error revokes readiness and shardReady records lost continuity', async () => {
+  const remote = provider();
+  const session = new SdkSession({...options, createClient: remote.createClient});
+  await session.start();
+  remote.events.emit('shardError', 0, new Error('private gateway detail'));
+  assert.equal(session.health().state, 'degraded');
+  remote.events.emit('shardReady', 0);
+  assert.equal(session.health().state, 'ready');
+  assert.equal(session.health().gateway_gap, true);
+  await session.close();
+});
+
+test('raw Gateway opcode strings cannot restore readiness after disconnect', async () => {
+  const remote = provider();
+  const session = new SdkSession({...options, createClient: remote.createClient});
+  await session.start();
+  remote.events.emit('shardDisconnect', 0, 1006);
+  remote.events.emit('disconnect');
+  remote.events.emit('invalidSession');
+  assert.equal(session.health().state, 'degraded');
+  remote.events.emit('shardResumed', 0);
   assert.equal(session.health().state, 'ready');
   await session.close();
 });
