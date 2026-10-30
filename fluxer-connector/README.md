@@ -36,3 +36,12 @@ cross-process behavioral test verifies `Node → private FastAPI → SQLite →
 no ActivityPub publication` for an explicitly owned test forum. Real SDK event
 shapes, gateway reconnect and hosted bot permissions remain live acceptance
 items rather than verified behavior.
+
+`src/event_delivery.ts` forwards normalized events to the single authenticated
+private Python HTTP route, with exact connector ownership, bounded concurrency,
+body/ACK limits and no redirect following. A successful ACK means the Python
+handler completed its ingress admission only. It neither proves ActivityPub
+publication nor authorizes replay after an uncertain response. Shutdown joins
+accepted HTTP operations; late events receive a refusal. The behavioral suite
+uses an actual Node subprocess over TCP to FastAPI and SQLite. SDK Gateway
+subscription and live reconnect delivery remain separate work.

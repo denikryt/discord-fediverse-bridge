@@ -195,6 +195,65 @@ class FluxerForumObservationScenarios(unittest.IsolatedAsyncioTestCase):
             # A confirmed physical owner still cannot mint a Fluxer AP author.
             self.assertEqual(session.query(LocalCommunityThread).count(), 1)
 
+    async def test_real_node_http_forwarder_reaches_python_sqlite_ingress(self) -> None:
+        """Gateway DTO traverses Node TCP → FastAPI → owned SQLite → AP gate."""
+        import socket
+        import uvicorn
+
+        app = FastAPI()
+        app.include_router(create_internal_fluxer_router({"fx-one": (self.handler, "test-secret") }))
+        listener = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        listener.bind(("127.0.0.1", 0))
+        listener.listen(32)
+        listener.setblocking(False)
+        port = listener.getsockname()[1]
+        server = uvicorn.Server(uvicorn.Config(
+            app, host="127.0.0.1", port=port, lifespan="off", log_level="critical",
+        ))
+        serving = asyncio.create_task(server.serve(sockets=[listener]))
+        try:
+            for _ in range(200):
+                if server.started:
+                    break
+                await asyncio.sleep(0.01)
+            self.assertTrue(server.started)
+            script = """
+              import {normalizeGatewayEvent} from './fluxer-connector/src/normalization.ts';
+              import {GatewayEventForwarder} from './fluxer-connector/src/event_delivery.ts';
+              let incoming=''; for await (const chunk of process.stdin) incoming+=chunk;
+              const wire=normalizeGatewayEvent('fx-one','THREAD_CREATE',JSON.parse(incoming),
+                {receivedAt:'2026-10-27T11:00:00.000Z'});
+              const forwarder=new GatewayEventForwarder({connectorKey:'fx-one',
+                pythonIngressUrl:process.env.TEST_INGRESS,transportSecret:'test-secret'});
+              try {await forwarder.forward(wire);} finally {await forwarder.close();}
+            """
+            payload = {"id": "thread-1", "parent_id": "forum-1",
+                       "guild_id": "guild-one", "type": 11, "name": "Topic",
+                       "newly_created": True}
+            import os
+            root = Path(__file__).resolve().parents[2]
+            env = {**os.environ,
+                   "TEST_INGRESS": f"http://127.0.0.1:{port}/internal/fluxer/events"}
+            with self.assertLogs("src.fluxer_ingress", level="INFO") as logged:
+                process = await asyncio.create_subprocess_exec(
+                    'node', '--experimental-strip-types', '--input-type=module',
+                    '-e', script, cwd=root, env=env,
+                    stdin=asyncio.subprocess.PIPE, stdout=asyncio.subprocess.PIPE,
+                    stderr=asyncio.subprocess.PIPE,
+                )
+                stdout, stderr = await asyncio.wait_for(
+                    process.communicate(json.dumps(payload).encode('utf8')), timeout=10,
+                )
+                self.assertEqual(process.returncode, 0, stderr.decode())
+                self.assertEqual(stdout, b'')
+            self.assertTrue(any("community_binding_not_active" in x for x in logged.output))
+            with self.database.session() as session:
+                self.assertEqual(session.query(LocalCommunityThread).count(), 1)
+        finally:
+            server.should_exit = True
+            await asyncio.wait_for(serving, timeout=10)
+            listener.close()
+
     async def test_private_http_rejects_bad_auth_schema_and_late_calls(self) -> None:
         """Malformed or unauthenticated events do not cross the sink boundary."""
         app = FastAPI()
