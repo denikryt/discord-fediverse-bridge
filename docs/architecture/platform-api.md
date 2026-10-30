@@ -377,3 +377,19 @@ explicit test opt-in. **This secures only the preflight discovery request**:
 until the SDK itself is installed and its subsequent REST/Gateway egress can
 be constrained and verified, the implementation must not treat discovery
 success as permission to send the bot token to arbitrary discovered endpoints.
+
+## Fluxer scoped lookup adapter (Checkpoint 2 implementation in progress)
+
+`src/fluxer_adapter.py:FluxerAdapter` currently implements *only* the
+`PlatformLookupPort` portion of the future complete `PlatformAdapterPort`. Its
+`fetch_channel`, `fetch_thread` and `fetch_message` checks require exact remote
+physical identity, thread parent, known guild and distinct observed starter
+message before returning neutral DTOs. Technical capabilities are granted only
+when the private provider's reply matches the requested channel scope; webhook
+capabilities are false unconditionally. Permission grants require the attested
+bot ID plus exact channel/guild; absent or mismatched metadata is `unknown`.
+`reconcile_create()` has no verified attempt-correlated provider receipt yet
+and returns `None` without a history/body heuristic. The class is intentionally
+not registered in production until its write methods, durable coordinator proof
+and SDK-backed operation handlers exist; these read tests are not live Fluxer
+acceptance.
