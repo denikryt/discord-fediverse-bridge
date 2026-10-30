@@ -15,16 +15,25 @@ old raw dispatch-shape fixtures are not a production event path.
 
 `FluxerNodeService` in `src/service.ts` composes the SDK session, event
 forwarder, listeners, and private RPC listener under one shutdown owner. It
-**requires an externally supplied egress-vetted SDK factory and operation
-handler**. This repository does **not yet provide a production factory** and
-does not start `Client.fromDiscovery` with unrestricted REST/WebSocket egress.
-`fromDiscovery()` alone cannot enforce the SSRF, DNS-rebinding and redirect
-policy required for self-hosted instances. In the v3.3.0 source, REST uses a
-shared `undici` Agent created inside `@fluxerjs/rest`, with no public per-client
-request dispatcher configuration. Gateway does allow a WebSocket constructor.
-A discovery-only preflight is therefore **not** a secure SDK factory. This
-verified limitation requires an explicit reviewed egress containment solution
-before the bot token can be exposed to the SDK.
+still **requires an externally supplied SDK factory and operation handler**;
+this repository does not yet provide the production factory or activate bot
+credentials. The revised one-trusted-instance issue #12 plan permits the
+SDK's default Undici REST Agent after strict operator approval of endpoints.
+It does **not** claim per-socket DNS-rebinding/SSRF protection. A production
+factory must still enforce the revised trust/credential boundaries before
+login and requires separate implementation and acceptance.
+
+The Gateway `MessageCreate` event identifies its immediate container, not
+necessarily its enclosing forum. `gateway.ts` now reuses the verified
+`rest_reads.ts` thread lookup (forced SDK channel and parent reads) before
+attaching `thread_context` / `parent_channel` to the single neutral DTO.
+Contradicting guild, non-forum parent, missing SDK read and lookup timeout
+result in an **unverified observation** with no claimable parent; the Python
+SQLite owner alone decides forum membership and still never publishes AP in
+issue #12. Each accepted lookup remains tracked and is joined on shutdown,
+even if the event-forwarding deadline expires. The Node health diagnostic
+`gateway_context_unverified` reports observed enrichment failures without
+mistaking them for an outbound SDK readiness failure.
 
 `rest_reads.ts` now implements SDK-backed `fetch_channel`, `fetch_thread`
 and `fetch_message` RPC reads with fresh channel lookups and strict physical

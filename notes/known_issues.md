@@ -508,3 +508,6 @@ The upstream v3.3.0 source confirms public `ThreadCreate/Update/Delete` and `Sha
   forum create and per-message edit/delete remain `unknown` until proven.
   This does not establish real-instance permission semantics or production
   SDK factory safety.
+
+- **CP023 local fix (not live-verified):** public SDK `MessageCreate` now uses CP021's force-read of the exact thread and its parent before emitting a claimable `parent_channel`/`thread_context`. Mismatched, missing or non-forum parents are forwarded only as unverified observations; these do not create AP publications. The accepted SDK-read task is joined on shutdown. Real SDK server behavior and published types remain an acceptance gate.
+- **Trusted-instance security scope update:** revised issue #12 plan accepts the official SDK's default Undici REST transport only for one expressly operator-trusted host set; no adversarial per-socket SSRF/DNS-rebinding guarantee is claimed. Production SDK factory remains unimplemented; do not use unrestricted external origins.

@@ -27,6 +27,7 @@ export class FluxerNodeService {
   private starting: Promise<number> | undefined;
   private closing: Promise<void> | undefined;
   private gatewayFault = false;
+  private gatewayContextUnverified = false;
   private shutdownRequested = false;
 
   constructor(config: ServiceConfig) {
@@ -35,7 +36,14 @@ export class FluxerNodeService {
     this.gateway = new FluxerSdkGatewayHandler({connectorKey: config.connectorKey,
       forwarder: this.forwarder,
       botId: () => this.currentClient?.user?.id as string | undefined,
-      onProblem: () => {this.gatewayFault = true;}});
+      onProblem: (reason) => {
+        if (reason === 'context_unverified') {
+          // An unverified inbound forum does not make outbound SDK REST unsafe.
+          this.gatewayContextUnverified = true;
+        } else {
+          this.gatewayFault = true;
+        }
+      }});
     this.session = new SdkSession({...config,
       createClient: async () => {
         const client = await config.createVettedClient();
@@ -47,7 +55,8 @@ export class FluxerNodeService {
     const dispatch: RpcHandler = async (operation: RpcOperation, args) => {
       if (operation === 'health') {
         const status = this.session.health();
-        return {...status, gateway_gap: status.gateway_gap || this.gatewayFault};
+        return {...status, gateway_gap: status.gateway_gap || this.gatewayFault,
+          gateway_context_unverified: this.gatewayContextUnverified};
       }
       // Never advertise writable bot operations until gateway and SDK are ready.
       if (this.shutdownRequested || this.session.health().state !== 'ready' || this.gatewayFault) {

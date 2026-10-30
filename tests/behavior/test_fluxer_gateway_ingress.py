@@ -253,6 +253,97 @@ class FluxerForumObservationScenarios(unittest.IsolatedAsyncioTestCase):
             await asyncio.wait_for(serving, timeout=10)
             listener.close()
 
+    async def test_uncached_sdk_message_parent_is_verified_before_sqlite_claim(self) -> None:
+        """Human reply in a new Fluxer thread reaches the claimed #13 gate only with fresh SDK proof."""
+        import os
+        import socket
+        import uvicorn
+
+        app = FastAPI()
+        app.include_router(create_internal_fluxer_router({"fx-one": (self.handler, "test-secret")}))
+        listener = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        listener.bind(("127.0.0.1", 0))
+        listener.listen(32)
+        listener.setblocking(False)
+        port = listener.getsockname()[1]
+        server = uvicorn.Server(uvicorn.Config(
+            app, host="127.0.0.1", port=port, lifespan="off", log_level="critical",
+        ))
+        serving = asyncio.create_task(server.serve(sockets=[listener]))
+        try:
+            for _ in range(200):
+                if server.started:
+                    break
+                await asyncio.sleep(0.01)
+            self.assertTrue(server.started)
+            # The real Node Gateway adapter, not a Python-preconstructed DTO,
+            # decides whether an SDK MessageCreate has a proven forum parent.
+            script = """
+              import {EventEmitter} from 'node:events';
+              import {FluxerSdkGatewayHandler} from './fluxer-connector/src/gateway.ts';
+              import {GatewayEventForwarder} from './fluxer-connector/src/event_delivery.ts';
+              const mode=process.env.TEST_PARENT_CASE;
+              const sdk=new EventEmitter();
+              sdk.channels={
+                async fetch(id,options){
+                  if(options.force!==true)throw new Error('cache-only lookup forbidden');
+                  if(mode==='removed')throw new Error('not found');
+                  if(id==='thread-1')return {id,type:11,name:'Topic',
+                    parentId:mode==='other-forum'?'forum-other':'forum-1',
+                    guildId:mode==='wrong-guild'?'foreign-guild':'guild-one',
+                    isThread:()=>true,isGuild:()=>true};
+                  if(id==='forum-1'||id==='forum-other')return {id,type:15,
+                    guildId:mode==='wrong-guild'?'foreign-guild':'guild-one',
+                    isGuild:()=>true,isForum:()=>mode!=='not-forum',
+                    isText:()=>mode==='not-forum',isAnnouncement:()=>false};
+                  throw new Error('unexpected ID');
+                },
+                async fetchMessage(){throw new Error('unexpected message lookup');},
+              };
+              const problems=[];
+              const forwarder=new GatewayEventForwarder({connectorKey:'fx-one',
+                pythonIngressUrl:process.env.TEST_INGRESS,transportSecret:'test-secret'});
+              const gateway=new FluxerSdkGatewayHandler({connectorKey:'fx-one',
+                forwarder,botId:()=>undefined,onProblem:reason=>problems.push(reason)});
+              gateway.attach(sdk);
+              sdk.emit('messageCreate',{id:'reply-1',channelId:'thread-1',
+                guildId:'guild-one',type:0,content:'Human message',
+                author:{id:'human-1',username:'Human',bot:false},
+                createdAt:new Date('2026-10-28T10:00:00Z'),attachments:new Map()});
+              await gateway.close();
+              process.stdout.write(JSON.stringify(problems));
+            """
+            root = Path(__file__).resolve().parents[2]
+            env = {**os.environ,
+                   "TEST_INGRESS": f"http://127.0.0.1:{port}/internal/fluxer/events"}
+            # Only verified live thread→forum/guild context may reach the
+            # claimed branch; the other three remain unclaimed and nonpublishing.
+            for mode, expected in (
+                ("verified", "community_binding_not_active"),
+                ("wrong-guild", "unproven forum ownership"),
+                ("not-forum", "unproven forum ownership"),
+                ("other-forum", "unproven forum ownership"),
+                ("removed", "unproven forum ownership"),
+            ):
+                with self.subTest(mode=mode), self.assertLogs("src.fluxer_ingress", level="INFO") as logged:
+                    process = await asyncio.create_subprocess_exec(
+                        "node", "--experimental-strip-types", "--input-type=module",
+                        "-e", script, cwd=root, env={**env, "TEST_PARENT_CASE": mode},
+                        stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE,
+                    )
+                    stdout, stderr = await asyncio.wait_for(process.communicate(), timeout=10)
+                    self.assertEqual(process.returncode, 0, stderr.decode())
+                    problems = json.loads(stdout)
+                    self.assertEqual(problems, [] if mode in ("verified", "other-forum")
+                                     else ["context_unverified"])
+                    self.assertTrue(any(expected in line for line in logged.output))
+                    with self.database.session() as session:
+                        self.assertEqual(session.query(LocalCommunityThread).count(), 1)
+        finally:
+            server.should_exit = True
+            await asyncio.wait_for(serving, timeout=10)
+            listener.close()
+
     async def test_private_http_rejects_bad_auth_schema_and_late_calls(self) -> None:
         """Malformed or unauthenticated events do not cross the sink boundary."""
         app = FastAPI()

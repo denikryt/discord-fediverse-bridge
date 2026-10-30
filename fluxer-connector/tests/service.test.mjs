@@ -96,3 +96,28 @@ test('RPC port collision after SDK login closes the SDK without claiming a runni
     await python.stop();
   }
 });
+
+test('an unknown inbound forum parent is diagnostic, never permanent outbound RPC disablement',async()=>{
+  const python=await receiver();const {service,emitter, calls}=setup(python.port);
+  try {
+    const port=await service.start();
+    emitter.emit('messageCreate',{id:'msg-unclaimed',channelId:'thread-unknown',
+      guildId:'guild-1',type:0,content:'foreign',
+      author:{id:'human',username:'Human',bot:false},attachments:new Map(),
+      createdAt:new Date('2026-10-28T00:00:00Z')});
+    // Allow the accepted event to complete before checking RPC readiness.
+    for(let n=0;n<100 && python.events.length===0;n++) {
+      await new Promise(resolve=>setTimeout(resolve,5));
+    }
+    const health=await (await request(port,'health')).json();
+    assert.equal(health.result.state,'ready');
+    assert.equal(health.result.gateway_context_unverified,true);
+    assert.equal((await request(port,'fetch_channel')).status,200);
+    await service.close();
+    assert.equal(python.events.length,1);
+    assert.equal('parent_channel' in python.events[0].body,false);
+    assert.equal('thread_context' in python.events[0].body,false);
+    // SDK unavailable context must not be mistaken for a broken outbound session.
+    assert.equal(calls.filter(([op])=>op==='login').length,1);
+  }finally{await service.close();await python.stop();}
+});
