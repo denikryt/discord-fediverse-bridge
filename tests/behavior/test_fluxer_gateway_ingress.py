@@ -158,6 +158,43 @@ class FluxerForumObservationScenarios(unittest.IsolatedAsyncioTestCase):
                 self.assertEqual(response.status_code, 200, response.text)
                 self.assertEqual(response.json(), {"accepted": True})
 
+    async def test_node_gateway_wire_is_admitted_and_still_cannot_publish_ap(self) -> None:
+        """A real Node subprocess feeds authenticated HTTP, then owned SQLite gate."""
+        import subprocess
+
+        payload = {
+            "id": "thread-1", "parent_id": "forum-1", "guild_id": "guild-one",
+            "type": 11, "name": "Topic", "owner_id": "human-1",
+            "newly_created": True,
+        }
+        script = """
+          import {normalizeGatewayEvent} from './fluxer-connector/src/normalization.ts';
+          let incoming=''; for await (const chunk of process.stdin) incoming+=chunk;
+          process.stdout.write(JSON.stringify(normalizeGatewayEvent(
+            'fx-one','THREAD_CREATE',JSON.parse(incoming),
+            {receivedAt:'2026-10-27T11:00:00.000Z'})));
+        """
+        root = Path(__file__).resolve().parents[2]
+        result = subprocess.run(
+            ['node', '--experimental-strip-types', '--input-type=module', '-e', script],
+            cwd=root, input=json.dumps(payload), text=True, capture_output=True,
+            check=True, timeout=10,
+        )
+        app = FastAPI()
+        app.include_router(create_internal_fluxer_router({"fx-one": (self.handler, "test-secret")}))
+        headers = {"Authorization": "Bearer test-secret", "X-Fluxer-Connector": "fx-one"}
+        with self.assertLogs("src.fluxer_ingress", level="INFO") as logged:
+            async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app),
+                                         base_url="http://test") as client:
+                response = await client.post("/internal/fluxer/events", headers=headers,
+                                             content=result.stdout)
+                self.assertEqual(response.status_code, 200, response.text)
+                self.assertEqual(response.json(), {"accepted": True})
+        self.assertTrue(any("community_binding_not_active" in line for line in logged.output))
+        with self.database.session() as session:
+            # A confirmed physical owner still cannot mint a Fluxer AP author.
+            self.assertEqual(session.query(LocalCommunityThread).count(), 1)
+
     async def test_private_http_rejects_bad_auth_schema_and_late_calls(self) -> None:
         """Malformed or unauthenticated events do not cross the sink boundary."""
         app = FastAPI()

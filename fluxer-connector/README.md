@@ -25,3 +25,14 @@ integration test can be considered verified. The current offline development
 environment can type-check the TypeScript source with an externally installed
 Node type declaration directory, but that is **not** verification of the SDK
 package's types or wire behavior.
+
+`src/normalization.ts` is the only native Fluxer Gateway-dispatch → neutral
+DTO converter. It follows the documented `MESSAGE_*` and `THREAD_*` payloads
+in the supplied Fluxer source (`fluxer_docs/.../gateway/events.md` and
+`gateway/threads.md`); it never guesses a forum starter or parent kind, and
+forwards ID-only message mutations without cached parent information. Python
+checks the resulting typed wire format and persisted forum ownership. The
+cross-process behavioral test verifies `Node → private FastAPI → SQLite →
+no ActivityPub publication` for an explicitly owned test forum. Real SDK event
+shapes, gateway reconnect and hosted bot permissions remain live acceptance
+items rather than verified behavior.
