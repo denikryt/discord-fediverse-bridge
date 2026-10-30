@@ -33,8 +33,7 @@ class FluxerSdkReadCrossProcessScenarios(unittest.IsolatedAsyncioTestCase):
             self.fail(f'Node SDK read fixture failed: {stderr[:200]!r}')
         self.rpc = FluxerRpcClient(FluxerConnectorConfig(
             connector_key='fluxer-contract', origin='https://fluxer.example',
-            rpc_url=f'http://127.0.0.1:{int(ready)}',
-            bot_token='not-used', transport_secret='test-transport-secret',
+            rpc_url=f'http://127.0.0.1:{int(ready)}', transport_secret='test-transport-secret',
         ))
         self.adapter = FluxerAdapter(connector_key='fluxer-contract',
                                      instance_origin='https://fluxer.example', rpc=self.rpc,

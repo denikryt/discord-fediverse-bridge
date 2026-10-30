@@ -36,7 +36,7 @@ class FluxerLookupAdapterScenarios(unittest.IsolatedAsyncioTestCase):
                                              'ok': True, 'result': result})
 
         config = FluxerConnectorConfig('fluxer-test', 'https://fluxer.example',
-                                       'http://127.0.0.1:8721', 'bot-token', 'transport-secret')
+                                       'http://127.0.0.1:8721', 'transport-secret')
         self.rpc = FluxerRpcClient(config, transport=httpx.MockTransport(server))
         self.adapter = FluxerAdapter(connector_key='fluxer-test',
                                            instance_origin='https://fluxer.example', rpc=self.rpc)

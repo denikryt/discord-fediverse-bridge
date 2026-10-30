@@ -168,6 +168,15 @@ def _build_live_runtime(
                 settings.normalized_fedify_origin, settings.fedify_actor_identifier
             )
         )
+        # Operator-approved Fluxer identity must be committed before SDK
+        # composition; a conflicting saved row never authorizes a rebind.
+        trusted_fluxer = settings.fluxer_connectors[0] if settings.fluxer_connectors else None
+        with database.session() as session:
+            database.platform_surfaces.admit_single_trusted_fluxer(
+                session,
+                connector_key=trusted_fluxer.connector_key if trusted_fluxer else None,
+                instance_origin=trusted_fluxer.origin if trusted_fluxer else None,
+            )
         BridgeActorKeyBootstrap(database=database, settings=settings).ensure()
 
         bridge_policy_service = BridgePolicyService(

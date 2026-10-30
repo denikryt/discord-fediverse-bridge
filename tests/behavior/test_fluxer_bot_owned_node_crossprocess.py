@@ -42,7 +42,7 @@ class FluxerVerifiedBotOwnershipScenarios(unittest.IsolatedAsyncioTestCase):
             self.fail(f'Node service did not authenticate: {stderr[:300]!r}')
         config = FluxerConnectorConfig('fx-owned', 'https://fx.test',
                                        f'http://127.0.0.1:{int(port)}',
-                                       'not-a-provider-token', 'test-transport-secret')
+                                       'test-transport-secret')
         self.rpc = FluxerRpcClient(config)
         # Deliberately pass no Python bot_actor_id: only READY health can bind it.
         self.adapter = FluxerAdapter(connector_key='fx-owned',

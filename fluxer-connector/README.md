@@ -75,3 +75,19 @@ that does not replace testing the published package.
 
 Do not declare the Fluxer transport ready or enable remote bot writes until
 that remaining SDK/factory/REST contract and the live acceptance tests pass.
+
+## One trusted instance and credentials
+
+Issue #12 accepts at most one explicitly approved Fluxer instance per bridge
+runtime. Python's `FLUXER_CONNECTORS_JSON` contains the canonical origin,
+connector key, `http://127.0.0.1:<fixed-port>` RPC address and private IPC
+bearer only. A legacy `bot_token` property in that JSON is rejected; the bridge
+never receives or forwards the Fluxer SDK bot token. Existing mismatched saved
+connector identities are rejected without silent replacement.
+
+The future production Node entrypoint must load the bot credential from its
+**own read-only secret file** with `readBotTokenFromFile()` in `token_secret.ts`.
+Only Node may mount that file; it must not be placed in the broad bridge
+`.env`/`env_file`, Python environment or DB. The Node-only Compose secret mount
+and production entrypoint are not yet wired in this checkpoint. The shared
+private HTTP bearer is a separate credential, not the SDK bot token.

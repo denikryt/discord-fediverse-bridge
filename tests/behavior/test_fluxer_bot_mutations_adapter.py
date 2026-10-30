@@ -84,7 +84,7 @@ class FluxerBotMutationScenarios(unittest.IsolatedAsyncioTestCase):
         """Initialize a non-Discord adapter and concrete mutable remote state."""
         self.provider = StatefulMutationProvider()
         config = FluxerConnectorConfig('fluxer-test', 'https://fluxer.example',
-                                       'http://127.0.0.1:8721', 'bot-secret', 'transport-secret')
+                                       'http://127.0.0.1:8721', 'transport-secret')
         self.rpc = FluxerRpcClient(config, transport=httpx.MockTransport(self.provider.serve))
         self.adapter = FluxerAdapter(connector_key='fluxer-test',
                                      instance_origin='https://fluxer.example',

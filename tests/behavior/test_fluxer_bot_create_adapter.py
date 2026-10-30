@@ -88,7 +88,7 @@ class FluxerBotCreateScenarios(unittest.IsolatedAsyncioTestCase):
         """Start one connector and stateful remote provider."""
         self.provider = Provider()
         cfg = FluxerConnectorConfig('fluxer-test', 'https://fluxer.example',
-                                    'http://127.0.0.1:8721', 'bot-token', 'transport-secret')
+                                    'http://127.0.0.1:8721', 'transport-secret')
         self.rpc = FluxerRpcClient(cfg, transport=httpx.MockTransport(self.provider.handle))
         self.adapter = FluxerAdapter(connector_key='fluxer-test',
                                      instance_origin='https://fluxer.example',
@@ -341,7 +341,7 @@ class FluxerDurableSqliteCreateScenarios(unittest.IsolatedAsyncioTestCase):
             self.canonical_id = canonical.id
         self.provider = Provider()
         cfg = FluxerConnectorConfig('fluxer-test', 'https://fluxer.example',
-                                    'http://127.0.0.1:8721', 'bot-token', 'transport-secret')
+                                    'http://127.0.0.1:8721', 'transport-secret')
         self.rpc = FluxerRpcClient(cfg, transport=httpx.MockTransport(self.provider.handle))
         self.adapter = FluxerAdapter(connector_key='fluxer-test',
                                      instance_origin='https://fluxer.example',

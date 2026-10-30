@@ -128,6 +128,21 @@ connector-aware human authorization. Node SDK normalization and production
 composition are not yet implemented; route tests do not claim live Gateway
 integration.
 
+## Trusted Fluxer connector identity admission
+
+The Python `FluxerConnectorConfig` carries one canonical operator-approved
+origin, connector key, loopback-only private RPC address and separately redacted
+IPC bearer. It **does not** carry a Fluxer bot credential. The JSON parser
+rejects additional instances and legacy `bot_token` fields; on live runtime
+construction, the repository checks the already saved Fluxer row before
+registering or reusing exactly one immutable identity. Different saved keys
+or origins are rejected before any SDK initialization and are never silently
+rekeyed or deleted. Disabled deployments create no new Fluxer row. The SQLite
+partial unique origin index remains a separate integrity guard; it does not
+substitute for this one-instance admission. The future Node service alone
+reads the bot token from a read-only secret file; no bearer bot credential
+crosses `PlatformAdapterPort` or the Python RPC boundary.
+
 ## Connector Create pre-claim admission
 
 Before `PlatformDeliveryIntentRepository.claim()` reserves a physical Create,

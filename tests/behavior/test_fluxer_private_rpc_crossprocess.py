@@ -31,8 +31,7 @@ class FluxerRpcCrossProcessScenarios(unittest.IsolatedAsyncioTestCase):
             self.fail(f'Node private RPC listener failed: {stderr[:200]!r}')
         self.client = FluxerRpcClient(FluxerConnectorConfig(
             connector_key='fluxer-contract', origin='https://fluxer.example',
-            rpc_url=f'http://127.0.0.1:{int(ready)}',
-            bot_token='unused-bot-token', transport_secret='test-transport-secret',
+            rpc_url=f'http://127.0.0.1:{int(ready)}', transport_secret='test-transport-secret',
         ))
 
     async def asyncTearDown(self) -> None:

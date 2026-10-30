@@ -20,7 +20,7 @@ class FluxerRpcContractScenarios(unittest.IsolatedAsyncioTestCase):
         """Use a nonpublic, explicit test-sidecar binding without real secrets."""
         return FluxerConnectorConfig(
             connector_key='fluxer-test', origin='https://fluxer.example',
-            rpc_url='http://127.0.0.1:8721', bot_token='secret-bot-token',
+            rpc_url='http://127.0.0.1:8721',
             transport_secret='secret-transport-token',
         )
 
@@ -51,7 +51,8 @@ class FluxerRpcContractScenarios(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(headers['authorization'], 'Bearer secret-transport-token')
         self.assertLess(len(content), 262144)
         self.assertEqual(json.loads(content)['connector_key'], 'fluxer-test')
-        self.assertNotIn(b'secret-bot-token', content)
+        self.assertNotIn(b'bot_token', content)
+        self.assertFalse(hasattr(self._config(), 'bot_token'))
 
     async def test_wrong_connector_and_unknown_method_rejected_without_io(self) -> None:
         """No fallback to another instance or arbitrary private operation name."""

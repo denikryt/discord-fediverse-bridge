@@ -174,6 +174,39 @@ class PlatformSurfaceRepository(BaseRepository):
             raise ValueError("Invalid connector origin URL") from error
 
     @staticmethod
+    def admit_single_trusted_fluxer(
+        session: Session, *, connector_key: str | None, instance_origin: str | None,
+    ) -> PlatformConnector | None:
+        """Admit at most one saved Fluxer binding before starting external clients.
+
+        The caller owns the transaction. An existing incompatible identity is
+        preserved for operator migration, not silently deleted or rebound.
+        """
+        rows = session.scalars(
+            select(PlatformConnector)
+            .where(PlatformConnector.platform == "fluxer")
+            .limit(2)
+        ).all()
+        if len(rows) > 1:
+            raise ValueError("Fluxer deployment has multiple persisted connector identities")
+        if connector_key is None and instance_origin is None:
+            # An explicitly disabled connector leaves its historical binding
+            # intact and never adds or starts a replacement.
+            return None
+        if connector_key is None or instance_origin is None:
+            raise ValueError("Fluxer configured identity is incomplete")
+        instance_origin = PlatformSurfaceRepository.canonical_origin(instance_origin)
+        if rows and (
+            rows[0].connector_key != connector_key
+            or rows[0].instance_origin != instance_origin
+        ):
+            raise ValueError("Fluxer configured instance conflicts with persisted identity")
+        return PlatformSurfaceRepository.add_connector(
+            session, connector_key=connector_key, platform="fluxer",
+            instance_origin=instance_origin,
+        )
+
+    @staticmethod
     def add_connector(
         session: Session,
         *,

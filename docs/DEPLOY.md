@@ -79,6 +79,33 @@ curl -fsS http://127.0.0.1:3000/healthz
 
 The public service should now be available at the URL configured in `PUBLIC_BASE_URL`.
 
+## Fluxer trusted-instance opt-in (integration in progress)
+
+The current Fluxer runtime implementation is **not yet deployed** by the
+standard Compose setup. Its Python configuration accepts zero or one trusted
+instance via `FLUXER_CONNECTORS_JSON`, for example:
+
+```json
+[{"connector_key":"fluxer-primary","origin":"https://fluxer.example",
+  "rpc_url":"http://127.0.0.1:8769","transport_secret":"separate-private-rpc-bearer"}]
+```
+
+The `origin` must be explicitly operator-approved. The RPC address must be
+`http://127.0.0.1:<port>`; the eventual Node sidecar shares the bridge network
+namespace, **not** a separate Compose loopback. Saved connector key/origin
+identity is immutable: a conflict stops startup without rewriting existing
+SQLite rows. Adding a second Fluxer instance is not supported by issue #12.
+
+**Never place a Fluxer bot token in `FLUXER_CONNECTORS_JSON`, the bridge
+`.env`/`env_file`, or Python container mounts.** Legacy token-bearing JSON is
+rejected. The Node sidecar will receive its credential only through a separate
+read-only secret file mounted for Node, and the IPC bearer above is independent
+of that credential. The secret-file reader is implemented, but the production
+Node entrypoint and Compose-only secret mount remain to be wired and verified.
+Do not enable real Fluxer bot dispatch on the strength of configuration
+admission alone. The trusted-instance model permits the SDK's default REST
+Agent; it does not promise per-socket SSRF/DNS rebinding protection.
+
 ## Development instance on the same machine
 
 The development instance uses a separate domain, Discord bot, ports, Compose project, database volume, and backup directory.
