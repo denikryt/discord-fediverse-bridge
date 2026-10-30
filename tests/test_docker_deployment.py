@@ -4,6 +4,8 @@ from __future__ import annotations
 
 from pathlib import Path
 
+import yaml
+
 ROOT = Path(__file__).resolve().parents[1]
 
 
@@ -12,14 +14,18 @@ def _read(path: str) -> str:
     return (ROOT / path).read_text(encoding="utf-8")
 
 
-def test_primary_compose_has_two_versioned_services_and_shared_state() -> None:
+def test_primary_compose_has_versioned_services_and_shared_state() -> None:
     """Default Compose must expose the application processes and automatic backup."""
     compose = _read("compose.yaml")
 
     assert "  bridge:" in compose
     assert "  fedify-gateway:" in compose
     assert "  nginx:" not in compose
-    assert compose.count("${BRIDGE_VERSION:?") == 3
+    services = yaml.safe_load(compose)["services"]
+    assert set(services) == {"bridge", "fedify-gateway", "backup", "fluxer-sidecar"}
+    for service in services.values():
+        assert "${BRIDGE_VERSION:?" in service["image"]
+    assert services["fluxer-sidecar"]["profiles"] == ["fluxer"]
     assert compose.count("DATABASE_URL: sqlite:////data/bridge.db") == 1
     assert compose.count("- bridge-data:/data") == 2
     assert "127.0.0.1:${BRIDGE_PUBLISHED_PORT:-8080}:8080" in compose
@@ -50,7 +56,14 @@ def test_build_override_builds_both_images_with_shared_version() -> None:
     """Local builds must stamp both Python services and the gateway with one version."""
     compose = _read("compose.build.yaml")
 
-    assert compose.count("APP_VERSION: ${BRIDGE_VERSION:?") == 3
+    services = yaml.safe_load(compose)["services"]
+    expected = {"bridge": "Dockerfile", "backup": "Dockerfile",
+                "fedify-gateway": "fedify-gateway/Dockerfile",
+                "fluxer-sidecar": "fluxer-connector/Dockerfile"}
+    assert set(services) == set(expected)
+    for name, dockerfile in expected.items():
+        assert services[name]["build"]["dockerfile"] == dockerfile
+        assert "${BRIDGE_VERSION:?" in services[name]["build"]["args"]["APP_VERSION"]
     assert "dockerfile: Dockerfile" in compose
     assert "dockerfile: fedify-gateway/Dockerfile" in compose
 

@@ -620,3 +620,7 @@ Startup and shutdown retain both SQLite lifetime and deployment leases on unconf
 ## Python test infrastructure (CP036)
 
 Default pytest collects application and vendored discordops tests together. Shared fixtures use bridge_test_support; vendor tests use discordops_tests. Spawn imports are covered, PyYAML is declared, and uv.lock uses public registry URLs without changing existing pinned versions.
+
+## Runtime regression scenarios (CP037)
+
+Startup/shutdown fixtures use the real Runtime and SQLite. Ready Discord admission is explicit. Nested Create coverage observes blocked -> pending -> scheduler delivery, committed parent/child surfaces and the persisted physical parent ID. Compose tests parse services instead of counting YAML strings.

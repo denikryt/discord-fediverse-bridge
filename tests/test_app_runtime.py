@@ -12,29 +12,7 @@ from src.config import Settings
 from src.discord_message_mutations import DiscordMessageMutationHandler
 
 
-def _settings(state_root: Path) -> Settings:
-    """Build isolated settings while preserving production validation defaults."""
-    validated = Settings.model_validate(
-        {
-            "DISCORD_TOKEN": "test-discord-token",
-            "DATABASE_URL": "sqlite:////data/bridge.db",
-            "PUBLIC_BASE_URL": "https://bridge.example",
-            "BRIDGE_GATEWAY_URL": "http://127.0.0.1:3000",
-            "FEDIFY_SHARED_SECRET": "test-shared-secret",
-            "BRIDGE_SUPER_ADMIN_USER_IDS": "1234567890",
-            "PROFILE_MEDIA_ROOT": "/data/profile-media",
-            "DEPLOYMENT_STATE_LOCK_PATH": "/data/deployment-state.lock",
-            "PROFILE_MEDIA_LOCK_PATH": "/data/profile-media.lock",
-        }
-    )
-    values = validated.model_dump()
-    values.update(
-        database_url=f"sqlite:///{state_root / 'bridge.db'}",
-        profile_media_root=str(state_root / "profile-media"),
-        deployment_state_lock_path=str(state_root / "deployment-state.lock"),
-        profile_media_lock_path=str(state_root / "profile-media.lock"),
-    )
-    return Settings.model_construct(**values)
+from bridge_test_support.runtime import runtime_settings as _settings
 
 
 @pytest.mark.asyncio
@@ -247,159 +225,53 @@ async def test_runtime_close_cancels_inflight_personal_feed_delivery_before_depe
         assert delivery.attempt_count == 0
 
 
-def test_partial_startup_failure_after_database_closes_database_and_lease(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+
+@pytest.mark.parametrize("phase", ["migration", "oauth", "validation"])
+def test_partial_startup_closes_real_resources_and_releases_both_leases(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, phase: str
 ) -> None:
-    """A migration-time startup failure closes only owners that already exist."""
+    """Every composition milestone unwinds SQLite before both protective locks."""
     from src import app
+    from src.db import Database
+    from src.profile_media import FileLock
+    from src.runtime_ownership import acquire_runtime_lifetime_lease
 
-    close_order: list[str] = []
+    settings = _settings(tmp_path)
+    steps = []
+    migrate, close, unlock = Database.migrate, Database.close, FileLock.close
 
-    class FakeLease:
-        """Track deployment lease closure for a failed startup."""
-
-        def close(self) -> None:
-            """Record release of the shared deployment lease."""
-            close_order.append("lease")
-
-    class FakeDatabase:
-        """Fail immediately after the database owner is constructed."""
-
-        def __init__(self, _url: str) -> None:
-            close_order.append("database-open")
-
-        def create_all(self) -> None:
-            """Preserve the schema creation milestone before migration."""
-
-        def migrate(self, *_args: object, **_kwargs: object) -> None:
-            """Raise after DB construction so cleanup must dispose the engine."""
+    def migrate_database(database, *args, **kwargs):
+        """Fail only after opening and migrating genuine SQLite connections."""
+        migrate(database, *args, **kwargs)
+        if phase == "migration":
             raise RuntimeError("migration failed")
 
-        def close(self) -> None:
-            """Record disposal of the partially opened database owner."""
-            close_order.append("database")
+    def close_database(database):
+        """Observe real disposal without replacing it with mock success."""
+        close(database)
+        steps.append("database")
 
-    monkeypatch.setattr(app, "Database", FakeDatabase)
+    def close_lease(lease):
+        """Record reverse-order release of real acquired lock descriptors."""
+        unlock(lease)
+        steps.append(lease.path.name)
 
-    with pytest.raises(RuntimeError, match="migration failed"):
-        app._build_live_runtime(_settings(tmp_path), FakeLease())
+    def fail(*args, **kwargs):
+        """Inject an outer construction or final composition boundary error."""
+        raise RuntimeError(f"{phase} failed")
 
-    assert close_order == ["database-open", "database", "lease"]
-
-
-def test_partial_startup_failure_after_gateway_closes_gateway_database_and_lease(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    """A failure after gateway construction closes gateway before database and lease."""
-    from src import app
-
-    close_order: list[str] = []
-
-    class FakeLease:
-        """Track deployment lease closure for gateway failure."""
-
-        def close(self) -> None:
-            """Record lease release."""
-            close_order.append("lease")
-
-    class FakeDatabase:
-        """Provide only the database surface needed before gateway construction."""
-
-        def __init__(self, _url: str) -> None:
-            close_order.append("database-open")
-            self.bridge_policy_entries = object()
-
-        def create_all(self) -> None:
-            """No-op schema setup for composition failure testing."""
-
-        def migrate(self, *_args: object, **_kwargs: object) -> None:
-            """No-op migration setup for composition failure testing."""
-
-        def close(self) -> None:
-            """Record database disposal."""
-            close_order.append("database")
-
-    class FakeGateway:
-        """Represent a constructed gateway HTTP client."""
-
-        def __init__(self, _settings: object) -> None:
-            close_order.append("gateway-open")
-
-        async def close(self) -> None:
-            """Record asynchronous gateway cleanup."""
-            close_order.append("gateway")
-
-    class FailingOAuth:
-        """Fail immediately after the gateway has become a live owner."""
-
-        def __init__(self, _settings: object) -> None:
-            raise RuntimeError("oauth failed")
-
-    monkeypatch.setattr(app, "Database", FakeDatabase)
-    monkeypatch.setattr(app, "BridgeActorKeyBootstrap", lambda **_kwargs: Mock(ensure=Mock()))
-    monkeypatch.setattr(app, "FedifyGatewayClient", FakeGateway)
-    monkeypatch.setattr(app, "DiscordOAuthClient", FailingOAuth)
-
-    with pytest.raises(RuntimeError, match="oauth failed"):
-        app._build_live_runtime(_settings(tmp_path), FakeLease())
-
-    assert close_order == ["database-open", "gateway-open", "gateway", "database", "lease"]
-
-
-@pytest.mark.asyncio
-async def test_partial_startup_validation_failure_closes_complete_runtime_graph(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    """A final graph-validation failure uses Runtime.close() before returning."""
-    from src import app
-    from src.db import Database as RealDatabase
-    from src.discord_oauth_client import DiscordOAuthClient as RealOAuth
-    from src.fedify_gateway_client import FedifyGatewayClient as RealGateway
-
-    close_order: list[str] = []
-
-    class FakeLease:
-        """Track deployment lease closure after final graph validation fails."""
-
-        def close(self) -> None:
-            """Record release of the deployment lease."""
-            close_order.append("lease")
-
-    class TrackingDatabase(RealDatabase):
-        """Real database with observable close semantics."""
-
-        def close(self) -> None:
-            """Record database disposal without hiding real cleanup."""
-            close_order.append("database")
-            super().close()
-
-    class TrackingGateway(RealGateway):
-        """Real gateway client with observable async close semantics."""
-
-        async def close(self) -> None:
-            """Record gateway HTTP client cleanup."""
-            close_order.append("gateway")
-            await super().close()
-
-    class TrackingOAuth(RealOAuth):
-        """Real OAuth client with observable async close semantics."""
-
-        async def close(self) -> None:
-            """Record OAuth HTTP client cleanup."""
-            close_order.append("oauth")
-            await super().close()
-
-    monkeypatch.setattr(app, "Database", TrackingDatabase)
-    monkeypatch.setattr(app, "FedifyGatewayClient", TrackingGateway)
-    monkeypatch.setattr(app, "DiscordOAuthClient", TrackingOAuth)
-
-    def fail_validation(_runtime: object) -> None:
-        """Fail after all production bind methods have completed."""
-        raise RuntimeError("validation failed")
-
-    monkeypatch.setattr(app, "_validate_runtime_graph", fail_validation)
-
-    with pytest.raises(RuntimeError, match="validation failed"):
-        app._build_live_runtime(_settings(tmp_path), FakeLease())
-
-    assert close_order == ["oauth", "gateway", "database", "lease"]
+    monkeypatch.setattr(Database, "migrate", migrate_database)
+    monkeypatch.setattr(Database, "close", close_database)
+    monkeypatch.setattr(FileLock, "close", close_lease)
+    if phase == "oauth":
+        monkeypatch.setattr(app, "DiscordOAuthClient", fail)
+    if phase == "validation":
+        monkeypatch.setattr(app, "_validate_runtime_graph", fail)
+    with pytest.raises(RuntimeError, match=f"{phase} failed"):
+        build_runtime(settings)
+    assert steps[-3:] == ["database", "deployment-state.lock", "bridge.db.runtime.lock"]
+    with acquire_runtime_lifetime_lease(settings.database_url):
+        with FileLock(Path(settings.deployment_state_lock_path)).acquire(
+            exclusive=True, timeout_seconds=0
+        ):
+            pass
