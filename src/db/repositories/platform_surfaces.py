@@ -1,6 +1,8 @@
 """Connector-scoped channel identity and transactional typed-claim persistence."""
 
 from dataclasses import dataclass
+import ipaddress
+import re
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
@@ -111,25 +113,65 @@ class PlatformSurfaceRepository(BaseRepository):
 
     @staticmethod
     def canonical_origin(origin: str) -> str:
-        """Normalize identity metadata without discovering or contacting an API."""
-        parsed = urlsplit(origin)
+        """Canonicalize an instance identity without DNS/network side effects.
+
+        The returned bytes are persisted and compared by SQLite; noncanonical
+        direct SQL values are outside the repository's normalization contract.
+        """
         if (
-            parsed.scheme.lower() not in {"http", "https"}
-            or not parsed.hostname
-            or parsed.username is not None
-            or parsed.password is not None
-            or parsed.path
-            or parsed.query
-            or parsed.fragment
+            not isinstance(origin, str)
+            or not origin
+            or any(char.isspace() for char in origin)
+            or "?" in origin
+            or "#" in origin
         ):
-            raise ValueError(
-                "Connector origin requires HTTP(S) scheme/host and no path, credentials, query or fragment"
-            )
-        hostname = parsed.hostname.lower()
-        host = f"[{hostname}]" if ":" in hostname else hostname
-        if parsed.port is not None:
-            host += f":{parsed.port}"
-        return urlunsplit((parsed.scheme.lower(), host, "", "", ""))
+            raise ValueError("Invalid connector origin URL")
+        try:
+            parsed = urlsplit(origin)
+            if (
+                parsed.scheme.lower() not in {"http", "https"}
+                or not parsed.netloc
+                or not parsed.hostname
+                or parsed.username is not None
+                or parsed.password is not None
+                or parsed.path
+                or parsed.query
+                or parsed.fragment
+            ):
+                raise ValueError("Connector origin requires scheme and host only")
+            port = parsed.port
+            hostname = parsed.hostname
+            if port is not None and port == 0:
+                raise ValueError("Invalid connector origin port")
+            if ":" in hostname:
+                # Forbid address-zone scoping and normalize all IPv6 spellings.
+                if "%" in hostname:
+                    raise ValueError("IPv6 zone identifiers are not instance identities")
+                normalized_host = f"[{ipaddress.IPv6Address(hostname).compressed}]"
+            else:
+                host = hostname.removesuffix(".")
+                if not host or host.endswith("."):
+                    raise ValueError("Invalid DNS hostname")
+                try:
+                    normalized_host = str(ipaddress.IPv4Address(host))
+                except ipaddress.AddressValueError:
+                    # IDNA is applied by label before saving, never by a DNS
+                    # lookup; labels must remain valid ASCII host labels.
+                    normalized_host = host.encode("idna").decode("ascii").lower()
+                    if len(normalized_host) > 253 or any(
+                        not re.fullmatch(r"[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?", label)
+                        for label in normalized_host.split(".")
+                    ):
+                        raise ValueError("Invalid DNS hostname")
+            scheme = parsed.scheme.lower()
+            if port is not None and not (
+                (scheme == "http" and port == 80)
+                or (scheme == "https" and port == 443)
+            ):
+                normalized_host += f":{port}"
+            return urlunsplit((scheme, normalized_host, "", "", ""))
+        except (UnicodeError, ValueError) as error:
+            raise ValueError("Invalid connector origin URL") from error
 
     @staticmethod
     def add_connector(
@@ -139,7 +181,11 @@ class PlatformSurfaceRepository(BaseRepository):
         platform: str,
         instance_origin: str | None = None,
     ) -> PlatformConnector:
-        """Provision one immutable connector; uniqueness is finally enforced by SQLite."""
+        """Register an immutable connector, reusing only an identical binding.
+
+        Callers own the transaction. The permanent SQLite unique index is the
+        final arbiter of a concurrent different-key/same-origin registration.
+        """
         if not isinstance(connector_key, str) or not connector_key.strip():
             raise ValueError("Connector key must be a nonempty opaque string")
         if platform == "discord" and instance_origin is not None:
@@ -147,11 +193,16 @@ class PlatformSurfaceRepository(BaseRepository):
         if platform == "fluxer":
             if instance_origin is None:
                 raise ValueError("Fluxer connector requires an instance origin")
-            instance_origin = PlatformSurfaceRepository.canonical_origin(
-                instance_origin
-            )
+            instance_origin = PlatformSurfaceRepository.canonical_origin(instance_origin)
         if platform not in {"discord", "fluxer"}:
             raise ValueError("Unsupported connector platform")
+        existing = session.scalar(
+            select(PlatformConnector).where(PlatformConnector.connector_key == connector_key)
+        )
+        if existing is not None:
+            if existing.platform != platform or existing.instance_origin != instance_origin:
+                raise ValueError("Connector key is bound to a different platform or origin")
+            return existing
         row = PlatformConnector(
             connector_key=connector_key,
             platform=platform,

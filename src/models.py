@@ -39,6 +39,14 @@ class PlatformConnector(Base):
     __tablename__ = "platform_connectors"
     __table_args__ = (
         UniqueConstraint("connector_key"),
+        # The unreleased v1 target enforces physical instance ownership even for
+        # direct SQL writers; application admission canonicalizes URLs first.
+        Index(
+            "ux_platform_connectors_fluxer_origin",
+            "instance_origin",
+            unique=True,
+            sqlite_where=text("platform = 'fluxer'"),
+        ),
         CheckConstraint(
             "platform IN ('discord', 'fluxer')", name="ck_connector_platform"
         ),

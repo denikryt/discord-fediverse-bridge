@@ -6,7 +6,7 @@ Method-level repository split planning lives in `docs/architecture/database-meth
 
 | Table | SQLAlchemy model | Area | Primary writer | Primary readers | Why it exists | Important invariants |
 | --- | --- | --- | --- | --- | --- | --- |
-| `platform_connectors` | `PlatformConnector` | Physical platform identity | Platform surface repository/bootstrap | Scoped repositories | Identify a connector independently of domain actors | Unique opaque key; Discord origin NULL, Fluxer canonical origin required; no credentials |
+| `platform_connectors` | `PlatformConnector` | Physical platform identity | Platform surface repository/bootstrap | Scoped repositories | Identify a connector independently of domain actors | Unique opaque key; Discord origin NULL, Fluxer canonical origin required and unique by SQLite partial index on saved values; no credentials |
 | `platform_channel_surfaces` | `ChannelSurface` | Physical channel ownership | Transactional claim operations | Placement and Discord recipient queries | Persist scoped channels and their current typed owner | Unique connector/channel; four unique typed owner FKs; at most one owner; stored generated nullable `role`; repository claims require forum for host/local/remote subscribers, and text/announcement/unknown for Personal Feed |
 | `post_links` | `PostLink` | Legacy/direct Lemmy mapping | Remote sync runtime | Remote sync runtime | Map Lemmy posts to Discord forum threads | Unique target thread; one row per post/channel copy |
 | `comment_links` | `CommentLink` | Legacy/direct Lemmy mapping | Remote sync runtime | Remote sync runtime | Map Lemmy comments to Discord messages | Unique target Discord message; per-thread remote comment dedup |
