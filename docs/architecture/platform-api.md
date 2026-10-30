@@ -301,6 +301,24 @@ scheduler, shared direct-path admission, or full per-connector concurrency
 bounds; those remain pending Checkpoint 5 integration.
 
 
+## Bounded mutation scans and explicit re-admission
+
+Mutation discovery reads at most one page of 32 physical-copy rows from each
+of the four existing copy families per connector sweep. Process-local cursors
+resume pagination across ticks and rotate family priority; every page is
+read-only and holds no durable claim. This prevents an arbitrarily large
+backlog of already-settled historical copies from monopolizing a connector.
+
+A definitive **pre-write** refusal is stored on the existing copy as
+`failed_definite` and tied to its canonical revision. That same revision is
+not reevaluated on every periodic scheduler tick and cannot be directly
+CAS-claimed. A newer canonical revision becomes eligible normally; an
+operator or current-policy revalidation may explicitly call
+`readmit_failed_revision(...)` for that exact connector, copy and revision
+after current owner/policy checks. Unavailable transports and failed remote
+reads before a claim remain recoverable without this manual action. An
+unknown-effect `unresolved` mutation is never re-admitted by this method.
+
 ## Connector-isolated physical recovery (Fluxer Support, partial)
 
 `PlatformPhysicalDeliveryScheduler` is the single runtime-owned task supervisor

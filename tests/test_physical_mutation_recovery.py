@@ -149,6 +149,14 @@ class PhysicalMutationRecoveryScenarios(unittest.TestCase):
             self.assertEqual(copy.mutation_state, 'failed_definite')
             self.assertIsNone(copy.applied_revision)
         worker.target_policy = lambda _connector, _surface: True
+        # Same-revision definitive refusals stay fenced until an explicit
+        # policy revalidation. Merely changing an in-memory predicate is not
+        # authority for repeated physical writes on scheduler ticks.
+        self.assertEqual(asyncio.run(worker.drain()), 0)
+        self.assertTrue(worker.readmit_failed_revision(
+            domain='local', kind='post', copy_id=self.copy_id,
+            connector_key='discord-primary', revision=1,
+        ))
         self.assertEqual(asyncio.run(worker.drain()), 1)
         self.assertEqual([item[0] for item in calls], ['edit'])
         with self.db.session() as session:
@@ -201,6 +209,11 @@ class PhysicalMutationRecoveryScenarios(unittest.TestCase):
             self.assertEqual(copy.mutation_state, 'failed_definite')
             self.assertIsNone(copy.applied_revision)
         worker.tombstone_renderer = lambda _domain, _kind: ContentDocument('*deleted*')
+        self.assertEqual(asyncio.run(worker.drain()), 0)
+        self.assertTrue(worker.readmit_failed_revision(
+            domain='local', kind='post', copy_id=self.copy_id,
+            connector_key='discord-primary', revision=2,
+        ))
         self.assertEqual(asyncio.run(worker.drain()), 1)
         self.assertEqual([(kind, ref) for kind, ref, _ in calls],
                          [('edit', MessageRef('discord-primary', '900', '901'))])

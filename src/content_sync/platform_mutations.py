@@ -95,7 +95,10 @@ class PlatformPhysicalMutationCoordinator:
         self.tombstone_renderer = tombstone_renderer
         self.dispatch_gate = dispatch_gate
         # Fair, bounded read-only scanning across four existing copy families.
-        self._scan_cursor: dict[str | None, tuple[int, int]] = {}
+        # Per-connector/family bounded SQL pagination, not a private work queue.
+        # The cursor advances after each 32-row read, even past settled rows.
+        self._scan_cursor: dict[tuple[str | None, int], int] = {}
+        self._family_rotation: dict[str | None, int] = {}
 
     @staticmethod
     def _current_owner(session, domain: str, canonical, surface: ChannelSurface, copy) -> bool:
@@ -186,84 +189,93 @@ class PlatformPhysicalMutationCoordinator:
     def _discover_due(self, *, connector_key: str | None = None,
                       excluded: set[tuple[str, str, int]] | None = None
                       ) -> list[PhysicalMutationCandidate]:
-        """Read-only, stable-id paginated discovery across all four copy families.
+        """Read at most one 32-row SQLite page per family in a single sweep.
 
-        Pages do not reserve work. A rejected low-ID copy cannot obscure a
-        higher-ID candidate, even if already-settled rows precede both.
+        Cursors belong to this runtime/connector only and may reset on restart;
+        they never authorize a write or bypass the durable unknown-effect fence.
         """
         excluded = excluded or set()
         due: list[PhysicalMutationCandidate] = []
-        start_family, start_id = self._scan_cursor.get(connector_key, (0, 0))
+        start_family = self._family_rotation.get(connector_key, 0)
         with self.database.session() as session:
             for offset in range(len(_COPY_MODELS)):
                 family_index = (start_family + offset) % len(_COPY_MODELS)
                 domain, kind, model, canonical_model, field = _COPY_MODELS[family_index]
-                last_id = start_id if offset == 0 else 0
-                while True:
+                cursor_key = (connector_key, family_index)
+                last_id = self._scan_cursor.get(cursor_key, 0)
+                query = select(model).where(
+                    model.mutation_state.in_(('idle', 'pending', 'failed_definite')),
+                    model.id > last_id,
+                ).order_by(model.id).limit(32)
+                copies = session.scalars(query).all()
+                if not copies and last_id:
+                    # Wrap on a later sweep; do not spin within one call.
+                    last_id = 0
+                    self._scan_cursor[cursor_key] = 0
                     copies = session.scalars(select(model).where(
                         model.mutation_state.in_(('idle', 'pending', 'failed_definite')),
-                        model.id > last_id,
                     ).order_by(model.id).limit(32)).all()
-                    if not copies:
-                        break
-                    last_id = copies[-1].id
-                    for copy in copies:
-                        if (domain, kind, copy.id) in excluded:
+                if not copies:
+                    continue
+                for copy in copies:
+                    if (domain, kind, copy.id) in excluded:
+                        continue
+                    canonical = session.get(canonical_model, getattr(copy, field))
+                    surface = session.get(ChannelSurface, copy.channel_surface_id)
+                    connector = session.get(PlatformConnector, copy.connector_id)
+                    if (canonical is None or surface is None or connector is None
+                        or (connector_key is not None and connector.connector_key != connector_key)
+                        or surface.connector_id != copy.connector_id
+                        or not self._current_owner(session, domain, canonical, surface, copy)):
+                        continue
+                    revision = canonical.content_revision
+                    if revision == 0 and canonical.deleted_at is None:
+                        continue
+                    if copy.applied_revision is not None and copy.applied_revision >= revision:
+                        continue
+                    if (copy.mutation_state == 'failed_definite'
+                        and copy.mutation_target_revision == revision):
+                        # A known-unsent definitive refusal is durable. Only
+                        # a new revision or explicit policy revalidation may
+                        # readmit this same copy for physical writes.
+                        continue
+                    message = self._physical_target(session, domain, kind, canonical, copy,
+                                                    connector.connector_key)
+                    if message is None:
+                        continue
+                    content = None
+                    render_error = None
+                    if canonical.deleted_at is None:
+                        if self.content_renderer is None or not canonical.current_content_json:
                             continue
-                        canonical = session.get(canonical_model, getattr(copy, field))
-                        surface = session.get(ChannelSurface, copy.channel_surface_id)
-                        connector = session.get(PlatformConnector, copy.connector_id)
-                        if (canonical is None or surface is None or connector is None
-                            or (connector_key is not None and connector.connector_key != connector_key)
-                            or surface.connector_id != copy.connector_id
-                            or not self._current_owner(session, domain, canonical, surface, copy)):
-                            continue
-                        revision = canonical.content_revision
-                        if revision == 0 and canonical.deleted_at is None:
-                            continue
-                        if copy.applied_revision is not None and copy.applied_revision >= revision:
-                            continue
-                        if (copy.mutation_state == 'failed_definite'
-                            and copy.mutation_target_revision == revision
-                            and (copy.mutation_last_error or '').startswith((
-                                'invalid canonical content: ',
-                                'unverified physical ownership: ',
-                            ))):
-                            continue
-                        message = self._physical_target(session, domain, kind, canonical, copy,
-                                                        connector.connector_key)
-                        if message is None:
-                            continue
-                        content = None
-                        render_error = None
-                        if canonical.deleted_at is None:
-                            if self.content_renderer is None or not canonical.current_content_json:
-                                continue
-                            try:
-                                snapshot = json.loads(canonical.current_content_json)
-                                if (not isinstance(snapshot, dict) or snapshot.get('schemaVersion') != 1
-                                    or snapshot.get('kind') != kind
-                                    or snapshot.get('apObjectId') != canonical.ap_object_id
-                                    or not isinstance(snapshot.get('bodyMarkdown'), str)):
-                                    raise ValueError('mismatched canonical content identity or shape')
-                                content = self.content_renderer(domain, kind, snapshot)
-                                if not isinstance(content, ContentDocument):
-                                    raise ValueError('domain mutation renderer must return ContentDocument')
-                            except (TypeError, ValueError, KeyError) as exc:
-                                # Rejected work is not a claim and cannot strand
-                                # its siblings; scan later copies in this sweep.
-                                render_error = 'invalid canonical content: ' + str(exc)
-                        due.append(PhysicalMutationCandidate(
-                            domain, kind, copy.id, connector.connector_key, revision,
-                            copy.applied_revision, copy.channel_surface_id, message,
-                            canonical.deleted_at is not None,
-                            canonical.current_content_json, content, render_error,
-                        ))
-                        if len(due) >= 32:
-                            # Always advance the scan before doing any async I/O.
-                            self._scan_cursor[connector_key] = (family_index, copy.id)
-                            return due
-        self._scan_cursor[connector_key] = ((start_family + 1) % len(_COPY_MODELS), 0)
+                        try:
+                            snapshot = json.loads(canonical.current_content_json)
+                            if (not isinstance(snapshot, dict) or snapshot.get('schemaVersion') != 1
+                                or snapshot.get('kind') != kind
+                                or snapshot.get('apObjectId') != canonical.ap_object_id
+                                or not isinstance(snapshot.get('bodyMarkdown'), str)):
+                                raise ValueError('mismatched canonical content identity or shape')
+                            content = self.content_renderer(domain, kind, snapshot)
+                            if not isinstance(content, ContentDocument):
+                                raise ValueError('domain mutation renderer must return ContentDocument')
+                        except (TypeError, ValueError, KeyError) as exc:
+                            # Rejected work is not a claim and cannot strand
+                            # its siblings; scan later copies in this sweep.
+                            render_error = 'invalid canonical content: ' + str(exc)
+                    due.append(PhysicalMutationCandidate(
+                        domain, kind, copy.id, connector.connector_key, revision,
+                        copy.applied_revision, copy.channel_surface_id, message,
+                        canonical.deleted_at is not None,
+                        canonical.current_content_json, content, render_error,
+                    ))
+                    if len(due) >= 32:
+                        self._scan_cursor[cursor_key] = copy.id
+                        self._family_rotation[connector_key] = (family_index + 1) % len(_COPY_MODELS)
+                        return due
+                # The next tick continues beyond this page; later families
+                # still get a bounded opportunity within the current tick.
+                self._scan_cursor[cursor_key] = copies[-1].id
+        self._family_rotation[connector_key] = (start_family + 1) % len(_COPY_MODELS)
         return due
 
     def _claim_one(self, candidate: PhysicalMutationCandidate) -> PhysicalMutationClaim | None:
@@ -296,6 +308,9 @@ class PlatformPhysicalMutationCoordinator:
                 return None
             if copy.applied_revision is not None and copy.applied_revision >= candidate.revision:
                 return None
+            if (copy.mutation_state == 'failed_definite'
+                and copy.mutation_target_revision == candidate.revision):
+                return None
             token = secrets.token_hex(16)
             copy.mutation_state = 'dispatching'
             copy.mutation_target_revision = candidate.revision
@@ -325,6 +340,48 @@ class PlatformPhysicalMutationCoordinator:
             copy.mutation_claim_token = None
             copy.mutation_lease_until = None
             copy.mutation_last_error = reason[:512]
+
+    def readmit_failed_revision(self, *, domain: str, kind: str, copy_id: int,
+                                connector_key: str, revision: int) -> bool:
+        """Readmit an exact known-unsent refusal after explicit policy review.
+
+        This is an operator/policy revalidation boundary, not a scheduler retry.
+        A new canonical revision is independently eligible without this call.
+        """
+        if not any((dom, typ) == (domain, kind) for dom, typ, *_ in _COPY_MODELS):
+            return False
+        descriptor = next(spec for spec in _COPY_MODELS
+                          if spec[0] == domain and spec[1] == kind)
+        _, _, model, canonical_model, field = descriptor
+        with self.database.session() as session:
+            copy = session.get(model, copy_id)
+            if copy is None:
+                return False
+            surface_id = copy.channel_surface_id
+        # Operator review must authorize the current policy *outside* the
+        # SQLite writer; the writer then checks exact identity and revision.
+        if not self.target_policy(connector_key, surface_id):
+            return False
+        with self.database.immediate_session() as session:
+            copy = session.get(model, copy_id)
+            if (copy is None or copy.channel_surface_id != surface_id
+                or copy.mutation_state != 'failed_definite'
+                or copy.mutation_target_revision != revision
+                or copy.mutation_claim_token is not None):
+                return False
+            canonical = session.get(canonical_model, getattr(copy, field))
+            surface = session.get(ChannelSurface, surface_id)
+            connector = session.get(PlatformConnector, copy.connector_id)
+            if (canonical is None or surface is None or connector is None
+                or connector.connector_key != connector_key
+                or surface.connector_id != connector.id
+                or canonical.content_revision != revision
+                or not self._current_owner(session, domain, canonical, surface, copy)):
+                return False
+            copy.mutation_state = 'pending'
+            copy.mutation_target_revision = None
+            copy.mutation_last_error = None
+            return True
 
     def _revalidate(self, claim: PhysicalMutationClaim) -> bool:
         """Check exact attempt, copy owner and target before transport begins."""
