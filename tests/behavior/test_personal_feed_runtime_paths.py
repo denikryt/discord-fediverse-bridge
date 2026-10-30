@@ -412,7 +412,7 @@ async def test_raw_personal_feed_edit_and_delete_route_to_user_actor_mutations(
             mutation_context_provider=lambda: context,
         )
     )
-    from support.typed_mutation_ingress import TypedMutationIngress
+    from bridge_test_support.typed_mutation_ingress import TypedMutationIngress
 
     bot.discord_adapter = TypedMutationIngress(bot._require_message_mutation_handler())
     edited_at = "2026-06-17T12:00:00Z"

@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from support.community_events import create_thread, create_message, configure_renderer, render_create
+from bridge_test_support.community_events import create_thread, create_message, configure_renderer, render_create
 
 import json
 from datetime import datetime, timezone
@@ -20,14 +20,14 @@ from src.local_communities.runtime import LocalCommunityRuntime
 from src.local_communities.service import LocalCommunityService
 from src.models import PublishedActivityObject, UserActorOutboundSource
 from src.user_actor_delivery import UserActorDeliveryService
-from support.db import (
+from bridge_test_support.db import (
     add_accepted_subscription,
     add_registered_user,
     build_database,
     create_source_thread_group,
 )
-from support.discord import build_starter_message, build_thread, build_thread_message
-from support.runtime import build_test_policy_service
+from bridge_test_support.discord import build_starter_message, build_thread, build_thread_message
+from bridge_test_support.runtime import build_test_policy_service
 
 
 class _MutationGateway:

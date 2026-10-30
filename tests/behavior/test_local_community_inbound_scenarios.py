@@ -1,7 +1,7 @@
 """Behavior scenarios for inbound local-community follow and content routing."""
 
 from __future__ import annotations
-from support.runtime import build_test_policy_service
+from bridge_test_support.runtime import build_test_policy_service
 
 from pathlib import Path
 from concurrent.futures import ThreadPoolExecutor
@@ -14,10 +14,10 @@ import pytest
 from src.activitypub_models import ActivityPubEvent
 from src.content_publish_service import ContentPublishService
 from src.local_communities.runtime import LocalCommunityRuntime
-from support.community_events import ScenarioDiscord
+from bridge_test_support.community_events import ScenarioDiscord
 from src.local_communities.service import LocalCommunityService
-from support.db import build_database
-from support.discord import (
+from bridge_test_support.db import build_database
+from bridge_test_support.discord import (
     build_bot,
     build_forum_channel_tuple_result,
     build_send_thread,

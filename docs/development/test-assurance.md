@@ -11,8 +11,11 @@ uv sync --extra dev
 cd fedify-gateway && npm ci && cd ..
 ```
 
-Run the complete Python test suite, including behavior, contract, property,
-stateful, and model-based tests:
+Run the complete Python test suite, including application behavior, contract,
+property, stateful, model-based and vendored discordops tests. The default
+importlib mode avoids collisions with the vendor `tests` package. Shared
+application fixtures live in `tests/bridge_test_support`, which is also
+importable by `multiprocessing` children using `spawn`:
 
 ```bash
 .venv/bin/python -m pytest -q
@@ -128,7 +131,7 @@ Run the remaining project tests without double-counting the specialized groups:
 Run the vendored DiscordOps framework tests:
 
 ```bash
-.venv/bin/python -m pytest -q --durations=0 vendor/discordops/tests
+.venv/bin/python -m pytest -q --durations=0 vendor/discordops/discordops_tests
 ```
 
 ## Generate the measurable baseline

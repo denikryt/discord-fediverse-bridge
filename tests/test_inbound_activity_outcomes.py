@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import sqlite3
 import pytest
-from support.runtime import build_test_policy_service
+from bridge_test_support.runtime import build_test_policy_service
 
 from pathlib import Path
 from types import SimpleNamespace

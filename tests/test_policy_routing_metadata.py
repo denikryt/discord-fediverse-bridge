@@ -6,7 +6,7 @@ from types import SimpleNamespace
 
 import pytest
 
-from support.fake_platform_adapter import FakeDiscordPort
+from bridge_test_support.fake_platform_adapter import FakeDiscordPort
 from src.community_sync.discord_fanout import DiscordFanout
 from src.local_communities.discord_fanout import LocalCommunityDiscordFanout
 

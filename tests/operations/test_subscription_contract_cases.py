@@ -16,7 +16,7 @@ from src.operations import (
     subscribe_operation,
     unsubscribe_operation,
 )
-from support.subscription_contracts import SUBSCRIPTION_CASES, SubscriptionCase
+from bridge_test_support.subscription_contracts import SUBSCRIPTION_CASES, SubscriptionCase
 
 ACTOR_ID = "https://lemmy.example/c/hackers"
 FOLLOW_ACTIVITY_ID = "https://bridge.example/actors/services/bridge/activities/follow/1"

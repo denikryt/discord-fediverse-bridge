@@ -1,9 +1,9 @@
 """cross-workflow scenarios that exercise registration, follow, publish, and dedup together."""
 
 from __future__ import annotations
-from support.community_events import configure_renderer, OBSERVED_AT
+from bridge_test_support.community_events import configure_renderer, OBSERVED_AT
 from src.platform_types import MessageRef
-from support.runtime import build_test_policy_service
+from bridge_test_support.runtime import build_test_policy_service
 
 from datetime import UTC, datetime
 from pathlib import Path

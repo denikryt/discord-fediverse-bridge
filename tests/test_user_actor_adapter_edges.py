@@ -1,7 +1,7 @@
 """User Actor follow notices and Discord reconciliation through physical adapter."""
 
 from __future__ import annotations
-from support.authored_publication import publication
+from bridge_test_support.authored_publication import publication
 
 from datetime import datetime, timezone
 import sys

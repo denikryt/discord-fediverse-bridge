@@ -17,7 +17,7 @@ from hypothesis.stateful import (
 )
 
 from model_based.local_community_relay_model import RelayModel
-from support.local_community_relay import LocalCommunityRelayHarness, PlannedOutcome
+from bridge_test_support.local_community_relay import LocalCommunityRelayHarness, PlannedOutcome
 
 ALICE = "https://lemmy.example/u/alice"
 CAROL = "https://lemmy.example/u/carol"

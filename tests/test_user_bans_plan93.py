@@ -7,7 +7,7 @@ Discord fanout boundary and then asserts persisted or delivered outcomes.
 from __future__ import annotations
 
 import sqlite3
-from support.runtime import build_test_policy_service
+from bridge_test_support.runtime import build_test_policy_service
 
 from dataclasses import dataclass
 from pathlib import Path
@@ -24,18 +24,18 @@ from src.db import Database
 from src.local_communities.service import LocalCommunityService
 from src.models import CommunityActorBan, ManagementAuditEvent
 from src.operations import UnbanUserInput, unban_user_operation
-from support.db import (
+from bridge_test_support.db import (
     add_accepted_subscription,
     build_database,
     create_source_thread_group,
 )
-from support.discord import (
+from bridge_test_support.discord import (
     build_forum_channel_object_result,
     build_starter_message,
     build_thread,
     build_thread_message,
 )
-from support.gateway import build_publish_result
+from bridge_test_support.gateway import build_publish_result
 
 
 @dataclass
@@ -465,7 +465,7 @@ async def test_community_ban_blocks_only_selected_local_community_and_global_ban
         reason="cats-only",
     )
     gateway = AsyncMock()
-    from support.community_events import configure_renderer, create_thread
+    from bridge_test_support.community_events import configure_renderer, create_thread
     from src.local_communities.runtime import LocalCommunityRuntime
     from src.platform_types import MessageRef
     configure_renderer(gateway, database)
@@ -581,11 +581,11 @@ async def test_discord_fanout_uses_registered_handle_not_mutable_nickname(
     )
     source = build_starter_message(content="hello", display_name="Changed nickname")
 
-    from support.community_events import observe_thread, ScenarioDiscord
+    from bridge_test_support.community_events import observe_thread, ScenarioDiscord
     from src.content_publish_service import ContentPublishService
-    from support.community_events import configure_renderer
+    from bridge_test_support.community_events import configure_renderer
     from src.community_sync.runtime import CommunityRuntime
-    from support.gateway import build_gateway_mock
+    from bridge_test_support.gateway import build_gateway_mock
     from dataclasses import replace
     from src.platform_types import ThreadRef
     add_accepted_subscription(database, channel_id=100, guild_id=1)

@@ -8,16 +8,16 @@ from datetime import datetime, timedelta, timezone
 
 from src.models import LocalCommunityThread, LocalCommunityThreadSurface
 from src.platform_types import AuthorRef, ContentDocument, MessageView
-from tests import test_physical_mutation_recovery as mutation_fixture
+from bridge_test_support import physical_mutation_recovery as mutation_fixture
 
 
 class MutationClaimSlotScenarios(unittest.TestCase):
     """Observe actual durable state before and after dispatch barriers."""
 
-    setUp = mutation_fixture.PhysicalMutationRecoveryScenarios.setUp
-    _worker = mutation_fixture.PhysicalMutationRecoveryScenarios._worker
+    setUp = mutation_fixture.PhysicalMutationScenario.setUp
+    _worker = mutation_fixture.PhysicalMutationScenario._worker
     _add_older_settled_copies_and_new_lagging_copy = (
-        mutation_fixture.PhysicalMutationRecoveryScenarios._add_older_settled_copies_and_new_lagging_copy
+        mutation_fixture.PhysicalMutationScenario._add_older_settled_copies_and_new_lagging_copy
     )
 
     def test_crash_after_one_claim_does_not_strand_unclaimed_sibling(self) -> None:

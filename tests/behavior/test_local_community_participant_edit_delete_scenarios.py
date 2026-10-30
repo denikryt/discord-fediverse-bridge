@@ -7,10 +7,10 @@ creating new canonical rows or relying on source-message-only ownership.
 """
 
 from __future__ import annotations
-from support.scenario_graph import attach, retain_original_author
-from support.community_events import OBSERVED_AT
+from bridge_test_support.scenario_graph import attach, retain_original_author
+from bridge_test_support.community_events import OBSERVED_AT
 from datetime import timedelta
-from support.runtime import build_test_policy_service
+from bridge_test_support.runtime import build_test_policy_service
 
 from pathlib import Path
 from types import SimpleNamespace
@@ -23,8 +23,8 @@ from src.activitypub_models import ActivityPubEvent
 from src.content_publish_service import ContentPublishService
 from src.local_communities.runtime import LocalCommunityRuntime
 from src.local_communities.service import LocalCommunityService
-from support.db import add_registered_user, build_database
-from support.runtime import build_runtime_namespace
+from bridge_test_support.db import add_registered_user, build_database
+from bridge_test_support.runtime import build_runtime_namespace
 
 
 class EditableMessage:

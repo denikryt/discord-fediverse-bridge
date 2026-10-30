@@ -7,8 +7,8 @@ from types import SimpleNamespace
 
 from src.local_communities.service import LocalCommunityService
 from src.operations import EditCommunityInput, edit_community_operation
-from support.db import build_database
-from support.runtime import build_test_policy_service
+from bridge_test_support.db import build_database
+from bridge_test_support.runtime import build_test_policy_service
 
 
 def _settings(*, super_admins: list[str] | None = None) -> SimpleNamespace:

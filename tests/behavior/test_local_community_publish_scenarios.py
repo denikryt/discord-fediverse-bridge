@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from support.community_events import create_thread, create_message, configure_renderer, source_ids
+from bridge_test_support.community_events import create_thread, create_message, configure_renderer, source_ids
 
 import json
 from pathlib import Path
@@ -10,7 +10,7 @@ from unittest.mock import AsyncMock
 
 import httpx
 import pytest
-from support.runtime import build_test_policy_service
+from bridge_test_support.runtime import build_test_policy_service
 from sqlalchemy import func, select
 
 from src.content_publish_service import ContentPublishService
@@ -18,8 +18,8 @@ from src.fedify_gateway_client import FedifyGatewayClient
 from src.local_communities.runtime import LocalCommunityRuntime
 from src.local_communities.service import LocalCommunityService
 from src.models import MessageMapping, PublishedActivityObject
-from support.db import add_registered_user, build_database
-from support.discord import build_starter_message, build_thread, build_thread_message
+from bridge_test_support.db import add_registered_user, build_database
+from bridge_test_support.discord import build_starter_message, build_thread, build_thread_message
 
 
 def _runtime(tmp_path: Path) -> tuple[object, LocalCommunityRuntime]:
@@ -70,7 +70,7 @@ def _real_gateway_runtime(
         """Record the outbound payload and return one successful gateway response."""
         payload = json.loads(request.content)
         requests.append({"path": request.url.path, "payload": payload})
-        from support.community_events import render_create
+        from bridge_test_support.community_events import render_create
         from src.fedify_gateway_client import RenderCommunityRequest
         rendered = render_create(RenderCommunityRequest(
             actor_username=payload['actorUsername'], community_actor_url=payload['communityActorUrl'],
@@ -254,7 +254,7 @@ async def test_local_community_create_preserves_canonical_create_for_direct_foll
 
     result = await create_thread(runtime, thread=build_thread(), starter_message=build_starter_message())
 
-    from support.community_events import render_create
+    from bridge_test_support.community_events import render_create
     canonical = render_create(runtime.fedify_gateway.render_community.await_args.args[0], user.actor_url).activity_json
     assert result.status == "published"
     with database.session() as session:

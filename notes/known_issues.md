@@ -616,3 +616,7 @@ The upstream v3.3.0 source confirms public `ThreadCreate/Update/Delete` and `Sha
 ## Runtime cleanup lock safety (CP035)
 
 Startup and shutdown retain both SQLite lifetime and deployment leases on unconfirmed teardown. Strong process-level ownership prevents GC from unlocking them; fatal errors block runtime restart in that process. Spawned-process SQLite scenarios cover restore exclusion and kernel release on process exit.
+
+## Python test infrastructure (CP036)
+
+Default pytest collects application and vendored discordops tests together. Shared fixtures use bridge_test_support; vendor tests use discordops_tests. Spawn imports are covered, PyYAML is declared, and uv.lock uses public registry URLs without changing existing pinned versions.

@@ -2,9 +2,9 @@
 
 from __future__ import annotations
 from src.platform_types import MessageRef
-from support.community_events import configure_renderer, source_ids, OBSERVED_AT
+from bridge_test_support.community_events import configure_renderer, source_ids, OBSERVED_AT
 
-from support.runtime import build_test_policy_service
+from bridge_test_support.runtime import build_test_policy_service
 
 from pathlib import Path
 from types import SimpleNamespace

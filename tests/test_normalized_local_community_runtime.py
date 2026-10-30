@@ -20,8 +20,8 @@ from src.platform_types import (
     MessageCreated, MessageRef, MessageView, PlatformOperationError,
     ThreadCreated, ThreadRef,
 )
-from support.db import add_registered_user, build_database
-from support.fake_platform_adapter import FakeDiscordPort
+from bridge_test_support.db import add_registered_user, build_database
+from bridge_test_support.fake_platform_adapter import FakeDiscordPort
 
 
 class Gateway:

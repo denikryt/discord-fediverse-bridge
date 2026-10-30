@@ -13,8 +13,8 @@ from src.platform_types import (
     CreatedMessage, CreatedThread, DeliveryPresentation, MessageCreated, MessageRef,
     MessageView, PlatformOperationError, ThreadCreated, ThreadRef,
 )
-from support.fake_platform_adapter import FakeDiscordPort
-from support.db import (COMMUNITY_ACTOR_URL, add_accepted_subscription,
+from bridge_test_support.fake_platform_adapter import FakeDiscordPort
+from bridge_test_support.db import (COMMUNITY_ACTOR_URL, add_accepted_subscription,
                         build_database, create_source_thread_group)
 
 

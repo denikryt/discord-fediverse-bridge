@@ -7,8 +7,8 @@ forum_channel.create_thread, thread.send, FedifyGatewayClient.
 """
 
 from __future__ import annotations
-from support.runtime import build_test_policy_service
-from support.community_events import ScenarioDiscord
+from bridge_test_support.runtime import build_test_policy_service
+from bridge_test_support.community_events import ScenarioDiscord
 
 from datetime import datetime, timezone
 from pathlib import Path

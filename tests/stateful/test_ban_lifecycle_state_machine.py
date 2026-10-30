@@ -27,7 +27,7 @@ from src.operations import (
     unban_user_operation,
 )
 from src.user_bans import UserBanService
-from support.db import build_database
+from bridge_test_support.db import build_database
 
 
 class ModelState(StrEnum):

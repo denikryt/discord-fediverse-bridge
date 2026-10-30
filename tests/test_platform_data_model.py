@@ -349,7 +349,7 @@ async def test_failed_retry_preserves_identity_and_claim(database, outcome):
     from unittest.mock import AsyncMock
     from discordops import run_operation_definition_async
     from src.operations import SubscribeInput, subscribe_operation
-    from support.runtime import build_test_policy_service
+    from bridge_test_support.runtime import build_test_policy_service
 
     with database.session() as session:
         _owners(session)

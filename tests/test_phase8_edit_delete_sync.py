@@ -23,10 +23,10 @@ Directions covered:
 """
 
 from __future__ import annotations
-from support.scenario_graph import attach, retain_original_author
-from support.community_events import OBSERVED_AT
+from bridge_test_support.scenario_graph import attach, retain_original_author
+from bridge_test_support.community_events import OBSERVED_AT
 from datetime import timedelta
-from support.runtime import build_test_policy_service
+from bridge_test_support.runtime import build_test_policy_service
 
 from datetime import datetime, timezone
 from pathlib import Path
@@ -40,7 +40,7 @@ from src.community_sync.runtime import CommunityRuntime
 from src.community_sync.discord_fanout import DiscordFanout
 from src.db import Database
 from src.content_publish_service import ContentPublishService
-from support.db import add_accepted_subscription
+from bridge_test_support.db import add_accepted_subscription
 from src.formatting import format_lemmy_comment_for_discord, format_lemmy_post_for_discord
 from src.activitypub_models import ActivityPubEvent
 from src.activitypub_handlers import dispatch_activitypub_event

@@ -4,8 +4,8 @@ from __future__ import annotations
 
 import pytest
 
-from support.ban_contracts import BanExpected
-from support.ban_effects import BanObservedEffects, assert_ban_effects
+from bridge_test_support.ban_contracts import BanExpected
+from bridge_test_support.ban_effects import BanObservedEffects, assert_ban_effects
 
 
 def test_effect_assertion_identifies_audit_mismatch() -> None:

@@ -8,7 +8,7 @@ from types import SimpleNamespace, ModuleType
 from dataclasses import dataclass
 
 import pytest
-from support.fake_platform_adapter import FakeDiscordPort
+from bridge_test_support.fake_platform_adapter import FakeDiscordPort
 from src.platform_types import CreatedThread, CreatedMessage, ThreadRef, MessageRef
 from src.models import PlatformDeliveryIntent
 from sqlalchemy import select

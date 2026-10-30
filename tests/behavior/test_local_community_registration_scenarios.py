@@ -17,7 +17,7 @@ from src.operations.create_community import (
     CreateCommunityInput,
     create_community_operation,
 )
-from support.db import build_database
+from bridge_test_support.db import build_database
 
 
 def _settings(*, allowlist: str = "123") -> Settings:

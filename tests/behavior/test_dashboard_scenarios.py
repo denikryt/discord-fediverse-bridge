@@ -1,7 +1,7 @@
 """Behavior scenarios for the public bridge dashboard."""
 
 from __future__ import annotations
-from support.runtime import build_test_policy_service
+from bridge_test_support.runtime import build_test_policy_service
 
 import json
 from pathlib import Path

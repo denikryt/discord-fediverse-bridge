@@ -1,5 +1,5 @@
 
-from support.community_events import configure_renderer, ScenarioDiscord, physical_forum
+from bridge_test_support.community_events import configure_renderer, ScenarioDiscord, physical_forum
 """Released SQLite upgrade preserves identities through one atomic public transition."""
 
 import shutil
@@ -656,7 +656,7 @@ async def test_migrated_follow_accept_routes_existing_discord_claims(legacy):
     from unittest.mock import AsyncMock
     from src.activitypub_handlers import dispatch_activitypub_event
     from src.activitypub_models import FollowLifecycleEvent
-    from support.runtime import build_test_policy_service
+    from bridge_test_support.runtime import build_test_policy_service
 
     _seed(legacy)
     with legacy.engine.begin() as c:
@@ -718,16 +718,16 @@ async def test_migrated_remote_delivery_and_local_publish(legacy):
     from src.content_publish_service import ContentPublishService
     from src.local_communities.runtime import LocalCommunityRuntime
     from src.fedify_gateway_client import PublishLocalCommunityContentResult
-    from support.activitypub import build_post_created_event
-    from support.gateway import build_gateway_mock
-    from support.discord import (
+    from bridge_test_support.activitypub import build_post_created_event
+    from bridge_test_support.gateway import build_gateway_mock
+    from bridge_test_support.discord import (
         build_bot,
         build_forum_channel_tuple_result,
         build_forum_channel_object_result,
         build_thread,
         build_starter_message,
     )
-    from support.runtime import build_community_runtime, build_test_policy_service
+    from bridge_test_support.runtime import build_community_runtime, build_test_policy_service
 
     _seed(legacy)
     legacy.migrate()
@@ -790,7 +790,7 @@ async def test_migrated_remote_delivery_and_local_publish(legacy):
             bridge_policy_service=policy,
         ),
     )
-    from support.community_events import observe_thread
+    from bridge_test_support.community_events import observe_thread
     from dataclasses import replace
     from src.platform_types import ThreadRef
     observed, view = observe_thread(thread=build_thread(thread_id=6000, channel_id=900),
@@ -815,7 +815,7 @@ def test_migrated_actor_read_contract_retains_keys_and_urls(legacy):
     from types import SimpleNamespace
     from fastapi.testclient import TestClient
     from src.http_api import create_http_app
-    from support.runtime import build_test_policy_service
+    from bridge_test_support.runtime import build_test_policy_service
 
     _seed(legacy)
     legacy.migrate()

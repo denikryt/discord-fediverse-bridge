@@ -1,5 +1,5 @@
 
-from support.community_events import create_thread, configure_renderer, ScenarioDiscord, physical_forum
+from bridge_test_support.community_events import create_thread, configure_renderer, ScenarioDiscord, physical_forum
 """Real runtime actions with mixed connector claims and retained physical copies."""
 
 from types import SimpleNamespace
@@ -11,10 +11,10 @@ from sqlalchemy import select
 from src.db import Database
 from src.db.repositories.platform_surfaces import PlatformSurfaceRepository
 from src.models import ChannelCommunitySubscription, PlatformConnector, ChannelSurface
-from support.activitypub import build_post_created_event, build_comment_created_event
-from support.discord import build_forum_channel_tuple_result, build_bot
-from support.gateway import build_gateway_mock
-from support.runtime import build_community_runtime, build_test_policy_service
+from bridge_test_support.activitypub import build_post_created_event, build_comment_created_event
+from bridge_test_support.discord import build_forum_channel_tuple_result, build_bot
+from bridge_test_support.gateway import build_gateway_mock
+from bridge_test_support.runtime import build_community_runtime, build_test_policy_service
 
 
 @pytest.mark.asyncio
@@ -315,8 +315,8 @@ async def test_local_publish_with_mixed_subscribers_creates_only_discord_copies(
     from src.content_publish_service import ContentPublishService
     from src.local_communities.runtime import LocalCommunityRuntime
     from src.fedify_gateway_client import PublishLocalCommunityContentResult
-    from support.db import add_registered_user
-    from support.discord import (
+    from bridge_test_support.db import add_registered_user
+    from bridge_test_support.discord import (
         build_forum_channel_object_result,
         build_thread,
         build_starter_message,
@@ -498,7 +498,7 @@ async def test_list_subscriptions_mixed_owners_only_renders_discord(
     from discordops import run_operation_definition_async
     from src.operations import ListSubscriptionsInput, list_subscriptions_operation
     from src.commands import list_subs
-    from support.db import add_registered_user
+    from bridge_test_support.db import add_registered_user
 
     database = Database(f"sqlite:///{tmp_path / 'list-mixed.db'}")
     database.migrate()
@@ -570,7 +570,7 @@ def test_personal_feed_discord_actions_cannot_retarget_fluxer_binding(tmp_path):
     """Views and mutations protect a non-Discord binding alongside a real feed."""
     from src.models import PersonalFeedBinding
     from src.personal_feeds import PersonalFeedService
-    from support.db import add_registered_user
+    from bridge_test_support.db import add_registered_user
 
     database = Database(f"sqlite:///{tmp_path / 'feeds-mixed.db'}")
     database.migrate()

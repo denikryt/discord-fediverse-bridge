@@ -13,7 +13,7 @@ from src.fediverse_identity import (
     extract_remote_actor_handle_from_actor_url,
     normalize_remote_actor_handle,
 )
-from support.identity_discovery_contracts import (
+from bridge_test_support.identity_discovery_contracts import (
     IDENTITY_DISCOVERY_CASES,
     IdentityDiscoveryCase,
 )

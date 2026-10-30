@@ -5,7 +5,7 @@ Discord transport and the import-time SDK-dependent handler result type.
 """
 from __future__ import annotations
 
-from support.fake_platform_adapter import FakeDiscordPort
+from bridge_test_support.fake_platform_adapter import FakeDiscordPort
 
 from dataclasses import dataclass
 from datetime import datetime, timezone
@@ -18,7 +18,7 @@ from src.activitypub_models import ActivityPubEvent
 from src.community_sync.runtime import CommunityRuntime
 from src.platform_types import CreatedMessage, MessageRef
 from src.models import ChannelSurface
-from support.db import add_accepted_subscription, build_database
+from bridge_test_support.db import add_accepted_subscription, build_database
 from tests_constants import LEMMY_EXAMPLE_DOMAIN
 
 

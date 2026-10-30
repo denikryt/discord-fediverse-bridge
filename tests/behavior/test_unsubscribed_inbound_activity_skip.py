@@ -1,8 +1,8 @@
 """Regression tests for ignoring remote content after unsubscribe."""
 
 from __future__ import annotations
-from support.runtime import build_runtime_namespace
-from support.runtime import build_test_policy_service
+from bridge_test_support.runtime import build_runtime_namespace
+from bridge_test_support.runtime import build_test_policy_service
 
 from pathlib import Path
 from types import SimpleNamespace
@@ -11,8 +11,8 @@ import pytest
 
 from src.activitypub_handlers import HandlerResult, dispatch_activitypub_event
 from src.inbound_activity_outcomes import InboundActivityOutcome
-from support.activitypub import build_comment_created_event, build_post_created_event
-from support.db import build_database
+from bridge_test_support.activitypub import build_comment_created_event, build_post_created_event
+from bridge_test_support.db import build_database
 
 
 class _NoopCommunityRuntime:

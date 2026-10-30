@@ -7,7 +7,7 @@ Only outer boundaries are mocked: FedifyGatewayClient and Discord SDK calls.
 """
 
 from __future__ import annotations
-from support.runtime import build_test_policy_service
+from bridge_test_support.runtime import build_test_policy_service
 
 from pathlib import Path
 from types import SimpleNamespace
@@ -16,10 +16,10 @@ from unittest.mock import AsyncMock
 import pytest
 
 from src.fedify_gateway_client import PublishContentResult
-from support.activitypub import build_comment_created_event, build_post_created_event
-from support.db import add_accepted_subscription, add_registered_user, build_database
-from support.discord import build_starter_message, build_thread, build_thread_message
-from support.runtime import build_community_runtime
+from bridge_test_support.activitypub import build_comment_created_event, build_post_created_event
+from bridge_test_support.db import add_accepted_subscription, add_registered_user, build_database
+from bridge_test_support.discord import build_starter_message, build_thread, build_thread_message
+from bridge_test_support.runtime import build_community_runtime
 from tests_constants import BRIDGE_HOST_DOMAIN, LEMMY_EXAMPLE_DOMAIN
 
 

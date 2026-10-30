@@ -2,8 +2,8 @@
 
 from __future__ import annotations
 
-from support.authored_publication import publication
-from support.community_events import configure_renderer, OBSERVED_AT, source_ids, render_create
+from bridge_test_support.authored_publication import publication
+from bridge_test_support.community_events import configure_renderer, OBSERVED_AT, source_ids, render_create
 from src.platform_types import MessageRef
 from types import SimpleNamespace
 from unittest.mock import AsyncMock
@@ -64,7 +64,7 @@ async def test_remote_publish_commits_exact_canonical_create_and_shared_inbox_on
                 remote_shared_inbox_url="https://remote.example/inbox",
                 follow_activity_id=f"https://remote.example/follows/{suffix}",
             )
-    from support.db import add_accepted_subscription
+    from bridge_test_support.db import add_accepted_subscription
     add_accepted_subscription(database, channel_id=33, community_actor_url='https://remote.example/c/group')
     canonical = {
         "id": "https://bridge.example/actors/users/alice/activities/create/posts/1",
@@ -785,7 +785,7 @@ async def test_local_community_reconciliation_preserves_policy_filtered_targets(
                 edited_at=datetime(2026, 6, 16, 10, 0, tzinfo=timezone.utc),
             )
 
-    from support.community_events import mutation_runtime
+    from bridge_test_support.community_events import mutation_runtime
     from src.models import PublishedActivityObject, LocalCommunityAuthoredAnnounceDelivery
     from src.local_communities.federation_fanout import LocalCommunityFederationFanout
     gateway = AsyncMock()

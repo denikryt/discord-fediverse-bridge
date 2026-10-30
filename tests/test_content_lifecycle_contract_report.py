@@ -1,6 +1,6 @@
 """Manifest checks for content lifecycle contracts."""
 
-from support.content_lifecycle_manifest import CONTENT_CONTRACT_ENTRIES
+from bridge_test_support.content_lifecycle_manifest import CONTENT_CONTRACT_ENTRIES
 
 
 def test_content_manifest_has_unique_rule_ids() -> None:

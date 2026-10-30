@@ -10,7 +10,7 @@ from hypothesis import given, settings
 from hypothesis.strategies import sampled_from
 
 import src.local_communities.federation_fanout as fanout_module
-from support.local_community_relay import LocalCommunityRelayHarness
+from bridge_test_support.local_community_relay import LocalCommunityRelayHarness
 
 ALICE = "https://lemmy.example/u/alice"
 CAROL = "https://lemmy.example/u/carol"

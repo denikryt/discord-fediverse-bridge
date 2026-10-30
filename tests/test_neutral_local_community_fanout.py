@@ -12,8 +12,8 @@ from src.platform_types import (
     ChannelRef, ContentDocument, CreatedMessage, CreatedThread, MessageRef,
     ThreadRef,
 )
-from support.db import build_database
-from support.fake_platform_adapter import FakeDiscordPort
+from bridge_test_support.db import build_database
+from bridge_test_support.fake_platform_adapter import FakeDiscordPort
 
 
 class PhysicalPort(FakeDiscordPort):

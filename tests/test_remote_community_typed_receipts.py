@@ -18,7 +18,7 @@ from src.fedify_gateway_client import RenderCommunityResult
 
 from src.models import CommunityMessageGroupDelivery, CommunityThreadGroupDelivery, PlatformDeliveryIntent
 from test_normalized_community_runtime import PhysicalTransport, reply, starter, world
-from support.fake_platform_adapter import FakeDiscordPort
+from bridge_test_support.fake_platform_adapter import FakeDiscordPort
 
 
 class VerifiedPhysicalTransport(PhysicalTransport, FakeDiscordPort):

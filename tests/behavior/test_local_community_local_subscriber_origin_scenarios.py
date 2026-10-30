@@ -2,8 +2,8 @@
 
 from __future__ import annotations
 
-from support.community_events import create_thread, create_message, configure_renderer, physical_forum, message_copy, ScenarioDiscord, admit_thread, mutation_runtime, OBSERVED_AT
-from support.runtime import build_test_policy_service
+from bridge_test_support.community_events import create_thread, create_message, configure_renderer, physical_forum, message_copy, ScenarioDiscord, admit_thread, mutation_runtime, OBSERVED_AT
+from bridge_test_support.runtime import build_test_policy_service
 
 from pathlib import Path
 from unittest.mock import AsyncMock
@@ -12,7 +12,7 @@ import pytest
 from sqlalchemy import func, select
 
 from src.discord_event_router import DiscordEventRouter
-from support.typed_forum_creates import route_verified_forum_thread
+from bridge_test_support.typed_forum_creates import route_verified_forum_thread
 from src.content_publish_service import ContentPublishService
 from src.local_communities.runtime import LocalCommunityRuntime
 from src.local_communities.service import LocalCommunityService
@@ -22,8 +22,8 @@ from src.models import (
     LocalCommunityThread,
     LocalCommunityThreadSurface,
 )
-from support.db import add_accepted_subscription, add_registered_user, build_database
-from support.discord import (
+from bridge_test_support.db import add_accepted_subscription, add_registered_user, build_database
+from bridge_test_support.discord import (
     build_bot,
     build_forum_channel_object_result,
     build_send_thread,
@@ -471,7 +471,7 @@ async def test_duplicate_local_subscriber_reply_retries_missing_target_surface_o
         database, thread_row, 300, 3300, 3400, "local_subscriber", sibling.id
     )
     add_registered_user(database)
-    from support.community_events import observe_message
+    from bridge_test_support.community_events import observe_message
     source_event = observe_message(build_thread_message(message_id=2400, thread_id=2200, channel_id=200))
     admitted = await runtime.content_publish_service.publish_normalized_comment_to_community(
         event=source_event, community_actor_url=local_community.actor_url,

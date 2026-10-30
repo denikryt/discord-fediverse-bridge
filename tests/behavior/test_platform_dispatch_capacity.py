@@ -10,7 +10,7 @@ from src.content_sync.platform_delivery_scheduler import ConnectorDispatchCapaci
 from src.content_sync.platform_fanout import PlatformFanoutCoordinator
 from behavior.test_local_community_receipt_handoff import _Adapter
 from behavior.test_platform_message_fanout_scenarios import _ThreeForumFixture
-from tests import test_physical_mutation_recovery as mutation_fixture
+from bridge_test_support import physical_mutation_recovery as mutation_fixture
 from src.platform_types import ContentDocument, DeliveryPresentation
 
 
@@ -201,8 +201,8 @@ class DurableCreateCapacityScenarios(_ThreeForumFixture):
 class DirectMutationCapacityScenarios(unittest.TestCase):
     """A direct edit call must not preclaim while recovery occupies its slot."""
 
-    setUp = mutation_fixture.PhysicalMutationRecoveryScenarios.setUp
-    _worker = mutation_fixture.PhysicalMutationRecoveryScenarios._worker
+    setUp = mutation_fixture.PhysicalMutationScenario.setUp
+    _worker = mutation_fixture.PhysicalMutationScenario._worker
 
     def test_direct_mutation_waits_before_claim_in_real_sqlite(self) -> None:
         """A competing edit is still idle with no token while capacity is held."""

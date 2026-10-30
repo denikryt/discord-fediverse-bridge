@@ -11,7 +11,7 @@ import pytest
 from src.platform_types import ChannelRef, CreatedMessage, CreatedThread, MessageRef, ThreadRef
 from src.local_communities.runtime import LocalCommunityRuntime
 from test_local_receipt_persistence import world
-from support.fake_platform_adapter import FakeDiscordPort
+from bridge_test_support.fake_platform_adapter import FakeDiscordPort
 from test_inbound_duplicate_admission import _post, _accepted
 
 

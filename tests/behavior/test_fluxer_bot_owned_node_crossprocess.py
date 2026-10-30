@@ -13,7 +13,7 @@ from src.content_sync.platform_mutations import PlatformPhysicalMutationCoordina
 from src.db.repositories.platform_surfaces import PlatformSurfaceRepository
 from src.models import (ChannelSurface, LocalCommunityThread,
                         LocalCommunityThreadSurface, PlatformConnector)
-from tests import test_physical_mutation_recovery as mutation_fixture
+from bridge_test_support import physical_mutation_recovery as mutation_fixture
 from src.fluxer_adapter import FluxerAdapter
 from src.fluxer_connector_config import FluxerConnectorConfig
 from src.fluxer_rpc_client import FluxerRpcClient
@@ -25,7 +25,7 @@ class FluxerVerifiedBotOwnershipScenarios(unittest.IsolatedAsyncioTestCase):
 
     def setUp(self) -> None:
         """Seed the same real SQLite durable copy fixture used by Discord regression."""
-        mutation_fixture.PhysicalMutationRecoveryScenarios.setUp(self)
+        mutation_fixture.PhysicalMutationScenario.setUp(self)
 
     async def asyncSetUp(self) -> None:
         """Start Node service with a real READY/health owner and fake SDK network edge."""

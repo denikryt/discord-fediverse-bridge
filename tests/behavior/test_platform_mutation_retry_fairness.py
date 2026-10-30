@@ -6,16 +6,16 @@ import asyncio
 import unittest
 
 from src.models import LocalCommunityThread, LocalCommunityThreadSurface
-from tests import test_physical_mutation_recovery as fixture
+from bridge_test_support import physical_mutation_recovery as fixture
 
 
 class PhysicalMutationFairnessScenarios(unittest.TestCase):
     """A refused old copy cannot monopolize a connector or cause a new claim."""
 
-    setUp = fixture.PhysicalMutationRecoveryScenarios.setUp
-    _worker = fixture.PhysicalMutationRecoveryScenarios._worker
+    setUp = fixture.PhysicalMutationScenario.setUp
+    _worker = fixture.PhysicalMutationScenario._worker
     _add_older_settled_copies_and_new_lagging_copy = (
-        fixture.PhysicalMutationRecoveryScenarios._add_older_settled_copies_and_new_lagging_copy
+        fixture.PhysicalMutationScenario._add_older_settled_copies_and_new_lagging_copy
     )
 
     def test_same_revision_policy_denial_requires_explicit_readmission(self) -> None:

@@ -5,7 +5,7 @@ remote document retrieval and Discord HTTP are replaced by deterministic fakes.
 """
 from __future__ import annotations
 
-from support.fake_platform_adapter import FakeDiscordPort
+from bridge_test_support.fake_platform_adapter import FakeDiscordPort
 
 from dataclasses import dataclass
 from datetime import datetime, timezone
@@ -19,7 +19,7 @@ from src.community_sync.inbound_mapping import needs_backfill
 from src.community_sync.runtime import CommunityRuntime
 from src.platform_types import CreatedThread, MessageRef, ThreadRef
 from src.models import ChannelSurface
-from support.db import add_accepted_subscription, build_database
+from bridge_test_support.db import add_accepted_subscription, build_database
 from tests_constants import LEMMY_EXAMPLE_DOMAIN
 
 COMMUNITY = f'https://{LEMMY_EXAMPLE_DOMAIN}/c/hackers'

@@ -7,7 +7,7 @@ from __future__ import annotations
 
 import json
 from datetime import datetime, timezone
-from support.fake_platform_adapter import FakeDiscordPort
+from bridge_test_support.fake_platform_adapter import FakeDiscordPort
 from src.content_sync.platform_mutations import PlatformPhysicalMutationCoordinator
 from dataclasses import dataclass
 from types import ModuleType, SimpleNamespace
@@ -19,7 +19,7 @@ import pytest
 import discord  # Load the installed SDK; never leave a global placeholder for other suites.
 from src.community_sync.runtime import CommunityRuntime
 from src.platform_types import AuthorRef, ContentDocument, MessageRef, MessageView, PlatformOperationError
-from support.db import add_accepted_subscription, build_database
+from bridge_test_support.db import add_accepted_subscription, build_database
 from tests_constants import LEMMY_EXAMPLE_DOMAIN
 
 COMMUNITY = f'https://{LEMMY_EXAMPLE_DOMAIN}/c/hackers'
