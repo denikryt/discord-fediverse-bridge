@@ -624,3 +624,7 @@ Default pytest collects application and vendored discordops tests together. Shar
 ## Runtime regression scenarios (CP037)
 
 Startup/shutdown fixtures use the real Runtime and SQLite. Ready Discord admission is explicit. Nested Create coverage observes blocked -> pending -> scheduler delivery, committed parent/child surfaces and the persisted physical parent ID. Compose tests parse services instead of counting YAML strings.
+
+## Official SDK type safety (CP038)
+
+The ordinary Fluxer TypeScript check now binds all dormant write factories to the real SDK Client. Send/Edit/Delete use official SDK types and channel predicates; no double assertions are used. All 108 Node tests pass, including genuine SDK Client/DM boundary tests. Live write acceptance remains open.

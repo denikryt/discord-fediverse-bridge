@@ -13,57 +13,16 @@
  * that bit, reply semantics and the bot message response contract.
  */
 import {PrivateRpcError, type RpcHandler} from './transport.ts';
-import {createSdkPermissionHandler, type SdkPermissionClient} from './permissions.ts';
+import {createSdkPermissionHandler} from './permissions.ts';
+import type {Channel, Client, GuildChannel, Message, MessageSendOptions} from '@fluxerjs/core';
 
 const ID = /^[A-Za-z0-9_-]+$/;
 const THREAD_SEND_BIT = 1n << 38n;
 const KEYS = new Set(['container_id', 'guild_id', 'reply_to_message_id',
   'content', 'allowed_mentions', 'attempt_key', 'delivery_mode']);
 
-type SendChannel = {
-  id: string;
-  guildId: string | null;
-  parentId: string | null;
-  isGuild(): boolean;
-  isThread(): boolean;
-  isText(): boolean;
-  isAnnouncement(): boolean;
-  isForum(): boolean;
-  archived?: boolean;
-  locked?: boolean;
-};
-type SendMessage = {
-  id: string;
-  channelId: string;
-  guildId: string | null;
-  content: string;
-  webhookId: string | null;
-  author: {id: string; bot: boolean};
-  messageReference: {channelId: string; messageId: string; guildId?: string | null} | null;
-};
-type SendPayload = {
-  content: string;
-  allowedMentions: {parse: []; repliedUser: false};
-  replyTo?: {channelId: string; messageId: string; guildId: string};
-};
-type SendMember = {
-  id: string;
-  guild: {id: string};
-  permissionsIn(channel: SendChannel): {has(flag: bigint): boolean};
-};
-type SendGuild = {
-  id: string;
-  members: {fetch(id: string, options: {force: true}): Promise<SendMember>};
-};
-/** SDK methods used without another HTTP client or handwritten Gateway code. */
-export type SdkMessageSendClient = Omit<SdkPermissionClient, 'channels'> & {
-  user: {id: string; bot: boolean} | null;
-  channels: {
-    fetch(id: string, options: {force: true}): Promise<SendChannel>;
-    fetchMessage(containerId: string, messageId: string): Promise<SendMessage>;
-    send(containerId: string, options: SendPayload): Promise<SendMessage>;
-  };
-};
+/** Use the official manager declarations, including their broad Channel result. */
+export type SdkMessageSendClient = Pick<Client, 'user' | 'channels' | 'guilds'>;
 
 /** Reject route fragments and missing physical IDs before SDK method entry. */
 function physicalId(value: unknown): string {
@@ -108,7 +67,7 @@ function parseRequest(args: Readonly<Record<string, unknown>>): {
 }
 
 /** Make an SDK read result an exact guild-scoped physical container. */
-function observedChannel(channel: SendChannel, id: string, guildId: string): void {
+function observedChannel(channel: Channel, id: string, guildId: string): asserts channel is GuildChannel {
   if (!channel || channel.id !== id || !channel.isGuild() ||
       channel.guildId !== guildId) {
     throw new PrivateRpcError('invalid_request');
@@ -116,7 +75,7 @@ function observedChannel(channel: SendChannel, id: string, guildId: string): voi
 }
 
 /** Refuse mismatched receipt scope or dropped nested-parent information. */
-function verifyMessage(message: SendMessage, containerId: string, guildId: string,
+function verifyMessage(message: Message, containerId: string, guildId: string,
                        replyId: string | null, botId: string,
                        body: string): Record<string, unknown> {
   // A post has already been attempted. Invalid or incomplete server result
@@ -171,7 +130,7 @@ export function createSdkMessageSendHandler(client: SdkMessageSendClient): RpcHa
         actions.some(action => permission[action] !== 'allowed')) {
       throw new PrivateRpcError('forbidden');
     }
-    if (thread) {
+    if (channel.isThread()) {
       // Forum posts are in a public thread, not their parent forum. A thread
       // cannot inherit proof of SEND_MESSAGES_IN_THREADS from SendMessages.
       if (channel.archived !== false || channel.locked !== false ||
@@ -192,13 +151,10 @@ export function createSdkMessageSendHandler(client: SdkMessageSendClient): RpcHa
       // Public SDK PermissionFlags do not name bit 38, but SDK
       // PermissionsBitField.has(bigint) accepts the server-defined bit. This
       // narrow check is *not* used to advertise global capabilities.
-      const resolvedGuild = await client.guilds.fetch(guildId, {force: true});
-      if (!resolvedGuild || typeof resolvedGuild !== 'object' ||
-          !('members' in resolvedGuild) || !('id' in resolvedGuild) ||
-          resolvedGuild.id !== guildId) {
+      const guild = await client.guilds.fetch(guildId, {force: true});
+      if (!guild || guild.id !== guildId) {
         throw new PrivateRpcError('forbidden');
       }
-      const guild = resolvedGuild as SendGuild;
       const me = await guild.members?.fetch(botId, {force: true});
       if (!me || me.id !== botId || me.guild?.id !== guildId ||
           me.permissionsIn(channel)?.has(THREAD_SEND_BIT) !== true) {
@@ -214,12 +170,12 @@ export function createSdkMessageSendHandler(client: SdkMessageSendClient): RpcHa
         throw new PrivateRpcError('not_found', 404);
       }
     }
-    const payload: SendPayload = {content: body,
+    const payload: MessageSendOptions = {content: body,
       allowedMentions: {parse: [], repliedUser: false}};
     if (replyId !== null) {
       payload.replyTo = {channelId: containerId, messageId: replyId, guildId};
     }
-    let sent: SendMessage;
+    let sent: Message;
     try {
       // Exactly one SDK send. Its own MessageUtils maps replyTo to the
       // wire `message_reference` and suppresses all reply notifications.

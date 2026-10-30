@@ -8,40 +8,15 @@
  * Live server verification is still required before production activation.
  */
 import {PrivateRpcError, type RpcHandler} from './transport.ts';
-import {createSdkPermissionHandler, type SdkPermissionClient} from './permissions.ts';
+import {createSdkPermissionHandler} from './permissions.ts';
+import type {Client, Message} from '@fluxerjs/core';
 
 const ID = /^[A-Za-z0-9_-]+$/;
 const REF_KEYS = new Set(['container_id', 'message_id', 'bot_id']);
 const EDIT_KEYS = new Set([...REF_KEYS, 'content', 'allowed_mentions']);
 
-type MutationChannel = {
-  id: string;
-  guildId: string | null;
-  isGuild(): boolean;
-  isThread(): boolean;
-  isText(): boolean;
-  isAnnouncement(): boolean;
-};
-
-type MutationMessage = {
-  id: string;
-  channelId: string;
-  guildId: string | null;
-  content: string;
-  webhookId: string | null;
-  author: {id: string; bot: boolean};
-  edit(payload: {content: string; allowedMentions: {parse: []}}): Promise<MutationMessage>;
-  delete(): Promise<void>;
-};
-
-/** Minimal observed public SDK methods, without another REST transport. */
-export type SdkMessageMutationClient = Omit<SdkPermissionClient, 'channels'> & {
-  user: {id: string; bot: boolean} | null;
-  channels: {
-    fetch(id: string, options: {force: true}): Promise<MutationChannel>;
-    fetchMessage(container: string, id: string): Promise<MutationMessage>;
-  };
-};
+/** Keep the SDK's broad Channel fetch type and narrow it at the read boundary. */
+export type SdkMessageMutationClient = Pick<Client, 'user' | 'channels' | 'guilds'>;
 
 /** Never allow a route fragment or a missing opaque physical ID. */
 function physicalId(value: unknown): string {
@@ -111,7 +86,7 @@ function refusal(error: unknown, writing: boolean): PrivateRpcError {
 }
 
 /** Check exact container, bot provenance and current actor before a write. */
-function authorizedMessage(message: MutationMessage, containerId: string,
+function authorizedMessage(message: Message, containerId: string,
                            messageId: string, guildId: string, botId: string): boolean {
   return Boolean(message && message.id === messageId &&
     message.channelId === containerId && message.guildId === guildId &&
@@ -132,7 +107,7 @@ export function createSdkMessageMutationHandler(client: SdkMessageMutationClient
       throw new PrivateRpcError('forbidden');
     }
     let guildId: string;
-    let message: MutationMessage;
+    let message: Message;
     try {
       const channel = await client.channels.fetch(containerId, {force: true});
       if (!channel || channel.id !== containerId || !channel.isGuild() ||

@@ -195,3 +195,7 @@ publishes a matching image only when an audited npm lockfile is committed.
 The Dockerfile fails closed without that file. Docker, npm registry and a
 real Fluxer instance were unavailable during these checks; the existing
 SDK-fake tests cannot establish B20/B21 or authorize production writes.
+
+## Official SDK write type contracts
+
+`npm run check` includes `src/sdk_write_contracts.ts`: every isolated write factory must accept the pinned official `Client`. Message send and mutation handlers use SDK channel types and narrow guild/thread channels before reading guild-specific fields. Node tests also construct an actual SDK client and DM channel to verify rejection before message lookup or write. This does not enable production writes or replace real-server REST acceptance.
