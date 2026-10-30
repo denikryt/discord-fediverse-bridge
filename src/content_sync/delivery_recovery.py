@@ -15,7 +15,8 @@ if TYPE_CHECKING:
 logger = logging.getLogger(__name__)
 
 
-async def recover_pending_creates(coordinator: PlatformFanoutCoordinator) -> list[int]:
+async def recover_pending_creates(coordinator: PlatformFanoutCoordinator, *,
+                                  connector_key: str | None = None) -> list[int]:
     """Resume safe pending work using coordinator-owned dispatch and reconciliation.
 
     The durable repository remains the sole arbiter of each send's status,
@@ -35,13 +36,13 @@ async def recover_pending_creates(coordinator: PlatformFanoutCoordinator) -> lis
     repository.materialize_ready_blocked()
     # Reconciliation must be read-only. A new process normally has no proof of
     # which physical message (if any) was created by an uncertain HTTP call.
-    for intent_id in repository.unresolved_ids():
+    for intent_id in repository.unresolved_ids(connector_key=connector_key):
         try:
             await coordinator.reconcile_unknown(intent_id)
         except Exception:
             logger.exception('Read-only Create reconciliation failed intent_id=%s', intent_id)
     completed: list[int] = []
-    for intent_id in repository.recoverable_pending_ids():
+    for intent_id in repository.recoverable_pending_ids(connector_key=connector_key):
         if await coordinator.deliver(intent_id):
             completed.append(intent_id)
     return completed

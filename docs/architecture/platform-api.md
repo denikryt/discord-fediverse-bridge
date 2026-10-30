@@ -96,6 +96,24 @@ response remain persistently `unresolved`; an expired lease never proves that
 another POST is safe. This coordinator change is independent of the later
 connector-isolated scheduler integration.
 
+## Runtime-owned physical connector capacity
+
+The runtime creates exactly one per-connector `ConnectorDispatchCapacity` shared
+by its `PlatformFanoutCoordinator`, `PlatformPhysicalMutationCoordinator`, and
+short-lived `from_adapter()` Create coordinators bound to the live adapter.
+Each slot must be acquired **before** a durable dispatch claim and held across
+transport settlement; a recovery lane does not claim a second queued operation
+while an immediate send occupies its connector. Independent connectors retain
+independent progress. Runtime shutdown closes new capacity admission, joins
+already accepted direct calls, and only then disposes adapters and SQLite.
+
+An exact parent receipt materializes eligible blocked child intents into SQLite
+and wakes connector lanes. It **does not await child HTTP** inside the parent's
+receipt completion. Lost wakes are recovered by the existing periodic scan;
+callers awaiting a parent receipt must observe the child's own durable status
+before assuming its physical delivery finished. This is a permanent scheduling
+rule, not a compatibility fallback or a second queue.
+
 ## Durable physical Create dispatch and cache ACK
 
 `CreateAttempt.key` beginning with `fanout:v1:` is reserved for the SQLite-backed
@@ -281,3 +299,23 @@ bounded candidate page and rotates across the four copy families. This
 module-level safety does **not** yet provide the runtime-owned multi-connector
 scheduler, shared direct-path admission, or full per-connector concurrency
 bounds; those remain pending Checkpoint 5 integration.
+
+
+## Connector-isolated physical recovery (Fluxer Support, partial)
+
+`PlatformPhysicalDeliveryScheduler` is the single runtime-owned task supervisor
+for connector-scoped durable physical Create and mutation recovery. Each
+configured connector has one bounded lane; no lane awaits another connector's
+network calls. The shared intent repository filters recovery candidates using
+persisted `connector_id`, and mutation read-only scans likewise filter on
+current connector identity. The scheduler is disabled for physical work until
+its adapter reports readiness and is joined before `DiscordAdapter.quiesce()`
+or SQLite close. A missed wake is recovered by periodic polling, not by an
+additional durable queue. The former Discord Personal Feed worker no longer
+owns generic community Create/mutation recovery; it continues handling
+Discord Personal Feed-specific work.
+
+The currently constructed production runtime contains only the existing
+Discord connector lane. Node Fluxer SDK registration, same-capacity admission
+for direct Create/mutation calls, and notification-based cross-connector child
+wake remain pending; this does not yet establish complete Checkpoint 5.

@@ -20,6 +20,9 @@ from .discord_bot import BridgeBot
 from .discord_adapter import DiscordAdapter
 from .platform_event_ingress import PlatformEventIngress
 from .platform_adapters import PlatformAdapterRegistry
+from .content_sync.platform_delivery_scheduler import (
+    ConnectorDispatchCapacity, PlatformPhysicalDeliveryScheduler,
+)
 from .discord_event_router import DiscordEventRouter
 from .discord_message_mutations import DiscordMessageMutationHandler
 from .discord_oauth_client import DiscordOAuthClient
@@ -69,11 +72,14 @@ async def _run_bot_lifetime(runtime: Runtime, discord_token: str) -> None:
                     await runtime.personal_feed_discord_delivery_worker.stop()
                 finally:
                     try:
-                        await runtime.user_actor_delivery_worker.stop()
+                        await runtime.physical_delivery_scheduler.stop()
                     finally:
-                        # SDK transport must outlive both in-flight workers;
-                        # only Runtime.close() owns Fedify and the database.
-                        await runtime.discord_adapter.quiesce()
+                        try:
+                            await runtime.user_actor_delivery_worker.stop()
+                        finally:
+                            # SDK transport must outlive every in-flight worker;
+                            # only Runtime.close() owns Fedify and the database.
+                            await runtime.discord_adapter.quiesce()
 
 
 async def main() -> None:
@@ -105,6 +111,7 @@ async def main() -> None:
             await http_server.serve()
 
         runtime.user_actor_delivery_worker.start()
+        runtime.physical_delivery_scheduler.start()
         async with asyncio.TaskGroup() as task_group:
             task_group.create_task(run_bot(), name="discord-bot")
             task_group.create_task(run_http_server(), name="internal-http-server")
@@ -256,21 +263,24 @@ def _build_live_runtime(
         adapter_registry = PlatformAdapterRegistry((connector,))
         discord_adapter = DiscordAdapter(connector=connector, bot=bot)
         adapter_registry.register(discord_adapter)
+        # Compose the one process-local capacity owner before constructing any
+        # direct fanout/recovery coordinator; all paths inherit these slots.
+        physical_dispatch_gate = ConnectorDispatchCapacity((connector.key,))
+        discord_adapter.bind_physical_dispatch_gate(physical_dispatch_gate)
         bot.bind_discord_adapter(discord_adapter)
         event_router.bind_reply_notice_adapter(discord_adapter)
         personal_feed_discord_delivery_worker = PersonalFeedDiscordDeliveryWorker(
             database=database, adapter=discord_adapter, personal_feed_service=personal_feed_service
         )
-        # The adapter is usable only after Discord READY. Reuse the existing
-        # SDK-owned periodic worker to recover durable community Create claims;
-        # starting a separate scheduler would weaken close/quiesce ordering.
+        # Physical recovery belongs to one runtime-owned connector scheduler.
+        # Personal Feed retains only its own Discord-specific physical work.
         from .content_sync.platform_fanout import PlatformFanoutCoordinator
-        physical_coordinator = PlatformFanoutCoordinator(database, adapter_registry)
-        personal_feed_discord_delivery_worker.add_drain(physical_coordinator.recover_pending)
+        physical_coordinator = PlatformFanoutCoordinator(
+            database, adapter_registry, dispatch_gate=physical_dispatch_gate,
+        )
 
-        # Durable physical edit/delete copies have no separate queue, including
-        # copies retained from released v0 without a Create intent.  This work
-        # is drained by the existing Discord-ready scheduler.
+        # Durable mutation copies are also owned by the shared physical lane;
+        # the existing SQLite copy rows are its only durable reservation state.
         from .content_sync.platform_mutations import PlatformPhysicalMutationCoordinator
         from .models import ChannelSurface
         from .platform_types import ContentDocument
@@ -313,8 +323,14 @@ def _build_live_runtime(
             target_policy=physical_mutation_policy,
             content_renderer=physical_mutation_content,
             tombstone_renderer=lambda _domain, _kind: ContentDocument('*deleted by creator*'),
+            dispatch_gate=physical_dispatch_gate,
         )
-        personal_feed_discord_delivery_worker.add_drain(physical_mutation_coordinator.drain)
+        physical_delivery_scheduler = PlatformPhysicalDeliveryScheduler(
+            connector_keys=(discord_adapter.connector.key,),
+            fanout=physical_coordinator, mutations=physical_mutation_coordinator,
+        )
+        physical_dispatch_gate.bind_wake(physical_delivery_scheduler.wake)
+        physical_coordinator.bind_delivery_wake(physical_delivery_scheduler.wake)
         personal_feed_conversation_runtime.bind_delivery_wake(
             personal_feed_discord_delivery_worker
         )
@@ -366,6 +382,8 @@ def _build_live_runtime(
             discord_adapter=discord_adapter,
             adapter_registry=adapter_registry,
             physical_mutation_coordinator=physical_mutation_coordinator,
+            physical_delivery_scheduler=physical_delivery_scheduler,
+            physical_dispatch_gate=physical_dispatch_gate,
             community_runtime=community_runtime,
             local_community_runtime=local_community_runtime,
             profile_media_store=media_store,
@@ -401,8 +419,13 @@ def _validate_runtime_graph(runtime: Runtime) -> None:
         raise RuntimeError("Runtime Discord adapter is not bound to BridgeBot")
     if runtime.adapter_registry.get(runtime.discord_adapter.connector.key) is not runtime.discord_adapter:
         raise RuntimeError('Live Discord adapter is not registered for persisted connector')
+    if (runtime.physical_mutation_coordinator.dispatch_gate is not runtime.physical_dispatch_gate
+        or runtime.discord_adapter._physical_dispatch_gate is not runtime.physical_dispatch_gate):
+        raise RuntimeError('Direct and recovery dispatch must share runtime capacity')
     if runtime.physical_mutation_coordinator.registry is not runtime.adapter_registry:
         raise RuntimeError('Physical mutation coordinator must use live registered adapters')
+    if runtime.discord_adapter.connector.key not in runtime.physical_delivery_scheduler.connector_keys:
+        raise RuntimeError('Physical recovery scheduler lacks the Discord connector lane')
     if runtime.discord_adapter._sink is None:
         raise RuntimeError("Discord normalized ingress is not configured")
     runtime.bot._require_personal_feed_delivery_worker()

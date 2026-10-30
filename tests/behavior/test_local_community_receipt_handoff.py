@@ -192,15 +192,23 @@ class LocalReceiptHandoffScenarios(_ThreeForumFixture):
             ))
         wake = PlatformFanoutCoordinator.from_adapter(self.database, self.adapter)
         asyncio.run(wake._wake_blocked_children())
-        self.assertEqual(set(self.adapter.comments),
-                         {('created-100', 'parent-A'), ('created-300', 'parent-C')})
+        # The parent proof only materializes a pending child. Its remote POST
+        # must wait for the connector lane, never run nested in receipt ACK.
+        self.assertEqual(self.adapter.comments, [('created-100', 'parent-A')])
         with self.database.session() as session:
             row = session.scalar(select(PlatformDeliveryIntent).where(
                 PlatformDeliveryIntent.domain == 'local',
                 PlatformDeliveryIntent.object_kind == 'comment',
                 PlatformDeliveryIntent.canonical_row_id == child_id,
                 PlatformDeliveryIntent.channel_surface_id == self.targets['C'][2]))
-            self.assertEqual(row.state, 'delivered')
+            self.assertEqual(row.state, 'pending')
+        # Simulate a lost wake: the bounded persisted recovery scan still sends
+        # only the newly eligible, exactly parent-linked child on this target.
+        self.assertEqual(asyncio.run(wake.recover_pending()), [row.id])
+        self.assertEqual(set(self.adapter.comments),
+                         {('created-100', 'parent-A'), ('created-300', 'parent-C')})
+        with self.database.session() as session:
+            self.assertEqual(session.get(PlatformDeliveryIntent, row.id).state, 'delivered')
 
 class LocalReceiptNegativeScenarios(LocalReceiptHandoffScenarios):
     """A missing physical parent is only recoverable for a valid canonical parent."""

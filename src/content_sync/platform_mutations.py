@@ -25,6 +25,7 @@ from ..models import (
     LocalSubscriber, PlatformConnector,
 )
 from ..platform_types import ContentDocument, MessageRef, MessageView
+from .platform_delivery_scheduler import DispatchAdmissionClosed
 
 logger = logging.getLogger(__name__)
 
@@ -84,6 +85,7 @@ class PlatformPhysicalMutationCoordinator:
         target_policy: Callable[[str, int], bool],
         content_renderer: Callable[[str, str, dict], ContentDocument] | None = None,
         tombstone_renderer: Callable[[str, str], ContentDocument] | None = None,
+        dispatch_gate=None,
     ) -> None:
         """Bind the durable database, connector registry and authorization edges."""
         self.database = database
@@ -91,6 +93,7 @@ class PlatformPhysicalMutationCoordinator:
         self.target_policy = target_policy
         self.content_renderer = content_renderer
         self.tombstone_renderer = tombstone_renderer
+        self.dispatch_gate = dispatch_gate
         # Fair, bounded read-only scanning across four existing copy families.
         self._scan_cursor: dict[str | None, tuple[int, int]] = {}
 
@@ -373,6 +376,34 @@ class PlatformPhysicalMutationCoordinator:
             return True
 
     async def drain(self, *, limit: int = 32, connector_key: str | None = None) -> int:
+        """Use the shared per-connector slot for both immediate and recovery work.
+
+        A direct drain without a connector is restricted to configured runtime
+        connectors, not admitted through a separate global physical sender.
+        """
+        if self.dispatch_gate is None:
+            return await self._drain_admitted(limit=limit, connector_key=connector_key)
+        if limit <= 0:
+            return 0
+        keys = ((connector_key,) if connector_key is not None
+                else self.dispatch_gate.connector_keys)
+        completed = 0
+        for key in keys:
+            if completed >= limit:
+                break
+            try:
+                async with self.dispatch_gate.slot(key):
+                    completed += await self._drain_admitted(
+                        limit=limit-completed, connector_key=key,
+                    )
+            except (LookupError, DispatchAdmissionClosed):
+                # Quiescing/unconfigured connectors cannot obtain dispatch
+                # authority. Leave their SQLite candidates untouched.
+                continue
+        return completed
+
+    async def _drain_admitted(self, *, limit: int = 32,
+                              connector_key: str | None = None) -> int:
         """Preflight without claims, then claim just one copy per available slot.
 
         Per-sweep attempted identities prevent a low-ID refusal from starving a
@@ -398,7 +429,8 @@ class PlatformPhysicalMutationCoordinator:
             # They happen BEFORE any durable mutation reservation.
             try:
                 adapter = self.registry.get(candidate.connector_key)
-                ready = getattr(adapter, 'is_ready', None)
+                ready = (getattr(adapter, 'dispatch_ready', None)
+                         or getattr(adapter, 'is_ready', None))
                 if ready is not None and not ready():
                     continue
                 if not self.target_policy(candidate.connector_key, candidate.surface_id):

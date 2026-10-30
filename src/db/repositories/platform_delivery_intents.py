@@ -538,15 +538,18 @@ class PlatformDeliveryIntentRepository:
                 ready.append(row.id)
         return ready
 
-    def recoverable_pending_ids(self) -> list[int]:
+    def recoverable_pending_ids(self, connector_key: str | None = None) -> list[int]:
         """Find only definitely unsent, fully materialized authorized targets.
 
         Unknown/expired dispatch is never included: restarting a process
         cannot prove that an earlier Discord POST did not succeed remotely.
         """
         with self._session_provider() as session:
-            rows = session.scalars(select(PlatformDeliveryIntent).where(
-                PlatformDeliveryIntent.state == 'pending').order_by(PlatformDeliveryIntent.id))
+            query = select(PlatformDeliveryIntent).where(PlatformDeliveryIntent.state == 'pending')
+            if connector_key is not None:
+                query = query.join(PlatformConnector, PlatformConnector.id == PlatformDeliveryIntent.connector_id).where(
+                    PlatformConnector.connector_key == connector_key)
+            rows = session.scalars(query.order_by(PlatformDeliveryIntent.id))
             recoverable: list[int] = []
             for row in rows:
                 if (not row.request_json or not row.request_fingerprint
@@ -646,12 +649,14 @@ class PlatformDeliveryIntentRepository:
             return ClaimedCreate(row.id, row.dispatch_token, row.request_json,
                                  row.request_fingerprint)
 
-    def unresolved_ids(self) -> list[int]:
+    def unresolved_ids(self, connector_key: str | None = None) -> list[int]:
         """List uncertain attempts for read-only startup reconciliation only."""
         with self._session_provider() as session:
-            return list(session.scalars(select(PlatformDeliveryIntent.id).where(
-                PlatformDeliveryIntent.state == 'unresolved').order_by(
-                    PlatformDeliveryIntent.id)).all())
+            query = select(PlatformDeliveryIntent.id).where(PlatformDeliveryIntent.state == 'unresolved')
+            if connector_key is not None:
+                query = query.join(PlatformConnector, PlatformConnector.id == PlatformDeliveryIntent.connector_id).where(
+                    PlatformConnector.connector_key == connector_key)
+            return list(session.scalars(query.order_by(PlatformDeliveryIntent.id)).all())
 
     def committed_ack_kind(self, claim: ClaimedCreate) -> str | None:
         """Prove a matching durable terminal receipt/unknown after writer commit.

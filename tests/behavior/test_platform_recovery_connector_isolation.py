@@ -88,5 +88,21 @@ class MissingAdapterRecoveryScenarios(PhysicalDeliveryRestartScenarios):
             self.assertEqual(row.dispatch_token, second.token)
 
 
+    def test_connector_filter_never_claims_other_connector_pending_work(self) -> None:
+        """A ready Discord lane cannot claim or consume the Fluxer-only scan."""
+        intent_id = self._pending('C')
+        self.assertEqual(asyncio.run(self.coordinator.recover_pending(
+            connector_key='fluxer-local')), [])
+        with self.database.session() as session:
+            row = session.get(PlatformDeliveryIntent, intent_id)
+            self.assertEqual(row.state, 'pending')
+            self.assertIsNone(row.dispatch_token)
+        self.assertEqual(asyncio.run(self.coordinator.recover_pending(
+            connector_key='discord-primary')), [intent_id])
+        with self.database.session() as session:
+            row = session.get(PlatformDeliveryIntent, intent_id)
+            self.assertEqual(row.state, 'delivered')
+
+
 if __name__ == '__main__':
     unittest.main()

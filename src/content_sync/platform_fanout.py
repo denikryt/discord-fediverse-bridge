@@ -10,6 +10,7 @@ import logging
 
 from ..platform_types import PlatformOperationError
 from ..db.repositories.platform_delivery_intents import decode_request
+from .platform_delivery_scheduler import DispatchAdmissionClosed
 
 logger=logging.getLogger(__name__)
 
@@ -17,10 +18,12 @@ logger=logging.getLogger(__name__)
 class PlatformFanoutCoordinator:
     """Serialize recipient Create through durable attempts and typed adapters."""
 
-    def __init__(self, database, registry):
+    def __init__(self, database, registry, *, dispatch_gate=None):
         """Use a Database writer and connector-keyed adapter registry."""
         self.database=database
         self.registry=registry
+        self.dispatch_gate = dispatch_gate
+        self._delivery_wake = None
 
     @classmethod
     def from_adapter(cls, database, adapter):
@@ -32,7 +35,10 @@ class PlatformFanoutCoordinator:
         from ..platform_adapters import PlatformAdapterRegistry
         registry=PlatformAdapterRegistry((adapter.connector,))
         registry.register(adapter)
-        return cls(database,registry)
+        # A short-lived coordinator inherits the gate explicitly bound to the
+        # live adapter by runtime composition; it must not create another gate.
+        return cls(database, registry, dispatch_gate=getattr(
+            adapter, '_physical_dispatch_gate', None))
 
     async def stage_and_deliver(self, *,domain,kind,canonical_id,forum,
                                 operation,destination,content,presentation,
@@ -86,7 +92,7 @@ class PlatformFanoutCoordinator:
             owner_id=owner_id, blocked_parent_canonical_id=parent_canonical_id)
         return row.id
 
-    async def recover_pending(self) -> list[int]:
+    async def recover_pending(self, *, connector_key: str | None = None) -> list[int]:
         """Restart safe Create work without guessing whether old POSTs succeeded.
 
         Claims from an expired or interrupted transport are made unresolved,
@@ -97,27 +103,28 @@ class PlatformFanoutCoordinator:
 
         # Recovery and live sends share the same coordinator claims; there is
         # no second queue or alternate SDK transport entry point.
-        return await recover_pending_creates(self)
+        return await recover_pending_creates(self, connector_key=connector_key)
+
+    def bind_delivery_wake(self, wake) -> None:
+        """Inject the one scheduler wake callback during runtime composition."""
+        if self._delivery_wake is not None:
+            raise RuntimeError('physical delivery wake already configured')
+        self._delivery_wake = wake
 
     async def _wake_blocked_children(self) -> None:
-        """Run newly provable nested deliveries, never unknown attempts.
+        """Materialize children with exact parent proof, then notify the lanes.
 
-        Nested children can themselves be parents. The reentrancy guard and
-        bounded passes avoid unbounded AP-driven recursion without creating a
-        separate queue; remaining ready SQLite rows survive later wake/restart.
+        The parent receipt commits before any child transport call. No nested
+        HTTP await is allowed: each connector later obtains its own slot and
+        durable claim; a lost notification is recovered by periodic DB scan.
         """
-        if getattr(self, '_waking_children', False):
-            return
-        self._waking_children = True
-        try:
-            for _ in range(128):
-                ready = self.database.platform_delivery_intents.materialize_ready_blocked()
-                if not ready:
-                    break
-                for child_id in ready:
-                    await self.deliver(child_id)
-        finally:
-            self._waking_children = False
+        ready = self.database.platform_delivery_intents.materialize_ready_blocked()
+        if ready:
+            wake = self._delivery_wake
+            if wake is None and self.dispatch_gate is not None:
+                wake = self.dispatch_gate.wake
+            if wake is not None:
+                wake()
 
     async def _ack_persisted_create(self, *, adapter, claim, attempt, permit,
                                     receipt=None) -> None:
@@ -148,6 +155,20 @@ class PlatformFanoutCoordinator:
             logger.exception('Physical Create cache ACK refused intent_id=%s', claim.intent_id)
 
     async def reconcile_unknown(self, intent_id: int) -> bool:
+        """Admit read-only reconciliation through the physical connector slot."""
+        if self.dispatch_gate is None:
+            return await self._reconcile_admitted(intent_id)
+        claim = self.database.platform_delivery_intents.unresolved_claim(intent_id)
+        if claim is None:
+            return False
+        try:
+            attempt, _, _, _, _ = decode_request(claim.request_json)
+            async with self.dispatch_gate.slot(attempt.connector_key):
+                return await self._reconcile_admitted(intent_id)
+        except (LookupError, DispatchAdmissionClosed):
+            return False
+
+    async def _reconcile_admitted(self, intent_id: int) -> bool:
         """Adopt only a matching read-only adapter receipt; never create again.
 
         An unknown HTTP outcome (or a new adapter after restart) is not a
@@ -184,7 +205,23 @@ class PlatformFanoutCoordinator:
         await self._wake_blocked_children()
         return True
 
-    async def deliver(self,intent_id:int)->bool:
+    async def deliver(self, intent_id: int) -> bool:
+        """Take the connector slot before any durable Create claim or remote I/O."""
+        if self.dispatch_gate is None:
+            return await self._deliver_claimed(intent_id)
+        pristine = self.database.platform_delivery_intents.pristine_pending_request(intent_id)
+        if pristine is None:
+            return False
+        try:
+            attempt, _, _, _, _ = decode_request(pristine[0])
+            async with self.dispatch_gate.slot(attempt.connector_key):
+                # Re-evaluate the intent inside admission; another sender may
+                # have settled it while this task waited for capacity.
+                return await self._deliver_claimed(intent_id)
+        except (LookupError, DispatchAdmissionClosed):
+            return False
+
+    async def _deliver_claimed(self, intent_id: int) -> bool:
         """Send only a newly claimed immutable Create, commit verified receipt.
 
         Return False for ineligible/already handled/unknown attempts. The

@@ -12,6 +12,9 @@ from .discord_bot import BridgeBot
 from .discord_adapter import DiscordAdapter
 from .platform_adapters import PlatformAdapterRegistry
 from .content_sync.platform_mutations import PlatformPhysicalMutationCoordinator
+from .content_sync.platform_delivery_scheduler import (
+    ConnectorDispatchCapacity, PlatformPhysicalDeliveryScheduler,
+)
 from .discord_oauth_client import DiscordOAuthClient
 from .content_publish_service import ContentPublishService
 from .fedify_gateway_client import FedifyGatewayClient
@@ -47,6 +50,8 @@ class Runtime:
     discord_adapter: DiscordAdapter
     adapter_registry: PlatformAdapterRegistry
     physical_mutation_coordinator: PlatformPhysicalMutationCoordinator
+    physical_delivery_scheduler: PlatformPhysicalDeliveryScheduler
+    physical_dispatch_gate: ConnectorDispatchCapacity
     community_runtime: CommunityRuntime
     local_community_runtime: LocalCommunityRuntime
     profile_media_store: ProfileMediaStore
@@ -71,12 +76,21 @@ class Runtime:
         # Close the gate before the first await, even when shutdown itself was
         # entered due to TaskGroup failure. Every later owner is attempted.
         try:
+            # Close physical admission before any awaits; queued direct callers
+            # cannot claim after the runtime enters structured shutdown.
+            self.physical_dispatch_gate.close_admission()
+        except BaseException as exc:
+            errors.append(exc)
+
+        try:
             self.discord_adapter.close_ingress_admission()
         except BaseException as exc:
             errors.append(exc)
 
         for operation in (
             self.discord_adapter.drain_ingress,
+            self.physical_delivery_scheduler.stop,
+            self.physical_dispatch_gate.drain,
             self.personal_feed_discord_delivery_worker.stop,
             self.user_actor_delivery_worker.stop,
             self.discord_adapter.quiesce,
