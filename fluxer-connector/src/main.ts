@@ -11,6 +11,7 @@ import {createTrustedSdkClient} from './sdk_factory.ts';
 import {FluxerNodeService} from './service.ts';
 import {createSdkReadHandler} from './rest_reads.ts';
 import {createSdkPermissionHandler} from './permissions.ts';
+import {createSdkCapabilityHandler} from './capabilities.ts';
 import {PrivateRpcError, type RpcHandler} from './transport.ts';
 
 /** Read mandatory deployment values without echoing secret names or contents. */
@@ -80,16 +81,18 @@ export async function runFluxerNodeService(): Promise<void> {
     createVettedClient: async () => {
       // The npm SDK is imported only after tokenless discovery and approved
       // hosts have passed; no fake SDK client is a production fallback.
-      const {Client} = await import('@fluxerjs/core');
+      const {Client, Routes} = await import('@fluxerjs/core');
       const client = createTrustedSdkClient(discovery, Client,
         config.allowInsecureLocalDevelopment);
       const reads = createSdkReadHandler(client);
       const permissions = createSdkPermissionHandler(client);
+      const capabilities = createSdkCapabilityHandler(client, Routes.channel);
       handler = (operation, args) => {
         if (operation === 'fetch_channel' || operation === 'fetch_thread' ||
             operation === 'fetch_message') return reads(operation, args);
         if (operation === 'check_permissions') return permissions(operation, args);
-        // No unconfirmed forum REST write or capability is advertised by
+        if (operation === 'capabilities') return capabilities(operation, args);
+        // No unconfirmed forum REST write is advertised by
         // production composition. There is no bot-mode silent fallback.
         throw new PrivateRpcError('unsupported');
       };

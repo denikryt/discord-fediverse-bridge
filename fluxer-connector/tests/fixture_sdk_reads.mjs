@@ -2,10 +2,13 @@
 import {PrivateRpcService} from '../src/transport.ts';
 import {createSdkReadHandler} from '../src/rest_reads.ts';
 import {createSdkPermissionHandler} from '../src/permissions.ts';
+import {createSdkCapabilityHandler} from '../src/capabilities.ts';
 
 /** Minimal observed SDK channel shape for a cross-process lookup fixture. */
 function channel(id, kind, parentId=null) {
-  return {id, guildId:'guild-1', parentId, name:id,
+  return {id, type:kind==='forum'?15:kind==='thread'?11:0,
+    ...(kind==='forum'?{flags:16, availableTags:[
+    {id:'tag-a',moderated:false},{id:'tag-mod',moderated:true}]}:{}), guildId:'guild-1', parentId, name:id,
     isForum:()=>kind==='forum', isGuild:()=>true, isThread:()=>kind==='thread',
     isText:()=>kind==='text', isAnnouncement:()=>kind==='announcement'};
 }
@@ -28,6 +31,13 @@ const guild={id:'guild-1',
     }};}},
 };
 const client={user:{id:'bot-id',bot:true},
+  rest:{async get(route) {
+    const id=route.split('/').pop();
+    const ch=channels.get(id);
+    if (!ch) throw new Error('missing channel');
+    return {id:ch.id, type:ch.type, guild_id:ch.guildId, flags:ch.flags,
+      available_tags:ch.availableTags};
+  }},
   guilds:{async fetch(id) {return id==='guild-1'?guild:null;}},
   channels:{
   async fetch(id) {
@@ -41,11 +51,13 @@ const client={user:{id:'bot-id',bot:true},
 }};
 const read=createSdkReadHandler(client);
 const permissions=createSdkPermissionHandler(client);
+const capabilities=createSdkCapabilityHandler(client,id=>`/channels/${id}`);
 const service=new PrivateRpcService({connectorKey:'fluxer-contract',
   transportSecret:'test-transport-secret',handler:(operation,args)=>
     operation==='health'?Promise.resolve({connector_key:'fluxer-contract',
       state:'ready',bot_id:client.user.id, instance_origin:'https://fluxer.example'}):
-    operation==='check_permissions'?permissions(operation,args):read(operation,args)});
+    operation==='check_permissions'?permissions(operation,args):
+    operation==='capabilities'?capabilities(operation,args):read(operation,args)});
 const port=await service.start();
 process.stdout.write(`${port}\n`);
 process.on('SIGTERM',()=>{void service.close().then(()=>process.exit(0));});

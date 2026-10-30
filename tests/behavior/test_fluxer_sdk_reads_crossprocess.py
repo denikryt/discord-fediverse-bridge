@@ -11,6 +11,7 @@ from src.fluxer_connector_config import FluxerConnectorConfig
 from src.fluxer_rpc_client import FluxerRpcClient
 from src.platform_types import (
     AuthorRef, ChannelRef, MessageRef, ThreadRef, PlatformOperationError,
+    ContentDocument, DeliveryPresentation, CreateAttempt,
 )
 
 
@@ -74,6 +75,29 @@ class FluxerSdkReadCrossProcessScenarios(unittest.IsolatedAsyncioTestCase):
         denied = await self.adapter.check_permissions(
             foreign, self.forum, frozenset({'view_channel'}))
         self.assertEqual(denied['view_channel'], 'unknown')
+
+    async def test_live_forum_metadata_is_observed_but_writes_stay_disabled(self) -> None:
+        """SDK forum tag policy crosses Node RPC; no unproven write capability escapes."""
+        response = await self.rpc.call('capabilities', {'channel_id': 'forum-1'},
+                                       connector_key='fluxer-contract')
+        self.assertEqual(response['guild_id'], 'guild-1')
+        self.assertTrue(response['tag_requirements_verified'])
+        self.assertTrue(response['requires_tag'])
+        self.assertEqual(response['available_tags'], [
+            {'id': 'tag-a', 'moderated': False},
+            {'id': 'tag-mod', 'moderated': True},
+        ])
+        caps = await self.adapter.capabilities(self.forum)
+        self.assertFalse(caps.forum_posts)
+        self.assertFalse(caps.message_edit_delete)
+        self.assertFalse(caps.webhook_send)
+        with self.assertRaises(PlatformOperationError) as denied:
+            await self.adapter.create_forum_thread(
+                self.forum, ContentDocument('hello'), title='Title',
+                presentation=DeliveryPresentation('bot'),
+                attempt=CreateAttempt('probe', 'fluxer-contract', 'forum_thread', self.forum),
+            )
+        self.assertEqual(denied.exception.reason, 'unsupported')
 
     async def test_wrong_physical_scope_cannot_be_repaired_by_sdk(self) -> None:
         """A wrong parent, container or instance is rejected without side effects."""

@@ -91,6 +91,20 @@ class FluxerConfigTests(unittest.TestCase):
             with self.subTest(instance=instance["origin"]), self.assertRaises(ValidationError):
                 self._settings(json.dumps([instance]))
 
+    def test_forum_tag_selection_is_immutable_and_bounded(self) -> None:
+        """Only exact forum ID → unique tag IDs reach the configured adapter."""
+        cfg = self._settings(json.dumps([self._instance(
+            forum_applied_tags={'forum-1': ['tag-a', 'tag-b']},
+        )])).fluxer_connectors[0]
+        self.assertEqual(cfg.forum_applied_tags, (('forum-1', ('tag-a', 'tag-b')),))
+        for tags in ({'forum-1': ['tag-a', 'tag-a']},
+                     {'forum-1': ['a', 'b', 'c', 'd', 'e', 'f']},
+                     {'forum/1': ['tag-a']},
+                     {'forum-1': ['bad/tag']},
+                     {'forum-1': 'tag-a'}):
+            with self.subTest(tags=tags), self.assertRaises(ValidationError):
+                self._settings(json.dumps([self._instance(forum_applied_tags=tags)]))
+
     def test_private_rpc_cannot_cross_network_namespace(self) -> None:
         """A sidecar DNS name or alternate loopback spelling cannot receive bearer."""
         for rpc_url in (

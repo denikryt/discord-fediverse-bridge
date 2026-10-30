@@ -24,8 +24,23 @@ map; SDK v3.3.0 otherwise fills absent values with hosted defaults. SDK REST
 uses its standard Undici Agent under the new *operator-trusted* threat model;
 this **does not** provide a per-socket SSRF or DNS-rebinding defense.
 
+The entrypoint additionally exposes a conservative `capabilities` RPC. For
+forums, it reads the exact current channel through SDK `channels.fetch` and
+then via SDK REST `get(Routes.channel(id))`; this second read avoids accepting
+cached tags or `flags=0` synthesized when the server omitted these fields.
+The response reports observed `requires_tag` (source constant `1 << 4`),
+`available_tags` and each tag's `moderated` property, but **all physical
+write capabilities stay false** until the actual operator-pinned server build
+has been measured. `tag_requirements_verified` only asserts the presence and
+consistency of the current REST metadata; it is not a supported-create claim.
+Malformed, missing or mismatched tag metadata cannot be used for POST.
+The SDK's public `PermissionFlags` do not expose the server's separate
+`SEND_MESSAGES_IN_THREADS` bit: thread sends remain `unknown` even with
+ordinary SendMessages. A definitely absent prerequisite View/Send flag can
+still produce `denied` for forum post admission.
+
 The entrypoint exposes only confirmed SDK-backed physical reads and partial
-ACL checks. Create, Send, Edit, Delete, capability discovery and reconciliation
+ACL checks. Create, Send, Edit, Delete and reconciliation
 are **not implemented** in the production handler and refuse RPC rather than
 inventing server-specific REST methods. Do not enable production physical
 writes or claim complete issue #12 transport at this checkpoint. The installed

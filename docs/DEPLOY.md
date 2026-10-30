@@ -105,6 +105,17 @@ but the optional Compose service and secret mount remain to be wired and
 verified. The Node process requires explicitly approved REST/Gateway hosts,
 and reports the configured instance origin in its authenticated health result;
 Python refuses bot ownership if this origin differs from its saved connector.
+A single connector may specify optional `"forum_applied_tags"` mapping exact
+forum IDs to up to five distinct tag IDs, e.g.
+`"forum_applied_tags":{"forum-123":["tag-4"]}`. The parser freezes the
+selection; the adapter rechecks current forum tag inventory and required-tag
+policy before a physical POST. Moderated/removed tags are refused without
+an independently established moderator grant, and missing tag metadata is not
+permission to post. Production composition has not yet passed these options
+to the adapter; that wiring belongs to the runtime-integration checkpoint.
+The supplied Fluxer server source describes tag requirements, but the live
+server build has not been pinned, so writable capabilities remain false.
+
 The entrypoint deliberately refuses unverified physical writes and is **not**
 yet a production-complete Fluxer deployment.
 Do not enable real Fluxer bot dispatch on the strength of configuration

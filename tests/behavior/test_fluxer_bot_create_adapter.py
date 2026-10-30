@@ -51,7 +51,8 @@ class Provider:
         elif op == 'capabilities':
             result = {'channel_id': args['channel_id'], 'guild_id': 'guild-1',
                       'forum_posts': True, 'thread_replies': True, 'attachments': False,
-                      'message_edit_delete': True, 'tag_requirements_verified': True, 'required_tags': []}
+                      'message_edit_delete': True, 'tag_requirements_verified': True,
+                      'requires_tag': False, 'available_tags': []}
         elif op == 'check_permissions':
             result = {'bot_id': 'bot-1', 'channel_id': args['channel_id'],
                       'guild_id': 'guild-1', **{action: self.permission for action in args['actions']}}
@@ -220,7 +221,7 @@ class FluxerBotCreateScenarios(unittest.IsolatedAsyncioTestCase):
             response = await orig(request)
             if json.loads(request.content)['operation'] == 'capabilities':
                 body = json.loads(response.content)
-                body['result']['required_tags'] = ['mandatory-tag']
+                body['result']['requires_tag'] = True
                 return httpx.Response(200, json=body)
             return response
 
@@ -228,6 +229,53 @@ class FluxerBotCreateScenarios(unittest.IsolatedAsyncioTestCase):
         with self.assertRaises(PlatformOperationError) as error:
             await self.create()
         self.assertEqual(error.exception.reason, 'unsupported')
+        self.assertEqual(self.provider.remote_threads, [])
+
+    async def test_operator_tags_are_verified_against_current_forum_before_post(self):
+        """Only a configured, current, unmoderated forum tag reaches remote Create."""
+        self.adapter._forum_applied_tags = {'forum-1': ('tag-a',)}
+        original = self.provider.handle
+
+        async def tagged_forum(request):
+            """Return observed forum tags and preserve the real fake remote effects."""
+            response = await original(request)
+            if json.loads(request.content)['operation'] == 'capabilities':
+                body = json.loads(response.content)
+                body['result'].update({
+                    'requires_tag': True,
+                    'available_tags': [{'id': 'tag-a', 'moderated': False},
+                                       {'id': 'tag-mod', 'moderated': True}],
+                })
+                return httpx.Response(200, json=body)
+            return response
+
+        self.rpc._http._transport = httpx.MockTransport(tagged_forum)
+        await self.create()
+        self.assertEqual(self.provider.remote_threads[0]['applied_tags'], ['tag-a'])
+        self.assertEqual(len(self.provider.remote_threads), 1)
+
+    async def test_removed_or_moderated_operator_tag_cannot_write(self):
+        """Revalidate configured tags against current provider inventory per attempt."""
+        self.adapter._forum_applied_tags = {'forum-1': ('tag-mod',)}
+        original = self.provider.handle
+
+        async def restricted_forum(request):
+            """Return tags which cannot be applied by unverified moderators."""
+            response = await original(request)
+            if json.loads(request.content)['operation'] == 'capabilities':
+                body = json.loads(response.content)
+                body['result']['available_tags'] = [{'id': 'tag-mod', 'moderated': True}]
+                return httpx.Response(200, json=body)
+            return response
+
+        self.rpc._http._transport = httpx.MockTransport(restricted_forum)
+        with self.assertRaises(PlatformOperationError) as error:
+            await self.create()
+        self.assertEqual(error.exception.reason, 'unsupported')
+        self.assertEqual(self.provider.remote_threads, [])
+        self.adapter._forum_applied_tags = {'forum-1': ('removed',)}
+        with self.assertRaises(PlatformOperationError):
+            await self.create()
         self.assertEqual(self.provider.remote_threads, [])
 
     async def test_wrong_forum_receipt_after_post_is_sticky_uncertainty(self):

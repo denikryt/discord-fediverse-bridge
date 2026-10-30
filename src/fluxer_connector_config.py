@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import re
 from dataclasses import dataclass, field
 from urllib.parse import urlsplit
 
@@ -18,6 +19,7 @@ class FluxerConnectorConfig:
     rpc_url: str
     transport_secret: str = field(repr=False)
     allow_insecure_local_development: bool = False
+    forum_applied_tags: tuple[tuple[str, tuple[str, ...]], ...] = ()
 
 
 def parse_fluxer_connectors(raw: str | None) -> tuple[FluxerConnectorConfig, ...]:
@@ -38,7 +40,7 @@ def parse_fluxer_connectors(raw: str | None) -> tuple[FluxerConnectorConfig, ...
     connectors: list[FluxerConnectorConfig] = []
     fields = {
         "connector_key", "origin", "rpc_url", "transport_secret",
-        "allow_insecure_local_development",
+        "allow_insecure_local_development", "forum_applied_tags",
     }
     for entry in entries:
         if not isinstance(entry, dict) or set(entry) - fields:
@@ -75,11 +77,27 @@ def parse_fluxer_connectors(raw: str | None) -> tuple[FluxerConnectorConfig, ...
                 raise ValueError("Invalid Fluxer private RPC address")
         except ValueError as error:
             raise ValueError("Invalid Fluxer private RPC address") from error
+        configured_tags = entry.get("forum_applied_tags", {})
+        if not isinstance(configured_tags, dict):
+            raise ValueError("Fluxer forum applied tags must be a forum-ID map")
+        forum_tags: list[tuple[str, tuple[str, ...]]] = []
+        for forum_id, tag_ids in configured_tags.items():
+            if (not isinstance(forum_id, str)
+                or re.fullmatch(r"[A-Za-z0-9_-]+", forum_id) is None
+                or not isinstance(tag_ids, list) or len(tag_ids) > 5
+                or any(not isinstance(tag, str)
+                       or re.fullmatch(r"[A-Za-z0-9_-]+", tag) is None
+                       for tag in tag_ids)
+                or len(tag_ids) != len(set(tag_ids))):
+                # Selection is immutable and cannot be repaired by filtering.
+                raise ValueError("Invalid Fluxer forum applied tag selection")
+            forum_tags.append((forum_id, tuple(tag_ids)))
         connectors.append(FluxerConnectorConfig(
             connector_key=key,
             origin=origin,
             rpc_url=rpc_url,
             transport_secret=transport_secret,
             allow_insecure_local_development=allow_http,
+            forum_applied_tags=tuple(sorted(forum_tags)),
         ))
     return tuple(connectors)

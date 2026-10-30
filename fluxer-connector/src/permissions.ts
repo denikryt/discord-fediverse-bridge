@@ -51,16 +51,27 @@ function channelGuild(channel: SdkChannelAcl, id: string): string {
 }
 
 /** Safely evaluate an operation against already verified effective rights. */
-function decide(action: string, can: (flag: string) => boolean): string {
+function decide(action: string, can: (flag: string) => boolean,
+                thread: boolean): string {
   if (action === 'view_channel') return can('ViewChannel') ? 'allowed' : 'denied';
   if (action === 'read_history') {
     return can('ViewChannel') && can('ReadMessageHistory') ? 'allowed' : 'denied';
   }
-  if (action === 'send_message') {
-    return can('ViewChannel') && can('SendMessages') ? 'allowed' : 'denied';
+  if (action === 'send_message' || action === 'create_forum_post') {
+    if (!can('ViewChannel') || !can('SendMessages')) return 'denied';
+    // The SDK's public PermissionFlags omit the server's thread-specific
+    // SEND_MESSAGES_IN_THREADS bit. Ordinary SendMessages is not sufficient
+    // to authorize a thread write, nor do base rights prove a forum POST.
+    return thread || action === 'create_forum_post' ? 'unknown' : 'allowed';
   }
-  // Neither forum tag policies nor message-specific authorship are proven by
-  // guild permission flags alone. Avoid false-positive durable admission.
+  if (action === 'start_message_thread') {
+    if (!can('ViewChannel') || !can('ReadMessageHistory')) return 'denied';
+    // Thread-specific create permissions are not exposed in these SDK flags.
+    return 'unknown';
+  }
+  if ((action === 'edit_message' || action === 'delete_message') &&
+      !can('ViewChannel')) return 'denied';
+  // Message ownership and the exact write contract are separate from ACLs.
   return 'unknown';
 }
 
@@ -131,7 +142,7 @@ export function createSdkPermissionHandler(client: SdkPermissionClient): RpcHand
       throw new PrivateRpcError('invalid_request');
     }
     const can = (flag: string) => effective.every(rights => rights.has(flag));
-    for (const action of args.actions) result[action] = decide(action, can);
+    for (const action of args.actions) result[action] = decide(action, can, channel.isThread());
     return result;
   };
 }

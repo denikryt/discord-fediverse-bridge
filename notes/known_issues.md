@@ -528,3 +528,15 @@ The upstream v3.3.0 source confirms public `ThreadCreate/Update/Delete` and `Sha
   verification has taken place. Bot REST writes/capabilities remain blocked
   until native build-specific contracts are confirmed. No per-socket
   DNS-rebinding/SSRF protection is claimed under the trusted-host plan.
+
+- **CP027 SDK forum metadata (local verification only):** a fresh SDK
+  `get(Routes.channel(id))` must confirm forum/guild/type, `flags` and all
+  `available_tags` before tag policy can be described as observed. The SDK's
+  cached `availableTags`/default `flags=0` cannot prove current server policy.
+  Operator tag selection is parsed immutably and checked before bot Create in
+  adapter tests; moderated tags remain unsupported without separately proven
+  moderator rights. The supplied server source's `REQUIRE_TAG` bit (1 << 4)
+  has not been checked against an actual approved server commit and login.
+  Production advertises **no** physical write capability and no forum POST
+  is activated. The actual SDK/type-backed compilation, versioned server
+  capability verification and Python runtime config injection remain open.

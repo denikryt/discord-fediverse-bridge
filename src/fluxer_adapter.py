@@ -57,11 +57,14 @@ class FluxerAdapter:
     _KINDS = frozenset({'forum', 'text', 'announcement', 'unknown'})
 
     def __init__(self, *, connector_key: str, instance_origin: str,
-                 rpc: FluxerRpcClient, bot_actor_id: str | None = None) -> None:
+                 rpc: FluxerRpcClient, bot_actor_id: str | None = None,
+                 forum_applied_tags: tuple[tuple[str, tuple[str, ...]], ...] = ()) -> None:
         """Bind an immutable connector; bot identity is optional until login."""
         self._connector = ConnectorRef(connector_key, 'fluxer', instance_origin)
         self._rpc = rpc
         self._bot_id = bot_actor_id
+        # Config parsing fixes this exact selection before a CreateAttempt can enter.
+        self._forum_applied_tags = dict(forum_applied_tags)
         self._create_lock = asyncio.Lock()
         self._creates: dict[tuple[str, str], _FluxerCreateFlight] = {}
         self._issued_create_permits: WeakKeyDictionary[CoordinatorDispatchPermit, tuple] = WeakKeyDictionary()
@@ -286,8 +289,8 @@ class FluxerAdapter:
             raise PlatformOperationError('unsupported', 'Fluxer bot cannot impersonate presentation')
 
     async def _preflight(self, channel: ChannelRef, *, is_forum: bool,
-                         action: PlatformAction) -> None:
-        """Verify live channel/capability/bot ACL without trusting request metadata."""
+                         action: PlatformAction) -> tuple[str, ...]:
+        """Verify live channel/capability/bot ACL and return verified tag selection."""
         self._scope(channel.connector_key)
         if await self._attested_bot_id() is None:
             raise PlatformOperationError('unavailable', 'Fluxer bot identity not attested')
@@ -297,6 +300,7 @@ class FluxerAdapter:
         if verified.external_guild_id is None:
             raise PlatformOperationError('forbidden', 'Fluxer channel guild not verified')
         flags = await self.capabilities(verified)
+        applied_tags: tuple[str, ...] = ()
         if is_forum:
             if not flags.forum_posts:
                 raise PlatformOperationError('unsupported', 'forum posts not verified on Fluxer build')
@@ -306,11 +310,25 @@ class FluxerAdapter:
             if (tags.get('channel_id') != verified.external_channel_id
                 or tags.get('guild_id') != verified.external_guild_id
                 or tags.get('tag_requirements_verified') is not True
-                or not isinstance(tags.get('required_tags'), list)
-                or any(not isinstance(item, str) or not item for item in tags['required_tags'])):
+                or type(tags.get('requires_tag')) is not bool
+                or not isinstance(tags.get('available_tags'), list)):
                 raise PlatformOperationError('unsupported', 'Fluxer forum tag requirements unverified')
-            if tags['required_tags']:
-                raise PlatformOperationError('unsupported', 'Fluxer required applied tags need explicit configuration')
+            applied_tags = self._forum_applied_tags.get(verified.external_channel_id, ())
+            available: dict[str, bool] = {}
+            for item in tags['available_tags']:
+                if (not isinstance(item, dict) or set(item) != {'id', 'moderated'}
+                    or not isinstance(item['id'], str) or not item['id']
+                    or type(item['moderated']) is not bool or item['id'] in available):
+                    raise PlatformOperationError('unsupported', 'Fluxer forum tag inventory unverified')
+                available[item['id']] = item['moderated']
+            if tags['requires_tag'] and not applied_tags:
+                raise PlatformOperationError('unsupported', 'Fluxer required applied tag not selected')
+            if len(applied_tags) > 5 or len(set(applied_tags)) != len(applied_tags):
+                raise PlatformOperationError('invalid_request', 'Fluxer applied tags invalid')
+            if any(tag not in available or available[tag] for tag in applied_tags):
+                # Moderated tags need independent moderator proof; no such grant
+                # can be inferred from ordinary SendMessages permissions.
+                raise PlatformOperationError('unsupported', 'Fluxer applied tag missing or restricted')
         if not is_forum and action == 'send_message' and verified.kind not in ('forum', 'text', 'announcement'):
             raise PlatformOperationError('unsupported', 'message destination kind not verified')
         principal = AuthorRef(self._connector.key, self._bot_id, 'bot', 'Fluxer bridge')
@@ -318,6 +336,7 @@ class FluxerAdapter:
         grants = await self.check_permissions(principal, verified, actions)
         if any(grants.get(permission) != 'allowed' for permission in actions):
             raise PlatformOperationError('forbidden', 'Fluxer bot permission not verified')
+        return applied_tags
 
     def _mint_coordinator_dispatch_permit(
         self, *, proof: CommittedCreateDispatchProof,
@@ -438,13 +457,13 @@ class FluxerAdapter:
 
         async def perform() -> CreatedThread:
             """Verify rights before entering the potentially effectful Node SDK boundary."""
-            await self._preflight(forum, is_forum=True, action='create_forum_post')
+            applied_tags = await self._preflight(forum, is_forum=True, action='create_forum_post')
             response = await self._call('create_forum_thread', {
                 'forum_id': forum.external_channel_id,
                 'guild_id': forum.external_guild_id, 'title': title,
                 'content': {'body': content.body, 'format': 'plain'},
                 'allowed_mentions': {'parse': []}, 'attempt_key': attempt.key,
-                'delivery_mode': 'bot',
+                'delivery_mode': 'bot', 'applied_tags': list(applied_tags),
             })
             try:
                 if (self._id(response, 'forum_id') != forum.external_channel_id

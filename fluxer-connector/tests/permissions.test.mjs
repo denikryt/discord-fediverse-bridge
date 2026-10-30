@@ -89,6 +89,29 @@ test('thread permissions require parent access; revoked parent denies send',asyn
   } finally {await h.stop();}
 });
 
+test('thread SEND_MESSAGES flag does not prove SEND_MESSAGES_IN_THREADS',async()=>{
+  const h=await harness();
+  try {
+    const result=await h.check({bot_id:'bot-id',channel_id:'thread-1',
+      actions:['send_message','create_forum_post','start_message_thread']});
+    assert.equal(result.status,200);
+    assert.equal(result.body.result.send_message,'unknown');
+    assert.equal(result.body.result.create_forum_post,'unknown');
+    assert.equal(result.body.result.start_message_thread,'unknown');
+  }finally{await h.stop();}
+});
+
+test('forum POST is denied with missing necessary view or send rights',async()=>{
+  const h=await harness({parentDeny:true});
+  try {
+    const result=await h.check({bot_id:'bot-id',channel_id:'forum-1',
+      actions:['create_forum_post','send_message']});
+    assert.equal(result.status,200);
+    assert.equal(result.body.result.create_forum_post,'denied');
+    assert.equal(result.body.result.send_message,'denied');
+  }finally{await h.stop();}
+});
+
 test('missing fresh role cannot turn stale cached permission into allowed',async()=>{
   const h=await harness({missingRole:true});
   try {

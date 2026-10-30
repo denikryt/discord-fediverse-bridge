@@ -91,6 +91,27 @@ coordinator's existing read-only ownership preflight. The normal durable
 revision/CAS/unknown-effect rules remain unchanged; this does not activate
 Fluxer→ActivityPub canonical mutation before issue #13.
 
+## Fluxer capability and forum-tag observation
+
+`capabilities` reads the requested exact channel through the pinned Fluxer
+SDK and, for forums, reads the raw channel again through the SDK REST client's
+`Routes.channel` endpoint. This prevents an SDK cached `availableTags` or
+synthesized `flags=0` from proving what the server returned in a fresh
+response. The authenticated RPC includes the observed `requires_tag`,
+`available_tags` and `moderated` fields only when the raw metadata validates;
+`tag_requirements_verified=false` otherwise. This proof of returned metadata
+is **not** a proof that the current unpinned Fluxer build can accept a forum
+POST, starter-message receipt, thread reply, media or mutation. Consequently
+production capabilities for these writes remain `false` until live capture.
+
+The opt-in `forum_applied_tags` setting associates selected tag IDs with one
+physical forum, and adapter preflight refuses unknown, removed, duplicate or
+moderated tags without a verified moderator authorization. A forum requiring
+any tag cannot be posted untagged; no arbitrary tag ID is manufactured. The
+SDK permission bitfield currently does not expose the server's thread-specific
+send bit: a generic SendMessages grant alone leaves thread send `unknown`.
+This check has no effect on Discord policy, DB ownership or issue #13 gating.
+
 ## Inbound Gateway event family
 
 `ThreadCreated`, `ThreadUpdated`, `ThreadDeleted`, `MessageCreated`, `MessageUpdated`, `MessageDeleted` are frozen, connector-scoped platform events; they are **not** Fedify/ActivityPub events. Each has diagnostic, timezone-aware `received_at` and optional `external_guild_id`; the API rejects naive or non-datetime timestamps. `MessageUpdated.edited_at` and `MessageView.edited_at` require timezone-aware `datetime` when known, with `None` meaning an unknown edit time. Discord adapter integration extends `MessageCreated.created_at` to preserve the actual source message creation instant separately from diagnostic `received_at`; its optional absence keeps generic transport fakes valid, but Discord publication must obtain the source timestamp. `MessageUpdated.author` is optional best-effort `AuthorRef` metadata, rejected if its connector differs from the edited message; a missing author is not inferred from a raw cache-less edit. A resolved `thread_context` must share the message's immediate container, and any accompanying `parent_channel` must identify the same physical channel without contradicting its known kind/guild metadata. Event `external_guild_id` is checked against **both** available channel contexts, even when the first has unknown metadata. A reply reference may point into another container for Discord `THREAD_STARTER_MESSAGE`; this is not an outbound reply permission. Raw message updates/deletes require no parent channel, cache or network fetch. Missing `MessageUpdated.content is None` is **not** empty content; `ContentDocument(body='')` means explicit empty content. `ThreadCreated.newly_created=None` and `MessageCreated.is_starter=None` mean unknown, not false.
