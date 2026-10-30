@@ -337,3 +337,30 @@ The currently constructed production runtime contains only the existing
 Discord connector lane. Node Fluxer SDK registration, same-capacity admission
 for direct Create/mutation calls, and notification-based cross-connector child
 wake remain pending; this does not yet establish complete Checkpoint 5.
+
+## Fluxer private outbound RPC (Checkpoint 1 implementation in progress)
+
+`FluxerRpcClient` sends one connector-scoped authenticated JSON request to the
+configured private Node service at `/rpc`. Its own operation allowlist, 256 KiB
+request limit, 1 MiB response limit, disabled redirects/proxy inheritance, and
+strict matching response connector are enforced before an adapter adopts a
+transport result. This `/rpc` envelope belongs exclusively to the bridge; it
+is **not** a guessed Fluxer REST endpoint. The Node sidecar will translate it
+using a pinned Fluxer SDK. A failed or malformed response to a side-effecting
+RPC remains `unknown_delivery` and is never automatically retried by Python.
+RPC task admission is closed and already admitted RPC calls are joined before
+its HTTP client is disposed. This is a local contract boundary only: Node SDK
+operation handlers and live forum/Gateway verification remain unfinished.
+
+## Fluxer private Node RPC listener (Checkpoint 1 implementation in progress)
+
+`fluxer-connector/src/transport.ts` is a loopback-only, bearer-authenticated
+listener matching Python's private `/rpc` envelope. Before calling a provider
+handler it verifies the requested method against the explicit allowlist and
+checks the configured connector key, body size and JSON shape. Its admission
+limit bounds active private requests; `close()` rejects new requests and joins
+accepted ones. Unknown SDK/provider failures are returned without raw exception
+text or bot credentials. Node's SDK handler, reproducible `npm` lockfile and
+Fluxer live discovery/transport are still unimplemented: the loopback test
+provider under `fluxer-connector/tests/` is intentionally **not** a Fluxer
+REST implementation and cannot justify a live transport acceptance result.

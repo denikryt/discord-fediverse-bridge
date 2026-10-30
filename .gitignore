@@ -32,3 +32,6 @@ backups/
 # Generated local test-assurance reports.
 .artifacts/test-assurance/
 .coverage
+
+# Reproducible optional Fluxer SDK package dependencies.
+fluxer-connector/node_modules/
