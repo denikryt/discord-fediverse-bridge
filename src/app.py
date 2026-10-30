@@ -5,6 +5,8 @@ from __future__ import annotations
 import asyncio
 import inspect
 import logging
+import signal
+from contextlib import contextmanager
 import threading
 from pathlib import Path
 
@@ -86,43 +88,95 @@ async def _run_bot_lifetime(runtime: Runtime, discord_token: str) -> None:
                             await runtime.discord_adapter.quiesce()
 
 
+class _RuntimeServiceStopped(Exception):
+    """Cancel sibling services when one process-owned lifetime finishes normally."""
+
+
+class _RuntimeHttpServer(uvicorn.Server):
+    """Let the application own process signals until every runtime resource closes."""
+
+    @contextmanager
+    def capture_signals(self):
+        """Avoid Uvicorn re-raising SIGTERM before SQLite/runtime cleanup."""
+        # Uvicorn otherwise restores SIG_DFL and re-raises the captured signal
+        # after HTTP stops, bypassing the outer application's finally block.
+        yield
+
+
 async def main() -> None:
-    # Build the full runtime once and then run both long-lived entry points
-    # against the same shared state.
+    """Supervise HTTP/Discord lifetimes and retain signal ownership through close."""
     settings = Settings()
     configure_logging(settings.log_level)
     logger.info("Starting Discord/Fediverse bridge version=%s", APP_VERSION)
     runtime = build_runtime(settings)
+    original_handlers = {}
+    failure: BaseException | None = None
     try:
-        # All post-composition startup, including HTTP app/server construction,
-        # belongs to the same cleanup scope as the live SDK tasks.
         http_app = create_http_app(runtime)
-        http_server = uvicorn.Server(
+        http_server = _RuntimeHttpServer(
             uvicorn.Config(
-                http_app,
-                host=settings.internal_http_host,
-                port=settings.internal_http_port,
-                log_level=settings.log_level.lower(),
+                http_app, host=settings.internal_http_host,
+                port=settings.internal_http_port, log_level=settings.log_level.lower(),
+                timeout_graceful_shutdown=30,
             )
         )
 
+        def request_shutdown(_signum, _frame):
+            """Close physical admission immediately and ask HTTP to drain normally."""
+            runtime.physical_dispatch_gate.close_admission()
+            http_server.should_exit = True
+
+        # Signals belong to the full application, not just its HTTP lifetime.
+        # Repeated SIGTERM cannot interrupt the later DB/lease teardown scope.
+        for signum in (signal.SIGTERM, signal.SIGINT):
+            original_handlers[signum] = signal.signal(signum, request_shutdown)
+
         async def run_bot() -> None:
-            """Run the Discord Gateway under its existing close contract."""
+            """A finished Gateway lifetime terminates the sibling HTTP service."""
             await _run_bot_lifetime(runtime, settings.discord_token)
+            raise _RuntimeServiceStopped()
 
         async def run_http_server() -> None:
-            """Serve the private HTTP API until the shared task group stops."""
-            await http_server.serve()
+            """Join HTTP callbacks even when a failing SDK cancels this task."""
+            try:
+                await http_server.serve()
+            except BaseException as error:
+                http_server.should_exit = True
+                if http_server.started:
+                    try:
+                        await http_server.shutdown()
+                    except BaseException as cleanup_error:
+                        runtime.retain_unclosed_owner(http_server, cleanup_error)
+                        raise BaseExceptionGroup("HTTP service shutdown failures", [error, cleanup_error])
+                raise
+            # TaskGroup does not cancel siblings when a task returns normally.
+            # A private sentinel joins Discord's lifetime after graceful HTTP stop.
+            raise _RuntimeServiceStopped()
 
         runtime.user_actor_delivery_worker.start()
         runtime.physical_delivery_scheduler.start()
-        async with asyncio.TaskGroup() as task_group:
-            task_group.create_task(run_bot(), name="discord-bot")
-            task_group.create_task(run_http_server(), name="internal-http-server")
+        try:
+            async with asyncio.TaskGroup() as task_group:
+                task_group.create_task(run_bot(), name="discord-bot")
+                task_group.create_task(run_http_server(), name="internal-http-server")
+        except* _RuntimeServiceStopped:
+            pass
+    except BaseException as error:
+        failure = error
+        raise
     finally:
-        # The runtime holds its exclusive SQLite lease until this has joined
-        # all ingress/worker clients and closed the database.
-        await runtime.close()
+        try:
+            try:
+                await runtime.close()
+            except BaseException as cleanup_error:
+                if failure is not None:
+                    # Preserve the original service/startup failure along with
+                    # every cleanup error in the fatal process diagnostic.
+                    raise quarantine(runtime, [failure, cleanup_error])
+                raise
+        finally:
+            for signum, handler in original_handlers.items():
+                signal.signal(signum, handler)
 
 
 def build_runtime(settings: Settings) -> Runtime:

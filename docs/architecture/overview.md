@@ -122,3 +122,7 @@ checks leave pristine pending intents recoverable and do not stop Discord.
 `Runtime.close()` rejects and joins HTTP ingress before disposing SQLite, then
 joins physical lanes and RPC operations before releasing the runtime lifetime
 lease. Live forum writes remain gated by verified Node SDK contracts.
+
+## Process shutdown supervision
+
+The application owns SIGTERM/SIGINT through HTTP, Discord and final runtime teardown. Uvicorn does not restore/re-raise a signal before SQLite closes. A graceful HTTP return or normal Gateway return terminates the sibling lifetime; cancellation of HTTP explicitly joins its accepted requests before Runtime.close(). HTTP receives a 30-second graceful drain budget, and Compose grants Python 60 seconds before forced termination. A cleanup failure remains fatal and retains both SQLite protections until confirmed recovery or process exit. If an externally owned HTTP server cannot join its callbacks, Runtime strongly retains that owner and its failure; successful SQLite disposal alone cannot release either lease.

@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 
 from .runtime_cleanup import quarantine, release_quarantine
 from .community_sync.runtime import CommunityRuntime
@@ -37,8 +37,9 @@ from .personal_feed_discord_delivery_worker import PersonalFeedDiscordDeliveryWo
 class Runtime:
     """Group the shared long-lived services that request handlers and Discord callbacks need.
 
-    All fields are constructed once in app.py and shared across the full bridge
-    process lifetime. No field is optional; absence of a dependency is a startup error.
+    Required services are constructed once in app.py and shared for the bridge
+    lifetime. Fluxer owners are absent only when the connector is disabled.
+    Failed external owners remain strongly retained until process termination.
     """
 
     # Runtime groups the shared long-lived services that request handlers and
@@ -70,6 +71,16 @@ class Runtime:
     personal_feed_discord_delivery_worker: PersonalFeedDiscordDeliveryWorker
     deployment_state_lease: FileLock
     runtime_lifetime_lease: FileLock
+    _unclosed_owners: list[tuple[object, BaseException]] = field(default_factory=list, init=False, repr=False)
+
+    def retain_unclosed_owner(self, owner: object, failure: BaseException) -> None:
+        """Keep an unjoined external service alive and prohibit both lease releases.
+
+        HTTP belongs to app.main, outside the Runtime service graph. If its
+        shutdown cannot be confirmed, an otherwise successful SQLite close must
+        not authorize restart or restore while callbacks might still be alive.
+        """
+        self._unclosed_owners.append((owner, failure))
 
     async def close(self) -> None:
         """Join active owners and report all failures without masking the first.
@@ -78,7 +89,7 @@ class Runtime:
         raises. The runtime must still attempt the remaining ordered cleanup,
         retaining cancellation and every independent failure for the caller.
         """
-        errors: list[BaseException] = []
+        errors = [failure for _owner, failure in self._unclosed_owners]
 
         # Close the gate before the first await, even when shutdown itself was
         # entered due to TaskGroup failure. Every later owner is attempted.

@@ -1,5 +1,7 @@
 services:
   bridge:
+    # HTTP receives up to 30s to drain before runtime clients/SQLite close.
+    stop_grace_period: 60s
     image: ${BRIDGE_IMAGE:-discord-fediverse-bridge}:${BRIDGE_VERSION:?BRIDGE_VERSION is required}
     restart: unless-stopped
     env_file:

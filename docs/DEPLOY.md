@@ -145,3 +145,30 @@ all Create/Send/Edit/Delete operations; these must not be enabled before live
 REST/starter/permission/Gateway contract verification. The Compose layout is
 implemented and statically checked but **must not be interpreted as a passed
 production deployment or complete issue #12 acceptance**.
+
+
+### Verify an isolated Fluxer deployment
+
+After starting actual bridge/sidecar images with a pinned test server and test
+credentials, run the verifier from the repository root. Always select a separate
+Compose project and its environment file explicitly:
+
+```bash
+python dev/verify_fluxer_deployment.py --env-file /absolute/path/test.env \
+  --project-name fluxer-acceptance --restart-sidecar --stop-services
+```
+
+The verifier uses Docker engine state and probes inside the real containers. It
+checks the shared namespace, loopback-only RPC listener, unpublished RPC port,
+Node-only read-only bot secret, rejected unauthenticated calls, connector-bound
+SDK READY identity, independent sidecar restart, and reverse-order clean exits.
+After shutdown it opens the same mounted SQLite file under both leases and runs
+`PRAGMA integrity_check`. `--stop-services` leaves the selected bridge and
+sidecar stopped; volumes are preserved. No physical Fluxer REST write is made.
+Raw container configuration, credentials and unfiltered logs are never printed.
+
+The equivalent opt-in pytest requires `FLUXER_COMPOSE_ACCEPTANCE_ENV` and
+`FLUXER_COMPOSE_ACCEPTANCE_PROJECT`. Without both, it is explicitly skipped.
+Neither static YAML checks nor a local HTTP fixture count as container evidence.
+These probes also do not prove Discord message progress or live Fluxer write
+contracts; those require the separate live action acceptance checklist.
