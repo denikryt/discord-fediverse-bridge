@@ -56,7 +56,7 @@ passed live two-container acceptance.
 
 `/healthz` exists in both processes. In the public-host deployment, public `/healthz` should stay gateway-owned unless an operator intentionally adds a Python health alias.
 
-All `/internal/*` routes are authenticated with the shared gateway secret and must not be routed publicly by nginx.
+All `/internal/*` routes are authenticated and must not be routed publicly by nginx. Fluxer uses its own connector-specific RPC/event bearer, **not** the ActivityPub gateway secret.
 
 `/actors/`, `/.well-known/webfinger`, `/.well-known/discord-fediverse-bridge/communities`, and `/inbox` are gateway-owned public identity, discovery, or delivery paths and should stay out of the Python bridge namespace. Retired local ActivityPub aliases under `/users/`, `/communities/`, `/c/`, and `/activitypub/` are not public AP gateway surfaces.
 

@@ -13,6 +13,7 @@ jobs:
     runs-on: ubuntu-latest
     outputs:
       version: ${{ steps.version.outputs.value }}
+      fluxer_lock: ${{ steps.version.outputs.fluxer_lock }}
     steps:
       - uses: actions/checkout@v4
       - id: version
@@ -29,6 +30,13 @@ jobs:
             exit 1
           fi
           echo "value=$tag_version" >> "$GITHUB_OUTPUT"
+          # Detect the SDK lock after checkout, not in the job-level if
+          # expression (where no workspace files are available).
+          if [[ -f fluxer-connector/package-lock.json ]]; then
+            echo "fluxer_lock=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "fluxer_lock=false" >> "$GITHUB_OUTPUT"
+          fi
 
   publish-images:
     needs: validate-version
@@ -77,7 +85,7 @@ jobs:
   # exists. Never silently build from floating/npm install dependencies.
   publish-fluxer-image:
     needs: validate-version
-    if: ${{ hashFiles('fluxer-connector/package-lock.json') != '' }}
+    if: ${{ needs.validate-version.outputs.fluxer_lock == 'true' }}
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4

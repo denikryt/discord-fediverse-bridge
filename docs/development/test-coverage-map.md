@@ -471,3 +471,16 @@ full Python/Node suites or live Discord/Fedify integration acceptance.
   a nested physical message through the actual Python-to-Node authenticated
   boundary and checks one side-effecting SDK-edge send, parent reference and
   no replay after a lost response. No real Fluxer server acceptance claimed.
+
+## Fluxer single trusted instance transport (Issue #12 — unaccepted live gate)
+
+The scenario/invariant status matrix is maintained in
+`docs/development/fluxer_live_verification.md` (B01–B21, R01–R24). Sources:
+`tests/behavior/test_fluxer_*`, `test_platform_recovery_connector_isolation.py`,
+`test_platform_delivery_scheduler_lanes.py`, `test_platform_mutation_claim_slots.py`,
+`test_platform_mutation_retry_fairness.py`, `test_single_runtime_ownership.py`,
+`test_fluxer_compose_topology.py` and `fluxer-connector/tests/*.test.mjs`.
+The standalone Node SDK-fake tests do **not** prove the production Docker
+namespace/secret configuration, official npm SDK type compatibility or the
+actual server's forum/starter/permissions/Gateway contracts. Full suite and
+actual container acceptance remain unverified as recorded in that matrix.

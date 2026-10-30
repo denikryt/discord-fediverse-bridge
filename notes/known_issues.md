@@ -488,14 +488,15 @@ Fedify-native security integration remains blocked by missing dependencies.
 
 ## Fluxer SDK v3.3.0 integration — verification pending
 
-The upstream v3.3.0 source confirms public `ThreadCreate/Update/Delete` and `ShardDisconnect/Ready/Resumed` events. Local Node event normalization, authenticated forwarding and injectable service composition are covered by deterministic tests, but `@fluxerjs/core@3.3.0` could not be installed in the current environment (`registry.npmjs.org`: `EAI_AGAIN`). The published npm package, full SDK TypeScript typings and real-instance Gateway behavior remain unverified. **Do not start a production bot with an unrestricted `Client.fromDiscovery` factory:** the required SDK-owned REST/WebSocket egress enforcement and the real bot operations are not yet implemented. See `fluxer-connector/README.md`.
+The upstream v3.3.0 source confirms public `ThreadCreate/Update/Delete` and `ShardDisconnect/Ready/Resumed` events. Local Node event normalization, authenticated forwarding and injectable service composition are covered by deterministic tests, but `@fluxerjs/core@3.3.0` could not be installed in the current environment (`registry.npmjs.org`: `EAI_AGAIN`). The published npm package, full SDK TypeScript typings and real-instance Gateway behavior remain unverified. **Do not enable production writes based on SDK fakes or assume per-socket DNS pinning:** the accepted one-operator-trusted-instance scope uses official SDK REST and explicitly approved discovery/Gateway hosts, not a custom REST dispatcher. See `fluxer-connector/README.md`.
 
 - **OPEN (Fluxer SDK security boundary):** upstream `@fluxerjs/rest` v3.3.0
   calls its own `undici.fetch` with a package-global Agent and exposes no
   per-client dispatcher option; the public SDK WebSocket constructor hook
-  does not secure REST. The promised production egress-vetted client factory
-  cannot be implemented by merely reusing the existing discovery preflight.
-  No unrestricted factory or bot token transport has been activated.
+  does not secure REST. This is an **accepted residual risk** for the
+  operator-trusted-host model, not an incomplete promised custom dispatcher.
+  The production SDK factory validates approved discovery endpoints but does
+  not claim to pin every later SDK REST socket. Bot REST writes are disabled.
 - **IMPLEMENTED locally (Fluxer SDK reads):** `rest_reads.ts` handles fresh,
   scoped channel/thread/message lookups via the documented ChannelManager
   methods, through the authenticated Python/Node RPC edge. An SDK-edge fake
@@ -510,7 +511,7 @@ The upstream v3.3.0 source confirms public `ThreadCreate/Update/Delete` and `Sha
   SDK factory safety.
 
 - **CP023 local fix (not live-verified):** public SDK `MessageCreate` now uses CP021's force-read of the exact thread and its parent before emitting a claimable `parent_channel`/`thread_context`. Mismatched, missing or non-forum parents are forwarded only as unverified observations; these do not create AP publications. The accepted SDK-read task is joined on shutdown. Real SDK server behavior and published types remain an acceptance gate.
-- **Trusted-instance security scope update:** revised issue #12 plan accepts the official SDK's default Undici REST transport only for one expressly operator-trusted host set; no adversarial per-socket SSRF/DNS-rebinding guarantee is claimed. Production SDK factory remains unimplemented; do not use unrestricted external origins.
+- **Trusted-instance security scope update:** revised issue #12 plan accepts the official SDK's default Undici REST transport only for one expressly operator-trusted host set; no adversarial per-socket SSRF/DNS-rebinding guarantee is claimed. The production SDK factory is now implemented with approved discovery/Gateway-host checks, but remains unverified against the published SDK and actual server. Never accept arbitrary origins.
 
 - **CP024 local fix (live SDK acceptance pending):** Fluxer SDK `fetch_message` now preserves explicit `webhook_id` provenance. The Python adapter checks current authenticated connector-bound Node READY/bot ID before granting `is_bridge_owned`, and rejects foreign bot/webhook/unknown identity in Edit/Delete. A two-process SDK-session/RPC/SQLite mutation scenario verifies exact bot copy revision/remote edit/delete; real Fluxer REST write methods are still pending their own checkpoint.
 
@@ -590,10 +591,24 @@ The upstream v3.3.0 source confirms public `ThreadCreate/Update/Delete` and `Sha
 - **CP033 static Compose wiring (B20/B21 live BLOCKED):** the optional
   `fluxer-sidecar` now shares `network_mode: service:bridge`, binds one fixed
   loopback RPC port, uses a Node-only read-only credential mount and independent
-  restart/health contract. Three source-level Compose tests pass. A real
+  restart/health contract. Five source-level Compose tests pass. A real
   two-container network namespace/secret mount/sidecar restart verification
   was **not** possible because Docker is absent. The required SDK npm
   `package-lock.json` could not be produced: npm registry DNS `EAI_AGAIN`.
   Consequently the Dockerfile intentionally cannot build, and the opt-in
   configuration is **not production-accepted**. The pinned real Fluxer
   build/starter/Gateway/live acceptance and write dispatcher remain blocked.
+
+- **CP034 available-environment regression (2026-10-29):** 142 selected
+  Python unittest scenarios passed (one skip); 106 Fluxer Node fixture tests
+  passed. `python -m compileall` and `git diff --check` passed. The complete
+  `pytest` run fails at `tests/conftest.py` because `hypothesis` is missing;
+  the exact original HEAD `1645689c...` fails at the same import boundary.
+  The original HEAD Fedify Node check also lacks installed Node modules.
+  Fluxer `npm run check` lacks `@types/node`; no published SDK typecheck or
+  actual Docker compose test was possible. Release workflow review found
+  and corrected a job-level `hashFiles` pre-check that could be evaluated
+  before checkout: the checked-in lock presence is now an explicit output
+  of the `validate-version` job, consumed by optional Node image publication.
+  Full B01–B21/R01–R24 and live acceptance are **BLOCKED**, not PASS; see
+  `docs/development/fluxer_live_verification.md`.

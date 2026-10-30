@@ -104,7 +104,7 @@ The gateway renders User Actor outboxes from a fixed-size internal DTO. Python o
 
 ## Platform persistence boundary
 
-Connector-scoped persistence separates domain actors from physical connector/channel locations. `src/db/repositories/platform_surfaces.py` owns placement resolution and typed claim mutations. Discord routing uses current `discord-primary` claims; connector-scoped historical copies survive release and rebinding. Fluxer rows are persistence-only at present. SQLite 3.31+ is required for stored generated roles; PostgreSQL 12+ DDL compatibility does not imply a PostgreSQL runtime migration implementation.
+Connector-scoped persistence separates domain actors from physical connector/channel locations. `src/db/repositories/platform_surfaces.py` owns placement resolution and typed claim mutations. Discord routing uses current `discord-primary` claims; connector-scoped historical copies survive release and rebinding. Fluxer connector rows now support opt-in Python adapter/runtime registration, authenticated read-only Node RPC and fail-closed Gateway observation. Production Fluxer physical writes and community federation remain disabled pending real-instance acceptance. SQLite 3.31+ is required for stored generated roles; PostgreSQL 12+ DDL compatibility does not imply a PostgreSQL runtime migration implementation.
 
 Database startup supports released v0.1.0 SQLite sources at version 0 and the complete current model at version 1. It upgrades directly in one transaction; The direct transfer work items the released rows in SQL TEMP, creates the current ORM target once and copies them natively; no legacy schema inventory business schema is reconstructed. See [SQLite startup migrations](../development/database-migrations.md).
 

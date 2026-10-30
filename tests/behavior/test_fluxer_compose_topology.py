@@ -48,6 +48,16 @@ class FluxerComposeTopologyContracts(unittest.TestCase):
         self.assertNotIn('fluxer-sidecar', services['backup'].get('depends_on', {}))
         self.assertNotIn('FLUXER_BOT_TOKEN', node['environment'])
 
+    def test_node_secret_file_is_gitignored_without_ignoring_source(self) -> None:
+        """A local bot token never becomes an accidental Git working-tree change."""
+        import subprocess
+        secret = subprocess.run(['git', 'check-ignore', '--quiet', '--no-index',
+                                 'secrets/fluxer-bot-token'], cwd=ROOT)
+        source = subprocess.run(['git', 'check-ignore', '--quiet', '--no-index',
+                                 'fluxer-connector/package.json'], cwd=ROOT)
+        self.assertEqual(secret.returncode, 0)
+        self.assertEqual(source.returncode, 1)
+
     def test_release_requires_pinned_lock_and_matching_image_version(self) -> None:
         """Never publish an optional image from floating npm dependencies."""
         node = ROOT / 'fluxer-connector'
@@ -57,7 +67,9 @@ class FluxerComposeTopologyContracts(unittest.TestCase):
                       dockerfile)
         self.assertIn('npm ci --ignore-scripts', dockerfile)
         self.assertNotIn('RUN npm install', dockerfile)
-        self.assertIn("hashFiles('fluxer-connector/package-lock.json')", workflow)
+        self.assertIn('if [[ -f fluxer-connector/package-lock.json ]]', workflow)
+        self.assertIn("needs.validate-version.outputs.fluxer_lock == 'true'", workflow)
+        self.assertNotIn('hashFiles(', workflow)
         self.assertIn('file: fluxer-connector/Dockerfile', workflow)
         import json
         package = json.loads((node / 'package.json').read_text())

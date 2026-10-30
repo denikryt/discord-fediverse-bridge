@@ -35,3 +35,7 @@ backups/
 
 # Reproducible optional Fluxer SDK package dependencies.
 fluxer-connector/node_modules/
+
+# The optional Fluxer sidecar's operator-owned Node-only bot token never
+# belongs in Git or the Python bridge image/build context.
+/secrets/
