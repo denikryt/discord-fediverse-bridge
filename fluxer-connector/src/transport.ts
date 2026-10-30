@@ -59,6 +59,8 @@ export class PrivateRpcService {
   private readonly work = new Set<Promise<void>>();
   private open = true;
   private closing: Promise<void> | undefined;
+  private listening = false;
+  private listenAttempt: Promise<number> | undefined;
   private readonly key: string;
   private readonly secret: string;
   private readonly handler: RpcHandler;
@@ -87,19 +89,29 @@ export class PrivateRpcService {
     });
   }
 
-  async start(): Promise<number> {
-    /** Bind only explicit loopback, never an accidental public listener. */
-    if (!this.open) throw new Error('Fluxer private RPC already closed');
-    await new Promise<void>((resolve, reject) => {
-      this.server.once('error', reject);
+  start(): Promise<number> {
+    /** Track listen admission so a concurrent close cannot leak a late bind. */
+    if (!this.open || this.listenAttempt) {
+      return Promise.reject(new Error('Fluxer private RPC already started or closed'));
+    }
+    this.listenAttempt = new Promise<number>((resolve, reject) => {
+      const failed = (error: Error): void => {
+        this.server.removeListener('error', failed);
+        reject(error);
+      };
+      this.server.once('error', failed);
       this.server.listen(this.port, this.host, () => {
-        this.server.removeListener('error', reject);
-        resolve();
+        this.server.removeListener('error', failed);
+        this.listening = true;
+        const address = this.server.address();
+        if (!address || typeof address === 'string') {
+          reject(new Error('invalid private RPC address'));
+        } else {
+          resolve((address as AddressInfo).port);
+        }
       });
     });
-    const address = this.server.address();
-    if (!address || typeof address === 'string') throw new Error('invalid private RPC address');
-    return (address as AddressInfo).port;
+    return this.listenAttempt;
   }
 
   private respond(res: ServerResponse, status: number, body: Record<string, unknown>): void {
@@ -164,16 +176,20 @@ export class PrivateRpcService {
     }
   }
 
-  async close(): Promise<void> {
-    /** Stop ingress and join admitted side effects before releasing the listener. */
+  close(): Promise<void> {
+    /** Refuse new RPCs and join a possibly in-progress TCP listen first. */
     if (this.closing) return this.closing;
     this.open = false;
     this.closing = (async () => {
-      const closed = new Promise<void>((resolve, reject) =>
-        this.server.close(err => err ? reject(err) : resolve()));
-      while (this.work.size) await Promise.allSettled([...this.work]);
-      this.server.closeIdleConnections();
-      await closed;
+      if (this.listenAttempt) await this.listenAttempt.catch(() => {});
+      if (this.listening) {
+        const closed = new Promise<void>((resolve, reject) =>
+          this.server.close(err => err ? reject(err) : resolve()));
+        while (this.work.size) await Promise.allSettled([...this.work]);
+        this.server.closeIdleConnections();
+        await closed;
+        this.listening = false;
+      }
     })();
     return this.closing;
   }

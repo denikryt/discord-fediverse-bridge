@@ -1,47 +1,35 @@
-# Fluxer Node connector (under implementation)
+# Fluxer Node connector — SDK integration in progress
 
-This Node package provides the authenticated, loopback-only Python ↔ Node RPC
-boundary and the tokenless, SSRF-checked Fluxer discovery preflight. The SDK
-session owner in `src/sdk_session.ts` is one self-contained lifecycle component:
-it observes Gateway READY, checks the exact discovered `api_public` and actual
-REST base URL when exposed, verifies that the authenticated principal is a bot,
-and drains/disposes its one client on failure or stop. Errors returned at this
-boundary do not contain provider exception text or credentials.
+The Node service owns one Fluxer SDK session, six public SDK event
+subscriptions, a single SDK-object → neutral DTO converter, authenticated
+Node → Python event forwarding, and a private Python → Node RPC listener.
+Python still owns forum/physical SQLite claims and the issue #13 publication
+gate; receiving a Gateway event is not an ActivityPub publication.
 
-The SDK session intentionally accepts a **trusted transport factory**. Preflight
-of `/.well-known/fluxer` alone does not secure subsequent SDK-created HTTP or
-WebSocket sockets against DNS rebinding, redirects or unapproved egress. The
-production factory and network policy must be completed and verified before
-this lifecycle owner is connected to a production bot. This component does not
-claim to support forum REST writes, Gateway normalization or real-instance
-acceptance; those remain separate implementation steps. Never enable a bot
-login by passing an unrestricted `Client.fromDiscovery()` factory without the
-required SDK egress protections.
+The public SDK v3.3.0 source exposes `ThreadCreate`, `ThreadUpdate`,
+`ThreadDelete`, `MessageCreate`, `MessageUpdate`, `MessageDelete` and the
+`ShardDisconnect`/`ShardResumed`/`ShardReady` lifecycle events. `ThreadCreate`
+may represent a thread becoming visible rather than a newly created post.
+Only the SDK's typed camelCase event objects are mapped by `normalization.ts`;
+old raw dispatch-shape fixtures are not a production event path.
 
-Run `npm test` with Node 22.13 or newer for the deterministic fake-provider,
-HTTP and lifecycle behavior suites. The pinned `@fluxerjs/core` package and
-`@types/node` must be installed before a normal `npm run check` or real SDK
-integration test can be considered verified. The current offline development
-environment can type-check the TypeScript source with an externally installed
-Node type declaration directory, but that is **not** verification of the SDK
-package's types or wire behavior.
+`FluxerNodeService` in `src/service.ts` composes the SDK session, event
+forwarder, listeners, and private RPC listener under one shutdown owner. It
+**requires an externally supplied egress-vetted SDK factory and operation
+handler**. This repository does **not yet provide a production factory** and
+does not start `Client.fromDiscovery` with unrestricted REST/WebSocket egress.
+`fromDiscovery()` alone cannot enforce the SSRF, DNS-rebinding and redirect
+policy required for self-hosted instances. Bot REST reads/writes and the
+standalone production process entry point remain unimplemented.
 
-`src/normalization.ts` is the only native Fluxer Gateway-dispatch → neutral
-DTO converter. It follows the documented `MESSAGE_*` and `THREAD_*` payloads
-in the supplied Fluxer source (`fluxer_docs/.../gateway/events.md` and
-`gateway/threads.md`); it never guesses a forum starter or parent kind, and
-forwards ID-only message mutations without cached parent information. Python
-checks the resulting typed wire format and persisted forum ownership. The
-cross-process behavioral test verifies `Node → private FastAPI → SQLite →
-no ActivityPub publication` for an explicitly owned test forum. Real SDK event
-shapes, gateway reconnect and hosted bot permissions remain live acceptance
-items rather than verified behavior.
+The npm dependency is pinned as `@fluxerjs/core@3.3.0` in `package.json`, but
+npm registry DNS was unavailable during this implementation pass. There is
+**no verified `package-lock.json`, installed SDK type check, or real-instance
+Gateway acceptance result**. `npm test` uses deterministic SDK-model-shaped
+fixtures, local HTTP, and Node's type stripping. `npm run check` requires
+installing dependencies and checking the actual published types. The source
+contracts were independently inspected at the upstream `v3.3.0` Git tag;
+that does not replace testing the published package.
 
-`src/event_delivery.ts` forwards normalized events to the single authenticated
-private Python HTTP route, with exact connector ownership, bounded concurrency,
-body/ACK limits and no redirect following. A successful ACK means the Python
-handler completed its ingress admission only. It neither proves ActivityPub
-publication nor authorizes replay after an uncertain response. Shutdown joins
-accepted HTTP operations; late events receive a refusal. The behavioral suite
-uses an actual Node subprocess over TCP to FastAPI and SQLite. SDK Gateway
-subscription and live reconnect delivery remain separate work.
+Do not declare the Fluxer transport ready or enable remote bot writes until
+that remaining SDK/factory/REST contract and the live acceptance tests pass.
