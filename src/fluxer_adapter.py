@@ -475,6 +475,65 @@ class FluxerAdapter:
                                   reply_to=reply_to, dispatch_permit=dispatch_permit,
                                   perform=perform)
 
+    async def _mutate_bot_message(
+        self, operation: str, message: MessageRef,
+        content: ContentDocument | None = None,
+    ) -> None:
+        """Recheck current physical author and rights before one scoped RPC mutation."""
+        self._scope(message.connector_key)
+        if not self._admission_open:
+            raise PlatformOperationError('unavailable', 'Fluxer adapter is closing')
+        if self._bot_id is None:
+            raise PlatformOperationError('unavailable', 'Fluxer bot identity not attested')
+        if operation == 'edit_message':
+            self._validate_body(content)
+        elif operation != 'delete_message' or content is not None:
+            raise PlatformOperationError('invalid_request', 'invalid Fluxer mutation payload')
+        task = asyncio.current_task()
+        if task is None:
+            raise RuntimeError('Fluxer mutation requires asyncio task')
+        self._active.add(task)
+        try:
+            # Physical MessageRef establishes the immediate container. The
+            # fresh provider read must attest bot authorship, not only ID scope.
+            observed = await self.fetch_message(message)
+            if (observed.author is None or observed.author.kind != 'bot'
+                or observed.author.external_actor_id != self._bot_id):
+                raise PlatformOperationError('forbidden', 'Fluxer message is not bot-owned')
+            channel = ChannelRef(self._connector.key, message.external_container_id)
+            await self._preflight(channel, is_forum=False, action=operation)
+            flags = await self.capabilities(channel)
+            if not flags.message_edit_delete:
+                raise PlatformOperationError('unsupported', 'Fluxer message mutation unavailable')
+            args: dict[str, Any] = {
+                'container_id': message.external_container_id,
+                'message_id': message.external_message_id,
+                'bot_id': self._bot_id,
+            }
+            if content is not None:
+                args['content'] = {'body': content.body, 'format': 'plain'}
+                args['allowed_mentions'] = {'parse': []}
+            # This is the sole possibly side-effecting SDK boundary. A timeout
+            # or cancellation cannot establish that an edit/delete was unsent;
+            # the caller's existing SQLite mutation state owns that decision.
+            response = await self._call(operation, args)
+            try:
+                if (self._id(response, 'container_id') != message.external_container_id
+                    or self._id(response, 'message_id') != message.external_message_id):
+                    raise ValueError('mutation response addresses another physical copy')
+            except (PlatformOperationError, ValueError) as exc:
+                raise PlatformOperationError('unknown_delivery', 'Fluxer mutation ACK not verified') from exc
+        finally:
+            self._active.discard(task)
+
+    async def edit_message(self, message: MessageRef, content: ContentDocument) -> None:
+        """Edit only the exact currently bot-owned physical message."""
+        await self._mutate_bot_message('edit_message', message, content)
+
+    async def delete_message(self, message: MessageRef) -> None:
+        """Delete only the bot's physical message, never its surrounding thread."""
+        await self._mutate_bot_message('delete_message', message)
+
     async def create_reply_thread(self, root: MessageRef, *, title: str,
                                   attempt: CreateAttempt,
                                   dispatch_permit: CoordinatorDispatchPermit | None = None) -> ThreadRef:

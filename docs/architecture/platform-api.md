@@ -66,8 +66,15 @@ confirm the logged-in bot and target forum; replies must reference an existing
 message within the exact destination container. The private write envelope
 includes `allowed_mentions.parse=[]` and never supplies Discord numeric IDs.
 Message-root threading remains explicitly unsupported until its native Fluxer
-contract can be confirmed. Node SDK REST mapping, live Gateway, physical
-edit/delete and production composition **are not implemented by this step**;
+contract can be confirmed. Bot-owned physical Edit/Delete are handled by the
+Checkpoint 016 read-before-write boundary: exact `MessageRef` and bot authorship
+are verified with a current physical lookup, followed by exact channel ACL and
+mutation capability checks. Only then may one private RPC write be issued;
+malformed write ACKs and transport uncertainty propagate to the existing
+SQLite mutation coordinator, which alone decides the durable unknown-effect
+fence. Quiesce joins admitted mutation calls before resources close.
+Node SDK REST mapping, live Gateway and production composition **are not
+implemented by this step**;
 the fake provider validates this internal contract, not the real Fluxer API.
 
 ## Inbound Gateway event family
