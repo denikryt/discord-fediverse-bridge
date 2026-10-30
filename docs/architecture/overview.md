@@ -77,7 +77,7 @@ This document does not define exact payload fields, every route, or every table 
 
 ## Profile persistence and media ownership
 
-Python owns profile persistence and bridge-managed profile image bytes. The main runtime holds a shared deployment-generation lease while DB and media paths are open; backup shares that generation, while restore and startup recovery require exclusive ownership. The Fedify gateway does not receive filesystem access. initial persistence implementation does not change actor serialization.
+Python owns profile persistence and bridge-managed profile image bytes. The bridge holds an exclusive process-lifetime `FileLock` at `<canonical-sqlite-file>.runtime.lock` from before recovery until all clients/tasks and SQLite are closed. It also retains the independent shared deployment-generation lease while DB and media paths are open; backup shares that deployment generation, while restore and startup recovery require exclusive deployment ownership. The lifetime lease closes the exclusive→shared deployment transition race between concurrently starting bridge processes. The Fedify gateway does not receive filesystem access. initial persistence implementation does not change actor serialization.
 
 ## User Actor profile delivery recovery
 

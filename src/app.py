@@ -33,6 +33,7 @@ from .project_version import APP_VERSION
 from .runtime import Runtime
 from .runtime_ports import DiscordMutationContext
 from .profile_media import FileLock, ProfileMediaStore
+from .runtime_ownership import acquire_runtime_lifetime_lease
 from .user_profiles import UserProfileService
 from .user_actor_followers import UserActorFollowService
 from .user_actor_delivery import UserActorDeliveryService
@@ -82,55 +83,67 @@ async def main() -> None:
     configure_logging(settings.log_level)
     logger.info("Starting Discord/Fediverse bridge version=%s", APP_VERSION)
     runtime = build_runtime(settings)
-    bot = runtime.bot
-    http_app = create_http_app(runtime)
-    http_server = uvicorn.Server(
-        uvicorn.Config(
-            http_app,
-            host=settings.internal_http_host,
-            port=settings.internal_http_port,
-            log_level=settings.log_level.lower(),
-        )
-    )
-
-    async def run_bot() -> None:
-        """Run the existing Gateway task under its ordered shutdown contract."""
-        await _run_bot_lifetime(runtime, settings.discord_token)
-
-    async def run_http_server() -> None:
-        await http_server.serve()
-
     try:
-        # Recovery starts before either long-lived server task, but inside the
-        # same close boundary so partial startup cannot leak its DB/gateway use.
+        # All post-composition startup, including HTTP app/server construction,
+        # belongs to the same cleanup scope as the live SDK tasks.
+        http_app = create_http_app(runtime)
+        http_server = uvicorn.Server(
+            uvicorn.Config(
+                http_app,
+                host=settings.internal_http_host,
+                port=settings.internal_http_port,
+                log_level=settings.log_level.lower(),
+            )
+        )
+
+        async def run_bot() -> None:
+            """Run the Discord Gateway under its existing close contract."""
+            await _run_bot_lifetime(runtime, settings.discord_token)
+
+        async def run_http_server() -> None:
+            """Serve the private HTTP API until the shared task group stops."""
+            await http_server.serve()
+
         runtime.user_actor_delivery_worker.start()
         async with asyncio.TaskGroup() as task_group:
-            # Both tasks are mandatory for the bridge to function, so they share one lifecycle.
             task_group.create_task(run_bot(), name="discord-bot")
             task_group.create_task(run_http_server(), name="internal-http-server")
     finally:
+        # The runtime holds its exclusive SQLite lease until this has joined
+        # all ingress/worker clients and closed the database.
         await runtime.close()
 
 
 def build_runtime(settings: Settings) -> Runtime:
     """Recover durable state, acquire a lifetime lease, and build the runtime."""
-    deployment_lock_path = Path(settings.deployment_state_lock_path)
-    with FileLock(deployment_lock_path).acquire(
-        exclusive=True, timeout_seconds=settings.profile_media_lock_timeout_seconds
-    ):
-        recover_incomplete_restore(
-            Path(settings.database_url.removeprefix("sqlite:///")),
-            Path(settings.profile_media_root),
+    # Runtime ownership precedes recovery, schema validation and the existing
+    # deployment exclusive -> shared handoff; shared leases alone allow peers.
+    lifetime_lease = acquire_runtime_lifetime_lease(settings.database_url)
+    try:
+        deployment_lock_path = Path(settings.deployment_state_lock_path)
+        with FileLock(deployment_lock_path).acquire(
+            exclusive=True, timeout_seconds=settings.profile_media_lock_timeout_seconds
+        ):
+            recover_incomplete_restore(
+                Path(settings.database_url.removeprefix("sqlite:///")),
+                Path(settings.profile_media_root),
+            )
+        deployment_lease = FileLock(deployment_lock_path).acquire(
+            exclusive=False, timeout_seconds=settings.profile_media_lock_timeout_seconds
         )
-    deployment_lease = FileLock(deployment_lock_path).acquire(
-        exclusive=False, timeout_seconds=settings.profile_media_lock_timeout_seconds
-    )
-    return _build_live_runtime(settings, deployment_lease)
+        return _build_live_runtime(settings, deployment_lease, lifetime_lease)
+    except BaseException:
+        # This owns the lease until successful transfer to Runtime. Descriptor
+        # close is idempotent even if partial composition already cleaned up.
+        lifetime_lease.close()
+        raise
 
 
-def _build_live_runtime(settings: Settings, deployment_lease: FileLock) -> Runtime:
+def _build_live_runtime(
+    settings: Settings, deployment_lease: FileLock, runtime_lifetime_lease: FileLock
+) -> Runtime:
     """Open live runtime owners and clean them up on partial startup failure."""
-    closeables: list[object] = [deployment_lease]
+    closeables: list[object] = [runtime_lifetime_lease, deployment_lease]
     runtime: Runtime | None = None
     try:
         database = Database(settings.database_url)
@@ -363,10 +376,11 @@ def _build_live_runtime(settings: Settings, deployment_lease: FileLock) -> Runti
             personal_feed_conversation_runtime=personal_feed_conversation_runtime,
             personal_feed_discord_delivery_worker=personal_feed_discord_delivery_worker,
             deployment_state_lease=deployment_lease,
+            runtime_lifetime_lease=runtime_lifetime_lease,
         )
         _validate_runtime_graph(runtime)
         return runtime
-    except Exception:
+    except BaseException:
         # Before Runtime exists, app.py owns every opened closeable.  Close in the
         # reverse ownership order used by Runtime.close() so failed validation or
         # bind errors do not leak the DB engine, HTTP clients, or deployment lease.

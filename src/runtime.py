@@ -57,6 +57,7 @@ class Runtime:
     personal_feed_conversation_runtime: PersonalFeedConversationRuntime
     personal_feed_discord_delivery_worker: PersonalFeedDiscordDeliveryWorker
     deployment_state_lease: FileLock
+    runtime_lifetime_lease: FileLock
 
     async def close(self) -> None:
         """Join active owners and report all failures without masking the first.
@@ -89,12 +90,20 @@ class Runtime:
                 # Fedify/DB failure. Cancellation is preserved, not swallowed.
                 errors.append(exc)
 
+        # Lock order is reversed only after all physical/ingress work joins.
+        # Keep the lifetime lease if shutdown could not prove work stopped.
         for operation in (self.database.close, self.deployment_state_lease.close):
             try:
                 operation()
             except BaseException as exc:
                 errors.append(exc)
 
+        if not errors:
+            try:
+                # Release absolutely last, after the SQLite engine is disposed.
+                self.runtime_lifetime_lease.close()
+            except BaseException as exc:
+                errors.append(exc)
         if len(errors) == 1:
             raise errors[0]
         if errors:

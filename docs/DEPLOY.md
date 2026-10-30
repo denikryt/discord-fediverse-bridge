@@ -211,7 +211,7 @@ Do not add `-v` for production. It deletes the database volume.
 
 The bridge stores validated profile images under `/data/profile-media` and keeps their metadata and user references in `/data/bridge.db`. Back up and restore these paths only through `python -m src.db.backup` complete-archive commands; copying or restoring the SQLite file alone is incomplete after profile media exists.
 
-The bridge process holds a shared lock on `/data/deployment-state.lock` for its full lifetime. Complete restore requires the exclusive form of that lock, so it fails or waits while the bridge is running. The backup service uses only explicit database, media, lock, interval, retention, and output paths; it must not receive Discord, OAuth, gateway, or signing secrets.
+The bridge process also holds an exclusive `/data/bridge.db.runtime.lock` for its lifetime (derived from the canonical SQLite pathname), preventing a second bridge runtime on the same database even across deployment lock handoff. This distinct lock file is never removed during shutdown or restore and does not replace deployment backup/restore coordination. The bridge process holds a shared lock on `/data/deployment-state.lock` for its full lifetime. Complete restore requires the exclusive form of that lock, so it fails or waits while the bridge is running. The backup service uses only explicit database, media, lock, interval, retention, and output paths; it must not receive Discord, OAuth, gateway, or signing secrets.
 
 ## Discord Message Content intent and personal feeds
 
