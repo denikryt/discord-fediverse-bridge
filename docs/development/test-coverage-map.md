@@ -450,3 +450,14 @@ full Python/Node suites or live Discord/Fedify integration acceptance.
 - Raw Community mutations assert exact typed service submissions; Personal Feed
   mutations retain their independent service path. Uncertain physical Creates
   retain an unresolved durable intent without a fabricated ACK or blind retry.
+
+## Fluxer forum post wire and RPC
+
+- `fluxer-connector/tests/forum_create.test.mjs` checks one SDK REST forum
+  POST with separate thread/starter IDs through the authenticated Node HTTP
+  listener, plus malformed/ambiguous receipt, tags, parent scope, bot identity
+  and webhook refusal (no unexpected remote effects).
+- `tests/behavior/test_fluxer_forum_create_node_crossprocess.py` sends a bot
+  Create through the real Python adapter and Node service with stateful fake
+  SDK REST side effects; an immutable repeated attempt creates no second POST.
+  These tests do not replace B05 acceptance against a pinned live server.

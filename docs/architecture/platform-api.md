@@ -475,3 +475,23 @@ and returns `None` without a history/body heuristic. The class is intentionally
 not registered in production until its write methods, durable coordinator proof
 and SDK-backed operation handlers exist; these read tests are not live Fluxer
 acceptance.
+
+## Fluxer forum create, SDK REST and receipt boundary (live acceptance pending)
+
+The Node `fluxer-connector/src/forum_create.ts` defines one checked bot forum
+POST on the **existing official SDK REST client**. The SDK v3.3.0
+`ThreadManager.createPost()` drops the response's included starter message
+while returning its `ThreadChannel`; the narrow handler keeps the original
+thread response and independently checks the `message.id`, immediate
+`message.channel_id`, forum parent, guild, current SDK bot author and absence
+of webhook provenance. This is not an alternative REST stack or a durable
+Create claimant. A malformed response after POST yields `unknown_delivery`
+rather than an inferred `starter_id` or permission to retry. Python's existing
+`FluxerAdapter` still owns the immutable `CreateAttempt` and verified receipt.
+
+This handler is exercised only in isolated SDK-edge tests. The production
+Node entrypoint continues to refuse Create and advertises
+`forum_posts=False` until the exact trusted server build's forum POST, starter
+and operation-specific ACL behavior are captured live. The current server ZIP
+is unversioned and does not satisfy that acceptance gate. Issue #13's Fluxer
+inbound publication gate remains unchanged.

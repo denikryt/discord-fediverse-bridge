@@ -540,3 +540,13 @@ The upstream v3.3.0 source confirms public `ThreadCreate/Update/Delete` and `Sha
   Production advertises **no** physical write capability and no forum POST
   is activated. The actual SDK/type-backed compilation, versioned server
   capability verification and Python runtime config injection remain open.
+
+- **CP028 SDK forum POST contract — locally implemented, not production-enabled:**
+  SDK v3.3.0 `ThreadManager.createPost()` discards the response starter;
+  `forum_create.ts` preserves it via the same `client.rest.post` route/body
+  verified in the SDK source and supplied unversioned server source. Real Node
+  RPC + two-process Python/SDK-edge tests verify one POST, scoped receipts,
+  fail-closed tags and `unknown_delivery`; production `main.ts` retains
+  `unsupported`/`forum_posts=False` until the exact trusted server build's
+  bot forum/ACL/starter and Gateway evidence is captured. No live bot write,
+  published SDK type-check or full Python dependency-backed suite passed.

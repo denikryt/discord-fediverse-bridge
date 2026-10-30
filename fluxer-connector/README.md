@@ -39,9 +39,32 @@ The SDK's public `PermissionFlags` do not expose the server's separate
 ordinary SendMessages. A definitely absent prerequisite View/Send flag can
 still produce `denied` for forum post admission.
 
+A separate `src/forum_create.ts` now implements the **narrow confirmed SDK
+REST forum-create wire contract** for testing: the SDK v3.3.0
+`ThreadManager.createPost()` calls `client.rest.post(Routes.channelThreads(id))`
+with the starter `message` in its request, but discards the response's
+`message` when it returns a `ThreadChannel`. The supplied unversioned Fluxer
+server `ThreadCreationService.createForumPost()` returns both the thread
+payload and the starter message; the bridge uses the **same SDK REST client**
+to preserve the two observed IDs. It validates the current forum metadata,
+selected tags, bot identity, bot ViewChannel/SendMessages prerequisites,
+request body and post-response scope, and reports `unknown_delivery` on
+lost/malformed post responses. No second POST, guessed starter, custom HTTP
+transport or webhook fallback is permitted. A two-process Python adapter →
+authenticated Node RPC → stateful SDK REST fake tests this path.
+
+**The production `main.ts` intentionally does not register the forum-create
+handler yet.** The server ZIP has no verified operator build/tag, so the
+required live B05 forum/starter contract and operation-specific permissions
+have not been measured. `capabilities.forum_posts` stays false and the
+production RPC returns `unsupported` until that hard gate is satisfied. A
+passing fake-server test does not authorize live bot writes or complete CP028
+acceptance. The outstanding live check also needs confirmation that the
+starter's author and webhook provenance are actually serialized as expected.
+
 The entrypoint exposes only confirmed SDK-backed physical reads and partial
 ACL checks. Create, Send, Edit, Delete and reconciliation
-are **not implemented** in the production handler and refuse RPC rather than
+are **not enabled** in the production handler and refuse RPC rather than
 inventing server-specific REST methods. Do not enable production physical
 writes or claim complete issue #12 transport at this checkpoint. The installed
 SDK/typecheck and real Fluxer instance are not yet verified.

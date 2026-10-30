@@ -22,7 +22,7 @@ const MAX_BYTES = 256 * 1024;
 export class PrivateRpcError extends Error {
   /** Only transport-neutral, deliberate refusal reasons cross the process boundary. */
   readonly reason: 'forbidden' | 'not_found' | 'unsupported' | 'invalid_request' |
-    'rate_limited' | 'unavailable';
+    'rate_limited' | 'unavailable' | 'unknown_delivery';
   readonly status: number;
   constructor(reason: PrivateRpcError['reason'], status = 422) {
     super('Fluxer RPC operation refused');
