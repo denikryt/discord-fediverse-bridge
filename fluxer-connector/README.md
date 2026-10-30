@@ -32,8 +32,16 @@ scope checks. It uses the SDK v3.3.0 `client.channels.fetch(id, {force:true})`
 and `client.channels.fetchMessage(containerId, id)` public methods, and never
 invents a forum starter-message ID. Media-bearing read snapshots explicitly
 fail closed until their neutral contract is supported. This read handler is
-injectable into the existing `FluxerNodeService`; production SDK client
-creation and the remaining REST operations are still missing. The standalone
+injectable into the existing `FluxerNodeService`.
+
+`permissions.ts` separately implements the `check_permissions` RPC operation
+using `GuildMember.permissionsIn(channel)` and fresh SDK guild/member/role
+reads. It confirms only view, read-history and send-message flags; forum
+creation, thread creation and message-specific edit/delete stay `unknown`
+until their separate API/ownership conditions are verified. Missing or
+inconsistent roles, a foreign bot or mismatched guild never grant rights.
+Production SDK client creation and the remaining REST operations are still
+missing. The standalone
 production process entry point also remains unimplemented.
 
 The npm dependency is pinned as `@fluxerjs/core@3.3.0` in `package.json`, but

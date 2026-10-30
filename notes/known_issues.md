@@ -501,3 +501,10 @@ The upstream v3.3.0 source confirms public `ThreadCreate/Update/Delete` and `Sha
   methods, through the authenticated Python/Node RPC edge. An SDK-edge fake
   and real loopback HTTP tests check physical parent/container identity.
   Published SDK types and real Fluxer responses are still unverified.
+- **IMPLEMENTED locally (Fluxer ACL):** SDK-backed `check_permissions` uses
+  freshly fetched channel/guild/bot member/role IDs and the SDK's own
+  `permissionsIn()` bitfield, including thread parent scope. Only ViewChannel,
+  ReadMessageHistory and SendMessages can yield `allowed` from those flags;
+  forum create and per-message edit/delete remain `unknown` until proven.
+  This does not establish real-instance permission semantics or production
+  SDK factory safety.

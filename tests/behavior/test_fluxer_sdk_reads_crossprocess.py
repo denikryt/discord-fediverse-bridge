@@ -9,7 +9,9 @@ from pathlib import Path
 from src.fluxer_adapter import FluxerAdapter
 from src.fluxer_connector_config import FluxerConnectorConfig
 from src.fluxer_rpc_client import FluxerRpcClient
-from src.platform_types import ChannelRef, MessageRef, ThreadRef, PlatformOperationError
+from src.platform_types import (
+    AuthorRef, ChannelRef, MessageRef, ThreadRef, PlatformOperationError,
+)
 
 
 class FluxerSdkReadCrossProcessScenarios(unittest.IsolatedAsyncioTestCase):
@@ -35,7 +37,8 @@ class FluxerSdkReadCrossProcessScenarios(unittest.IsolatedAsyncioTestCase):
             bot_token='not-used', transport_secret='test-transport-secret',
         ))
         self.adapter = FluxerAdapter(connector_key='fluxer-contract',
-                                     instance_origin='https://fluxer.example', rpc=self.rpc)
+                                     instance_origin='https://fluxer.example', rpc=self.rpc,
+                                     bot_actor_id='bot-id')
         self.forum = ChannelRef('fluxer-contract', 'forum-1', 'forum', 'guild-1')
 
     async def asyncTearDown(self) -> None:
@@ -57,6 +60,21 @@ class FluxerSdkReadCrossProcessScenarios(unittest.IsolatedAsyncioTestCase):
             MessageRef('fluxer-contract', 'thread-1', 'message-1'))
         self.assertEqual(message.content.body, 'hello from SDK')
         self.assertEqual(message.author.external_actor_id, 'user-1')
+
+    async def test_permissions_are_checked_on_current_bot_without_forum_assumptions(self) -> None:
+        """Python receives attested ACL for reads but not invented forum rights."""
+        bot = AuthorRef('fluxer-contract', 'bot-id', 'bot', 'Bridge')
+        grants = await self.adapter.check_permissions(bot, self.forum, frozenset({
+            'view_channel', 'read_history', 'send_message', 'create_forum_post',
+        }))
+        self.assertEqual(grants['view_channel'], 'allowed')
+        self.assertEqual(grants['read_history'], 'allowed')
+        self.assertEqual(grants['send_message'], 'allowed')
+        self.assertEqual(grants['create_forum_post'], 'unknown')
+        foreign = AuthorRef('fluxer-contract', 'another-bot', 'bot', 'Other')
+        denied = await self.adapter.check_permissions(
+            foreign, self.forum, frozenset({'view_channel'}))
+        self.assertEqual(denied['view_channel'], 'unknown')
 
     async def test_wrong_physical_scope_cannot_be_repaired_by_sdk(self) -> None:
         """A wrong parent, container or instance is rejected without side effects."""
