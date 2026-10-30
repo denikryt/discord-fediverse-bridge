@@ -158,7 +158,12 @@ class PlatformFanoutCoordinator:
         if claim is None:
             return False
         attempt, _, _, _, _ = decode_request(claim.request_json)
-        adapter = self.registry.get(attempt.connector_key)
+        try:
+            adapter = self.registry.get(attempt.connector_key)
+        except LookupError:
+            # An unavailable adapter cannot perform read-only reconciliation.
+            # Keep the durable unknown-effect fence untouched for a later run.
+            return False
         inspector = getattr(adapter, '_reconcile_persisted_create', None)
         if inspector is None:
             return False
@@ -185,17 +190,34 @@ class PlatformFanoutCoordinator:
         Return False for ineligible/already handled/unknown attempts. The
         durable intent rather than this return value decides restart behavior.
         """
-        claim=self.database.platform_delivery_intents.claim(intent_id)
-        if claim is None:return False
+        repository = self.database.platform_delivery_intents
+        pristine = repository.pristine_pending_request(intent_id)
+        if pristine is None:
+            return False
+        # Unavailable adapters are never allowed to turn pristine work into
+        # an unknown remote write. Resolve identity before the SQLite claim.
+        request_json, fingerprint = pristine
+        try:
+            attempt, _, _, _, _ = decode_request(request_json)
+            adapter = self.registry.get(attempt.connector_key)
+            readiness = getattr(adapter, 'dispatch_ready', None)
+            if readiness is not None and not readiness():
+                return False
+        except (LookupError, ValueError):
+            return False
+        claim = repository.claim(
+            intent_id, expected_request=request_json, expected_fingerprint=fingerprint,
+        )
+        if claim is None:
+            return False
+        io_started = False
         try:
             attempt,content,presentation,title,reply_to=decode_request(claim.request_json)
-            adapter=self.registry.get(attempt.connector_key)
             # A valid claim may become ineligible during registry selection.
             # Re-read canonical deletion and the current surface owner at the
             # last authoritative pre-transport boundary, never from cache.
             if not self.database.platform_delivery_intents.dispatch_still_authorized(claim):
-                self.database.platform_delivery_intents.mark_unresolved(
-                    intent_id, token=claim.token, reason='pre_send_revoked')
+                repository.release_unstarted_claim(claim)
                 return False
             # Permit issuance is adapter-local and only occurs after a fresh
             # committed SQLite dispatch claim. Non-supporting adapters cannot
@@ -218,6 +240,15 @@ class PlatformFanoutCoordinator:
                 kwargs['dispatch_permit'] = permit
             # No fallback to a Discord singleton or raw SDK path. Distinguish
             # the three operation types before constructing a network request.
+            # Recheck readiness after the claim, but before method entry.
+            # Only this witnessed interval authorizes release to pending.
+            readiness = getattr(adapter, 'dispatch_ready', None)
+            if readiness is not None and not readiness():
+                repository.release_unstarted_claim(claim)
+                return False
+            # After entering even one adapter method, Python cannot prove the
+            # Node/SDK side did not commit a write before cancellation.
+            io_started = True
             if attempt.operation=='forum_thread':
                 receipt=await adapter.create_forum_thread(
                     attempt.destination,content,title=title,presentation=presentation,
@@ -245,17 +276,22 @@ class PlatformFanoutCoordinator:
                 # Do not let a dependent failure invalidate the parent's receipt.
                 await self._wake_blocked_children()
             return accepted
-        except Exception as exc:
-            # The claim was committed before invoking transport. Even an error
-            # raised during local DTO rehydration cannot prove no network bytes.
-            # Preserve the original attempt for read-only reconciliation.
-            persisted = self.database.platform_delivery_intents.mark_unresolved(
-                intent_id,token=claim.token,
-                reason=exc.reason if isinstance(exc,PlatformOperationError) else 'unknown_delivery')
-            if persisted and 'adapter' in locals() and 'permit' in locals():
-                await self._ack_persisted_create(
-                    adapter=adapter, claim=claim, attempt=attempt,
-                    permit=permit,
+        except BaseException as exc:
+            # Only this coordinator knows whether it crossed the adapter method
+            # boundary. A failed local preflight can safely release its token;
+            # any entered I/O (including cancellation) remains uncertain.
+            if not io_started:
+                repository.release_unstarted_claim(claim)
+            else:
+                persisted = repository.mark_unresolved(
+                    intent_id, token=claim.token,
+                    reason=exc.reason if isinstance(exc, PlatformOperationError) else 'unknown_delivery',
                 )
-            logger.exception('Physical Create unresolved intent_id=%s',intent_id)
+                if persisted and 'adapter' in locals() and 'permit' in locals():
+                    await self._ack_persisted_create(
+                        adapter=adapter, claim=claim, attempt=attempt, permit=permit,
+                    )
+            if not isinstance(exc, Exception):
+                raise
+            logger.exception('Physical Create refused/uncertain intent_id=%s', intent_id)
             return False

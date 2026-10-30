@@ -360,11 +360,28 @@ class PlatformDeliveryIntentRepository:
             row.request_revision=scoped[0].content_revision
             row.state='pending';row.blocked_parent_canonical_id=None
 
-    def claim(self, intent_id:int) -> ClaimedCreate | None:
+    def pristine_pending_request(self, intent_id: int) -> tuple[str, str] | None:
+        """Inspect frozen transport identity before authorizing a network-side claim.
+
+        The snapshot is not a dispatch permit. The later SQLite claim must
+        recheck its fingerprint after any concurrent source/owner mutation.
+        """
+        with self._session_provider() as session:
+            row = session.get(PlatformDeliveryIntent, intent_id)
+            if (row is None or row.state != 'pending' or row.desired_deleted
+                or not row.request_json or not row.request_fingerprint):
+                return None
+            return (row.request_json, row.request_fingerprint)
+
+    def claim(self, intent_id:int, *, expected_request: str | None = None,
+              expected_fingerprint: str | None = None) -> ClaimedCreate | None:
         """Reserve one POST; committed dispatching is uncertain after a crash."""
         with self._immediate_session_provider() as session:
             row=session.get(PlatformDeliveryIntent,intent_id)
             if row is None or row.state!='pending' or row.desired_deleted:return None
+            if (expected_request is not None and row.request_json != expected_request
+                or expected_fingerprint is not None and row.request_fingerprint != expected_fingerprint):
+                return None
             scoped=self._scope(session,row)
             if scoped is None or scoped[0].deleted_at is not None:
                 row.state='cancelled';return None
@@ -373,6 +390,24 @@ class PlatformDeliveryIntentRepository:
             row.state='dispatching';row.dispatch_token=token
             row.lease_until=datetime.now(timezone.utc)+timedelta(seconds=90)
             return ClaimedCreate(row.id,token,row.request_json,row.request_fingerprint)
+
+    def release_unstarted_claim(self, claim: ClaimedCreate) -> bool:
+        """CAS-restore pending only for a coordinator-proven unentered I/O call.
+
+        Ownership of the witness belongs to the live coordinator. An expired
+        lease or a mere adapter exception is not evidence that no POST happened.
+        """
+        with self._immediate_session_provider() as session:
+            row = session.get(PlatformDeliveryIntent, claim.intent_id)
+            if (row is None or row.state != 'dispatching'
+                or row.dispatch_token != claim.token
+                or row.request_fingerprint != claim.fingerprint
+                or row.request_json != claim.request_json):
+                return False
+            row.state = 'pending'
+            row.dispatch_token = None
+            row.lease_until = None
+            return True
 
     def dispatch_still_authorized(self, claim: ClaimedCreate) -> bool:
         """Recheck an exact claim and canonical/target liveness before POST.

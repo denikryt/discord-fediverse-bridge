@@ -67,6 +67,20 @@ All three create operations take a core-generated `CreateAttempt(key, connector_
 
 **Personal Feed exception:** Discord threads created *from* an existing text/announcement-channel root message share its ID; there can be only one. A verified existing `ThreadRef` with the root ID, correct parent connector/channel and compatible thread kind can be adopted even when it predates the attempt. This is proof of the intended **target**, not proof the current attempt created it. `create_reply_thread` may return such a preexisting thread rather than issuing a second create; `reconcile_create` may return it when verified with a network/platform lookup. The exception never extends to forum posts or arbitrary messages, nor does it authorize sending a reply without permissions. Other platforms must verify any equivalent guarantee rather than assuming Discord semantics.
 
+## Connector Create pre-claim admission
+
+Before `PlatformDeliveryIntentRepository.claim()` reserves a physical Create,
+`PlatformFanoutCoordinator.deliver()` reads its frozen request and resolves the
+exact registered connector (including its optional readiness predicate).
+Absent/degraded transport leaves the immutable intent `pending` with no dispatch
+lease or token. The subsequent transaction compare-checks request/fingerprint,
+so a concurrent update cannot dispatch stale admission. Only the *live* owner
+may release an exact token to `pending` before entering the adapter operation.
+Once the call may have entered the physical SDK, cancellation and a lost HTTP
+response remain persistently `unresolved`; an expired lease never proves that
+another POST is safe. This coordinator change is independent of the later
+connector-isolated scheduler integration.
+
 ## Durable physical Create dispatch and cache ACK
 
 `CreateAttempt.key` beginning with `fanout:v1:` is reserved for the SQLite-backed
