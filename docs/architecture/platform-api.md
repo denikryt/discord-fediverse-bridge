@@ -45,6 +45,31 @@ Before a create, the concrete adapter calls `validate_create_attempt(attempt, op
 
 `ContentDocument` is neutral body/portable Markdown, optional title/link and `AttachmentRef` URL metadata, not an SDK File/native reply reference. The adapter renders links, mentions and supported attachments, handles platform size/tags/uploads, and disables unsolicited mention pings on mirrored content. `DeliveryPresentation('bot'|'webhook')` asks for one actual send mode; unsupported webhook mode must fail explicitly, never silently fall back to bot. Visual webhook labels are not ActivityPub author identities.
 
+## Fluxer bot Create transport admission (Checkpoint 015)
+
+`src/fluxer_adapter.py` now implements bot-only forum-thread and message Creates
+through the authenticated Python→Node RPC contract. This is a complete adapter
+**Create admission and receipt-validation boundary**, not an implementation of
+Fluxer REST inside Node. An explicit, test-only owned forum is exercised through
+SQLite `PlatformFanoutCoordinator`, its committed `CreateAttempt` claim, one
+RPC provider write, separately verified thread/starter IDs and persisted
+physical copy. A missing response or mismatched success receipt remains
+`unresolved`, never an invitation for another POST. Reserved fanout attempt
+keys require a one-use permit issued from an authenticated committed SQLite
+claim; a persisted terminal proof alone allows eviction of the local flight.
+Concurrent callers for an identical direct attempt share the same in-process
+result, whereas changed physical destination, content or mode is refused.
+
+This adapter rejects webhook presentation, unsupported rich content and
+unverified required forum tags before a write. Reads and rights checks must
+confirm the logged-in bot and target forum; replies must reference an existing
+message within the exact destination container. The private write envelope
+includes `allowed_mentions.parse=[]` and never supplies Discord numeric IDs.
+Message-root threading remains explicitly unsupported until its native Fluxer
+contract can be confirmed. Node SDK REST mapping, live Gateway, physical
+edit/delete and production composition **are not implemented by this step**;
+the fake provider validates this internal contract, not the real Fluxer API.
+
 ## Inbound Gateway event family
 
 `ThreadCreated`, `ThreadUpdated`, `ThreadDeleted`, `MessageCreated`, `MessageUpdated`, `MessageDeleted` are frozen, connector-scoped platform events; they are **not** Fedify/ActivityPub events. Each has diagnostic, timezone-aware `received_at` and optional `external_guild_id`; the API rejects naive or non-datetime timestamps. `MessageUpdated.edited_at` and `MessageView.edited_at` require timezone-aware `datetime` when known, with `None` meaning an unknown edit time. Discord adapter integration extends `MessageCreated.created_at` to preserve the actual source message creation instant separately from diagnostic `received_at`; its optional absence keeps generic transport fakes valid, but Discord publication must obtain the source timestamp. `MessageUpdated.author` is optional best-effort `AuthorRef` metadata, rejected if its connector differs from the edited message; a missing author is not inferred from a raw cache-less edit. A resolved `thread_context` must share the message's immediate container, and any accompanying `parent_channel` must identify the same physical channel without contradicting its known kind/guild metadata. Event `external_guild_id` is checked against **both** available channel contexts, even when the first has unknown metadata. A reply reference may point into another container for Discord `THREAD_STARTER_MESSAGE`; this is not an outbound reply permission. Raw message updates/deletes require no parent channel, cache or network fetch. Missing `MessageUpdated.content is None` is **not** empty content; `ContentDocument(body='')` means explicit empty content. `ThreadCreated.newly_created=None` and `MessageCreated.is_starter=None` mean unknown, not false.

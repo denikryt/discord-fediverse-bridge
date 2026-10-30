@@ -1,20 +1,50 @@
-"""Fail-closed Fluxer physical lookups over the authenticated private RPC.
+"""Scoped Fluxer reads and bot-only Create attempts over authenticated RPC.
 
-This read-only owner must not be registered as a writable PlatformAdapterPort:
-real bot writes, receipts and durable dispatch permits are not yet implemented.
+The adapter authenticates persistent Create claims without deciding canonical AP
+ownership; the Node transport owns Fluxer SDK details and physical HTTP writes.
 """
 
 from __future__ import annotations
 
+import asyncio
 from datetime import datetime
 from typing import Any
+from weakref import WeakKeyDictionary, WeakSet
 
 from .fluxer_rpc_client import FluxerRpcClient
 from .platform_types import (
     AuthorRef, ChannelRef, ChannelView, ConnectorRef, ContentDocument,
     CreateAttempt, MessageRef, MessageView, PlatformAction, PlatformCapabilities,
     PlatformOperationError, PermissionResult, ThreadRef, ThreadView,
+    CreatedThread, CreatedMessage, DeliveryPresentation,
+    CoordinatorDispatchPermit, CommittedCreateDispatchProof, CommittedCreateAckProof,
+    validate_create_attempt, validate_created_receipt, validate_message_reply,
+    _verify_committed_create_dispatch_proof, _verify_committed_create_ack_proof,
+    _issue_verified_create_reconciliation_proof,
 )
+
+
+def _physical_identity(ref: object) -> object:
+    """Include kind/guild in immutable Create signatures, unlike ChannelRef equality."""
+    if isinstance(ref, ChannelRef):
+        return (ref.connector_key, ref.external_channel_id, ref.kind, ref.external_guild_id)
+    if isinstance(ref, ThreadRef):
+        return (_physical_identity(ref.channel), ref.external_thread_id)
+    if isinstance(ref, MessageRef):
+        return (ref.connector_key, ref.external_container_id, ref.external_message_id)
+    return ref
+
+
+class _FluxerCreateFlight:
+    """Retain the exact attempted write and its result until durable SQLite ACK."""
+
+    def __init__(self, signature: tuple, permit: CoordinatorDispatchPermit | None,
+                 claim: tuple | None) -> None:
+        """Allocate process-local singleflight state without authorizing a POST."""
+        self.signature = signature
+        self.permit = permit
+        self.claim = claim
+        self.future: asyncio.Future = asyncio.get_running_loop().create_future()
 
 
 class FluxerAdapter:
@@ -32,6 +62,12 @@ class FluxerAdapter:
         self._connector = ConnectorRef(connector_key, 'fluxer', instance_origin)
         self._rpc = rpc
         self._bot_id = bot_actor_id
+        self._create_lock = asyncio.Lock()
+        self._creates: dict[tuple[str, str], _FluxerCreateFlight] = {}
+        self._issued_create_permits: WeakKeyDictionary[CoordinatorDispatchPermit, tuple] = WeakKeyDictionary()
+        self._used_dispatch_proofs: WeakSet[CommittedCreateDispatchProof] = WeakSet()
+        self._active: set[asyncio.Task] = set()
+        self._admission_open = True
 
     @property
     def connector(self) -> ConnectorRef:
@@ -194,7 +230,326 @@ class FluxerAdapter:
             'allowed', 'denied', 'unknown', 'unsupported',
         ) else 'unknown') for action in actions}
 
-    async def reconcile_create(self, attempt: CreateAttempt) -> None:
-        """Without a server-attested attempt receipt, never adopt a title match."""
+    @staticmethod
+    def _validate_body(content: ContentDocument) -> None:
+        """Refuse unknown rendering, media and notification side effects before POST."""
+        if not isinstance(content, ContentDocument) or not content.body.strip():
+            raise PlatformOperationError('invalid_request', 'Fluxer message body must not be empty')
+        if content.attachments or content.format != 'plain':
+            raise PlatformOperationError('unsupported', 'Fluxer rich content is not yet verified')
+        if len(content.body.encode('utf-8')) > 8192:
+            raise PlatformOperationError('unsupported', 'Fluxer body exceeds the verified RPC envelope limit')
+
+    @staticmethod
+    def _bot_mode(presentation: DeliveryPresentation) -> None:
+        """Never silently degrade requested webhook identity to bot mode."""
+        if not isinstance(presentation, DeliveryPresentation):
+            raise PlatformOperationError('invalid_request', 'Fluxer presentation malformed')
+        if presentation.mode != 'bot':
+            raise PlatformOperationError('unsupported', 'Fluxer webhook transport not implemented')
+        if presentation.display_name or presentation.avatar_url:
+            raise PlatformOperationError('unsupported', 'Fluxer bot cannot impersonate presentation')
+
+    async def _preflight(self, channel: ChannelRef, *, is_forum: bool,
+                         action: PlatformAction) -> None:
+        """Verify live channel/capability/bot ACL without trusting request metadata."""
+        self._scope(channel.connector_key)
+        if self._bot_id is None:
+            raise PlatformOperationError('unavailable', 'Fluxer bot identity not attested')
+        verified = (await self.fetch_channel(channel)).channel
+        if is_forum and verified.kind != 'forum':
+            raise PlatformOperationError('unsupported', 'destination is not a verified Fluxer forum')
+        if verified.external_guild_id is None:
+            raise PlatformOperationError('forbidden', 'Fluxer channel guild not verified')
+        flags = await self.capabilities(verified)
+        if is_forum:
+            if not flags.forum_posts:
+                raise PlatformOperationError('unsupported', 'forum posts not verified on Fluxer build')
+            # Required tags must be measured on this instance. A boolean forum
+            # capability alone does not prove an untagged create will succeed.
+            tags = await self._call('capabilities', {'channel_id': verified.external_channel_id})
+            if (tags.get('channel_id') != verified.external_channel_id
+                or tags.get('guild_id') != verified.external_guild_id
+                or tags.get('tag_requirements_verified') is not True
+                or not isinstance(tags.get('required_tags'), list)
+                or any(not isinstance(item, str) or not item for item in tags['required_tags'])):
+                raise PlatformOperationError('unsupported', 'Fluxer forum tag requirements unverified')
+            if tags['required_tags']:
+                raise PlatformOperationError('unsupported', 'Fluxer required applied tags need explicit configuration')
+        if not is_forum and action == 'send_message' and verified.kind not in ('forum', 'text', 'announcement'):
+            raise PlatformOperationError('unsupported', 'message destination kind not verified')
+        principal = AuthorRef(self._connector.key, self._bot_id, 'bot', 'Fluxer bridge')
+        actions = frozenset({'view_channel', action})
+        grants = await self.check_permissions(principal, verified, actions)
+        if any(grants.get(permission) != 'allowed' for permission in actions):
+            raise PlatformOperationError('forbidden', 'Fluxer bot permission not verified')
+
+    def _mint_coordinator_dispatch_permit(
+        self, *, proof: CommittedCreateDispatchProof,
+        intent_id: int, attempt: CreateAttempt, request_fingerprint: str,
+        dispatch_token: str, operation: str,
+        destination: ChannelRef | ThreadRef | MessageRef,
+        content: ContentDocument | None, presentation: DeliveryPresentation | None,
+        title: str | None, reply_to: MessageRef | None,
+    ) -> CoordinatorDispatchPermit:
+        """Require repository-signed committed claim before issuing one local POST permit."""
+        validate_create_attempt(attempt, operation, destination)
         self._scope(attempt.connector_key)
+        if (not _verify_committed_create_dispatch_proof(proof)
+            or (proof.intent_id, proof.attempt_key, proof.request_fingerprint,
+                proof.dispatch_token) != (intent_id, attempt.key, request_fingerprint,
+                                          dispatch_token)
+            or proof in self._used_dispatch_proofs or intent_id <= 0
+            or not attempt.key.startswith('fanout:v1:')):
+            raise PlatformOperationError('invalid_request', 'invalid Fluxer SQLite Create claim')
+        signature = (attempt.connector_key, operation, _physical_identity(destination),
+                     title, content, _physical_identity(reply_to), presentation)
+        self._used_dispatch_proofs.add(proof)
+        permit = object.__new__(CoordinatorDispatchPermit)
+        self._issued_create_permits[permit] = (
+            intent_id, attempt.key, request_fingerprint, dispatch_token, signature)
+        return permit
+
+    async def _create(
+        self, *, attempt: CreateAttempt, operation: str,
+        destination: ChannelRef | ThreadRef,
+        content: ContentDocument, presentation: DeliveryPresentation,
+        title: str | None, reply_to: MessageRef | None,
+        dispatch_permit: CoordinatorDispatchPermit | None,
+        perform,
+    ) -> CreatedThread | CreatedMessage:
+        """One immutable attempt performs at most one physical bot POST in this process."""
+        validate_create_attempt(attempt, operation, destination)
+        self._scope(attempt.connector_key)
+        signature = (attempt.connector_key, operation, _physical_identity(destination),
+                     title, content, _physical_identity(reply_to), presentation)
+        claim = None
+        if attempt.key.startswith('fanout:v1:'):
+            # Raw CreateAttempt keys do not authorize durable fanout writes.
+            issued = (self._issued_create_permits.get(dispatch_permit)
+                      if isinstance(dispatch_permit, CoordinatorDispatchPermit) else None)
+            if issued is None or issued[1] != attempt.key or issued[4] != signature:
+                raise PlatformOperationError('invalid_request', 'Fluxer fanout Create requires current permit')
+            claim = issued[:4]
+            del self._issued_create_permits[dispatch_permit]
+        elif dispatch_permit is not None:
+            raise PlatformOperationError('invalid_request', 'direct Fluxer Create cannot borrow permit')
+        async with self._create_lock:
+            flight = self._creates.get((attempt.connector_key, attempt.key))
+            if flight is not None:
+                if flight.signature != signature or (claim is not None and flight.claim != claim):
+                    raise PlatformOperationError('invalid_request', 'Fluxer Create attempt payload/claim changed')
+                owner = False
+            else:
+                if not self._admission_open or len(self._creates) >= 100_000:
+                    raise PlatformOperationError('unavailable', 'Fluxer Create admission closed or saturated')
+                flight = _FluxerCreateFlight(signature, dispatch_permit, claim)
+                self._creates[(attempt.connector_key, attempt.key)] = flight
+                owner = True
+        if not owner:
+            result = await asyncio.shield(flight.future)
+            if isinstance(result, PlatformOperationError):
+                raise result
+            return result
+        task = asyncio.current_task()
+        if task is not None:
+            self._active.add(task)
+        try:
+            try:
+                result = await perform()
+            except asyncio.CancelledError:
+                # The Node SDK may have completed the request after Python cancelled.
+                flight.future.set_result(PlatformOperationError('unknown_delivery'))
+                raise
+            except PlatformOperationError as exc:
+                if exc.reason in ('forbidden', 'not_found', 'unsupported', 'invalid_request',
+                                  'rate_limited', 'unavailable'):
+                    # Explicit pre-I/O refusals and authenticated definitive HTTP errors
+                    # may be retried after conditions change, but never an unknown write.
+                    if self._creates.get((attempt.connector_key, attempt.key)) is flight:
+                        del self._creates[(attempt.connector_key, attempt.key)]
+                flight.future.set_result(exc)
+                raise
+            except Exception as exc:
+                unknown = PlatformOperationError('unknown_delivery', 'Fluxer create response unavailable')
+                flight.future.set_result(unknown)
+                raise unknown from exc
+            try:
+                validate_created_receipt(attempt, result, presentation=presentation)
+            except Exception as exc:
+                # POST already returned: a malformed/mismatched receipt is uncertainty,
+                # not a definite rejection authorizing another remote POST.
+                unknown = PlatformOperationError('unknown_delivery', 'Fluxer receipt not verified')
+                flight.future.set_result(unknown)
+                raise unknown from exc
+            flight.future.set_result(result)
+            return result
+        finally:
+            if task is not None:
+                self._active.discard(task)
+
+    async def create_forum_thread(
+        self, forum: ChannelRef, content: ContentDocument, *, title: str,
+        presentation: DeliveryPresentation, attempt: CreateAttempt,
+        dispatch_permit: CoordinatorDispatchPermit | None = None,
+    ) -> CreatedThread:
+        """Create one bot forum thread; verify distinct forum, thread and starter IDs."""
+        self._scope(forum.connector_key)
+        validate_create_attempt(attempt, 'forum_thread', forum)
+        self._bot_mode(presentation)
+        self._validate_body(content)
+        if not isinstance(title, str) or not title.strip():
+            raise PlatformOperationError('invalid_request', 'Fluxer forum title required')
+
+        async def perform() -> CreatedThread:
+            """Verify rights before entering the potentially effectful Node SDK boundary."""
+            await self._preflight(forum, is_forum=True, action='create_forum_post')
+            response = await self._call('create_forum_thread', {
+                'forum_id': forum.external_channel_id,
+                'guild_id': forum.external_guild_id, 'title': title,
+                'content': {'body': content.body, 'format': 'plain'},
+                'allowed_mentions': {'parse': []}, 'attempt_key': attempt.key,
+                'delivery_mode': 'bot',
+            })
+            try:
+                if (self._id(response, 'forum_id') != forum.external_channel_id
+                    or response.get('guild_id') != forum.external_guild_id
+                    or response.get('delivery_mode') != 'bot'):
+                    raise ValueError('wrong forum or mode')
+                thread_id = self._id(response, 'thread_id')
+                starter_id = self._id(response, 'starter_id')
+                return CreatedThread(ThreadRef(forum, thread_id),
+                                     MessageRef(self._connector.key, thread_id, starter_id), 'bot')
+            except (ValueError, PlatformOperationError) as exc:
+                raise PlatformOperationError('unknown_delivery', 'Fluxer forum receipt not verified') from exc
+
+        return await self._create(attempt=attempt, operation='forum_thread',
+                                  destination=forum, content=content,
+                                  presentation=presentation, title=title, reply_to=None,
+                                  dispatch_permit=dispatch_permit, perform=perform)
+
+    async def send_message(
+        self, destination: ThreadRef | ChannelRef, content: ContentDocument, *,
+        reply_to: MessageRef | None, presentation: DeliveryPresentation,
+        attempt: CreateAttempt, dispatch_permit: CoordinatorDispatchPermit | None = None,
+    ) -> CreatedMessage:
+        """Send one bot reply into its verified immediate thread/channel container."""
+        self._scope(destination.connector_key)
+        validate_create_attempt(attempt, 'message', destination)
+        validate_message_reply(destination, reply_to)
+        self._bot_mode(presentation)
+        self._validate_body(content)
+
+        async def perform() -> CreatedMessage:
+            """Verify parent and bot ACL before issuing one physical RPC write."""
+            if isinstance(destination, ThreadRef):
+                await self.fetch_thread(destination)
+                if reply_to is not None:
+                    # The reply's immediate container is necessary but not
+                    # sufficient: confirm its exact physical parent exists.
+                    await self.fetch_message(reply_to)
+                channel = destination.channel
+                container_id = destination.external_thread_id
+            else:
+                channel = destination
+                container_id = destination.external_channel_id
+            await self._preflight(channel, is_forum=False, action='send_message')
+            response = await self._call('send_message', {
+                'container_id': container_id, 'guild_id': channel.external_guild_id,
+                'reply_to_message_id': reply_to.external_message_id if reply_to else None,
+                'content': {'body': content.body, 'format': 'plain'},
+                'allowed_mentions': {'parse': []}, 'attempt_key': attempt.key,
+                'delivery_mode': 'bot',
+            })
+            try:
+                if (self._id(response, 'container_id') != container_id
+                    or response.get('delivery_mode') != 'bot'):
+                    raise ValueError('wrong physical reply destination/mode')
+                return CreatedMessage(MessageRef(self._connector.key, container_id,
+                                                 self._id(response, 'message_id')), 'bot')
+            except (ValueError, PlatformOperationError) as exc:
+                raise PlatformOperationError('unknown_delivery', 'Fluxer message receipt not verified') from exc
+
+        return await self._create(attempt=attempt, operation='message', destination=destination,
+                                  content=content, presentation=presentation, title=None,
+                                  reply_to=reply_to, dispatch_permit=dispatch_permit,
+                                  perform=perform)
+
+    async def create_reply_thread(self, root: MessageRef, *, title: str,
+                                  attempt: CreateAttempt,
+                                  dispatch_permit: CoordinatorDispatchPermit | None = None) -> ThreadRef:
+        """Refuse message-root threading until its exact SDK ownership rule is verified."""
+        self._scope(root.connector_key)
+        validate_create_attempt(attempt, 'reply_thread', root)
+        raise PlatformOperationError('unsupported', 'Fluxer message-root thread semantics not verified')
+
+    async def _reconcile_persisted_create(
+        self, *, intent_id: int, attempt: CreateAttempt,
+        request_fingerprint: str, dispatch_token: str,
+    ):
+        """Prove only an exact finished same-process, same-generation receipt."""
+        self._scope(attempt.connector_key)
+        async with self._create_lock:
+            flight = self._creates.get((attempt.connector_key, attempt.key))
+            if (flight is None or not flight.future.done() or flight.claim != (
+                intent_id, attempt.key, request_fingerprint, dispatch_token)):
+                return None
+            receipt = flight.future.result()
+            if not isinstance(receipt, (CreatedThread, CreatedMessage)):
+                return None
+            if (flight.signature[1] != attempt.operation or
+                flight.signature[2] != _physical_identity(attempt.destination)):
+                return None
+            proof = _issue_verified_create_reconciliation_proof(
+                intent_id, attempt.key, request_fingerprint, dispatch_token, receipt)
+            return receipt, proof, flight.permit
+
+    async def acknowledge_persisted_create(
+        self, *, permit: CoordinatorDispatchPermit, proof: CommittedCreateAckProof,
+        intent_id: int, attempt: CreateAttempt, request_fingerprint: str,
+        dispatch_token: str, terminal_status: str,
+        receipt: CreatedThread | CreatedMessage | None = None,
+    ) -> bool:
+        """Evict an exact terminal flight only after repository-signed SQLite ACK."""
+        if (terminal_status not in ('delivered', 'unresolved')
+            or not _verify_committed_create_ack_proof(proof)
+            or (proof.intent_id, proof.attempt_key, proof.request_fingerprint,
+                proof.dispatch_token, proof.terminal_status) != (
+                intent_id, attempt.key, request_fingerprint, dispatch_token, terminal_status)):
+            return False
+        async with self._create_lock:
+            key = (attempt.connector_key, attempt.key)
+            flight = self._creates.get(key)
+            if (flight is None or not flight.future.done() or flight.permit is not permit
+                or flight.claim != (intent_id, attempt.key, request_fingerprint, dispatch_token)):
+                return False
+            value = flight.future.result()
+            if terminal_status == 'unresolved':
+                if not (isinstance(value, PlatformOperationError)
+                        and value.reason == 'unknown_delivery' and receipt is None):
+                    return False
+            elif isinstance(value, PlatformOperationError) or receipt != value:
+                return False
+            del self._creates[key]
+            return True
+
+    async def reconcile_create(self, attempt: CreateAttempt):
+        """Return only an already observed exact receipt; never search by title."""
+        self._scope(attempt.connector_key)
+        async with self._create_lock:
+            flight = self._creates.get((attempt.connector_key, attempt.key))
+            if flight is not None and flight.future.done() and (
+                flight.signature[1] == attempt.operation
+                and flight.signature[2] == _physical_identity(attempt.destination)):
+                value = flight.future.result()
+                if isinstance(value, (CreatedThread, CreatedMessage)):
+                    return value
         return None
+
+    async def quiesce(self) -> None:
+        """Close Create admission and await all physical RPC calls before DB teardown."""
+        self._admission_open = False
+        current = asyncio.current_task()
+        tasks = tuple(task for task in self._active if task is not current)
+        if tasks:
+            await asyncio.gather(*tasks, return_exceptions=True)

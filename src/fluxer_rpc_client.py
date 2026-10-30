@@ -89,7 +89,10 @@ class FluxerRpcClient:
             ) as response:
                 # The transport must never follow a redirect with a bearer secret.
                 if 300 <= response.status_code < 400:
-                    raise PlatformOperationError('invalid_request', 'private RPC redirected')
+                    raise PlatformOperationError(
+                        'unknown_delivery' if write else 'invalid_request',
+                        'private RPC redirected',
+                    )
                 if response.status_code >= 500:
                     raise PlatformOperationError(
                         'unknown_delivery' if write else 'unavailable',
