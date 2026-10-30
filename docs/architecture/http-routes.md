@@ -42,6 +42,13 @@ This document explains HTTP route ownership between the Python bridge and the Fe
 | `/update` | POST | Fedify gateway | internal | Send Update | `fedify-gateway/src/routes/internal-publish.ts` | Internal/gateway |
 | `/delete` | POST | Fedify gateway | internal | Send Delete | `fedify-gateway/src/routes/internal-publish.ts` | Internal/gateway |
 
+**Fluxer ingress implementation in progress:** `src/internal_fluxer_api.py` supplies a
+private authenticated `POST /internal/fluxer/events` router with a closed
+neutral DTO contract, one connector-specific `FluxerInboundHandler` and
+quiesce admission. It has automated ASGI/SQLite tests but is **not yet
+registered by production `create_http_app()`** while the Node SDK connector
+lifecycle is incomplete; it must never be routed from the public host.
+
 `/healthz` exists in both processes. In the public-host deployment, public `/healthz` should stay gateway-owned unless an operator intentionally adds a Python health alias.
 
 All `/internal/*` routes are authenticated with the shared gateway secret and must not be routed publicly by nginx.

@@ -67,6 +67,21 @@ All three create operations take a core-generated `CreateAttempt(key, connector_
 
 **Personal Feed exception:** Discord threads created *from* an existing text/announcement-channel root message share its ID; there can be only one. A verified existing `ThreadRef` with the root ID, correct parent connector/channel and compatible thread kind can be adopted even when it predates the attempt. This is proof of the intended **target**, not proof the current attempt created it. `create_reply_thread` may return such a preexisting thread rather than issuing a second create; `reconcile_create` may return it when verified with a network/platform lookup. The exception never extends to forum posts or arbitrary messages, nor does it authorize sending a reply without permissions. Other platforms must verify any equivalent guarantee rather than assuming Discord semantics.
 
+## Fluxer-only private ingress (implementation in progress)
+
+`src/internal_fluxer_api.py` verifies a private bearer before reading a bounded
+request body, then strictly reconstructs **neutral** `ThreadCreated`,
+`ThreadUpdated`, `ThreadDeleted`, `MessageCreated`, `MessageUpdated` or
+`MessageDeleted` wire DTOs. The HTTP layer checks only connector identity and
+structure; `FluxerInboundHandler` exclusively resolves forum ownership using
+persisted connector-scoped physical evidence, including ID-only mutations. A
+single runtime-owned admission gate joins accepted calls before SQLite closes.
+The exact `MULTIPLATFORM_FLUXER_COMMUNITY_BINDING_PENDING` gate emits no
+ActivityPub objects until issue #13 supplies canonical source binding and
+connector-aware human authorization. Node SDK normalization and production
+composition are not yet implemented; route tests do not claim live Gateway
+integration.
+
 ## Connector Create pre-claim admission
 
 Before `PlatformDeliveryIntentRepository.claim()` reserves a physical Create,
