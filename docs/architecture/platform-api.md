@@ -364,3 +364,16 @@ text or bot credentials. Node's SDK handler, reproducible `npm` lockfile and
 Fluxer live discovery/transport are still unimplemented: the loopback test
 provider under `fluxer-connector/tests/` is intentionally **not** a Fluxer
 REST implementation and cannot justify a live transport acceptance result.
+
+## Fluxer discovery preflight (Checkpoint 1 implementation in progress)
+
+`fluxer-connector/src/discovery.ts` implements a tokenless,
+redirect-disabled, bounded `/.well-known/fluxer` request. Its discovery socket
+uses the address accepted by its DNS/SSRF policy (no second lookup during that
+request); it requires a documented `endpoints.api_public` rather than falling
+back to the first-party `api` or `api_client` values. A split API host requires
+an explicit configured hostname allowlist. Loopback HTTP is confined to an
+explicit test opt-in. **This secures only the preflight discovery request**:
+until the SDK itself is installed and its subsequent REST/Gateway egress can
+be constrained and verified, the implementation must not treat discovery
+success as permission to send the bot token to arbitrary discovered endpoints.
