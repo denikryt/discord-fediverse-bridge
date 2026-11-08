@@ -9,6 +9,7 @@
  */
 import {PrivateRpcError, type RpcHandler} from './transport.ts';
 import {createSdkPermissionHandler} from './permissions.ts';
+import {matchesMessageScope} from './message_scope.ts';
 import type {Client, Message} from '@fluxerjs/core';
 
 const ID = /^[A-Za-z0-9_-]+$/;
@@ -89,7 +90,7 @@ function refusal(error: unknown, writing: boolean): PrivateRpcError {
 function authorizedMessage(message: Message, containerId: string,
                            messageId: string, guildId: string, botId: string): boolean {
   return Boolean(message && message.id === messageId &&
-    message.channelId === containerId && message.guildId === guildId &&
+    matchesMessageScope(message, containerId, guildId) &&
     message.author?.id === botId && message.author.bot === true &&
     message.webhookId === null);
 }

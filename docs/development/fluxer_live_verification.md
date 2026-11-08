@@ -6,6 +6,16 @@ unperformed external/real-instance checks a PASS result.
 
 ## Current corrective-series evidence
 
+Independent Debian VM testing on `fluxer-release@2026.1106.212644` subsequently
+confirmed actual REST/Gateway operation but found four message receipt/scope
+failures (FLX-LIVE-01–04). The corrections and local regression results are in
+`fluxer_rest_contract_fixes_ru.md`. Full REST messages may omit guild_id and
+webhook_id; forum starter/thread IDs may be equal. Preserve the two observed
+IDs instead of requiring inequality. The corrected code still requires a
+live rerun, complete physical SQLite receipt scenarios and Compose acceptance;
+production writes remain unsupported. The CP034/CP041 observations below are
+historical and do not describe completion of these later gates.
+
 The original CP034 environment snapshot below is historical. The installed SDK,
 lockfile, ordinary TypeScript contracts and local runtime regression status have
 since changed; see [CP035–CP041 verification](fluxer_fix_verification_ru.md).

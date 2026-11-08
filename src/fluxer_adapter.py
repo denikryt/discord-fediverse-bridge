@@ -483,7 +483,7 @@ class FluxerAdapter:
         presentation: DeliveryPresentation, attempt: CreateAttempt,
         dispatch_permit: CoordinatorDispatchPermit | None = None,
     ) -> CreatedThread:
-        """Create one bot forum thread; verify distinct forum, thread and starter IDs."""
+        """Create one bot forum thread and verify the separately observed physical IDs."""
         self._scope(forum.connector_key)
         validate_create_attempt(attempt, 'forum_thread', forum)
         self._bot_mode(presentation)

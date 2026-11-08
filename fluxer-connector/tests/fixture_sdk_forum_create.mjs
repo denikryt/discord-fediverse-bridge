@@ -11,6 +11,10 @@ import {PrivateRpcError} from '../src/transport.ts';
 
 const logPath=process.argv[2];
 if (!logPath) throw Error('test requires external effects log');
+// Exercise both explicitly populated snapshots and the measured full REST
+// omission shape, including a starter whose observed ID equals its thread ID.
+const restOmissions=process.argv[4]==='rest-omissions';
+const starterId=restOmissions?'thread-9':'starter-91';
 const emitter=new EventEmitter();
 const threads=new Map();
 const messages=new Map();
@@ -42,7 +46,7 @@ const client={on:emitter.on.bind(emitter),off:emitter.off.bind(emitter),
     async send(container,options){
       appendFileSync(logPath, `${JSON.stringify({sdk_send:{container,options}})}\n`);
       if(process.argv[3]==='lose-message-response')throw Error('message ACK lost');
-      const msg={id:'message-12',channelId:container,guildId:'guild-1',
+      const msg={id:'message-12',channelId:container,guildId:restOmissions?null:'guild-1',
         content:options.content,author:{id:'bot-1',bot:true,username:'Bridge'},
         webhookId:null,createdAt:new Date('2026-10-28T12:00:00Z'),editedAt:null,
         attachments:new Map(),messageReference:options.replyTo?{
@@ -62,15 +66,16 @@ const client={on:emitter.on.bind(emitter),off:emitter.off.bind(emitter),
       if(route!=='/channels/forum-1/threads')throw Error('invalid REST write');
       appendFileSync(logPath, `${JSON.stringify({route,options:opts})}\n`);
       threads.set('thread-9',opts.body);
-      const msg={id:'starter-91',channelId:'thread-9',guildId:'guild-1',
+      const msg={id:starterId,channelId:'thread-9',guildId:restOmissions?null:'guild-1',
         content:opts.body.message.content,
         author:{id:'bot-1',bot:true,username:'Bridge'},webhookId:null,
         createdAt:new Date('2026-10-28T12:00:00Z'),editedAt:null,attachments:new Map()};
-      messages.set('thread-9/starter-91',msg);
+      messages.set(`thread-9/${starterId}`,msg);
       if(process.argv[3]==='lose-response')throw Error('external response lost');
       return {id:'thread-9',parent_id:'forum-1',guild_id:'guild-1',type:11,
-        message:{id:'starter-91',channel_id:'thread-9',guild_id:'guild-1',
-          author:{id:'bot-1',bot:true},webhook_id:null}};
+        message:{id:starterId,channel_id:'thread-9',
+          ...(restOmissions?{}:{guild_id:'guild-1',webhook_id:null}),
+          author:{id:'bot-1',bot:true},content:opts.body.message.content}};
     },
   },
   async login(){this.user={id:'bot-1',bot:true};emitter.emit('ready');},

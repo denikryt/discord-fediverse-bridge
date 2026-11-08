@@ -24,6 +24,9 @@ from src.platform_types import (
 class FluxerForumCreateCrossProcess(unittest.IsolatedAsyncioTestCase):
     """Follow one complete physical Create and repeated attempt to the Node REST edge."""
 
+    server_contract = 'explicit'
+    starter_id = 'starter-91'
+
     async def asyncSetUp(self) -> None:
         """Boot a READY Node SDK session and a scoped authenticated Python client."""
         self.tmp = TemporaryDirectory()
@@ -34,6 +37,7 @@ class FluxerForumCreateCrossProcess(unittest.IsolatedAsyncioTestCase):
             str(root / 'fluxer-connector/tests/fixture_sdk_forum_create.mjs'),
             str(self.effects),
             ('lose-response' if self._testMethodName == 'test_lost_remote_response_is_unresolved_and_no_repost' else 'lose-message-response' if self._testMethodName == 'test_lost_reply_response_never_reposts' else 'normal'),
+            self.server_contract,
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.PIPE,
         )
@@ -60,7 +64,7 @@ class FluxerForumCreateCrossProcess(unittest.IsolatedAsyncioTestCase):
         await asyncio.wait_for(self.node.wait(), timeout=10)
         self.tmp.cleanup()
 
-    async def test_one_post_creates_distinct_thread_and_starter_and_repeat_has_no_effect(self) -> None:
+    async def test_one_post_preserves_observed_ids_and_repeat_has_no_effect(self) -> None:
         """Observe one durable attempt's exact remote POST body and immutable receipt."""
         async def send():
             return await self.adapter.create_forum_thread(
@@ -70,7 +74,7 @@ class FluxerForumCreateCrossProcess(unittest.IsolatedAsyncioTestCase):
 
         receipt = await send()
         self.assertEqual(receipt.thread.external_thread_id, 'thread-9')
-        self.assertEqual(receipt.starter, MessageRef('fx-forum', 'thread-9', 'starter-91'))
+        self.assertEqual(receipt.starter, MessageRef('fx-forum', 'thread-9', self.starter_id))
         self.assertEqual(await send(), receipt)
         effects = [json.loads(line) for line in self.effects.read_text().splitlines()]
         self.assertEqual(len(effects), 1)
@@ -127,7 +131,7 @@ class FluxerForumCreateCrossProcess(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(len(effects), 2)
         self.assertEqual(effects[1]['sdk_send']['container'], 'thread-9')
         self.assertEqual(effects[1]['sdk_send']['options']['replyTo'],
-                         {'channelId': 'thread-9', 'messageId': 'starter-91',
+                         {'channelId': 'thread-9', 'messageId': self.starter_id,
                           'guildId': 'guild-1'})
         self.assertEqual(effects[1]['sdk_send']['options']['allowedMentions'],
                          {'parse': [], 'repliedUser': False})
@@ -149,4 +153,16 @@ class FluxerForumCreateCrossProcess(unittest.IsolatedAsyncioTestCase):
             self.assertEqual(caught.exception.reason, 'unknown_delivery')
         effects = [json.loads(line) for line in self.effects.read_text().splitlines()]
         self.assertEqual(len(effects), 2)
-        self.assertEqual(effects[1]['sdk_send']['options']['replyTo']['messageId'], 'starter-91')
+        self.assertEqual(effects[1]['sdk_send']['options']['replyTo']['messageId'], self.starter_id)
+
+
+class FluxerMeasuredRestCrossProcess(FluxerForumCreateCrossProcess):
+    """Repeat all receipt/reply/no-repost scenarios with the measured REST shape.
+
+    The server explicitly returns equal thread/starter IDs; messages omit guild
+    on the wire (SDK null), and the raw starter omits webhook_id. Inherited tests
+    keep the same observable assertions for both server response contracts.
+    """
+
+    server_contract = 'rest-omissions'
+    starter_id = 'thread-9'

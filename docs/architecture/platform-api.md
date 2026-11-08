@@ -465,7 +465,7 @@ success as permission to send the bot token to arbitrary discovered endpoints.
 `src/fluxer_adapter.py:FluxerAdapter` currently implements *only* the
 `PlatformLookupPort` portion of the future complete `PlatformAdapterPort`. Its
 `fetch_channel`, `fetch_thread` and `fetch_message` checks require exact remote
-physical identity, thread parent, known guild and distinct observed starter
+physical identity, thread parent, known guild and separately observed starter
 message before returning neutral DTOs. Technical capabilities are granted only
 when the private provider's reply matches the requested channel scope; webhook
 capabilities are false unconditionally. Permission grants require the attested
@@ -475,6 +475,16 @@ and returns `None` without a history/body heuristic. The class is intentionally
 not registered in production until its write methods, durable coordinator proof
 and SDK-backed operation handlers exist; these read tests are not live Fluxer
 acceptance.
+
+For complete Fluxer REST messages, guild scope is established by a fresh
+guild-container lookup, not by requiring a message-level guild_id that the
+server omits. A non-null SDK message guild must still match that container.
+Message and bot ownership checks retain exact container/author IDs and explicit
+SDK webhook provenance. Forum POST receipts use the returned thread guild and
+parent plus the embedded starter's own ID/container/content/author; the raw
+Message schema allows omitted/null webhook_id but never a webhook bot receipt.
+Observed thread/starter IDs may be equal and are never substituted for one
+another when a field is absent.
 
 ## Fluxer forum create, SDK REST and receipt boundary (live acceptance pending)
 

@@ -47,8 +47,11 @@ reads the exact immediate container and existing parent message, and refuses
 stale/wrong parent or guild, archived/locked thread and unverified bot rights.
 All sends suppress `parse` mentions and reply-author notifications; attachments
 and non-plain content are deliberately rejected rather than dropped. The
-received SDK `Message` must attest the same bot, container, guild and
-`messageReference`, or the existing CreateAttempt stays `unknown_delivery`.
+received SDK `Message` must attest the same bot, exact container and
+`messageReference`; guild scope comes from that freshly fetched container.
+An explicit conflicting message guild is rejected, while SDK `guildId: null`
+is accepted for the full REST response. Any mismatched receipt leaves the
+existing CreateAttempt `unknown_delivery`.
 The unversioned server source names `SEND_MESSAGES_IN_THREADS` as bit 38;
 this isolated executor checks it, but does not promote it to a production
 capability without the approved build's observed contract. Node IPC and
@@ -74,20 +77,18 @@ transport or webhook fallback is permitted. A two-process Python adapter →
 authenticated Node RPC → stateful SDK REST fake tests this path.
 
 **The production `main.ts` intentionally does not register the forum-create
-handler yet.** The server ZIP has no verified operator build/tag, so the
-required live B05 forum/starter contract and operation-specific permissions
-have not been measured. `capabilities.forum_posts` stays false and the
-production RPC returns `unsupported` until that hard gate is satisfied. A
-passing fake-server test does not authorize live bot writes or complete CP028
-acceptance. The outstanding live check also needs confirmation that the
-starter's author and webhook provenance are actually serialized as expected.
+handler yet.** Independent VM verification on `fluxer-release@2026.1106.212644`
+observed real forum/message writes but exposed incompatible receipt checks.
+The fixes below require a live rerun and complete runtime/deployment acceptance.
+`capabilities.forum_posts` stays false and production RPC returns `unsupported`.
+Passing local contract regressions does not authorize production bot writes.
 
 The entrypoint exposes only confirmed SDK-backed physical reads and partial
 ACL checks. Create, Send, Edit, Delete and reconciliation
 are **not enabled** in the production handler and refuse RPC rather than
 inventing server-specific REST methods. Do not enable production physical
-writes or claim complete issue #12 transport at this checkpoint. The installed
-SDK/typecheck and real Fluxer instance are not yet verified.
+writes or claim complete issue #12 transport at this checkpoint. The
+remaining live runtime/deployment gates have not passed.
 
 The Gateway `MessageCreate` event identifies its immediate container, not
 necessarily its enclosing forum. `gateway.ts` now reuses the verified
@@ -173,11 +174,11 @@ private HTTP bearer is a separate credential, not the SDK bot token.
 
 `src/message_mutations.ts` uses the public SDK v3.3.0 `Message.edit()` and
 `Message.delete()` methods after a **fresh SDK REST message read**, exact
-container/guild verification, current authenticated bot-ID confirmation,
+container verification in its freshly observed guild, current authenticated bot-ID confirmation,
 explicit `webhookId === null` and a fresh guild/channel ACL check. The
 Python mutation coordinator still owns the SQLite CAS claim, revision and
 unknown-effect fence. An edit ACK must preserve the original message ID,
-container, guild, bot provenance and requested text; deletion never deletes
+container, nonconflicting guild, bot provenance and requested text; deletion never deletes
 the surrounding thread. A lost SDK response or mismatched edit result is
 `unknown_delivery`, not proof of a completed canonical revision. Definitive
 SDK HTTP status codes (400/401/403/404/429) are classified separately.
@@ -199,6 +200,28 @@ SDK-fake tests cannot establish B20/B21 or authorize production writes.
 ## Official SDK write type contracts
 
 `npm run check` includes `src/sdk_write_contracts.ts`: every isolated write factory must accept the pinned official `Client`. Message send and mutation handlers use SDK channel types and narrow guild/thread channels before reading guild-specific fields. Node tests also construct an actual SDK client and DM channel to verify rejection before message lookup or write. This does not enable production writes or replace real-server REST acceptance.
+
+## Measured REST message scope and receipts
+
+The independently tested `fluxer-release@2026.1106.212644` omits `guild_id` and
+`webhook_id` on ordinary full REST messages. SDK 3.3.0 constructs `guildId: null`
+and `webhookId: null`; message sends, replies, reads and mutations accept this
+shape only after fetching the exact guild container. An explicit mismatched
+guild or container still fails. SDK snapshots must retain their explicit
+`webhookId` property, and only null can attest a bot-owned message.
+
+Forum POST responses contain a thread with authoritative guild/parent and an
+embedded starter with its own ID, exact channel, content and bot author. The
+server's Message schema makes raw `webhook_id` optional/null; a non-null value
+is never a bot receipt. A starter's observed ID may equal the thread ID or
+differ from it. Both values must be present in the response; no ID is inferred.
+
+`tests/message_rest_contracts.test.mjs` exercises these measured response shapes
+through real SDK managers and Message instances with a stateful external REST
+fake. Python/Node scenarios cover both ID relationships, repeated attempts,
+lost responses and SQLite-owned mutations. These are local regressions, not a
+live rerun of the corrected bridge. See
+`docs/development/fluxer_rest_contract_fixes_ru.md` for results and open gates.
 
 ## Reproducible Node 22 build
 

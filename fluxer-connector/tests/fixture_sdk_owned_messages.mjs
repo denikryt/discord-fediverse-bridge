@@ -18,13 +18,15 @@ function channel(id, kind, parentId=null) {
 
 const emitter = new EventEmitter();
 const messages = new Map([
-  ['thread-1/owned',{id:'owned',channelId:'thread-1',guildId:'guild-1',
+  // The measured SDK GET has null guildId. Only the fresh channel supplies
+  // guild scope; webhook provenance and bot ownership remain explicit.
+  ['thread-1/owned',{id:'owned',channelId:'thread-1',guildId:null,
     content:'original',author:{id:'bot-one',bot:true,username:'Bridge'},
     webhookId:null,createdAt:new Date('2026-10-28T12:00:00Z'),editedAt:null,attachments:new Map()}],
-  ['thread-1/foreign',{id:'foreign',channelId:'thread-1',guildId:'guild-1',
+  ['thread-1/foreign',{id:'foreign',channelId:'thread-1',guildId:null,
     content:'other bot',author:{id:'bot-two',bot:true,username:'Other'},
     webhookId:null,createdAt:new Date('2026-10-28T12:00:00Z'),editedAt:null,attachments:new Map()}],
-  ['thread-1/webhook',{id:'webhook',channelId:'thread-1',guildId:'guild-1',
+  ['thread-1/webhook',{id:'webhook',channelId:'thread-1',guildId:null,
     content:'webhook',author:{id:'bot-one',bot:true,username:'WebHook'},
     webhookId:'hook-1',createdAt:new Date('2026-10-28T12:00:00Z'),editedAt:null,attachments:new Map()}],
 ]);

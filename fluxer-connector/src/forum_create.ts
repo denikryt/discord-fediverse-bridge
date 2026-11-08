@@ -14,6 +14,7 @@
 import {PrivateRpcError, type RpcHandler} from './transport.ts';
 import {createSdkCapabilityHandler, type SdkCapabilityClient} from './capabilities.ts';
 import {createSdkPermissionHandler, type SdkPermissionClient} from './permissions.ts';
+import {matchesMessageScope} from './message_scope.ts';
 
 const ID = /^[A-Za-z0-9_-]+$/;
 const REQUEST_KEYS = new Set([
@@ -79,7 +80,7 @@ function validateRequest(args: Readonly<Record<string, unknown>>): {
 
 /** Check an observed server response without inventing its opening message. */
 function verifyReceipt(raw: unknown, forumId: string, guildId: string,
-                       botId: string): Record<string, unknown> {
+                       botId: string, body: string): Record<string, unknown> {
   if (!raw || typeof raw !== 'object' || Array.isArray(raw)) {
     throw new PrivateRpcError('unknown_delivery');
   }
@@ -96,13 +97,19 @@ function verifyReceipt(raw: unknown, forumId: string, guildId: string,
   const source = author as Record<string, unknown>;
   // Validate after the POST as an unknown effect, not a definite refusal:
   // the server may have already created the thread and starter.
+  // Fluxer's full REST Message schema makes webhook_id nullish and omits
+  // guild_id. The thread proves guild/parent; the embedded starter must name
+  // that exact container and bot. Explicit contradictory provenance still
+  // invalidates the receipt. Neither ID is inferred from the other.
   if (typeof thread.id !== 'string' || !ID.test(thread.id) ||
       thread.parent_id !== forumId || thread.guild_id !== guildId ||
       thread.type !== PUBLIC_THREAD ||
       typeof starter.id !== 'string' || !ID.test(starter.id) ||
-      starter.channel_id !== thread.id || starter.guild_id !== guildId ||
+      !matchesMessageScope({channelId: starter.channel_id,
+        guildId: starter.guild_id ?? null}, thread.id, guildId) ||
+      starter.content !== body ||
       source.id !== botId || source.bot !== true ||
-      starter.webhook_id !== null) {
+      ('webhook_id' in starter && starter.webhook_id !== null)) {
     throw new PrivateRpcError('unknown_delivery');
   }
   return {forum_id: forumId, guild_id: guildId, thread_id: thread.id,
@@ -162,6 +169,6 @@ export function createSdkForumCreateHandler(
       // A failed response cannot prove the physical write was not accepted.
       throw new PrivateRpcError('unknown_delivery');
     }
-    return verifyReceipt(result, forumId, guildId, botId);
+    return verifyReceipt(result, forumId, guildId, botId, body);
   };
 }

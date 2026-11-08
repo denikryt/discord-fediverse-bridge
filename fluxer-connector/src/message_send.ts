@@ -14,6 +14,7 @@
  */
 import {PrivateRpcError, type RpcHandler} from './transport.ts';
 import {createSdkPermissionHandler} from './permissions.ts';
+import {matchesMessageScope} from './message_scope.ts';
 import type {Channel, Client, GuildChannel, Message, MessageSendOptions} from '@fluxerjs/core';
 
 const ID = /^[A-Za-z0-9_-]+$/;
@@ -81,7 +82,7 @@ function verifyMessage(message: Message, containerId: string, guildId: string,
   // A post has already been attempted. Invalid or incomplete server result
   // is uncertain delivery, not a definite rejection permitting a retry.
   if (!message || typeof message.id !== 'string' || !ID.test(message.id) ||
-      message.channelId !== containerId || message.guildId !== guildId ||
+      !matchesMessageScope(message, containerId, guildId) ||
       message.content !== body || message.author?.id !== botId ||
       message.author.bot !== true || message.webhookId !== null) {
     throw new PrivateRpcError('unknown_delivery');
@@ -166,7 +167,7 @@ export function createSdkMessageSendHandler(client: SdkMessageSendClient): RpcHa
       // Python caller already resolved a canonical/physical parent mapping.
       const replied = await client.channels.fetchMessage(containerId, replyId);
       if (!replied || replied.id !== replyId ||
-          replied.channelId !== containerId || replied.guildId !== guildId) {
+          !matchesMessageScope(replied, containerId, guildId)) {
         throw new PrivateRpcError('not_found', 404);
       }
     }

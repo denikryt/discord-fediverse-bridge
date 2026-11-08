@@ -35,7 +35,7 @@ async function fixture({response,flags=16,tags=[{id:'tag-a',moderated:false}], b
         if(response instanceof Error)throw response;
         return response??{id:'thread-9',guild_id:'guild-1',parent_id:'forum-1',type:11,
           message:{id:'starter-91',channel_id:'thread-9',guild_id:'guild-1',
-            author:{id:'bot-1',bot:true},webhook_id:null}};
+            author:{id:'bot-1',bot:true},webhook_id:null,content:options.body.message.content}};
       },
     },
   };

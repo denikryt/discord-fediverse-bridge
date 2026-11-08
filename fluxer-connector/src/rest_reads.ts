@@ -6,6 +6,7 @@
  * are the only external operations used here.
  */
 import {PrivateRpcError, type RpcHandler} from './transport.ts';
+import {matchesMessageScope} from './message_scope.ts';
 
 /** Only the public read methods/properties of the pinned SDK used by this module. */
 type SdkChannel = {
@@ -130,8 +131,7 @@ export function createSdkReadHandler(client: SdkReadClient): RpcHandler {
       }
       const message = await client.channels.fetchMessage(containerId, id);
       if (physicalId(message.id) !== id ||
-          physicalId(message.channelId) !== containerId ||
-          message.guildId !== guildId) {
+          !matchesMessageScope(message, containerId, guildId)) {
         throw new PrivateRpcError('invalid_request');
       }
       if (!(message.attachments instanceof Map)) {
