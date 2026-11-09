@@ -644,3 +644,8 @@ Final Python suite: 2197 passed, 1 skipped (actual Docker deployment), 98 subtes
 ## Measured Fluxer REST message contracts
 
 Independent VM verification on fluxer-release@2026.1106.212644 found four real receipt/reply/mutation failures. Full REST messages omit guild_id and webhook_id; SDK 3.3.0 maps them to null. Local corrections verify guild through the fresh container, reject explicit conflicts, retain exact bot/webhook checks and preserve independently returned starter/thread IDs even when equal. fetch_message had the same guild incompatibility and is corrected too. Real-SDK contract regressions and two-process Python/Node/SQLite tests cover the measured shape; a live rerun of the fixes and complete Compose/physical SQLite acceptance remain open. Production writes stay disabled. The supplied Fedify audit's 6 advisories (1 high) remain a separate dependency follow-up. See docs/development/fluxer_rest_contract_fixes_ru.md.
+
+
+## Fluxer fixture URL maintenance
+
+A complete-history CP041 checkout exposes one existing retired-AP-URL scanner failure in two Fluxer behavioral fixtures. The separate follow-up changes only their activity/inbox/outbox/followers URLs to actor-scoped paths; scanner and behavioral expectations remain unchanged. Final Python suite after both fixes: 2202 passed, 1 skipped (actual Compose), 98 subtests. Fluxer Node 22: 117/117 plus tsc/lock checks. Fedify tsc and 20 security tests pass; normal tsx CLI remains blocked by Unix-socket EPERM (alternative entry point: 51/52 files, same child-CLI blocker). Live rerun of corrected REST writes remains required.

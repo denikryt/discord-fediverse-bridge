@@ -44,8 +44,9 @@ class FluxerForumObservationScenarios(unittest.IsolatedAsyncioTestCase):
             community = LocalCommunity(
                 slug="fx-test", display_name="Fluxer test",
                 actor_url="https://bridge.test/actors/communities/fx-test",
-                inbox_url="https://bridge.test/c/inbox", outbox_url="https://bridge.test/c/outbox",
-                followers_url="https://bridge.test/c/followers",
+                inbox_url="https://bridge.test/actors/communities/fx-test/inbox",
+                outbox_url="https://bridge.test/actors/communities/fx-test/outbox",
+                followers_url="https://bridge.test/actors/communities/fx-test/followers",
                 public_key_pem="test", private_key_pem="test", status="active",
             )
             session.add(community)

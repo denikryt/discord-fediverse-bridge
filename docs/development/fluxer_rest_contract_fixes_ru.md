@@ -62,15 +62,32 @@ container, автор, webhook и текст не получают положи�
 SQLite mutation-сценарии теперь используют SDK guildId:null и проверяют
 applied_revision, mutation_state, readback и отказ изменения чужой копии.
 
+## Отдельный патч тестовых ActivityPub URL
+
+Полный pytest после REST-исправления обнаружил существовавшую ошибку CP041:
+в `test_fluxer_bot_create_adapter.py` использовался старый root-level activity
+URL, а в `test_fluxer_gateway_ingress.py` — старые community inbox/outbox/
+followers URL. `test_retired_local_activitypub_urls.py` отвергает эти адреса.
+Падение воспроизведено на отдельном чистом CP041; это дефект фикстур.
+
+Во втором коммите адреса заменены текущими actor-scoped путями. Scanner,
+его запрещённые шаблоны и поведенческие ожидания не менялись. Проверка
+scanner и оба затронутых behavioral-модуля: 24 passed, 11 subtests.
+Scanner использует git ls-files, поэтому наличие исходников без Git metadata
+и проверка полного bundle не дают эквивалентное покрытие этой гарантии.
+
 ## Проверки текущего изменения
 
 - Node 22.16.0: npm ci, check:lock, TypeScript — PASS; 117/117 Node tests.
 - Contract regression на CP041: 5 FAIL / 3 PASS; на исправлении: 8/8 PASS.
 - Два Python/Node crossprocess-модуля: 14 passed, 2 subtests.
-- Полный pytest (Python 3.12.14): 2201 passed, 1 failed, 1 skipped,
-  98 subtests. Единственный failure — существовавшие в CP041 устаревшие
-  локальные AP URL в двух Fluxer-фикстурах. Воспроизведён отдельно на чистом
-  CP041; будет исправлен отдельным тестовым патчем, без изменения scanner.
+- Финальный полный pytest после обоих патчей (Python 3.12.14):
+  **2202 passed, 1 skipped, 98 subtests**, ошибок нет. JUnit содержит
+  2301 testcase с учётом subtests и skip. Включены vendored-тесты, Git/tag,
+  spawn, оба runtime lock и restore-сценарии.
+- Предыдущий полный прогон до второго патча: 2201 passed, 1 failed,
+  1 skipped, 98 subtests. Failure существовавших AP URL воспроизведён на
+  чистом CP041 и устранён отдельным тестовым патчем без изменения scanner.
 - Skip: opt-in actual Compose verifier без тестового env/Discord token.
 - Fedify: TypeScript и 20 security tests PASS. Штатный npm test BLOCKED
   запретом Unix socket у tsx CLI. Альтернативный node --import tsx прошёл

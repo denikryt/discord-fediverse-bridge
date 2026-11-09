@@ -382,7 +382,8 @@ class FluxerDurableSqliteCreateScenarios(unittest.IsolatedAsyncioTestCase):
                                        external_guild_id='guild-1', kind='forum',
                                        local_community_id=community.id))
             canonical = LocalCommunityThread(
-                local_community_id=community.id, ap_activity_id='https://bridge.test/activities/test',
+                local_community_id=community.id,
+                ap_activity_id='https://bridge.test/actors/communities/test/activities/test',
                 ap_object_id='https://bridge.test/objects/test', direction='inbound',
                 origin_kind='activitypub')
             session.add(canonical)
