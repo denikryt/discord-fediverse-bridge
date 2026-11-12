@@ -29,3 +29,5 @@ Inbound personal-feed comments are retained even when the active binding is remo
 - CP06 offline upgrade boundary (2026-11-11): startup creates a verified migration archive under the existing EX lease before any nonempty v0 upgrade, releases EX, then reacquires SH and admits v1 read-only before Discord/HTTP. The external operator must stop/disable all old binaries and restart supervisors; no atomic flock conversion or mixed rolling upgrade is claimed.
 
 - CP07: Bridge #19 autocomplete now matches handle/actor URLs and enforces Discord choice sizes; blocked-origin and empty-result diagnostics use safe reason codes. NodeBB Group discovery is still pending CP08.
+
+- CP08 (2026-11-11): verified NodeBB category/WebFinger/Group discovery, choice revalidation and DNS-pinned read-only HTTP are implemented with fixture tests. Remote Follow cancellation, profile persistence and NodeBB content ingest/publish remain future checkpoints; do not treat discovery as complete NodeBB federation. Full Discord suite remains unverified because its dependencies are missing.

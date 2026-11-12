@@ -259,6 +259,7 @@ def _community_autocomplete(
                 fetch_bridge_communities=fetch_bridge_community_summaries,
                 lemmy_client_cls=LemmyClient,
                 on_diagnostic=report_discovery_reason,
+                policy_service=policy_service,
             )
         except Exception:
             # The internal diagnostic is deliberately bounded to a stable code.

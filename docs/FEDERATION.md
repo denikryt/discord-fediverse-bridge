@@ -91,7 +91,18 @@ enter its full URL manually. An unavailable Bridge endpoint falls back to the
 existing Lemmy discovery path; a confirmed Bridge response does not.
 Autocomplete errors and empty results are logged with normalized origin and
 one bounded reason code only; blocked remote origins are rejected before the
-network request. NodeBB-specific public Group discovery is a separate feature.
+network request. When the Bridge endpoint is unavailable, NodeBB discovery
+checks anonymous `GET /api/categories`, nested categories, public read access,
+and the canonical ActivityPub `Group` actor at `/category/{cid}` before falling
+back to Lemmy. NodeBB handles resolve through WebFinger; public category links
+and `nodebb:` selections are revalidated on submit. NodeBB selection uses
+`remote_nodebb` with no Lemmy numeric ID. Long canonical actor URLs receive
+short-lived autocomplete lookup keys; an expired key is rejected and the user
+must search again or enter the category URL. NodeBB HTTP reads enforce HTTPS,
+current federation policy, public-IP DNS, same-origin redirects, and bounded
+response size. The signed NodeBB Follow lifecycle and actual content sync are
+completed in later checkpoints; discovery alone is not a claim of end-to-end
+NodeBB federation.
 
 ## Supported inbound ActivityPub
 

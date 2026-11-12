@@ -8,6 +8,7 @@ version = "0.1.0"
 description = "Discord forum to Lemmy community bridge"
 requires-python = ">=3.12"
 dependencies = [
+  "aiohttp>=3.9.0",
   "alembic>=1.14.0",
   "discord.py>=2.6.0",
   "fastapi>=0.115.0",

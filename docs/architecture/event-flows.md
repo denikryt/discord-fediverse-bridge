@@ -10,8 +10,11 @@ This document explains the major runtime traces through the bridge: user/platfor
 
 ## Remote /subscribe-community flow
 
-1. `src/commands/subscribe.py` calls `src/operations/subscribe.py`.
-2. `src/lemmy_client.py` resolves the remote community when needed.
+1. `src/commands/subscribe.py` uses `src/community_discovery.py` for Bridge,
+   verified NodeBB `Group` (`src/nodebb_discovery.py`), or Lemmy discovery,
+   checking policy before network and again for the resolved actor.
+2. `src/operations/subscribe.py` receives canonical actor identity; a NodeBB
+   category `cid` is never used as a Lemmy community ID.
 3. `src/db/database.py` records `channel_community_subscriptions` and bridge follow state.
 4. `src/fedify_gateway_client.py` calls gateway `/follow-community`; gateway sends the Follow.
 5. Accept returns through gateway `/inbox`, `src/http_api.py`, and `src/activitypub_handlers.py`.

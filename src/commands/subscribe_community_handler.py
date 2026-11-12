@@ -228,6 +228,7 @@ class SubscribeCommunityCommandHandler:
             community_value=request.community,
             fetch_bridge_communities=self._fetch_bridge_communities_getter(),
             lemmy_client_cls=self._lemmy_client_cls_getter(),
+            policy_service=self.policy_service,
         )
 
     async def _ensure_numeric_id(

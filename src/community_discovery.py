@@ -19,6 +19,12 @@ from urllib.parse import urlparse
 
 import httpx
 
+from .nodebb_discovery import (
+    NodeBBDiscoveryError, NodeBBUnavailable, decode_nodebb_choice,
+    fetch_nodebb_groups, nodebb_autocomplete_choices, probe_nodebb_origin,
+    resolve_nodebb_group,
+)
+
 if TYPE_CHECKING:
     from .config import Settings
     from .lemmy_client import LemmyClient
@@ -78,7 +84,7 @@ class BridgeCommunitySummary:
 class ResolvedCommunity:
     """Describe one community selected by `/subscribe-community` before dispatch."""
 
-    source: Literal["remote_lemmy", "remote_bridge", "local_bridge"]
+    source: Literal["remote_lemmy", "remote_bridge", "local_bridge", "remote_nodebb"]
     actor_id: str
     name: str | None
     numeric_id: int | None
@@ -257,6 +263,7 @@ async def autocomplete_communities(
     fetch_bridge_communities: Any,
     lemmy_client_cls: type[LemmyClient],
     on_diagnostic: Callable[[str], None] | None = None,
+    policy_service: Any = None,
 ) -> list[tuple[str, str]]:
     """Return Discord choices and one safe reason code when discovery is empty.
 
@@ -306,6 +313,23 @@ async def autocomplete_communities(
         if not bridge_choices:
             report_empty(empty_reason(summaries))
         return bridge_choices
+
+    if policy_service is not None and origin.startswith("https://"):
+        # A confirmed NodeBB with no public categories must not be mistaken for
+        # Lemmy. The HTTP adapter performs DNS/IP and redirect admission at the
+        # socket boundary in addition to the command-level policy gate.
+        try:
+            groups = await fetch_nodebb_groups(origin, policy_service=policy_service, query=query)
+        except NodeBBUnavailable:
+            pass  # No NodeBB API on this host: retain the established Lemmy route.
+        except NodeBBDiscoveryError as error:
+            report_empty(error.reason_code)
+            return []
+        else:
+            nodebb_choices = nodebb_autocomplete_choices(groups, query)
+            if not nodebb_choices:
+                report_empty("filter_no_match" if query else "no_public_groups")
+            return nodebb_choices
 
     remote_client = lemmy_client_cls(origin)
     try:
@@ -360,6 +384,7 @@ async def resolve_selected_community(
     community_value: str,
     fetch_bridge_communities: Any,
     lemmy_client_cls: type[LemmyClient],
+    policy_service: Any = None,
 ) -> ResolvedCommunity:
     """Resolve one moderator-entered community value into a typed target.
 
@@ -368,6 +393,22 @@ async def resolve_selected_community(
     ``instance_domain`` so global Lemmyverse mode cannot guess between duplicate
     community names on different hosts.
     """
+
+    # NodeBB choices are untrusted client input, including short TTL lookup
+    # keys. Revalidate current policy, anonymous category access and the Group
+    # actor on submit, even when the exact URL came from autocomplete.
+    if community_value.startswith(("nodebb:", "nodebb-key:")):
+        if policy_service is None:
+            raise CommunityResolutionError("NodeBB policy validation is unavailable.", reason_code="denied_origin")
+        try:
+            nodebb_origin, actor_url = decode_nodebb_choice(community_value)
+            await probe_nodebb_origin(nodebb_origin, policy_service=policy_service)
+            group = await resolve_nodebb_group(
+                actor_url, origin=nodebb_origin, policy_service=policy_service
+            )
+        except (NodeBBDiscoveryError, NodeBBUnavailable) as error:
+            raise _nodebb_resolution_error(error) from error
+        return _resolved_nodebb_group(group)
 
     encoded = _parse_encoded_community_value(community_value)
     if encoded is not None:
@@ -403,6 +444,11 @@ async def resolve_selected_community(
         )
         if bridge_result is not None:
             return bridge_result
+        nodebb = await _try_resolve_nodebb(
+            parsed_url.actor_url, parsed_url.origin, policy_service=policy_service
+        )
+        if nodebb is not None:
+            return nodebb
         return await _resolve_remote_lemmy(
             parsed_url.origin,
             slug_or_name=parsed_url.slug,
@@ -431,6 +477,11 @@ async def resolve_selected_community(
         )
         if bridge_result is not None:
             return bridge_result
+        nodebb = await _try_resolve_nodebb(
+            parsed_handle.handle, handle_origin, policy_service=policy_service
+        )
+        if nodebb is not None:
+            return nodebb
         return await _resolve_remote_lemmy(
             handle_origin,
             slug_or_name=parsed_handle.name,
@@ -462,11 +513,50 @@ async def resolve_selected_community(
     )
     if bridge_result is not None:
         return bridge_result
+    nodebb = await _try_resolve_nodebb(
+        community_value.strip(), instance_origin, policy_service=policy_service
+    )
+    if nodebb is not None:
+        return nodebb
     return await _resolve_remote_lemmy(
         instance_origin,
         slug_or_name=community_value.strip(),
         lemmy_client_cls=lemmy_client_cls,
     )
+
+
+def _resolved_nodebb_group(group: Any) -> ResolvedCommunity:
+    """Expose only verified actor identity, never the NodeBB numeric CID."""
+    return ResolvedCommunity(
+        source="remote_nodebb", actor_id=group.actor_id, name=group.name,
+        numeric_id=None, handle=group.handle, remote_software="nodebb",
+    )
+
+
+def _nodebb_resolution_error(error: Exception) -> CommunityResolutionError:
+    """Translate discovery transport errors into bounded moderator messages."""
+    if isinstance(error, NodeBBUnavailable):
+        return CommunityResolutionError("NodeBB category is not publicly accessible.", reason_code="no_public_groups")
+    return CommunityResolutionError(str(error), reason_code=error.reason_code)
+
+
+async def _try_resolve_nodebb(
+    value: str, origin: str, *, policy_service: Any,
+) -> ResolvedCommunity | None:
+    """Use the verified NodeBB API before falling back to legacy Lemmy."""
+    if policy_service is None or not origin.startswith("https://"):
+        return None
+    try:
+        await probe_nodebb_origin(origin, policy_service=policy_service)
+    except NodeBBUnavailable:
+        return None
+    except NodeBBDiscoveryError as error:
+        raise _nodebb_resolution_error(error) from error
+    try:
+        group = await resolve_nodebb_group(value, origin=origin, policy_service=policy_service)
+    except (NodeBBUnavailable, NodeBBDiscoveryError) as error:
+        raise _nodebb_resolution_error(error) from error
+    return _resolved_nodebb_group(group)
 
 
 def _discovery_failure_code(error: Exception) -> str:
