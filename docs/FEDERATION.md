@@ -81,6 +81,17 @@ or an unsigned inner Create is not permission. Existing same-actor subscribers
 are unchanged. Until both Bridges expose the declaration, the new
 Service→Person path refuses access rather than guessing software provenance.
 
+For locally hosted Group **Update/Delete**, the verified direct action must be
+signed by the original Person even when the current accepted subscription
+belongs to its Bridge Service. The first Create fixes the local Group, AP
+object, owner, origin subscriber and (for replies) root/parent. These fields
+are checked again before any Discord edit/delete or remote relay. A Group-only
+`Announce(Update|Delete)`, later conflicting `attributedTo`, another Group's
+placement or a historical missing owner cannot grant modification rights.
+An ID-only signed `Delete(Tombstone)` may omit its ancestry, but it cannot
+change the original Group/parent association. Moderator delegation without a
+separately verified authority proof remains unsupported.
+
 ## Supported discovery
 
 The gateway supports WebFinger actor discovery for bridge, user, and community handles.

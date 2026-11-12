@@ -96,6 +96,29 @@ host placements have the same object ID. A reply with explicit verified local
 Group targeting uses its tenant-scoped canonical parent. The gateway may not
 infer an absent local Group from a competing global mapping.
 
+### Locally hosted Group mutation admission (CP22)
+
+`post.updated|deleted` and `comment.updated|deleted` targeting a locally
+hosted Bridge `Group` are distinct from updates distributed by a subscribed
+remote Group. The gateway must provide the same trusted, server-selected
+`verified_destination_group_actor_id` and outer
+`verified_sender_actor_id` as for a local Create. A verified direct
+`Update`/`Delete` must be signed by its `Person` owner; an `Announce` signed
+by a Group does not independently authenticate its embedded mutation. The
+original wire activity ID and verified source record remain unchanged.
+
+Python first authenticates the Person through a current accepted same-actor
+subscriber or the verified Bridge Service relationship, then checks the
+**initial** canonical `(local_community_id, ap_object_id, kind,
+source_owner_actor_id, origin_subscriber_actor_id)` under SQLite's writer lock.
+The reply's persisted root and immediate parent must belong to that exact
+Group; any ancestry supplied by a mutation must agree. A signed Delete with
+an ID-only Tombstone may omit ancestry but cannot overwrite or infer it.
+The original host surface must be delivered, the origin subscriber must still
+be accepted, and current federation policy must permit the sender. Denied,
+ambiguous and legacy NULL-owner rows produce no Discord edit/delete or relay.
+The global `MessageMapping` is not a local Group mutation authorization source.
+
 ### Inbound remote mutation authorization
 
 For `post.updated|deleted` and `comment.updated|deleted`, the gateway sends

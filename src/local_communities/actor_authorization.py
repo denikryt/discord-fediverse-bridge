@@ -93,23 +93,50 @@ def _declares_bridge_service(actor: dict) -> bool:
     )
 
 
-def _verified_outer_person(event: ActivityPubEvent) -> bool:
-    """An independently signed direct Create must match actor and object owner."""
+def _verified_outer_person(event: ActivityPubEvent, activity_type: str = "Create") -> bool:
+    """Require an owner-signed direct action with matching source provenance.
+
+    Fedify authenticates the outer activity before forwarding it to Python.
+    A Group Announce does not separately authenticate the embedded Person,
+    and an Update/Delete must never borrow authorization from an earlier Create.
+    """
     if (
         event.source_announce_id is not None
         or event.verified_sender_actor_id != event.actor_id
     ):
         return False
     source = event.source_activity_json
-    if not isinstance(source, dict) or source.get("type") != "Create" or source.get("actor") != event.actor_id:
+    if (
+        not isinstance(source, dict)
+        or source.get("type") != activity_type
+        or source.get("actor") != event.actor_id
+    ):
         return False
     obj = source.get("object")
-    return (
-        isinstance(obj, dict)
-        and obj.get("id") == event.object.ap_id
-        and obj.get("attributedTo") == event.actor_id
-        and event.object.attributed_to_actor_id in (None, event.actor_id)
-    )
+    # A signed Delete may contain only the object IRI or a Tombstone, whereas
+    # Create/Update usually carry an attributed Note/Page. None of these fresh
+    # fields can change the canonical owner stored by the original Create.
+    if isinstance(obj, str):
+        # Create/Update need an attributed object; only Delete may legally
+        # refer to an ID-only Tombstone without fresh object attribution.
+        if activity_type != "Delete" or obj != event.object.ap_id:
+            return False
+    elif isinstance(obj, dict):
+        if obj.get("id") != event.object.ap_id:
+            return False
+        if obj.get("attributedTo") not in (None, event.actor_id):
+            return False
+        if activity_type == "Create" and obj.get("attributedTo") != event.actor_id:
+            return False
+        if activity_type in ("Update", "Delete") and obj.get("inReplyTo") is not None:
+            # Signed ancestry is authoritative. Never authorize a modification
+            # against a normalized parent that hides a different signed parent.
+            if (event.object.kind != "comment"
+                    or obj["inReplyTo"] != event.object.parent_ap_id):
+                return False
+    else:
+        return False
+    return event.object.attributed_to_actor_id in (None, event.actor_id)
 
 
 async def authorize_inbound_source(
@@ -119,6 +146,7 @@ async def authorize_inbound_source(
     database: Database,
     policy: BridgePolicyService,
     fetch_actor: ActorFetch | None = None,
+    source_activity_type: str = "Create",
 ) -> AuthorizedInboundSource | None:
     """Resolve one accepted tenant subscriber without trusting an actor hostname.
 
@@ -129,6 +157,13 @@ async def authorize_inbound_source(
     actor fetching cannot authorize content through a stale accepted row.
     """
     author = event.actor_id
+    if source_activity_type not in ("Create", "Update", "Delete"):
+        return None
+    # Mutations require their own verified owner action even for a legacy
+    # same-actor follower. A previous Create signature never authorizes a fresh
+    # modification and Announce(inner Update) carries no independent signature.
+    if source_activity_type != "Create" and not _verified_outer_person(event, source_activity_type):
+        return None
     if event.verified_sender_actor_id is not None and event.verified_sender_actor_id != author:
         return None
     # Even an accepted same-actor subscriber cannot publish an object with a
@@ -144,7 +179,7 @@ async def authorize_inbound_source(
 
     # A wrapped Create is signed by its outer distributor, not by its inner
     # Person. Never grant Service rights based on unsigned inner attribution.
-    if not _verified_outer_person(event):
+    if not _verified_outer_person(event, source_activity_type):
         return None
     origin = _actor_origin(author, "users")
     if origin is None or not policy.federation_decision(author).allowed:

@@ -449,10 +449,10 @@ async def test_local_discord_deletes_mark_non_source_surfaces(
 
 
 @pytest.mark.asyncio
-async def test_inbound_remote_updates_edit_all_local_surfaces(
+async def test_legacy_remote_updates_without_owner_do_not_edit_surfaces(
     scenario: SimpleNamespace,
 ) -> None:
-    """Remote post/comment updates should edit host and local subscriber copies."""
+    """Legacy unproven owners cannot edit host or subscriber surfaces."""
     thread_row = _thread_with_surfaces(scenario)
     _comment_with_surfaces(scenario, thread_row)
     bot, messages = _bot_for_surfaces()
@@ -466,34 +466,31 @@ async def test_inbound_remote_updates_edit_all_local_surfaces(
         _remote_comment_event("comment.updated"), runtime
     )
 
-    assert post_result.status == "processed"
-    assert comment_result.status == "processed"
-    for message_id in (1200, 2300, 3400):
-        messages[message_id].edit.assert_any_await(
-            content="**Remote title**\n\nAuthor: `bob@remote.example`\n\nremote body\n\nhttps://remote.example/post/1"
-        )
-    for message_id in (1300, 2400, 3500):
-        messages[message_id].edit.assert_any_await(
-            content="`bob@remote.example`\n\nremote comment"
-        )
+    assert post_result.status == "skipped"
+    assert comment_result.status == "skipped"
+    # These historical fixtures were never populated with verified owner or
+    # signed Create provenance. No Group or sibling Discord surface may change.
+    for message in messages.values():
+        message.edit.assert_not_awaited()
 
 
 @pytest.mark.asyncio
-async def test_inbound_remote_deletes_mark_all_local_surfaces(
+async def test_legacy_remote_deletes_without_owner_do_not_edit_surfaces(
     scenario: SimpleNamespace,
 ) -> None:
-    """Remote deletes should mark every persisted local Discord surface."""
+    """A signed Delete cannot recover owner rights missing from legacy rows."""
     thread_row = _thread_with_surfaces(scenario)
     _comment_with_surfaces(scenario, thread_row)
     bot, messages = _bot_for_surfaces()
     scenario.runtime.bot = bot
     runtime = _runtime_namespace(scenario, bot)
 
-    await dispatch_activitypub_event(_remote_post_event("post.deleted"), runtime)
-    await dispatch_activitypub_event(_remote_comment_event("comment.deleted"), runtime)
-
-    for message_id in (1200, 2300, 3400, 1300, 2400, 3500):
-        messages[message_id].edit.assert_any_await(content="*deleted by creator*")
+    post_result = await dispatch_activitypub_event(_remote_post_event("post.deleted"), runtime)
+    comment_result = await dispatch_activitypub_event(_remote_comment_event("comment.deleted"), runtime)
+    assert post_result.status == "skipped"
+    assert comment_result.status == "skipped"
+    for message in messages.values():
+        message.edit.assert_not_awaited()
 
 
 @pytest.mark.asyncio

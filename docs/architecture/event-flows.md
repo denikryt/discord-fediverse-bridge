@@ -53,6 +53,26 @@ This document explains the major runtime traces through the bridge: user/platfor
    Existing pre-v1 host rows without a provable initial content snapshot do
    not gain new sibling content from a later envelope; that replay fails closed.
 
+## Local Group inbound Update/Delete flow
+
+1. The gateway forwards the authenticated outer `Update` or `Delete` sender
+   and exact verified local Group recipient; a Group-signed nested mutation
+   alone does not supply a Person signature. Python admits a separate Group
+   receipt only after this recipient boundary.
+2. `LocalCommunityMutationHandler` confirms the currently accepted original
+   same-actor subscriber or independently verified Bridge Person→Service
+   relationship. The signed activity's object identity, author and explicit
+   `inReplyTo` must agree with normalized source fields.
+3. `LocalCommunityContentRepository` verifies, under a SQLite writer lock,
+   `(local_community_id, ap_object_id, kind, source_owner_actor_id,
+   origin_subscriber_actor_id)` and the original reply root/parent chain.
+   Unknown historical owners, a revoked subscription, an undelivered host,
+   or foreign Group/parent fails before any Discord or relay effect.
+4. Only that exact canonical row is passed to Discord surface fanout; signed
+   ID-only `Delete` is permitted for the known original owner, without
+   interpreting a fresh Tombstone as new ownership evidence. Later relay
+   follows only after this authorization succeeds.
+
 ## Local Group inbound Follow/Undo(Follow) flow
 
 1. Fedify verifies the signed Follow/Undo and routes the verified local Group
@@ -198,7 +218,7 @@ This document explains the major runtime traces through the bridge: user/platfor
 1. Discord edit/delete enters through `src/discord_message_mutations.py`, then `src/discord_event_router.py` resolves the starter/reply surface row for the raw message id.
 2. `src/local_communities/runtime.py` resolves the canonical post/comment and loads the `PublishedActivityObject` by canonical AP object id, not by the copied Discord message id.
 3. For host or active local-subscriber source surfaces, Python sends one gateway Update/Delete and `src/local_communities/discord_fanout.py` mutates every other persisted local Discord surface.
-4. For inbound remote update/delete, the runtime mutates every persisted local Discord surface, including host and local subscribers, then keeps the existing remote relay eligibility rule for remote subscribers.
+4. For inbound remote update/delete, the runtime first verifies the signed original owner, accepted origin subscriber, exact tenant, kind and parent under the same SQLite writer lock. Only authorized actions mutate the canonical row's host and sibling surfaces, then use the existing remote relay eligibility rule.
 5. Inactive local-subscriber surfaces are historical copies, not authoritative mutation sources.
 
 ## Remote ActivityPub Undo(Follow) -> local community unfollow flow

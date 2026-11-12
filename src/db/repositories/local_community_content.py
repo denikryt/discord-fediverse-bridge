@@ -257,6 +257,81 @@ class LocalCommunityContentRepository(BaseRepository):
             row.host_delivery_state = state
             session.flush()
 
+    def authorize_inbound_mutation(
+        self, *, local_community_id: int, ap_object_id: str, kind: str,
+        owner_actor_id: str, origin_subscriber_actor_id: str,
+        post_ap_id: str | None, parent_ap_id: str | None,
+        operation: str,
+    ) -> tuple[LocalCommunityThread | LocalCommunityMessage, LocalCommunityThread] | None:
+        """Read original owner and tenant with subscriber status under one lock.
+
+        A verified sender is not allowed to adopt an unrelated tenant's object,
+        modify an outbound/ambiguous legacy row, or address a foreign parent.
+        All checks precede Discord edits and remote relay; no owner inference is
+        made from a later ActivityPub envelope.
+        """
+        if kind not in ("post", "comment") or operation not in ("update", "delete"):
+            raise HostIdentityConflict("unsupported mutation kind or operation")
+        if not (owner_actor_id and origin_subscriber_actor_id and ap_object_id):
+            raise HostIdentityConflict("mutation identity is incomplete")
+        with self._immediate_session() as session:
+            self._require_accepted_source(session, local_community_id, origin_subscriber_actor_id)
+            model = LocalCommunityThread if kind == "post" else LocalCommunityMessage
+            row = session.scalar(select(model).where(
+                model.local_community_id == local_community_id,
+                model.ap_object_id == ap_object_id,
+            ))
+            if row is None:
+                return None
+            if (
+                row.direction != "ap_to_discord"
+                or row.source_owner_actor_id != owner_actor_id
+                or row.origin_subscriber_actor_id != origin_subscriber_actor_id
+                or row.host_delivery_state != "delivered"
+            ):
+                raise HostIdentityConflict("original mutation owner, origin or host differs")
+            if kind == "post":
+                if post_ap_id is not None or parent_ap_id is not None:
+                    raise HostIdentityConflict("post mutation supplies a foreign parent")
+                thread = row
+                surface_id = session.scalar(select(LocalCommunityThreadSurface.id).where(
+                    LocalCommunityThreadSurface.local_community_thread_id == thread.id,
+                    LocalCommunityThreadSurface.role == "host",
+                ))
+            else:
+                thread = session.get(LocalCommunityThread, row.local_community_thread_id)
+                if (
+                    thread is None or thread.local_community_id != local_community_id
+                    or thread.direction != "ap_to_discord"
+                    or thread.host_delivery_state != "delivered"
+                ):
+                    raise HostIdentityConflict("comment root is not hosted in this Group")
+                # Update must carry a consistent root/parent. Delete(Tombstone)
+                # may be ID-only; any supplied ancestry must still agree with
+                # the canonical Create and exact tenant-scoped parent chain.
+                if operation == "update" and (not post_ap_id or not parent_ap_id):
+                    raise HostIdentityConflict("comment Update lacks original ancestry")
+                if post_ap_id is not None and post_ap_id != thread.ap_object_id:
+                    raise HostIdentityConflict("comment root belongs to another Group")
+                if parent_ap_id is not None and parent_ap_id != row.parent_ap_object_id:
+                    raise HostIdentityConflict("comment parent differs from original Create")
+                if row.parent_ap_object_id != thread.ap_object_id:
+                    parent = session.scalar(select(LocalCommunityMessage.id).where(
+                        LocalCommunityMessage.local_community_id == local_community_id,
+                        LocalCommunityMessage.local_community_thread_id == thread.id,
+                        LocalCommunityMessage.ap_object_id == row.parent_ap_object_id,
+                        LocalCommunityMessage.host_delivery_state == "delivered",
+                    ))
+                    if parent is None:
+                        raise HostIdentityConflict("original nested parent not hosted in this Group")
+                surface_id = session.scalar(select(LocalCommunityMessageSurface.id).where(
+                    LocalCommunityMessageSurface.local_community_message_id == row.id,
+                    LocalCommunityMessageSurface.role == "host",
+                ))
+            if surface_id is None:
+                raise HostIdentityConflict("confirmed mutation host surface is missing")
+            return row, thread
+
     def create_local_community_thread(
         self,
         *,

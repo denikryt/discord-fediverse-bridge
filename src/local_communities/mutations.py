@@ -20,6 +20,8 @@ from ..runtime_ports import DiscordMutationContext
 from .discord_surface_fanout import LocalCommunitySurfaceFanout
 from .federation_fanout import LocalCommunityFederationFanout
 from .rendering import format_inbound_comment_body, format_inbound_post_body
+from .actor_authorization import ActorFetch, authorize_inbound_source
+from ..db.repositories.local_community_content import HostIdentityConflict
 
 logger = logging.getLogger(__name__)
 
@@ -46,6 +48,7 @@ class LocalCommunityMutationHandler:
         surface_fanout: LocalCommunitySurfaceFanout,
         federation_fanout: LocalCommunityFederationFanout,
         is_community_id_disabled: Callable[[int | None], bool],
+        actor_fetcher: ActorFetch | None = None,
     ) -> None:
         """Store the narrow dependencies needed by mutation handling."""
         self.database = database
@@ -54,6 +57,7 @@ class LocalCommunityMutationHandler:
         self.surface_fanout = surface_fanout
         self.federation_fanout = federation_fanout
         self.is_community_id_disabled = is_community_id_disabled
+        self.actor_fetcher = actor_fetcher
 
     def _surface_can_mutate(self, surface: object, local_community_id: int) -> bool:
         """Return whether one Discord surface can author canonical mutations.
@@ -366,174 +370,141 @@ class LocalCommunityMutationHandler:
             source_surface_id=getattr(message_surface, "id"),
         )
 
+    async def _admit_inbound_mutation(
+        self, event: object, *, kind: str, operation: str
+    ) -> tuple[object, object, object] | HandlerResult:
+        """Authorize verified remote owner and original Group before side effects.
+
+        Receipt and gateway recipient selection precede this boundary. The
+        domain rechecks exact canonical tenant, original owner, origin Service,
+        parent and accepted subscriber under the same SQLite writer lock.
+        """
+        from ..activitypub_handlers import HandlerResult as _HandlerResult
+
+        local_community = self.database.local_communities.get_local_community_by_actor_url(
+            getattr(event, "community_actor_id", None)
+        )
+        if local_community is None:
+            return _HandlerResult(
+                status="skipped", outcome=InboundActivityOutcome.IGNORED_UNKNOWN_LOCAL_COMMUNITY,
+                detail="unknown local Group recipient",
+            )
+        tenant_id = getattr(local_community, "id")
+        if (
+            self.is_community_id_disabled(tenant_id)
+            or getattr(event, "verified_destination_group_actor_id", None) != local_community.actor_url
+        ):
+            return _HandlerResult(
+                status="skipped", outcome=InboundActivityOutcome.IGNORED_UNAUTHORIZED_MUTATION,
+                detail="mutation lacks verified active local Group recipient",
+            )
+        # A signed Group Announce proves distribution, not Person ownership;
+        # mutations require a separate owner-signed Update/Delete action.
+        authorized = await authorize_inbound_source(
+            event=event, local_community_id=tenant_id,
+            database=self.database, policy=self.bridge_policy_service,
+            fetch_actor=self.actor_fetcher,
+            source_activity_type="Update" if operation == "update" else "Delete",
+        )
+        if authorized is None:
+            return _HandlerResult(
+                status="skipped", outcome=InboundActivityOutcome.IGNORED_UNAUTHORIZED_MUTATION,
+                detail="mutation is not signed by authorized original Person",
+            )
+        # Deny actor/Service origins whose current policy no longer permits
+        # federation, even if an accepted subscriber row has not been removed.
+        policy = self.bridge_policy_service.snapshot()
+        if not all(policy.federation_decision(subject).allowed for subject in (
+            authorized.author_actor_id, authorized.subscriber_actor_id,
+        )):
+            return _HandlerResult(
+                status="skipped", outcome=InboundActivityOutcome.IGNORED_UNAUTHORIZED_MUTATION,
+                detail="mutation owner or subscriber origin is no longer permitted",
+            )
+        obj = getattr(event, "object")
+        try:
+            found = self.database.local_community_content.authorize_inbound_mutation(
+                local_community_id=tenant_id, ap_object_id=getattr(obj, "ap_id"),
+                kind=kind, owner_actor_id=authorized.author_actor_id,
+                origin_subscriber_actor_id=authorized.subscriber_actor_id,
+                post_ap_id=getattr(obj, "post_ap_id", None),
+                parent_ap_id=getattr(obj, "parent_ap_id", None),
+                operation=operation,
+            )
+        except HostIdentityConflict:
+            return _HandlerResult(
+                status="skipped", outcome=InboundActivityOutcome.IGNORED_UNAUTHORIZED_MUTATION,
+                detail="mutation owner, tenant, origin or parent conflicts with original Create",
+            )
+        if found is None:
+            return _HandlerResult(
+                status="skipped", outcome=InboundActivityOutcome.IGNORED_UNMAPPED_CONTEXT,
+                detail="original object is not hosted in target Group",
+            )
+        canonical, thread = found
+        return local_community, canonical, thread
+
+    async def _handle_inbound_mutation(
+        self, event: object, *, kind: str, operation: str
+    ) -> HandlerResult:
+        """Apply one authorized scoped mutation and relay only after admission."""
+        from ..activitypub_handlers import HandlerResult as _HandlerResult
+
+        admission = await self._admit_inbound_mutation(event, kind=kind, operation=operation)
+        if isinstance(admission, _HandlerResult):
+            return admission
+        local_community, row, _thread = admission
+        if kind == "post":
+            if operation == "update":
+                await self.surface_fanout.fanout_thread_edit(
+                    thread_row=row, source_surface_id=None,
+                    new_content=format_inbound_post_body(event),
+                )
+            else:
+                await self.surface_fanout.fanout_thread_delete(
+                    thread_row=row, source_surface_id=None,
+                )
+        else:
+            if operation == "update":
+                await self.surface_fanout.fanout_message_edit(
+                    message_row=row, source_surface_id=None,
+                    new_content=format_inbound_comment_body(event),
+                )
+            else:
+                await self.surface_fanout.fanout_message_delete(
+                    message_row=row, source_surface_id=None,
+                )
+        # The relay source must be the original authorized tenant/owner; a
+        # rejected mutation never reaches the federation delivery boundary.
+        await self.federation_fanout.relay_update_or_delete(
+            event=event, local_community=local_community,
+            object_kind=kind, operation=operation,
+        )
+        return _HandlerResult(
+            status="processed", outcome=InboundActivityOutcome.APPLIED,
+            detail=f"{kind} {operation} applied",
+        )
+
     async def handle_inbound_post_update(
         self, event: object, runtime: object
     ) -> HandlerResult:
-        """Edit the starter message for one inbound remote post update."""
-        from ..activitypub_handlers import HandlerResult as _HandlerResult
-
-        thread_row = self.database.local_community_content.get_local_community_thread_by_ap_object_id(
-            getattr(getattr(event, "object"), "ap_id")
-        )
-        if thread_row is None:
-            return _HandlerResult(
-                status="skipped",
-                outcome=InboundActivityOutcome.IGNORED_UNMAPPED_CONTEXT,
-                detail="post not yet mapped",
-            )
-        local_community = (
-            self.database.local_communities.get_local_community_by_actor_url(
-                getattr(event, "community_actor_id")
-            )
-        )
-        await self.surface_fanout.fanout_thread_edit(
-            thread_row=thread_row,
-            source_surface_id=None,
-            new_content=format_inbound_post_body(event),
-        )
-        if local_community is not None:
-            await self.federation_fanout.relay_update_or_delete(
-                event=event,
-                local_community=local_community,
-                object_kind="post",
-                operation="update",
-            )
-        return _HandlerResult(
-            status="processed",
-            outcome=InboundActivityOutcome.APPLIED,
-            detail="post updated",
-        )
+        """Edit the original tenant's post only for its signed owner."""
+        return await self._handle_inbound_mutation(event, kind="post", operation="update")
 
     async def handle_inbound_post_delete(
         self, event: object, runtime: object
     ) -> HandlerResult:
-        """Mark the starter message deleted for one inbound remote post delete."""
-        from ..activitypub_handlers import HandlerResult as _HandlerResult
-
-        thread_row = self.database.local_community_content.get_local_community_thread_by_ap_object_id(
-            getattr(getattr(event, "object"), "ap_id")
-        )
-        if thread_row is None:
-            return _HandlerResult(
-                status="skipped",
-                outcome=InboundActivityOutcome.IGNORED_UNMAPPED_CONTEXT,
-                detail="post not yet mapped",
-            )
-        local_community = (
-            self.database.local_communities.get_local_community_by_actor_url(
-                getattr(event, "community_actor_id")
-            )
-        )
-        await self.surface_fanout.fanout_thread_delete(
-            thread_row=thread_row,
-            source_surface_id=None,
-        )
-        if local_community is not None:
-            await self.federation_fanout.relay_update_or_delete(
-                event=event,
-                local_community=local_community,
-                object_kind="post",
-                operation="delete",
-            )
-        return _HandlerResult(
-            status="processed",
-            outcome=InboundActivityOutcome.APPLIED,
-            detail="post deleted",
-        )
+        """Delete the original tenant's post only for its signed owner."""
+        return await self._handle_inbound_mutation(event, kind="post", operation="delete")
 
     async def handle_inbound_comment_update(
         self, event: object, runtime: object
     ) -> HandlerResult:
-        """Edit the mirrored Discord copy for one inbound remote comment update."""
-        from ..activitypub_handlers import HandlerResult as _HandlerResult
-
-        message_row = self.database.local_community_content.get_local_community_message_by_ap_object_id(
-            getattr(getattr(event, "object"), "ap_id")
-        )
-        if message_row is None:
-            return _HandlerResult(
-                status="skipped",
-                outcome=InboundActivityOutcome.IGNORED_UNMAPPED_CONTEXT,
-                detail="comment not yet mapped",
-            )
-        thread_row = (
-            self.database.local_community_content.get_local_community_thread_by_id(
-                getattr(message_row, "local_community_thread_id")
-            )
-        )
-        if thread_row is None:
-            return _HandlerResult(
-                status="skipped",
-                outcome=InboundActivityOutcome.IGNORED_UNMAPPED_CONTEXT,
-                detail="comment thread not mapped",
-            )
-        local_community = (
-            self.database.local_communities.get_local_community_by_actor_url(
-                getattr(event, "community_actor_id")
-            )
-        )
-        await self.surface_fanout.fanout_message_edit(
-            message_row=message_row,
-            source_surface_id=None,
-            new_content=format_inbound_comment_body(event),
-        )
-        if local_community is not None:
-            await self.federation_fanout.relay_update_or_delete(
-                event=event,
-                local_community=local_community,
-                object_kind="comment",
-                operation="update",
-            )
-        return _HandlerResult(
-            status="processed",
-            outcome=InboundActivityOutcome.APPLIED,
-            detail="comment updated",
-        )
+        """Edit the original Group reply after validating root and parent."""
+        return await self._handle_inbound_mutation(event, kind="comment", operation="update")
 
     async def handle_inbound_comment_delete(
         self, event: object, runtime: object
     ) -> HandlerResult:
-        """Mark the mirrored Discord copy deleted for one inbound remote comment delete."""
-        from ..activitypub_handlers import HandlerResult as _HandlerResult
-
-        message_row = self.database.local_community_content.get_local_community_message_by_ap_object_id(
-            getattr(getattr(event, "object"), "ap_id")
-        )
-        if message_row is None:
-            return _HandlerResult(
-                status="skipped",
-                outcome=InboundActivityOutcome.IGNORED_UNMAPPED_CONTEXT,
-                detail="comment not yet mapped",
-            )
-        thread_row = (
-            self.database.local_community_content.get_local_community_thread_by_id(
-                getattr(message_row, "local_community_thread_id")
-            )
-        )
-        if thread_row is None:
-            return _HandlerResult(
-                status="skipped",
-                outcome=InboundActivityOutcome.IGNORED_UNMAPPED_CONTEXT,
-                detail="comment thread not mapped",
-            )
-        local_community = (
-            self.database.local_communities.get_local_community_by_actor_url(
-                getattr(event, "community_actor_id")
-            )
-        )
-        await self.surface_fanout.fanout_message_delete(
-            message_row=message_row,
-            source_surface_id=None,
-        )
-        if local_community is not None:
-            await self.federation_fanout.relay_update_or_delete(
-                event=event,
-                local_community=local_community,
-                object_kind="comment",
-                operation="delete",
-            )
-        return _HandlerResult(
-            status="processed",
-            outcome=InboundActivityOutcome.APPLIED,
-            detail="comment deleted",
-        )
+        """Delete the original Group reply without fresh owner inference."""
+        return await self._handle_inbound_mutation(event, kind="comment", operation="delete")
