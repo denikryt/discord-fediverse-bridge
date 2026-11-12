@@ -114,9 +114,55 @@ its original Group; an early Accept is not reverted by a later HTTP result.
 Only a confirmed `threadiverse` profile may be implicitly accepted on inbound
 content. NodeBB and `unknown` require explicit signed Accept. A possible
 network send with no response remains `sending`/pending with the same ID and
-must not be retried as a new Follow. Safe last-channel Undo and unresolved
-cleanup after restart are completed separately in the cancellation checkpoint;
-the existence of a pending binding does not mean the remote Group accepted it.
+must not be retried as a new Follow. The last Discord channel unsubscribes
+under the same SQLite writer boundary: an unclaimed `prepared` Follow is
+cancelled without HTTP; a `sending` Follow retains `cancel_requested` until
+the original sender has a confirmed result; a proven `sent` Follow can claim
+`undo_sending` **before** signed `Undo(Follow)` goes to the original saved
+inbox. The Undo ID is derived deterministically from the original Follow ID.
+A resubscribe before Undo begins atomically reuses the original generation;
+`undo_sending` is not reactivated on restart. Neither a pending Follow nor an
+unresolved Undo proves the remote Group accepted or removed the subscription.
+
+### Exceptional offline recovery for an unresolved remote Undo
+
+This procedure applies **only** when `/subscribe-community` reports
+`remote_follow_cleanup_unresolved` for an exact Group and Follow. Stop **all**
+bridge runtimes and their restart supervisors. Take and restore-validate a
+protected SQLite + media backup. Obtain independent confirmation from the
+remote Group administrator that the original bridge Service is **absent**
+from that Group's subscribers. Without that proof, leave the row unchanged.
+
+With all runtimes still stopped, inspect the saved Group and Follow IDs,
+check that no channel bindings remain, and run this guarded transaction with
+the **literal exact ActivityPub URLs** substituted:
+
+```sql
+BEGIN IMMEDIATE;
+SELECT community_actor_id, follow_activity_id, cancel_requested, follow_dispatch_state
+FROM bridge_actor_follows
+WHERE community_actor_id = 'https://nodebb.example/category/42'
+  AND follow_activity_id = 'https://bridge.example/actors/services/bridge/activities/follow/EXACT';
+SELECT COUNT(*) FROM channel_community_subscriptions
+WHERE lemmy_community_actor_id = 'https://nodebb.example/category/42';
+DELETE FROM bridge_actor_follows
+WHERE community_actor_id = 'https://nodebb.example/category/42'
+  AND follow_activity_id = 'https://bridge.example/actors/services/bridge/activities/follow/EXACT'
+  AND cancel_requested = 1 AND follow_dispatch_state = 'undo_sending'
+  AND NOT EXISTS (
+    SELECT 1 FROM channel_community_subscriptions
+    WHERE lemmy_community_actor_id = 'https://nodebb.example/category/42'
+  );
+SELECT changes();
+-- COMMIT only when changes() = 1 and the earlier COUNT(*) = 0.
+-- Otherwise ROLLBACK and investigate; do not retry a possibly delivered Undo.
+COMMIT;
+```
+
+After a successful guarded deletion, admit v1 read-only under the normal
+startup lock and restart. A fresh `/subscribe-community` then reserves a new
+Follow generation. Never delete an uncertain Follow or bypass these predicates
+without evidence of remote unsubscribe.
 
 ## Supported inbound ActivityPub
 

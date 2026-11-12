@@ -6,6 +6,7 @@
  */
 
 import { Follow, Undo } from "@fedify/vocab";
+import { createHash } from "node:crypto";
 import type { Federation } from "@fedify/fedify";
 
 import type { GatewayConfig } from "../config.js";
@@ -141,12 +142,20 @@ export async function unfollowCommunity(
   config: GatewayConfig,
   communityActorUrl: string,
   followActivityId: string,
+  originalInboxUrl?: string,
 ): Promise<void> {
   const ctx = federation.createContext(new URL(config.fedifyOrigin), config);
   const serviceActorTail = `services/${config.actorIdentifier}`;
   const actorUri = ctx.getActorUri(serviceActorTail);
 
-  const { communityId, inboxUrl } = await fetchRemoteCommunity(communityActorUrl);
+  // The Undo must go to the original, verified Group recipient. Fetching a
+  // changed actor document after cancellation could redirect this generation.
+  const { communityId, inboxUrl } = originalInboxUrl == null
+    ? await fetchRemoteCommunity(communityActorUrl)
+    : { communityId: communityActorUrl, inboxUrl: originalInboxUrl };
+  if (new URL(communityId).protocol !== "https:" || new URL(inboxUrl).protocol !== "https:") {
+    throw new Error("saved Undo recipient must use HTTPS");
+  }
 
   const undo = buildLemmyCompatibleUnfollowActivity(
     config,
@@ -208,7 +217,7 @@ export function buildLemmyCompatibleUnfollowActivity(
     id: buildServiceUndoFollowActivityId(
       config.fedifyOrigin,
       config.actorIdentifier,
-      `${Date.now()}-${Math.random().toString(36).slice(2)}`,
+      createHash("sha256").update(followActivityId, "utf8").digest("hex"),
     ),
     actor: actorUri,
     object: new Follow({

@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from dataclasses import dataclass
+
 from sqlalchemy import select, update
 from sqlalchemy.orm import Session
 
@@ -13,6 +15,16 @@ from .base import BaseRepository
 
 class FollowReservationConflict(ValueError):
     """An existing durable Follow generation cannot be replaced safely."""
+
+
+@dataclass(frozen=True)
+class FollowCancellationResult:
+    """Report a transactionally removed channel's remote cleanup disposition."""
+
+    outcome: str
+    community_actor_id: str | None = None
+    community_inbox_url: str | None = None
+    follow_activity_id: str | None = None
 
 
 """Bridge actor Follow activity persistence."""
@@ -145,10 +157,10 @@ class BridgeActorFollowRepository(BaseRepository):
             session.add(follow)
             session.flush()
         else:
-            if follow.cancel_requested or follow.follow_dispatch_state == "undo_sending":
-                # Last-channel cancellation and any started Undo need a proven
-                # cleanup before this operation may reserve another binding.
-                raise FollowReservationConflict("Follow cancellation needs on-demand cleanup")
+            if follow.follow_dispatch_state == "undo_sending":
+                # Once Undo may have reached the remote host, only a proven
+                # cleanup can create a new generation. Never rebind here.
+                raise FollowReservationConflict("Follow cleanup unresolved after Undo started")
             if not follow.follow_activity_id or not follow.community_inbox_url:
                 raise FollowReservationConflict("existing Follow has incomplete immutable identity")
             if follow.community_inbox_url != community_inbox_url:
@@ -162,6 +174,11 @@ class BridgeActorFollowRepository(BaseRepository):
                 raise FollowReservationConflict("remote Group software profile conflicts with saved Follow")
             if follow.remote_software_profile == "unknown" and remote_software_profile != "unknown":
                 follow.remote_software_profile = remote_software_profile
+            if follow.cancel_requested:
+                # Before Undo begins, on-demand resubscribe restores the very
+                # same immutable generation, including an uncertain send.
+                follow.cancel_requested = False
+                follow.updated_at = utcnow()
 
         session.add(ChannelCommunitySubscription(
             discord_channel_id=discord_channel_id,
@@ -179,6 +196,115 @@ class BridgeActorFollowRepository(BaseRepository):
         # Even the second concurrent subscribing channel may claim a still
         # prepared Follow. The CAS below selects the unique actual sender.
         return follow, follow.follow_dispatch_state == "prepared"
+
+    def cancel_channel_binding(self, discord_channel_id: int) -> FollowCancellationResult:
+        """Atomically remove one channel and reserve final-Follow cleanup state.
+
+        If no sender claimed a prepared Follow, cancelling it and its binding
+        in the same SQLite transaction makes network delivery impossible.
+        """
+        # Reuse Database's existing IMMEDIATE transaction through the caller's
+        # session provider rather than inventing an additional lock lifecycle.
+        with self.session() as session:
+            # A write-first statement reserves SQLite's writer lock before the
+            # following read/count decision, preventing a racing subscribe.
+            session.execute(update(ChannelCommunitySubscription).where(
+                ChannelCommunitySubscription.discord_channel_id == discord_channel_id,
+            ).values(updated_at=utcnow()))
+            binding = session.scalar(select(ChannelCommunitySubscription).where(
+                ChannelCommunitySubscription.discord_channel_id == discord_channel_id,
+            ))
+            if binding is None:
+                return FollowCancellationResult("not_found")
+
+            actor = binding.lemmy_community_actor_id
+            others = session.scalar(select(ChannelCommunitySubscription.id).where(
+                ChannelCommunitySubscription.lemmy_community_actor_id == actor,
+                ChannelCommunitySubscription.discord_channel_id != discord_channel_id,
+            ).limit(1))
+            if others is not None:
+                session.delete(binding)
+                return FollowCancellationResult("other_bindings", community_actor_id=actor)
+
+            follow = session.scalar(select(BridgeActorFollow).where(
+                BridgeActorFollow.community_actor_id == actor,
+            ))
+            # A last channel whose Follow provenance was lost must remain
+            # visible for diagnosis rather than be silently deleted.
+            if follow is None or not follow.follow_activity_id or not follow.community_inbox_url:
+                # The write-first lock update was only for serialization;
+                # failure to clean up must not change even the row timestamp.
+                session.rollback()
+                return FollowCancellationResult("missing_identity", community_actor_id=actor)
+
+            outcome = {
+                "prepared": "prepared_cancelled",
+                "sending": "await_follow_send",
+                "sent": "ready_for_undo",
+                "undo_sending": "undo_unresolved",
+            }.get(follow.follow_dispatch_state)
+            if outcome is None:
+                return FollowCancellationResult("missing_identity", community_actor_id=actor)
+            result = FollowCancellationResult(outcome, actor,
+                follow.community_inbox_url, follow.follow_activity_id)
+            session.delete(binding)
+            if outcome == "prepared_cancelled":
+                # The claim sender checks this same row with an UPDATE CAS;
+                # after deletion that claim cannot send a Follow.
+                session.delete(follow)
+            else:
+                follow.cancel_requested = True
+                follow.updated_at = utcnow()
+            session.flush()
+            return result
+
+    def claim_follow_undo(self, community_actor_id: str, follow_activity_id: str) -> bool:
+        """Durably record possible Undo delivery before making an HTTP request."""
+        with self.session() as session:
+            updated = session.execute(update(BridgeActorFollow).where(
+                BridgeActorFollow.community_actor_id == community_actor_id,
+                BridgeActorFollow.follow_activity_id == follow_activity_id,
+                BridgeActorFollow.cancel_requested.is_(True),
+                BridgeActorFollow.follow_dispatch_state == "sent",
+            ).values(follow_dispatch_state="undo_sending",updated_at=utcnow()))
+            if updated.rowcount != 1:
+                return False
+            # This UPDATE holds the single writer lock while absence of all
+            # channel bindings is checked. A racing resubscribe cannot steal
+            # the generation from a claimed Undo.
+            has_binding = session.scalar(select(ChannelCommunitySubscription.id).where(
+                ChannelCommunitySubscription.lemmy_community_actor_id == community_actor_id,
+            ).limit(1))
+            if has_binding is not None:
+                session.rollback()
+                return False
+            return True
+
+    def finish_follow_undo(self, community_actor_id: str, follow_activity_id: str) -> bool:
+        """Delete only the exact cancelled generation after proven gateway success."""
+        with self.session() as session:
+            # Selecting after obtaining the SQLite writer lock prevents a
+            # concurrent subscribe from slipping a binding into this deletion.
+            updated = session.execute(update(BridgeActorFollow).where(
+                BridgeActorFollow.community_actor_id == community_actor_id,
+                BridgeActorFollow.follow_activity_id == follow_activity_id,
+                BridgeActorFollow.cancel_requested.is_(True),
+                BridgeActorFollow.follow_dispatch_state == "undo_sending",
+            ).values(updated_at=utcnow()))
+            if updated.rowcount != 1:
+                return False
+            has_binding = session.scalar(select(ChannelCommunitySubscription.id).where(
+                ChannelCommunitySubscription.lemmy_community_actor_id == community_actor_id,
+            ).limit(1))
+            if has_binding is not None:
+                session.rollback()
+                return False
+            follow = session.scalar(select(BridgeActorFollow).where(
+                BridgeActorFollow.community_actor_id == community_actor_id,
+                BridgeActorFollow.follow_activity_id == follow_activity_id,
+            ))
+            session.delete(follow)
+            return True
 
     def claim_prepared_follow(self, follow_id: int) -> bool:
         """Atomically select the sole sender for a durable prepared Follow."""

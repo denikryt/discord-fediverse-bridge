@@ -19,7 +19,7 @@ Supported normalized event categories: `post.created`, `post.updated`, `post.del
 | `/prepare-community-follow` | `prepare_community_follow` | Verify canonical Group and allocate Follow identity without sending | `communityActorUrl` | Returns verified `communityActorUrl`, `communityInboxUrl`, and immutable `followActivityId` |
 | `/send-prepared-community-follow` | `send_prepared_community_follow` | Submit only an already committed Follow | `communityActorUrl`, `communityInboxUrl`, `followActivityId` | Sends exactly the reserved Follow; timeout outcome remains unresolved in Python |
 | `/follow-community` | `follow_community` | Legacy manual gateway send (not used by subscription operation) | `communityActorUrl` | Returns community actor URL, inbox URL, and Follow activity id |
-| `/unfollow-community` | `unfollow_community` | Send Undo(Follow) | `communityActorUrl`, `followActivityId` | Returns `ok` or error |
+| `/unfollow-community` | `unfollow_community` | Send Undo(Follow) to original saved Group inbox | `communityActorUrl`, `followActivityId`, optional `communityInboxUrl` from verified persisted Follow | Returns `ok` only after gateway send succeeds; Python claims `undo_sending` before calling and keeps ambiguous outcome unresolved |
 | `/publish` | `publish_content` | Publish remote-community content | `actorUsername`, `communityActorUrl`, `kind`, `bodyMarkdown` | Returns canonical ids |
 | `/publish-local-community` | `publish_local_community_content` | Publish local-community content | publish fields | Returns ids and delivery counts |
 | `/send-local-community-relay` | `send_local_community_relay` | Deliver rendered relay activities | `signingActorUrl`, `deliveries[]` | Returns per-target outcomes |

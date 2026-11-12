@@ -171,6 +171,17 @@ async def _body(operation_input: SubscribeInput) -> OperationResult:
         )
 
     existing = operation_input.get_bridge_actor_follow()
+    if existing is not None and existing.follow_dispatch_state == "undo_sending":
+        # A signed Undo may already have left this process. Restart does not
+        # establish its outcome, so no new Follow generation can be prepared.
+        from .unsubscribe import _unresolved_undo_message
+        return OperationResult(
+            applied=False,
+            reason="remote_follow_cleanup_unresolved",
+            message=_unresolved_undo_message(
+                existing.community_actor_id, existing.follow_activity_id or "missing"
+            ),
+        )
     if existing is not None and existing.status in ("pending", "accepted"):
         # Reuse the original actor/inbox/ID; discovery is not authoritative
         # over a previously committed Follow generation.
@@ -225,15 +236,46 @@ async def _body(operation_input: SubscribeInput) -> OperationResult:
                 follow_activity_id=follow.follow_activity_id,
             )
     except FollowReservationConflict as error:
+        if "cleanup" in str(error):
+            # A concurrent unsubscriber might have claimed Undo since this
+            # operation's earlier read. Report the exact retained generation.
+            from .unsubscribe import _unresolved_undo_message
+            current = operation_input.database.bridge_actor_follows.get_bridge_actor_follow(
+                operation_input.actor_id
+            )
+            if current is not None and current.follow_dispatch_state == "undo_sending":
+                return OperationResult(
+                    applied=False, reason="remote_follow_cleanup_unresolved",
+                    message=_unresolved_undo_message(
+                        current.community_actor_id, current.follow_activity_id or "missing"
+                    ),
+                )
         return OperationResult(applied=False, reason="follow_reservation_conflict", message=str(error))
 
     if prepared_to_send and operation_input.database.bridge_actor_follows.claim_prepared_follow(follow_id):
         try:
             await operation_input.fedify_gateway.send_prepared_community_follow(committed)
         except Exception:
-            # Network outcome is ambiguous after the claimed attempt started.
-            # In particular, never mark a fast Accept as failed or generate a
-            # second Follow ID in response to a timeout.
+            # A lost response is ambiguous, not a proven failed delivery. The
+            # original Follow ID remains in ``sending`` for on-demand recovery.
+            # A moderator can cancel the channel while HTTP is in flight; a
+            # timed-out sender must not subsequently claim it is subscribed.
+            current_binding = operation_input.database.remote_subscriptions.get_subscription_by_channel(
+                operation_input.channel_id
+            )
+            current_follow = operation_input.database.bridge_actor_follows.get_bridge_actor_follow(
+                committed.community_actor_url
+            )
+            if (
+                current_binding is None
+                or current_follow is None
+                or current_follow.cancel_requested
+            ):
+                return OperationResult(
+                    applied=False, reason="follow_cancelled_during_dispatch",
+                    message=("The channel unsubscribed while Follow delivery was unresolved. "
+                             "The original Follow generation is retained for guarded cleanup."),
+                )
             return OperationResult(
                 applied=True,
                 reason="pending_remote_confirmation",
@@ -243,9 +285,35 @@ async def _body(operation_input: SubscribeInput) -> OperationResult:
             )
         operation_input.database.bridge_actor_follows.complete_prepared_follow(follow_id)
 
+        # The last channel may have unsubscribed while HTTP was in flight.
+        # Only a *proven* completed Follow may proceed to a claimed Undo.
+        post_send = operation_input.database.bridge_actor_follows.get_bridge_actor_follow(
+            committed.community_actor_url
+        )
+        if post_send is not None and post_send.cancel_requested:
+            from .unsubscribe import complete_cancelled_remote_follow
+            await complete_cancelled_remote_follow(
+                database=operation_input.database,
+                fedify_gateway=operation_input.fedify_gateway,
+                policy_service=operation_input.policy_service,
+                community_actor_id=committed.community_actor_url,
+                community_inbox_url=committed.community_inbox_url,
+                follow_activity_id=committed.follow_activity_id,
+            )
+
     # Another channel may have already received the signed Accept while our
     # HTTP request was in flight. Never downgrade that accepted DB state.
     current = operation_input.database.bridge_actor_follows.get_bridge_actor_follow(committed.community_actor_url)
+    binding = operation_input.database.remote_subscriptions.get_subscription_by_channel(
+        operation_input.channel_id
+    )
+    if current is None or binding is None or current.cancel_requested:
+        # An unsubscribe may have cancelled this command's binding between
+        # commit and HTTP return. Do not claim the channel is still active.
+        return OperationResult(
+            applied=False, reason="follow_cancelled_during_dispatch",
+            message="Follow was cancelled by a concurrent unsubscribe; no active channel subscription remains.",
+        )
     if current is not None and current.status == "accepted":
         return OperationResult(applied=True, message=(
             f"Subscribed {operation_input.channel_mention} to **{_requested_community_label(operation_input)}**."

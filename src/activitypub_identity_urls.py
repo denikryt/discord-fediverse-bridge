@@ -9,6 +9,7 @@ parts, and the module returns deterministic absolute URLs.
 from __future__ import annotations
 
 import re
+import hashlib
 from dataclasses import dataclass
 from enum import StrEnum
 from urllib.parse import quote, unquote, urlsplit
@@ -19,6 +20,22 @@ from urllib.parse import quote, unquote, urlsplit
 # wider runtime boundary than Stage 2 needs.
 _USERNAME_PATTERN = re.compile(r"^[a-z0-9_-]+$")
 _COMMUNITY_SLUG_PATTERN = re.compile(r"^[a-z0-9_-]+$")
+_SERVICE_FOLLOW_URL = re.compile(
+    r"^(https://[^/]+/actors/services/[^/]+)/activities/follow/[^/?#]+$"
+)
+
+
+def derive_service_undo_follow_activity_id(follow_activity_id: str) -> str | None:
+    """Derive the stable Undo ID from a typed Service Follow without a new DB field.
+
+    An untyped legacy Follow URL does not prove the Service root; it must not
+    be reinterpreted as a new canonical identity during recovery.
+    """
+    match = _SERVICE_FOLLOW_URL.fullmatch(follow_activity_id)
+    if match is None:
+        return None
+    digest = hashlib.sha256(follow_activity_id.encode("utf-8")).hexdigest()
+    return f"{match.group(1)}/activities/undo/follows/{digest}"
 
 
 class LocalActorKind(StrEnum):

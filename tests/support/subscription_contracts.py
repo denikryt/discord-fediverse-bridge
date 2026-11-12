@@ -174,7 +174,7 @@ SUBSCRIPTION_CASES = (
         remote_outcome="failed",
         expected=SubscriptionExpected(
             applied=False,
-            reason="remote_unfollow_failed",
+            reason="remote_follow_cleanup_unresolved",
             unfollow_calls=1,
             delete_channel_calls=1,
         ),

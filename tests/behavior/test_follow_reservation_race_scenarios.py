@@ -126,8 +126,12 @@ def test_cancelled_follow_does_not_accept_or_claim(tmp_path: Path) -> None:
         assert not db.bridge_actor_follows.accept_verified_follow(
             follow_activity_id=f"{_FOLLOW}-10", actor_id=_GROUP
         )
-        with pytest.raises(FollowReservationConflict, match="cancellation"):
-            _reserve(db, 11)
+        # Before Undo was claimed, a later subscribe is allowed to rebind
+        # the same generation, never generating a replacement Follow ID.
+        same_id, can_send = _reserve(db, 11)
+        assert same_id == follow_id and can_send
+        assert not db.bridge_actor_follows.get_bridge_actor_follow(_GROUP).cancel_requested
+        assert db.bridge_actor_follows.claim_prepared_follow(follow_id)
     finally:
         db.close()
 

@@ -99,7 +99,7 @@ export function registerInternalFollowRoutes(
     if (!hasValidInternalAuthorization(config, context.req.header("Authorization") ?? null)) {
       return context.json({ error: "invalid authorization" }, { status: 401 });
     }
-    const { communityActorUrl, followActivityId } = await context.req.json();
+    const { communityActorUrl, followActivityId, communityInboxUrl } = await context.req.json();
 
     if (!communityActorUrl || typeof communityActorUrl !== "string") {
       return context.json(
@@ -114,8 +114,11 @@ export function registerInternalFollowRoutes(
       );
     }
 
+    if (communityInboxUrl !== undefined && (typeof communityInboxUrl !== "string" || !communityInboxUrl)) {
+      return context.json({ error: "communityInboxUrl must be a nonempty URL" }, { status: 400 });
+    }
     try {
-      await unfollowCommunity(fedify, config, communityActorUrl, followActivityId);
+      await unfollowCommunity(fedify, config, communityActorUrl, followActivityId, communityInboxUrl);
       return context.json({ ok: true });
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);

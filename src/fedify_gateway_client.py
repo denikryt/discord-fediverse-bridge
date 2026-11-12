@@ -388,7 +388,8 @@ class FedifyGatewayClient:
         )
 
     async def unfollow_community(
-        self, community_actor_url: str, follow_activity_id: str
+        self, community_actor_url: str, follow_activity_id: str,
+        *, original_inbox_url: str | None = None,
     ) -> UnfollowCommunityResult:
         """Trigger one gateway-side Undo(Follow) to remove a community follow.
 
@@ -402,6 +403,7 @@ class FedifyGatewayClient:
                 json={
                     "communityActorUrl": community_actor_url,
                     "followActivityId": follow_activity_id,
+                    **({"communityInboxUrl": original_inbox_url} if original_inbox_url else {}),
                 },
             )
         except httpx.HTTPError as exc:
