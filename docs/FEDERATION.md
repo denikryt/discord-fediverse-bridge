@@ -80,6 +80,19 @@ This endpoint returns public local-community identity fields for `/subscribe-cha
 discovery. It is not ActivityPub, not WebFinger, and not a claim of Lemmy API
 compatibility.
 
+The `/subscribe-community` direct-instance autocomplete checks public Bridge
+community summaries by slug, name, title, `!handle@host` (or `handle@host`),
+canonical `/communities/{slug}` and alternate `/c/{slug}` actor URLs. Results
+from this endpoint use `bridge-local:` or `bridge-remote:` selection values;
+remote database numeric IDs are not used as local IDs. The 25-result Discord
+list has a 100-character limit on names and values. A long actor URL that
+cannot be encoded losslessly is omitted from autocomplete; moderators may
+enter its full URL manually. An unavailable Bridge endpoint falls back to the
+existing Lemmy discovery path; a confirmed Bridge response does not.
+Autocomplete errors and empty results are logged with normalized origin and
+one bounded reason code only; blocked remote origins are rejected before the
+network request. NodeBB-specific public Group discovery is a separate feature.
+
 ## Supported inbound ActivityPub
 
 The inbound federation profile is intentionally narrow. The gateway accepts selected ActivityPub activities, normalizes them into the Python bridge's internal event model, and forwards them to Python through the private `/internal/activitypub/events` route.

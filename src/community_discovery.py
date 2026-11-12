@@ -14,7 +14,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 import logging
-from typing import TYPE_CHECKING, Any, Literal
+from typing import TYPE_CHECKING, Any, Callable, Literal
 from urllib.parse import urlparse
 
 import httpx
@@ -29,11 +29,12 @@ BRIDGE_DISCOVERY_PATH = "/.well-known/discord-fediverse-bridge/communities"
 
 
 class CommunityResolutionError(RuntimeError):
-    """Carry one moderator-facing resolution error.
+    """Carry moderator-facing resolution errors and optional safe diagnostic codes."""
 
-    Command adapters use this error to return one precise ephemeral message
-    instead of silently guessing the wrong remote-community source type.
-    """
+    def __init__(self, message: str, *, reason_code: str | None = None) -> None:
+        """Separate safe logs from arbitrary remote-origin error details."""
+        super().__init__(message)
+        self.reason_code = reason_code
 
 
 class BridgeDiscoveryUnavailable(RuntimeError):
@@ -191,41 +192,60 @@ async def fetch_bridge_community_summaries(origin: str) -> list[BridgeCommunityS
             )
         except httpx.HTTPError as error:
             raise CommunityResolutionError(
-                f"Could not reach the bridge discovery endpoint at {normalize_instance_domain(origin)}."
+                f"Could not reach the bridge discovery endpoint at {normalize_instance_domain(origin)}.",
+                reason_code=("discovery_timeout" if isinstance(error, httpx.TimeoutException)
+                             else "discovery_http_error"),
             ) from error
     if response.status_code == 404:
         raise BridgeDiscoveryUnavailable(discovery_url)
     if response.status_code >= 400:
         raise CommunityResolutionError(
-            f"Bridge discovery failed for {normalize_instance_domain(origin)} with HTTP {response.status_code}."
+            f"Bridge discovery failed for {normalize_instance_domain(origin)} with HTTP {response.status_code}.",
+            reason_code="discovery_http_error",
         )
-    payload = response.json()
+    try:
+        payload = response.json()
+    except ValueError as error:
+        raise CommunityResolutionError(
+            "Bridge discovery returned malformed JSON.", reason_code="malformed_response"
+        ) from error
+    if not isinstance(payload, dict):
+        raise CommunityResolutionError(
+            "Bridge discovery returned an invalid response.", reason_code="malformed_response"
+        )
     if payload.get("software") != "discord-fediverse-bridge":
         raise BridgeDiscoveryUnavailable(discovery_url)
     communities = payload.get("communities")
     if not isinstance(communities, list):
         raise CommunityResolutionError(
-            "Bridge discovery returned an invalid community list payload."
+            "Bridge discovery returned an invalid community list payload.",
+            reason_code="malformed_response",
         )
 
     summaries: list[BridgeCommunitySummary] = []
     for item in communities:
         if not isinstance(item, dict):
             continue
-        summaries.append(
-            BridgeCommunitySummary(
-                id=int(item["id"]),
-                slug=str(item["slug"]),
-                name=str(item.get("name") or item["slug"]),
-                title=str(item.get("title") or item.get("name") or item["slug"]),
-                description=str(item["description"])
-                if item.get("description") is not None
-                else None,
-                actor_id=str(item["actor_id"]),
-                alternate_actor_id=str(item["alternate_actor_id"]),
-                handle=str(item["handle"]),
+        try:
+            summaries.append(
+                BridgeCommunitySummary(
+                    id=int(item["id"]),
+                    slug=str(item["slug"]),
+                    name=str(item.get("name") or item["slug"]),
+                    title=str(item.get("title") or item.get("name") or item["slug"]),
+                    description=str(item["description"])
+                    if item.get("description") is not None else None,
+                    actor_id=str(item["actor_id"]),
+                    alternate_actor_id=str(item["alternate_actor_id"]),
+                    handle=str(item["handle"]),
+                )
             )
-        )
+        except (KeyError, TypeError, ValueError) as error:
+            # An incomplete public summary is not a trusted selectable identity.
+            raise CommunityResolutionError(
+                "Bridge discovery returned a malformed community.",
+                reason_code="malformed_response",
+            ) from error
     return summaries
 
 
@@ -236,39 +256,62 @@ async def autocomplete_communities(
     current: str,
     fetch_bridge_communities: Any,
     lemmy_client_cls: type[LemmyClient],
+    on_diagnostic: Callable[[str], None] | None = None,
 ) -> list[tuple[str, str]]:
-    """Return `(choice_name, choice_value)` pairs for community autocomplete."""
+    """Return Discord choices and one safe reason code when discovery is empty.
+
+    A confirmed Bridge response never falls back to Lemmy; a host without the
+    Bridge endpoint retains the existing Lemmy discovery behavior.
+    """
+
+    def report_empty(reason: str) -> None:
+        """Emit exactly one validated diagnostic without response bodies or tokens."""
+        if on_diagnostic is not None:
+            on_diagnostic(reason)
+
+    def empty_reason(summaries: list[BridgeCommunitySummary]) -> str:
+        """Distinguish an empty public collection from a query with no matches."""
+        return "filter_no_match" if summaries else "no_public_groups"
 
     origin = normalize_instance_domain(instance_domain)
-    query = current.lower().strip()
+    query = current.casefold().strip()
     if is_bridge_origin(origin, settings):
         try:
             summaries = await fetch_bridge_communities(origin)
-        except Exception:
-            logger.exception("Failed same-instance bridge discovery for %s", origin)
+        except Exception as error:
+            report_empty(_discovery_failure_code(error))
             return []
-        return _build_bridge_autocomplete_choices(
+        bridge_choices = _build_bridge_autocomplete_choices(
             summaries, query=query, source="local_bridge"
         )
+        if not bridge_choices:
+            report_empty(empty_reason(summaries))
+        return bridge_choices
 
+    # Keep Bridge transport failures visible even if the legacy Lemmy
+    # discovery fallback also fails; never put remote exception text in logs.
+    fallback_failure: str | None = None
     try:
         summaries = await fetch_bridge_communities(origin)
     except BridgeDiscoveryUnavailable:
         summaries = None
-    except Exception:
-        logger.exception("Failed remote bridge discovery for %s", origin)
+    except Exception as error:
+        fallback_failure = _discovery_failure_code(error)
         summaries = None
 
     if summaries is not None:
-        return _build_bridge_autocomplete_choices(
+        bridge_choices = _build_bridge_autocomplete_choices(
             summaries, query=query, source="remote_bridge"
         )
+        if not bridge_choices:
+            report_empty(empty_reason(summaries))
+        return bridge_choices
 
     remote_client = lemmy_client_cls(origin)
     try:
         communities = await remote_client.list_communities(limit=50, type_="Local")
-    except Exception:
-        logger.exception("Failed to fetch communities from %s for autocomplete", origin)
+    except Exception as error:
+        report_empty(fallback_failure or _discovery_failure_code(error))
         return []
     finally:
         await remote_client.close()
@@ -305,6 +348,8 @@ async def autocomplete_communities(
             )
         )
     choices.sort(key=lambda item: (item[0], item[1]))
+    if not choices:
+        report_empty(fallback_failure or ("filter_no_match" if communities else "no_public_groups"))
     return [choice for _, _, choice in choices[:25]]
 
 
@@ -424,27 +469,61 @@ async def resolve_selected_community(
     )
 
 
+def _discovery_failure_code(error: Exception) -> str:
+    """Classify Bridge/Lemmy transport failure without logging its remote text."""
+    if isinstance(error, CommunityResolutionError) and error.reason_code in {
+        "discovery_timeout", "discovery_http_error", "malformed_response",
+    }:
+        return error.reason_code
+    if isinstance(error, httpx.TimeoutException) or isinstance(error.__cause__, httpx.TimeoutException):
+        return "discovery_timeout"
+    if isinstance(error, httpx.HTTPError) or isinstance(error.__cause__, httpx.HTTPError):
+        return "discovery_http_error"
+    return "malformed_response"
+
+
 def _build_bridge_autocomplete_choices(
     summaries: list[BridgeCommunitySummary],
     *,
     query: str,
     source: Literal["local_bridge", "remote_bridge"],
 ) -> list[tuple[str, str]]:
-    """Encode bridge discovery summaries into Discord autocomplete values."""
+    """Filter all public Bridge identities and preserve Discord value limits.
+
+    The actor URL must remain complete in the encoded value, because truncating
+    it could silently subscribe a different Group. Oversized actors cannot be
+    selected through autocomplete; moderators can still paste their full URL.
+    """
 
     choices: list[tuple[str, str]] = []
     prefix = "bridge-local" if source == "local_bridge" else "bridge-remote"
+    normalized_query = query.casefold().strip().removeprefix("!")
     for summary in summaries:
-        haystacks = (summary.slug.lower(), summary.name.lower(), summary.title.lower())
-        if query and not any(query in candidate for candidate in haystacks):
+        parsed_actor = urlparse(summary.actor_id)
+        origin = f"{parsed_actor.scheme}://{parsed_actor.netloc}"
+        # Bridge exposes canonical and alternate actor routes. Public handle
+        # lookup must work with or without the ActivityPub `!` prefix.
+        haystacks = (
+            summary.slug, summary.name, summary.title, summary.handle.lstrip("!"),
+            summary.actor_id, summary.alternate_actor_id,
+            f"{origin}/communities/{summary.slug}",
+            f"{origin}/c/{summary.slug}",
+            f"/communities/{summary.slug}", f"/c/{summary.slug}",
+        )
+        if normalized_query and not any(
+            normalized_query in candidate.casefold() for candidate in haystacks
+        ):
             continue
         hidden_id = str(summary.id) if source == "local_bridge" else ""
-        choices.append(
-            (
-                _build_bridge_autocomplete_choice_name(summary),
-                f"{prefix}:{summary.actor_id}|{summary.name}|{hidden_id}",
-            )
-        )
+        # Keep the canonical ID and (only for local results) database ID intact;
+        # cut only the decorative name to satisfy Discord's 100-character cap.
+        value_prefix = f"{prefix}:{summary.actor_id}|"
+        value_suffix = f"|{hidden_id}"
+        name_budget = 100 - len(value_prefix) - len(value_suffix)
+        if name_budget < 0:
+            continue
+        value = value_prefix + summary.name[:name_budget] + value_suffix
+        choices.append((_build_bridge_autocomplete_choice_name(summary), value))
         if len(choices) >= 25:
             break
     return choices

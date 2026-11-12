@@ -23,6 +23,7 @@ This document is a short, feature-oriented index of the test suite. It helps mai
 - Follow/Accept subscription protocol flow — [`tests/test_follow_subscription_flow.py`](../../tests/test_follow_subscription_flow.py)
 - Cross-stage register, subscribe, accept, publish, retry, and echo suppression — [`tests/behavior/test_cross_stage_scenarios.py`](../../tests/behavior/test_cross_stage_scenarios.py)
 - Unified local/remote community discovery — [`tests/behavior/test_unified_community_discovery_scenarios.py`](../../tests/behavior/test_unified_community_discovery_scenarios.py)
+- Bridge handle/actor URL autocomplete, Discord choice bounds, empty diagnostics and Lemmy fallback — [`tests/test_bridge_autocomplete_contract.py`](../../tests/test_bridge_autocomplete_contract.py), [`tests/commands/test_subscribe_command.py`](../../tests/commands/test_subscribe_command.py)
 - Community resolution rules and fallback behavior — [`tests/test_community_discovery_resolution.py`](../../tests/test_community_discovery_resolution.py)
 - Subscribe business rules — [`tests/operations/test_subscribe_operation.py`](../../tests/operations/test_subscribe_operation.py)
 - Subscribe Discord adapter and autocomplete — [`tests/commands/test_subscribe_command.py`](../../tests/commands/test_subscribe_command.py)

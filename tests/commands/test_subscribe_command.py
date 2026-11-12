@@ -818,3 +818,56 @@ def test_subscribe_community_channel_description_fits_discord_limit(
 
     assert 1 <= len(descriptions["channel"]) <= 100
     assert "leave empty" in descriptions["channel"]
+
+@pytest.mark.asyncio
+async def test_bridge_autocomplete_uses_nested_raw_instance_domain_for_actor_url_search(
+    database, caplog
+) -> None:
+    """A Discord raw subcommand option identifies the same permitted remote Bridge."""
+    from src.community_discovery import BridgeCommunitySummary
+
+    settings = _settings(["remote.bridge.test"])
+    policy = _policy_service(database, settings)
+    interaction = _make_interaction(None)
+    interaction.data = {
+        "options": [{"name": "lookup", "options": [
+            {"name": "instance_domain", "value": "remote.bridge.test"},
+            {"name": "community", "value": "/c/science", "focused": True},
+        ]}],
+    }
+    summary = BridgeCommunitySummary(
+        id=87, slug="science", name="science", title="Science", description=None,
+        actor_id="https://remote.bridge.test/communities/science",
+        alternate_actor_id="https://remote.bridge.test/c/science",
+        handle="!science@remote.bridge.test",
+    )
+    with patch("src.commands.subscribe.fetch_bridge_community_summaries", new=AsyncMock(return_value=[summary])) as bridge_fetch:
+        with patch("src.commands.subscribe.LemmyClient") as lemmy_mock:
+            choices = await subscribe._community_autocomplete(settings, database, policy)(
+                interaction, "/c/science"
+            )
+    bridge_fetch.assert_awaited_once_with("https://remote.bridge.test")
+    lemmy_mock.assert_not_called()
+    assert len(choices) == 1
+    assert choices[0].value.startswith("bridge-remote:")
+    assert "|87" not in choices[0].value
+
+
+@pytest.mark.asyncio
+async def test_blocked_bridge_autocomplete_logs_denied_origin_before_any_network(
+    database, caplog
+) -> None:
+    """Blocked remote origin is denied before Bridge discovery or Lemmy fallback."""
+    import logging
+
+    settings = _settings(["allowed.bridge.test"])
+    policy = _policy_service(database, settings)
+    interaction = _make_interaction("denied.bridge.test")
+    caplog.set_level(logging.INFO, logger="src.commands.subscribe")
+    with patch("src.commands.subscribe.fetch_bridge_community_summaries", new=AsyncMock()) as bridge_fetch:
+        with patch("src.commands.subscribe.LemmyClient") as lemmy_mock:
+            choices = await subscribe._community_autocomplete(settings, database, policy)(interaction, "")
+    assert choices == []
+    bridge_fetch.assert_not_awaited()
+    lemmy_mock.assert_not_called()
+    assert "origin=https://denied.bridge.test reason=denied_origin" in caplog.text
