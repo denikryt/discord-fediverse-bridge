@@ -90,20 +90,19 @@ class _Stage4UserContentIdentity:
 DATABASE_VERSION = 1
 
 
-def _pending_v0_upgrade_step(
-    _conn: Connection,
-    _source_profile: str,
-    _config: Stage4IdentityMigrationConfig | None,
+# The one supported historical upgrade is complete only when its constraints
+# and the independent target snapshot agree under the writer transaction.
+def _upgrade_v0_to_v1_step(
+    conn: Connection, profile: str, config: Stage4IdentityMigrationConfig | None
 ) -> None:
-    """Reject 0→1 until CP04/CP05 replace this deliberately incomplete step."""
-    # CP03_MIGRATION_STEP_NOT_READY: This guarded hook is replaced when
-    # CP04's verified transfer and CP05's complete target v1 schema exist.
-    # No temporary fallback migration is allowed at production startup.
-    raise RuntimeError("v0→v1 migration step is incomplete (CP04/CP05 required)")
+    """Load the historical step lazily to keep the migration owner acyclic."""
+    from .migration_steps.v0_to_v1 import upgrade_v0_to_v1
+
+    upgrade_v0_to_v1(conn, profile, config)
 
 
 MIGRATIONS: dict[int, Callable[[Connection, str, Stage4IdentityMigrationConfig | None], None]] = {
-    1: _pending_v0_upgrade_step,
+    1: _upgrade_v0_to_v1_step,
 }
 
 

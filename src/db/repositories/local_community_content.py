@@ -116,7 +116,13 @@ class LocalCommunityContentRepository(BaseRepository):
     ) -> LocalCommunityMessage:
         """Persist one canonical message row plus its host Discord surface."""
         with self.session() as session:
+            # Tenant comes from the canonical parent, never a caller-supplied
+            # object ID or a global AP mapping shared with another Group.
+            thread = session.get(LocalCommunityThread, local_community_thread_id)
+            if thread is None:
+                raise RuntimeError("Missing canonical local-community parent thread")
             message = LocalCommunityMessage(
+                local_community_id=thread.local_community_id,
                 local_community_thread_id=local_community_thread_id,
                 ap_activity_id=ap_activity_id,
                 ap_object_id=ap_object_id,
@@ -166,7 +172,13 @@ class LocalCommunityContentRepository(BaseRepository):
         surface here would bind the source Discord message to the wrong forum.
         """
         with self.session() as session:
+            # Tenant comes from the canonical parent, never a caller-supplied
+            # object ID or a global AP mapping shared with another Group.
+            thread = session.get(LocalCommunityThread, local_community_thread_id)
+            if thread is None:
+                raise RuntimeError("Missing canonical local-community parent thread")
             message = LocalCommunityMessage(
+                local_community_id=thread.local_community_id,
                 local_community_thread_id=local_community_thread_id,
                 ap_activity_id=ap_activity_id,
                 ap_object_id=ap_object_id,

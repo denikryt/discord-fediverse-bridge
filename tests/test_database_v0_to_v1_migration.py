@@ -126,7 +126,9 @@ def test_tagged_release_data_transfer_preserves_all_old_rows_and_main_ddl(tmp_pa
                 SELECT type,name,tbl_name,sql FROM sqlite_master
                 WHERE name NOT LIKE 'sqlite_%' ORDER BY type,name,tbl_name
             """).all())
-            assert profile == "known_main_v0"
+            # Partial source conversion is not itself an admissible writer
+            # version: it has v1-added structures but no v1 header.
+            assert profile is None
             assert conn.execute(text("SELECT COUNT(*) FROM users")).scalar_one() == 1
             assert conn.execute(text("SELECT id,profile_version FROM users")).one() == (2,0)
             assert conn.execute(text("""
@@ -313,11 +315,40 @@ def test_release_transfer_errors_roll_back_all_schema_and_data(tmp_path: Path) -
             conn.rollback()
             conn.exec_driver_sql("BEGIN IMMEDIATE")
             transfer_released_v0_tables(conn)
-            assert conn.exec_driver_sql("SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%'").scalar() == 43
+            assert conn.exec_driver_sql("SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%'").scalar() == 44
             conn.rollback()
         with sqlite3.connect(path) as conn:
             assert conn.execute("PRAGMA user_version").fetchone() == (0,)
             assert conn.execute("SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%'").fetchone() == (30,)
         assert path.read_bytes() == old
+    finally:
+        database.close()
+
+
+def test_legacy_main_upgrade_selectively_invalidates_changed_actor_relationships(
+    tmp_path: Path,
+) -> None:
+    """One migration invalidates only subscriptions bound to old actor identity."""
+    database, path = _fixture(tmp_path, "known_main_v0")
+    try:
+        with database.engine.begin() as conn:
+            _seed_local_actors(conn, legacy=True)
+        database.migrate(_CONFIG)
+        with database.engine.connect() as conn:
+            assert conn.exec_driver_sql("PRAGMA user_version").scalar_one() == 1
+            assert conn.execute(text("SELECT actor_url FROM bridge_actor_keys")).scalar_one() == (
+                "https://bridge.example/actors/services/bridge"
+            )
+            assert conn.execute(text("SELECT status, follow_activity_id FROM bridge_actor_follows")).one() == (
+                "failed", None
+            )
+            assert conn.execute(text("SELECT status, follow_activity_id FROM channel_community_subscriptions")).one() == (
+                "failed", None
+            )
+            assert conn.execute(text("SELECT COUNT(*) FROM remote_subscribers")).scalar_one() == 0
+            assert conn.exec_driver_sql("PRAGMA foreign_key_check").all() == []
+        after = path.read_bytes()
+        database.migrate(_CONFIG)
+        assert path.read_bytes() == after
     finally:
         database.close()

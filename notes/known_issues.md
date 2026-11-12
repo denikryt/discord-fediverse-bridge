@@ -20,8 +20,8 @@ Inbound personal-feed comments are retained even when the active binding is remo
 
 ## NodeBB release branch baseline (2026-11-11)
 
-- Open: current main's repeated `Database.migrate()` deletes unaffected accepted remote Follow rows and resets Discord channel bindings (CP03/CP04).
+- Fixed through CP05, pending CP06 startup gate: repeated `Database.migrate()` admits the exact v1 schema read-only instead of rerunning legacy identity purge; unaffected accepted Follow and channel rows remain unchanged.
 - Fixed in CP02, awaiting CP06 startup integration: source-aware migration backup accepts the exact tagged `v0.1.0` schema without `profile_media_assets`, checks referenced media on known main, and publishes protected no-clobber archives.
 - Verification blocked: initial full `pytest` cannot import missing `hypothesis`; Node gateway dependency install is unavailable from the local offline npm cache. These are environment blockers, not observed test failures.
-- CP03 intentionally fail-closed until CP04/CP05: versioned migration rejects v0 upgrades and v1 admission without its full frozen schema; do not deploy intermediate checkpoint as a DB v1 release. CP06 still needs verified offline EX→SH startup.
-- CP04 verified release-v0 row transfer and selective legacy identity invalidation are intermediate; CP05 full v1 schema/collision admission and integration into `run_pending_migrations` are required before bootstrap can succeed.
+- CP05 has an operationally incomplete startup boundary: the v0→v1 runner is now functional and schema-validated, but CP06 must integrate the mandatory verified migration backup under EX deployment lock before production upgrade. Do not deploy CP05 as a release.
+- CP05: v1 ORM and provisional physical snapshot contain tenant-scoped canonical AP identities, dual-FK typed remote Discord target claims, local composite reply FK, group-scoped receipts, Follow/relay attempts and immutable owner slots. Unknown historical owner remains NULL; conflicting v0 canonical identities fail admission before writes. Historical matching Lemmy numeric IDs are insufficient provenance because existing `lemmy:` encoded values can be supplied manually; ambiguous accepted rows retain `remote_software_profile='unknown'` until verified discovery. Full version-1 snapshot is provisional until CP24.

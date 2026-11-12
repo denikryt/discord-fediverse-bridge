@@ -10,10 +10,12 @@ from sqlalchemy import (
     Index,
     DateTime,
     ForeignKey,
+    ForeignKeyConstraint,
     Integer,
     JSON,
     String,
     Text,
+    text,
     UniqueConstraint,
 )
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column
@@ -121,9 +123,20 @@ class ActivityPubEventReceipt(Base):
     # Receipts make inbound ActivityPub processing idempotent across retries,
     # duplicates, and partial failures.
     __tablename__ = "activitypub_event_receipts"
+    __table_args__ = (
+        # Wire IDs remain unchanged; a verified local Group owns only its scope.
+        Index("uq_ap_receipt_local_group", "delivery_id", "event_type",
+              "verified_destination_group_actor_id", unique=True,
+              sqlite_where=text("verified_destination_group_actor_id IS NOT NULL")),
+        Index("uq_ap_receipt_global", "delivery_id", unique=True,
+              sqlite_where=text("verified_destination_group_actor_id IS NULL")),
+    )
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
-    delivery_id: Mapped[str] = mapped_column(String(128), unique=True, nullable=False)
+    delivery_id: Mapped[str] = mapped_column(String(128), nullable=False)
+    verified_destination_group_actor_id: Mapped[str | None] = mapped_column(
+        String(512), nullable=True
+    )
     event_type: Mapped[str] = mapped_column(String(64), nullable=False)
     object_ap_id: Mapped[str] = mapped_column(String(512), nullable=False)
     status: Mapped[str] = mapped_column(String(32), nullable=False)
@@ -904,6 +917,12 @@ class CommunityThreadGroup(Base):
     # source_* fields are nullable to accommodate inbound AP events, which have
     # no source Discord channel — threads are created in all subscribed channels.
     __tablename__ = "community_thread_groups"
+    __table_args__ = (
+        # Discord-origin source rows do not collide with inbound remote IDs.
+        Index("uq_remote_thread_group_object", "community_actor_id", "ap_object_id",
+              unique=True, sqlite_where=text(
+                  "ap_object_id IS NOT NULL AND source_channel_id IS NULL AND source_thread_id IS NULL")),
+    )
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
     community_actor_id: Mapped[str] = mapped_column(String(512), nullable=False)
@@ -916,6 +935,7 @@ class CommunityThreadGroup(Base):
     )
     ap_activity_id: Mapped[str | None] = mapped_column(String(512), nullable=True)
     ap_object_id: Mapped[str | None] = mapped_column(String(512), nullable=True)
+    source_owner_actor_id: Mapped[str | None] = mapped_column(String(512), nullable=True)
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), default=utcnow, nullable=False
     )
@@ -951,6 +971,13 @@ class CommunityMessageGroup(Base):
     # source_* fields are nullable to accommodate inbound AP events, which have
     # no source Discord message — the message is created in all subscribed threads.
     __tablename__ = "community_message_groups"
+    __table_args__ = (
+        Index("uq_remote_message_group_object", "community_actor_id", "ap_object_id",
+              unique=True, sqlite_where=text(
+                  "ap_object_id IS NOT NULL AND source_channel_id IS NULL AND source_message_id IS NULL")),
+        Index("uq_source_discord_reply_message", "source_message_id", unique=True,
+              sqlite_where=text("source_message_id IS NOT NULL")),
+    )
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
     community_actor_id: Mapped[str] = mapped_column(String(512), nullable=False)
@@ -960,6 +987,7 @@ class CommunityMessageGroup(Base):
     source_message_id: Mapped[int | None] = mapped_column(Integer, nullable=True)
     ap_activity_id: Mapped[str | None] = mapped_column(String(512), nullable=True)
     ap_object_id: Mapped[str | None] = mapped_column(String(512), nullable=True)
+    source_owner_actor_id: Mapped[str | None] = mapped_column(String(512), nullable=True)
     # FK to another CommunityMessageGroup if this message is a reply.
     parent_message_group_id: Mapped[int | None] = mapped_column(Integer, nullable=True)
     created_at: Mapped[datetime] = mapped_column(
@@ -988,6 +1016,40 @@ class CommunityMessageGroupDelivery(Base):
     role: Mapped[str] = mapped_column(String(32), nullable=False)
 
 
+class CommunityDiscordTargetClaim(Base):
+    """Reserve one typed remote Group/Discord target before external REST.
+
+    The two concrete FKs prevent an identically numbered post group and reply
+    group from sharing the same attempt or masquerading as each other.
+    """
+
+    __tablename__ = "community_discord_target_claims"
+    __table_args__ = (
+        CheckConstraint("(thread_group_id IS NOT NULL AND message_group_id IS NULL AND kind = 'post') OR "
+                        "(thread_group_id IS NULL AND message_group_id IS NOT NULL AND kind = 'comment')",
+                        name="ck_discord_target_kind_fk"),
+        CheckConstraint("status IN ('claimed', 'failed', 'completed', 'unknown')",
+                        name="ck_discord_target_status"),
+        Index("uq_discord_target_thread", "thread_group_id", "discord_channel_id",
+              unique=True, sqlite_where=text("thread_group_id IS NOT NULL")),
+        Index("uq_discord_target_message", "message_group_id", "discord_channel_id",
+              unique=True, sqlite_where=text("message_group_id IS NOT NULL")),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    thread_group_id: Mapped[int | None] = mapped_column(
+        ForeignKey("community_thread_groups.id", ondelete="CASCADE"), nullable=True
+    )
+    message_group_id: Mapped[int | None] = mapped_column(
+        ForeignKey("community_message_groups.id", ondelete="CASCADE"), nullable=True
+    )
+    discord_channel_id: Mapped[int] = mapped_column(Integer, nullable=False)
+    kind: Mapped[str] = mapped_column(String(16), nullable=False)
+    status: Mapped[str] = mapped_column(String(16), nullable=False)
+    attempt_id: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    attempt_started_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+
+
 class BridgeActorFollow(Base):
     """Track one AP-level Follow from the bridge actor to a remote community.
 
@@ -1001,6 +1063,14 @@ class BridgeActorFollow(Base):
 
     # status values: pending | accepted | failed
     __tablename__ = "bridge_actor_follows"
+    __table_args__ = (
+        Index("uq_bridge_follow_activity", "follow_activity_id", unique=True,
+              sqlite_where=text("follow_activity_id IS NOT NULL")),
+        CheckConstraint("remote_software_profile IN ('unknown','nodebb','threadiverse','bridge')",
+                        name="ck_bridge_follow_profile"),
+        CheckConstraint("follow_dispatch_state IN ('prepared','sending','sent','undo_sending')",
+                        name="ck_bridge_follow_dispatch"),
+    )
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
     # Canonical AP actor URL for the remote community — UNIQUE enforces the
@@ -1009,6 +1079,15 @@ class BridgeActorFollow(Base):
         String(512), nullable=False, unique=True
     )
     follow_activity_id: Mapped[str | None] = mapped_column(String(512), nullable=True)
+    remote_software_profile: Mapped[str] = mapped_column(
+        String(32), nullable=False, default="unknown", server_default="unknown"
+    )
+    follow_dispatch_state: Mapped[str] = mapped_column(
+        String(32), nullable=False, default="prepared", server_default="prepared"
+    )
+    cancel_requested: Mapped[bool] = mapped_column(
+        Boolean, nullable=False, default=False, server_default="0"
+    )
     community_inbox_url: Mapped[str | None] = mapped_column(String(512), nullable=True)
     status: Mapped[str] = mapped_column(String(32), nullable=False, default="pending")
     created_at: Mapped[datetime] = mapped_column(
@@ -1269,6 +1348,8 @@ class LocalCommunityRelaySourceActivity(Base):
 
     __tablename__ = "local_community_relay_source_activities"
     __table_args__ = (
+        Index("uq_local_relay_create", "local_community_id", "source_object_ap_id",
+              unique=True, sqlite_where=text("operation = 'create'")),
         UniqueConstraint(
             "local_community_id",
             "operation",
@@ -1318,6 +1399,8 @@ class LocalCommunityRelayDelivery(Base):
         String(64), nullable=False, default="threadiverse_group"
     )
     relay_activity_id: Mapped[str | None] = mapped_column(String(512), nullable=True)
+    attempt_token: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    attempt_started_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     status: Mapped[str] = mapped_column(String(32), nullable=False, default="pending")
     attempt_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
     last_attempted_at: Mapped[datetime | None] = mapped_column(
@@ -1342,8 +1425,14 @@ class LocalCommunityThread(Base):
 
     __tablename__ = "local_community_threads"
     __table_args__ = (
-        UniqueConstraint("ap_activity_id"),
-        UniqueConstraint("ap_object_id"),
+        UniqueConstraint("local_community_id", "ap_activity_id"),
+        UniqueConstraint("local_community_id", "ap_object_id"),
+        UniqueConstraint("id", "local_community_id"),
+        CheckConstraint("host_delivery_state IS NULL OR host_delivery_state IN "
+                        "('reserved','sending','delivered','failed','unknown')",
+                        name="ck_local_thread_host_state"),
+        CheckConstraint("direction = 'ap_to_discord' OR host_delivery_state IS NULL",
+                        name="ck_local_thread_host_direction"),
     )
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
@@ -1352,6 +1441,11 @@ class LocalCommunityThread(Base):
     ap_object_id: Mapped[str] = mapped_column(String(512), nullable=False)
     direction: Mapped[str] = mapped_column(String(32), nullable=False)
     origin_kind: Mapped[str] = mapped_column(String(32), nullable=False)
+    source_owner_actor_id: Mapped[str | None] = mapped_column(String(512), nullable=True)
+    origin_subscriber_actor_id: Mapped[str | None] = mapped_column(String(512), nullable=True)
+    host_delivery_state: Mapped[str | None] = mapped_column(String(16), nullable=True)
+    host_attempt_id: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    host_attempt_started_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), default=utcnow, nullable=False
     )
@@ -1368,15 +1462,31 @@ class LocalCommunityMessage(Base):
 
     __tablename__ = "local_community_messages"
     __table_args__ = (
-        UniqueConstraint("ap_activity_id"),
-        UniqueConstraint("ap_object_id"),
+        UniqueConstraint("local_community_id", "ap_activity_id"),
+        UniqueConstraint("local_community_id", "ap_object_id"),
+        ForeignKeyConstraint(
+            ["local_community_thread_id", "local_community_id"],
+            ["local_community_threads.id", "local_community_threads.local_community_id"],
+            name="fk_local_message_thread_tenant",
+        ),
+        CheckConstraint("host_delivery_state IS NULL OR host_delivery_state IN "
+                        "('reserved','sending','delivered','failed','unknown')",
+                        name="ck_local_message_host_state"),
+        CheckConstraint("direction = 'ap_to_discord' OR host_delivery_state IS NULL",
+                        name="ck_local_message_host_direction"),
     )
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
     local_community_thread_id: Mapped[int] = mapped_column(Integer, nullable=False)
+    local_community_id: Mapped[int] = mapped_column(Integer, nullable=False)
     ap_activity_id: Mapped[str] = mapped_column(String(512), nullable=False)
     ap_object_id: Mapped[str] = mapped_column(String(512), nullable=False)
     parent_ap_object_id: Mapped[str | None] = mapped_column(String(512), nullable=True)
+    source_owner_actor_id: Mapped[str | None] = mapped_column(String(512), nullable=True)
+    origin_subscriber_actor_id: Mapped[str | None] = mapped_column(String(512), nullable=True)
+    host_delivery_state: Mapped[str | None] = mapped_column(String(16), nullable=True)
+    host_attempt_id: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    host_attempt_started_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     direction: Mapped[str] = mapped_column(String(32), nullable=False)
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), default=utcnow, nullable=False
