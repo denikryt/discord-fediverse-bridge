@@ -195,6 +195,12 @@ class UserActorDeliveryRepository(BaseRepository):
         """Count one actual gateway submission for the currently owned claim."""
         return self._outcomes.mark_submitted(delivery_id, claim_token)
 
+    def record_unresolved(
+        self, delivery_id: int, claim_token: str, error: str | None
+    ) -> None:
+        """Mark an ambiguous direct Group attempt as non-retryable unknown."""
+        self._outcomes.record_unresolved(delivery_id, claim_token, error)
+
     def record_outcome(
         self, delivery_id: int, claim_token: str, *, ok: bool, error: str | None = None
     ) -> None:

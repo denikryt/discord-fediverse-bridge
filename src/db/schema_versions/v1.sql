@@ -626,7 +626,7 @@ CREATE TABLE user_actor_outbound_deliveries (
 	updated_at DATETIME NOT NULL,
 	PRIMARY KEY (id),
 	UNIQUE (source_id, target_endpoint_url),
-	CONSTRAINT ck_user_actor_delivery_status CHECK (status IN ('pending', 'sending', 'delivered', 'failed', 'ineligible', 'superseded')),
+	CONSTRAINT ck_user_actor_delivery_status CHECK (status IN ('pending', 'sending', 'delivered', 'failed', 'ineligible', 'superseded', 'unknown')),
 	CONSTRAINT ck_user_actor_delivery_attempts CHECK (attempt_count >= 0),
 	CONSTRAINT ck_user_actor_delivery_endpoint_nonempty CHECK (length(target_endpoint_url) > 0),
 	FOREIGN KEY(source_id) REFERENCES user_actor_outbound_sources (id) ON DELETE CASCADE

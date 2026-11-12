@@ -342,12 +342,19 @@ Create persistence snapshots the accepted follower relationships in the same dat
 
 `/actors/users/{username}/outbox` is the canonical `OrderedCollection`. Fixed pages contain current `Create` activities for durable undeleted public posts and comments, ordered by publication time and durable row id. Separate page requests are not an immutable snapshot.
 
-## Community Create durable admission (CP15)
+## Community Create durable admission and direct Group delivery (CP15–CP16)
 
-Remote Group publication now renders immutable typed User Actor Create IDs before
+Remote Group publication renders immutable typed User Actor Create IDs before
 network delivery. The renderer selects NodeBB Note roots/replies and retains
 Lemmy/Bridge Page roots; unverified software profiles fail closed. The original
 accepted Group/Follow inbox is snapshotted with the first Create in SQLite.
 `queued` means the source was saved locally, **not** that the Group accepted it.
-Direct Group worker eligibility and queued Discord sibling placement are the
-next CP16 checkpoint; this intermediate state is not a deployable release.
+The Discord runtime records canonical thread/reply mappings and mirrors sibling
+forums on this locally committed result, without waiting for network transport.
+The User Actor delivery worker validates the original accepted Follow generation,
+channel binding and Group/inbox policy for direct transport, including authors
+with no User Actor followers. A follower at the same endpoint does not override
+Group revocation; shared endpoints are sent at most once. A timeout after a
+possible send persists `unknown` without automatic retry or a new Create ID.
+The older follower-only delivery retry contract remains unchanged. The completed
+federation feature still depends on later checkpoints and full integration tests.

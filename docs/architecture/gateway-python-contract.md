@@ -76,10 +76,17 @@ The direct Group recipient is not a synthetic follower. An exact duplicate
 reuses the original source without rendering or changing its JSON.
 
 `PublishResult(status="queued",locally_accepted=True,delivery_state="queued")`
-means only **local durable admission**. CP16 must authorize original direct
-Group recipients in the existing worker; CP15 alone does not establish remote
-transport eligibility or acceptance. The old local-community
-`/publish-local-community` path is independent of this remote direct route.
+means only **local durable admission**. The community runtime persists canonical
+thread/reply placements and sibling Discord deliveries on this result without
+waiting for the remote Group. The bot deduplicates repeated thread-create events.
+The existing User Actor delivery worker authorizes a direct Group route from the
+original source snapshot, checking the currently accepted **same** Follow ID,
+Group actor, inbox, forum binding and federation policy under its claim
+boundary. A matching follower endpoint shares one send, but a follower grant
+cannot bypass revoked Group authorization. Ambiguous direct sends persist as
+`UserActorOutboundDelivery.status="unknown"` and are not automatically retried;
+this is not evidence of NodeBB acceptance. Follower-only retry is unchanged.
+The old local-community `/publish-local-community` path is independent.
 
 ## Bridge signing key ownership
 

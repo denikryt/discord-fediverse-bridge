@@ -80,6 +80,24 @@ class UserActorDeliveryOutcomeRepository(BaseRepository):
             )
             return result.rowcount == 1
 
+    def record_unresolved(
+        self, delivery_id: int, claim_token: str, error: str | None
+    ) -> None:
+        """Retain ambiguous direct Group send evidence without automatic retries."""
+        with self.session() as session:
+            delivery = session.scalar(select(UserActorOutboundDelivery).where(
+                UserActorOutboundDelivery.id == delivery_id,
+                UserActorOutboundDelivery.status == "sending",
+                UserActorOutboundDelivery.claim_token == claim_token,
+            ))
+            if delivery is None:
+                return
+            delivery.status = "unknown"
+            delivery.claim_token = None
+            delivery.claimed_at = None
+            delivery.last_error = bound_delivery_error(error or "direct Group HTTP outcome unknown")
+            delivery.next_attempt_at = None
+
     def record_outcome(
         self, delivery_id: int, claim_token: str, *, ok: bool, error: str | None = None
     ) -> None:
@@ -148,7 +166,7 @@ class UserActorDeliveryOutcomeRepository(BaseRepository):
                 .where(
                     UserActorOutboundDelivery.source_id == source_id,
                     UserActorOutboundDelivery.status.in_(
-                        ("pending", "sending", "failed")
+                        ("pending", "sending", "failed", "unknown")
                     ),
                 )
                 .limit(1)
@@ -174,6 +192,6 @@ class UserActorDeliveryOutcomeRepository(BaseRepository):
         total = sum(counts.values())
         delivered = counts.get("delivered", 0)
         outstanding = sum(
-            counts.get(status, 0) for status in ("pending", "sending", "failed")
+            counts.get(status, 0) for status in ("pending", "sending", "failed", "unknown")
         )
         return delivered, outstanding, total

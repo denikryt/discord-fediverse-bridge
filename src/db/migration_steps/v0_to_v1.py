@@ -109,6 +109,9 @@ _V1_REBUILDS = (
     "local_community_relay_deliveries",
     "local_community_threads",
     "local_community_messages",
+    # The direct Group delivery path needs a durable unresolved outcome; a
+    # known-main CHECK constraint must be rebuilt to admit that state.
+    "user_actor_outbound_deliveries",
 )
 
 _V1_NEW_VALUES = {
@@ -222,6 +225,15 @@ def _rebuild_v1_table(conn: Connection, table_name: str) -> None:
     """
     legacy = f"_v0_{table_name}"
     conn.exec_driver_sql(f"ALTER TABLE {table_name} RENAME TO {legacy}")
+    # Explicit indexes keep global names after SQLite table rename. Drop only
+    # indexes owned by this temporary table before target.create recreates
+    # the exact v1 indexes. SQLite's autoindexes remain owned by the source.
+    explicit_indexes = list(conn.exec_driver_sql(
+        "SELECT name FROM sqlite_master WHERE type='index' AND tbl_name=? "
+        "AND sql IS NOT NULL", (legacy,)
+    ))
+    for (index_name,) in explicit_indexes:
+        conn.exec_driver_sql(f'DROP INDEX "{index_name}"')
     target = Base.metadata.tables[table_name]
     target.create(conn)
     old_columns = {row[1] for row in conn.exec_driver_sql(f"PRAGMA table_info({legacy})")}

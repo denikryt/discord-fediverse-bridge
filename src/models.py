@@ -486,7 +486,7 @@ class UserActorOutboundDelivery(Base):
     __table_args__ = (
         UniqueConstraint("source_id", "target_endpoint_url"),
         CheckConstraint(
-            "status IN ('pending', 'sending', 'delivered', 'failed', 'ineligible', 'superseded')",
+            "status IN ('pending', 'sending', 'delivered', 'failed', 'ineligible', 'superseded', 'unknown')",
             name="ck_user_actor_delivery_status",
         ),
         CheckConstraint("attempt_count >= 0", name="ck_user_actor_delivery_attempts"),

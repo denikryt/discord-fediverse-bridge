@@ -134,7 +134,9 @@ class CommunityRuntime:
             thread=thread,
             starter_message=starter_message,
         )
-        if result.status != "published":
+        # A committed queued Create is locally accepted even when its remote
+        # Group transport has not run. Keep canonical source and siblings.
+        if result.status != "published" and not getattr(result, "locally_accepted", False):
             return result
 
         # Resolve subscription for the source channel to get community_actor_id.
@@ -222,7 +224,9 @@ class CommunityRuntime:
         result = await self.content_publish_service.publish_thread_message(
             message=message
         )
-        if result.status != "published":
+        # A committed queued Create is locally accepted even when its remote
+        # Group transport has not run. Keep canonical source and siblings.
+        if result.status != "published" and not getattr(result, "locally_accepted", False):
             return result
 
         # Resolve the thread group for the originating thread. If none exists (pre-Phase-2

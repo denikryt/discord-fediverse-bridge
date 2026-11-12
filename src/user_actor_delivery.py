@@ -391,6 +391,15 @@ class UserActorDeliveryService:
                 endpoint_allowed = self.policy_service.federation_decision(
                     claim.target_endpoint_url
                 ).allowed
+                # A shared follower endpoint is not a substitute for a
+                # revoked or policy-denied Group grant when the Create is
+                # addressed to that Group. Check every original Group actor
+                # and inbox independently, not just the target endpoint.
+                group_policy_allowed = all(
+                    self.policy_service.federation_decision(group_actor).allowed
+                    and self.policy_service.federation_decision(group_inbox).allowed
+                    for group_actor, group_inbox in claim.direct_group_routes
+                )
                 represented_actor_allowed = any(
                     self.policy_service.federation_decision(actor_id).allowed
                     for actor_id in claim.represented_actor_ids
@@ -402,7 +411,7 @@ class UserActorDeliveryService:
                     claim.delivery_id, claim.claim_token, str(exc)
                 )
                 continue
-            if not endpoint_allowed or not represented_actor_allowed:
+            if not endpoint_allowed or not represented_actor_allowed or not group_policy_allowed:
                 self.database.user_actor_deliveries.mark_ineligible(
                     claim.delivery_id,
                     claim.claim_token,
@@ -435,26 +444,35 @@ class UserActorDeliveryService:
                 by_id = {outcome.delivery_id: outcome for outcome in outcomes}
                 for claim in group:
                     outcome = by_id.get(claim.delivery_id)
-                    self.database.user_actor_deliveries.record_outcome(
-                        claim.delivery_id,
-                        claim.claim_token,
-                        ok=bool(outcome and outcome.ok),
-                        error=(
-                            None
-                            if outcome and outcome.ok
-                            else (
+                    if claim.direct_group_routes and not (outcome and outcome.ok):
+                        # A negative/absent gateway outcome can follow a real
+                        # successful send. Never auto-retry this direct Create.
+                        self.database.user_actor_deliveries.record_unresolved(
+                            claim.delivery_id, claim.claim_token,
+                            outcome.error if outcome else "gateway omitted outcome",
+                        )
+                    else:
+                        self.database.user_actor_deliveries.record_outcome(
+                            claim.delivery_id,
+                            claim.claim_token,
+                            ok=bool(outcome and outcome.ok),
+                            error=None if outcome and outcome.ok else (
                                 outcome.error if outcome else "gateway omitted outcome"
-                            )
-                        ),
-                    )
+                            ),
+                        )
                     self.database.user_actor_deliveries.release_terminal_source_media(
                         claim.source_id
                     )
             except Exception as exc:
                 for claim in group:
-                    self.database.user_actor_deliveries.record_outcome(
-                        claim.delivery_id, claim.claim_token, ok=False, error=str(exc)
-                    )
+                    if claim.direct_group_routes:
+                        self.database.user_actor_deliveries.record_unresolved(
+                            claim.delivery_id, claim.claim_token, str(exc)
+                        )
+                    else:
+                        self.database.user_actor_deliveries.record_outcome(
+                            claim.delivery_id, claim.claim_token, ok=False, error=str(exc)
+                        )
                     self.database.user_actor_deliveries.release_terminal_source_media(
                         claim.source_id
                     )
