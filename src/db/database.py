@@ -117,8 +117,8 @@ class Database:
     def migrate(
         self, stage4_identity: Stage4IdentityMigrationConfig | None = None
     ) -> None:
-        """Apply schema and identity migrations that create_all cannot handle."""
-        migrations.migrate(self.engine, stage4_identity=stage4_identity)
+        """Admit SQLite input and run the one-time versioned transaction."""
+        migrations.run_pending_migrations(self.engine, stage4_identity=stage4_identity)
 
     @contextmanager
     def immediate_session(self) -> Iterator[Session]:

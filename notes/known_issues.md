@@ -23,3 +23,4 @@ Inbound personal-feed comments are retained even when the active binding is remo
 - Open: current main's repeated `Database.migrate()` deletes unaffected accepted remote Follow rows and resets Discord channel bindings (CP03/CP04).
 - Fixed in CP02, awaiting CP06 startup integration: source-aware migration backup accepts the exact tagged `v0.1.0` schema without `profile_media_assets`, checks referenced media on known main, and publishes protected no-clobber archives.
 - Verification blocked: initial full `pytest` cannot import missing `hypothesis`; Node gateway dependency install is unavailable from the local offline npm cache. These are environment blockers, not observed test failures.
+- CP03 intentionally fail-closed until CP04/CP05: versioned migration rejects v0 upgrades and v1 admission without its full frozen schema; do not deploy intermediate checkpoint as a DB v1 release. CP06 still needs verified offline EX→SH startup.

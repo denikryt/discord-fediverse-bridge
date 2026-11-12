@@ -112,7 +112,8 @@ def _build_live_runtime(settings: Settings, deployment_lease: FileLock) -> Runti
             max_pixels=settings.profile_media_max_pixels,
         )
         media_store.initialize()
-        database.create_all()
+        # The versioned runner, not `create_all`, owns bootstrap/admission.
+        # CP06 moves this call under the existing EX deployment gate.
         database.migrate(
             Stage4IdentityMigrationConfig(
                 public_origin=settings.normalized_fedify_origin,

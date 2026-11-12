@@ -25,6 +25,7 @@ from src.profile_media import FileLock
 
 _FIXED_TIME = datetime(2026, 11, 11, 0, tzinfo=timezone.utc)
 _RELEASE_SQL = Path(__file__).parents[1] / "fixtures/database/released_v0_schema.sql"
+_KNOWN_MAIN_SQL = Path(__file__).parents[1] / "fixtures/database/known_main_v0_schema.sql"
 
 
 def _tagged_release_database(tmp_path: Path) -> Path:
@@ -40,9 +41,11 @@ def _known_main_database_with_media(tmp_path: Path) -> tuple[Path, Path, bytes]:
     """Populate one canonical main-schema writer with referenced profile bytes."""
     path = tmp_path / "main-v0.db"
     root = tmp_path / "media"
+    # Restore the actual old-main migrated schema rather than asking the new
+    # versioned runner to construct an old, unversioned database.
+    with sqlite3.connect(path) as connection:
+        connection.executescript(_KNOWN_MAIN_SQL.read_text(encoding="utf-8"))
     database = Database(f"sqlite:///{path}")
-    database.create_all()
-    database.migrate()
     database.users.create_user(
         discord_user_id="user-1", activitypub_username="alice",
         actor_url="https://bridge.example/actors/users/alice",

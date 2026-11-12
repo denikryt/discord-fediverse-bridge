@@ -35,6 +35,30 @@ _SOURCE_SCHEMA_DIGESTS = {
 }
 
 
+def schema_entries_fingerprint(entries: object) -> str:
+    """Hash complete SQLite DDL without incidental trailing formatting changes.
+
+    SQLite's `iterdump` removes per-line trailing whitespace from stored DDL.
+    Preserve every other token, constraint, index, trigger and table identity
+    instead of treating a table count or one column as source evidence.
+    """
+    canonical_entries = [
+        (
+            kind, name, table,
+            "\n".join(line.rstrip() for line in sql.splitlines()) if sql else None,
+        )
+        for kind, name, table, sql in entries
+    ]
+    return hashlib.sha256(
+        json.dumps(canonical_entries, ensure_ascii=True, separators=(",", ":")).encode()
+    ).hexdigest()
+
+
+def classify_legacy_sqlite_schema(entries: object) -> str | None:
+    """Classify only the two source-writer DDL profiles in the feature scope."""
+    return _SOURCE_SCHEMA_DIGESTS.get(schema_entries_fingerprint(entries))
+
+
 def inspect_migration_backup_source(database: Path) -> str:
     """Classify a schema-exact, unversioned backup source without SQLite writes.
 
@@ -52,21 +76,7 @@ def inspect_migration_backup_source(database: Path) -> str:
             FROM sqlite_master WHERE name NOT LIKE 'sqlite_%'
             ORDER BY type, name, tbl_name
         """).fetchall()
-        # SQLite's iterdump strips trailing DDL whitespace but does not change
-        # SQL semantics. Only that incidental formatting is normalized.
-        canonical_entries = [
-            (
-                kind, name, table,
-                "\n".join(line.rstrip() for line in sql.splitlines()) if sql else None,
-            )
-            for kind, name, table, sql in entries
-        ]
-        fingerprint = hashlib.sha256(
-            json.dumps(
-                canonical_entries, ensure_ascii=True, separators=(",", ":")
-            ).encode()
-        ).hexdigest()
-        profile = _SOURCE_SCHEMA_DIGESTS.get(fingerprint)
+        profile = classify_legacy_sqlite_schema(entries)
         if profile is None:
             raise RuntimeError("unsupported or modified SQLite v0 backup source profile")
         return profile

@@ -1,20 +1,23 @@
-"""Additive and compatibility schema migration helpers for bridge SQLite DBs.
+"""Versioned SQLite migration owner and legacy additive/identity helpers.
 
-Database owns the engine and calls this module from `Database.migrate()`. The
-helpers preserve the previous additive migration behavior and include one narrow
-SQLite table-rebuild migration for the local-community summary nullability
-change, because SQLite cannot drop a NOT NULL constraint in place.
+``Database.migrate`` delegates to ``run_pending_migrations`` for source
+admission, a single writer-owned transaction and final version stamping. The
+legacy schema helpers remain for verified source transfer in CP04/CP05, not
+as a second unconditional production migration path.
 """
 
 from __future__ import annotations
 
 from collections.abc import Callable
 from dataclasses import dataclass
+from pathlib import Path
+import sqlite3
 import hashlib
 import json
 from urllib.parse import urlsplit
 
 from sqlalchemy import text
+from sqlalchemy.exc import SQLAlchemyError, StatementError
 from sqlalchemy.engine import Connection, Engine
 
 from ..activitypub_identity_urls import (
@@ -36,6 +39,8 @@ from ..activitypub_identity_urls import (
     build_user_update_post_activity_id,
     build_user_profile_update_activity_id,
 )
+from .backup import classify_legacy_sqlite_schema, schema_entries_fingerprint
+
 from ..models import (
     Base,
     BridgeActorKey,
@@ -79,199 +84,195 @@ class _Stage4UserContentIdentity:
     terminal_id: str
 
 
-def migrate(engine: Engine, stage4_identity: Stage4IdentityMigrationConfig | None = None) -> None:
-    """Apply schema migrations that `create_all()` cannot handle.
+# SQLite DB-version ownership is independent from application VERSION. Until
+# CP04/CP05 has assembled all v1 constraints and transfer mappings, the step
+# refuses to stamp v1 rather than leaving any runnable partial schema.
+DATABASE_VERSION = 1
 
-    `create_all()` creates missing tables but does not alter existing columns.
-    Most migrations are additive column/table changes. The local-community
-    summary migration is intentionally handled separately because changing
-    nullable constraints in SQLite requires rebuilding the table.
+
+def _pending_v0_upgrade_step(
+    _conn: Connection,
+    _source_profile: str,
+    _config: Stage4IdentityMigrationConfig | None,
+) -> None:
+    """Reject 0→1 until CP04/CP05 replace this deliberately incomplete step."""
+    # CP03_MIGRATION_STEP_NOT_READY: This guarded hook is replaced when
+    # CP04's verified transfer and CP05's complete target v1 schema exist.
+    # No temporary fallback migration is allowed at production startup.
+    raise RuntimeError("v0→v1 migration step is incomplete (CP04/CP05 required)")
+
+
+MIGRATIONS: dict[int, Callable[[Connection, str, Stage4IdentityMigrationConfig | None], None]] = {
+    1: _pending_v0_upgrade_step,
+}
+
+
+@dataclass(frozen=True, slots=True)
+class SQLiteDatabaseState:
+    """One fully inspected SQLite version and classified source profile."""
+
+    version: int
+    profile: str
+
+
+def _registered_steps_are_valid() -> None:
+    """Reject an incomplete or non-consecutive migration registry."""
+    if (
+        type(DATABASE_VERSION) is not int
+        or DATABASE_VERSION < 1
+        or set(MIGRATIONS) != set(range(1, DATABASE_VERSION + 1))
+        or not all(callable(step) for step in MIGRATIONS.values())
+    ):
+        raise RuntimeError("invalid SQLite migration registry")
+
+
+def _current_sqlite_schema_entries(conn: Connection) -> list[tuple[object, ...]]:
+    """Read physical table/index/trigger/view DDL from one SQLite transaction."""
+    return list(conn.exec_driver_sql("""
+        SELECT type, name, tbl_name, sql
+        FROM sqlite_master WHERE name NOT LIKE 'sqlite_%'
+        ORDER BY type, name, tbl_name
+    """).all())
+
+
+def _check_database_integrity(conn: Connection) -> None:
+    """Reject FK or storage corruption without rewriting source rows."""
+    if conn.exec_driver_sql("PRAGMA foreign_key_check").first() is not None:
+        raise RuntimeError("SQLite database has foreign-key violations")
+    if conn.exec_driver_sql("PRAGMA integrity_check").scalars().all() != ["ok"]:
+        raise RuntimeError("SQLite database failed integrity checking")
+
+
+def _validate_current_v1_schema(conn: Connection) -> None:
+    """Compare v1 physical DDL to its immutable independent snapshot, read-only."""
+    snapshot = Path(__file__).parent / "schema_versions" / "v1.sql"
+    if not snapshot.is_file():
+        raise RuntimeError("SQLite v1 schema snapshot is not ready (CP05 required)")
+    # The fixed snapshot is executed only in an isolated disposable memory DB,
+    # never on the existing app database or its migration connection.
+    with sqlite3.connect(":memory:") as reference:
+        reference.executescript(snapshot.read_text(encoding="utf-8"))
+        expected = reference.execute("""
+            SELECT type, name, tbl_name, sql
+            FROM sqlite_master WHERE name NOT LIKE 'sqlite_%'
+            ORDER BY type, name, tbl_name
+        """).fetchall()
+    if schema_entries_fingerprint(_current_sqlite_schema_entries(conn)) != schema_entries_fingerprint(expected):
+        raise RuntimeError("SQLite v1 physical schema differs from the fixed snapshot")
+    _check_database_integrity(conn)
+
+
+def _read_state_on_connection(conn: Connection) -> SQLiteDatabaseState:
+    """Apply the authoritative source/version guard at this connection boundary."""
+    version = int(conn.exec_driver_sql("PRAGMA user_version").scalar_one())
+    if version < 0 or version > DATABASE_VERSION:
+        raise RuntimeError(f"Unsupported SQLite user_version={version}; target is {DATABASE_VERSION}")
+    entries = _current_sqlite_schema_entries(conn)
+    if version == DATABASE_VERSION:
+        _validate_current_v1_schema(conn)
+        return SQLiteDatabaseState(version, "ready_v1")
+    if not entries:
+        return SQLiteDatabaseState(version, "empty_v0")
+    # A source with views/triggers but no tables is not an empty bootstrap.
+    profile = classify_legacy_sqlite_schema(entries)
+    if profile is None:
+        raise RuntimeError("Unknown or partially upgraded SQLite v0 schema; restore a verified backup")
+    _check_database_integrity(conn)
+    return SQLiteDatabaseState(version, profile)
+
+
+def read_database_state(engine: Engine) -> SQLiteDatabaseState:
+    """Classify existing SQLite without data/DDL writes or repair attempts."""
+    _registered_steps_are_valid()
+    if engine.dialect.name != "sqlite":
+        raise RuntimeError("The v0→v1 migration runner supports SQLite only")
+    try:
+        with engine.connect() as conn:
+            if conn.exec_driver_sql("PRAGMA foreign_keys").scalar_one() != 1:
+                raise RuntimeError("SQLite migration requires foreign_keys=ON")
+            # SQLite implicit SELECT transactions are not stable across DDL;
+            # an explicit read snapshot keeps the preflight internally coherent.
+            conn.rollback()
+            conn.exec_driver_sql("BEGIN")
+            return _read_state_on_connection(conn)
+    except SQLAlchemyError as error:
+        if isinstance(error, StatementError):
+            error.hide_parameters = True
+        raise RuntimeError("SQLite migration source preflight failed") from error
+
+
+def _rollback_physical_transaction(conn: Connection) -> None:
+    """Close both SQLAlchemy and SQLite's actual transaction after exceptions."""
+    conn.rollback()
+    driver = conn.connection.driver_connection
+    if driver.in_transaction:
+        driver.rollback()
+
+
+def run_pending_migrations(
+    engine: Engine, stage4_identity: Stage4IdentityMigrationConfig | None = None
+) -> None:
+    """Perform an atomic v0→v1 upgrade, never stamping incomplete target DDL.
+
+    Offline startup owns the existing EX deployment lock (CP06). The caller
+    must not create tables before the read-only source admission. A second
+    contender rechecks the header and physical profile inside BEGIN IMMEDIATE.
     """
-    migrations = [
-        (
-            "channel_community_subscriptions",
-            "discord_guild_id",
-            "ALTER TABLE channel_community_subscriptions ADD COLUMN discord_guild_id INTEGER",
-        ),
-        (
-            "local_communities",
-            "created_by_discord_user_id",
-            "ALTER TABLE local_communities ADD COLUMN created_by_discord_user_id VARCHAR(64)",
-        ),
-        (
-            "activitypub_event_receipts",
-            "outcome",
-            "ALTER TABLE activitypub_event_receipts ADD COLUMN outcome VARCHAR(64)",
-        ),
-        (
-            "users",
-            "display_name",
-            "ALTER TABLE users ADD COLUMN display_name VARCHAR(30)",
-        ),
-        ("users", "summary", "ALTER TABLE users ADD COLUMN summary VARCHAR(500)"),
-        (
-            "users",
-            "avatar_media_id",
-            "ALTER TABLE users ADD COLUMN avatar_media_id INTEGER REFERENCES profile_media_assets(id) ON DELETE RESTRICT",
-        ),
-        (
-            "users",
-            "header_media_id",
-            "ALTER TABLE users ADD COLUMN header_media_id INTEGER REFERENCES profile_media_assets(id) ON DELETE RESTRICT",
-        ),
-        (
-            "users",
-            "profile_version",
-            "ALTER TABLE users ADD COLUMN profile_version INTEGER NOT NULL DEFAULT 0",
-        ),
-        (
-            "published_activity_objects",
-            "content_revision",
-            "ALTER TABLE published_activity_objects ADD COLUMN content_revision INTEGER NOT NULL DEFAULT 1",
-        ),
-        (
-            "published_activity_objects",
-            "deleted_at",
-            "ALTER TABLE published_activity_objects ADD COLUMN deleted_at DATETIME",
-        ),
-        (
-            "published_activity_objects",
-            "desired_kind",
-            "ALTER TABLE published_activity_objects ADD COLUMN desired_kind VARCHAR(16) NOT NULL DEFAULT 'none'",
-        ),
-        (
-            "published_activity_objects",
-            "desired_title",
-            "ALTER TABLE published_activity_objects ADD COLUMN desired_title VARCHAR(512)",
-        ),
-        (
-            "published_activity_objects",
-            "desired_body_markdown",
-            "ALTER TABLE published_activity_objects ADD COLUMN desired_body_markdown TEXT",
-        ),
-        (
-            "published_activity_objects",
-            "desired_edited_timestamp",
-            "ALTER TABLE published_activity_objects ADD COLUMN desired_edited_timestamp DATETIME",
-        ),
-        (
-            "published_activity_objects",
-            "desired_fingerprint",
-            "ALTER TABLE published_activity_objects ADD COLUMN desired_fingerprint VARCHAR(64)",
-        ),
-        (
-            "published_activity_objects",
-            "discord_reconciliation_needed",
-            "ALTER TABLE published_activity_objects ADD COLUMN discord_reconciliation_needed BOOLEAN NOT NULL DEFAULT 0",
-        ),
-        (
-            "published_activity_objects",
-            "discord_reconciliation_attempt_count",
-            "ALTER TABLE published_activity_objects ADD COLUMN discord_reconciliation_attempt_count INTEGER NOT NULL DEFAULT 0",
-        ),
-        (
-            "published_activity_objects",
-            "discord_reconciliation_next_attempt_at",
-            "ALTER TABLE published_activity_objects ADD COLUMN discord_reconciliation_next_attempt_at DATETIME",
-        ),
-        (
-            "published_activity_objects",
-            "discord_reconciliation_last_error",
-            "ALTER TABLE published_activity_objects ADD COLUMN discord_reconciliation_last_error VARCHAR(512)",
-        ),
-        (
-            "published_activity_objects",
-            "conversation_root_object_id",
-            "ALTER TABLE published_activity_objects ADD COLUMN conversation_root_object_id VARCHAR(512)",
-        ),
-    ]
-    # Stage 2 adds explicit local-community surface tables. Creating them here
-    # keeps interrupted deployments and migrate-only test fixtures aligned with
-    # the schema that the runtime expects after the refactor.
-    Base.metadata.create_all(
-        engine,
-        tables=[
-            BridgeActorKey.__table__,
-            BridgePolicyEntry.__table__,
-            CommunityActorBan.__table__,
-            LocalCommunityThreadSurface.__table__,
-            LocalCommunityMessageSurface.__table__,
-            ManagementAuditEvent.__table__,
-            GuildInvitePublication.__table__,
-            ProfileMediaAsset.__table__,
-            UserProfileField.__table__,
-            UserActorFollower.__table__,
-            UserActorFollowActivityId.__table__,
-            UserActorOutboundSource.__table__,
-            UserActorOutboundDelivery.__table__,
-            UserActorOutboundDeliveryFollower.__table__,
-            UserActorOutboundSourceMedia.__table__,
-            UserActorContentMutation.__table__,
-            PersonalFeedBinding.__table__,
-            PersonalFeedThreadMapping.__table__,
-            InboundConversationObject.__table__,
-            InboundDiscordDelivery.__table__,
-        ],
-    )
-    with engine.connect() as conn:
-        _migrate_published_activity_objects_stage5(conn)
-        _migrate_message_mappings_stage7(conn)
-        for table, column, stmt in migrations:
-            # PRAGMA table_info returns one row per column; skip if already present.
-            existing = _table_columns(conn, table)
-            # Partial legacy fixtures may omit unrelated tables entirely. A
-            # missing table has nothing to migrate and may be created later by
-            # the normal metadata path.
-            if not existing:
-                continue
-            if column not in existing:
-                conn.execute(text(stmt))
-        if "conversation_root_object_id" in _table_columns(
-            conn, "published_activity_objects"
-        ):
-            conn.execute(
-                text(
-                    "UPDATE published_activity_objects SET conversation_root_object_id = "
-                    "CASE WHEN kind = 'post' THEN object_id ELSE COALESCE(in_reply_to_object_id, object_id) END "
-                    "WHERE conversation_root_object_id IS NULL"
-                )
-            )
-            conn.execute(
-                text(
-                    "CREATE INDEX IF NOT EXISTS ix_published_activity_objects_conversation_root_object_id "
-                    "ON published_activity_objects (conversation_root_object_id)"
-                )
-            )
-        _migrate_local_communities_summary_nullable(conn)
-        _migrate_generalized_user_bans(conn)
-        # Stage 3 stores the selected LocalSubscriber on subscriber surface rows.
-        # Existing host-only surface rows keep NULL, so this additive migration is
-        # safe to run before or after Stage 2 backfill.
-        for table in (
-            "local_community_thread_surfaces",
-            "local_community_message_surfaces",
-        ):
-            columns = _table_columns(conn, table)
-            if "local_subscriber_id" not in columns:
-                conn.execute(
-                    text(f"ALTER TABLE {table} ADD COLUMN local_subscriber_id INTEGER")
-                )
-        _verify_stage2_surface_invariants(conn)
-        _migrate_profile_field_name_width(conn)
-        _migrate_user_actor_outbound_sources_stage5(conn)
-        _migrate_stage4_typed_activitypub_identity(conn, stage4_identity)
-        _install_profile_media_triggers(conn)
-        # Partial legacy fixtures may not contain authored-object storage yet.
-        if _table_columns(conn, "published_activity_objects"):
-            conn.execute(
-                text(
-                    "CREATE INDEX IF NOT EXISTS ix_published_objects_user_outbox "
-                    "ON published_activity_objects "
-                    "(actor_username, actor_url, deleted_at, published_at, id)"
-                )
-            )
-        conn.commit()
+    from . import schema
 
+    before = read_database_state(engine)
+    if before.version == DATABASE_VERSION:
+        return
+
+    with engine.connect() as conn:
+        suspended = False
+        try:
+            conn.rollback()
+            if conn.exec_driver_sql("PRAGMA foreign_keys").scalar_one() != 1:
+                raise RuntimeError("Migration writer lacks foreign key enforcement")
+            conn.rollback()
+            if before.profile != "empty_v0":
+                # FK toggling inside a SQLite transaction is a no-op. Disable
+                # only for supported source rebuilds and restore after rollback
+                # or commit, including under injected failure.
+                conn.exec_driver_sql("PRAGMA foreign_keys=OFF")
+                if conn.exec_driver_sql("PRAGMA foreign_keys").scalar_one() != 0:
+                    raise RuntimeError("Cannot suspend foreign keys before legacy rebuild")
+                suspended = True
+                conn.rollback()
+            conn.exec_driver_sql("BEGIN IMMEDIATE")
+            current = _read_state_on_connection(conn)
+            if current.version == DATABASE_VERSION:
+                # A concurrent v1 starter completed while we waited for EX.
+                conn.rollback()
+                return
+            if current != before:
+                raise RuntimeError("SQLite migration source changed after preflight")
+            if current.profile == "empty_v0":
+                schema.create_all(conn)
+                _install_profile_media_triggers(conn)
+            else:
+                MIGRATIONS[1](conn, current.profile, stage4_identity)
+            _validate_current_v1_schema(conn)
+            # Only the runner can stamp the DB header, after every schema,
+            # relationship and FK invariant has already passed.
+            conn.exec_driver_sql("PRAGMA user_version=1")
+            conn.commit()
+        except BaseException:
+            _rollback_physical_transaction(conn)
+            raise
+        finally:
+            if suspended:
+                _rollback_physical_transaction(conn)
+                try:
+                    conn.exec_driver_sql("PRAGMA foreign_keys=ON")
+                    if conn.exec_driver_sql("PRAGMA foreign_keys").scalar_one() != 1:
+                        raise RuntimeError("Could not restore SQLite foreign key enforcement")
+                except BaseException as exc:
+                    conn.invalidate()
+                    raise RuntimeError("Failed to restore SQLite FK enforcement") from exc
+    # Returning success requires a second read-only target admission.
+    read_database_state(engine)
 
 def _migrate_published_activity_objects_stage5(conn: Connection) -> None:
     """Rebuild authored objects to the current typed publication-context schema."""
