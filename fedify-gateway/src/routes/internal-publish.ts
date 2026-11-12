@@ -215,6 +215,8 @@ export function registerInternalPublishRoutes(
         mutationTimestamp: typeof payload.mutationTimestamp === "string" ? payload.mutationTimestamp : null,
         expectedRevision: typeof payload.expectedRevision === "number" ? payload.expectedRevision : null,
         nextRevision: typeof payload.nextRevision === "number" ? payload.nextRevision : null,
+        renderOnly: payload.renderOnly === true,
+        softwareProfile: payload.softwareProfile === "nodebb" || payload.softwareProfile === "bridge" || payload.softwareProfile === "threadiverse" ? payload.softwareProfile : null,
       });
       return context.json(result);
     } catch (error) {
@@ -260,6 +262,8 @@ export function registerInternalPublishRoutes(
         mutationTimestamp: typeof payload.mutationTimestamp === "string" ? payload.mutationTimestamp : null,
         expectedRevision: typeof payload.expectedRevision === "number" ? payload.expectedRevision : null,
         nextRevision: typeof payload.nextRevision === "number" ? payload.nextRevision : null,
+        renderOnly: payload.renderOnly === true,
+        softwareProfile: payload.softwareProfile === "nodebb" || payload.softwareProfile === "bridge" || payload.softwareProfile === "threadiverse" ? payload.softwareProfile : null,
       });
       return context.json(result);
     } catch (error) {

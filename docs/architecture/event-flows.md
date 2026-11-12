@@ -35,6 +35,24 @@ This document explains the major runtime traces through the bridge: user/platfor
 5. After commit, `queued/locally_accepted` means the original Create exists in the outbox, **not** that NodeBB accepted it. `CommunityRuntime` records one canonical thread/reply group and source Discord delivery, then mirrors to accepted sibling forums even while remote transport remains queued. `BridgeBot.on_thread_create` remembers the locally accepted thread for reconnect deduplication. Terminal local rejection does not create groups or mirrors.
 6. The existing `UserActorDeliveryWorker` claims the source's original direct Group endpoint even when the author has zero followers. It rechecks the exact accepted Follow generation, channel binding and Group/inbox policy; matching accepted User Actor followers share the same endpoint request, but cannot resurrect a revoked Group grant. An ambiguous direct transport result is retained as `unknown` without blind retry. Follower-only delivery retains its existing retry policy.
 
+## Discord Update/Delete -> original remote Group
+
+1. A Discord edit/delete of a published root or reply records a desired
+   mutation on the original `PublishedActivityObject` and reserves a stable
+   activity ID under a SQLite writer transaction. The reservation copies the
+   original Create Group/inbox/Follow/software evidence; missing evidence for a
+   remote Group is an explicit refusal, never a fresh actor discovery.
+2. `ContentMutationRepository.claim_due` waits until the original direct
+   Create delivery is confirmed `delivered`. An unknown network result does
+   not grant permission to render or publish a mutation.
+3. The gateway renders the deterministic Update/Delete without sending. Python
+   verifies its canonical identity/owner and atomically commits a new source
+   with the same direct recipient and endpoint, even across worker restarts.
+4. The existing User Actor worker checks the current exact Follow generation,
+   forum binding and policy. It delivers Create then revisions in order:
+   neither Update nor terminal Delete may bypass an unresolved earlier direct
+   send; an unknown outcome is held rather than retried blindly.
+
 ## Inbound receipt observability
 
 `src/http_api.py` creates an `in_progress` receipt before dispatch. Terminal handlers return a lifecycle `status`, a stable `InboundActivityOutcome`, and human-readable `detail`; `EventReceiptRepository` persists all three together. Deferred or failed retries reset the row to `in_progress` and clear the previous outcome. Duplicate terminal deliveries return the stored outcome without rewriting the receipt.

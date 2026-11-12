@@ -16,6 +16,9 @@ from ...models import (
     User,
     UserActorContentMutation,
     UserActorFollower,
+    UserActorOutboundSource,
+    UserActorOutboundDelivery,
+    LocalCommunity,
 )
 from ...activitypub_identity_urls import (
     build_user_delete_comment_activity_id,
@@ -144,6 +147,52 @@ class ContentMutationRepository(BaseRepository):
         )
         if active is not None:
             return active.id
+        # A remote Group mutation must inherit the already-committed Create's
+        # exact Follow generation and inbox. Never rebuild this identity from
+        # the current subscription (it may have been replaced after Create).
+        create_source = session.scalar(select(UserActorOutboundSource).where(
+            UserActorOutboundSource.published_object_id == published.id,
+            UserActorOutboundSource.source_kind == "content_create",
+        ))
+        direct_recipients = None
+        if create_source is not None:
+            try:
+                create_snapshot = json.loads(create_source.snapshot_json)
+            except (TypeError, ValueError) as exc:
+                raise ValueError("original Create snapshot is unreadable") from exc
+            if not isinstance(create_snapshot, dict):
+                raise ValueError("original Create snapshot is not an object")
+            if "directGroupRecipients" in create_snapshot:
+                direct_recipients = create_snapshot["directGroupRecipients"]
+                if (not isinstance(direct_recipients, list)
+                    or len(direct_recipients) != 1
+                    or not isinstance(direct_recipients[0], dict)):
+                    raise ValueError("original direct Group recipient evidence is invalid")
+                recipient = direct_recipients[0]
+                if (recipient.get("actorId") != published.community_actor_url
+                    or recipient.get("discordChannelId") != published.discord_channel_id
+                    or recipient.get("discordGuildId") != published.discord_guild_id
+                    or not isinstance(recipient.get("followActivityId"), str)
+                    or not isinstance(recipient.get("inboxUrl"), str)
+                    or recipient.get("softwareProfile") not in {"nodebb", "threadiverse", "bridge"}):
+                    raise ValueError("original direct Group recipient contradicts Create ownership")
+                create_delivery = session.scalar(select(UserActorOutboundDelivery).where(
+                    UserActorOutboundDelivery.source_id == create_source.id,
+                    UserActorOutboundDelivery.target_endpoint_url == recipient["inboxUrl"],
+                ))
+                if create_delivery is None:
+                    raise ValueError("original direct Group Create has no recorded target")
+                if target_inbox_urls is not None:
+                    raise ValueError("direct Group mutation cannot replace the original recipient")
+        # A legacy remote Create with no saved recipient is not permission to
+        # rediscover a possibly different Group inbox/Follow during mutation.
+        # Local Bridge-hosted communities still use their established fanout.
+        if direct_recipients is None and published.publication_context == "community":
+            hosted = session.scalar(select(LocalCommunity.id).where(
+                LocalCommunity.actor_url == published.community_actor_url,
+            ))
+            if hosted is None:
+                raise ValueError("remote community Create has no provable original Group recipient")
         user = session.scalar(select(User).where(User.actor_url == published.actor_url))
         if user is None:
             raise ValueError("published object actor is not a registered User Actor")
@@ -161,6 +210,9 @@ class ContentMutationRepository(BaseRepository):
             "bodyMarkdown": published.desired_body_markdown,
             "inReplyToObjectId": published.in_reply_to_object_id,
             "targetInboxUrls": target_inbox_urls,
+            **({"directGroupRecipients": direct_recipients,
+                "softwareProfile": direct_recipients[0]["softwareProfile"]}
+               if direct_recipients is not None else {}),
             "mutationTimestamp": (
                 published.desired_edited_timestamp.isoformat()
                 if published.desired_edited_timestamp is not None
@@ -369,6 +421,27 @@ class ContentMutationRepository(BaseRepository):
                 .limit(limit)
             ).all()
             for mutation, user, _published in rows:
+                # No rendering, local canonical commit or HTTP activity can
+                # overtake an unconfirmed remote Create (including unknown).
+                request = json.loads(mutation.request_json)
+                recipients = request.get("directGroupRecipients")
+                if recipients is not None:
+                    create_source = session.scalar(select(UserActorOutboundSource).where(
+                        UserActorOutboundSource.published_object_id == mutation.published_object_id,
+                        UserActorOutboundSource.source_kind == "content_create",
+                    ))
+                    if create_source is None or not isinstance(recipients, list) or not recipients:
+                        continue
+                    original = json.loads(create_source.snapshot_json).get("directGroupRecipients")
+                    if original != recipients or any(
+                        session.scalar(select(UserActorOutboundDelivery).where(
+                            UserActorOutboundDelivery.source_id == create_source.id,
+                            UserActorOutboundDelivery.target_endpoint_url == recipient["inboxUrl"],
+                            UserActorOutboundDelivery.status == "delivered",
+                        )) is None
+                        for recipient in recipients
+                    ):
+                        continue
                 token = secrets.token_hex(16)
                 mutation.claim_token = token
                 mutation.claimed_at = now
@@ -542,6 +615,16 @@ class ContentMutationRepository(BaseRepository):
                     )
                 )
             )
+            # The source snapshot is authoritative after restart, and must
+            # not be replaced by whatever Follow happens to be current now.
+            direct_recipients = request.get("directGroupRecipients")
+            if direct_recipients is not None:
+                original = session.scalar(select(UserActorOutboundSource).where(
+                    UserActorOutboundSource.published_object_id == published.id,
+                    UserActorOutboundSource.source_kind == "content_create",
+                ))
+                if original is None or json.loads(original.snapshot_json).get("directGroupRecipients") != direct_recipients:
+                    raise ValueError("mutation recipient differs from original Create")
             source = delivery_repository.insert_ready_content_source(
                 session,
                 user_id=mutation.user_id,
@@ -558,8 +641,10 @@ class ContentMutationRepository(BaseRepository):
                     if mutation.kind == "content_delete"
                     else "Update",
                     "contentRevision": mutation.next_revision,
+                    **({"directGroupRecipients": direct_recipients} if direct_recipients is not None else {}),
                 },
                 followers=followers,
+                direct_group_recipients=direct_recipients,
             )
             mutation.state = "committed"
             mutation.claim_token = None

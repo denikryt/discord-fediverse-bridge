@@ -195,6 +195,10 @@ class UserActorDeliveryClaimRepository:
         """Return the nearest newer terminal Delete status for content rows."""
         if source.source_kind not in {"content_create", "content_update"}:
             return None
+        # Direct Group mutations cannot replace an unsent Create; preserving
+        # chronological Create→Update→Delete is required even for terminal Delete.
+        if UserActorDeliveryClaimRepository._has_direct_group_snapshot(source):
+            return None
         return session.scalar(
             select(UserActorOutboundDelivery.status)
             .join(UserActorOutboundSource)
@@ -250,7 +254,9 @@ class UserActorDeliveryClaimRepository:
     ) -> bool:
         """Apply FIFO except that terminal Delete may bypass unsent failures."""
         blocking_statuses = (
-            ("sending", "unknown")
+            ("pending", "failed", "sending", "unknown", "ineligible", "superseded")
+            if UserActorDeliveryClaimRepository._has_direct_group_snapshot(source)
+            else ("sending", "unknown")
             if source.source_kind == "content_delete"
             else ("pending", "failed", "sending", "unknown")
         )
@@ -310,6 +316,15 @@ class UserActorDeliveryClaimRepository:
         )
 
     @staticmethod
+    def _has_direct_group_snapshot(source: UserActorOutboundSource) -> bool:
+        """Identify a direct-grant content source without reclassifying followers."""
+        try:
+            snapshot = json.loads(source.snapshot_json)
+        except (TypeError, ValueError):
+            return False
+        return isinstance(snapshot, dict) and "directGroupRecipients" in snapshot
+
+    @staticmethod
     def _eligible_direct_routes(
         session: Session, source: UserActorOutboundSource,
     ) -> tuple[tuple[str, str], ...] | None:
@@ -325,7 +340,7 @@ class UserActorDeliveryClaimRepository:
         if not isinstance(snapshot, dict) or "directGroupRecipients" not in snapshot:
             return None
         recipients = snapshot.get("directGroupRecipients")
-        if source.source_kind != "content_create" or not isinstance(recipients, list) or not recipients:
+        if source.source_kind not in {"content_create", "content_update", "content_delete"} or not isinstance(recipients, list) or not recipients:
             return ()
         accepted: list[tuple[str, str]] = []
         for recipient in recipients:

@@ -358,3 +358,16 @@ Group revocation; shared endpoints are sent at most once. A timeout after a
 possible send persists `unknown` without automatic retry or a new Create ID.
 The older follower-only delivery retry contract remains unchanged. The completed
 federation feature still depends on later checkpoints and full integration tests.
+
+## Direct Group mutations after queued Create (CP17)
+
+Discord-origin edits/deletes of a remote Group publication preserve the Group
+actor, inbox, Follow generation and content profile of its initial durable
+Create. Mutation rendering does not send ActivityPub before SQLite commit;
+after a confirmed original Create delivery, the existing User Actor worker
+submits Update/Delete in revision order with that original target. If Create
+is still queued or its network result is unknown, mutation delivery remains
+pending rather than being reported as accepted by NodeBB. A cancelled Follow,
+changed generation or missing historical direct recipient evidence does not
+permit a mutation to rediscover a new inbox or use an unrelated follower.
+The older local-community and personal-feed mutation paths are independent.

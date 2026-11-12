@@ -51,8 +51,8 @@ against the saved Group-scoped canonical post/reply, not the URI suffix;
 | `/publish-local-community` | `publish_local_community_content` | Publish local-community content | publish fields | Returns ids and delivery counts |
 | `/send-local-community-relay` | `send_local_community_relay` | Deliver rendered relay activities | `signingActorUrl`, `deliveries[]` | Returns per-target outcomes |
 | `/accept-local-community-follow` | `accept_local_community_follow` | Send Accept(Follow) | community, remote actor, inbox, Follow id | Sends signed Accept |
-| `/update` | `update_content` | Send Update | actor, community, object, kind, body | Sends Update |
-| `/delete` | `delete_content` | Send Delete | actor, community, object | Sends Delete |
+| `/update` | `update_content` | Render immutable direct Group Update or retain legacy non-direct delivery | actor, community, object, kind, body, `renderOnly`, `softwareProfile`, `conversationRootObjectId` | Direct Group returns JSON without transport; other paths retain prior delivery |
+| `/delete` | `delete_content` | Render immutable direct Group Delete or retain legacy non-direct delivery | actor, community, object, `renderOnly`, `softwareProfile`, `conversationRootObjectId` | Direct Group returns JSON without transport; other paths retain prior delivery |
 
 ### Durable remote community Create (CP15/CP16 boundary)
 
@@ -87,6 +87,39 @@ cannot bypass revoked Group authorization. Ambiguous direct sends persist as
 `UserActorOutboundDelivery.status="unknown"` and are not automatically retried;
 this is not evidence of NodeBB acceptance. Follower-only retry is unchanged.
 The old local-community `/publish-local-community` path is independent.
+
+### Direct remote Group Update/Delete (CP17)
+
+Discord-origin Update/Delete first records durable desired content against the
+original `PublishedActivityObject`, then reserves a stable revision in
+`UserActorContentMutation.request_json`. Remote Group reservations copy the
+**original Create** `UserActorOutboundSource.snapshot_json.directGroupRecipients`
+(Group actor, inbox, Follow generation, guild/forum and software profile).
+Missing or contradictory original recipient evidence is a local refusal: a new
+Follow, a matching URL or an unrelated follower does not reconstruct it.
+Local Bridge-hosted Groups and personal-feed mutations keep their existing
+non-direct paths.
+
+While the original direct Create endpoint remains `pending`, `failed`, `sending`,
+`unknown` or otherwise unconfirmed, the mutation reservation is not claimed
+for rendering. After the Create is confirmed `delivered`, Python invokes the
+existing authenticated `/update` or `/delete` with `renderOnly=true` and the
+saved software profile and conversation root. This path validates stable IDs
+and constructs the canonical ActivityPub JSON **without** remote discovery or
+`sendActivity`. NodeBB Update roots use Note with the original root context;
+threadiverse/Bridge roots preserve Page; Delete retains the immutable object ID.
+Python verifies the returned actor, ID, object, Group and kind before an atomic
+`commit_canonical` creates a new ready source, carrying the exact original
+`directGroupRecipients` and endpoint. On restart both the reservation and
+source snapshot remain in SQLite.
+
+The existing delivery worker rechecks that same Follow generation, channel
+binding, Group/inbox policy and ordering at claim. Direct Group Delete cannot
+bypass pending/failed/unknown Create or earlier mutation revisions. A dropped
+Follow is not rescued by a User Actor follower at the same inbox. `unknown`
+means the network may have succeeded and blocks blind resubmission; no remote
+acceptance is claimed. This boundary does not alter follower-only delivery
+ordering or automatic recovery policy.
 
 ## Bridge signing key ownership
 

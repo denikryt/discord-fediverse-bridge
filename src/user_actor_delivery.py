@@ -284,6 +284,9 @@ class UserActorDeliveryService:
                                 mutation_timestamp=request.get("mutationTimestamp"),
                                 expected_revision=claim.expected_revision,
                                 next_revision=claim.next_revision,
+                                render_only=bool(request.get("directGroupRecipients")),
+                                software_profile=request.get("softwareProfile"),
+                                conversation_root_object_id=request.get("conversationRootObjectId"),
                             )
                         )
                     else:
@@ -305,9 +308,14 @@ class UserActorDeliveryService:
                                 mutation_timestamp=request.get("mutationTimestamp"),
                                 expected_revision=claim.expected_revision,
                                 next_revision=claim.next_revision,
+                                render_only=bool(request.get("directGroupRecipients")),
+                                software_profile=request.get("softwareProfile"),
+                                conversation_root_object_id=request.get("conversationRootObjectId"),
                             )
                         )
                     canonical = result.activity_json
+                    if request.get("directGroupRecipients") is not None:
+                        self._validate_direct_mutation_render(claim, result)
                     if not self.database.content_mutations.record_canonical_result(
                         claim.mutation_id, claim.claim_token, canonical
                     ):
@@ -346,6 +354,37 @@ class UserActorDeliveryService:
         return len(claims)
 
     @staticmethod
+    def _validate_direct_mutation_render(claim, result) -> None:
+        """Require the gateway's pure mutation render to retain original IDs/ACL."""
+        request = claim.request
+        activity = result.activity_json
+        group = request["communityActorUrl"]
+        if (result.activity_id != claim.activity_id
+            or result.object_id != request["apObjectId"]
+            or not isinstance(activity, dict)
+            or activity.get("id") != claim.activity_id
+            or activity.get("actor") != claim.actor_url
+            or activity.get("type") != ("Delete" if claim.kind == "content_delete" else "Update")
+            or group not in activity.get("to", [])):
+            raise ValueError("rendered direct mutation changed verified activity identity/addressing")
+        obj = activity.get("object")
+        if claim.kind == "content_delete":
+            if obj != request["apObjectId"]:
+                raise ValueError("rendered direct Delete targets a different object")
+            return
+        profile = request["softwareProfile"]
+        expected_type = ("Note" if profile == "nodebb" or request["kind"] == "comment" else "Page")
+        if (not isinstance(obj, dict)
+            or obj.get("id") != request["apObjectId"]
+            or obj.get("attributedTo") != claim.actor_url
+            or obj.get("type") != expected_type
+            or obj.get("audience") != group
+            or group not in obj.get("to", [])
+            or obj.get("inReplyTo") != request.get("inReplyToObjectId")
+            or (profile == "nodebb" and obj.get("context") != request.get("conversationRootObjectId"))):
+            raise ValueError("rendered direct Update changed original Group owner/type/parent")
+
+    @staticmethod
     def _validate_mutation_request(claim) -> None:
         """Reject malformed local reservations before any gateway side effect."""
         request = claim.request
@@ -373,6 +412,14 @@ class UserActorDeliveryService:
             raise ValueError(
                 "mutation activity identity does not match its reservation"
             )
+        if "directGroupRecipients" in request:
+            recipients = request["directGroupRecipients"]
+            if (not isinstance(recipients, list) or len(recipients) != 1
+                or not isinstance(recipients[0], dict)
+                or recipients[0].get("actorId") != request.get("communityActorUrl")
+                or recipients[0].get("softwareProfile") != request.get("softwareProfile")
+                or request.get("targetInboxUrls") is not None):
+                raise ValueError("direct Group mutation has inconsistent immutable recipient")
 
     async def drain_deliveries(self, *, limit: int = CLAIM_BATCH_SIZE) -> int:
         """Claim and submit a bounded batch with isolated per-target outcomes."""

@@ -167,6 +167,9 @@ class UpdateContentRequest:
     mutation_timestamp: str | None = None
     expected_revision: int | None = None
     next_revision: int | None = None
+    render_only: bool = False
+    software_profile: str | None = None
+    conversation_root_object_id: str | None = None
 
 
 @dataclass(slots=True)
@@ -182,6 +185,9 @@ class DeleteContentRequest:
     mutation_timestamp: str | None = None
     expected_revision: int | None = None
     next_revision: int | None = None
+    render_only: bool = False
+    software_profile: str | None = None
+    conversation_root_object_id: str | None = None
 
 
 @dataclass(slots=True)
@@ -506,6 +512,9 @@ class FedifyGatewayClient:
                 "mutationTimestamp": request.mutation_timestamp,
                 "expectedRevision": request.expected_revision,
                 "nextRevision": request.next_revision,
+                "renderOnly": request.render_only,
+                "softwareProfile": request.software_profile,
+                "conversationRootObjectId": request.conversation_root_object_id,
             },
         )
         response.raise_for_status()
@@ -534,6 +543,9 @@ class FedifyGatewayClient:
                 "mutationTimestamp": request.mutation_timestamp,
                 "expectedRevision": request.expected_revision,
                 "nextRevision": request.next_revision,
+                "renderOnly": request.render_only,
+                "softwareProfile": request.software_profile,
+                "conversationRootObjectId": request.conversation_root_object_id,
             },
         )
         response.raise_for_status()

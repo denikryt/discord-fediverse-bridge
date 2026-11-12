@@ -218,6 +218,9 @@ export interface UpdateContentRequest {
   mutationTimestamp?: string | null;
   expectedRevision?: number | null;
   nextRevision?: number | null;
+  // Only immutable, Python-verified remote Group mutations use render-only.
+  renderOnly?: boolean;
+  softwareProfile?: "nodebb" | "threadiverse" | "bridge" | null;
 }
 
 export interface DeleteContentRequest {
@@ -233,6 +236,9 @@ export interface DeleteContentRequest {
   mutationTimestamp?: string | null;
   expectedRevision?: number | null;
   nextRevision?: number | null;
+  // Only immutable, Python-verified remote Group mutations use render-only.
+  renderOnly?: boolean;
+  softwareProfile?: "nodebb" | "threadiverse" | "bridge" | null;
 }
 
 export interface AcceptLocalCommunityFollowRequest {

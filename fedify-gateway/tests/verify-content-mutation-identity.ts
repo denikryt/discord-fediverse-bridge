@@ -1,7 +1,8 @@
 import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
-import { verifyMutationIdentity } from "../src/federation-outbound.js";
+import { verifyMutationIdentity, updateContent, deleteContent } from "../src/federation-outbound.js";
 import type { GatewayConfig } from "../src/config.js";
+import type { UpdateContentRequest, DeleteContentRequest } from "../src/types.js";
 
 const config: GatewayConfig = {
   actorIdentifier: "bridge", actorName: "Bridge", actorSummary: "Bridge",
@@ -16,12 +17,12 @@ function stableJson(value: unknown): string {
   return `{${Object.keys(record).sort().map((key) => `${JSON.stringify(key)}:${stableJson(record[key])}`).join(",")}}`;
 }
 
-function buildRequest(kind: "content_update" | "content_delete") {
+function buildRequest(kind: "content_update" | "content_delete", targetInboxUrls: string[] | null = []) {
   const base = {
     actorUsername: "alice",
     communityActorUrl: "https://remote.example/c/group",
     apObjectId: "https://bridge.example/actors/users/alice/objects/posts/1",
-    targetInboxUrls: [],
+    targetInboxUrls,
     mutationTimestamp: "2026-06-16T10:00:00+00:00",
     expectedRevision: 1,
     nextRevision: 2,
@@ -60,4 +61,39 @@ for (const kind of ["content_update", "content_delete"] as const) {
   // verification derives identity entirely from immutable request inputs.
   verifyMutationIdentity(config, JSON.parse(JSON.stringify(request)) as never, kind);
 }
+// A durable remote Group mutation is rendered but never sent by the gateway.
+// The original Group/inbox/Follow is authorized later by the Python delivery worker.
+const noNetwork = { createContext: () => { throw new Error("render-only invoked Fedify network"); } };
+const root = "https://bridge.example/actors/users/alice/objects/posts/1";
+const updateRequest = {
+  ...buildRequest("content_update", null), publicationContext: "community" as const,
+  renderOnly: true, softwareProfile: "nodebb" as const,
+  conversationRootObjectId: root,
+} as UpdateContentRequest;
+const updated = await updateContent(noNetwork as never, config, updateRequest);
+assert.equal(updated.activityId, updateRequest.activityId);
+assert.equal(updated.objectId, root);
+assert.equal((updated.activityJson.object as Record<string, unknown>).type, "Note");
+assert.equal((updated.activityJson.object as Record<string, unknown>).context, root);
+assert.equal((updated.activityJson.object as Record<string, unknown>).audience, updateRequest.communityActorUrl);
+
+const deleteRequest = {
+  ...buildRequest("content_delete", null), publicationContext: "community" as const,
+  renderOnly: true, softwareProfile: "nodebb" as const,
+  conversationRootObjectId: root,
+} as DeleteContentRequest;
+const deleted = await deleteContent(noNetwork as never, config, deleteRequest);
+assert.equal(deleted.activityJson.object, root);
+assert.equal(deleted.activityJson.id, deleteRequest.activityId);
+await assert.rejects(
+  () => deleteContent(noNetwork as never, config,
+    { ...deleteRequest, softwareProfile: null }),
+  /verified Create provenance/,
+);
+await assert.rejects(
+  () => updateContent(noNetwork as never, config,
+    { ...updateRequest, targetInboxUrls: ["https://wrong.example/inbox"] }),
+  /mutation operation identity mismatch|verified Create provenance/,
+);
+
 console.log("verify:content-mutation-identity passed");

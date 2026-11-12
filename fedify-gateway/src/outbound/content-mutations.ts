@@ -97,7 +97,7 @@ function buildUpdateActivity(
     : Temporal.Instant.from(request.mutationTimestamp);
 
   let object;
-  if (request.kind === "post") {
+  if (request.kind === "post" && request.softwareProfile !== "nodebb") {
     object = new Page({
       id: objectId,
       name: request.title ?? "Untitled Discord Post",
@@ -120,6 +120,9 @@ function buildUpdateActivity(
       source,
       content: htmlContent,
       updated,
+      ...(request.kind === "post" ? { name: request.title ?? "Untitled Discord Post" } : {}),
+      ...(request.softwareProfile === "nodebb" && request.conversationRootObjectId
+        ? { context: new URL(request.conversationRootObjectId) } : {}),
     };
     if (request.inReplyToObjectId) {
       noteParams.replyTarget = new URL(request.inReplyToObjectId);
@@ -175,6 +178,26 @@ function buildDeleteActivity(
   };
 }
 
+/** Refuse any unproven render-only mutation at the gateway boundary. */
+function validateDirectMutationRender(request: UpdateContentRequest | DeleteContentRequest): void {
+  if (request.publicationContext !== "community" ||
+      !request.communityActorUrl ||
+      !request.operationId || !request.activityId ||
+      request.targetInboxUrls != null ||
+      !["nodebb", "threadiverse", "bridge"].includes(request.softwareProfile ?? "")) {
+    throw new Error("remote Group mutation render requires immutable verified Create provenance");
+  }
+  const group = new URL(request.communityActorUrl);
+  if (group.protocol !== "https:" || group.hash || group.username || group.password) {
+    throw new Error("remote Group mutation requires an HTTPS canonical actor");
+  }
+  if (request.softwareProfile === "nodebb" &&
+      (!request.conversationRootObjectId ||
+       new URL(request.conversationRootObjectId).protocol !== "https:")) {
+    throw new Error("NodeBB mutation requires the persisted conversation root");
+  }
+}
+
 /** Build and deliver or render one canonical content Update activity. */
 export async function updateContent(
   federation: Federation<GatewayConfig>,
@@ -184,6 +207,17 @@ export async function updateContent(
   // Update delivery mirrors publish delivery: same actor URI, same community
   // fetch, but wraps the object in an Update activity instead of Create.
   const builtUpdate = buildUpdateActivity(config, request);
+  if (request.renderOnly === true) {
+    // Unlike the legacy remote path, this call must not perform discovery or
+    // Fedify.sendActivity. Python commits the canonical mutation first, then
+    // the existing User Actor worker authorizes its original Group recipient.
+    validateDirectMutationRender(request);
+    return {
+      activityId: builtUpdate.activityId.href,
+      objectId: request.apObjectId,
+      activityJson: await renderPublicActivityJson(builtUpdate.activity),
+    };
+  }
   if (request.publicationContext === "personal_feed") {
     return {
       activityId: builtUpdate.activityId.href,
@@ -243,6 +277,14 @@ export async function deleteContent(
   // Delete delivery uses the AP object URL as the object field (string form, not
   // a full object), matching the Lemmy federation protocol for Delete activities.
   const builtDelete = buildDeleteActivity(config, request);
+  if (request.renderOnly === true) {
+    validateDirectMutationRender(request);
+    return {
+      activityId: builtDelete.activityId.href,
+      objectId: request.apObjectId,
+      activityJson: await renderPublicActivityJson(builtDelete.activity),
+    };
+  }
   if (request.publicationContext === "personal_feed") {
     return {
       activityId: builtDelete.activityId.href,
