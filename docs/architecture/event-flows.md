@@ -22,9 +22,17 @@ This document explains the major runtime traces through the bridge: user/platfor
 ## Remote /unsubscribe-channel flow
 
 1. `src/commands/unsubscribe.py` calls `src/operations/unsubscribe.py`.
-2. The channel subscription is removed.
-3. If it was the last channel for the community, Python calls gateway `/unfollow-community`.
-4. The bridge follow row is removed or preserved according to Undo(Follow) delivery outcome.
+2. Under the same SQLite writer boundary as Follow send reservation, remove the
+   channel binding and inspect the existing Follow generation. Another active
+   channel keeps the original Group Follow unchanged.
+3. When the last channel is removed, `prepared` Follow is cancelled **before**
+   network send; `sending` or `sent` Follow records `cancel_requested` without
+   inventing a replacement Follow ID. Only a confirmed sent Follow may advance
+   to `undo_sending` before the gateway sends the deterministic Undo ID.
+4. Uncertain Follow/Undo transport does not prove remote cleanup or delete the
+   saved generation. Resubscribe before Undo starts can rebind the **same**
+   Follow; after `undo_sending`, it requires proven cleanup or reports
+   `remote_follow_cleanup_unresolved` with the guarded offline operator path.
 
 ## Local Group inbound post/reply host flow
 
@@ -244,10 +252,16 @@ This document explains the major runtime traces through the bridge: user/platfor
 
 ## Remote ActivityPub Undo(Follow) -> local community unfollow flow
 
-1. Gateway receives embedded Undo(Follow) addressed to a local community actor.
-2. Gateway emits `local.unfollow_requested` when the target actor is owned by this bridge.
-3. Python removes the remote actor from `remote_subscribers`.
-4. Future create, update, and delete fanout uses current accepted remote subscribers and excludes the removed actor.
+1. Gateway verifies the signed `Undo(Follow)` and the exact verified local
+   Group recipient; an ID-only raw cache cannot supply the embedded Follow.
+2. Gateway emits `local.unfollow_requested` for that owner; Python validates
+   the authenticated actor and original Follow identity.
+3. Under SQLite writer serialization, delete from `remote_subscribers` only
+   where `(local_community_id,remote_actor_id,follow_activity_id,status)`
+   matches the **current** accepted generation and Follow ID is non-NULL.
+   Late `Undo(old)` after `Follow(new)` and a missing Follow ID do no deletion.
+4. Subsequent Create/Update/Delete and relay reevaluate current accepted
+   subscribers; a retry of old Follow cannot restore an undone generation.
 
 
 ## Local subscriber Discord post/comment -> local community flow

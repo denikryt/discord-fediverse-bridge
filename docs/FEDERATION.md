@@ -92,6 +92,13 @@ An ID-only signed `Delete(Tombstone)` may omit its ancestry, but it cannot
 change the original Group/parent association. Moderator delegation without a
 separately verified authority proof remains unsupported.
 
+The first accepted inbound Create also fixes the rendered Discord title/body
+in the canonical local host row before the Discord REST call. A later signed
+Create or `Announce` with the same object ID may complete an unfinished sibling
+delivery, but uses that saved rendering rather than a changed replay body.
+Historical host rows without first-Create content evidence cannot reconstruct
+new sibling content from the latest envelope and fail closed for that retry.
+
 ### Canonical relay of locally hosted Group content
 
 The first authorized inbound Create fixes a relay source for
@@ -160,9 +167,12 @@ and `nodebb:` selections are revalidated on submit. NodeBB selection uses
 short-lived autocomplete lookup keys; an expired key is rejected and the user
 must search again or enter the category URL. NodeBB HTTP reads enforce HTTPS,
 current federation policy, public-IP DNS, same-origin redirects, and bounded
-response size. The signed NodeBB Follow lifecycle and actual content sync are
-completed in later checkpoints; discovery alone is not a claim of end-to-end
-NodeBB federation.
+response size. The NodeBB Follow/Undo, signed Group announcement ingestion, bounded historical
+root membership, durable Create/direct delivery and owner-checked mutations are
+implemented on this branch. These paths have focused fixture/SQLite tests, but
+**live NodeBB–Fedify–Discord end-to-end interoperability is not verified**
+without the actual gateway and Discord dependencies. Discovery alone does not
+prove remote acceptance of a Follow or publication.
 
 Remote subscriptions now reserve the canonical Group actor, verified inbox,
 immutable outbound Follow activity ID, software profile, and the first Discord
@@ -416,8 +426,8 @@ channel binding and Group/inbox policy for direct transport, including authors
 with no User Actor followers. A follower at the same endpoint does not override
 Group revocation; shared endpoints are sent at most once. A timeout after a
 possible send persists `unknown` without automatic retry or a new Create ID.
-The older follower-only delivery retry contract remains unchanged. The completed
-federation feature still depends on later checkpoints and full integration tests.
+The older follower-only delivery retry contract remains unchanged. The persistent Group delivery and local fanout implementation is present;
+release acceptance still requires the full dependency-backed integration tests.
 
 ## Direct Group mutations after queued Create (CP17)
 

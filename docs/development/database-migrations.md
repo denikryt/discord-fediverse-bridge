@@ -4,8 +4,11 @@ This document owns the deployment/operator contract for the bridge's first
 versioned SQLite schema. It is **not** a generic rolling-upgrade or disaster
 recovery framework. The application version (`v0.1.0` or later) is unrelated
 to `PRAGMA user_version` (`0` for supported historical files, `1` for this
-release). The `src/db/schema_versions/v1.sql` snapshot is provisional during
-development and must be frozen against the ORM and migrated files at CP24.
+release). The `src/db/schema_versions/v1.sql` file is the **frozen SQLite v1
+physical-schema reference** for this release branch. CP24 regression checks compare
+it with fresh v1 bootstrap and upgrades from both supported v0 schemas, including
+indexes and triggers; any subsequent physical schema change requires a new
+versioned migration rather than an undocumented edit of v1.
 
 ## Source admission
 

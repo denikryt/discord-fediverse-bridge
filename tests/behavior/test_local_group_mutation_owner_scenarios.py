@@ -45,6 +45,7 @@ def _setup(tmp_path):
             local_community_id=community.id,
             ap_activity_id=AUTHOR + "/activities/create/1", ap_object_id=POST,
             source_owner_actor_id=AUTHOR, origin_subscriber_actor_id=AUTHOR,
+            inbound_create_snapshot={"title": "Original", "content": "post body"},
         )
         db.local_community_content.finish_inbound_host_attempt(
             canonical_id=root.canonical.id, attempt_id=root.attempt_id, kind="post",
@@ -56,6 +57,7 @@ def _setup(tmp_path):
             ap_activity_id=AUTHOR + "/activities/create-comment/1", ap_object_id=REPLY,
             parent_ap_object_id=POST, source_owner_actor_id=AUTHOR,
             origin_subscriber_actor_id=AUTHOR,
+            inbound_create_snapshot={"content": "reply body"},
         )
         db.local_community_content.finish_inbound_host_attempt(
             canonical_id=reply.canonical.id, attempt_id=reply.attempt_id, kind="comment",
