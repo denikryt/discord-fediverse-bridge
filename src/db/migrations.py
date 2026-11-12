@@ -16,7 +16,7 @@ import hashlib
 import json
 from urllib.parse import urlsplit
 
-from sqlalchemy import text
+from sqlalchemy import bindparam, text
 from sqlalchemy.exc import SQLAlchemyError, StatementError
 from sqlalchemy.engine import Connection, Engine
 
@@ -706,8 +706,8 @@ def _migrate_stage4_typed_activitypub_identity(
     """Convert retained same-origin local ActivityPub identity to typed URLs.
 
     The migration deliberately receives only non-secret identity configuration.
-    It rewrites local application rows, purges stale remote relationship state,
-    and then checks the retained local columns before the surrounding transaction
+    It rewrites local application rows, invalidates only relationships whose
+    local actor endpoint changed, and checks retained columns before the transaction
     commits so startup cannot finish in a mixed namespace state.
     """
     if config is None:
@@ -740,6 +740,7 @@ def _migrate_stage4_typed_activitypub_identity(
         ).mappings()
     ) if _table_columns(conn, "users") else []
     user_actor_map: dict[str, str] = {}
+    invalidated_user_ids: list[int] = []
     for row in user_rows:
         username = str(row["activitypub_username"])
         address = build_actor_address(
@@ -748,6 +749,8 @@ def _migrate_stage4_typed_activitypub_identity(
         old_actor = row["actor_url"]
         if isinstance(old_actor, str):
             user_actor_map[old_actor] = address.actor_url
+        if old_actor != address.actor_url:
+            invalidated_user_ids.append(int(row["id"]))
         conn.execute(
             text(
                 "UPDATE users SET actor_url=:actor_url, inbox_url=:inbox_url, "
@@ -769,6 +772,7 @@ def _migrate_stage4_typed_activitypub_identity(
     ) if _table_columns(conn, "local_communities") else []
     community_actor_map: dict[str, str] = {}
     community_slug_by_id: dict[int, str] = {}
+    invalidated_community_ids: list[int] = []
     for row in community_rows:
         slug = str(row["slug"])
         community_slug_by_id[int(row["id"])] = slug
@@ -778,6 +782,8 @@ def _migrate_stage4_typed_activitypub_identity(
         old_actor = row["actor_url"]
         if isinstance(old_actor, str):
             community_actor_map[old_actor] = address.actor_url
+        if old_actor != address.actor_url:
+            invalidated_community_ids.append(int(row["id"]))
         conn.execute(
             text(
                 "UPDATE local_communities SET actor_url=:actor_url, inbox_url=:inbox_url, "
@@ -792,7 +798,13 @@ def _migrate_stage4_typed_activitypub_identity(
             },
         )
 
+    service_actor_changed = False
     if _table_columns(conn, "bridge_actor_keys"):
+        service_actor_changed = any(
+            row[0] != service.actor_url for row in conn.execute(
+                text("SELECT actor_url FROM bridge_actor_keys")
+            ).all()
+        )
         conn.execute(
             text("UPDATE bridge_actor_keys SET actor_url=:actor_url, key_id=:key_id"),
             {"actor_url": service.actor_url, "key_id": service.public_key_url},
@@ -805,7 +817,11 @@ def _migrate_stage4_typed_activitypub_identity(
     _migrate_stage4_content_mutations(conn, origin, object_id_map, user_actor_map, community_actor_map)
     _migrate_stage4_local_community_relay_deliveries(conn, origin, community_slug_by_id)
     _migrate_stage4_community_sync_groups(conn, origin)
-    _purge_stage4_remote_relationship_state(conn)
+    _invalidate_changed_actor_relationships(
+        conn, changed_user_ids=invalidated_user_ids,
+        changed_community_ids=invalidated_community_ids,
+        service_actor_changed=service_actor_changed,
+    )
     _verify_stage4_identity_invariants(conn, origin)
 
 
@@ -1587,19 +1603,46 @@ def _stage4_actor_child_url(value: str, origin: str) -> str | None:
         return None
     return getattr(address, f"{child}_url")
 
-def _purge_stage4_remote_relationship_state(conn: Connection) -> None:
-    """Remove old local-actor relationship state that cannot be reused safely."""
-    for table in ("user_actor_follow_activity_ids", "user_actor_followers", "remote_subscribers", "bridge_actor_follows"):
-        if _table_columns(conn, table):
-            conn.execute(text(f"DELETE FROM {table}"))
-    subscription_columns = _table_columns(conn, "channel_community_subscriptions")
-    if {"follow_activity_id", "status"}.issubset(subscription_columns):
+def _invalidate_changed_actor_relationships(
+    conn: Connection,
+    *,
+    changed_user_ids: list[int],
+    changed_community_ids: list[int],
+    service_actor_changed: bool,
+) -> None:
+    """Invalidate only relations whose verified local actor endpoint changed.
+
+    Historical accepted rows for unchanged typed actors are never purged. The
+    source relationship is not transplanted to a new actor identity: a follow
+    requires a fresh signed protocol handshake. The old relationship IDs are
+    not fabricated or reused for the new endpoint.
+    """
+    if changed_user_ids and _table_columns(conn, "user_actor_followers"):
         conn.execute(
-            text(
-                "UPDATE channel_community_subscriptions "
-                "SET follow_activity_id=NULL, status='pending'"
-            )
+            text("DELETE FROM user_actor_followers WHERE user_id IN :ids").bindparams(
+                bindparam("ids", expanding=True)
+            ),
+            {"ids": changed_user_ids},
         )
+    if changed_community_ids and _table_columns(conn, "remote_subscribers"):
+        conn.execute(
+            text("DELETE FROM remote_subscribers WHERE local_community_id IN :ids").bindparams(
+                bindparam("ids", expanding=True)
+            ),
+            {"ids": changed_community_ids},
+        )
+    if service_actor_changed:
+        if _table_columns(conn, "bridge_actor_follows"):
+            conn.execute(text(
+                "UPDATE bridge_actor_follows SET follow_activity_id=NULL, status='failed' "
+                "WHERE follow_activity_id IS NOT NULL OR status!='failed'"
+            ))
+        if _table_columns(conn, "channel_community_subscriptions"):
+            conn.execute(text(
+                "UPDATE channel_community_subscriptions "
+                "SET follow_activity_id=NULL, status='failed' "
+                "WHERE follow_activity_id IS NOT NULL OR status!='failed'"
+            ))
 
 
 def _verify_stage4_identity_invariants(conn: Connection, origin: str) -> None:
