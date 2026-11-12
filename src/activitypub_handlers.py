@@ -552,22 +552,25 @@ async def _notify_channel_accepted(subscription: object, runtime: Runtime) -> No
 
 def _is_discord_originated_echo(event: ActivityPubEvent, runtime: Runtime) -> bool:
     """Return whether an inbound AP event matches a prior Discord-originated publish."""
-    # Outbound Discord publishes persist both activity_id and object_id, so
-    # inbound loop suppression checks both keys before any Discord fanout.
-    if (
+    # The global MessageMapping table can also reference an inbound host
+    # placement for a different LocalCommunity. Only a proven Discord-origin
+    # publish in the *same* community is an echo; an inbound AP reference is
+    # never a reason to suppress a separately authorized Group delivery.
+    for mapping in (
         runtime.database.message_mappings.get_message_mapping_by_object_id(
             event.object.ap_id
-        )
-        is not None
-    ):
-        return True
-    if (
+        ),
         runtime.database.message_mappings.get_message_mapping_by_activity_id(
             event.delivery_id
-        )
-        is not None
+        ),
     ):
-        return True
+        if (
+            mapping is not None
+            and mapping.source_platform == "discord"
+            and mapping.actor_url == event.actor_id
+            and mapping.community_actor_url == event.community_actor_id
+        ):
+            return True
     # Lemmy re-wraps our outbound activities in an Announce with a new ap_id, so
     # the object_id check above misses the echo. If the actor is one of our own
     # registered users, the activity originated here and must be suppressed.

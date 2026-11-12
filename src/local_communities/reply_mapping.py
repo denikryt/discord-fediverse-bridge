@@ -106,10 +106,13 @@ def resolve_inbound_reply_target(
         return getattr(thread_surface, "discord_starter_message_id")
     parent_message = (
         database.local_community_content.get_local_community_message_by_ap_object_id(
-            parent_ap_object_id
+            parent_ap_object_id,
+            local_community_id=getattr(thread_row, "local_community_id"),
         )
     )
-    if parent_message is None:
+    if parent_message is None or getattr(parent_message, "local_community_thread_id") != getattr(thread_row, "id"):
+        # Even an identical AP ID in a different local Group is never a
+        # valid parent for this concrete Discord thread surface.
         return None
     message_surface = (
         database.local_community_surfaces.get_host_local_community_message_surface(

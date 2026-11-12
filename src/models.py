@@ -1443,6 +1443,8 @@ class LocalCommunityThread(Base):
     origin_kind: Mapped[str] = mapped_column(String(32), nullable=False)
     source_owner_actor_id: Mapped[str | None] = mapped_column(String(512), nullable=True)
     origin_subscriber_actor_id: Mapped[str | None] = mapped_column(String(512), nullable=True)
+    # Immutable first-Create Discord projection; legacy/outbound rows lack it.
+    inbound_create_snapshot_json: Mapped[dict | None] = mapped_column(JSON, nullable=True)
     host_delivery_state: Mapped[str | None] = mapped_column(String(16), nullable=True)
     host_attempt_id: Mapped[str | None] = mapped_column(String(64), nullable=True)
     host_attempt_started_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
@@ -1484,6 +1486,8 @@ class LocalCommunityMessage(Base):
     parent_ap_object_id: Mapped[str | None] = mapped_column(String(512), nullable=True)
     source_owner_actor_id: Mapped[str | None] = mapped_column(String(512), nullable=True)
     origin_subscriber_actor_id: Mapped[str | None] = mapped_column(String(512), nullable=True)
+    # Replay may complete missing sibling deliveries, but not replace their body.
+    inbound_create_snapshot_json: Mapped[dict | None] = mapped_column(JSON, nullable=True)
     host_delivery_state: Mapped[str | None] = mapped_column(String(16), nullable=True)
     host_attempt_id: Mapped[str | None] = mapped_column(String(64), nullable=True)
     host_attempt_started_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)

@@ -72,7 +72,7 @@ class Database:
         self.management_audit = ManagementAuditRecorder(self.management_audit_events)
         self.remote_subscribers = RemoteSubscriberRepository(self.session)
         self.local_subscribers = LocalSubscriberRepository(self.session)
-        self.local_community_content = LocalCommunityContentRepository(self.session)
+        self.local_community_content = LocalCommunityContentRepository(self.session, self.immediate_session)
         self.local_community_surfaces = LocalCommunitySurfaceRepository(self.session)
         self.local_community_relay = LocalCommunityRelayRepository(self.session)
         self.remote_subscriptions = RemoteSubscriptionRepository(self.session)

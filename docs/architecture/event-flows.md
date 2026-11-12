@@ -26,6 +26,33 @@ This document explains the major runtime traces through the bridge: user/platfor
 3. If it was the last channel for the community, Python calls gateway `/unfollow-community`.
 4. The bridge follow row is removed or preserved according to Undo(Follow) delivery outcome.
 
+## Local Group inbound post/reply host flow
+
+1. The gateway resolves every authenticated local Group recipient separately
+   (actor-specific owner or bounded shared inbox); the Python receipt is scoped
+   by wire ID, event type and verified Group actor.
+2. For each tenant, `LocalCommunityInboundCreateHandler` checks its accepted
+   direct actor or cryptographically verified Bridge Person→Service relationship
+   **before** any existing-object or parent lookup.
+3. `LocalCommunityContentRepository` reserves one immutable `(Group,object,kind)`
+   with original owner/Service origin, the first rendered Discord Create body
+   and a fencing attempt ID under `BEGIN IMMEDIATE`. Reply roots and direct
+   parents must belong to this Group. Later signed Create/Announce duplicates
+   use the saved title/body when completing a missing sibling; their new
+   payload cannot replace what the original host received.
+   Another concurrent Create/Announce may observe the row but cannot issue a
+   second host Discord REST call.
+4. A successful REST response atomically attaches the corresponding host
+   surface and marks `delivered`; verified sibling surfaces and relay follow.
+   A pre-send error marks `failed`; a possible send with lost response marks
+   `unknown` and is not blindly retried. A duplicate of an unknown attempt
+   cannot generate another host or relay send.
+5. The global AP `MessageMapping` is optional compatibility provenance, not
+   proof of a Group host. A gateway parent fallback with more than one local
+   host placement returns an explicit ambiguity instead of selecting one.
+   Existing pre-v1 host rows without a provable initial content snapshot do
+   not gain new sibling content from a later envelope; that replay fails closed.
+
 ## Local Group inbound Follow/Undo(Follow) flow
 
 1. Fedify verifies the signed Follow/Undo and routes the verified local Group

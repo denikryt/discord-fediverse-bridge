@@ -541,9 +541,10 @@ class LocalCommunityDiscordFanout:
         ):
             return getattr(target_thread_surface, "discord_starter_message_id")
         parent_message = self.database.local_community_content.get_local_community_message_by_ap_object_id(
-            parent_ap_object_id
+            parent_ap_object_id,
+            local_community_id=getattr(thread_row, "local_community_id"),
         )
-        if parent_message is None:
+        if parent_message is None or getattr(parent_message, "local_community_thread_id") != getattr(thread_row, "id"):
             return MISSING_PARENT_SURFACE
         parent_surface = (
             self.database.local_community_surfaces.get_local_community_message_surface(

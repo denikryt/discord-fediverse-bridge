@@ -580,6 +580,21 @@ def create_internal_fedify_router(runtime: Runtime) -> APIRouter:
         )
         if row is None:
             raise HTTPException(status_code=404, detail="Message mapping not found")
+        if row.source_platform == "activitypub" and row.community_actor_url is not None:
+            local_group = runtime.database.local_communities.get_local_community_by_actor_url(
+                row.community_actor_url
+            )
+            if local_group is not None:
+                tenants = runtime.database.local_community_content.list_delivered_local_group_message_tenants(
+                    request.object_id
+                )
+                if tenants != [local_group.id]:
+                    # Global MessageMapping is a reference, never a tenant
+                    # placement proof: a second Group can host the same AP id.
+                    raise HTTPException(
+                        status_code=409,
+                        detail="ambiguous or unverified local Group parent mapping",
+                    )
         return MessageMappingResponse(
             source_platform=row.source_platform,
             source_id=row.source_id,

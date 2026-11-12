@@ -71,6 +71,31 @@ rejected without content effects. A verified *same-actor* accepted subscriber
 keeps its prior path. CP21 completes durable pre-REST host reservation; CP23
 will correct origin Service exclusion and immutable relay provenance.
 
+### Local Group host reservation (CP21)
+
+After each signed Create is admitted to one specific Local Group (CP19) and
+its Person/Service subscription is verified (CP20), Python reserves a
+`LocalCommunityThread` or `LocalCommunityMessage` keyed by
+`(local_community_id, ap_object_id)`. The first record pins the original
+`source_owner_actor_id`, `origin_subscriber_actor_id`, root and direct parent.
+A single CAS attempt token transitions `reserved|failed` to `sending` **in
+SQLite before** Discord `create_thread`/`send`; only the winner calls REST.
+A confirmed response commits the Discord host surface with `delivered` in
+the same transaction. A provably pre-send failure may be retried; an ambiguous
+send or stale sending attempt is `unknown`, without automatic resubmission.
+Two authorized local Groups may store the same AP object independently, while
+a forged duplicate, different origin or foreign parent cannot reuse another
+tenant's host or relay privileges. All duplicate deliveries recheck subscriber
+ACL first. This uses the existing canonical host state fields, not a second
+host-claim table or a restart recovery worker.
+
+The generic `MessageMapping` is a single AP reference, **not** a local Group
+placement lookup. `POST /internal/fedify/message-mappings/resolve` therefore
+returns `409` rather than choosing its first stored Group when multiple local
+host placements have the same object ID. A reply with explicit verified local
+Group targeting uses its tenant-scoped canonical parent. The gateway may not
+infer an absent local Group from a competing global mapping.
+
 ### Inbound remote mutation authorization
 
 For `post.updated|deleted` and `comment.updated|deleted`, the gateway sends
