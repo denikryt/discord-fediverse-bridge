@@ -118,7 +118,7 @@ Use `docs/architecture/database-map.md` for table ownership and invariants. Use 
 
 - `src/actor_key_service.py` bootstraps and resolves local actor signing keys.
 - `src/db/repositories/bridge_actor_keys.py` persists the bridge service actor keypair.
-- `src/db/backup.py` creates, retains, and restores validated SQLite snapshots.
+- `src/db/backup.py` creates, retains, and restores validated SQLite snapshots. `create_migration_backup` separately requires an already held exclusive deployment lock and produces verified no-clobber v0 archives under `backups/migrations`; ordinary backup retention does not inspect that subdirectory.
 
 
 Discord OAuth boundary code consumes `Settings.resolved_discord_oauth_redirect_uri` directly; test adapters implement the same contract.

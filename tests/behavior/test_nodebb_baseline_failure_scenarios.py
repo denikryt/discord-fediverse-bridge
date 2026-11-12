@@ -56,7 +56,6 @@ def test_repeat_migrate_retains_unchanged_remote_follow_and_channel(tmp_path: Pa
         database.close()
 
 
-@pytest.mark.xfail(strict=True, reason="CP02: released v0 has no profile_media_assets")
 def test_release_v0_complete_backup_can_be_restored_without_media_table(tmp_path: Path) -> None:
     """The tagged release DB must be a valid zero-media migration backup source."""
     schema = Path(__file__).parents[1] / "fixtures/database/released_v0_schema.sql"

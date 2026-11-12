@@ -105,7 +105,7 @@ This document is a short, feature-oriented index of the test suite. It helps mai
 - Database federation identity and actor persistence — [`tests/test_db_federation_identity.py`](../../tests/test_db_federation_identity.py)
 - Schema cleanup and migration idempotency — [`tests/test_stage5_schema_cleanup.py`](../../tests/test_stage5_schema_cleanup.py)
 - Removal of legacy remote-subscriber naming compatibility — [`tests/test_stage1_remote_subscriber_naming.py`](../../tests/test_stage1_remote_subscriber_naming.py)
-- SQLite backups — [`tests/behavior/test_sqlite_backup_scenarios.py`](../../tests/behavior/test_sqlite_backup_scenarios.py)
+- SQLite backups — [`tests/behavior/test_sqlite_backup_scenarios.py`](../../tests/behavior/test_sqlite_backup_scenarios.py); exact tagged-v0/known-main migration archive, media, restore, no-clobber, and rejection — [`tests/behavior/test_migration_source_backup_scenarios.py`](../../tests/behavior/test_migration_source_backup_scenarios.py)
 - Internal Python/Fedify API contract — [`tests/test_internal_fedify_api.py`](../../tests/test_internal_fedify_api.py)
 - Federation policy and allowlist handlers — [`tests/test_federation_policy.py`](../../tests/test_federation_policy.py), [`tests/test_federation_allowlist_handlers.py`](../../tests/test_federation_allowlist_handlers.py)
 - Actor key bootstrap — [`tests/test_bridge_actor_key_bootstrap.py`](../../tests/test_bridge_actor_key_bootstrap.py)

@@ -21,5 +21,5 @@ Inbound personal-feed comments are retained even when the active binding is remo
 ## NodeBB release branch baseline (2026-11-11)
 
 - Open: current main's repeated `Database.migrate()` deletes unaffected accepted remote Follow rows and resets Discord channel bindings (CP03/CP04).
-- Open: complete SQLite/media backup on tagged `v0.1.0` fails because the release schema does not include `profile_media_assets` (CP02).
+- Fixed in CP02, awaiting CP06 startup integration: source-aware migration backup accepts the exact tagged `v0.1.0` schema without `profile_media_assets`, checks referenced media on known main, and publishes protected no-clobber archives.
 - Verification blocked: initial full `pytest` cannot import missing `hypothesis`; Node gateway dependency install is unavailable from the local offline npm cache. These are environment blockers, not observed test failures.

@@ -5,7 +5,7 @@ This is the pre-implementation acceptance checklist for the single `feature/node
 | Invariant (positive / negative regression) | Owning checkpoints | Verified |
 | --- | --- | --- |
 | An unmodified v1 SQLite starts read-only with byte-identical subscriptions; v0 is upgraded exactly once / unsupported or mixed sources are rejected without writes. | CP03–CP06, CP24 | [ ] |
-| Release v0 and known-main backups include a restorable database and complete referenced media; separate migration snapshots never clobber / missing media, unrecognized sources or invalid digests stop before upgrade. | CP02, CP06, CP24 | [ ] |
+| Release v0 and known-main backups include a restorable database and complete referenced media; separate migration snapshots never clobber / missing media, unrecognized sources or invalid digests stop before upgrade. | CP02, CP06, CP24 | [x] CP02 component; CP06 startup pending |
 | Identity cutover changes only owned local identifiers and affected relations / unrelated accepted remote Follow, subscriber and user follower relationships survive restart. | CP04–CP05, CP24 | [ ] |
 | Discord choices resolve public, federated, canonical NodeBB Group identities by verified actor/WebFinger; private/non-Group or blocked/private-network targets cause no HTTP/DB/Follow effects. | CP07–CP08, CP24 | [ ] |
 | Each canonical Group has one durable Follow generation shared by channel bindings; explicit signed Accept is checked / late or forged Accept, cancelled Follow and ambiguous Undo never re-enable a subscription. | CP10–CP11, CP24 | [ ] |
