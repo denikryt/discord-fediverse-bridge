@@ -29,7 +29,11 @@ export async function normalizeCreateActivity(
   }
 
   if (object instanceof Note) {
-    return await normalizeCommentActivity(activity, object, options);
+    // A NodeBB topic starter is a Note with no inReplyTo. It is not a
+    // comment merely because its ActivityStreams type is Note.
+    return object.replyTargetId == null
+      ? await normalizeNoteRootActivity(activity, object)
+      : await normalizeCommentActivity(activity, object, options);
   }
 
   return null;
@@ -55,7 +59,9 @@ export async function normalizeCreateActivityFromJson(
   }
 
   if (object.type === "Note") {
-    return await normalizeCommentActivityFromJson(activity, object, options);
+    return asString(object.inReplyTo) == null && asString(object.replyTarget) == null
+      ? normalizeNoteRootActivityFromJson(activity, object)
+      : await normalizeCommentActivityFromJson(activity, object, options);
   }
 
   return null;
@@ -213,6 +219,56 @@ async function normalizePostActivity(
       published_at: publishedAt,
       title: resolveText(object.name),
       url,
+    },
+  };
+}
+
+/** Normalize a root Note without inventing a Lemmy numeric post identity. */
+async function normalizeNoteRootActivity(
+  activity: Create,
+  object: Note,
+): Promise<BridgeEvent> {
+  const objectId = requireUrl(object.id, "root Note ID");
+  const owner = (object as unknown as { attributionId?: URL }).attributionId?.href;
+  if (!owner || activity.actorId?.href !== owner) {
+    throw new Error("Direct root Note requires signed actor matching attribution");
+  }
+  const published = toIsoString(object.published) ?? toIsoString(activity.published);
+  return {
+    actor_id: owner,
+    community_actor_id: resolveCommunityActorId(object),
+    delivery_id: activity.id?.href ?? randomUUID(),
+    event_type: "post.created",
+    occurred_at: published,
+    object: {
+      ap_id: objectId, author_name: await resolveAuthorName(activity),
+      body_markdown: resolveMarkdownBody(object), kind: "post", lemmy_id: 0,
+      parent_ap_id: null, post_ap_id: null, post_lemmy_id: null,
+      published_at: published, title: resolveText(object.name),
+      url: resolveObjectUrl(object) ?? objectId,
+      attributed_to_actor_id: owner,
+    },
+  };
+}
+
+/** A Group-wrapped root Note has attribution but no independent Person signature. */
+function normalizeNoteRootActivityFromJson(
+  activity: Record<string, unknown>, object: Record<string, unknown>,
+): BridgeEvent {
+  const objectId = requireString(object.id, "root Note ID");
+  const owner = asCanonicalActorId(object.attributedTo);
+  if (!owner) throw new Error("Root Note attribution is missing or ambiguous");
+  const published = asString(object.published) ?? asString(activity.published) ?? new Date().toISOString();
+  return {
+    actor_id: owner, community_actor_id: resolveCommunityActorIdFromJson(object),
+    delivery_id: asString(activity.id) ?? randomUUID(),
+    event_type: "post.created", occurred_at: published,
+    object: {
+      ap_id: objectId, author_name: lastPathSegment(owner),
+      body_markdown: resolveMarkdownBodyFromJson(object), kind: "post", lemmy_id: 0,
+      parent_ap_id: null, post_ap_id: null, post_lemmy_id: null,
+      published_at: published, title: asString(object.name),
+      url: asString(object.url) ?? objectId, attributed_to_actor_id: owner,
     },
   };
 }
@@ -658,6 +714,12 @@ async function resolveReplyChainContext(
   const nextReplyTarget =
     asString(parentRecord.inReplyTo) ?? asString(parentRecord.replyTarget);
   if (!nextReplyTarget) {
+    // NodeBB topic starters are root Notes, not Lemmy Pages. Their context
+    // identifies the topic but their canonical Note ID identifies the root.
+    // Python still requires a verified Group association before Discord work.
+    if (parentRecord.type === "Note" && asString(parentRecord.context)) {
+      return { postApId: replyTarget, parentApId: null, postSource: "remote" };
+    }
     return {
       postApId: null,
       parentApId: isCommentLikeReplyTarget(replyTarget, parentRecord)
@@ -917,7 +979,8 @@ function isCommunityActorId(value: string): boolean {
   const pathname = new URL(value).pathname;
   return (
     /\/c\/[^/]+(?:$|\/)/.test(pathname) ||
-    /\/communities\/[^/]+(?:$|\/)/.test(pathname)
+    /\/communities\/[^/]+(?:$|\/)/.test(pathname) ||
+    /^\/category\/\d+$/.test(pathname)
   );
 }
 

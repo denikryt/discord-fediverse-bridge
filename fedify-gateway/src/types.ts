@@ -41,6 +41,21 @@ export interface BridgeContentEvent {
 // pipeline keeps its current naming while follow lifecycle uses a separate type.
 export type BridgeEvent = BridgeContentEvent;
 
+/** Signed Group distribution, with object dereferencing delegated to Python. */
+export interface RemoteGroupAnnounceEvent {
+  event_type: "remote.group_announced";
+  delivery_id: string;
+  occurred_at: string;
+  actor_id: string;
+  community_actor_id: string;
+  source_activity_json: Record<string, unknown>;
+  object: {
+    ap_id: string;
+    inline_object: Record<string, unknown> | null;
+    inner_create_id: string | null;
+  };
+}
+
 export interface FollowLifecycleObject {
   follow_activity_id: string;
 }
@@ -86,6 +101,7 @@ export interface LocalUnfollowRequestedEvent {
 
 export type InternalBridgeEvent =
   | BridgeContentEvent
+  | RemoteGroupAnnounceEvent
   | FollowAcceptedEvent
   | LocalFollowRequestedEvent
   | LocalUnfollowRequestedEvent;

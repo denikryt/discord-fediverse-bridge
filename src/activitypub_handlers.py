@@ -96,6 +96,13 @@ async def dispatch_activitypub_event(
             detail=result.reason,
         )
 
+    # Remote Group Announce is verified by Fedify but its Note may be a URI.
+    # Resolve it only after the received Group and accepted software profile
+    # have been checked by the policy-bound NodeBB reader.
+    if event.event_type == "remote.group_announced":
+        from .community_sync.nodebb_inbound import handle_nodebb_announcement
+        return await handle_nodebb_announcement(event, runtime)
+
     # Keep dispatch explicit so supported inbound event types stay obvious.
     if event.event_type == "post.created":
         return await handle_post_created(event, runtime)

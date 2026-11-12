@@ -132,3 +132,21 @@ This document explains the major runtime traces through the bridge: user/platfor
 3. The service acquires SQLite's writer reservation, rechecks user/guild/channel uniqueness and cross-mode channel ownership, then inserts or compare-and-set moves the single binding.
 4. `/account-settings feed-view` reads the durable assignment; `feed-unbind` removes only the caller's current assignment. Historical publication/thread/message mappings are not modified.
 5. `BridgeBot.on_message` recognizes owner-authored root messages in an active ordinary text-channel or announcement-channel binding before existing forum routing. Non-owner roots, stale bindings, threads, DMs, and unrelated channels do not classify as personal-feed roots.
+
+## Verified NodeBB Group Announce -> Discord root/reply
+
+1. A signed Fedify `Announce` on `/inbox` carries the original outer ID and
+   verified distributor. The NodeBB route does **not** require a local Group
+   recipient and does not use the ID-only raw cache.
+2. Gateway passes a `remote.group_announced` event with the original inline
+   Note/Article or referenced URI. Python admits only the same persisted,
+   accepted `nodebb` Group/inbox, checking federation policy **before** fetch.
+3. `src/community_sync/nodebb_inbound.py` safely dereferences the exact Note,
+   checks canonical object ID, audience, recipients, author and topic context.
+   A root Note is a post; a Note with `inReplyTo` is a reply, whose parent chain
+   is bounded. The Group signature proves distribution, not a Person signature.
+4. For a root created before Follow, an official Group outbox item must
+   announce its exact ID; no match within the bounded view yields a deferred
+   result, not an inferred membership from `context` or `audience`.
+5. Existing `CommunityRuntime` reserves canonical Group/owner and Discord
+   targets before REST. Unknown Discord outcomes remain unresolved.

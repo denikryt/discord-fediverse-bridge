@@ -8,7 +8,18 @@ The gateway uses one authenticated internal bridge API. `POST /internal/activity
 
 Common fields: `event_type`, `delivery_id`, `occurred_at`, `actor_id`, `community_actor_id`, and `object` or event-specific object payload.
 
-Supported normalized event categories: `post.created`, `post.updated`, `post.deleted`, `comment.created`, `comment.updated`, `comment.deleted`, `follow.accepted`, `local.follow_requested`, `local.unfollow_requested`.
+Supported normalized event categories: `post.created`, `post.updated`, `post.deleted`, `comment.created`, `comment.updated`, `comment.deleted`, `follow.accepted`, `local.follow_requested`, `local.unfollow_requested`, `remote.group_announced`.
+
+For `remote.group_announced`, `actor_id` and `community_actor_id` identify
+**the Fedify-verified Group distributor**, not the claimed Person author.
+`delivery_id` is the outer signed `Announce.id`; `object.ap_id` is its URI or
+verified inline Note/Article ID. `source_activity_json` preserves the verified
+outer envelope, with an optional inner Create ID carried separately. Python
+requires the persisted accepted `nodebb` Follow, actor/inbox equality and
+policy before fetching URI objects with the bounded DNS-on-connect adapter.
+The fetched `Note.attributedTo` becomes the immutable canonical owner; it is
+not represented as an independent Person signature. A historical reply root
+requires exact membership in that Group's bounded official outbox.
 
 ## Python -> Gateway
 

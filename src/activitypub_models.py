@@ -97,6 +97,52 @@ class ActivityPubEvent(BaseModel):
         return self
 
 
+class RemoteGroupAnnounceObject(BaseModel):
+    """One verified Group distribution target, not a Person-signed Create."""
+
+    model_config = ConfigDict(extra="forbid")
+    ap_id: str
+    inline_object: dict[str, Any] | None = None
+    inner_create_id: str | None = None
+
+
+class RemoteGroupAnnounceEvent(BaseModel):
+    """Pass a signed Group Announce to Python for secure NodeBB object resolution.
+
+    Fedify validates the incoming request before the gateway builds this event.
+    Python must additionally validate the accepted NodeBB Follow and canonical
+    Group identity before it trusts an inline object or fetches an URI target.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+    event_type: Literal["remote.group_announced"]
+    actor_id: str
+    community_actor_id: str
+    delivery_id: str
+    occurred_at: datetime
+    object: RemoteGroupAnnounceObject
+    source_activity_json: dict[str, Any]
+
+    @model_validator(mode="after")
+    def validate_signed_envelope_identity(self) -> "RemoteGroupAnnounceEvent":
+        """Reject internal mismatches before receipt admission or any fetch."""
+        source = self.source_activity_json
+        if (source.get("type") != "Announce" or source.get("id") != self.delivery_id
+                or source.get("actor") != self.actor_id or self.actor_id != self.community_actor_id):
+            raise ValueError("Group distribution identity conflicts with signed envelope")
+        obj = source.get("object")
+        if isinstance(obj, dict) and obj.get("type") == "Create":
+            if obj.get("id") != self.object.inner_create_id:
+                raise ValueError("inner Create identity conflicts with signed envelope")
+            obj = obj.get("object")
+        source_id = obj if isinstance(obj, str) else obj.get("id") if isinstance(obj, dict) else None
+        if source_id != self.object.ap_id:
+            raise ValueError("Group distributed object identity mismatch")
+        if isinstance(obj, dict) and obj != self.object.inline_object:
+            raise ValueError("Group distributed inline object mismatch")
+        return self
+
+
 class FollowLifecycleObject(BaseModel):
     # Follow lifecycle events carry state-transition identifiers, not content
     # payloads, so they stay separate from the post/comment object contract.
@@ -167,6 +213,7 @@ class LocalUnfollowRequestEvent(BaseModel):
 
 BridgeGatewayEvent = Annotated[
     ActivityPubEvent
+    | RemoteGroupAnnounceEvent
     | FollowLifecycleEvent
     | LocalFollowRequestEvent
     | LocalUnfollowRequestEvent,

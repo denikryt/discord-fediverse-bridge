@@ -35,6 +35,7 @@ import type {
   FollowAcceptedEvent,
   LocalFollowRequestedEvent,
   LocalUnfollowRequestedEvent,
+  RemoteGroupAnnounceEvent,
 } from "./types.js";
 
 export function createGatewayFederation(
@@ -184,6 +185,21 @@ export function createGatewayFederation(
         }
         logAnnounceDebug(isDebug, announceEnvelope);
 
+        // A signed NodeBB Group Announce often references a Note by URI,
+        // rather than including a Create. Send verified distribution metadata
+        // to Python so its policy-bound HTTPS reader can safely fetch it.
+        // /category/{cid} is only a routing hint; Python must prove the
+        // persisted accepted NodeBB Group before accepting this event.
+        const nodebbDistribution = buildNodeBBGroupAnnounceEvent(announceEnvelope);
+        if (nodebbDistribution != null) {
+          await deliverNormalizedEvent(config, nodebbDistribution, {
+            announceId: nodebbDistribution.delivery_id,
+            groupActor: nodebbDistribution.community_actor_id,
+            objectId: nodebbDistribution.object.ap_id,
+          });
+          return;
+        }
+
         const createRecord = extractCreateRecord(announceEnvelope.rawRecord);
         if (createRecord != null) {
           const event = await normalizeCreateActivityFromJson(createRecord, {
@@ -315,7 +331,7 @@ export function createGatewayFederation(
 
 async function deliverNormalizedEvent(
   config: GatewayContextData,
-  event: BridgeContentEvent | FollowAcceptedEvent | LocalFollowRequestedEvent | LocalUnfollowRequestedEvent,
+  event: BridgeContentEvent | RemoteGroupAnnounceEvent | FollowAcceptedEvent | LocalFollowRequestedEvent | LocalUnfollowRequestedEvent,
   logContext: Record<string, unknown>,
 ): Promise<void> {
   // All successful normalization funnels through one delivery path so logging
@@ -435,6 +451,51 @@ function logAnnounceDebug(
     nestedObjectId: asString(nestedObject?.id),
     nestedObjectType: asString(nestedObject?.type),
   });
+}
+
+/** Preserve the signed Group envelope instead of dereferencing arbitrary raw URIs. */
+export function buildNodeBBGroupAnnounceEvent(
+  envelope: NonNullable<Awaited<ReturnType<typeof getVerifiedAnnounceEnvelope>>>,
+): RemoteGroupAnnounceEvent | null {
+  const raw = envelope.rawRecord;
+  const groupId = asString(raw.actor);
+  if (groupId == null) return null;
+  let group: URL;
+  try {
+    group = new URL(groupId);
+  } catch {
+    return null;
+  }
+  // The path only selects the NodeBB-specific pipeline; it never proves a
+  // Group or author. That proof belongs to the accepted Follow in Python.
+  if (group.protocol !== "https:" || !/^\/category\/\d+$/.test(group.pathname)
+      || group.search || group.hash || group.username || group.password) return null;
+  const wrapped = asRecord(raw.object);
+  const innerCreate = wrapped?.type === "Create" ? wrapped : null;
+  const target = innerCreate == null ? raw.object : innerCreate.object;
+  const record = asRecord(target);
+  // Fedify may serialize an URI reference as { id } rather than a string.
+  // Neither representation supplies signed Note fields: Python must fetch it.
+  const inline = record != null && (record.type === "Note" || record.type === "Article")
+    ? record : null;
+  if (record != null && inline == null && (Object.keys(record).some((key) => key !== "id"))) return null;
+  const objectId = asActivityIri(target);
+  if (objectId == null || !objectId.startsWith("https://")) return null;
+  const innerCreateId = innerCreate == null ? null : asString(innerCreate.id);
+  if (innerCreate != null && (innerCreateId == null || asActivityIri(innerCreate.actor) == null)) return null;
+  return {
+    event_type: "remote.group_announced",
+    actor_id: groupId,
+    community_actor_id: groupId,
+    delivery_id: envelope.announceId,
+    occurred_at: new Date().toISOString(),
+    source_activity_json: raw,
+    object: {
+      ap_id: objectId,
+      inline_object: inline,
+      inner_create_id: innerCreateId,
+    },
+  };
 }
 
 function extractCreateRecord(
