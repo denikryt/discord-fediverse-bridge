@@ -26,6 +26,7 @@ export interface ActivityPubRequestData {
   activitypubRawJson?: unknown;
   activitypubRawBodySha256?: string;
   activitypubInboxOwner?: ActivityPubInboxOwner;
+  activitypubInboxPath?: "shared" | "actor";
 }
 
 export type InboxPathClassification =
@@ -119,9 +120,11 @@ export async function buildActivityPubRequestData(
       activitypubRawJson,
       activitypubRawBodySha256,
       activitypubInboxOwner,
+      activitypubInboxPath: classification.kind,
     };
   } catch {
-    return {};
+    // A malformed body must not erase server-owned inbox routing evidence.
+    return { activitypubInboxOwner, activitypubInboxPath: classification.kind };
   }
 }
 

@@ -74,6 +74,23 @@ This document explains the major runtime traces through the bridge: user/platfor
 
 `src/http_api.py` creates an `in_progress` receipt before dispatch. Terminal handlers return a lifecycle `status`, a stable `InboundActivityOutcome`, and human-readable `detail`; `EventReceiptRepository` persists all three together. Deferred or failed retries reset the row to `in_progress` and clear the previous outcome. Duplicate terminal deliveries return the stored outcome without rewriting the receipt.
 
+## Verified local Group inbox -> scoped receipt flow (CP19)
+
+1. Fedify verifies the incoming activity. Its typed, verified JSON is compared
+   with the server-owned actor-specific inbox owner, or with a bounded set of
+   real local Group actors in a shared inbox; the first raw `to`/`cc` address
+   is not a routing authority. Missing owner provenance or contradictory local
+   recipients are rejected before Python delivery.
+2. A signed Create addressed to Group A and B produces two internal events,
+   both retaining the original wire `delivery_id`. Each carries only its own
+   `verified_destination_group_actor_id`, and an individual failure does not
+   prevent the other tenant's admission.
+3. Python authenticates bearer/header, checks the verified destination against
+   its local Group row, then claims/finishes a receipt keyed by wire ID, event
+   type and Group. Earlier NULL-scope receipts and remote Group/Follow/personal
+   receipts remain global. Independent Service/Person authorization and host
+   reservation must still follow (CP20–CP21).
+
 ## Remote ActivityPub post -> Discord fanout flow
 
 1. Fedify emits a verified remote Group `post.created`; Python checks the accepted subscription and event author before any Discord effect.

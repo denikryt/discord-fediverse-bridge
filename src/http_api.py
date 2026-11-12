@@ -10,6 +10,7 @@ from urllib.parse import parse_qs
 from fastapi import FastAPI, Header, HTTPException, Request, Response, status
 from fastapi.responses import FileResponse, HTMLResponse, RedirectResponse
 from fastapi.staticfiles import StaticFiles
+from sqlalchemy.exc import IntegrityError
 
 from .activitypub_handlers import dispatch_activitypub_event
 from .inbound_activity_outcomes import InboundActivityOutcome
@@ -18,7 +19,7 @@ from .dashboard import (
     build_dashboard_payload,
     render_dashboard_html,
 )
-from .activitypub_models import BridgeGatewayEvent
+from .activitypub_models import ActivityPubEvent, BridgeGatewayEvent
 from .registration_service import (
     RegistrationError,
     generate_oauth_state,
@@ -284,6 +285,10 @@ def create_http_app(runtime: Runtime) -> FastAPI:
             shared_secret=runtime.settings.fedify_shared_secret,
         )
         _validate_delivery_header(x_bridge_delivery_id, event.delivery_id)
+        # The gateway selected this recipient only after verifying the signed
+        # activity and inbox route. Python independently verifies that the
+        # scoped identity is one of our local Group actors before any receipt.
+        _validate_verified_local_group_destination(runtime, event)
 
         # NodeBB roots and replies both use /post/{pid}; resolve a signed
         # Delete's kind from the verified Group's canonical DB identity before
@@ -302,14 +307,16 @@ def create_http_app(runtime: Runtime) -> FastAPI:
         try:
             result = await dispatch_activitypub_event(event, runtime, is_retry=is_retry)
         except Exception as exc:
-            _mark_event_failed(runtime, event.delivery_id, str(exc))
+            _mark_event_failed(runtime, event.delivery_id, str(exc),
+                               verified_destination_group_actor_id=_receipt_group_scope(event))
             logger.exception(
                 "ActivityPub event handling failed for delivery %s", event.delivery_id
             )
             raise
 
         _finish_event_processing(
-            runtime, event.delivery_id, result.status, result.outcome, result.detail
+            runtime, event.delivery_id, result.status, result.outcome, result.detail,
+            verified_destination_group_actor_id=_receipt_group_scope(event),
         )
         return {
             "status": result.status,
@@ -457,6 +464,38 @@ def _validate_delivery_header(
         )
 
 
+def _receipt_group_scope(event: BridgeGatewayEvent) -> str | None:
+    """Only verified local content owns a scoped receipt; all else is global."""
+    if isinstance(event, ActivityPubEvent):
+        return event.verified_destination_group_actor_id
+    return None
+
+
+def _validate_verified_local_group_destination(
+    runtime: Runtime, event: BridgeGatewayEvent,
+) -> None:
+    """Reject local-Group content lacking a trusted gateway-selected tenant.
+
+    Remote NodeBB/Lemmy Group distributions, ordinary Follow and personal feed
+    traffic retain their independent ingress/receipt domains. Local groups
+    cannot be chosen from an unverified first ``to``/``cc`` candidate.
+    """
+    if not isinstance(event, ActivityPubEvent):
+        return
+    scope = event.verified_destination_group_actor_id
+    candidate = event.community_actor_id
+    local_target = (runtime.database.local_communities.get_local_community_by_actor_url(candidate)
+                    if candidate else None)
+    if scope is None:
+        if local_target is not None:
+            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST,
+                                detail="Local Group content requires verified destination")
+        return
+    if scope != candidate or local_target is None or local_target.actor_url != scope:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST,
+                            detail="Unverified local Group destination")
+
+
 def _begin_event_processing(
     runtime: Runtime, event: BridgeGatewayEvent
 ) -> dict[str, str | None] | None:
@@ -476,16 +515,36 @@ def _begin_event_attempt(
     """
     # Receipt state is the source of truth for idempotency across duplicate and
     # retry deliveries from the gateway.
-    existing = runtime.database.event_receipts.get_event_receipt(event.delivery_id)
+    scope = _receipt_group_scope(event)
+    existing = runtime.database.event_receipts.get_event_receipt(
+        event.delivery_id, verified_destination_group_actor_id=scope)
     if existing is None:
-        runtime.database.event_receipts.create_event_receipt(
-            delivery_id=event.delivery_id,
-            event_type=event.event_type,
-            object_ap_id=_event_object_id(event),
-            status="in_progress",
-        )
-        return None, False
+        try:
+            runtime.database.event_receipts.create_event_receipt(
+                delivery_id=event.delivery_id,
+                verified_destination_group_actor_id=scope,
+                event_type=event.event_type,
+                object_ap_id=_event_object_id(event),
+                status="in_progress",
+            )
+            return None, False
+        except IntegrityError:
+            # Another handler may have reserved the same wire ID and Group
+            # between our read and INSERT. Do not convert that valid duplicate
+            # race into HTTP 500 or borrow another tenant's receipt.
+            existing = runtime.database.event_receipts.get_event_receipt(
+                event.delivery_id, verified_destination_group_actor_id=scope)
+            if existing is None:
+                raise
 
+    # A wire ID reused for a different object within the same verified Group
+    # cannot borrow an earlier terminal result or mutate that object's receipt.
+    if scope is not None and (
+        existing.event_type != event.event_type
+        or existing.object_ap_id != _event_object_id(event)
+    ):
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT,
+                            detail="Delivery identity conflicts within receipt scope")
     if existing.status == "in_progress":
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
@@ -516,6 +575,7 @@ def _begin_event_attempt(
     if existing.status == "deferred":
         runtime.database.event_receipts.update_event_receipt(
             delivery_id=event.delivery_id,
+            verified_destination_group_actor_id=scope,
             status="in_progress",
             outcome=None,
             detail="retrying deferred delivery",
@@ -524,6 +584,7 @@ def _begin_event_attempt(
 
     runtime.database.event_receipts.update_event_receipt(
         delivery_id=event.delivery_id,
+        verified_destination_group_actor_id=scope,
         status="in_progress",
         outcome=None,
         detail="retrying failed delivery",
@@ -547,20 +608,26 @@ def _finish_event_processing(
     status_value: str,
     outcome: InboundActivityOutcome,
     detail: str,
+    *, verified_destination_group_actor_id: str | None = None,
 ) -> None:
-    """Persist one terminal result as an atomic receipt transition."""
+    """Persist one terminal result only inside the verified receipt scope."""
     runtime.database.event_receipts.update_event_receipt(
         delivery_id=delivery_id,
+        verified_destination_group_actor_id=verified_destination_group_actor_id,
         status=status_value,
         outcome=outcome,
         detail=detail,
     )
 
 
-def _mark_event_failed(runtime: Runtime, delivery_id: str, detail: str) -> None:
-    """Persist an exception as a failed attempt with a stable outcome."""
+def _mark_event_failed(
+    runtime: Runtime, delivery_id: str, detail: str, *,
+    verified_destination_group_actor_id: str | None = None,
+) -> None:
+    """Persist one failed attempt without affecting another Group's receipt."""
     runtime.database.event_receipts.update_event_receipt(
         delivery_id=delivery_id,
+        verified_destination_group_actor_id=verified_destination_group_actor_id,
         status="failed",
         outcome=InboundActivityOutcome.PROCESSING_FAILED,
         detail=detail,

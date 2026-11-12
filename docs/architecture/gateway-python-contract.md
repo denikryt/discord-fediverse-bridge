@@ -21,6 +21,32 @@ The fetched `Note.attributedTo` becomes the immutable canonical owner; it is
 not represented as an independent Person signature. A historical reply root
 requires exact membership in that Group's bounded official outbox.
 
+### Verified local Group delivery scope (CP19)
+
+For **locally hosted Bridge Groups**, the Fedify-verified direct `Create`,
+`Update`, `Delete` or verified `Announce(Create|Update|Delete)` is routed using
+server-owned inbox context and the signed activity's addressing. An
+actor-specific `/actors/communities/{slug}/inbox` admits only its verified
+route owner, if that Group is explicitly addressed; `/inbox` resolves all
+bounded, unambiguous local Group recipients independently. Missing route
+provenance, nonexistent/contradictory Group identity, or an excessive recipient
+set fails closed before any internal content HTTP delivery. Signed remote
+NodeBB/Lemmy Group announcements still go through the remote distributor
+subscription path; they do not need a local Group address.
+
+Every admitted local Group content event carries the **server-derived**
+`verified_destination_group_actor_id`, equal to `community_actor_id`. The
+original outer wire `delivery_id` and `X-Bridge-Delivery-Id` are unchanged,
+including `Announce(Create(...))` where the inner Create ID is merely
+provenance. Python checks that the scope names an existing local Group before
+receipt admission and indexes receipt lifecycle transitions by
+`(delivery_id,event_type,verified_destination_group_actor_id)`. Old receipts
+retain NULL scope, and Follow/personal/remote events retain the global
+`delivery_id` receipt; a historical global receipt is never evidence for
+skipping or admitting a different Group's Create. After admission, each Group
+still requires its independent subscriber ACL/owner and canonical host
+reservation (CP20–CP21); receipt scope is not content authorization.
+
 ### Inbound remote mutation authorization
 
 For `post.updated|deleted` and `comment.updated|deleted`, the gateway sends

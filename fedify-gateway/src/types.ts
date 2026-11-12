@@ -21,6 +21,8 @@ export interface BridgeObject {
 export interface BridgeContentEvent {
   actor_id: string;
   community_actor_id?: string | null;
+  /** Gateway-confirmed local Group recipient; never client-selected. */
+  verified_destination_group_actor_id?: string | null;
   target?: BridgeTarget | null;
   delivery_id: string;
   event_type:

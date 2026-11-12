@@ -30,6 +30,10 @@ import {
 import { getPythonBridgeClient } from "./python-bridge-client.js";
 import { admitRemoteDeliveryEndpoint, type RemoteEndpointAdmissionOptions } from "./remote-delivery-endpoints.js";
 import { parseTypedActorIdentifier } from "./typed-actor-routing.js";
+import {
+  selectVerifiedLocalGroupDestinations,
+  type VerifiedInboxRoute,
+} from "./local-group-ingress.js";
 import type {
   BridgeContentEvent,
   FollowAcceptedEvent,
@@ -127,7 +131,7 @@ export function createGatewayFederation(
   federation
     .setInboxListeners("/actors/{+identifier}/inbox", "/inbox")
     .withIdempotency("per-inbox")
-    .on(Create, async (_ctx, activity) => {
+    .on(Create, async (ctx, activity) => {
       if (isDebug) {
         console.log("[Fedify][debug] Received direct Create activity");
       }
@@ -147,28 +151,29 @@ export function createGatewayFederation(
         event.source_activity_json = sourceActivityJson;
         event.source_activity_id = typeof sourceActivityJson.id === "string" ? sourceActivityJson.id : event.delivery_id;
         event.source_announce_id = null;
-        await deliverNormalizedEvent(config, event, {
-          deliveryId: event.delivery_id,
-          eventType: event.event_type,
-          objectId: event.object.ap_id,
-        });
+        await deliverVerifiedLocalContentEvent(config, ctx.data, event,
+          sourceActivityJson, {
+            deliveryId: event.delivery_id,
+            eventType: event.event_type,
+            objectId: event.object.ap_id,
+          });
       } catch (error) {
         console.error("[Fedify] Error processing direct Create activity", error);
       }
     })
-    .on(Update, async (_ctx, activity) => {
+    .on(Update, async (ctx, activity) => {
       try {
         // Direct Update must be forwarded even when the remote server does not
         // wrap it inside Announce.
-        await deliverDirectUpdateActivity(config, activity, isDebug);
+        await deliverDirectUpdateActivity(config, activity, isDebug, ctx.data);
       } catch (error) {
         console.error("[Fedify] Error processing direct Update activity", error);
       }
     })
-    .on(Delete, async (_ctx, activity) => {
+    .on(Delete, async (ctx, activity) => {
       try {
         // Direct Delete is the delete counterpart to direct Create/Update.
-        await deliverDirectDeleteActivity(config, activity, isDebug);
+        await deliverDirectDeleteActivity(config, activity, isDebug, ctx.data);
       } catch (error) {
         console.error("[Fedify] Error processing direct Delete activity", error);
       }
@@ -216,7 +221,8 @@ export function createGatewayFederation(
           // One wire Announce is one receipt, regardless of the nested Create,
           // Update, or Delete id. Keep that inner id only as provenance.
           event.delivery_id = announceEnvelope.announceId;
-          await deliverNormalizedEvent(config, event, {
+          await deliverVerifiedLocalContentEvent(config, _ctx.data, event,
+            announceEnvelope.rawRecord, {
             announceId: announceEnvelope.announceId,
             createId: asString(createRecord.id) ?? event.delivery_id,
             eventType: event.event_type,
@@ -241,7 +247,8 @@ export function createGatewayFederation(
           // One wire Announce is one receipt, regardless of the nested Create,
           // Update, or Delete id. Keep that inner id only as provenance.
           event.delivery_id = announceEnvelope.announceId;
-          await deliverNormalizedEvent(config, event, {
+          await deliverVerifiedLocalContentEvent(config, _ctx.data, event,
+            announceEnvelope.rawRecord, {
             announceId: announceEnvelope.announceId,
             updateId: asString(updateRecord.id) ?? event.delivery_id,
             eventType: event.event_type,
@@ -263,7 +270,8 @@ export function createGatewayFederation(
           // One wire Announce is one receipt, regardless of the nested Create,
           // Update, or Delete id. Keep that inner id only as provenance.
           event.delivery_id = announceEnvelope.announceId;
-          await deliverNormalizedEvent(config, event, {
+          await deliverVerifiedLocalContentEvent(config, _ctx.data, event,
+            announceEnvelope.rawRecord, {
             announceId: announceEnvelope.announceId,
             deleteId: asString(deleteRecord.id) ?? event.delivery_id,
             eventType: event.event_type,
@@ -329,6 +337,58 @@ export function createGatewayFederation(
   return federation;
 }
 
+/** Select all verified local destinations before any HTTP receipt or handler.
+ *
+ * One signed Create in shared inbox can belong to several local Groups; each
+ * receives the original wire ID and its own private receipt scope. A delivery
+ * to an actor-specific inbox only reaches the server-owned Group. The remote
+ * NodeBB/Lemmy Group distributor path is intentionally unchanged.
+ */
+async function deliverVerifiedLocalContentEvent(
+  config: GatewayContextData,
+  context: GatewayContextData | undefined,
+  event: BridgeContentEvent,
+  signedActivityJson: Record<string, unknown>,
+  logContext: Record<string, unknown>,
+): Promise<void> {
+  const route: VerifiedInboxRoute = context?.activitypubInboxPath === "shared"
+    ? { kind: "shared" }
+    : context?.activitypubInboxPath === "actor"
+      ? { kind: "actor", owner: context.activitypubInboxOwner }
+      : { kind: "unknown" };
+  const selected = await selectVerifiedLocalGroupDestinations(
+    config.fedifyOrigin, route, signedActivityJson,
+    async (candidate) => {
+      const group = await resolveLocalCommunityByActorUrl(config, candidate);
+      return group?.actorId.href ?? null;
+    },
+  );
+  if (selected.kind === "rejected") {
+    logDebug(config.logLevel === "debug", "Rejected unverified local Group recipient");
+    return;
+  }
+  if (selected.kind === "remote") {
+    await deliverNormalizedEvent(config, event, logContext);
+    return;
+  }
+  if (event.target?.kind === "personal_feed") {
+    logDebug(config.logLevel === "debug", "Personal feed event cannot target a local Group");
+    return;
+  }
+  // Deliver all independently: a denied/failed Group cannot suppress another
+  // valid tenant from the same signed wire activity.
+  const results = await Promise.allSettled(selected.groups.map(async (groupActorId) =>
+    deliverNormalizedEvent(config, {
+      ...event,
+      community_actor_id: groupActorId,
+      verified_destination_group_actor_id: groupActorId,
+    }, { ...logContext, verifiedDestinationGroup: groupActorId }),
+  ));
+  if (results.some((result) => result.status === "rejected")) {
+    throw new Error("At least one verified local Group delivery failed");
+  }
+}
+
 async function deliverNormalizedEvent(
   config: GatewayContextData,
   event: BridgeContentEvent | RemoteGroupAnnounceEvent | FollowAcceptedEvent | LocalFollowRequestedEvent | LocalUnfollowRequestedEvent,
@@ -346,6 +406,7 @@ export async function deliverDirectUpdateActivity(
   config: GatewayContextData,
   activity: Update,
   isDebug = false,
+  trustedContext?: GatewayContextData,
 ): Promise<void> {
   /** Normalize one direct Update and deliver it to the Python bridge. */
   const sourceActivityJson = await activity.toJsonLd() as Record<string, unknown>;
@@ -359,17 +420,18 @@ export async function deliverDirectUpdateActivity(
   event.source_activity_json = sourceActivityJson;
   event.source_activity_id = typeof sourceActivityJson.id === "string" ? sourceActivityJson.id : event.delivery_id;
   event.source_announce_id = null;
-  await deliverNormalizedEvent(config, event, {
-    deliveryId: event.delivery_id,
-    eventType: event.event_type,
-    objectId: event.object.ap_id,
-  });
+  await deliverVerifiedLocalContentEvent(config, trustedContext, event,
+    sourceActivityJson, {
+      deliveryId: event.delivery_id, eventType: event.event_type,
+      objectId: event.object.ap_id,
+    });
 }
 
 export async function deliverDirectDeleteActivity(
   config: GatewayContextData,
   activity: Delete,
   isDebug = false,
+  trustedContext?: GatewayContextData,
 ): Promise<void> {
   /** Normalize one direct Delete and deliver it to the Python bridge. */
   const sourceActivityJson = await activity.toJsonLd() as Record<string, unknown>;
@@ -381,11 +443,11 @@ export async function deliverDirectDeleteActivity(
   event.source_activity_json = sourceActivityJson;
   event.source_activity_id = typeof sourceActivityJson.id === "string" ? sourceActivityJson.id : event.delivery_id;
   event.source_announce_id = null;
-  await deliverNormalizedEvent(config, event, {
-    deliveryId: event.delivery_id,
-    eventType: event.event_type,
-    objectId: event.object.ap_id,
-  });
+  await deliverVerifiedLocalContentEvent(config, trustedContext, event,
+    sourceActivityJson, {
+      deliveryId: event.delivery_id, eventType: event.event_type,
+      objectId: event.object.ap_id,
+    });
 }
 
 /**

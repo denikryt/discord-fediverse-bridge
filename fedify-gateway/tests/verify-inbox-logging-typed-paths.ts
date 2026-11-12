@@ -67,6 +67,7 @@ async function main(): Promise<void> {
     },
   }, "https://bridge.example");
   assert.deepEqual(captured.activitypubRawJson, payload);
+  assert.equal(captured.activitypubInboxPath, "actor");
   assert.equal(
     captured.activitypubRawBodySha256,
     createHash("sha256").update(rawBody).digest("hex"),
@@ -95,7 +96,13 @@ async function main(): Promise<void> {
       }),
     },
   }, "https://bridge.example");
-  assert.deepEqual(malformed, {});
+  assert.deepEqual(malformed, {
+    activitypubInboxOwner: {
+      kind: "user", identifier: "alice",
+      actorUrl: "https://bridge.example/actors/users/alice",
+    },
+    activitypubInboxPath: "actor",
+  });
 
   console.log("verify:inbox-logging-typed-paths passed");
 }

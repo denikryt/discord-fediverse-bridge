@@ -51,6 +51,9 @@ class ActivityPubEvent(BaseModel):
     delivery_id: str
     occurred_at: datetime
     community_actor_id: str | None = None
+    # Gateway-owned recipient proof. Only authenticated local-Group content
+    # uses it; never derive this identity in Python from arbitrary addressing.
+    verified_destination_group_actor_id: str | None = None
     target: ActivityPubTarget | None = None
     actor_id: str
     object: ActivityPubObject
@@ -60,6 +63,14 @@ class ActivityPubEvent(BaseModel):
 
     @model_validator(mode="after")
     def validate_event_shape(self) -> "ActivityPubEvent":
+        # A scoped receipt must be tied to exactly the canonical community
+        # selected at the signed inbox boundary. Personal feeds stay global.
+        verified = self.verified_destination_group_actor_id
+        if verified is not None and (
+            not verified or verified != self.community_actor_id
+            or (self.target is not None and self.target.kind != "community")
+        ):
+            raise ValueError("verified destination must match community actor")
         # The event type and object kind must stay in sync because downstream
         # handlers branch on that contract instead of re-inspecting payloads.
         post_events = {"post.created", "post.updated", "post.deleted"}
