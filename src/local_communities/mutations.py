@@ -479,6 +479,8 @@ class LocalCommunityMutationHandler:
         await self.federation_fanout.relay_update_or_delete(
             event=event, local_community=local_community,
             object_kind=kind, operation=operation,
+            origin_subscriber_actor_id=row.origin_subscriber_actor_id,
+            source_owner_actor_id=row.source_owner_actor_id,
         )
         return _HandlerResult(
             status="processed", outcome=InboundActivityOutcome.APPLIED,

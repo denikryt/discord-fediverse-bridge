@@ -209,6 +209,8 @@ class SendLocalCommunityRelayOutcome:
     target_remote_actor_id: str
     activity_id: str | None = None
     error: str | None = None
+    # True only when the gateway proves no HTTP delivery was attempted.
+    safe_to_retry: bool = False
 
 
 @dataclass(slots=True)
@@ -589,6 +591,7 @@ class FedifyGatewayClient:
                     target_remote_actor_id=str(item["targetRemoteActorId"]),
                     activity_id=item.get("activityId"),
                     error=item.get("error"),
+                    safe_to_retry=item.get("safeToRetry") is True,
                 )
                 for item in payload.get("outcomes", [])
             ]

@@ -127,6 +127,8 @@ class LocalCommunityInboundCreateHandler:
                 await self.federation_fanout.relay_create(
                     event=event, local_community=local_community,
                     object_kind="post",
+                    origin_subscriber_actor_id=thread_row.origin_subscriber_actor_id,
+                    source_owner_actor_id=thread_row.source_owner_actor_id,
                 )
             return _HandlerResult(
                 status="skipped",
@@ -182,6 +184,8 @@ class LocalCommunityInboundCreateHandler:
         )
         await self.federation_fanout.relay_create(
             event=event, local_community=local_community, object_kind="post",
+            origin_subscriber_actor_id=thread_row.origin_subscriber_actor_id,
+            source_owner_actor_id=thread_row.source_owner_actor_id,
         )
         return _HandlerResult(
             status="processed", outcome=InboundActivityOutcome.APPLIED,
@@ -272,6 +276,8 @@ class LocalCommunityInboundCreateHandler:
                 await self.federation_fanout.relay_create(
                     event=event, local_community=local_community,
                     object_kind="comment",
+                    origin_subscriber_actor_id=message_row.origin_subscriber_actor_id,
+                    source_owner_actor_id=message_row.source_owner_actor_id,
                 )
             return _HandlerResult(
                 status="skipped", outcome=InboundActivityOutcome.IGNORED_ALREADY_APPLIED,
@@ -348,6 +354,8 @@ class LocalCommunityInboundCreateHandler:
         )
         await self.federation_fanout.relay_create(
             event=event, local_community=local_community, object_kind="comment",
+            origin_subscriber_actor_id=message_row.origin_subscriber_actor_id,
+            source_owner_actor_id=message_row.source_owner_actor_id,
         )
         return _HandlerResult(
             status="processed", outcome=InboundActivityOutcome.APPLIED,

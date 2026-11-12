@@ -45,6 +45,7 @@ export async function sendLocalCommunityRelay(
         ok: false,
         activityId: typeof delivery.activityJson.id === "string" ? delivery.activityJson.id : null,
         error: "activity.actor must match signingActorUrl",
+        safeToRetry: true,
       });
       continue;
     }
@@ -63,6 +64,7 @@ export async function sendLocalCommunityRelay(
         ok: true,
         activityId: typeof delivery.activityJson.id === "string" ? delivery.activityJson.id : null,
         error: null,
+        safeToRetry: false,
       });
     } catch (error) {
       outcomes.push({
@@ -71,6 +73,8 @@ export async function sendLocalCommunityRelay(
         ok: false,
         activityId: typeof delivery.activityJson.id === "string" ? delivery.activityJson.id : null,
         error: error instanceof Error ? error.message : String(error),
+        // Signed network delivery may have succeeded before the error surfaced.
+        safeToRetry: false,
       });
     }
   }

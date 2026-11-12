@@ -34,6 +34,7 @@ def render_local_community_relay_activity(
     community_slug: str,
     delivery_profile: str,
     object_kind: str | None = None,
+    relay_activity_id: str | None = None,
 ) -> dict:
     """Render one outbound community Announce for a target delivery profile.
 
@@ -54,17 +55,18 @@ def render_local_community_relay_activity(
             community_actor_url=community_actor_url,
             community_slug=community_slug,
             object_kind=object_kind or "comment",
+            relay_activity_id=relay_activity_id,
         )
 
     if delivery_profile == "threadiverse_group":
         return _render_announce(
-            source_activity_json, community_actor_url, community_slug, object_kind
+            source_activity_json, community_actor_url, community_slug, object_kind, relay_activity_id
         )
     if delivery_profile == "mastodon_compat":
         return _render_announce(
-            source_activity_json, community_actor_url, community_slug, object_kind
+            source_activity_json, community_actor_url, community_slug, object_kind, relay_activity_id
         )
-    return _render_announce(source_activity_json, community_actor_url, community_slug, object_kind)
+    return _render_announce(source_activity_json, community_actor_url, community_slug, object_kind, relay_activity_id)
 
 
 def _is_create_note(activity: dict) -> bool:
@@ -131,6 +133,7 @@ def _render_threadiverse_note_announce(
     community_actor_url: str,
     community_slug: str,
     object_kind: str | None = None,
+    relay_activity_id: str | None = None,
 ) -> dict:
     """Render a Lemmy-compatible community Announce for a non-threadiverse Create(Note)."""
     event_object = getattr(normalized_event, "object")
@@ -179,7 +182,7 @@ def _render_threadiverse_note_announce(
         "cc": [community_actor_url, actor_id],
         "object": note,
     }
-    return _render_announce(create, community_actor_url, community_slug, object_kind or "comment")
+    return _render_announce(create, community_actor_url, community_slug, object_kind or "comment", relay_activity_id)
 
 
 
@@ -218,16 +221,19 @@ def _render_announce(
     community_actor_url: str,
     community_slug: str,
     object_kind: str | None = None,
+    relay_activity_id: str | None = None,
 ) -> dict:
     """Build a community-owned Announce without mutating the source activity."""
     # Deep-copying protects the persisted source JSON from accidental renderer
     # mutation while preserving the original actor and object attribution.
     source_activity = deepcopy(source_activity_json)
-    operation_id = f"{datetime.now(timezone.utc).timestamp():.6f}-{uuid4().hex}"
+    # CP23 passes the already persisted activity identity; the random fallback
+    # remains only for direct non-durable render callers outside the relay.
+    operation_id = f"{datetime.now(timezone.utc).timestamp():.6f}-{uuid4().hex}" if relay_activity_id is None else None
     origin_parts = urlsplit(community_actor_url)
     origin = f"{origin_parts.scheme}://{origin_parts.netloc}"
     resolved_kind = object_kind or _infer_announce_object_kind(source_activity)
-    announce_id = (
+    announce_id = relay_activity_id or (
         build_community_announce_comment_activity_id(
             origin=origin, slug=community_slug, activity_id=operation_id
         )

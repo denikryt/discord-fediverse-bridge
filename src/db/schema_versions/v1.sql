@@ -334,6 +334,7 @@ CREATE TABLE local_community_relay_source_activities (
 	source_announce_id VARCHAR(512),
 	origin_remote_actor_id VARCHAR(512) NOT NULL,
 	source_activity_json JSON NOT NULL,
+	canonical_relay_projection_json JSON,
 	created_at DATETIME NOT NULL,
 	PRIMARY KEY (id),
 	UNIQUE (local_community_id, operation, source_object_ap_id, source_activity_id)

@@ -74,7 +74,7 @@ class Database:
         self.local_subscribers = LocalSubscriberRepository(self.session)
         self.local_community_content = LocalCommunityContentRepository(self.session, self.immediate_session)
         self.local_community_surfaces = LocalCommunitySurfaceRepository(self.session)
-        self.local_community_relay = LocalCommunityRelayRepository(self.session)
+        self.local_community_relay = LocalCommunityRelayRepository(self.session, self.immediate_session)
         self.remote_subscriptions = RemoteSubscriptionRepository(self.session)
         self.bridge_actor_follows = BridgeActorFollowRepository(self.session)
         self.bridge_policy_entries = BridgePolicyEntryRepository(self.session)

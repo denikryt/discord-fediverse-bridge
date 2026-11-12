@@ -92,6 +92,27 @@ An ID-only signed `Delete(Tombstone)` may omit its ancestry, but it cannot
 change the original Group/parent association. Moderator delegation without a
 separately verified authority proof remains unsupported.
 
+### Canonical relay of locally hosted Group content
+
+The first authorized inbound Create fixes a relay source for
+`(local_community_id, source_object_ap_id)` regardless of how many distinct
+`Announce.id` wrappers later deliver the same object. Its author, original
+Service subscriber and first verified payload remain immutable. Relay excludes
+that **Service**, not the author Person, from accepted targets. The initial
+normalized Note projection is stored with the verified source when required for
+Mastodon→threadiverse rendering; a later envelope cannot replace its body or
+parent. Update/Delete remain separate signed revision identities, authorized
+against the same original local Group and immutable Person owner.
+
+Each relay target has one persistent Announce ID and a SQLite CAS-claimed send.
+The gateway signs and sends that prepared activity without regenerating its ID.
+A confirmed delivery is never sent again; a confirmed **pre-network** rejection
+may retry the same ID and payload. HTTP timeout, lost response, a partial batch
+without an outcome, or a gateway send exception is `unknown` and is **not**
+retried automatically. A crash after `sending` can also mean the destination
+already accepted the activity; this release does not supply a general relay
+reconciliation worker or exactly-once delivery guarantee.
+
 ## Supported discovery
 
 The gateway supports WebFinger actor discovery for bridge, user, and community handles.

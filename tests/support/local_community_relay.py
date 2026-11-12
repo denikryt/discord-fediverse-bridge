@@ -29,6 +29,9 @@ class PlannedOutcome:
 
     ok: bool
     error: str | None = None
+    # This fake rejects before issuing any HTTP call, unless a test explicitly
+    # models an ambiguous after-send outcome.
+    safe_to_retry: bool = True
 
 
 @dataclass(frozen=True, slots=True)
@@ -87,6 +90,7 @@ class DeterministicRelayGateway:
                     target_remote_actor_id=delivery.target_remote_actor_id,
                     activity_id=delivery.activity_json["id"],
                     error=planned.error,
+                    safe_to_retry=not planned.ok and planned.safe_to_retry,
                 )
             )
         return SendLocalCommunityRelayResult(outcomes=outcomes)

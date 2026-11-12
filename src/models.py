@@ -1367,6 +1367,9 @@ class LocalCommunityRelaySourceActivity(Base):
     source_announce_id: Mapped[str | None] = mapped_column(String(512), nullable=True)
     origin_remote_actor_id: Mapped[str] = mapped_column(String(512), nullable=False)
     source_activity_json: Mapped[dict] = mapped_column(JSON, nullable=False)
+    # The first verified normalized projection freezes Mastodon-to-Lemmy rendering
+    # across Announce replays, independently of later event body changes.
+    canonical_relay_projection_json: Mapped[dict | None] = mapped_column(JSON, nullable=True)
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), default=utcnow, nullable=False
     )

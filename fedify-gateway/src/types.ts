@@ -283,6 +283,8 @@ export interface SendLocalCommunityRelayOutcome {
   ok: boolean;
   activityId: string | null;
   error: string | null;
+  /** Evidence that the gateway rejected this target before any network send. */
+  safeToRetry?: boolean;
 }
 
 export interface SendLocalCommunityRelayResult {

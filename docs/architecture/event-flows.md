@@ -53,6 +53,27 @@ This document explains the major runtime traces through the bridge: user/platfor
    Existing pre-v1 host rows without a provable initial content snapshot do
    not gain new sibling content from a later envelope; that replay fails closed.
 
+## Local Group canonical Create relay flow
+
+1. The completed tenant-scoped host Create supplies the immutable original
+   Person owner and origin subscriber (a Service for Bridge Person publication).
+2. `LocalCommunityFederationFanout` excludes that original Service and selects
+   currently accepted, policy-allowed target actors/inboxes. Repeated Announce
+   wrappers reuse the same source identified by `(tenant, AP object, Create)`.
+3. `LocalCommunityRelayRepository` stores the first raw source and, only when
+   needed, its first verified normalized projection; later source JSON and
+   author changes cannot replace it. It reserves each target under SQLite
+   `BEGIN IMMEDIATE`, then claims `pending|failed→sending` with a fencing token
+   and stable relay activity ID before gateway HTTP.
+4. The existing Fedify gateway signs/sends this exact JSON. A matching verified
+   result yields `delivered`. Only an explicit pre-send rejection allows
+   `failed` retry with the original identity; unknown or mismatched HTTP result
+   stays `unknown` without blind retry. Late completion cannot modify an
+   attempt claimed under another token.
+5. An independently verified Update/Delete receives its own revision source and
+   may target only accepted actors with a confirmed original Create delivery.
+   The mutation owner, original Service and Group stay unchanged.
+
 ## Local Group inbound Update/Delete flow
 
 1. The gateway forwards the authenticated outer `Update` or `Delete` sender
