@@ -15,9 +15,9 @@ This document explains the major runtime traces through the bridge: user/platfor
    checking policy before network and again for the resolved actor.
 2. `src/operations/subscribe.py` receives canonical actor identity; a NodeBB
    category `cid` is never used as a Lemmy community ID.
-3. `src/db/database.py` records `channel_community_subscriptions` and bridge follow state.
-4. `src/fedify_gateway_client.py` calls gateway `/follow-community`; gateway sends the Follow.
-5. Accept returns through gateway `/inbox`, `src/http_api.py`, and `src/activitypub_handlers.py`.
+3. The gateway `/prepare-community-follow` returns the verified canonical Group/inbox and an immutable Follow ID **without sending**.
+4. Python inserts the `bridge_actor_follows` generation and channel binding together inside `BEGIN IMMEDIATE`; a CAS `prepared→sending` selects one sender, then `/send-prepared-community-follow` submits exactly the committed activity.
+5. Network ambiguity retains `sending` and the original ID; it does not trigger a new Follow. Signed Accept must come from the saved Group actor, reference the original Follow ID, and match an uncancelled pending generation; its update of all matching channel bindings is atomic. Only verified threadiverse may accept implicitly on inbound content; NodeBB requires explicit Accept.
 
 ## Remote /unsubscribe-channel flow
 

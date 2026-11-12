@@ -88,7 +88,7 @@ SUBSCRIPTION_CASES = (
         remote_outcome="accepted",
         expected=SubscriptionExpected(
             applied=True,
-            reason=None,
+            reason="pending_remote_confirmation",
             follow_calls=1,
             create_channel_calls=1,
         ),
@@ -117,7 +117,7 @@ SUBSCRIPTION_CASES = (
         remote_outcome="not_called",
         expected=SubscriptionExpected(
             applied=True,
-            reason=None,
+            reason="pending_remote_confirmation",
             create_channel_calls=1,
         ),
     ),

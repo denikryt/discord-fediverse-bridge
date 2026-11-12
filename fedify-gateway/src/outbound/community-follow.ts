@@ -22,6 +22,59 @@ export interface FollowCommunityResult {
   followActivityId: string;
 }
 
+/** Prepare an immutable Follow identity and verified target without sending. */
+export async function prepareCommunityFollow(
+  config: GatewayConfig,
+  communityActorUrl: string,
+): Promise<FollowCommunityResult> {
+  // The Python writer must commit this complete tuple and a channel binding
+  // before a sender is allowed to contact the remote inbox.
+  const { communityId, inboxUrl } = await fetchRemoteCommunity(communityActorUrl);
+  return {
+    communityActorUrl: communityId,
+    communityInboxUrl: inboxUrl,
+    followActivityId: buildServiceFollowActivityId(
+      config.fedifyOrigin,
+      config.actorIdentifier,
+      `${Date.now()}-${Math.random().toString(36).slice(2)}`,
+    ).href,
+  };
+}
+
+/** Send exactly the Follow reserved by the Python persistence boundary. */
+export async function sendPreparedCommunityFollow(
+  federation: Federation<GatewayConfig>,
+  config: GatewayConfig,
+  prepared: FollowCommunityResult,
+): Promise<void> {
+  // Never synthesize a replacement ID or re-fetch a possibly changed target:
+  // both the original actor and inbox are part of the durable reservation.
+  const actor = new URL(prepared.communityActorUrl);
+  const inbox = new URL(prepared.communityInboxUrl);
+  const followId = new URL(prepared.followActivityId);
+  if (actor.protocol !== "https:" || inbox.protocol !== "https:") {
+    throw new Error("prepared Follow recipient must use HTTPS");
+  }
+  const expectedPrefix = buildServiceFollowActivityId(
+    config.fedifyOrigin, config.actorIdentifier, "placeholder",
+  ).href.replace(/placeholder$/, "");
+  if (!followId.href.startsWith(expectedPrefix) || followId.origin !== new URL(config.fedifyOrigin).origin) {
+    throw new Error("prepared Follow ID does not belong to this bridge service");
+  }
+  const ctx = federation.createContext(new URL(config.fedifyOrigin), config);
+  const actorTail = `services/${config.actorIdentifier}`;
+  const follow = new Follow({
+    id: followId,
+    actor: ctx.getActorUri(actorTail),
+    object: actor,
+  });
+  await ctx.sendActivity(
+    { username: actorTail },
+    { id: actor, inboxId: inbox },
+    follow,
+  );
+}
+
 /** Publish one bridge actor Follow activity to a remote community actor. */
 export async function followCommunity(
   federation: Federation<GatewayConfig>,

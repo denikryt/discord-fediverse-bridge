@@ -9,7 +9,7 @@
 
 export { buildGatewayUrl } from "./outbound/gateway-url.js";
 export { renderPublicActivityJson } from "./outbound/activity-json.js";
-export { followCommunity, unfollowCommunity, buildLemmyCompatibleUnfollowActivity } from "./outbound/community-follow.js";
+export { followCommunity, prepareCommunityFollow, sendPreparedCommunityFollow, unfollowCommunity, buildLemmyCompatibleUnfollowActivity } from "./outbound/community-follow.js";
 export { acceptUserActorFollow, acceptLocalCommunityFollow } from "./outbound/follow-accept.js";
 export { publishContent, buildPublishCreateActivity } from "./outbound/content-publish.js";
 export { publishLocalCommunityContent, buildLocalCommunityAnnounceActivity } from "./outbound/local-community-fanout.js";

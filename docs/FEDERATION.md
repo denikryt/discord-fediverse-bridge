@@ -104,6 +104,20 @@ response size. The signed NodeBB Follow lifecycle and actual content sync are
 completed in later checkpoints; discovery alone is not a claim of end-to-end
 NodeBB federation.
 
+Remote subscriptions now reserve the canonical Group actor, verified inbox,
+immutable outbound Follow activity ID, software profile, and the first Discord
+channel binding in one SQLite transaction **before** invoking the Fedify
+sender. A second channel reuses that generation; the sender uses a durable
+`prepared → sending → sent` claim so only one command sends the reserved ID.
+A signed `Accept(Follow)` must identify that exact activity and originate from
+its original Group; an early Accept is not reverted by a later HTTP result.
+Only a confirmed `threadiverse` profile may be implicitly accepted on inbound
+content. NodeBB and `unknown` require explicit signed Accept. A possible
+network send with no response remains `sending`/pending with the same ID and
+must not be retried as a new Follow. Safe last-channel Undo and unresolved
+cleanup after restart are completed separately in the cancellation checkpoint;
+the existence of a pending binding does not mean the remote Group accepted it.
+
 ## Supported inbound ActivityPub
 
 The inbound federation profile is intentionally narrow. The gateway accepts selected ActivityPub activities, normalizes them into the Python bridge's internal event model, and forwards them to Python through the private `/internal/activitypub/events` route.

@@ -16,7 +16,9 @@ Supported normalized event categories: `post.created`, `post.updated`, `post.del
 
 | Route | Python caller method | Purpose | Important payload fields | Result or side effect |
 | --- | --- | --- | --- | --- |
-| `/follow-community` | `follow_community` | Send shared bridge actor Follow | `communityActorUrl` | Returns community actor URL, inbox URL, and Follow activity id |
+| `/prepare-community-follow` | `prepare_community_follow` | Verify canonical Group and allocate Follow identity without sending | `communityActorUrl` | Returns verified `communityActorUrl`, `communityInboxUrl`, and immutable `followActivityId` |
+| `/send-prepared-community-follow` | `send_prepared_community_follow` | Submit only an already committed Follow | `communityActorUrl`, `communityInboxUrl`, `followActivityId` | Sends exactly the reserved Follow; timeout outcome remains unresolved in Python |
+| `/follow-community` | `follow_community` | Legacy manual gateway send (not used by subscription operation) | `communityActorUrl` | Returns community actor URL, inbox URL, and Follow activity id |
 | `/unfollow-community` | `unfollow_community` | Send Undo(Follow) | `communityActorUrl`, `followActivityId` | Returns `ok` or error |
 | `/publish` | `publish_content` | Publish remote-community content | `actorUsername`, `communityActorUrl`, `kind`, `bodyMarkdown` | Returns canonical ids |
 | `/publish-local-community` | `publish_local_community_content` | Publish local-community content | publish fields | Returns ids and delivery counts |

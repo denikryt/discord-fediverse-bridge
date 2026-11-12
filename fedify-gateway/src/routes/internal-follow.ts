@@ -12,6 +12,8 @@ import {
   acceptLocalCommunityFollow,
   acceptUserActorFollow,
   followCommunity,
+  prepareCommunityFollow,
+  sendPreparedCommunityFollow,
   unfollowCommunity,
 } from "../federation-outbound.js";
 import type { AcceptLocalCommunityFollowRequest, AcceptUserActorFollowRequest } from "../types.js";
@@ -28,6 +30,46 @@ export function registerInternalFollowRoutes(
   dependencies: InternalFollowRouteDependencies,
 ): void {
   const { config, fedify } = dependencies;
+
+  app.post("/prepare-community-follow", async (context) => {
+    // Discovery is allowed here, but this endpoint must never send an AP Follow.
+    if (!hasValidInternalAuthorization(config, context.req.header("Authorization") ?? null)) {
+      return context.json({ error: "invalid authorization" }, { status: 401 });
+    }
+    const { communityActorUrl } = await context.req.json();
+    if (typeof communityActorUrl !== "string" || !communityActorUrl) {
+      return context.json({ error: "communityActorUrl is required" }, { status: 400 });
+    }
+    try {
+      return context.json(await prepareCommunityFollow(config, communityActorUrl));
+    } catch (error) {
+      return context.json({ error: error instanceof Error ? error.message : "actor lookup failed" }, { status: 500 });
+    }
+  });
+
+  app.post("/send-prepared-community-follow", async (context) => {
+    // The caller already committed the exact actor/inbox/Follow tuple.  This
+    // route cannot generate a new ID or pick a different remote recipient.
+    if (!hasValidInternalAuthorization(config, context.req.header("Authorization") ?? null)) {
+      return context.json({ error: "invalid authorization" }, { status: 401 });
+    }
+    const payload = await context.req.json() as Record<string, unknown>;
+    if (["communityActorUrl", "communityInboxUrl", "followActivityId"].some(
+      (field) => typeof payload[field] !== "string" || !payload[field],
+    )) {
+      return context.json({ error: "prepared Follow tuple is incomplete" }, { status: 400 });
+    }
+    try {
+      await sendPreparedCommunityFollow(fedify, config, {
+        communityActorUrl: payload.communityActorUrl as string,
+        communityInboxUrl: payload.communityInboxUrl as string,
+        followActivityId: payload.followActivityId as string,
+      });
+      return context.json({ ok: true });
+    } catch (error) {
+      return context.json({ error: error instanceof Error ? error.message : "Follow send failed" }, { status: 500 });
+    }
+  });
 
   app.post("/follow-community", async (context) => {
     // This endpoint exists as an operational bootstrap path until follow logic

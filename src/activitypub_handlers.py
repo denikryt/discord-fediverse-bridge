@@ -356,6 +356,19 @@ async def handle_follow_accepted(
             detail="bridge follow activity is not mapped",
         )
 
+    if (
+        event.actor_id != bridge_follow.community_actor_id
+        or event.community_actor_id != bridge_follow.community_actor_id
+        or bridge_follow.cancel_requested
+    ):
+        # The signed distributor must be the canonical target of the original
+        # Follow; an Accept with the same Follow ID from another Group is inert.
+        return HandlerResult(
+            status="skipped",
+            outcome=InboundActivityOutcome.IGNORED_UNKNOWN_FOLLOW,
+            detail="Accept sender or Follow generation does not match verified Group",
+        )
+
     if bridge_follow.status == "accepted":
         return HandlerResult(
             status="skipped",
@@ -370,13 +383,20 @@ async def handle_follow_accepted(
     pending_subs = runtime.database.remote_subscriptions.get_pending_channel_subscriptions_for_community(
         community_actor_id
     )
-    runtime.database.bridge_actor_follows.mark_bridge_actor_follow_accepted(
-        community_actor_id
+    accepted = runtime.database.bridge_actor_follows.accept_verified_follow(
+        follow_activity_id=follow_activity_id, actor_id=event.actor_id
     )
+    if not accepted:
+        return HandlerResult(
+            status="skipped",
+            outcome=InboundActivityOutcome.IGNORED_UNKNOWN_FOLLOW,
+            detail="Follow was cancelled or changed before Accept commit",
+        )
 
-    # DM every Discord user who was waiting on this community.
+    # Only the original generation is authorized by this Accept.
     for sub in pending_subs:
-        await _notify_channel_accepted(sub, runtime)
+        if sub.follow_activity_id == follow_activity_id:
+            await _notify_channel_accepted(sub, runtime)
 
     return HandlerResult(
         status="processed",
@@ -396,7 +416,12 @@ async def _maybe_implicit_accept(community_actor_id: str, runtime: Runtime) -> N
     bridge_follow = runtime.database.bridge_actor_follows.get_bridge_actor_follow(
         community_actor_id
     )
-    if bridge_follow is None or bridge_follow.status != "pending":
+    if (
+        bridge_follow is None
+        or bridge_follow.status != "pending"
+        or bridge_follow.remote_software_profile != "threadiverse"
+        or bridge_follow.cancel_requested
+    ):
         # Either already accepted/failed or no follow row at all — nothing to promote.
         return
 
@@ -406,11 +431,9 @@ async def _maybe_implicit_accept(community_actor_id: str, runtime: Runtime) -> N
         community_actor_id,
     )
 
-    # Capture pending subs before marking accepted so DMs can be sent.
-    pending_subs = runtime.database.remote_subscriptions.get_pending_channel_subscriptions_for_community(
-        community_actor_id
-    )
-    runtime.database.bridge_actor_follows.mark_bridge_actor_follow_accepted(
+    # The repository repeats the verified profile and cancellation predicates
+    # atomically with its state change; this earlier read is not authority.
+    pending_subs = runtime.database.bridge_actor_follows.accept_implicit_threadiverse_follow(
         community_actor_id
     )
 
@@ -442,7 +465,12 @@ def _should_skip_unsubscribed_remote_create(
         event.community_actor_id
     )
     if bridge_follow is not None and bridge_follow.status == "pending":
-        return False
+        # NodeBB and unknown Group profiles require explicit signed Accept.
+        # A signed Announce alone never activates pending Discord bindings.
+        return (
+            bridge_follow.remote_software_profile != "threadiverse"
+            or bridge_follow.cancel_requested
+        )
 
     if event.event_type == "post.created":
         # Unsubscribed posts are only relevant if they already map to a stored

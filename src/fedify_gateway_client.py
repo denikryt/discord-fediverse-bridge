@@ -253,6 +253,34 @@ class FedifyGatewayClient:
         )
         response.raise_for_status()
 
+    async def prepare_community_follow(self, community_actor_url: str) -> FollowCommunityResult:
+        """Resolve and allocate one immutable Follow tuple without network delivery."""
+        response = await self._client.post(
+            "/prepare-community-follow",
+            headers={"Authorization": f"Bearer {self._shared_secret}"},
+            json={"communityActorUrl": community_actor_url},
+        )
+        response.raise_for_status()
+        payload = response.json()
+        return FollowCommunityResult(
+            community_actor_url=payload["communityActorUrl"],
+            community_inbox_url=payload["communityInboxUrl"],
+            follow_activity_id=payload["followActivityId"],
+        )
+
+    async def send_prepared_community_follow(self, prepared: FollowCommunityResult) -> None:
+        """Send only the Follow identity and recipient already committed in SQLite."""
+        response = await self._client.post(
+            "/send-prepared-community-follow",
+            headers={"Authorization": f"Bearer {self._shared_secret}"},
+            json={
+                "communityActorUrl": prepared.community_actor_url,
+                "communityInboxUrl": prepared.community_inbox_url,
+                "followActivityId": prepared.follow_activity_id,
+            },
+        )
+        response.raise_for_status()
+
     async def follow_community(self, community_actor_url: str) -> FollowCommunityResult:
         """Trigger one gateway-side Follow and return the stored metadata."""
         # The request is authenticated because this endpoint is a trusted
