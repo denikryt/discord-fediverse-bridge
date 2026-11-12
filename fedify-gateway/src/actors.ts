@@ -39,6 +39,12 @@ export function buildBridgeServiceActor(
     endpoints: new Endpoints({
       sharedInbox: sharedInboxId,
     }),
+    // The accepted Service makes a public, stable software declaration.
+    // Local Group authorization may only link its registered Person actors
+    // after checking this metadata and both canonical actor documents.
+    attachments: [new PropertyValue({
+      name: "Bridge software", value: "discord-fediverse-bridge",
+    })],
     publicKeys: keyPairs.map((keyPair) => keyPair.cryptographicKey),
   });
 }

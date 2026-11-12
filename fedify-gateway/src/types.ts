@@ -20,6 +20,8 @@ export interface BridgeObject {
 
 export interface BridgeContentEvent {
   actor_id: string;
+  /** Outer Fedify-authenticated sender, not the inner Announce(Create) author. */
+  verified_sender_actor_id?: string | null;
   community_actor_id?: string | null;
   /** Gateway-confirmed local Group recipient; never client-selected. */
   verified_destination_group_actor_id?: string | null;

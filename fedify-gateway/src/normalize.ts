@@ -218,7 +218,7 @@ async function normalizePostActivity(
       author_name: await resolveAuthorName(activity),
       body_markdown: resolveMarkdownBody(object),
       kind: "post",
-      lemmy_id: parseRequiredLemmyNumericId(apId, "post"),
+      lemmy_id: parseInboundPostNumericId(apId, activity.actorId?.href ?? ""),
       parent_ap_id: null,
       post_ap_id: null,
       post_lemmy_id: null,
@@ -449,7 +449,7 @@ function normalizePostActivityFromJson(
       author_name: resolveAuthorNameFromJson(activity, object),
       body_markdown: resolveMarkdownBodyFromJson(object),
       kind: "post",
-      lemmy_id: parseRequiredLemmyNumericId(apId, "post"),
+      lemmy_id: parseInboundPostNumericId(apId, asCanonicalActorId(activity.actor) ?? ""),
       parent_ap_id: null,
       post_ap_id: null,
       post_lemmy_id: null,
@@ -967,6 +967,31 @@ function tryParseLemmyNumericId(
     return null;
   }
   return Number.parseInt(match[1], 10);
+}
+
+/** Keep Lemmy post IDs strict while admitting Bridge registered-Person Page IDs.
+ *
+ * A Bridge Page is named in the *author's exact typed* /objects/posts/
+ * namespace. Its opaque source token is not a Lemmy integer; the compatibility
+ * Pydantic field is only a zero sentinel, never canonical object identity.
+ * Final signature, Service and tenant admission happens before Discord effects.
+ */
+function parseInboundPostNumericId(objectId: string, actorId: string): number {
+  try {
+    const object = new URL(objectId);
+    const actor = new URL(actorId);
+    if (
+      object.protocol === "https:" && actor.protocol === "https:"
+      && object.origin === actor.origin
+      && /^\/actors\/users\/[A-Za-z0-9_-]+$/.test(actor.pathname)
+      && object.pathname.startsWith(`${actor.pathname}/objects/posts/`)
+      && /^[A-Za-z0-9_-]+$/.test(object.pathname.slice(`${actor.pathname}/objects/posts/`.length))
+      && !object.search && !object.hash && !actor.search && !actor.hash
+    ) return 0;
+  } catch {
+    // An invalid URI cannot establish Bridge namespace ownership.
+  }
+  return parseRequiredLemmyNumericId(objectId, "post");
 }
 
 function parseRequiredLemmyNumericId(value: string, kind: "post" | "comment"): number {

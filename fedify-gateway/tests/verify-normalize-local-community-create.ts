@@ -14,6 +14,8 @@ const COMMUNITY_URL = "https://bridge.example/actors/communities/hackers";
 
 async function main(): Promise<void> {
   await testDirectCreateToTypedLocalCommunityPathNormalizesPost();
+  await testSignedBridgePersonOpaquePageUsesNonLemmySentinel();
+  await testUnrelatedOpaquePageStillRequiresLemmyNumericId();
   console.log("verify:normalize-local-community-create passed");
 }
 
@@ -51,9 +53,44 @@ async function testDirectCreateToTypedLocalCommunityPathNormalizesPost(): Promis
   assert.ok(event, "The direct Create(Page) must normalize for local communities");
   assert.equal(event?.event_type, "post.created");
   assert.equal(event?.community_actor_id, COMMUNITY_URL);
+  assert.equal(event?.object.lemmy_id, 1);
 }
 
 main().catch((error) => {
   console.error(error);
   process.exitCode = 1;
 });
+
+/** A registered Bridge Person may use a stable opaque post token. */
+async function testSignedBridgePersonOpaquePageUsesNonLemmySentinel(): Promise<void> {
+  const actor = "https://remote.example/actors/users/alice";
+  const postId = `${actor}/objects/posts/opaque-digest-31a`;
+  const event = await normalizeCreateActivityFromJson({
+    type: "Create", id: `${actor}/activities/create/posts/opaque-digest-31a`,
+    actor, to: [COMMUNITY_URL],
+    object: {
+      type: "Page", id: postId, attributedTo: actor,
+      name: "Bridge topic", audience: COMMUNITY_URL, to: [COMMUNITY_URL],
+      source: { content: "Bridge body", mediaType: "text/markdown" },
+      published: "2026-11-12T00:00:00Z", url: postId,
+    },
+  });
+  assert.ok(event);
+  assert.equal(event.event_type, "post.created");
+  assert.equal(event.actor_id, actor);
+  assert.equal(event.object.ap_id, postId);
+  assert.equal(event.object.lemmy_id, 0);
+}
+
+/** An opaque arbitrary Page cannot silently weaken Lemmy's numeric contract. */
+async function testUnrelatedOpaquePageStillRequiresLemmyNumericId(): Promise<void> {
+  const actor = "https://remote.example/actors/users/alice";
+  await assert.rejects(() => normalizeCreateActivityFromJson({
+    type: "Create", id: `${actor}/activities/create/posts/unrelated`, actor,
+    object: {
+      type: "Page", id: "https://remote.example/unrelated/opaque",
+      attributedTo: actor, audience: COMMUNITY_URL, to: [COMMUNITY_URL],
+      published: "2026-11-12T00:00:00Z", name: "Untrusted opaque post",
+    },
+  }), /Could not parse Lemmy post numeric id/);
+}

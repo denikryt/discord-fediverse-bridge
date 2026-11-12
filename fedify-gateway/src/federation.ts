@@ -375,11 +375,19 @@ async function deliverVerifiedLocalContentEvent(
     logDebug(config.logLevel === "debug", "Personal feed event cannot target a local Group");
     return;
   }
+  // Only Fedify's authenticated OUTER activity supplies the sender. Wrapped
+  // Create actors must not inherit a distributor's verified signature.
+  const outerSender = asActivityIri(signedActivityJson.actor);
+  if (outerSender == null) {
+    logDebug(config.logLevel === "debug", "Verified local Group activity lacks an outer actor");
+    return;
+  }
   // Deliver all independently: a denied/failed Group cannot suppress another
   // valid tenant from the same signed wire activity.
   const results = await Promise.allSettled(selected.groups.map(async (groupActorId) =>
     deliverNormalizedEvent(config, {
       ...event,
+      verified_sender_actor_id: outerSender,
       community_actor_id: groupActorId,
       verified_destination_group_actor_id: groupActorId,
     }, { ...logContext, verifiedDestinationGroup: groupActorId }),

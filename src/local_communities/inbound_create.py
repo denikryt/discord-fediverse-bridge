@@ -13,6 +13,8 @@ from typing import TYPE_CHECKING
 
 from ..content_sync.inbound_references import build_message_reference
 from ..db import Database
+from ..bridge_policy import BridgePolicyService
+from .actor_authorization import ActorFetch, authorize_inbound_source
 from ..inbound_activity_outcomes import InboundActivityOutcome
 from ..runtime_ports import DiscordDeliveryClientPort
 from .delivery_mapping import get_local_community_thread_for_ap_object
@@ -39,12 +41,16 @@ class LocalCommunityInboundCreateHandler:
         surface_fanout: LocalCommunitySurfaceFanout,
         federation_fanout: LocalCommunityFederationFanout,
         discord_client_provider: Callable[[], DiscordDeliveryClientPort | None],
+        bridge_policy_service: BridgePolicyService,
+        actor_fetcher: ActorFetch | None = None,
     ) -> None:
         """Store only dependencies needed for inbound Discord mirror creation."""
         self.database = database
         self.surface_fanout = surface_fanout
         self.federation_fanout = federation_fanout
         self._discord_client_provider = discord_client_provider
+        self.bridge_policy_service = bridge_policy_service
+        self.actor_fetcher = actor_fetcher
 
     async def handle_post(
         self, event: object, runtime: object
@@ -62,6 +68,22 @@ class LocalCommunityInboundCreateHandler:
                 status="skipped",
                 outcome=InboundActivityOutcome.IGNORED_UNKNOWN_LOCAL_COMMUNITY,
                 detail="unknown local community",
+            )
+        # Authorize the specific verified tenant before duplicate/parent reads
+        # or any host, mapping or relay side effect. A Service relationship
+        # never grants rights based solely on a Person's hostname.
+        authorized = await authorize_inbound_source(
+            event=event,
+            local_community_id=getattr(local_community, "id"),
+            database=self.database,
+            policy=self.bridge_policy_service,
+            fetch_actor=self.actor_fetcher,
+        )
+        if authorized is None:
+            return _HandlerResult(
+                status="skipped",
+                outcome=InboundActivityOutcome.IGNORED_ACTOR_NOT_SUBSCRIBER,
+                detail="remote actor has no verified accepted subscriber relationship",
             )
         existing = get_local_community_thread_for_ap_object(
             self.database, getattr(getattr(event, "object"), "ap_id")
@@ -85,19 +107,6 @@ class LocalCommunityInboundCreateHandler:
                 status="skipped",
                 outcome=InboundActivityOutcome.IGNORED_ALREADY_APPLIED,
                 detail="post already mapped",
-            )
-        remote_subscriber = self.database.remote_subscribers.get_remote_subscriber(
-            local_community_id=getattr(local_community, "id"),
-            remote_actor_id=getattr(event, "actor_id"),
-        )
-        if (
-            remote_subscriber is None
-            or getattr(remote_subscriber, "status") != "accepted"
-        ):
-            return _HandlerResult(
-                status="skipped",
-                outcome=InboundActivityOutcome.IGNORED_ACTOR_NOT_SUBSCRIBER,
-                detail="remote actor is not an accepted remote subscriber",
             )
         bot = self._discord_client_provider()
         if bot is None:
@@ -164,6 +173,22 @@ class LocalCommunityInboundCreateHandler:
                 outcome=InboundActivityOutcome.IGNORED_UNKNOWN_LOCAL_COMMUNITY,
                 detail="unknown local community",
             )
+        # Authorize the specific verified tenant before duplicate/parent reads
+        # or any host, mapping or relay side effect. A Service relationship
+        # never grants rights based solely on a Person's hostname.
+        authorized = await authorize_inbound_source(
+            event=event,
+            local_community_id=getattr(local_community, "id"),
+            database=self.database,
+            policy=self.bridge_policy_service,
+            fetch_actor=self.actor_fetcher,
+        )
+        if authorized is None:
+            return _HandlerResult(
+                status="skipped",
+                outcome=InboundActivityOutcome.IGNORED_ACTOR_NOT_SUBSCRIBER,
+                detail="remote actor has no verified accepted subscriber relationship",
+            )
         existing_message = self.database.local_community_content.get_local_community_message_by_ap_object_id(
             getattr(getattr(event, "object"), "ap_id")
         )
@@ -191,19 +216,6 @@ class LocalCommunityInboundCreateHandler:
                 status="skipped",
                 outcome=InboundActivityOutcome.IGNORED_ALREADY_APPLIED,
                 detail="comment already mapped",
-            )
-        remote_subscriber = self.database.remote_subscribers.get_remote_subscriber(
-            local_community_id=getattr(local_community, "id"),
-            remote_actor_id=getattr(event, "actor_id"),
-        )
-        if (
-            remote_subscriber is None
-            or getattr(remote_subscriber, "status") != "accepted"
-        ):
-            return _HandlerResult(
-                status="skipped",
-                outcome=InboundActivityOutcome.IGNORED_ACTOR_NOT_SUBSCRIBER,
-                detail="remote actor is not an accepted remote subscriber",
             )
 
         thread_row = self.database.local_community_content.get_local_community_thread_by_ap_object_id(

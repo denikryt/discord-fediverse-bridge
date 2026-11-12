@@ -43,9 +43,33 @@ receipt admission and indexes receipt lifecycle transitions by
 `(delivery_id,event_type,verified_destination_group_actor_id)`. Old receipts
 retain NULL scope, and Follow/personal/remote events retain the global
 `delivery_id` receipt; a historical global receipt is never evidence for
-skipping or admitting a different Group's Create. After admission, each Group
-still requires its independent subscriber ACL/owner and canonical host
-reservation (CP20–CP21); receipt scope is not content authorization.
+skipping or admitting a different Group's Create. After admission, each Group still requires its independent subscriber ACL,
+owner and canonical host reservation; receipt scope is not content authorization.
+
+### Bridge Service→Person author admission (CP20)
+
+For local Group content, `verified_sender_actor_id` is derived only from the
+**outer Fedify-authenticated** ActivityPub actor. It must not be copied from an
+inner `Announce(Create)` actor or from a raw ID-indexed request cache. For a
+direct Create signed by a registered remote Bridge `Person`, Python checks the
+outer sender against the `Create.actor`, original object ID and `attributedTo`
+before any duplicate/parent/Discord/relay operation. The signed Person retains
+its own author identity even when the authorization relationship belongs to
+a different accepted `Service` subscriber.
+
+A Service subscriber authorizes one such Person only when both are canonical
+`https://origin/actors/{services,users}/{identifier}` actors, public documents
+confirm their `Service`/`Person` types, actor IDs, actor-owned public keys,
+individual inbox/outbox paths and the same Bridge shared inbox. The Service
+publishes a `PropertyValue` attachment (`Bridge software` =
+`discord-fediverse-bridge`) as an explicit Bridge protocol declaration. An
+accepted subscription to that exact Service and target Local Group is required
+both before and after the bounded, public-IP-validated actor fetch. Ambiguous
+multiple Services on the same origin, unavailable/contradictory actors,
+unsigned inner Person claims, revoked subscriptions and policy denial are
+rejected without content effects. A verified *same-actor* accepted subscriber
+keeps its prior path. CP21 completes durable pre-REST host reservation; CP23
+will correct origin Service exclusion and immutable relay provenance.
 
 ### Inbound remote mutation authorization
 

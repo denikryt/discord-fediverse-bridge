@@ -69,6 +69,7 @@ class LocalCommunityRuntime:
             surface_fanout=self.surface_fanout,
             federation_fanout=self.federation_fanout,
             discord_client_provider=lambda: self.bot,
+            bridge_policy_service=bridge_policy_service,
         )
         self.mutation_handler = LocalCommunityMutationHandler(
             database=database,

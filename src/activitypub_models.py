@@ -56,6 +56,9 @@ class ActivityPubEvent(BaseModel):
     verified_destination_group_actor_id: str | None = None
     target: ActivityPubTarget | None = None
     actor_id: str
+    # Server-generated evidence from the outer Fedify-verified activity.
+    # An Announce cannot certify that its embedded Person signed a Create.
+    verified_sender_actor_id: str | None = None
     object: ActivityPubObject
     source_activity_json: dict[str, Any] | None = None
     source_activity_id: str | None = None

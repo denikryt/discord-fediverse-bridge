@@ -68,6 +68,19 @@ a late `Undo(old)` or missing ID is ignored without affecting current access.
 This is the *incoming* local-community subscriber lifecycle, not the outbound
 NodeBB Follow/Undo state machine.
 
+### Bridge Service and registered Person authorization
+
+When a remote Bridge `Service` follows a locally hosted Group, a registered
+`Person` from that Bridge can author a direct signed Create without obtaining
+a separate accepted Follow. The gateway records the authenticated **outer**
+activity sender; the local Group checks the exact accepted Service relationship,
+public `Service`/`Person` actor documents and their shared Bridge namespace.
+Service actor documents advertise `Bridge software: discord-fediverse-bridge`
+as public ActivityStreams `PropertyValue` metadata. A mere matching hostname
+or an unsigned inner Create is not permission. Existing same-actor subscribers
+are unchanged. Until both Bridges expose the declaration, the new
+Service→Person path refuses access rather than guessing software provenance.
+
 ## Supported discovery
 
 The gateway supports WebFinger actor discovery for bridge, user, and community handles.
