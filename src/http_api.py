@@ -292,12 +292,15 @@ def create_http_app(runtime: Runtime) -> FastAPI:
             from .community_sync.edit_delete import canonicalize_remote_delete_kind
             event = canonicalize_remote_delete_kind(runtime.database, event)
 
-        duplicate_response = _begin_event_processing(runtime, event)
+        # Only a durable failed/deferred receipt establishes that this
+        # Follow ID was observed before. Keep the internal provenance before
+        # resetting the receipt for retry; never trust an external flag.
+        duplicate_response, is_retry = _begin_event_attempt(runtime, event)
         if duplicate_response is not None:
             return duplicate_response
 
         try:
-            result = await dispatch_activitypub_event(event, runtime)
+            result = await dispatch_activitypub_event(event, runtime, is_retry=is_retry)
         except Exception as exc:
             _mark_event_failed(runtime, event.delivery_id, str(exc))
             logger.exception(
@@ -457,7 +460,20 @@ def _validate_delivery_header(
 def _begin_event_processing(
     runtime: Runtime, event: BridgeGatewayEvent
 ) -> dict[str, str | None] | None:
-    """Begin one delivery attempt or return the stored duplicate result."""
+    """Keep the public receipt helper's response contract for existing callers."""
+    result, _is_retry = _begin_event_attempt(runtime, event)
+    return result
+
+
+def _begin_event_attempt(
+    runtime: Runtime, event: BridgeGatewayEvent
+) -> tuple[dict[str, str | None] | None, bool]:
+    """Claim a receipt and capture Follow retry provenance before resetting it.
+
+    The retry flag is internal-only and meaningful solely for community
+    Follow requests. A failed receipt may outlive a successful Undo, so the
+    subscriber repository must still decide if this generation is current.
+    """
     # Receipt state is the source of truth for idempotency across duplicate and
     # retry deliveries from the gateway.
     existing = runtime.database.event_receipts.get_event_receipt(event.delivery_id)
@@ -468,7 +484,7 @@ def _begin_event_processing(
             object_ap_id=_event_object_id(event),
             status="in_progress",
         )
-        return None
+        return None, False
 
     if existing.status == "in_progress":
         raise HTTPException(
@@ -480,7 +496,23 @@ def _begin_event_processing(
             "status": "duplicate",
             "outcome": existing.outcome,
             "detail": existing.detail or existing.status,
-        }
+        }, False
+    is_retry = event.event_type == "local.follow_requested" and (
+        existing.event_type == event.event_type
+        and existing.object_ap_id == _event_object_id(event)
+    )
+    # If the same wire ID once carried a different event/object, it cannot
+    # safely prove a new Follow first-seen or legitimate retry generation.
+    if event.event_type == "local.follow_requested" and not is_retry:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="Follow delivery ID conflicts with a prior event",
+        )
+    if existing.status not in {"failed", "deferred"}:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="Unsupported receipt state for Follow retry",
+        )
     if existing.status == "deferred":
         runtime.database.event_receipts.update_event_receipt(
             delivery_id=event.delivery_id,
@@ -488,7 +520,7 @@ def _begin_event_processing(
             outcome=None,
             detail="retrying deferred delivery",
         )
-        return None
+        return None, is_retry
 
     runtime.database.event_receipts.update_event_receipt(
         delivery_id=event.delivery_id,
@@ -496,7 +528,7 @@ def _begin_event_processing(
         outcome=None,
         detail="retrying failed delivery",
     )
-    return None
+    return None, is_retry
 
 
 def _event_object_id(event: BridgeGatewayEvent) -> str:

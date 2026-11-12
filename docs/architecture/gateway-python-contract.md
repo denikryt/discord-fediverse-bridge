@@ -36,6 +36,28 @@ rows fail closed. Before receipt admission, a Delete URL is classified only
 against the saved Group-scoped canonical post/reply, not the URI suffix;
 `delivery_id` and the external header remain the original wire values.
 
+### Local Group Follow retry and Undo identity (CP18)
+
+`local.follow_requested` and `local.unfollow_requested` retain their original
+wire ActivityPub `delivery_id` and verified `Follow.id`. No `is_retry` field is
+accepted from the gateway. After internal bearer/header checks, the Python HTTP
+receipt boundary captures `is_retry=True` **only** for a previously failed or
+deferred `local.follow_requested` with the same persisted Follow ID, before
+resetting its receipt to `in_progress`. Other receipt categories retain their
+normal deduplication behavior; receipt state does not prove the absence of a
+later unsubscribe.
+
+The local-community follower handler checks the accepted subscriber for that
+same `(local_community_id, remote_actor_id)` under `BEGIN IMMEDIATE`. A retry
+matching the current Follow ID may resend the original Accept to the saved
+inbox. A retry of a superseded Follow or an absent accepted subscriber returns
+`skipped/ignored_already_applied` without updating the subscriber or sending
+Accept. Only a verified first-seen Follow ID may start/replace a generation.
+For `Undo(Follow)`, a single SQL DELETE requires a non-empty exact current
+`follow_activity_id` and accepted subscriber; older, missing and unrelated IDs
+return `skipped/ignored_unknown_follow`. This inbound Service relationship is
+separate from the outbound NodeBB Follow cancellation lifecycle.
+
 ## Python -> Gateway
 
 `src/fedify_gateway_client.py` calls authenticated internal gateway routes. Python decides bridge policy and persistence; the gateway owns actor documents, object URLs, HTTP signatures, and signed federation delivery.

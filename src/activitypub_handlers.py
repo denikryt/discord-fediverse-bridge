@@ -44,9 +44,9 @@ class HandlerResult:
 
 
 async def dispatch_activitypub_event(
-    event: BridgeGatewayEvent, runtime: Runtime
+    event: BridgeGatewayEvent, runtime: Runtime, *, is_retry: bool = False
 ) -> HandlerResult:
-    """Route one inbound ActivityPub event after federation policy admission."""
+    """Route an event, carrying only server-derived Follow retry provenance."""
     subject = _allowlist_subject(event, runtime)
     decision = runtime.bridge_policy_service.federation_decision(subject)
     if not decision.allowed:
@@ -156,6 +156,7 @@ async def dispatch_activitypub_event(
             remote_actor_id=event.actor_id,
             remote_inbox_url=event.object.remote_inbox_url,
             follow_activity_id=event.object.follow_activity_id,
+            is_retry=is_retry,
         )
     if event.event_type == "local.unfollow_requested":
         if event.target_actor_kind == "user":

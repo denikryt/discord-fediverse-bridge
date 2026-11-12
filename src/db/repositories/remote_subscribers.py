@@ -1,9 +1,11 @@
+"""Remote subscriber persistence for bridge-owned local communities."""
+
 from __future__ import annotations
 
 
 from dataclasses import dataclass
 
-from sqlalchemy import func, select
+from sqlalchemy import delete, func, select
 from sqlalchemy.orm import Session
 
 from ...models import (
@@ -11,9 +13,6 @@ from ...models import (
     utcnow,
 )
 from .base import BaseRepository
-
-
-"""Remote subscriber persistence for bridge-owned local communities."""
 
 
 class FollowActivityIdCollision(ValueError):
@@ -24,8 +23,9 @@ class FollowActivityIdCollision(ValueError):
 class RemoteSubscriberTransition:
     """Describe the outcome of one atomic remote-subscriber mutation."""
 
-    remote_subscriber_id: int
+    remote_subscriber_id: int | None
     transition: str
+    accepted_inbox_url: str | None = None
 
 
 class RemoteSubscriberRepository(BaseRepository):
@@ -40,6 +40,7 @@ class RemoteSubscriberRepository(BaseRepository):
         remote_actor_id: str,
         remote_inbox_url: str,
         follow_activity_id: str,
+        is_retry: bool = False,
     ) -> RemoteSubscriberTransition:
         """Atomically create or refresh one accepted remote-subscriber row.
 
@@ -48,6 +49,27 @@ class RemoteSubscriberRepository(BaseRepository):
         immediate transaction so concurrent Follow deliveries do not escape as
         raw database integrity errors.
         """
+        # A durable receipt marks an already-observed Follow generation.
+        # Neither a failed Accept nor a deferred receipt proves that Undo did
+        # not subsequently remove the relationship. Decide atomically against
+        # the current accepted row before considering any write or new Accept.
+        remote_subscriber = session.scalar(
+            select(RemoteSubscriber).where(
+                RemoteSubscriber.local_community_id == local_community_id,
+                RemoteSubscriber.remote_actor_id == remote_actor_id,
+            )
+        )
+        if is_retry:
+            if remote_subscriber is None or remote_subscriber.status != "accepted":
+                return RemoteSubscriberTransition(None, "unproven_retry_after_unsubscribe")
+            if remote_subscriber.follow_activity_id != follow_activity_id:
+                return RemoteSubscriberTransition(remote_subscriber.id, "superseded_retry")
+            # A current-ID retry may resend its Accept, but it cannot rewrite
+            # the original relationship's recipient inbox or generation.
+            return RemoteSubscriberTransition(
+                remote_subscriber.id, "current_retry", remote_subscriber.remote_inbox_url
+            )
+
         existing_follow_owner = session.scalar(
             select(RemoteSubscriber).where(
                 RemoteSubscriber.follow_activity_id == follow_activity_id
@@ -62,12 +84,6 @@ class RemoteSubscriberRepository(BaseRepository):
         ):
             raise FollowActivityIdCollision(follow_activity_id)
 
-        remote_subscriber = session.scalar(
-            select(RemoteSubscriber).where(
-                RemoteSubscriber.local_community_id == local_community_id,
-                RemoteSubscriber.remote_actor_id == remote_actor_id,
-            )
-        )
         if remote_subscriber is None:
             remote_subscriber = RemoteSubscriber(
                 local_community_id=local_community_id,
@@ -89,7 +105,9 @@ class RemoteSubscriberRepository(BaseRepository):
             session.flush()
             transition = "refreshed"
 
-        return RemoteSubscriberTransition(remote_subscriber.id, transition)
+        return RemoteSubscriberTransition(
+            remote_subscriber.id, transition, remote_subscriber.remote_inbox_url
+        )
 
     def create_remote_subscriber(
         self,
@@ -173,6 +191,32 @@ class RemoteSubscriberRepository(BaseRepository):
             remote_subscriber.updated_at = utcnow()
             session.flush()
             return remote_subscriber
+
+    def delete_accepted_if_current_follow(
+        self,
+        *,
+        local_community_id: int,
+        remote_actor_id: str,
+        follow_activity_id: str | None,
+    ) -> bool:
+        """Delete only the *current* accepted Follow generation atomically.
+
+        An Undo without an original Follow ID is never authorization to remove
+        a subscriber. The single guarded SQL DELETE prevents a concurrent
+        Follow(new) refresh from being removed by a late Undo(old).
+        """
+        if not follow_activity_id:
+            return False
+        with self.session() as session:
+            result = session.execute(
+                delete(RemoteSubscriber).where(
+                    RemoteSubscriber.local_community_id == local_community_id,
+                    RemoteSubscriber.remote_actor_id == remote_actor_id,
+                    RemoteSubscriber.follow_activity_id == follow_activity_id,
+                    RemoteSubscriber.status == "accepted",
+                )
+            )
+            return result.rowcount == 1
 
     def delete_remote_subscriber(
         self,

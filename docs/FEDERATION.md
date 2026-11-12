@@ -53,6 +53,21 @@ A bound personal-feed guild text channel publishes only owner-authored root mess
 
 Discord synchronization is active only while the root mapping's channel remains the User Actor's current personal-feed binding. After unbind or move, inbound comments remain stored but Discord rendering and outbound thread publication are suppressed. Discord rendering uses at most three actual API attempts with retry intervals no longer than 30 seconds; waiting for an out-of-order parent does not consume that budget. Attachments, private visibility, complete remote conversation reconstruction, and public outbox pagination remain outside Stage 8.
 
+### Local community inbound Follow generation safety
+
+For local Bridge-hosted `Group` subscriptions, a verified incoming
+`Follow(new)` establishes one accepted remote subscriber generation. A repeated
+`Follow(current)` can repeat its signed Accept using the persisted target inbox.
+After a persisted failed Accept, a retry of an older Follow cannot overwrite a
+newer accepted generation, and a retry after `Undo` cannot recreate a deleted
+subscriber. These are terminal `ignored_already_applied` decisions; the remote
+actor must send a genuinely new verified Follow ID to subscribe again.
+
+`Undo(Follow)` must reference the exact non-empty currently accepted Follow ID;
+a late `Undo(old)` or missing ID is ignored without affecting current access.
+This is the *incoming* local-community subscriber lifecycle, not the outbound
+NodeBB Follow/Undo state machine.
+
 ## Supported discovery
 
 The gateway supports WebFinger actor discovery for bridge, user, and community handles.

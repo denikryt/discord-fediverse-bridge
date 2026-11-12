@@ -26,6 +26,23 @@ This document explains the major runtime traces through the bridge: user/platfor
 3. If it was the last channel for the community, Python calls gateway `/unfollow-community`.
 4. The bridge follow row is removed or preserved according to Undo(Follow) delivery outcome.
 
+## Local Group inbound Follow/Undo(Follow) flow
+
+1. Fedify verifies the signed Follow/Undo and routes the verified local Group
+   target to the authenticated Python event endpoint. A bare matching actor or
+   an ID-only cached raw payload does not establish authority.
+2. `src/http_api.py` claims the wire receipt. Failed/deferred Follow receipts
+   preserve an internal retry bit before reset; no external retry bit is trusted.
+3. `LocalCommunityFollowerHandler` checks policy and inbox admission, then
+   `RemoteSubscriberRepository.create_or_refresh_accepted()` serializes the
+   subscriber generation under `BEGIN IMMEDIATE`. A retry of the current ID
+   may repeat Accept; a superseded/removed generation is terminal skipped and
+   cannot publish, refresh its inbox or send Accept.
+4. For verified `Undo(Follow)`, the repository deletes only a row with the exact
+   non-empty current Follow ID and accepted status in one SQL statement. A late
+   Undo(old) leaves Follow(new) intact even during concurrent refresh. No
+   separate read is used to authorize deletion.
+
 ## Discord thread/reply -> remote Group Create flow
 
 1. `src/discord_bot.py` receives a Discord event; the router chooses the accepted remote subscription and `CommunityRuntime` checks its forum/parent context.
