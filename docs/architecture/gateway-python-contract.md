@@ -21,6 +21,18 @@ The fetched `Note.attributedTo` becomes the immutable canonical owner; it is
 not represented as an independent Person signature. A historical reply root
 requires exact membership in that Group's bounded official outbox.
 
+A repeat of a signature-verified NodeBB `Announce` with the **same outer wire
+ID** must reach this Python path again: Fedify's inbox idempotency skips its
+usual `per-inbox` cache only for the NodeBB category-actor `Announce` shape.
+The actor path is a routing hint, **not** authorization; the accepted Group,
+policy, canonical owner and immutable first-Create snapshot are revalidated
+before any Discord effect. A previously terminal global wire receipt remains
+the historical outcome, while canonical per-forum CAS may complete only
+missing or definitely failed-before-REST targets. Fully completed repeats
+continue to report `duplicate`; ambiguous Discord sends are never blindly
+retried. Other inbox activities retain the default per-inbox key strategy,
+and local Group receipts remain tenant-scoped.
+
 ### Verified local Group delivery scope (CP19)
 
 For **locally hosted Bridge Groups**, the Fedify-verified direct `Create`,

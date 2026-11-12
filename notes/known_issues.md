@@ -97,3 +97,14 @@ Inbound personal-feed comments are retained even when the active binding is remo
 - Release gate open: external clean-checkout review reported 1040 passed, 217 failed, 6 errors and 1 xfailed on the feature, versus 988 passed and 6 failed on `main`. Direct NodeBB/Fedify/Discord E2E remains unverified; do not describe CP24 as accepted.
 - Corrected in the follow-up review patch: public NodeBB object GET/outbox now read original Create type/context, NodeBB Update JSON preserves the verified conversation root, and a valid same-wire remote Group Create retry can pass a terminal receipt to complete provably unsent Discord forums. Errors before the Discord REST call remain `failed`; unknown network outcomes still block blind resend. The first verified remote Group Create object JSON is now saved with the canonical root/reply before REST: later valid Announce deliveries can complete missing forums but cannot change the original Discord title/body. Previously stored remote groups without this proof fail closed for additional placements.
 - Legacy partial-schema tests are not valid v0 inputs to the strict migration runner. The inbound receipt fixture was updated to the actual tagged `v0.1.0` schema; the remaining full suite regressions still need classification on genuine supported v0/v1 fixtures. Node TypeScript/Fedify runtime tests are not executable in this environment without the project dependencies; no gateway runtime pass is asserted.
+
+- Post-review replay correction (2026-11-13): the remote NodeBB `Announce` path
+  needed *both* Fedify inbox idempotency admission and Python terminal receipt
+  resume for the original `remote.group_announced` wire event. A repeated
+  signed Group event now rechecks canonical per-forum claims; completed
+  repeats preserve the prior `duplicate` HTTP response and exceptions do not
+  rewrite an already applied receipt. A local SQLite/HTTP regression covers
+  A delivered/B failed-before-REST → same-wire replay → B delivered; live
+  Fedify-signed HTTP and full SDK suites are still required for CP24 acceptance.
+  No SQLite v1 schema change was made here. Prior CP24 candidate v1 databases
+  with different DDL remain unsupported without a separately scoped migration.

@@ -34,6 +34,7 @@ import {
   selectVerifiedLocalGroupDestinations,
   type VerifiedInboxRoute,
 } from "./local-group-ingress.js";
+import { gatewayInboxIdempotencyKey } from "./inbox-idempotency.js";
 import type {
   BridgeContentEvent,
   FollowAcceptedEvent,
@@ -130,7 +131,9 @@ export function createGatewayFederation(
 
   federation
     .setInboxListeners("/actors/{+identifier}/inbox", "/inbox")
-    .withIdempotency("per-inbox")
+    .withIdempotency((ctx, activity) => gatewayInboxIdempotencyKey(
+      ctx, activity, activity instanceof Announce,
+    ))
     .on(Create, async (ctx, activity) => {
       if (isDebug) {
         console.log("[Fedify][debug] Received direct Create activity");

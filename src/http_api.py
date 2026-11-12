@@ -19,7 +19,7 @@ from .dashboard import (
     build_dashboard_payload,
     render_dashboard_html,
 )
-from .activitypub_models import ActivityPubEvent, BridgeGatewayEvent
+from .activitypub_models import ActivityPubEvent, BridgeGatewayEvent, RemoteGroupAnnounceEvent
 from .registration_service import (
     RegistrationError,
     generate_oauth_state,
@@ -297,6 +297,14 @@ def create_http_app(runtime: Runtime) -> FastAPI:
             from .community_sync.edit_delete import canonicalize_remote_delete_kind
             event = canonicalize_remote_delete_kind(runtime.database, event)
 
+        # The original receipt remains immutable for a remote Group replay;
+        # keep its result for the HTTP duplicate contract after revalidation.
+        original_receipt = None
+        if event.event_type in {"post.created", "comment.created", "remote.group_announced"}:
+            original_receipt = runtime.database.event_receipts.get_event_receipt(
+                event.delivery_id,
+                verified_destination_group_actor_id=_receipt_group_scope(event),
+            )
         # Only a durable failed/deferred receipt establishes that this
         # Follow ID was observed before. Keep the internal provenance before
         # resetting the receipt for retry; never trust an external flag.
@@ -307,8 +315,12 @@ def create_http_app(runtime: Runtime) -> FastAPI:
         try:
             result = await dispatch_activitypub_event(event, runtime, is_retry=is_retry)
         except Exception as exc:
-            _mark_event_failed(runtime, event.delivery_id, str(exc),
-                               verified_destination_group_actor_id=_receipt_group_scope(event))
+            # A resume never owns the successful first wire receipt. A failed
+            # revalidation can leave a target pending, but must not rewrite
+            # the original authenticated outcome as processing_failed.
+            if not _is_resumable_remote_group_receipt(event, original_receipt):
+                _mark_event_failed(runtime, event.delivery_id, str(exc),
+                                   verified_destination_group_actor_id=_receipt_group_scope(event))
             logger.exception(
                 "ActivityPub event handling failed for delivery %s", event.delivery_id
             )
@@ -318,6 +330,16 @@ def create_http_app(runtime: Runtime) -> FastAPI:
             runtime, event.delivery_id, result.status, result.outcome, result.detail,
             verified_destination_group_actor_id=_receipt_group_scope(event),
         )
+        if (_is_resumable_remote_group_receipt(event, original_receipt)
+                and result.status == "skipped"
+                and result.outcome == InboundActivityOutcome.IGNORED_ALREADY_APPLIED):
+            # A valid repeat reached the canonical fanout and found no safe
+            # missing target; keep the previous public duplicate response.
+            return {
+                "status": "duplicate",
+                "outcome": original_receipt.outcome,
+                "detail": original_receipt.detail or original_receipt.status,
+            }
         return {
             "status": result.status,
             "outcome": result.outcome.value,
@@ -496,6 +518,35 @@ def _validate_verified_local_group_destination(
                             detail="Unverified local Group destination")
 
 
+def _is_resumable_remote_group_receipt(
+    event: BridgeGatewayEvent, receipt: object | None,
+) -> bool:
+    """Identify a terminal remote Create eligible for canonical target rechecking.
+
+    This does not authorize a delivery. The gateway must still authenticate
+    the envelope, and the runtime rechecks the Group Follow, original owner,
+    subscription and per-forum CAS before any Discord REST call.
+    """
+    if receipt is None or not isinstance(event, (ActivityPubEvent, RemoteGroupAnnounceEvent)):
+        return False
+    if _receipt_group_scope(event) is not None:
+        return False  # Local Group receipts retain their tenant-specific contract.
+    if event.event_type not in {"post.created", "comment.created", "remote.group_announced"}:
+        return False
+    return (
+        receipt.status in {"processed", "skipped"}
+        and receipt.event_type == event.event_type
+        and receipt.object_ap_id == _event_object_id(event)
+        and receipt.outcome in {
+            InboundActivityOutcome.APPLIED.value,
+            InboundActivityOutcome.IGNORED_ALREADY_APPLIED.value,
+        }
+        and event.community_actor_id is not None
+        and (not isinstance(event, ActivityPubEvent)
+             or event.target is None or event.target.kind == "community")
+    )
+
+
 def _begin_event_processing(
     runtime: Runtime, event: BridgeGatewayEvent
 ) -> dict[str, str | None] | None:
@@ -555,19 +606,7 @@ def _begin_event_attempt(
         # that provably failed before Discord REST. The terminal receipt
         # describes the previous attempt, not all future subscribed forums.
         # Local Group content keeps its separately scoped duplicate contract.
-        can_resume_remote = (
-            isinstance(event, ActivityPubEvent)
-            and scope is None
-            and event.community_actor_id is not None
-            and (event.target is None or event.target.kind == "community")
-            and event.event_type in {"post.created", "comment.created"}
-            and existing.event_type == event.event_type
-            and existing.object_ap_id == _event_object_id(event)
-            and existing.outcome in {
-                InboundActivityOutcome.APPLIED.value,
-                InboundActivityOutcome.IGNORED_ALREADY_APPLIED.value,
-            }
-        )
+        can_resume_remote = _is_resumable_remote_group_receipt(event, existing)
         if can_resume_remote:
             # Preserve the terminal receipt: each *eligible target* is fenced
             # by its canonical Group/Discord CAS claim in the runtime. This
