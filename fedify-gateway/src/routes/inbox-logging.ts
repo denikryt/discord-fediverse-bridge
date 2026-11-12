@@ -8,7 +8,6 @@ import { createHash } from "node:crypto";
 
 import type { Hono } from "hono";
 
-import { storeRawActivity } from "../activitypub-raw-cache.js";
 import { appendDebugFileLog } from "../debug-file-log.js";
 import { buildActorAddress } from "../activitypub-identity-urls.js";
 import { parseTypedActorIdentifier, type TypedActorIdentifier } from "../typed-actor-routing.js";
@@ -113,16 +112,9 @@ export async function buildActivityPubRequestData(
       .update(rawBody)
       .digest("hex");
 
-    if (hasStringId(activitypubRawJson)) {
-      // Cache by activity id so queued Announce handling can recover the exact
-      // payload that originally hit /inbox.
-      storeRawActivity(
-        activitypubRawJson.id,
-        activitypubRawJson,
-        activitypubRawBodySha256,
-      );
-    }
-
+    // The request body is captured for diagnostics only. It has not yet
+    // passed Fedify signature verification, so a global id-keyed cache must
+    // never become an authoritative inbox payload for a queued callback.
     return {
       activitypubRawJson,
       activitypubRawBodySha256,
@@ -212,12 +204,6 @@ function asRecord(value: unknown): Record<string, unknown> | null {
 
 function asString(value: unknown): string | null {
   return typeof value === "string" ? value : null;
-}
-
-function hasStringId(
-  value: unknown,
-): value is Record<"id", string> & Record<string, unknown> {
-  return typeof value === "object" && value !== null && "id" in value && typeof value.id === "string";
 }
 
 interface RawRequestContext {

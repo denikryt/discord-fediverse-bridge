@@ -31,3 +31,5 @@ Inbound personal-feed comments are retained even when the active binding is remo
 - CP07: Bridge #19 autocomplete now matches handle/actor URLs and enforces Discord choice sizes; blocked-origin and empty-result diagnostics use safe reason codes. NodeBB Group discovery is still pending CP08.
 
 - CP08 (2026-11-11): verified NodeBB category/WebFinger/Group discovery, choice revalidation and DNS-pinned read-only HTTP are implemented with fixture tests. Remote Follow cancellation, profile persistence and NodeBB content ingest/publish remain future checkpoints; do not treat discovery as complete NodeBB federation. Full Discord suite remains unverified because its dependencies are missing.
+
+- CP09 (2026-11-11): removed authoritative pre-verification raw-activity ID cache lookups for Announce, Accept and Undo. Trusted nested content now requires Fedify typed serialization; unsupported typed shapes fail closed rather than consuming cached JSON. Gateway `npm test` remains unavailable in this environment because @fedify packages are not installed; the changed TypeScript paths require the gateway suite before release.

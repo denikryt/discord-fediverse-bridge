@@ -28,3 +28,25 @@ Supported normalized event categories: `post.created`, `post.updated`, `post.del
 ## Bridge signing key ownership
 
 Python initializes the bridge actor key in `bridge_actor_keys` before readiness. The gateway reads that row from the shared SQLite database; it does not generate an in-memory bridge identity or require bridge JWK environment variables during normal runtime.
+
+## Verified inbound envelope boundary (NodeBB/Bridge checkpoint CP09)
+
+Fedify signature verification precedes content extraction. The gateway uses
+`Announce.toJsonLd()` only from the verified callback, matching its typed
+`id`, `actorId`, and `objectId`; it never replaces those values with a raw
+request cached under an activity ID. If an embedded Create/Update/Delete cannot
+be recovered from verified typed serialization, it is dropped before the Python
+events endpoint rather than trusting an unverified copy. This remains a
+functional limit until the NodeBB URI/Note normalization checkpoint.
+
+For nested `Announce(Create|Update|Delete)`, `delivery_id` and the
+`X-Bridge-Delivery-Id` internal header identify the **outer** Announce;
+`source_activity_id` identifies the nested activity. `Accept` obtains its
+original Follow ID from verified `Accept.objectId`, while `Undo(Follow)`
+requires a complete typed embedded Follow with the same verified sender and
+an actor-specific inbox owner matching the target when that route is used.
+Request-captured raw JSON is diagnostic only and cannot create or delete a
+remote-subscription relationship. A signed announcement from an accepted
+remote Group can still arrive in the shared Service inbox without a locally
+hosted Group destination; the local-host recipient rules belong to a separate
+verified ingress path.

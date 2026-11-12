@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import { mkdtemp, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
-import { Undo } from "@fedify/vocab";
+import { Follow, Undo } from "@fedify/vocab";
 import { exportJwk } from "@fedify/fedify";
 import initSqlJs, { seedBridgeActorJwk } from "./support/sqlite-fixture.js";
 import { closeAllPythonBridgeFixtures, importFixedRsaKeyPair, startPythonBridgeFixture } from "./support/python-bridge-fixture.js";
@@ -109,11 +109,14 @@ async function main(): Promise<void> {
     },
   };
   const activity = new Undo({
-    id: new URL(rawUndo.id),
-    actor: new URL(rawUndo.actor),
+    id: new URL(rawUndo.id), actor: new URL(rawUndo.actor),
+    object: new Follow({
+      id: new URL(rawUndo.object.id), actor: new URL(rawUndo.object.actor),
+      object: new URL(rawUndo.object.object),
+    }),
   });
 
-  const event = await buildLocalUnfollowRequestedEvent(config, activity, rawUndo);
+  const event = await buildLocalUnfollowRequestedEvent(config, activity);
 
   assert.ok(event != null);
   assert.equal(event?.event_type, "local.unfollow_requested");
@@ -122,22 +125,52 @@ async function main(): Promise<void> {
   assert.equal(event?.actor_id, `${REMOTE_ORIGIN}u/bob`);
   assert.equal(event?.object.follow_activity_id, `${REMOTE_ORIGIN}activities/follow/1`);
 
-  const mismatchedActor = await buildLocalUnfollowRequestedEvent(config, activity, {
-    ...rawUndo,
-    object: { ...rawUndo.object, actor: `${REMOTE_ORIGIN}u/alice` },
-  });
+  // Untrusted raw JSON may be poisoned under the same Undo.id but must not
+  // override a typed authenticated Undo(Follow) or its original destination.
+  const poisonedRaw = await buildLocalUnfollowRequestedEvent({
+    ...config, activitypubRawJson: {
+      ...rawUndo, object: { ...rawUndo.object, actor: `${REMOTE_ORIGIN}u/alice` },
+    },
+  }, activity);
+  assert.equal(poisonedRaw?.object.follow_activity_id, rawUndo.object.id);
+
+  const correctOwner = await buildLocalUnfollowRequestedEvent({
+    ...config, activitypubInboxOwner: {
+      kind: "community", identifier: "hackers",
+      actorUrl: `${TEST_ORIGIN}actors/communities/hackers`,
+    },
+  }, activity);
+  assert.equal(correctOwner?.object.follow_activity_id, rawUndo.object.id);
+  const foreignOwner = await buildLocalUnfollowRequestedEvent({
+    ...config, activitypubInboxOwner: {
+      kind: "community", identifier: "foreign",
+      actorUrl: `${TEST_ORIGIN}actors/communities/foreign`,
+    },
+  }, activity);
+  assert.equal(foreignOwner, null, "wrong actor-specific route owner must not authorize Undo");
+
+  const mismatchedActor = await buildLocalUnfollowRequestedEvent(config, new Undo({
+    id: new URL(rawUndo.id), actor: new URL(rawUndo.actor),
+    object: new Follow({
+      id: new URL(rawUndo.object.id), actor: new URL(`${REMOTE_ORIGIN}u/alice`),
+      object: new URL(rawUndo.object.object),
+    }),
+  }));
   assert.equal(mismatchedActor, null);
 
-  const remoteTarget = await buildLocalUnfollowRequestedEvent(config, activity, {
-    ...rawUndo,
-    object: { ...rawUndo.object, object: `${REMOTE_ORIGIN}c/remote` },
-  });
+  const remoteTarget = await buildLocalUnfollowRequestedEvent(config, new Undo({
+    id: new URL(rawUndo.id), actor: new URL(rawUndo.actor),
+    object: new Follow({
+      id: new URL(rawUndo.object.id), actor: new URL(rawUndo.object.actor),
+      object: new URL(`${REMOTE_ORIGIN}c/remote`),
+    }),
+  }));
   assert.equal(remoteTarget, null);
 
-  const unsupportedObject = await buildLocalUnfollowRequestedEvent(config, activity, {
-    ...rawUndo,
-    object: `${REMOTE_ORIGIN}activities/follow/1`,
-  });
+  const unsupportedObject = await buildLocalUnfollowRequestedEvent(config, new Undo({
+    id: new URL(rawUndo.id), actor: new URL(rawUndo.actor),
+    object: new URL(rawUndo.object.id),
+  }));
   assert.equal(unsupportedObject, null);
 
   console.log("verify:local-community-unfollow passed");

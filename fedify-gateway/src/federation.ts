@@ -5,7 +5,6 @@ import {
 } from "@fedify/fedify";
 import { Accept, Announce, Create, Delete, Follow, Undo, Update } from "@fedify/vocab";
 
-import { getRawActivity } from "./activitypub-raw-cache.js";
 import {
   buildBridgeServiceActor,
   buildLocalCommunityGroupActor,
@@ -173,12 +172,16 @@ export function createGatewayFederation(
         console.error("[Fedify] Error processing direct Delete activity", error);
       }
     })
-    .on(Announce, async (ctx, activity) => {
+    .on(Announce, async (_ctx, activity) => {
       try {
-        // Lemmy wraps Create, Update, and Delete inside Announce.
-        // Try each type in turn using the cached raw inbox payload.
-        const announceEnvelope = getAnnounceEnvelope(ctx, activity.id?.href ?? null);
-
+        // Only the Fedify-verified Announce is allowed to supply identity and
+        // object provenance. The ID-only pre-verification cache is not a
+        // signed envelope, even if a previously seen request shares this ID.
+        const announceEnvelope = await getVerifiedAnnounceEnvelope(activity);
+        if (announceEnvelope == null) {
+          logDebug(isDebug, "untrusted_raw_announce: verified envelope missing");
+          return;
+        }
         logAnnounceDebug(isDebug, announceEnvelope);
 
         const createRecord = extractCreateRecord(announceEnvelope.rawRecord);
@@ -194,6 +197,9 @@ export function createGatewayFederation(
           event.source_activity_json = createRecord;
           event.source_activity_id = asString(createRecord.id) ?? event.delivery_id;
           event.source_announce_id = announceEnvelope.announceId;
+          // One wire Announce is one receipt, regardless of the nested Create,
+          // Update, or Delete id. Keep that inner id only as provenance.
+          event.delivery_id = announceEnvelope.announceId;
           await deliverNormalizedEvent(config, event, {
             announceId: announceEnvelope.announceId,
             createId: asString(createRecord.id) ?? event.delivery_id,
@@ -216,6 +222,9 @@ export function createGatewayFederation(
           event.source_activity_json = updateRecord;
           event.source_activity_id = asString(updateRecord.id) ?? event.delivery_id;
           event.source_announce_id = announceEnvelope.announceId;
+          // One wire Announce is one receipt, regardless of the nested Create,
+          // Update, or Delete id. Keep that inner id only as provenance.
+          event.delivery_id = announceEnvelope.announceId;
           await deliverNormalizedEvent(config, event, {
             announceId: announceEnvelope.announceId,
             updateId: asString(updateRecord.id) ?? event.delivery_id,
@@ -235,6 +244,9 @@ export function createGatewayFederation(
           event.source_activity_json = deleteRecord;
           event.source_activity_id = asString(deleteRecord.id) ?? event.delivery_id;
           event.source_announce_id = announceEnvelope.announceId;
+          // One wire Announce is one receipt, regardless of the nested Create,
+          // Update, or Delete id. Keep that inner id only as provenance.
+          event.delivery_id = announceEnvelope.announceId;
           await deliverNormalizedEvent(config, event, {
             announceId: announceEnvelope.announceId,
             deleteId: asString(deleteRecord.id) ?? event.delivery_id,
@@ -246,7 +258,7 @@ export function createGatewayFederation(
 
         logDebug(
           isDebug,
-          "Could not find Create, Update, or Delete in Announce.object from raw JSON",
+          "Verified Announce did not contain a supported nested activity",
         );
       } catch (error) {
         console.error(
@@ -268,14 +280,9 @@ export function createGatewayFederation(
       });
     })
     .on(Undo, async (ctx, activity) => {
-      const activityId = activity.id?.href;
-      const cachedRaw = activityId == null ? null : getRawActivity(activityId);
-      const rawForUndo = asRecord(cachedRaw?.rawJson ?? ctx.data.activitypubRawJson);
-      const event = await buildLocalUnfollowRequestedEvent(
-        ctx.data,
-        activity,
-        rawForUndo,
-      );
+      // A purported Follow inside pre-verification raw JSON cannot select a
+      // local relationship to delete. The builder uses typed Undo evidence.
+      const event = await buildLocalUnfollowRequestedEvent(ctx.data, activity);
       if (event == null) {
         return;
       }
@@ -288,22 +295,11 @@ export function createGatewayFederation(
       });
     })
     .on(Accept, async (ctx, activity) => {
-      const activityId = activity.id?.href ?? null;
-      const rawJson = ctx.data.activitypubRawJson;
-      console.log("[Fedify][debug] Accept received", {
-        activityId,
-        actorId: activity.actorId?.href,
-        objectId: activity.objectId?.href,
-        rawObject: (rawJson as Record<string, unknown>)?.object,
-      });
-      const event = buildFollowAcceptedEvent(
-        activity,
-        ctx.data,
-        activityId,
-      );
+      // Accept.objectId comes from the verified Fedify activity, including
+      // when the original signed envelope embedded a Follow object.
+      const event = buildFollowAcceptedEvent(activity, ctx.data, activity.id?.href ?? null);
       if (event == null) {
-        logDebug(isDebug, "Accept did not contain a follow activity id");
-        console.log("[Fedify][debug] Accept null event — raw activity:", JSON.stringify(rawJson, null, 2));
+        logDebug(isDebug, "ignored_unknown_follow: verified Accept lacks Follow.id");
         return;
       }
 
@@ -376,24 +372,38 @@ export async function deliverDirectDeleteActivity(
   });
 }
 
-function getAnnounceEnvelope(
-  ctx: { data: GatewayContextData },
-  announceId: string | null,
-): {
-  announceId: string | null;
-  rawRecord: Record<string, unknown> | null;
-  rawBodySha256: string | undefined;
-} {
-  // Prefer the payload stored at HTTP-ingest time because queued handler
-  // execution may no longer have the original request-local body attached.
-  const cachedRaw = announceId ? getRawActivity(announceId) : null;
-  const rawJson = cachedRaw?.rawJson ?? ctx.data.activitypubRawJson;
-  return {
-    announceId,
-    rawRecord: asRecord(rawJson),
-    rawBodySha256:
-      cachedRaw?.rawBodySha256 ?? ctx.data.activitypubRawBodySha256,
-  };
+/**
+ * Return only serialization of the Fedify-verified Announce, never ID-only raw.
+ *
+ * The signed distribution identity and object wrapper must originate from the
+ * same authenticated typed object. A missing stable ID or contradictory
+ * serialization is rejected before any Python receipt or Discord effect.
+ */
+export async function getVerifiedAnnounceEnvelope(
+  activity: Announce,
+): Promise<{
+  announceId: string;
+  rawRecord: Record<string, unknown>;
+  rawBodySha256: undefined;
+} | null> {
+  const announceId = activity.id?.href;
+  const actorId = activity.actorId?.href;
+  if (announceId == null || actorId == null) return null;
+  let rawRecord: Record<string, unknown> | null;
+  try {
+    rawRecord = asRecord(await activity.toJsonLd());
+  } catch {
+    return null;
+  }
+  if (rawRecord?.type !== "Announce" || asString(rawRecord.id) !== announceId
+      || asActivityIri(rawRecord.actor) !== actorId) return null;
+
+  // The serialized object must agree with any object identity Fedify already
+  // decoded; an ID-only cache cannot repair a mismatch or missing object.
+  const serializedObjectId = asActivityIri(rawRecord.object);
+  if (serializedObjectId == null || (activity.objectId != null
+      && activity.objectId.href !== serializedObjectId)) return null;
+  return { announceId, rawRecord, rawBodySha256: undefined };
 }
 
 function logAnnounceDebug(
@@ -460,6 +470,11 @@ function asString(value: unknown): string | null {
   return typeof value === "string" ? value : null;
 }
 
+function asActivityIri(value: unknown): string | null {
+  // Fedify may encode an embedded typed object as JSON-LD with a stable id.
+  return asString(value) ?? asString(asRecord(value)?.id);
+}
+
 function asUrlString(value: unknown): string | null {
   if (typeof value === "string") {
     return value;
@@ -476,39 +491,24 @@ function logDebug(isDebug: boolean, message: string): void {
   }
 }
 
+/** Build Accept only from the verified actor and original Follow object ID. */
 export function buildFollowAcceptedEvent(
   activity: Accept,
-  data: GatewayContextData,
-  fallbackDeliveryId: string | null,
+  _data: GatewayContextData,
+  _fallbackDeliveryId: string | null,
 ): FollowAcceptedEvent | null {
-  // The typed Accept activity is the source of truth for follow lifecycle
-  // events. Raw JSON exists only as a fallback because Hono/Fedify request
-  // body handling can be unavailable when the internal queue re-dispatches.
-  const rawJson = data.activitypubRawJson
-    ?? (fallbackDeliveryId != null ? getRawActivity(fallbackDeliveryId)?.rawJson : undefined);
-  const rawRecord = asRecord(rawJson);
-  const actorId = activity.actorId?.href ?? asString(rawRecord?.actor);
-  const objectValue = rawRecord?.object;
-  const objectRecord = asRecord(objectValue);
-  const followActivityId =
-    activity.objectId?.href
-    ?? asString(objectValue)
-    ?? asString(objectRecord?.id);
-  if (actorId == null || followActivityId == null) {
-    return null;
-  }
+  // Raw request-local JSON and the ID-only cache were captured before the
+  // signature check. Neither can supply a missing authenticated Follow.id.
+  const actorId = activity.actorId?.href;
+  const followActivityId = activity.objectId?.href;
+  const acceptId = activity.id?.href;
+  if (actorId == null || followActivityId == null || acceptId == null) return null;
   return {
     actor_id: actorId,
     community_actor_id: actorId,
-    delivery_id:
-      activity.id?.href
-      ?? asString(rawRecord?.id)
-      ?? fallbackDeliveryId
-      ?? `follow-accepted:${followActivityId}`,
+    delivery_id: acceptId,
     event_type: "follow.accepted",
-    object: {
-      follow_activity_id: followActivityId,
-    },
+    object: { follow_activity_id: followActivityId },
     occurred_at: new Date().toISOString(),
   };
 }
@@ -583,16 +583,29 @@ export async function buildLocalFollowRequestedEvent(
   };
 }
 
+/** Build a scoped Undo(Follow) only from the verified typed Undo envelope. */
 export async function buildLocalUnfollowRequestedEvent(
   config: GatewayContextData,
   activity: Undo,
-  rawJson: Record<string, unknown> | null,
 ): Promise<LocalUnfollowRequestedEvent | null> {
-  const undoActorId = activity.actorId?.href ?? asString(rawJson?.actor);
-  const embeddedFollow = asRecord(rawJson?.object);
-  if (undoActorId == null || embeddedFollow?.type !== "Follow") return null;
-  if (asString(embeddedFollow.actor) !== undoActorId) return null;
-  const targetActorId = asString(embeddedFollow.object);
+  const undoActorId = activity.actorId?.href;
+  const undoId = activity.id?.href;
+  if (undoActorId == null || undoId == null) return null;
+
+  let verified: Record<string, unknown> | null;
+  try {
+    verified = asRecord(await activity.toJsonLd());
+  } catch {
+    return null;
+  }
+  if (verified?.type !== "Undo" || asString(verified.id) !== undoId
+      || asActivityIri(verified.actor) !== undoActorId) return null;
+  const embeddedFollow = asRecord(verified.object);
+  const followId = asString(embeddedFollow?.id);
+  if (embeddedFollow?.type !== "Follow" || followId == null
+      || asActivityIri(embeddedFollow.actor) !== undoActorId) return null;
+  if (activity.objectId != null && activity.objectId.href !== followId) return null;
+  const targetActorId = asActivityIri(embeddedFollow.object);
   if (targetActorId == null) return null;
 
   const community = await resolveLocalCommunityByActorUrl(config, targetActorId);
@@ -602,17 +615,16 @@ export async function buildLocalUnfollowRequestedEvent(
     const user = username == null ? null : await loadUserActorIdentity(config, username);
     if (user != null && user.actorId.href === targetActorId) targetKind = "user";
   }
-  if (targetKind == null) return null;
-  if (!matchesActorSpecificInboxOwner(config, targetKind, targetActorId)) {
+  if (targetKind == null || !matchesActorSpecificInboxOwner(config, targetKind, targetActorId)) {
     return null;
   }
   return {
     actor_id: undoActorId,
     target_actor_kind: targetKind,
     target_actor_id: targetActorId,
-    delivery_id: activity.id?.href ?? asString(rawJson?.id) ?? `local-unfollow:${Date.now()}`,
+    delivery_id: undoId,
     event_type: "local.unfollow_requested",
-    object: { follow_activity_id: asString(embeddedFollow.id) },
+    object: { follow_activity_id: followId },
     occurred_at: new Date().toISOString(),
   };
 }
