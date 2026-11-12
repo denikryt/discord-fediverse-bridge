@@ -285,6 +285,13 @@ def create_http_app(runtime: Runtime) -> FastAPI:
         )
         _validate_delivery_header(x_bridge_delivery_id, event.delivery_id)
 
+        # NodeBB roots and replies both use /post/{pid}; resolve a signed
+        # Delete's kind from the verified Group's canonical DB identity before
+        # receipt admission. The wire delivery ID/header never changes.
+        if getattr(event, "event_type", None) in {"post.deleted", "comment.deleted"}:
+            from .community_sync.edit_delete import canonicalize_remote_delete_kind
+            event = canonicalize_remote_delete_kind(runtime.database, event)
+
         duplicate_response = _begin_event_processing(runtime, event)
         if duplicate_response is not None:
             return duplicate_response

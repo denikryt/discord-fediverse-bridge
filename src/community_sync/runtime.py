@@ -27,6 +27,8 @@ from .delivery_mapping import (
 )
 from .edit_delete import (
     get_inbound_comment_edit_deliveries,
+    inbound_mutation_denial,
+    canonicalize_remote_delete_kind,
     get_outbound_delete_deliveries,
     get_outbound_edit_deliveries,
     propagate_inbound_comment_delete,
@@ -693,6 +695,27 @@ class CommunityRuntime:
                 detail="post not yet mapped",
             )
 
+        denial = inbound_mutation_denial(event, thread_group)
+        if denial is not None:
+            return _HandlerResult(
+                status="skipped", outcome=InboundActivityOutcome.IGNORED_UNAUTHORIZED_MUTATION,
+                detail=denial,
+            )
+
+        # A shared Group can carry the same AP ID for a root and a reply.
+        # No mutation may choose one when canonical kind is ambiguous.
+        if get_message_group_for_ap_object(self.database, event.object.ap_id,
+                                    community_actor_id=event.community_actor_id) is not None:
+            return _HandlerResult(
+                status="skipped", outcome=InboundActivityOutcome.IGNORED_UNAUTHORIZED_MUTATION,
+                detail="ambiguous canonical object kind in Group",
+            )
+        if not get_accepted_subscriptions(self.database, event.community_actor_id):
+            return _HandlerResult(
+                status="skipped", outcome=InboundActivityOutcome.IGNORED_NO_SUBSCRIPTION,
+                detail="no accepted Group subscription for mutation",
+            )
+
         thread_deliveries = self.database.discord_fanout_groups.get_thread_deliveries(
             thread_group.id
         )
@@ -731,6 +754,15 @@ class CommunityRuntime:
 
         thread_group = get_thread_group_for_ap_object(self.database, event.object.ap_id, community_actor_id=event.community_actor_id)
         if thread_group is None:
+            # The gateway cannot derive NodeBB Note kind from /post/{pid}:
+            # both topic starters and replies share this URL shape. Consult
+            # canonical DB identity rather than treating a reply as a root.
+            if get_message_group_for_ap_object(
+                self.database, event.object.ap_id,
+                community_actor_id=event.community_actor_id,
+            ) is not None:
+                canonical_event = canonicalize_remote_delete_kind(self.database, event)
+                return await self.handle_inbound_comment_delete(canonical_event, runtime)
             logger.info(
                 "Post delete for %s — no thread group found, skipping",
                 event.object.ap_id,
@@ -739,6 +771,27 @@ class CommunityRuntime:
                 status="skipped",
                 outcome=InboundActivityOutcome.IGNORED_UNMAPPED_CONTEXT,
                 detail="post not yet mapped",
+            )
+
+        denial = inbound_mutation_denial(event, thread_group)
+        if denial is not None:
+            return _HandlerResult(
+                status="skipped", outcome=InboundActivityOutcome.IGNORED_UNAUTHORIZED_MUTATION,
+                detail=denial,
+            )
+
+        # A shared Group can carry the same AP ID for a root and a reply.
+        # No mutation may choose one when canonical kind is ambiguous.
+        if get_message_group_for_ap_object(self.database, event.object.ap_id,
+                                    community_actor_id=event.community_actor_id) is not None:
+            return _HandlerResult(
+                status="skipped", outcome=InboundActivityOutcome.IGNORED_UNAUTHORIZED_MUTATION,
+                detail="ambiguous canonical object kind in Group",
+            )
+        if not get_accepted_subscriptions(self.database, event.community_actor_id):
+            return _HandlerResult(
+                status="skipped", outcome=InboundActivityOutcome.IGNORED_NO_SUBSCRIPTION,
+                detail="no accepted Group subscription for mutation",
             )
 
         thread_deliveries = self.database.discord_fanout_groups.get_thread_deliveries(
@@ -781,6 +834,36 @@ class CommunityRuntime:
                 status="skipped",
                 outcome=InboundActivityOutcome.IGNORED_UNMAPPED_CONTEXT,
                 detail="comment not yet mapped",
+            )
+
+        root = self.database.discord_fanout_groups.get_thread_group_by_id(
+            message_group.thread_group_id
+        )
+        parent = (self.database.discord_fanout_groups.get_message_group_by_id(
+            message_group.parent_message_group_id
+        ) if message_group.parent_message_group_id is not None else None)
+        # The canonical reply has no autonomous Discord placement; its
+        # originally verified root must still exist in this Group.
+        denial = ("original reply root is missing" if root is None else
+                  inbound_mutation_denial(event, message_group, root=root, parent=parent))
+        if denial is not None:
+            return _HandlerResult(
+                status="skipped", outcome=InboundActivityOutcome.IGNORED_UNAUTHORIZED_MUTATION,
+                detail=denial,
+            )
+
+        # A shared Group can carry the same AP ID for a root and a reply.
+        # No mutation may choose one when canonical kind is ambiguous.
+        if get_thread_group_for_ap_object(self.database, event.object.ap_id,
+                                    community_actor_id=event.community_actor_id) is not None:
+            return _HandlerResult(
+                status="skipped", outcome=InboundActivityOutcome.IGNORED_UNAUTHORIZED_MUTATION,
+                detail="ambiguous canonical object kind in Group",
+            )
+        if not get_accepted_subscriptions(self.database, event.community_actor_id):
+            return _HandlerResult(
+                status="skipped", outcome=InboundActivityOutcome.IGNORED_NO_SUBSCRIPTION,
+                detail="no accepted Group subscription for mutation",
             )
 
         all_deliveries = self.database.discord_fanout_groups.get_message_deliveries(
@@ -827,6 +910,12 @@ class CommunityRuntime:
             self.database, event.object.ap_id, community_actor_id=event.community_actor_id
         )
         if message_group is None:
+            if get_thread_group_for_ap_object(
+                self.database, event.object.ap_id,
+                community_actor_id=event.community_actor_id,
+            ) is not None:
+                canonical_event = canonicalize_remote_delete_kind(self.database, event)
+                return await self.handle_inbound_post_delete(canonical_event, runtime)
             logger.info(
                 "Comment delete for %s — no message group found, skipping",
                 event.object.ap_id,
@@ -835,6 +924,36 @@ class CommunityRuntime:
                 status="skipped",
                 outcome=InboundActivityOutcome.IGNORED_UNMAPPED_CONTEXT,
                 detail="comment not yet mapped",
+            )
+
+        root = self.database.discord_fanout_groups.get_thread_group_by_id(
+            message_group.thread_group_id
+        )
+        parent = (self.database.discord_fanout_groups.get_message_group_by_id(
+            message_group.parent_message_group_id
+        ) if message_group.parent_message_group_id is not None else None)
+        # The canonical reply has no autonomous Discord placement; its
+        # originally verified root must still exist in this Group.
+        denial = ("original reply root is missing" if root is None else
+                  inbound_mutation_denial(event, message_group, root=root, parent=parent))
+        if denial is not None:
+            return _HandlerResult(
+                status="skipped", outcome=InboundActivityOutcome.IGNORED_UNAUTHORIZED_MUTATION,
+                detail=denial,
+            )
+
+        # A shared Group can carry the same AP ID for a root and a reply.
+        # No mutation may choose one when canonical kind is ambiguous.
+        if get_thread_group_for_ap_object(self.database, event.object.ap_id,
+                                    community_actor_id=event.community_actor_id) is not None:
+            return _HandlerResult(
+                status="skipped", outcome=InboundActivityOutcome.IGNORED_UNAUTHORIZED_MUTATION,
+                detail="ambiguous canonical object kind in Group",
+            )
+        if not get_accepted_subscriptions(self.database, event.community_actor_id):
+            return _HandlerResult(
+                status="skipped", outcome=InboundActivityOutcome.IGNORED_NO_SUBSCRIPTION,
+                detail="no accepted Group subscription for mutation",
             )
 
         all_deliveries = self.database.discord_fanout_groups.get_message_deliveries(

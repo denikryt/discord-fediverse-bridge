@@ -89,14 +89,20 @@ export async function normalizeUpdateActivityFromJson(
   }
 
   if (object.type === "Note") {
-    const event = await normalizeCommentActivityFromJson(activity, object, options);
+    // NodeBB uses Note for both topic roots and replies. An Update must not
+    // infer "comment" from vocabulary type alone: inReplyTo distinguishes
+    // the canonical root from a reply in the same Group.
+    const isReply = asString(object.inReplyTo) != null || asString(object.replyTarget) != null;
+    const event = isReply
+      ? await normalizeCommentActivityFromJson(activity, object, options)
+      : normalizeNoteRootActivityFromJson(activity, object);
     const revisionTime = asString(object.updated) ?? asString(activity.updated)
       ?? asString(activity.published) ?? event.occurred_at;
-    // For Update, published_at carries the accepted remote revision timestamp
-    // used by the Python ownership+ordering transaction.
+    // Original owner/group verification belongs to Python's canonical Create
+    // boundary; a Group Announce with no independent Person proof is rejected.
     return {
       ...event,
-      event_type: "comment.updated",
+      event_type: isReply ? "comment.updated" : "post.updated",
       occurred_at: revisionTime,
       object: { ...event.object, published_at: revisionTime },
     };

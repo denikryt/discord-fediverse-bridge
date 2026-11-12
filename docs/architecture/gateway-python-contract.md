@@ -21,6 +21,21 @@ The fetched `Note.attributedTo` becomes the immutable canonical owner; it is
 not represented as an independent Person signature. A historical reply root
 requires exact membership in that Group's bounded official outbox.
 
+### Inbound remote mutation authorization
+
+For `post.updated|deleted` and `comment.updated|deleted`, the gateway sends
+`source_activity_json` from the Fedify-verified **direct** Update/Delete and
+retains `source_announce_id` for Group-wrapped deliveries. Python requires the
+canonical persisted `(community_actor_id, ap_object_id, kind, source_owner_actor_id)`
+from Create and exact signed actor/object/Group identity before any Discord edit.
+A Group-signed `Announce(Update|Delete)`, even with a claimed matching inner
+`actor`, does **not** prove the Person performed the mutation: until separately
+verified owner action or explicitly proven moderator authority is supported,
+this path returns `ignored_unauthorized_mutation`. `owner=NULL` historical
+rows fail closed. Before receipt admission, a Delete URL is classified only
+against the saved Group-scoped canonical post/reply, not the URI suffix;
+`delivery_id` and the external header remain the original wire values.
+
 ## Python -> Gateway
 
 `src/fedify_gateway_client.py` calls authenticated internal gateway routes. Python decides bridge policy and persistence; the gateway owns actor documents, object URLs, HTTP signatures, and signed federation delivery.

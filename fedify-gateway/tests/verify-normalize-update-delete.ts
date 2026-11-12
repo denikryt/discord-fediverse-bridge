@@ -33,6 +33,7 @@ const EMPTY_LOOKUP_CLIENT = {
 async function main(): Promise<void> {
   await testNormalizeUpdateComment();
   await testNormalizeUpdatePost();
+  await testNormalizeUpdateNodeBBRootNote();
   await testNormalizeDeleteComment();
   await testNormalizeDeletePost();
   await testNormalizeDeleteByObjectFallback();
@@ -101,6 +102,31 @@ async function testNormalizeUpdatePost(): Promise<void> {
   assert.equal(event.object.ap_id, `${LEMMY_ORIGIN}/post/35`);
   assert.equal(event.object.kind, "post");
   assert.equal(event.object.body_markdown, "Updated post body");
+}
+
+/**
+ * A NodeBB root is an Update(Note) with no inReplyTo, not a reply.
+ * Both Note roots and replies may have an object URL of /post/{pid}.
+ */
+async function testNormalizeUpdateNodeBBRootNote(): Promise<void> {
+  const group = "https://nodebb.example/category/7";
+  const actor = "https://person.example/actors/alice";
+  const activity = {
+    type: "Update", id: "https://person.example/activities/edit/1", actor,
+    object: {
+      type: "Note", id: "https://nodebb.example/post/42", audience: group,
+      to: [group], attributedTo: actor, content: "edited root topic",
+      published: "2026-11-11T11:00:00Z", updated: "2026-11-11T12:00:00Z",
+    },
+  };
+  const normalized = await normalizeUpdateActivityFromJson(activity, {
+    pythonBridgeClient: EMPTY_LOOKUP_CLIENT,
+  });
+  assert.ok(normalized, "Update(Note root) must reach canonical post handling");
+  assert.equal(normalized.event_type, "post.updated");
+  assert.equal(normalized.object.kind, "post");
+  assert.equal(normalized.object.ap_id, activity.object.id);
+  assert.equal(normalized.object.published_at, activity.object.updated);
 }
 
 /**

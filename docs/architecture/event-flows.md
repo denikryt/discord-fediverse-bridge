@@ -52,6 +52,27 @@ This document explains the major runtime traces through the bridge: user/platfor
 3. The same typed target claim rules apply to `_send_inbound_comment`; the confirmed `CommunityMessageGroupDelivery` and claim are committed atomically. An ambiguous Discord send remains `unknown` without automatic retry.
 4. A missing historical root/target is deferred unless there is verified Group-distribution or bounded official category-outbox membership evidence. NodeBB-specific verification and historical root reconstruction are owned by CP13; a fetched object's `context` or `audience` alone never authorizes placement.
 
+## Remote Group Update/Delete -> existing Discord surfaces
+
+1. Fedify checks the inbound signature and gateway normalizes the original
+   `Update`/`Delete` activity. Its `source_activity_json` is the verified typed
+   event, **not** an ID-only raw-cache entry. Nested Group `Announce(Update|Delete)`
+   carries only a Group signature; it is not evidence of a Person signature.
+2. `CommunityRuntime` selects one canonical post or reply by **Group + AP object
+   ID + kind** and requires an immutable non-NULL `source_owner_actor_id`, a
+   signed direct activity from exactly that original owner, matching original
+   object ID and Group addressing, and an active Group subscription.
+3. Reply mutations also match the saved root/parent. An ambiguous canonical
+   root/reply identity, foreign Group/actor, changed parent, unknown historical
+   owner or Group-only mutation is rejected **before** reading delivery targets
+   or performing Discord REST. No moderator delegation is inferred from Group
+   signatures or `Tombstone.attributedTo`.
+4. NodeBB roots and replies may both use `/post/{pid}`. On Delete, if the
+   gateway's URI-based kind hint does not match the DB canonical kind, Python
+   resolves the proven kind before receipt admission and owner checks; it
+   never picks an unrelated Group's mapping. Direct signed owner Update/Delete
+   edits only existing bot-owned Discord deliveries.
+
 ## Discord edit/delete -> ActivityPub update/delete flow
 
 1. Discord edit/delete enters `src/discord_bot.py`, which delegates raw admission, echo suppression, and partial edit reconciliation to `src/discord_message_mutations.py`.
