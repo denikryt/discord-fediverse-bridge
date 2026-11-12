@@ -17,3 +17,9 @@ but the fanout call itself raises and does not return a complete summary.
 Inbound personal-feed comments are retained even when the active binding is removed, moved, or Discord delivery reaches its three-attempt terminal failure. Stage 8 deliberately suppresses synchronization to stale channels and does not reconstruct retained roots, threads, or comments in a replacement Discord channel. Restore/replay tooling remains future work.
 
 - Personal-feed comments tied to an inactive or removed binding remain durable but are not rendered into Discord.
+
+## NodeBB release branch baseline (2026-11-11)
+
+- Open: current main's repeated `Database.migrate()` deletes unaffected accepted remote Follow rows and resets Discord channel bindings (CP03/CP04).
+- Open: complete SQLite/media backup on tagged `v0.1.0` fails because the release schema does not include `profile_media_assets` (CP02).
+- Verification blocked: initial full `pytest` cannot import missing `hypothesis`; Node gateway dependency install is unavailable from the local offline npm cache. These are environment blockers, not observed test failures.

@@ -1,0 +1,44 @@
+{
+  "@context": "https://www.w3.org/ns/activitystreams",
+  "id": "https://nodebb.example/category/42/outbox",
+  "orderedItems": [
+    {
+      "@context": "https://www.w3.org/ns/activitystreams",
+      "actor": "https://nodebb.example/category/42",
+      "cc": [
+        "https://nodebb.example/category/42/followers"
+      ],
+      "id": "https://nodebb.example/post/101#activity/announce/cid/42",
+      "object": {
+        "actor": "https://nodebb.example/uid/7",
+        "id": "https://nodebb.example/post/101#activity/create/1770000000000",
+        "object": {
+          "@context": "https://www.w3.org/ns/activitystreams",
+          "attributedTo": "https://nodebb.example/uid/7",
+          "audience": "https://nodebb.example/category/42",
+          "content": "First post",
+          "context": "https://nodebb.example/topic/5",
+          "id": "https://nodebb.example/post/101",
+          "inReplyTo": null,
+          "name": "A pinned topic",
+          "to": [
+            "https://www.w3.org/ns/activitystreams#Public",
+            "https://nodebb.example/category/42"
+          ],
+          "type": "Note"
+        },
+        "to": [
+          "https://www.w3.org/ns/activitystreams#Public",
+          "https://nodebb.example/category/42"
+        ],
+        "type": "Create"
+      },
+      "to": [
+        "https://www.w3.org/ns/activitystreams#Public"
+      ],
+      "type": "Announce"
+    }
+  ],
+  "totalItems": 1,
+  "type": "OrderedCollection"
+}

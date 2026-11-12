@@ -1,0 +1,14 @@
+{
+  "@context": "https://www.w3.org/ns/activitystreams",
+  "attributedTo": "https://nodebb.example/uid/7",
+  "audience": "https://nodebb.example/category/42",
+  "content": "A reply",
+  "context": "https://nodebb.example/topic/5",
+  "id": "https://nodebb.example/post/102",
+  "inReplyTo": "https://nodebb.example/post/101",
+  "to": [
+    "https://www.w3.org/ns/activitystreams#Public",
+    "https://nodebb.example/category/42"
+  ],
+  "type": "Note"
+}
