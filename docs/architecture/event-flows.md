@@ -40,17 +40,17 @@ This document explains the major runtime traces through the bridge: user/platfor
 
 ## Remote ActivityPub post -> Discord fanout flow
 
-1. Gateway `/inbox` receives and normalizes ActivityPub to `post.created`.
-2. `src/activitypub_handlers.py` validates idempotency and routes to remote subscription runtime.
-3. If no accepted subscription and no existing mapped thread context exists, Python skips the event locally while gateway delivery remains acknowledged.
-4. Otherwise Discord threads are created and group/delivery rows are recorded.
+1. Fedify emits a verified remote Group `post.created`; Python checks the accepted subscription and event author before any Discord effect.
+2. `CommunityRuntime.handle_inbound_post` atomically reserves `(community_actor_id, ap_object_id)` with an immutable original owner in `CommunityThreadGroup`. A different Group can store the same object ID independently. Legacy roots without original owner cannot acquire new destinations.
+3. For each still-accepted Discord forum, `DiscordFanoutGroupRepository.reserve_remote_target` atomically claims the typed target before REST. Existing confirmed delivery or `claimed/unknown/completed` attempt cannot send again; an explicit pre-send failure may retry under a new attempt token.
+4. On confirmed Discord success, the existing `CommunityThreadGroupDelivery` and completed claim commit together. An uncertain REST result remains `unknown` and is not blindly resent. A subsequent valid AP event can complete only safe missing targets; no restart sweeper runs.
 
 ## Remote ActivityPub comment -> Discord fanout flow
 
-1. Gateway normalizes inbound comment ActivityPub to `comment.created`.
-2. Python validates the event and checks accepted subscription or already mapped parent/post context.
-3. Unsubscribed comments without mapped context are skipped before backfill or Discord fanout.
-4. Runtime creates Discord messages in mapped thread deliveries and records message group rows.
+1. The reply is scoped to the accepted Group's existing canonical root; its parent, if any, must belong to the same Group and root. A different tenant's root or reply cannot supply a Discord target.
+2. `CommunityMessageGroup` reserves the immutable `(Group, object, owner, root, parent)` before Discord. Each confirmed root delivery is a candidate reply target only while that channel remains subscribed.
+3. The same typed target claim rules apply to `_send_inbound_comment`; the confirmed `CommunityMessageGroupDelivery` and claim are committed atomically. An ambiguous Discord send remains `unknown` without automatic retry.
+4. A missing historical root/target is deferred unless there is verified Group-distribution or bounded official category-outbox membership evidence. NodeBB-specific verification and historical root reconstruction are owned by CP13; a fetched object's `context` or `audience` alone never authorizes placement.
 
 ## Discord edit/delete -> ActivityPub update/delete flow
 

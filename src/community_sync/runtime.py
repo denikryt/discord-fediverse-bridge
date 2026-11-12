@@ -16,7 +16,6 @@ from typing import TYPE_CHECKING
 import discord
 
 from ..inbound_activity_outcomes import InboundActivityOutcome
-from .backfill import backfill_post_as_thread_group
 from .delivery_mapping import (
     get_message_group_for_ap_object,
     get_message_group_for_delivered_message,
@@ -39,7 +38,6 @@ from .edit_delete import (
 from .inbound_mapping import (
     get_accepted_subscriptions,
     get_parent_message_group,
-    needs_backfill,
 )
 from .reply_mapping import resolve_inbound_reference, resolve_reply_context
 from ..runtime_ports import DiscordDeliveryClientPort, DiscordMutationContext
@@ -291,274 +289,225 @@ class CommunityRuntime:
         return result
 
     async def handle_inbound_post(
-        self,
-        event: ActivityPubEvent,
-        runtime: Runtime,
+        self, event: ActivityPubEvent, runtime: Runtime
     ) -> HandlerResult:
-        """Handle an inbound ActivityPub post by creating Discord threads in all subscriptions.
+        """Reserve a verified remote root, then claim each subscribed Discord forum.
 
-        Deduplicates via CommunityThreadGroup.ap_object_id. Creates one thread per
-        accepted subscription and records each as an 'inbound' delivery row. Does not
-        write PostLink rows — group tables are the sole mapping from Phase 5 onward.
-
-        Returns status='skipped' if the post is already mapped or no subscriptions exist.
-        Returns status='processed' after successful delivery to all subscribed channels.
-
-        Retry and partial-delivery behavior (Phase 6):
-          If a thread group already exists for this ap_id (e.g. because a prior delivery
-          partially succeeded for some channels but failed for others), the retry returns
-          'skipped' — it does not attempt to complete missing channel deliveries. The
-          get-then-create guard is not atomic: a concurrent replay can race past it, but
-          the UNIQUE constraint on (thread_group_id, discord_channel_id) provides the
-          final safety net at the DB level. Full per-channel retry on partial failure is
-          Phase 8 scope.
+        The canonical owner is immutable and the per-forum attempt is durable
+        before any Discord mutation. Only known pre-send failures may be retried.
         """
         from ..activitypub_handlers import HandlerResult as _HandlerResult
-
-        # Dedup: if a thread group already exists for this AP object, a duplicate
-        # or replayed event arrived — skip without creating more threads.
-        if (
-            get_thread_group_for_ap_object(self.database, event.object.ap_id)
-            is not None
-        ):
-            logger.info(
-                "Post %s already mapped to a thread group — skipping",
-                event.object.ap_id,
-            )
-            return _HandlerResult(
-                status="skipped",
-                outcome=InboundActivityOutcome.IGNORED_ALREADY_APPLIED,
-                detail="post already mapped",
-            )
-
-        accepted = get_accepted_subscriptions(self.database, event.community_actor_id)
-        if not accepted:
-            return _HandlerResult(
-                status="skipped",
-                outcome=InboundActivityOutcome.IGNORED_NO_SUBSCRIPTION,
-                detail="no subscriptions for this community",
-            )
-
-        # Use self.bot when available; fall back to runtime.bot for backward compat
-        # with callers that pass the full Runtime (e.g. existing integration tests).
-        bot = self.bot or runtime.bot
-        await bot.wait_until_bridge_ready()
-
-        # Create the canonical thread group. source_* fields are None because
-        # inbound AP events have no single source Discord channel.
-        # delivery_id is the closest equivalent to an activity_id for inbound events.
-        thread_group = self.database.discord_fanout_groups.create_thread_group(
-            community_actor_id=event.community_actor_id,
-            source_channel_id=None,
-            source_thread_id=None,
-            source_starter_message_id=None,
-            ap_activity_id=event.delivery_id,
-            ap_object_id=event.object.ap_id,
-        )
-
-        # Lazy import avoids circular dependency: bridge_lemmy_to_discord imports db.
+        from ..db.repositories.discord_fanout_groups import RemoteCommunityGroupConflict
         from ..bridge_lemmy_to_discord import _create_inbound_discord_thread
 
-        for subscription in accepted:
-            forum_channel = await bot.fetch_forum_channel(
-                subscription.discord_channel_id
-            )
-            thread_id, starter_message_id = await _create_inbound_discord_thread(
-                forum_channel=forum_channel,
-                event=event,
-            )
-            self.database.discord_fanout_groups.add_thread_delivery(
-                thread_group_id=thread_group.id,
-                discord_channel_id=subscription.discord_channel_id,
-                discord_thread_id=thread_id,
-                discord_starter_message_id=starter_message_id,
-                role="inbound",
-            )
+        try:
+            owner = self._inbound_owner(event)
+        except ValueError:
+            return _HandlerResult("skipped", InboundActivityOutcome.IGNORED_UNMAPPED_CONTEXT,
+                                  "inbound post author conflict")
+        accepted = get_accepted_subscriptions(self.database, event.community_actor_id)
+        if not accepted:
+            return _HandlerResult("skipped", InboundActivityOutcome.IGNORED_NO_SUBSCRIPTION,
+                                  "no subscriptions for this community")
 
-        logger.info(
-            "Delivered inbound post %s into %d subscribed channel(s)",
-            event.object.ap_id,
-            len(accepted),
+        repository = self.database.discord_fanout_groups
+        existing = repository.get_thread_group_by_ap_object(
+            event.object.ap_id, community_actor_id=event.community_actor_id
         )
-        return _HandlerResult(
-            status="processed",
-            outcome=InboundActivityOutcome.APPLIED,
-            detail="post created",
-        )
+        # Historical groups without a proven owner may identify known deliveries,
+        # but cannot authorize additional placement from a fresh envelope.
+        if existing is not None and existing.source_owner_actor_id is None:
+            return _HandlerResult("skipped", InboundActivityOutcome.IGNORED_UNMAPPED_CONTEXT,
+                                  "legacy remote root has no verified owner")
+        try:
+            thread_group = repository.get_or_create_remote_thread_group(
+                community_actor_id=event.community_actor_id,
+                ap_object_id=event.object.ap_id, source_owner_actor_id=owner,
+                ap_activity_id=event.source_activity_id or event.delivery_id,
+            )
+        except RemoteCommunityGroupConflict:
+            return _HandlerResult("skipped", InboundActivityOutcome.IGNORED_UNMAPPED_CONTEXT,
+                                  "remote post Group or original owner conflict")
+        bot = self.bot or runtime.bot
+        delivered = 0
+        for subscription in accepted:
+            channel = subscription.discord_channel_id
+            # Recheck the current binding immediately before obtaining a claim.
+            if channel not in {s.discord_channel_id for s in get_accepted_subscriptions(
+                self.database, event.community_actor_id
+            )}:
+                continue
+            reservation = repository.reserve_remote_target(
+                kind="post", group_id=thread_group.id, discord_channel_id=channel
+            )
+            if reservation.state != "reserved":
+                continue
+            attempt = reservation.attempt_id
+            # Fetching a channel is read-only; failure is provably before create_thread.
+            try:
+                forum = await bot.fetch_forum_channel(channel)
+            except Exception:
+                repository.mark_remote_target(kind="post", group_id=thread_group.id,
+                    discord_channel_id=channel, attempt_id=attempt, status="failed")
+                logger.exception("Remote post Discord channel unavailable: group=%s target=%s",
+                                 thread_group.id, channel)
+                continue
+            try:
+                await bot.wait_until_bridge_ready()
+                thread_id, starter_id = await _create_inbound_discord_thread(
+                    forum_channel=forum, event=event
+                )
+                repository.finish_remote_target(kind="post", group_id=thread_group.id,
+                    discord_channel_id=channel, attempt_id=attempt,
+                    discord_thread_id=thread_id, discord_object_id=starter_id)
+                delivered += 1
+            except Exception:
+                # Even if the response was lost, the remote Discord call may have
+                # succeeded. Never classify this outcome as safely retryable.
+                repository.mark_remote_target(kind="post", group_id=thread_group.id,
+                    discord_channel_id=channel, attempt_id=attempt, status="unknown")
+                logger.exception("Unresolved remote post Discord delivery: group=%s target=%s attempt=%s",
+                                 thread_group.id, channel, attempt)
+        if delivered:
+            return _HandlerResult("processed", InboundActivityOutcome.APPLIED, "post created")
+        return _HandlerResult("skipped", InboundActivityOutcome.IGNORED_ALREADY_APPLIED,
+                              "no safe new post deliveries")
+
+    @staticmethod
+    def _inbound_owner(event: ActivityPubEvent) -> str:
+        """Retain the original author from the trusted gateway event, not its distributor.
+
+        CP13 handles the Group-signed cross-origin provenance verification;
+        here conflicting normalized authors are rejected before canonical writes.
+        """
+        owner = event.object.attributed_to_actor_id or event.actor_id
+        if not owner or (event.object.attributed_to_actor_id
+                         and event.object.attributed_to_actor_id != event.actor_id):
+            raise ValueError("inbound Group object owner is inconsistent")
+        return owner
 
     async def handle_inbound_comment(
-        self,
-        event: ActivityPubEvent,
-        runtime: Runtime,
+        self, event: ActivityPubEvent, runtime: Runtime
     ) -> HandlerResult:
-        """Handle an inbound ActivityPub comment by delivering it into all mapped threads.
+        """Reserve one tenant-scoped reply and deliver only claimable thread targets.
 
-        Deduplicates via CommunityMessageGroup.ap_object_id. Resolves the parent thread
-        group via post_ap_id and the parent message group via parent_ap_id (when present).
-        Delivers the comment into every thread in the thread group with the correct per-thread
-        Discord reply reference. Does not write CommentLink rows.
-
-        If the parent post has no CommunityThreadGroup yet, attempts on-demand backfill:
-        fetches the post from the remote AP endpoint, creates the Discord thread in all
-        subscribed channels that have no delivery row, and persists the group/delivery rows.
-        Falls back to deferred if the fetch or parse fails.
-
-        Returns status='skipped' if already mapped, status='deferred' if the parent post
-        is not yet mapped and cannot be fetched, status='processed' after successful delivery.
-
-        Retry and partial-delivery behavior (Phase 6):
-          If a message group already exists for this ap_id, the retry returns 'skipped'.
-          The get-then-create guard is not atomic; the UNIQUE constraint on
-          CommunityMessageGroupDelivery.discord_message_id is the final safety net.
-          Partial delivery (some threads succeeded, some failed) is not retried here —
-          the message group row already exists, so the retry hits the 'already mapped'
-          guard and skips entirely. Full per-thread retry on partial failure is Phase 8 scope.
+        An unknown or foreign root/parent must never select a Discord thread in
+        another Group. Historical parent fetch is deferred until the signed Group
+        membership check is implemented with CP13.
         """
         from ..activitypub_handlers import HandlerResult as _HandlerResult
-
-        logger.debug(
-            "[handle_inbound_comment] ap_id=%s post_ap_id=%s parent_ap_id=%s",
-            event.object.ap_id,
-            event.object.post_ap_id,
-            event.object.parent_ap_id,
-        )
-
-        # Dedup: if a message group already exists for this AP object, skip.
-        if (
-            get_message_group_for_ap_object(self.database, event.object.ap_id)
-            is not None
-        ):
-            logger.info("Comment %s already mapped — skipping", event.object.ap_id)
-            return _HandlerResult(
-                status="skipped",
-                outcome=InboundActivityOutcome.IGNORED_ALREADY_APPLIED,
-                detail="comment already mapped",
-            )
-
-        # Resolve the thread group and ensure all subscribed channels have a delivery
-        # row. When the group is missing entirely, or when some channels have no
-        # delivery row yet (partial prior delivery), backfill fills the gaps by
-        # fetching the post from the remote AP endpoint. Fetch failure → deferred.
-        post_ap_id = event.object.post_ap_id or ""
-        thread_group = get_thread_group_for_ap_object(self.database, post_ap_id)
-        bot = self.bot or runtime.bot
-
-        should_backfill = needs_backfill(
-            thread_group=thread_group,
-            community_actor_id=event.community_actor_id,
-            database=self.database,
-        )
-        if should_backfill:
-            thread_group = await backfill_post_as_thread_group(
-                post_ap_id=post_ap_id,
-                community_actor_id=event.community_actor_id,
-                delivery_id=event.delivery_id,
-                bot=bot,
-                database=self.database,
-            )
-            if thread_group is None:
-                logger.info(
-                    "Deferring comment %s — parent post %s not mapped and fetch failed",
-                    event.object.ap_id,
-                    event.object.post_ap_id,
-                )
-                return _HandlerResult(
-                    status="deferred",
-                    outcome=InboundActivityOutcome.DEFERRED_MISSING_DEPENDENCY,
-                    detail="parent post not mapped and fetch failed",
-                )
-
-        if thread_group is None:
-            logger.info(
-                "Skipping comment %s — parent post %s is not mapped and no backfill is needed",
-                event.object.ap_id,
-                event.object.post_ap_id,
-            )
-            return _HandlerResult(
-                status="skipped",
-                outcome=InboundActivityOutcome.IGNORED_UNMAPPED_CONTEXT,
-                detail="parent post not mapped",
-            )
-
-        logger.debug(
-            "[handle_inbound_comment] thread_group=%s deliveries=%s",
-            thread_group.id,
-            [
-                d.discord_thread_id
-                for d in self.database.discord_fanout_groups.get_thread_deliveries(
-                    thread_group.id
-                )
-            ],
-        )
-
-        self.database.personal_feed_conversations.retain_community_create(
-            activity_id=event.source_activity_id or event.delivery_id,
-            object_id=event.object.ap_id,
-            root_object_id=event.object.post_ap_id or "",
-            parent_object_id=event.object.parent_ap_id,
-            actor_id=event.actor_id,
-            actor_name=event.object.author_name,
-            content_markdown=event.object.body_markdown or "",
-            published_at=event.object.published_at,
-            source_activity=event.source_activity_json,
-        )
-
-        bot = self.bot or runtime.bot
-        await bot.wait_until_bridge_ready()
-
-        # Resolve the parent message group when this is a reply to a prior comment.
-        # get_message_group_by_ap_object returns None when parent_ap_id is the post
-        # itself (root comment), which is the correct flat-send fallback.
-        parent_group = get_parent_message_group(
-            self.database, event.object.parent_ap_id
-        )
-
-        message_group = self.database.discord_fanout_groups.create_message_group(
-            community_actor_id=event.community_actor_id,
-            thread_group_id=thread_group.id,
-            source_channel_id=None,
-            source_thread_id=None,
-            source_message_id=None,
-            ap_activity_id=event.delivery_id,
-            ap_object_id=event.object.ap_id,
-            parent_message_group_id=parent_group.id if parent_group else None,
-        )
-
+        from ..db.repositories.discord_fanout_groups import RemoteCommunityGroupConflict
         from ..bridge_lemmy_to_discord import _send_inbound_comment
 
-        thread_deliveries = self.database.discord_fanout_groups.get_thread_deliveries(
-            thread_group.id
+        try:
+            owner = self._inbound_owner(event)
+        except ValueError:
+            return _HandlerResult("skipped", InboundActivityOutcome.IGNORED_UNMAPPED_CONTEXT,
+                                  "inbound reply author conflict")
+        repository = self.database.discord_fanout_groups
+        accepted = get_accepted_subscriptions(self.database, event.community_actor_id)
+        if not accepted:
+            return _HandlerResult("skipped", InboundActivityOutcome.IGNORED_NO_SUBSCRIPTION,
+                                  "no subscriptions for this community")
+        post_ap_id = event.object.post_ap_id or ""
+        thread_group = repository.get_thread_group_by_ap_object(
+            post_ap_id, community_actor_id=event.community_actor_id
         )
-        for thread_delivery in thread_deliveries:
-            thread = await bot.get_thread_by_id(thread_delivery.discord_thread_id)
-            # Resolve the per-thread Discord reply reference. Returns None when the
-            # parent is the post root or when no delivery exists for this thread.
-            reference = resolve_inbound_reference(
-                self.database, parent_group, thread_delivery
-            )
-            message = await _send_inbound_comment(
-                thread=thread,
-                event=event,
-                reference=reference,
-            )
-            self.database.discord_fanout_groups.add_message_delivery(
-                message_group_id=message_group.id,
-                discord_channel_id=thread_delivery.discord_channel_id,
-                discord_thread_id=thread_delivery.discord_thread_id,
-                discord_message_id=message.id,
-                role="inbound",
-            )
+        if thread_group is None:
+            # Seeing another Group's same root ID is a contradiction, not proof
+            # of membership in the current Group. Never cross that boundary.
+            if repository.get_thread_group_by_ap_object(post_ap_id) is not None:
+                return _HandlerResult("skipped", InboundActivityOutcome.IGNORED_UNMAPPED_CONTEXT,
+                                      "reply root belongs to another Group")
+            return _HandlerResult("deferred", InboundActivityOutcome.DEFERRED_MISSING_DEPENDENCY,
+                                  "verified root membership required before backfill")
+        # A persisted tenant-scoped root is authoritative membership evidence
+        # for replies even when legacy root author provenance is incomplete.
+        # Update/Delete still require a separately verified original owner.
 
-        logger.info(
-            "Delivered inbound comment %s into %d thread(s)",
-            event.object.ap_id,
-            len(thread_deliveries),
+        parent = None
+        parent_ap_id = event.object.parent_ap_id
+        if parent_ap_id and parent_ap_id != post_ap_id:
+            parent = repository.get_message_group_by_ap_object(
+                parent_ap_id, community_actor_id=event.community_actor_id
+            )
+            if parent is None:
+                return _HandlerResult("deferred", InboundActivityOutcome.DEFERRED_MISSING_DEPENDENCY,
+                                      "verified parent reply not mapped")
+            if parent.thread_group_id != thread_group.id:
+                return _HandlerResult("skipped", InboundActivityOutcome.IGNORED_UNMAPPED_CONTEXT,
+                                      "reply parent belongs to another root")
+
+        # A missing root Discord surface cannot be reconstructed from the reply's
+        # context alone. CP13 will validate official Group outbox proof for it.
+        delivered_threads = repository.get_thread_deliveries(thread_group.id)
+        if not delivered_threads:
+            return _HandlerResult("deferred", InboundActivityOutcome.DEFERRED_MISSING_DEPENDENCY,
+                                  "no confirmed root Discord surfaces")
+        existing = repository.get_message_group_by_ap_object(
+            event.object.ap_id, community_actor_id=event.community_actor_id
         )
-        return _HandlerResult(
-            status="processed",
-            outcome=InboundActivityOutcome.APPLIED,
-            detail="comment created",
-        )
+        if existing is not None and existing.source_owner_actor_id is None:
+            return _HandlerResult("skipped", InboundActivityOutcome.IGNORED_UNMAPPED_CONTEXT,
+                                  "legacy reply has no verified owner")
+        try:
+            message_group = repository.get_or_create_remote_message_group(
+                community_actor_id=event.community_actor_id, ap_object_id=event.object.ap_id,
+                source_owner_actor_id=owner, ap_activity_id=event.source_activity_id or event.delivery_id,
+                thread_group_id=thread_group.id, parent_message_group_id=parent.id if parent else None,
+            )
+        except RemoteCommunityGroupConflict:
+            return _HandlerResult("skipped", InboundActivityOutcome.IGNORED_UNMAPPED_CONTEXT,
+                                  "remote reply Group, root, parent or owner conflict")
+        bot = self.bot or runtime.bot
+        delivered = 0
+        allowed_channels = {s.discord_channel_id for s in accepted}
+        for delivery in delivered_threads:
+            channel = delivery.discord_channel_id
+            if channel not in allowed_channels or channel not in {s.discord_channel_id for s in
+                get_accepted_subscriptions(self.database, event.community_actor_id)}:
+                continue
+            reservation = repository.reserve_remote_target(
+                kind="comment", group_id=message_group.id, discord_channel_id=channel
+            )
+            if reservation.state != "reserved":
+                continue
+            attempt = reservation.attempt_id
+            try:
+                thread = await bot.get_thread_by_id(delivery.discord_thread_id)
+            except Exception:
+                repository.mark_remote_target(kind="comment", group_id=message_group.id,
+                    discord_channel_id=channel, attempt_id=attempt, status="failed")
+                logger.exception("Remote reply Discord thread unavailable: group=%s channel=%s",
+                                 message_group.id, channel)
+                continue
+            try:
+                await bot.wait_until_bridge_ready()
+                reference = resolve_inbound_reference(self.database, parent, delivery)
+                message = await _send_inbound_comment(thread=thread, event=event, reference=reference)
+                repository.finish_remote_target(kind="comment", group_id=message_group.id,
+                    discord_channel_id=channel, attempt_id=attempt,
+                    discord_thread_id=delivery.discord_thread_id, discord_object_id=message.id)
+                delivered += 1
+            except Exception:
+                repository.mark_remote_target(kind="comment", group_id=message_group.id,
+                    discord_channel_id=channel, attempt_id=attempt, status="unknown")
+                logger.exception("Unresolved remote reply Discord delivery: group=%s channel=%s attempt=%s",
+                                 message_group.id, channel, attempt)
+        if delivered:
+            # A canonical reply may be an attachment point for a later AP reply
+            # even when one of its Discord targets remains unresolved.
+            self.database.personal_feed_conversations.retain_community_create(
+                activity_id=event.source_activity_id or event.delivery_id,
+                object_id=event.object.ap_id, root_object_id=event.object.post_ap_id or "",
+                parent_object_id=event.object.parent_ap_id, actor_id=event.actor_id,
+                actor_name=event.object.author_name,
+                content_markdown=event.object.body_markdown or "",
+                published_at=event.object.published_at, source_activity=event.source_activity_json,
+            )
+            return _HandlerResult("processed", InboundActivityOutcome.APPLIED, "comment created")
+        return _HandlerResult("skipped", InboundActivityOutcome.IGNORED_ALREADY_APPLIED,
+                              "no safe new reply deliveries")
 
 
     def _require_mutation_context(
@@ -732,7 +681,7 @@ class CommunityRuntime:
         """
         from ..activitypub_handlers import HandlerResult as _HandlerResult
 
-        thread_group = get_thread_group_for_ap_object(self.database, event.object.ap_id)
+        thread_group = get_thread_group_for_ap_object(self.database, event.object.ap_id, community_actor_id=event.community_actor_id)
         if thread_group is None:
             logger.info(
                 "Post update for %s — no thread group found, skipping",
@@ -780,7 +729,7 @@ class CommunityRuntime:
         """
         from ..activitypub_handlers import HandlerResult as _HandlerResult
 
-        thread_group = get_thread_group_for_ap_object(self.database, event.object.ap_id)
+        thread_group = get_thread_group_for_ap_object(self.database, event.object.ap_id, community_actor_id=event.community_actor_id)
         if thread_group is None:
             logger.info(
                 "Post delete for %s — no thread group found, skipping",
@@ -821,7 +770,7 @@ class CommunityRuntime:
         from ..activitypub_handlers import HandlerResult as _HandlerResult
 
         message_group = get_message_group_for_ap_object(
-            self.database, event.object.ap_id
+            self.database, event.object.ap_id, community_actor_id=event.community_actor_id
         )
         if message_group is None:
             logger.info(
@@ -875,7 +824,7 @@ class CommunityRuntime:
         from ..activitypub_handlers import HandlerResult as _HandlerResult
 
         message_group = get_message_group_for_ap_object(
-            self.database, event.object.ap_id
+            self.database, event.object.ap_id, community_actor_id=event.community_actor_id
         )
         if message_group is None:
             logger.info(

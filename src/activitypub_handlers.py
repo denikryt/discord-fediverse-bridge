@@ -478,7 +478,7 @@ def _should_skip_unsubscribed_remote_create(
         # be acknowledged and ignored locally.
         return (
             runtime.database.discord_fanout_groups.get_thread_group_by_ap_object(
-                event.object.ap_id
+                event.object.ap_id, community_actor_id=event.community_actor_id
             )
             is None
         )
@@ -490,7 +490,7 @@ def _should_skip_unsubscribed_remote_create(
         if (
             event.object.post_ap_id
             and runtime.database.discord_fanout_groups.get_thread_group_by_ap_object(
-                event.object.post_ap_id
+                event.object.post_ap_id, community_actor_id=event.community_actor_id
             )
             is not None
         ):
@@ -498,7 +498,7 @@ def _should_skip_unsubscribed_remote_create(
         if (
             event.object.parent_ap_id
             and runtime.database.discord_fanout_groups.get_message_group_by_ap_object(
-                event.object.parent_ap_id
+                event.object.parent_ap_id, community_actor_id=event.community_actor_id
             )
             is not None
         ):

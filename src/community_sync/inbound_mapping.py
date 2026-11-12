@@ -23,12 +23,14 @@ def get_accepted_subscriptions(
 
 
 def get_parent_message_group(
-    database: object, parent_ap_id: str | None
+    database: object, parent_ap_id: str | None, *, community_actor_id: str | None = None
 ) -> object | None:
     """Return the parent message group for one inbound comment reply target."""
     if not parent_ap_id:
         return None
-    return database.discord_fanout_groups.get_message_group_by_ap_object(parent_ap_id)
+    return database.discord_fanout_groups.get_message_group_by_ap_object(
+        parent_ap_id, community_actor_id=community_actor_id
+    )
 
 
 def needs_backfill(

@@ -16,6 +16,7 @@ async def backfill_post_as_thread_group(
     delivery_id: str,
     bot: object,
     database: object,
+    verified_root_membership: bool = False,
 ) -> object | None:
     """Fetch a missing AP post and create any missing Discord thread deliveries.
 
@@ -27,6 +28,13 @@ async def backfill_post_as_thread_group(
     - create only deliveries for channels that still do not have one
     - return `None` on fetch or parse failure so the caller can defer
     """
+    # A fetched object's audience/context alone does not prove that the root
+    # belongs to this Group. CP13 must supply verified Group distribution or
+    # category-outbox membership before permitting any historical root write.
+    if not verified_root_membership:
+        logger.info("Deferring historical root without verified Group membership: %s", post_ap_id)
+        return None
+
     from ..bridge_lemmy_to_discord import (
         _build_post_event_from_ap_doc,
         _create_inbound_discord_thread,
@@ -48,7 +56,7 @@ async def backfill_post_as_thread_group(
         return None
 
     thread_group = database.discord_fanout_groups.get_thread_group_by_ap_object(
-        post_ap_id
+        post_ap_id, community_actor_id=community_actor_id
     )
     if thread_group is None:
         thread_group = database.discord_fanout_groups.create_thread_group(

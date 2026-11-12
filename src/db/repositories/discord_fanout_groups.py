@@ -1,5 +1,9 @@
 from __future__ import annotations
 
+from dataclasses import dataclass
+from datetime import datetime, timezone
+from uuid import uuid4
+
 from sqlalchemy import select
 
 from ...models import (
@@ -7,6 +11,7 @@ from ...models import (
     CommunityMessageGroupDelivery,
     CommunityThreadGroup,
     CommunityThreadGroupDelivery,
+    CommunityDiscordTargetClaim,
 )
 from .base import BaseRepository
 
@@ -14,8 +19,29 @@ from .base import BaseRepository
 """Discord fanout group and delivery persistence."""
 
 
+class RemoteCommunityGroupConflict(ValueError):
+    """Reject an AP replay that conflicts with immutable Group provenance."""
+
+
+@dataclass(frozen=True, slots=True)
+class RemoteTargetReservation:
+    """One winner's claim token or a durable non-send outcome."""
+
+    state: str
+    attempt_id: str | None = None
+
+
 class DiscordFanoutGroupRepository(BaseRepository):
     """Persist the discord fanout groups domain."""
+
+    def __init__(self, session_provider, immediate_session_provider=None) -> None:
+        """Use writer-reserved transactions for canonical and pre-REST claims."""
+        super().__init__(session_provider)
+        self._immediate_session_provider = immediate_session_provider or session_provider
+
+    def immediate_session(self):
+        """Open the Database-owned SQLite BEGIN IMMEDIATE transaction."""
+        return self._immediate_session_provider()
 
     def create_thread_group(
         self,
@@ -57,17 +83,16 @@ class DiscordFanoutGroupRepository(BaseRepository):
             )
 
     def get_thread_group_by_ap_object(
-        self, ap_object_id: str
+        self, ap_object_id: str, *, community_actor_id: str | None = None
     ) -> CommunityThreadGroup | None:
-        """Load the thread group that maps to one ActivityPub object ID."""
-        # Inbound AP→Discord routing uses the AP object ID to check whether a
-        # thread was already processed to avoid duplicate Discord threads.
+        """Find a post by AP ID; incoming remote lookups must specify Group."""
         with self.session() as session:
-            return session.scalar(
-                select(CommunityThreadGroup).where(
-                    CommunityThreadGroup.ap_object_id == ap_object_id
-                )
+            query = select(CommunityThreadGroup).where(
+                CommunityThreadGroup.ap_object_id == ap_object_id
             )
+            if community_actor_id is not None:
+                query = query.where(CommunityThreadGroup.community_actor_id == community_actor_id)
+            return session.scalar(query)
 
     def get_thread_group_by_id(
         self, thread_group_id: int
@@ -198,17 +223,16 @@ class DiscordFanoutGroupRepository(BaseRepository):
             )
 
     def get_message_group_by_ap_object(
-        self, ap_object_id: str
+        self, ap_object_id: str, *, community_actor_id: str | None = None
     ) -> CommunityMessageGroup | None:
-        """Load the message group that maps to one ActivityPub object ID."""
-        # Echo suppression for inbound AP→Discord uses this lookup to detect
-        # whether a comment was already processed from this bridge's own publish.
+        """Find a reply by AP ID, restricted to its verified remote Group."""
         with self.session() as session:
-            return session.scalar(
-                select(CommunityMessageGroup).where(
-                    CommunityMessageGroup.ap_object_id == ap_object_id
-                )
+            query = select(CommunityMessageGroup).where(
+                CommunityMessageGroup.ap_object_id == ap_object_id
             )
+            if community_actor_id is not None:
+                query = query.where(CommunityMessageGroup.community_actor_id == community_actor_id)
+            return session.scalar(query)
 
     def get_message_group_by_delivered_message(
         self, discord_message_id: int
@@ -298,3 +322,152 @@ class DiscordFanoutGroupRepository(BaseRepository):
                     == discord_thread_id,
                 )
             )
+
+    def get_or_create_remote_thread_group(
+        self, *, community_actor_id: str, ap_object_id: str,
+        source_owner_actor_id: str, ap_activity_id: str
+    ) -> CommunityThreadGroup:
+        """Reserve a post before REST, with immutable Group/object/owner identity."""
+        if not all((community_actor_id, ap_object_id, source_owner_actor_id, ap_activity_id)):
+            raise RemoteCommunityGroupConflict("remote root requires verified Group and owner")
+        with self.immediate_session() as session:
+            group = session.scalar(select(CommunityThreadGroup).where(
+                CommunityThreadGroup.community_actor_id == community_actor_id,
+                CommunityThreadGroup.ap_object_id == ap_object_id,
+            ))
+            if group is not None:
+                if group.source_owner_actor_id != source_owner_actor_id:
+                    raise RemoteCommunityGroupConflict("remote post owner differs from original Create")
+                if group.source_channel_id is not None or group.source_thread_id is not None:
+                    raise RemoteCommunityGroupConflict("outbound source is not a remote post reservation")
+                return group
+            group = CommunityThreadGroup(
+                community_actor_id=community_actor_id, ap_object_id=ap_object_id,
+                ap_activity_id=ap_activity_id, source_owner_actor_id=source_owner_actor_id,
+                source_channel_id=None, source_thread_id=None, source_starter_message_id=None,
+            )
+            session.add(group)
+            session.flush()
+            return group
+
+    def get_or_create_remote_message_group(
+        self, *, community_actor_id: str, ap_object_id: str,
+        source_owner_actor_id: str, ap_activity_id: str, thread_group_id: int,
+        parent_message_group_id: int | None,
+    ) -> CommunityMessageGroup:
+        """Reserve one immutable comment and verify parent/thread belong to this Group."""
+        if not all((community_actor_id, ap_object_id, source_owner_actor_id, ap_activity_id)):
+            raise RemoteCommunityGroupConflict("remote reply requires verified Group and owner")
+        with self.immediate_session() as session:
+            root = session.get(CommunityThreadGroup, thread_group_id)
+            if root is None or root.community_actor_id != community_actor_id:
+                raise RemoteCommunityGroupConflict("reply root belongs to another Group")
+            if parent_message_group_id is not None:
+                parent = session.get(CommunityMessageGroup, parent_message_group_id)
+                if parent is None or parent.thread_group_id != root.id or parent.community_actor_id != community_actor_id:
+                    raise RemoteCommunityGroupConflict("reply parent belongs to another Group/root")
+            group = session.scalar(select(CommunityMessageGroup).where(
+                CommunityMessageGroup.community_actor_id == community_actor_id,
+                CommunityMessageGroup.ap_object_id == ap_object_id,
+            ))
+            if group is not None:
+                if (group.source_owner_actor_id != source_owner_actor_id
+                    or group.thread_group_id != thread_group_id
+                    or group.parent_message_group_id != parent_message_group_id):
+                    raise RemoteCommunityGroupConflict("remote reply owner, root or parent conflict")
+                if group.source_channel_id is not None or group.source_message_id is not None:
+                    raise RemoteCommunityGroupConflict("outbound source is not a remote reply reservation")
+                return group
+            group = CommunityMessageGroup(
+                community_actor_id=community_actor_id, ap_object_id=ap_object_id,
+                ap_activity_id=ap_activity_id, source_owner_actor_id=source_owner_actor_id,
+                thread_group_id=thread_group_id, parent_message_group_id=parent_message_group_id,
+                source_channel_id=None, source_thread_id=None, source_message_id=None,
+            )
+            session.add(group)
+            session.flush()
+            return group
+
+    def reserve_remote_target(
+        self, *, kind: str, group_id: int, discord_channel_id: int
+    ) -> RemoteTargetReservation:
+        """Use one serialized v1 claim before each potentially mutating Discord REST call.
+
+        Completed/unknown/in-flight attempts cannot be sent again without proof.
+        Only an explicitly failed pre-send attempt can receive a new token.
+        """
+        if kind not in ("post", "comment"):
+            raise ValueError("invalid remote target kind")
+        group_fk = (CommunityDiscordTargetClaim.thread_group_id if kind == "post"
+                    else CommunityDiscordTargetClaim.message_group_id)
+        delivery = CommunityThreadGroupDelivery if kind == "post" else CommunityMessageGroupDelivery
+        delivery_fk = delivery.thread_group_id if kind == "post" else delivery.message_group_id
+        with self.immediate_session() as session:
+            if session.scalar(select(delivery.id).where(
+                delivery_fk == group_id, delivery.discord_channel_id == discord_channel_id
+            )) is not None:
+                return RemoteTargetReservation("delivered")
+            claim = session.scalar(select(CommunityDiscordTargetClaim).where(
+                group_fk == group_id,
+                CommunityDiscordTargetClaim.discord_channel_id == discord_channel_id,
+            ))
+            if claim is not None and claim.status != "failed":
+                return RemoteTargetReservation(claim.status)
+            attempt_id = uuid4().hex
+            if claim is None:
+                claim = CommunityDiscordTargetClaim(
+                    thread_group_id=group_id if kind == "post" else None,
+                    message_group_id=group_id if kind == "comment" else None,
+                    discord_channel_id=discord_channel_id, kind=kind, status="claimed",
+                )
+                session.add(claim)
+            claim.attempt_id = attempt_id
+            claim.attempt_started_at = datetime.now(timezone.utc)
+            claim.status = "claimed"
+            session.flush()
+            return RemoteTargetReservation("reserved", attempt_id)
+
+    def finish_remote_target(
+        self, *, kind: str, group_id: int, discord_channel_id: int, attempt_id: str,
+        discord_thread_id: int, discord_object_id: int,
+    ) -> None:
+        """Atomically record the proven Discord surface and complete its CAS claim."""
+        with self.immediate_session() as session:
+            claim = self._claimed_target(session, kind, group_id, discord_channel_id, attempt_id)
+            if kind == "post":
+                delivery = CommunityThreadGroupDelivery(
+                    thread_group_id=group_id, discord_channel_id=discord_channel_id,
+                    discord_thread_id=discord_thread_id,
+                    discord_starter_message_id=discord_object_id, role="inbound")
+            else:
+                delivery = CommunityMessageGroupDelivery(
+                    message_group_id=group_id, discord_channel_id=discord_channel_id,
+                    discord_thread_id=discord_thread_id, discord_message_id=discord_object_id,
+                    role="inbound")
+            session.add(delivery)
+            session.flush()
+            claim.status = "completed"
+
+    def mark_remote_target(
+        self, *, kind: str, group_id: int, discord_channel_id: int,
+        attempt_id: str, status: str
+    ) -> None:
+        """Save a proven pre-send failure or an ambiguous external result."""
+        if status not in ("failed", "unknown"):
+            raise ValueError("invalid target failure status")
+        with self.immediate_session() as session:
+            claim = self._claimed_target(session, kind, group_id, discord_channel_id, attempt_id)
+            claim.status = status
+
+    @staticmethod
+    def _claimed_target(session, kind: str, group_id: int, channel_id: int, attempt_id: str):
+        """Fence stale callbacks against replacement attempts and wrong typed FK."""
+        column = CommunityDiscordTargetClaim.thread_group_id if kind == "post" else CommunityDiscordTargetClaim.message_group_id
+        claim = session.scalar(select(CommunityDiscordTargetClaim).where(
+            column == group_id, CommunityDiscordTargetClaim.discord_channel_id == channel_id,
+            CommunityDiscordTargetClaim.kind == kind, CommunityDiscordTargetClaim.status == "claimed",
+            CommunityDiscordTargetClaim.attempt_id == attempt_id,
+        ))
+        if claim is None:
+            raise RemoteCommunityGroupConflict("stale or unverified Discord target attempt")
+        return claim

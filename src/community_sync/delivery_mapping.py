@@ -20,10 +20,12 @@ def get_thread_group_for_any_thread(database: object, thread_id: int) -> object 
 
 
 def get_thread_group_for_ap_object(
-    database: object, ap_object_id: str
+    database: object, ap_object_id: str, *, community_actor_id: str | None = None
 ) -> object | None:
     """Return the canonical thread group for one AP post object id."""
-    return database.discord_fanout_groups.get_thread_group_by_ap_object(ap_object_id)
+    return database.discord_fanout_groups.get_thread_group_by_ap_object(
+        ap_object_id, community_actor_id=community_actor_id
+    )
 
 
 def get_message_group_for_source_message(
@@ -36,10 +38,12 @@ def get_message_group_for_source_message(
 
 
 def get_message_group_for_ap_object(
-    database: object, ap_object_id: str
+    database: object, ap_object_id: str, *, community_actor_id: str | None = None
 ) -> object | None:
     """Return the canonical message group for one AP comment object id."""
-    return database.discord_fanout_groups.get_message_group_by_ap_object(ap_object_id)
+    return database.discord_fanout_groups.get_message_group_by_ap_object(
+        ap_object_id, community_actor_id=community_actor_id
+    )
 
 
 def get_message_group_for_delivered_message(
