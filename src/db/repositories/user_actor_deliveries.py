@@ -82,6 +82,7 @@ class UserActorDeliveryRepository(BaseRepository):
         snapshot: dict,
         followers: list[UserActorFollower],
         direct_target_inbox_urls: list[str] | None = None,
+        direct_group_recipients: list[dict] | None = None,
     ) -> UserActorOutboundSource:
         """Insert one already-rendered content source and immutable audience."""
         return UserActorDeliverySourceRepository.insert_ready_content_source(
@@ -96,6 +97,7 @@ class UserActorDeliveryRepository(BaseRepository):
             snapshot=snapshot,
             followers=followers,
             direct_target_inbox_urls=direct_target_inbox_urls,
+            direct_group_recipients=direct_group_recipients,
         )
 
     def get_source(self, source_id: int) -> UserActorOutboundSource | None:

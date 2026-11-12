@@ -75,6 +75,7 @@ class UserActorDeliverySourceRepository:
         snapshot: dict,
         followers: list[UserActorFollower],
         direct_target_inbox_urls: list[str] | None = None,
+        direct_group_recipients: list[dict] | None = None,
     ) -> UserActorOutboundSource:
         """Insert one already-rendered content source and immutable audience."""
         source = UserActorOutboundSource(
@@ -101,7 +102,9 @@ class UserActorDeliverySourceRepository:
         }
         # Direct target endpoints are sorted and deduplicated so replayed content
         # fanout preserves the current deterministic row identities.
-        for endpoint_url in sorted(set(direct_target_inbox_urls or [])):
+        # The direct Group is an endpoint grant, not a fake User Actor follower.
+        direct_endpoints = [recipient["inboxUrl"] for recipient in (direct_group_recipients or [])]
+        for endpoint_url in sorted(set(direct_target_inbox_urls or []).union(direct_endpoints)):
             endpoint = UserActorDeliverySourceRepository.validate_endpoint(endpoint_url)
             if endpoint not in existing_endpoints:
                 session.add(

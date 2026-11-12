@@ -133,6 +133,29 @@ export interface RenderPersonalFeedResult {
   activityJson: Record<string, unknown>;
 }
 
+export interface RenderCommunityCreateRequest {
+  /** Caller-owned identity; never generated from gateway wall-clock time. */
+  actorUsername: string;
+  communityActorUrl: string;
+  softwareProfile: "nodebb" | "threadiverse" | "bridge";
+  kind: "post" | "comment";
+  operationId: string;
+  activityId: string;
+  objectId: string;
+  title: string | null;
+  bodyMarkdown: string;
+  publishedAt: string;
+  inReplyToObjectId: string | null;
+  conversationRootObjectId: string | null;
+}
+
+export interface RenderCommunityCreateResult {
+  activityId: string;
+  objectId: string;
+  publishedAt: string;
+  activityJson: Record<string, unknown>;
+}
+
 export interface PublishContentRequest {
   actorUsername: string;
   communityActorUrl: string;

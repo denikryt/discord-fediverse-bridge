@@ -57,6 +57,34 @@ class PublishContentRequest:
 
 
 @dataclass(slots=True)
+class RenderCommunityCreateRequest:
+    """Describe one immutable community Create for the gateway's pure renderer."""
+
+    actor_username: str
+    community_actor_url: str
+    software_profile: str
+    kind: str
+    operation_id: str
+    activity_id: str
+    object_id: str
+    title: str | None
+    body_markdown: str
+    published_at: str
+    in_reply_to_object_id: str | None = None
+    conversation_root_object_id: str | None = None
+
+
+@dataclass(slots=True)
+class RenderCommunityCreateResult:
+    """Return exact identities and JSON without delivering them to the network."""
+
+    activity_id: str
+    object_id: str
+    published_at: str
+    activity_json: dict = field(default_factory=dict)
+
+
+@dataclass(slots=True)
 class PublishContentResult:
     """Return the exact canonical Create rendered and sent by the gateway."""
 
@@ -320,6 +348,37 @@ class FedifyGatewayClient:
         response.raise_for_status()
         payload = response.json()
         return RenderPersonalFeedResult(
+            activity_id=payload["activityId"],
+            object_id=payload["objectId"],
+            published_at=payload["publishedAt"],
+            activity_json=payload["activityJson"],
+        )
+
+    async def render_community_create(
+        self, request: RenderCommunityCreateRequest
+    ) -> RenderCommunityCreateResult:
+        """Render canonical Create JSON without signing, fetching or sending it."""
+        response = await self._client.post(
+            "/render-community-create",
+            headers={"Authorization": f"Bearer {self._shared_secret}"},
+            json={
+                "actorUsername": request.actor_username,
+                "communityActorUrl": request.community_actor_url,
+                "softwareProfile": request.software_profile,
+                "kind": request.kind,
+                "operationId": request.operation_id,
+                "activityId": request.activity_id,
+                "objectId": request.object_id,
+                "title": request.title,
+                "bodyMarkdown": request.body_markdown,
+                "publishedAt": request.published_at,
+                "inReplyToObjectId": request.in_reply_to_object_id,
+                "conversationRootObjectId": request.conversation_root_object_id,
+            },
+        )
+        response.raise_for_status()
+        payload = response.json()
+        return RenderCommunityCreateResult(
             activity_id=payload["activityId"],
             object_id=payload["objectId"],
             published_at=payload["publishedAt"],

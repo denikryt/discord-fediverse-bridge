@@ -26,13 +26,13 @@ This document explains the major runtime traces through the bridge: user/platfor
 3. If it was the last channel for the community, Python calls gateway `/unfollow-community`.
 4. The bridge follow row is removed or preserved according to Undo(Follow) delivery outcome.
 
-## Discord thread -> remote Lemmy community publish flow
+## Discord thread/reply -> remote Group Create flow
 
-1. `src/discord_bot.py` receives a Discord event.
-2. `src/discord_event_router.py` selects remote subscription runtime.
-3. `src/community_sync/runtime.py` validates context.
-4. `src/content_sync/outbound_publish.py` builds the publish request.
-5. Gateway `/publish` signs and sends Create; Python persists object/mapping state.
+1. `src/discord_bot.py` receives a Discord event; the router chooses the accepted remote subscription and `CommunityRuntime` checks its forum/parent context.
+2. `ContentPublishService` requires the persisted verified `BridgeActorFollow.remote_software_profile` (`nodebb`, `threadiverse`, or `bridge`), the accepted channel binding, original Follow ID and original Group inbox. `unknown` cannot fall back to Page.
+3. An immutable operation digest from Discord guild, forum, message, registered Person, Group and kind produces typed AP object/Create IDs. NodeBB roots use Note/context; known Lemmy/Bridge roots preserve Page; all replies use Note with canonical parent.
+4. Gateway `/render-community-create` validates and renders the caller-supplied IDs **without** ActivityPub sends. Python verifies the returned Create, then atomically persists mapping, original object, source JSON, follower audience and direct Group recipient snapshot under one SQLite writer transaction. Exact duplicates reuse the same source.
+5. After commit, result `queued/locally_accepted` means the outbox source exists; it does not mean NodeBB accepted it. The existing worker will authorize/deliver the direct Group route in CP16; until then direct Group sends are not guaranteed. Discord canonical/sibling fanout on queued outcomes is likewise completed by CP16.
 
 ## Inbound receipt observability
 

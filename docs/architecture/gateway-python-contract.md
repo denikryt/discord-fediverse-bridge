@@ -46,12 +46,40 @@ against the saved Group-scoped canonical post/reply, not the URI suffix;
 | `/send-prepared-community-follow` | `send_prepared_community_follow` | Submit only an already committed Follow | `communityActorUrl`, `communityInboxUrl`, `followActivityId` | Sends exactly the reserved Follow; timeout outcome remains unresolved in Python |
 | `/follow-community` | `follow_community` | Legacy manual gateway send (not used by subscription operation) | `communityActorUrl` | Returns community actor URL, inbox URL, and Follow activity id |
 | `/unfollow-community` | `unfollow_community` | Send Undo(Follow) to original saved Group inbox | `communityActorUrl`, `followActivityId`, optional `communityInboxUrl` from verified persisted Follow | Returns `ok` only after gateway send succeeds; Python claims `undo_sending` before calling and keeps ambiguous outcome unresolved |
-| `/publish` | `publish_content` | Publish remote-community content | `actorUsername`, `communityActorUrl`, `kind`, `bodyMarkdown` | Returns canonical ids |
+| `/render-community-create` | `render_community_create` | Render immutable community Create without remote fetch, signing or network delivery | canonical User Actor IDs, SHA-256 `operationId`, persisted `softwareProfile`, Group actor, parent/root, timestamp | Returns exact `activityId`, `objectId`, `publishedAt`, and JSON; Python checks all identities/addressing before DB commit |
+| `/publish` | `publish_content` | Legacy gateway send route (remote Discord runtime no longer calls it) | `actorUsername`, `communityActorUrl`, `kind`, `bodyMarkdown` | Sends immediately; not suitable for persist-before-send community publishing |
 | `/publish-local-community` | `publish_local_community_content` | Publish local-community content | publish fields | Returns ids and delivery counts |
 | `/send-local-community-relay` | `send_local_community_relay` | Deliver rendered relay activities | `signingActorUrl`, `deliveries[]` | Returns per-target outcomes |
 | `/accept-local-community-follow` | `accept_local_community_follow` | Send Accept(Follow) | community, remote actor, inbox, Follow id | Sends signed Accept |
 | `/update` | `update_content` | Send Update | actor, community, object, kind, body | Sends Update |
 | `/delete` | `delete_content` | Send Delete | actor, community, object | Sends Delete |
+
+### Durable remote community Create (CP15/CP16 boundary)
+
+The Discord remote-community service derives one operation digest from the immutable
+`(guild_id, forum_channel_id, Discord message_id, registered Person, canonical Group, kind)`.
+Typed User Actor object/Create IDs and the original UTC Discord timestamp are sent
+to `/render-community-create`. The gateway returns **only JSON**, without querying
+remote actors or sending ActivityPub. It renders Note roots for persisted `nodebb`,
+Page roots for confirmed `threadiverse`/`bridge`, and Note replies for each.
+A NodeBB root uses its own canonical object ID as `context`; replies carry the
+verified conversation root and immediate `inReplyTo`, not a guessed remote topic URL.
+`unknown` software profile is rejected before rendering.
+
+Python checks the returned Create/object IDs, author, Group addressing, parent,
+source, kind and timestamp. Under a single SQLite writer transaction it checks
+accepted Follow/binding generation again, then persists `MessageMapping`,
+`PublishedActivityObject`, one ready `UserActorOutboundSource`, immutable
+`snapshot_json.directGroupRecipients[]` (Group actor, inbox, Follow ID, Discord
+forum/guild, software profile), follower snapshots and deduplicated endpoints.
+The direct Group recipient is not a synthetic follower. An exact duplicate
+reuses the original source without rendering or changing its JSON.
+
+`PublishResult(status="queued",locally_accepted=True,delivery_state="queued")`
+means only **local durable admission**. CP16 must authorize original direct
+Group recipients in the existing worker; CP15 alone does not establish remote
+transport eligibility or acceptance. The old local-community
+`/publish-local-community` path is independent of this remote direct route.
 
 ## Bridge signing key ownership
 
