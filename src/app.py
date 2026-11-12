@@ -17,6 +17,10 @@ from .community_sync.runtime import CommunityRuntime
 from .config import Settings
 from .db import Database
 from .db.migrations import Stage4IdentityMigrationConfig
+from .db.startup import (
+    admit_sqlite_under_shared_lease,
+    prepare_sqlite_under_exclusive_lease,
+)
 from .discord_bot import BridgeBot
 from .discord_event_router import DiscordEventRouter
 from .discord_message_mutations import DiscordMessageMutationHandler
@@ -84,15 +88,45 @@ async def main() -> None:
 
 
 def build_runtime(settings: Settings) -> Runtime:
-    """Recover durable state, acquire a lifetime lease, and build the runtime."""
+    """Upgrade under EX, then admit v1 again under the normal lifetime SH lease.
+
+    Operators must first stop **all** pre-v1 processes and disable their
+    automatic restart; advisory flock does not provide a mixed-version rolling
+    upgrade protocol, including in the EX→SH acquisition window.
+    """
+    if (
+        not settings.database_url.startswith("sqlite:///")
+        or ":memory:" in settings.database_url
+        or "?" in settings.database_url
+    ):
+        raise RuntimeError("offline v1 migration requires a local SQLite file URL")
+    db_path = Path(settings.database_url.removeprefix("sqlite:///"))
     deployment_lock_path = Path(settings.deployment_state_lock_path)
     with FileLock(deployment_lock_path).acquire(
         exclusive=True, timeout_seconds=settings.profile_media_lock_timeout_seconds
     ):
-        recover_incomplete_restore(
-            Path(settings.database_url.removeprefix("sqlite:///")),
-            Path(settings.profile_media_root),
-        )
+        recover_incomplete_restore(db_path, Path(settings.profile_media_root))
+        # The migration runner is the only schema writer. If backup or upgrade
+        # fails, no Discord/HTTP owner is constructed and EX is released.
+        database = Database(settings.database_url)
+        try:
+            archived = prepare_sqlite_under_exclusive_lease(
+                database,
+                database_path=db_path,
+                media_root=Path(settings.profile_media_root),
+                media_lock_path=Path(settings.profile_media_lock_path),
+                lock_timeout_seconds=settings.profile_media_lock_timeout_seconds,
+                identity=Stage4IdentityMigrationConfig(
+                    public_origin=settings.normalized_fedify_origin,
+                    service_actor_identifier=settings.fedify_actor_identifier,
+                ),
+            )
+            if archived is not None:
+                logger.info("Verified offline SQLite migration backup: %s", archived)
+        finally:
+            database.close()
+    # This is NOT an atomic EX→SH downgrade. All pre-v1 restart mechanisms
+    # must remain disabled throughout the operator-controlled upgrade window.
     deployment_lease = FileLock(deployment_lock_path).acquire(
         exclusive=False, timeout_seconds=settings.profile_media_lock_timeout_seconds
     )
@@ -106,20 +140,16 @@ def _build_live_runtime(settings: Settings, deployment_lease: FileLock) -> Runti
     try:
         database = Database(settings.database_url)
         closeables.append(database)
+        # Recheck after acquiring SH: another new process may have completed an
+        # upgrade during lock conversion. No migration or even idempotent UPDATE
+        # is legal at this startup boundary.
+        admit_sqlite_under_shared_lease(database)
         media_store = ProfileMediaStore(
             Path(settings.profile_media_root),
             max_upload_bytes=settings.profile_media_max_upload_bytes,
             max_pixels=settings.profile_media_max_pixels,
         )
         media_store.initialize()
-        # The versioned runner, not `create_all`, owns bootstrap/admission.
-        # CP06 moves this call under the existing EX deployment gate.
-        database.migrate(
-            Stage4IdentityMigrationConfig(
-                public_origin=settings.normalized_fedify_origin,
-                service_actor_identifier=settings.fedify_actor_identifier,
-            )
-        )
         BridgeActorKeyBootstrap(database=database, settings=settings).ensure()
 
         bridge_policy_service = BridgePolicyService(
