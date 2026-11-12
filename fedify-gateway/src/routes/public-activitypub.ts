@@ -39,6 +39,8 @@ export interface PublishedActivityObjectView {
   title: string | null;
   bodyMarkdown: string;
   inReplyToObjectId: string | null;
+  originalObjectType?: "Note" | "Page" | null;
+  originalObjectContext?: string | null;
   publishedAt: string;
   discordGuildId: number | null;
   discordChannelId: number | null;

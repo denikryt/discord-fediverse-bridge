@@ -551,6 +551,29 @@ def _begin_event_attempt(
             detail="Delivery is already in progress",
         )
     if existing.status in {"processed", "skipped"}:
+        # A repeated *authenticated* remote Group Create can complete targets
+        # that provably failed before Discord REST. The terminal receipt
+        # describes the previous attempt, not all future subscribed forums.
+        # Local Group content keeps its separately scoped duplicate contract.
+        can_resume_remote = (
+            isinstance(event, ActivityPubEvent)
+            and scope is None
+            and event.community_actor_id is not None
+            and (event.target is None or event.target.kind == "community")
+            and event.event_type in {"post.created", "comment.created"}
+            and existing.event_type == event.event_type
+            and existing.object_ap_id == _event_object_id(event)
+            and existing.outcome in {
+                InboundActivityOutcome.APPLIED.value,
+                InboundActivityOutcome.IGNORED_ALREADY_APPLIED.value,
+            }
+        )
+        if can_resume_remote:
+            # Preserve the terminal receipt: each *eligible target* is fenced
+            # by its canonical Group/Discord CAS claim in the runtime. This
+            # allows retries without mutating receipt provenance or allowing
+            # a bad duplicate envelope to replace the earlier applied result.
+            return None, False
         return {
             "status": "duplicate",
             "outcome": existing.outcome,
@@ -610,7 +633,17 @@ def _finish_event_processing(
     detail: str,
     *, verified_destination_group_actor_id: str | None = None,
 ) -> None:
-    """Persist one terminal result only inside the verified receipt scope."""
+    """Persist first-time outcomes without rewriting an applied remote receipt."""
+    if verified_destination_group_actor_id is None:
+        existing = runtime.database.event_receipts.get_event_receipt(delivery_id)
+        if (existing is not None and existing.status in {"processed", "skipped"}
+                and existing.outcome in {
+                    InboundActivityOutcome.APPLIED.value,
+                    InboundActivityOutcome.IGNORED_ALREADY_APPLIED.value,
+                }):
+            # A duplicate remote Group Create may have filled another forum,
+            # but its first terminal receipt remains the historical wire result.
+            return
     runtime.database.event_receipts.update_event_receipt(
         delivery_id=delivery_id,
         verified_destination_group_actor_id=verified_destination_group_actor_id,

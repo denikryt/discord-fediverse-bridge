@@ -325,7 +325,8 @@ class DiscordFanoutGroupRepository(BaseRepository):
 
     def get_or_create_remote_thread_group(
         self, *, community_actor_id: str, ap_object_id: str,
-        source_owner_actor_id: str, ap_activity_id: str
+        source_owner_actor_id: str, ap_activity_id: str,
+        first_object_json: dict | None = None,
     ) -> CommunityThreadGroup:
         """Reserve a post before REST, with immutable Group/object/owner identity."""
         if not all((community_actor_id, ap_object_id, source_owner_actor_id, ap_activity_id)):
@@ -344,6 +345,7 @@ class DiscordFanoutGroupRepository(BaseRepository):
             group = CommunityThreadGroup(
                 community_actor_id=community_actor_id, ap_object_id=ap_object_id,
                 ap_activity_id=ap_activity_id, source_owner_actor_id=source_owner_actor_id,
+                inbound_create_snapshot_json=first_object_json,
                 source_channel_id=None, source_thread_id=None, source_starter_message_id=None,
             )
             session.add(group)
@@ -354,6 +356,7 @@ class DiscordFanoutGroupRepository(BaseRepository):
         self, *, community_actor_id: str, ap_object_id: str,
         source_owner_actor_id: str, ap_activity_id: str, thread_group_id: int,
         parent_message_group_id: int | None,
+        first_object_json: dict | None = None,
     ) -> CommunityMessageGroup:
         """Reserve one immutable comment and verify parent/thread belong to this Group."""
         if not all((community_actor_id, ap_object_id, source_owner_actor_id, ap_activity_id)):
@@ -381,6 +384,7 @@ class DiscordFanoutGroupRepository(BaseRepository):
             group = CommunityMessageGroup(
                 community_actor_id=community_actor_id, ap_object_id=ap_object_id,
                 ap_activity_id=ap_activity_id, source_owner_actor_id=source_owner_actor_id,
+                inbound_create_snapshot_json=first_object_json,
                 thread_group_id=thread_group_id, parent_message_group_id=parent_message_group_id,
                 source_channel_id=None, source_thread_id=None, source_message_id=None,
             )

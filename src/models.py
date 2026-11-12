@@ -936,6 +936,8 @@ class CommunityThreadGroup(Base):
     ap_activity_id: Mapped[str | None] = mapped_column(String(512), nullable=True)
     ap_object_id: Mapped[str | None] = mapped_column(String(512), nullable=True)
     source_owner_actor_id: Mapped[str | None] = mapped_column(String(512), nullable=True)
+    # The first verified AP object is immutable across Announce retries and forums.
+    inbound_create_snapshot_json: Mapped[dict | None] = mapped_column(JSON, nullable=True)
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), default=utcnow, nullable=False
     )
@@ -988,6 +990,8 @@ class CommunityMessageGroup(Base):
     ap_activity_id: Mapped[str | None] = mapped_column(String(512), nullable=True)
     ap_object_id: Mapped[str | None] = mapped_column(String(512), nullable=True)
     source_owner_actor_id: Mapped[str | None] = mapped_column(String(512), nullable=True)
+    # Late retries use the first verified Note, never a replacement reply body.
+    inbound_create_snapshot_json: Mapped[dict | None] = mapped_column(JSON, nullable=True)
     # FK to another CommunityMessageGroup if this message is a reply.
     parent_message_group_id: Mapped[int | None] = mapped_column(Integer, nullable=True)
     created_at: Mapped[datetime] = mapped_column(

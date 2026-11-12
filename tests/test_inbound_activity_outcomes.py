@@ -4,11 +4,13 @@ from __future__ import annotations
 from support.runtime import build_test_policy_service
 
 from pathlib import Path
+import sqlite3
 from types import SimpleNamespace
 
-from sqlalchemy import create_engine, inspect, text
+from sqlalchemy import inspect, text
 
 from src.db import Database
+from src.db.migrations import Stage4IdentityMigrationConfig
 from src.http_api import _begin_event_processing
 from src.inbound_activity_outcomes import InboundActivityOutcome
 
@@ -39,64 +41,38 @@ def test_fresh_schema_has_nullable_outcome_column(tmp_path: Path) -> None:
     assert columns["outcome"]["type"].length == 64
 
 
-def test_migration_adds_outcome_without_backfilling_legacy_rows(tmp_path: Path) -> None:
-    """Migration should preserve legacy receipts and leave outcome unknown."""
+def test_supported_release_v0_upgrade_preserves_unknown_receipt_outcome(tmp_path: Path) -> None:
+    """A genuine tagged v0 receipt keeps NULL outcome across the 0→1 upgrade.
+
+    The versioned runner rejects synthetic three-table databases. Build a
+    supported historical source rather than bypassing its schema admission.
+    """
     db_path = tmp_path / "legacy.db"
-    engine = create_engine(f"sqlite:///{db_path}", future=True)
-    with engine.begin() as connection:
-        connection.execute(
-            text(
-                """
-                CREATE TABLE activitypub_event_receipts (
-                    id INTEGER PRIMARY KEY AUTOINCREMENT,
-                    delivery_id VARCHAR(128) UNIQUE NOT NULL,
-                    event_type VARCHAR(64) NOT NULL,
-                    object_ap_id VARCHAR(512) NOT NULL,
-                    status VARCHAR(32) NOT NULL,
-                    detail VARCHAR(1024),
-                    created_at DATETIME NOT NULL,
-                    updated_at DATETIME NOT NULL
-                )
-                """
-            )
-        )
-        connection.execute(
-            text(
-                "CREATE TABLE local_community_threads (id INTEGER PRIMARY KEY AUTOINCREMENT)"
-            )
-        )
-        connection.execute(
-            text(
-                "CREATE TABLE local_community_messages (id INTEGER PRIMARY KEY AUTOINCREMENT)"
-            )
-        )
-        connection.execute(
-            text(
-                """
-                INSERT INTO activitypub_event_receipts (
-                    delivery_id, event_type, object_ap_id, status, detail,
-                    created_at, updated_at
-                ) VALUES (
-                    'delivery-1', 'post.created', 'object-1', 'skipped',
-                    'legacy detail', CURRENT_TIMESTAMP, CURRENT_TIMESTAMP
-                )
-                """
-            )
-        )
+    historical_schema = Path(__file__).parent / "fixtures/database/released_v0_schema.sql"
+    with sqlite3.connect(db_path) as connection:
+        connection.executescript(historical_schema.read_text(encoding="utf-8"))
+        connection.execute("""
+            INSERT INTO activitypub_event_receipts (
+                delivery_id, event_type, object_ap_id, status, outcome,
+                detail, created_at, updated_at
+            ) VALUES ('delivery-1', 'post.created', 'object-1', 'skipped', NULL,
+                      'legacy detail', CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
+        """)
 
     database = Database(f"sqlite:///{db_path}")
-    database.migrate()
-    database.migrate()
-
-    with database.engine.connect() as connection:
-        row = connection.execute(
-            text(
-                "SELECT delivery_id, status, detail, outcome "
-                "FROM activitypub_event_receipts"
-            )
-        ).one()
-
-    assert row == ("delivery-1", "skipped", "legacy detail", None)
+    config = Stage4IdentityMigrationConfig("https://bridge.example", "bridge")
+    try:
+        database.migrate(config)
+        database.migrate(config)
+        with database.engine.connect() as connection:
+            row = connection.execute(text(
+                "SELECT delivery_id, status, detail, outcome FROM activitypub_event_receipts"
+            )).one()
+            version = connection.exec_driver_sql("PRAGMA user_version").scalar_one()
+        assert version == 1
+        assert row == ("delivery-1", "skipped", "legacy detail", None)
+    finally:
+        database.close()
 
 
 def test_repository_updates_status_outcome_and_detail_together(tmp_path: Path) -> None:

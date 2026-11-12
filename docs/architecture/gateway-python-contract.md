@@ -184,6 +184,13 @@ remote actors or sending ActivityPub. It renders Note roots for persisted `nodeb
 Page roots for confirmed `threadiverse`/`bridge`, and Note replies for each.
 A NodeBB root uses its own canonical object ID as `context`; replies carry the
 verified conversation root and immediate `inReplyTo`, not a guessed remote topic URL.
+The private published-object resolver and User Actor outbox list expose
+`original_object_type` and `original_object_context` read from the immutable
+outbound Create source, so public GET and outbox cannot turn that NodeBB Note
+into a Page after restart. A missing historical Create source keeps the legacy
+Page/Note fallback; corrupted source identity fails closed. The NodeBB Update
+render-only path explicitly adds the saved conversation root to its final signed
+JSON, because the Fedify Note serializer does not retain constructor `context`.
 `unknown` software profile is rejected before rendering.
 
 Python checks the returned Create/object IDs, author, Group addressing, parent,

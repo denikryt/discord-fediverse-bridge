@@ -330,10 +330,20 @@ class CommunityRuntime:
                 community_actor_id=event.community_actor_id,
                 ap_object_id=event.object.ap_id, source_owner_actor_id=owner,
                 ap_activity_id=event.source_activity_id or event.delivery_id,
+                first_object_json=event.object.model_dump(mode="json"),
             )
         except RemoteCommunityGroupConflict:
             return _HandlerResult("skipped", InboundActivityOutcome.IGNORED_UNMAPPED_CONTEXT,
                                   "remote post Group or original owner conflict")
+        # The first accepted Create owns the content for *all* forum targets.
+        # Legacy rows without that proof must not adopt a late replay's body.
+        if thread_group.inbound_create_snapshot_json is None:
+            return _HandlerResult("skipped", InboundActivityOutcome.IGNORED_UNMAPPED_CONTEXT,
+                                  "remote root lacks immutable first Create content")
+        from ..activitypub_models import ActivityPubObject
+        canonical_event = event.model_copy(update={
+            "object": ActivityPubObject.model_validate(thread_group.inbound_create_snapshot_json),
+        })
         bot = self.bot or runtime.bot
         delivered = 0
         for subscription in accepted:
@@ -359,9 +369,18 @@ class CommunityRuntime:
                                  thread_group.id, channel)
                 continue
             try:
+                # Readiness is an entirely pre-REST check. A failure here is
+                # provably unsent and may be retried on a later valid event.
                 await bot.wait_until_bridge_ready()
+            except Exception:
+                repository.mark_remote_target(kind="post", group_id=thread_group.id,
+                    discord_channel_id=channel, attempt_id=attempt, status="failed")
+                logger.exception("Remote post Discord bot not ready: group=%s target=%s",
+                                 thread_group.id, channel)
+                continue
+            try:
                 thread_id, starter_id = await _create_inbound_discord_thread(
-                    forum_channel=forum, event=event
+                    forum_channel=forum, event=canonical_event
                 )
                 repository.finish_remote_target(kind="post", group_id=thread_group.id,
                     discord_channel_id=channel, attempt_id=attempt,
@@ -461,10 +480,18 @@ class CommunityRuntime:
                 community_actor_id=event.community_actor_id, ap_object_id=event.object.ap_id,
                 source_owner_actor_id=owner, ap_activity_id=event.source_activity_id or event.delivery_id,
                 thread_group_id=thread_group.id, parent_message_group_id=parent.id if parent else None,
+                first_object_json=event.object.model_dump(mode="json"),
             )
         except RemoteCommunityGroupConflict:
             return _HandlerResult("skipped", InboundActivityOutcome.IGNORED_UNMAPPED_CONTEXT,
                                   "remote reply Group, root, parent or owner conflict")
+        if message_group.inbound_create_snapshot_json is None:
+            return _HandlerResult("skipped", InboundActivityOutcome.IGNORED_UNMAPPED_CONTEXT,
+                                  "remote reply lacks immutable first Create content")
+        from ..activitypub_models import ActivityPubObject
+        canonical_event = event.model_copy(update={
+            "object": ActivityPubObject.model_validate(message_group.inbound_create_snapshot_json),
+        })
         bot = self.bot or runtime.bot
         delivered = 0
         allowed_channels = {s.discord_channel_id for s in accepted}
@@ -488,9 +515,18 @@ class CommunityRuntime:
                                  message_group.id, channel)
                 continue
             try:
+                # Resolving a reference and awaiting readiness do not invoke
+                # Discord send. A failure is safe to retry with the same claim.
                 await bot.wait_until_bridge_ready()
                 reference = resolve_inbound_reference(self.database, parent, delivery)
-                message = await _send_inbound_comment(thread=thread, event=event, reference=reference)
+            except Exception:
+                repository.mark_remote_target(kind="comment", group_id=message_group.id,
+                    discord_channel_id=channel, attempt_id=attempt, status="failed")
+                logger.exception("Remote reply unavailable before Discord REST: group=%s channel=%s",
+                                 message_group.id, channel)
+                continue
+            try:
+                message = await _send_inbound_comment(thread=thread, event=canonical_event, reference=reference)
                 repository.finish_remote_target(kind="comment", group_id=message_group.id,
                     discord_channel_id=channel, attempt_id=attempt,
                     discord_thread_id=delivery.discord_thread_id, discord_object_id=message.id)
@@ -505,11 +541,11 @@ class CommunityRuntime:
             # even when one of its Discord targets remains unresolved.
             self.database.personal_feed_conversations.retain_community_create(
                 activity_id=event.source_activity_id or event.delivery_id,
-                object_id=event.object.ap_id, root_object_id=event.object.post_ap_id or "",
-                parent_object_id=event.object.parent_ap_id, actor_id=event.actor_id,
-                actor_name=event.object.author_name,
-                content_markdown=event.object.body_markdown or "",
-                published_at=event.object.published_at, source_activity=event.source_activity_json,
+                object_id=canonical_event.object.ap_id, root_object_id=canonical_event.object.post_ap_id or "",
+                parent_object_id=canonical_event.object.parent_ap_id, actor_id=event.actor_id,
+                actor_name=canonical_event.object.author_name,
+                content_markdown=canonical_event.object.body_markdown or "",
+                published_at=canonical_event.object.published_at, source_activity=event.source_activity_json,
             )
             return _HandlerResult("processed", InboundActivityOutcome.APPLIED, "comment created")
         return _HandlerResult("skipped", InboundActivityOutcome.IGNORED_ALREADY_APPLIED,

@@ -139,6 +139,7 @@ CREATE TABLE community_message_groups (
 	ap_activity_id VARCHAR(512),
 	ap_object_id VARCHAR(512),
 	source_owner_actor_id VARCHAR(512),
+	inbound_create_snapshot_json JSON,
 	parent_message_group_id INTEGER,
 	created_at DATETIME NOT NULL,
 	PRIMARY KEY (id)
@@ -163,6 +164,7 @@ CREATE TABLE community_thread_groups (
 	ap_activity_id VARCHAR(512),
 	ap_object_id VARCHAR(512),
 	source_owner_actor_id VARCHAR(512),
+	inbound_create_snapshot_json JSON,
 	created_at DATETIME NOT NULL,
 	PRIMARY KEY (id),
 	UNIQUE (source_thread_id)

@@ -247,3 +247,197 @@ async def test_reply_to_verified_root_is_delivered_once(tmp_path: Path) -> None:
         assert len(db.discord_fanout_groups.get_message_deliveries(msg.id)) == 1
     finally:
         db.close()
+
+@pytest.mark.asyncio
+async def test_same_wire_id_can_resume_proven_failed_target_after_terminal_receipt(tmp_path: Path) -> None:
+    """An authenticated replay with the same Announce ID resumes a proven unsent forum."""
+    from src.http_api import _begin_event_attempt, _finish_event_processing
+
+    db, rt, context, forums, _ = _setup(tmp_path, {100: (200, 300), 101: (201, 301)})
+    original_fetch = context.bot.fetch_forum_channel
+    unavailable = True
+
+    async def fetch(channel: int):
+        if channel == 101 and unavailable:
+            raise LookupError("forum unavailable before Discord REST")
+        return await original_fetch(channel)
+
+    context.bot.fetch_forum_channel = fetch
+    event = _event(activity="https://remote.example/announce/one")
+    try:
+        assert _begin_event_attempt(context, event) == (None, False)
+        first = await rt.handle_inbound_post(event, context)
+        _finish_event_processing(context, event.delivery_id, first.status, first.outcome, first.detail)
+        assert forums[100].create_thread.await_count == 1
+        assert forums[101].create_thread.await_count == 0
+
+        unavailable = False
+        # The terminal receipt must not prevent this authenticated retry from
+        # reaching the canonical per-forum claim boundary.
+        assert _begin_event_attempt(context, event) == (None, False)
+        second = await rt.handle_inbound_post(event, context)
+        _finish_event_processing(context, event.delivery_id, second.status, second.outcome, second.detail)
+        assert forums[100].create_thread.await_count == 1
+        assert forums[101].create_thread.await_count == 1
+    finally:
+        db.close()
+
+
+@pytest.mark.asyncio
+async def test_ready_failure_before_discord_rest_is_retryable(tmp_path: Path) -> None:
+    """Failure awaiting bot readiness must not create an unknown Discord attempt."""
+    db, rt, context, forums, _ = _setup(tmp_path, {100: (200, 300)})
+    initial_ready = context.bot.wait_until_bridge_ready
+
+    async def unavailable():
+        raise RuntimeError("bot not ready")
+
+    try:
+        context.bot.wait_until_bridge_ready = unavailable
+        await rt.handle_inbound_post(_event(), context)
+        assert forums[100].create_thread.await_count == 0
+        with db.session() as session:
+            claims = session.scalars(select(CommunityDiscordTargetClaim)).all()
+            assert len(claims) == 1
+            assert claims[0].status == "failed"
+        context.bot.wait_until_bridge_ready = initial_ready
+        await rt.handle_inbound_post(_event(activity="announce/2"), context)
+        assert forums[100].create_thread.await_count == 1
+    finally:
+        db.close()
+
+@pytest.mark.asyncio
+async def test_conflicting_same_wire_replay_does_not_poison_original_receipt(tmp_path: Path) -> None:
+    """An owner-spoofing replay cannot replace the first applied terminal receipt."""
+    from src.http_api import _begin_event_attempt, _finish_event_processing
+
+    db, rt, context, forums, _ = _setup(tmp_path, {100: (200, 300), 101: (201, 301)})
+    original_fetch = context.bot.fetch_forum_channel
+    unavailable = True
+
+    async def fetch(channel: int):
+        if channel == 101 and unavailable:
+            raise LookupError("no REST attempted")
+        return await original_fetch(channel)
+
+    context.bot.fetch_forum_channel = fetch
+    valid = _event(activity="https://remote.example/announce/replayed")
+    invalid = _event(activity=valid.delivery_id, owner="https://evil.example/user")
+    try:
+        assert _begin_event_attempt(context, valid) == (None, False)
+        first = await rt.handle_inbound_post(valid, context)
+        _finish_event_processing(context, valid.delivery_id, first.status, first.outcome, first.detail)
+        assert first.status == "processed"
+        assert _begin_event_attempt(context, invalid) == (None, False)
+        denied = await rt.handle_inbound_post(invalid, context)
+        assert denied.status == "skipped"
+        _finish_event_processing(context, invalid.delivery_id, denied.status, denied.outcome, denied.detail)
+        receipt = db.event_receipts.get_event_receipt(valid.delivery_id)
+        assert receipt.status == "processed" and receipt.outcome == "applied"
+        assert forums[101].create_thread.await_count == 0
+
+        unavailable = False
+        assert _begin_event_attempt(context, valid) == (None, False)
+        resumed = await rt.handle_inbound_post(valid, context)
+        _finish_event_processing(context, valid.delivery_id, resumed.status, resumed.outcome, resumed.detail)
+        assert forums[101].create_thread.await_count == 1
+        assert db.event_receipts.get_event_receipt(valid.delivery_id).outcome == "applied"
+    finally:
+        db.close()
+
+@pytest.mark.asyncio
+async def test_remote_replay_uses_first_create_text_for_missing_forum(tmp_path: Path) -> None:
+    """A late envelope may fill a forum but not replace the original root body."""
+    db, rt, context, forums, _ = _setup(tmp_path, {100: (200, 300), 101: (201, 301)})
+    original_fetch = context.bot.fetch_forum_channel
+    unavailable = True
+
+    async def fetch(channel: int):
+        if channel == 101 and unavailable:
+            raise LookupError("not ready before REST")
+        return await original_fetch(channel)
+
+    context.bot.fetch_forum_channel = fetch
+    try:
+        original = _event()
+        await rt.handle_inbound_post(original, context)
+        unavailable = False
+        changed = original.model_copy(update={
+            "delivery_id": "announce/2",
+            "object": original.object.model_copy(update={"title": "Altered title", "body_markdown": "Altered body"}),
+        })
+        await rt.handle_inbound_post(changed, context)
+        assert forums[101].create_thread.await_count == 1
+        call = forums[101].create_thread.await_args
+        assert "Altered" not in call.kwargs["name"]
+        assert "Altered" not in call.kwargs["content"]
+        assert "Content" in call.kwargs["content"]
+    finally:
+        db.close()
+
+
+@pytest.mark.asyncio
+async def test_remote_reply_replay_uses_first_create_text_for_missing_forum(tmp_path: Path) -> None:
+    """A later Note for the same comment may not change a newly placed reply."""
+    db, rt, context, _forums, threads = _setup(tmp_path, {100: (200, 300), 101: (201, 301)})
+    try:
+        await rt.handle_inbound_post(_event(), context)
+        comment = _event(kind="comment", activity="announce/reply-1", parent=ROOT)
+        threads[201].send.side_effect = LookupError("remote reply send failed before REST")
+        # A pre-REST failure is represented by the availability of the thread;
+        # make this forum temporarily unavailable to obtain a safe retry.
+        original_get = context.bot.get_thread_by_id
+        unavailable = True
+
+        async def get_thread(thread_id: int):
+            if thread_id == 201 and unavailable:
+                raise LookupError("not available before REST")
+            return await original_get(thread_id)
+
+        context.bot.get_thread_by_id = get_thread
+        await rt.handle_inbound_comment(comment, context)
+        unavailable = False
+        threads[201].send.side_effect = None
+        changed = comment.model_copy(update={
+            "delivery_id": "announce/reply-2",
+            "object": comment.object.model_copy(update={"body_markdown": "Altered reply"}),
+        })
+        await rt.handle_inbound_comment(changed, context)
+        assert threads[201].send.await_count == 1
+        content = threads[201].send.await_args.args[0]
+        assert "Altered" not in content
+        assert "Content" in content
+    finally:
+        db.close()
+
+@pytest.mark.asyncio
+async def test_legacy_remote_group_without_first_create_snapshot_refuses_new_forum(tmp_path: Path) -> None:
+    """An old reservation cannot infer original content from a later Announce."""
+    db, rt, context, forums, _ = _setup(tmp_path, {100: (200, 300), 101: (201, 301)})
+    available = False
+    original_fetch = context.bot.fetch_forum_channel
+
+    async def fetch(channel: int):
+        if channel == 101 and not available:
+            raise LookupError("pre-REST outage")
+        return await original_fetch(channel)
+
+    context.bot.fetch_forum_channel = fetch
+    try:
+        await rt.handle_inbound_post(_event(), context)
+        with db.immediate_session() as session:
+            group = session.scalar(select(CommunityThreadGroup).where(
+                CommunityThreadGroup.community_actor_id == GROUP_A,
+                CommunityThreadGroup.ap_object_id == ROOT,
+            ))
+            assert group is not None
+            # Simulate a pre-fix legacy row whose initial Create content was
+            # never captured. A replay's changed body cannot recover proof.
+            group.inbound_create_snapshot_json = None
+        available = True
+        result = await rt.handle_inbound_post(_event(activity="announce/later"), context)
+        assert result.status == "skipped"
+        assert forums[100].create_thread.await_count == 1
+        assert forums[101].create_thread.await_count == 0
+    finally:
+        db.close()

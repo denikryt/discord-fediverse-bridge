@@ -94,6 +94,9 @@ export interface PublishedActivityObjectRow {
   title: string | null;
   bodyMarkdown: string;
   inReplyToObjectId: string | null;
+  /** Original serialized Create evidence, never inferred from mutable Follow. */
+  originalObjectType?: "Note" | "Page" | null;
+  originalObjectContext?: string | null;
   publishedAt: string;
   discordGuildId: number | null;
   discordChannelId: number | null;
@@ -436,11 +439,21 @@ function mapPublishedObject(row: Record<string, unknown>): PublishedActivityObje
     title: nullableString(row, "title"),
     bodyMarkdown: requiredString(row, "body_markdown"),
     inReplyToObjectId: nullableString(row, "in_reply_to_object_id"),
+    originalObjectType: originalPublishedType(row),
+    originalObjectContext: nullableString(row, "original_object_context"),
     publishedAt: requiredString(row, "published_at"),
     discordGuildId: nullableNumber(row, "discord_guild_id"),
     discordChannelId: nullableNumber(row, "discord_channel_id"),
     discordMessageId: nullableNumber(row, "discord_message_id"),
   };
+}
+
+/** Reject unknown persisted Create object types instead of guessing Page. */
+function originalPublishedType(row: Record<string, unknown>): "Note" | "Page" | null {
+  const value = row.original_object_type;
+  if (value == null) return null;
+  if (value !== "Note" && value !== "Page") throw new Error("Invalid original Create object type");
+  return value;
 }
 
 function mapCommunity(row: Record<string, unknown>): LocalCommunityRow {

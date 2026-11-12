@@ -76,6 +76,10 @@ assert.equal(updated.objectId, root);
 assert.equal((updated.activityJson.object as Record<string, unknown>).type, "Note");
 assert.equal((updated.activityJson.object as Record<string, unknown>).context, root);
 assert.equal((updated.activityJson.object as Record<string, unknown>).audience, updateRequest.communityActorUrl);
+await assert.rejects(
+  () => updateContent(noNetwork as never, config, {...updateRequest, renderOnly: false}),
+  /NodeBB Update requires durable render-only delivery/,
+);
 
 const deleteRequest = {
   ...buildRequest("content_delete", null), publicationContext: "community" as const,

@@ -426,7 +426,12 @@ channel binding and Group/inbox policy for direct transport, including authors
 with no User Actor followers. A follower at the same endpoint does not override
 Group revocation; shared endpoints are sent at most once. A timeout after a
 possible send persists `unknown` without automatic retry or a new Create ID.
-The older follower-only delivery retry contract remains unchanged. The persistent Group delivery and local fanout implementation is present;
+The older follower-only delivery retry contract remains unchanged. Public
+object GET and outbox reconstruct the original Create's `Note`/`Page` type and
+NodeBB conversation `context` from the durable outbox source, not from mutable
+Follow discovery. Direct NodeBB Update carries this same verified `context` in
+its persisted signed JSON.
+The persistent Group delivery and local fanout implementation is present;
 release acceptance still requires the full dependency-backed integration tests.
 
 ## Direct Group mutations after queued Create (CP17)

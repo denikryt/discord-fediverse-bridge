@@ -290,3 +290,80 @@ async def test_followers_and_direct_group_share_one_target_delivery(tmp_path):
     assert result.status == "queued"
     with db.session() as session:
         assert len(list(session.scalars(select(UserActorOutboundDelivery)))) == 1
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("profile,expected_type", [
+    ("nodebb", "Note"), ("threadiverse", "Page"), ("bridge", "Page"),
+])
+async def test_dereference_uses_original_create_type_and_context(tmp_path, profile, expected_type):
+    """A public GET must reconstruct the stored Create, not guess by post kind."""
+    db = setup_database(tmp_path, profile=profile)
+    try:
+        service, _gateway, _wake, thread, starter, _ = setup_action(db)
+        result = await service.publish_thread_starter(thread=thread, starter_message=starter)
+        published = db.activitypub_objects.get_published_activity_object_by_object_id(result.object_id)
+        assert published is not None
+        object_type, context = db.activitypub_objects.get_original_create_object_shape(published)
+        assert object_type == expected_type
+        if profile == "nodebb":
+            assert context == result.object_id
+        else:
+            assert context is None
+    finally:
+        db.close()
+
+
+@pytest.mark.asyncio
+async def test_dereference_rejects_source_with_different_object_identity(tmp_path):
+    """A corrupted source cannot silently change the published AP object type."""
+    db = setup_database(tmp_path)
+    try:
+        service, _gateway, _wake, thread, starter, _ = setup_action(db)
+        result = await service.publish_thread_starter(thread=thread, starter_message=starter)
+        with db.immediate_session() as session:
+            source = session.scalar(select(UserActorOutboundSource))
+            activity = json.loads(source.activity_json)
+            activity["object"]["id"] = "https://different.example/object"
+            source.activity_json = json.dumps(activity)
+        published = db.activitypub_objects.get_published_activity_object_by_object_id(result.object_id)
+        with pytest.raises(ValueError, match="Create identity conflicts"):
+            db.activitypub_objects.get_original_create_object_shape(published)
+    finally:
+        db.close()
+
+@pytest.mark.asyncio
+async def test_internal_public_object_and_outbox_share_nodebb_create_shape(tmp_path):
+    """Private read HTTP exposes the stored Note/context to both public routes."""
+    from fastapi import FastAPI
+    from fastapi.testclient import TestClient
+    from src.internal_fedify_api import create_internal_fedify_router
+
+    db = setup_database(tmp_path)
+    try:
+        service, _gateway, _wake, thread, starter, _ = setup_action(db)
+        result = await service.publish_thread_starter(thread=thread, starter_message=starter)
+        runtime = SimpleNamespace(
+            database=db,
+            settings=SimpleNamespace(fedify_shared_secret="test-secret"),
+        )
+        app = FastAPI()
+        app.include_router(create_internal_fedify_router(runtime))
+        client = TestClient(app)
+        headers = {"Authorization": "Bearer test-secret"}
+        resolved = client.post(
+            "/internal/fedify/published-objects/resolve",
+            json={"object_id": result.object_id}, headers=headers,
+        )
+        assert resolved.status_code == 200
+        assert resolved.json()["original_object_type"] == "Note"
+        assert resolved.json()["original_object_context"] == result.object_id
+        outbox = client.get(
+            "/internal/fedify/actors/users/alice/outbox?page=1&page_size=40",
+            headers=headers,
+        )
+        assert outbox.status_code == 200
+        item = outbox.json()["items"][0]
+        assert item["original_object_type"] == "Note"
+        assert item["original_object_context"] == result.object_id
+    finally:
+        db.close()

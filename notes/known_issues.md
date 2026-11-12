@@ -91,3 +91,9 @@ Inbound personal-feed comments are retained even when the active binding is remo
   correctly fail strict admission against this revision. Do not apply this
   snapshot amendment in place to such a database; if any CP24 candidate was
   deployed, it requires a separately planned versioned migration instead.
+
+## Post-bundle B6 review (2026-11-13)
+
+- Release gate open: external clean-checkout review reported 1040 passed, 217 failed, 6 errors and 1 xfailed on the feature, versus 988 passed and 6 failed on `main`. Direct NodeBB/Fedify/Discord E2E remains unverified; do not describe CP24 as accepted.
+- Corrected in the follow-up review patch: public NodeBB object GET/outbox now read original Create type/context, NodeBB Update JSON preserves the verified conversation root, and a valid same-wire remote Group Create retry can pass a terminal receipt to complete provably unsent Discord forums. Errors before the Discord REST call remain `failed`; unknown network outcomes still block blind resend. The first verified remote Group Create object JSON is now saved with the canonical root/reply before REST: later valid Announce deliveries can complete missing forums but cannot change the original Discord title/body. Previously stored remote groups without this proof fail closed for additional placements.
+- Legacy partial-schema tests are not valid v0 inputs to the strict migration runner. The inbound receipt fixture was updated to the actual tagged `v0.1.0` schema; the remaining full suite regressions still need classification on genuine supported v0/v1 fixtures. Node TypeScript/Fedify runtime tests are not executable in this environment without the project dependencies; no gateway runtime pass is asserted.
