@@ -119,6 +119,26 @@ class BridgeActorFollowRepository(BaseRepository):
             ChannelCommunitySubscription.discord_channel_id == discord_channel_id
         ))
         if previous_channel is not None:
+            if (
+                previous_channel.status == "pending"
+                and previous_channel.lemmy_community_actor_id == community_actor_id
+            ):
+                # A confirmed pre-network failure released this same durable
+                # generation to `prepared`. The existing channel binding is
+                # retained; do not insert a duplicate or allocate a new ID.
+                retry_follow = session.scalar(select(BridgeActorFollow).where(
+                    BridgeActorFollow.community_actor_id == community_actor_id,
+                ))
+                if (
+                    retry_follow is not None
+                    and retry_follow.follow_dispatch_state == "prepared"
+                    and retry_follow.status == "pending"
+                    and not retry_follow.cancel_requested
+                    and retry_follow.follow_activity_id == previous_channel.follow_activity_id
+                    and retry_follow.community_inbox_url == previous_channel.community_inbox_url
+                    and remote_software_profile in ("unknown", retry_follow.remote_software_profile)
+                ):
+                    return retry_follow, True
             if previous_channel.status != "failed":
                 raise FollowReservationConflict("channel already has an active or pending subscription")
             session.delete(previous_channel)
@@ -320,6 +340,39 @@ class BridgeActorFollowRepository(BaseRepository):
                 .values(follow_dispatch_state="sending", updated_at=utcnow())
             )
             return result.rowcount == 1
+
+    def reset_unsent_follow(self, follow_id: int) -> bool:
+        """Release a claimed Follow only after the gateway proves no HTTP send.
+
+        A same-ID retry is then possible from the existing pending channel.
+        If a last-channel unsubscribe raced the sender, delete the never-sent
+        generation instead of leaving a permanent cancellation tombstone.
+        """
+        with self.session() as session:
+            # A write-first compare-and-swap serializes with unsubscribe and
+            # the sender's completion. It must never modify a sent/accepted row.
+            claimed = session.execute(update(BridgeActorFollow).where(
+                BridgeActorFollow.id == follow_id,
+                BridgeActorFollow.follow_dispatch_state == "sending",
+                BridgeActorFollow.status == "pending",
+            ).values(updated_at=utcnow()))
+            if claimed.rowcount != 1:
+                return False
+            follow = session.get(BridgeActorFollow, follow_id)
+            has_binding = session.scalar(select(ChannelCommunitySubscription.id).where(
+                ChannelCommunitySubscription.lemmy_community_actor_id == follow.community_actor_id,
+                ChannelCommunitySubscription.follow_activity_id == follow.follow_activity_id,
+            ).limit(1)) is not None
+            if follow.cancel_requested and not has_binding:
+                # No transport ever started, so Undo is neither needed nor
+                # safe. The exact original Follow has been cancelled locally.
+                session.delete(follow)
+                return True
+            if follow.cancel_requested or not has_binding:
+                session.rollback()
+                return False
+            follow.follow_dispatch_state = "prepared"
+            return True
 
     def complete_prepared_follow(self, follow_id: int) -> bool:
         """Record proven transport completion without undoing a fast Accept."""

@@ -264,3 +264,20 @@ def test_nodebb_requires_explicit_accept_but_verified_threadiverse_can_implicit(
         assert db.bridge_actor_follows.accept_implicit_threadiverse_follow(_GROUP) == []
     finally:
         db.close()
+
+
+def test_pre_network_failure_releases_only_original_sending_claim(tmp_path: Path) -> None:
+    """Recovery needs a matching CAS and must not overwrite a sent generation."""
+    db = _db(tmp_path)
+    try:
+        follow_id, _ = _reserve(db, 10)
+        assert db.bridge_actor_follows.claim_prepared_follow(follow_id)
+        assert db.bridge_actor_follows.reset_unsent_follow(follow_id)
+        assert not db.bridge_actor_follows.reset_unsent_follow(follow_id)
+        assert db.bridge_actor_follows.claim_prepared_follow(follow_id)
+        assert db.bridge_actor_follows.complete_prepared_follow(follow_id)
+        assert not db.bridge_actor_follows.reset_unsent_follow(follow_id)
+        row = db.bridge_actor_follows.get_bridge_actor_follow(_GROUP)
+        assert row.follow_dispatch_state == "sent"
+    finally:
+        db.close()

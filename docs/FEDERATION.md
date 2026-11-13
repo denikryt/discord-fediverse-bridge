@@ -183,6 +183,14 @@ immutable outbound Follow activity ID, software profile, and the first Discord
 channel binding in one SQLite transaction **before** invoking the Fedify
 sender. A second channel reuses that generation; the sender uses a durable
 `prepared → sending → sent` claim so only one command sends the reserved ID.
+For **Follow only**, the gateway uses Fedify `sendActivity(..., { immediate: true })`
+and bypasses its in-process outbox queue: `sent` now means the remote inbox
+returned an HTTP success for that Follow, **not** that the remote Group
+accepted the subscription. An explicit signed `Accept` remains required for
+NodeBB; other outbound federation messages may still use the normal Fedify
+queue. The Follow identity and target are durable in SQLite before this
+synchronous send, so no queue task can vanish on gateway restart after Python
+mistakenly marks it `sent`.
 A signed `Accept(Follow)` must identify that exact activity and originate from
 its original Group; an early Accept is not reverted by a later HTTP result.
 Only a confirmed `threadiverse` profile may be implicitly accepted on inbound
@@ -190,14 +198,24 @@ content. NodeBB and `unknown` require explicit signed Accept. Both the
 prepared and bootstrap Follow sender pass Fedify the service **identifier**
 (`services/bridge`, not the public WebFinger username `bridge`) so Fedify uses
 the persisted service key without running the handle mapper. Sender-lookup
-failures are logged by the gateway and Python with the original Follow ID and
-reported to Discord as `follow_sender_resolution_failed` rather than
-misrepresenting an untransmitted Follow as awaiting NodeBB Accept.
-A previously retained `sending` Follow is not resent automatically after a
-binary upgrade: its remote delivery must be verified before an operator can
-safely clear or retry the original generation. A possible
-network send with no response remains `sending`/pending with the same ID and
-must not be retried as a new Follow. The last Discord channel unsubscribes
+failures are logged by the gateway and Python with the original Follow ID.
+The gateway performs an explicit Service-key check **before remote HTTP** and
+returns HTTP 422 with `code=follow_sender_unavailable` and `dispatched=false`
+if that check fails. Only this authenticated structured result is proof of a
+non-dispatched Follow: Python atomically releases `sending → prepared`, retains
+the original Follow ID and channel binding, and reports
+`follow_sender_resolution_failed`. After correcting the key/configuration, a
+moderator can invoke `/subscribe-community` again for the **same channel and
+Group**. The command CAS-claims and sends the original Follow instead of
+allocating a new ID. If the last channel was cancelled in the meantime, the
+pre-HTTP failure removes the never-sent generation without an Undo. A generic
+HTTP 500, even one containing `No actor found`, is **not** accepted as proof
+by text matching. A possible network send with no response remains
+`sending`/pending and must not be retried blindly. `prepared` is durable across
+restart; stale `sending` from previous versions is **not** reclassified just
+because the gateway was upgraded. This release does not add a background
+Follow retry scheduler: retries of proved local failures are on demand.
+ The last Discord channel unsubscribes
 under the same SQLite writer boundary: an unclaimed `prepared` Follow is
 cancelled without HTTP; a `sending` Follow retains `cancel_requested` until
 the original sender has a confirmed result; a proven `sent` Follow can claim
@@ -206,6 +224,49 @@ inbox. The Undo ID is derived deterministically from the original Follow ID.
 A resubscribe before Undo begins atomically reuses the original generation;
 `undo_sending` is not reactivated on restart. Neither a pending Follow nor an
 unresolved Undo proves the remote Group accepted or removed the subscription.
+
+### Recovery of a pre-upgrade Follow stuck in `sending`
+
+A `sending` Follow recorded by an older gateway can represent a local
+pre-network failure **or** an HTTP request with unknown outcome. Installing a
+new binary does not distinguish these cases. If the original gateway log and
+corresponding Follow ID prove the failure was strictly before any remote HTTP
+(e.g. the old `No actor found for the given username "services/bridge"` from
+Fedify sender resolution), an operator may restore **that exact generation** to
+`prepared`. Otherwise leave it unresolved and verify state with the remote
+administrator; lack of an `Accept` alone is not proof of non-delivery.
+
+Stop all bridge processes and restart supervisors, create and restore-validate
+an offline SQLite+media backup, and verify the exact stored Group URL, Follow
+ID, pending channel binding and original gateway evidence. With the old
+process stopped, substitute the **verified** actor and Follow ID below and run
+in SQLite:
+
+```sql
+BEGIN IMMEDIATE;
+UPDATE bridge_actor_follows
+SET follow_dispatch_state = 'prepared'
+WHERE community_actor_id = 'https://nodebb.example/category/42'
+  AND follow_activity_id = 'https://bridge.example/actors/services/bridge/activities/follow/EXACT'
+  AND follow_dispatch_state = 'sending'
+  AND status = 'pending'
+  AND cancel_requested = 0
+  AND EXISTS (
+    SELECT 1 FROM channel_community_subscriptions AS c
+    WHERE c.lemmy_community_actor_id = bridge_actor_follows.community_actor_id
+      AND c.follow_activity_id = bridge_actor_follows.follow_activity_id
+      AND c.status = 'pending'
+  );
+SELECT changes();
+-- COMMIT only if changes() = 1 and all preconditions/evidence were verified;
+-- otherwise ROLLBACK. Do not run if remote HTTP may have been attempted.
+```
+
+After committing and restarting, repeat `/subscribe-community` in the
+existing pending Discord channel. It will reuse the original ID and the
+saved target; a fresh remote `Accept` still governs activation. This is an
+exceptional offline repair of a **proven** local failure, not a general retry
+procedure for timeouts or an unresolved `Undo`.
 
 ### Exceptional offline recovery for an unresolved remote Undo
 

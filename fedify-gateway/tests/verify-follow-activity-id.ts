@@ -47,8 +47,10 @@ async function main(): Promise<void> {
             sender: { identifier?: string },
             recipient: { id: URL; inboxId: URL },
             activity: { id?: URL },
+            options?: { immediate?: boolean },
           ): Promise<void> {
             assert.equal(sender.identifier, "services/bridge");
+            assert.equal(options?.immediate, true);
             sentActivities.push({
               recipients: [{ id: recipient.id.href, inboxId: recipient.inboxId.href }],
               activity,

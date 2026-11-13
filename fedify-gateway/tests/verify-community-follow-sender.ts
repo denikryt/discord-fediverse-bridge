@@ -3,15 +3,16 @@
  *
  * A test-only sendActivity stub cannot expose username-to-identifier lookup.
  * This scenario uses a real Fedify context, the same typed mapping/key
- * dispatchers as the gateway, stored service keys, and immediate HTTP
- * delivery. Only the remote Group HTTP endpoint is replaced by a fake.
+ * dispatchers as the gateway, stored service keys, and a production-style
+ * volatile outbox queue. Follow must bypass that queue and perform HTTP
+ * delivery synchronously. Only the remote Group HTTP endpoint is faked.
  */
 import assert from "node:assert/strict";
 import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 
-import { createFederation, exportJwk, MemoryKvStore } from "@fedify/fedify";
+import { createFederation, exportJwk, InProcessMessageQueue, MemoryKvStore } from "@fedify/fedify";
 import { Application, Follow } from "@fedify/vocab";
 
 import { buildServiceFollowActivityId } from "../src/activitypub-identity-urls.js";
@@ -54,10 +55,16 @@ async function main(): Promise<void> {
       port: 3000,
       logLevel: "info",
     };
-    // No queue: the test must observe the real signed HTTP POST rather than
-    // interpreting admission to an in-memory queue as successful delivery.
+    // The production Gateway enables an in-memory outbox queue. This fixture
+    // must do the same so a forgotten { immediate: true } cannot pass merely
+    // because the test accidentally forced synchronous delivery.
+    const outboxQueue = new InProcessMessageQueue();
     const federation = createFederation<GatewayConfig>({
       origin: ORIGIN, kv: new MemoryKvStore(),
+      queue: { outbox: outboxQueue, fanout: outboxQueue },
+      // The queue is deliberately not started. Immediate Follow must reach
+      // HTTP even when the ordinary outbox worker cannot process messages.
+      manuallyStartQueue: true,
     });
     federation
       .setActorDispatcher("/actors/{+identifier}", (ctx, identifier) =>
@@ -110,6 +117,20 @@ async function main(): Promise<void> {
     });
     assert.equal(deliveries.length, 1, "prepared Follow must reach remote HTTP");
     assert.equal(deliveries[0]?.id, reservedId);
+
+    // A missing local Service signing key is proven before any external
+    // network request. This is the only gateway failure classified as safe
+    // for resetting the original SQLite sending attempt.
+    const absentConfig = { ...config, actorIdentifier: "absent" };
+    await assert.rejects(
+      () => sendPreparedCommunityFollow(federation, absentConfig, {
+        communityActorUrl: GROUP,
+        communityInboxUrl: INBOX,
+        followActivityId: buildServiceFollowActivityId(ORIGIN, "absent", "no-key").href,
+      }),
+      { name: "FollowSenderUnavailableError" },
+    );
+    assert.equal(deliveries.length, 1);
 
     // The operational bootstrap path must use the same service identifier.
     const bootstrap = await followCommunity(federation, config, GROUP);

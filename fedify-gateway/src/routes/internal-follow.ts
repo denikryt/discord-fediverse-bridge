@@ -18,6 +18,7 @@ import {
 } from "../federation-outbound.js";
 import type { AcceptLocalCommunityFollowRequest, AcceptUserActorFollowRequest } from "../types.js";
 import { hasValidInternalAuthorization } from "./internal-auth.js";
+import { FollowSenderUnavailableError } from "../outbound/community-follow.js";
 
 export interface InternalFollowRouteDependencies {
   config: GatewayConfig;
@@ -69,12 +70,18 @@ export function registerInternalFollowRoutes(
     } catch (error) {
       // Report the failure at the gateway boundary. A 500 does not prove that
       // a potentially started network delivery was rejected by the remote Group.
+      const localFailure = error instanceof FollowSenderUnavailableError;
       const reason = error instanceof Error ? error.message : "Follow send failed";
       console.error("[Follow] Prepared Follow dispatch failed", {
         communityActorUrl: payload.communityActorUrl,
         followActivityId: payload.followActivityId,
         error: reason,
       });
+      if (localFailure) {
+        // A structured admission failure is the only way Python may release
+        // the existing sending claim for a safe on-demand same-ID retry.
+        return context.json({ error: reason, code: "follow_sender_unavailable", dispatched: false }, { status: 422 });
+      }
       return context.json({ error: reason }, { status: 500 });
     }
   });

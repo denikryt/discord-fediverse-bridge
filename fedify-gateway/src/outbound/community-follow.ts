@@ -17,6 +17,14 @@ import { renderPublicActivityJson } from "./activity-json.js";
 import { fetchRemoteCommunity } from "./remote-actor.js";
 import { sendSignedJsonActivity, shouldLogSignedJsonDelivery } from "./signed-json-delivery.js";
 
+/** Identifies a locally proven failure before any remote HTTP Follow is attempted. */
+export class FollowSenderUnavailableError extends Error {
+  constructor() {
+    super("Bridge service signing key unavailable");
+    this.name = "FollowSenderUnavailableError";
+  }
+}
+
 export interface FollowCommunityResult {
   communityActorUrl: string;
   communityInboxUrl: string;
@@ -64,6 +72,16 @@ export async function sendPreparedCommunityFollow(
   }
   const ctx = federation.createContext(new URL(config.fedifyOrigin), config);
   const actorTail = `services/${config.actorIdentifier}`;
+  // Resolve the configured Service key before invoking Fedify. This is the
+  // only failure we can prove happened before remote HTTP delivery and thus
+  // safely unlock for retry with the same durable Follow ID.
+  try {
+    if (await loadActorKeyPair(config, actorTail) == null) {
+      throw new FollowSenderUnavailableError();
+    }
+  } catch {
+    throw new FollowSenderUnavailableError();
+  }
   const follow = new Follow({
     id: followId,
     actor: ctx.getActorUri(actorTail),
@@ -76,6 +94,9 @@ export async function sendPreparedCommunityFollow(
     { identifier: actorTail },
     { id: actor, inboxId: inbox },
     follow,
+    // Follow is already durable in Python. Bypass Fedify's volatile outbox
+    // queue so a successful return means HTTP delivery, not queue admission.
+    { immediate: true },
   );
 }
 
@@ -131,6 +152,8 @@ export async function followCommunity(
     { identifier: serviceActorTail },
     { id: new URL(communityId), inboxId: new URL(inboxUrl) },
     follow,
+    // Operational bootstrap uses the same synchronous HTTP semantics.
+    { immediate: true },
   );
 
   console.log("[Follow] Successfully sent Follow activity");

@@ -261,14 +261,13 @@ async def test_subscribe_operation_marks_failed_when_follow_dispatch_fails(tmp_p
 
 
 @pytest.mark.asyncio
-async def test_follow_actor_resolution_failure_is_logged_without_losing_generation(
+async def test_unstructured_gateway_sender_error_remains_ambiguous(
     tmp_path: Path, caplog: pytest.LogCaptureFixture,
 ) -> None:
-    """A gateway sender-lookup error is visible; the committed Follow is not replaced.
+    """An unstructured HTTP 500 cannot prove absence of an external send.
 
-    The internal gateway returns the real Fedify failure. Since generic HTTP
-    failures are potentially ambiguous, this operation keeps the original
-    Follow ID and its pending binding rather than allocating a second Follow.
+    Even the words 'No actor found' in an arbitrary HTTP error are not a
+    substitute for a gateway-proven pre-network failure code.
     """
     db, actor, gateway, policy = _live_setup(tmp_path)
     request = httpx.Request("POST", "http://gateway.test/send-prepared-community-follow")
@@ -282,8 +281,7 @@ async def test_follow_actor_resolution_failure_is_logged_without_losing_generati
     )
     try:
         result = await _run_live(db, actor, gateway, policy)
-        assert not result.applied and result.reason == "follow_sender_resolution_failed"
-        assert "Follow was not dispatched" in result.message
+        assert result.applied and result.reason == "pending_remote_confirmation"
         assert 'No actor found for the given username "services/bridge".' in caplog.text
         follow = db.bridge_actor_follows.get_bridge_actor_follow(actor)
         assert follow.follow_dispatch_state == "sending"
@@ -333,3 +331,103 @@ async def test_subscribe_preparation_failure_leaves_no_relationship(tmp_path: Pa
         gateway.send_prepared_community_follow.assert_not_awaited()
     finally:
         db.close()
+
+@pytest.mark.asyncio
+async def test_confirmed_unsent_follow_can_retry_same_generation_from_same_channel(tmp_path: Path) -> None:
+    """A local sender failure is retried on demand, never with a new Follow ID."""
+    from src.fedify_gateway_client import FollowNotDispatchedError
+
+    db, actor, gateway, policy = _live_setup(tmp_path)
+    gateway.send_prepared_community_follow.side_effect = FollowNotDispatchedError(
+        "local service signing key unavailable"
+    )
+    try:
+        first = await _run_live(db, actor, gateway, policy)
+        assert first.reason == "follow_sender_resolution_failed" and not first.applied
+        initial = db.bridge_actor_follows.get_bridge_actor_follow(actor)
+        assert initial.follow_dispatch_state == "prepared"
+        first_id = initial.follow_activity_id
+        assert db.remote_subscriptions.get_subscription_by_channel(123).status == "pending"
+
+        # A subsequent invocation of the same Discord command claims the
+        # already-persisted generation instead of reserving another one.
+        gateway.send_prepared_community_follow.side_effect = None
+        second = await _run_live(db, actor, gateway, policy)
+        assert second.applied and second.reason == "pending_remote_confirmation"
+        row = db.bridge_actor_follows.get_bridge_actor_follow(actor)
+        assert row.follow_activity_id == first_id
+        assert row.follow_dispatch_state == "sent"
+        assert gateway.prepare_community_follow.await_count == 1
+        assert gateway.send_prepared_community_follow.await_count == 2
+        with db.session() as session:
+            assert len(session.scalars(select(BridgeActorFollow)).all()) == 1
+            assert len(session.scalars(select(ChannelCommunitySubscription)).all()) == 1
+    finally:
+        db.close()
+
+
+@pytest.mark.asyncio
+async def test_ambiguous_timeout_never_unlocks_same_channel_retry(tmp_path: Path) -> None:
+    """An HTTP request whose outcome is unknown cannot be resent on demand."""
+    db, actor, gateway, policy = _live_setup(tmp_path)
+    gateway.send_prepared_community_follow.side_effect = TimeoutError("after send")
+    try:
+        first = await _run_live(db, actor, gateway, policy)
+        assert first.reason == "pending_remote_confirmation"
+        second = await _run_live(db, actor, gateway, policy)
+        assert second.reason == "channel_subscription_already_pending"
+        assert gateway.send_prepared_community_follow.await_count == 1
+        assert db.bridge_actor_follows.get_bridge_actor_follow(actor).follow_dispatch_state == "sending"
+    finally:
+        db.close()
+
+
+@pytest.mark.asyncio
+async def test_confirmed_unsent_follow_racing_last_unsubscribe_cleans_up_without_undo(tmp_path: Path) -> None:
+    """A preflight failure after cancellation cannot leave an unresolvable sending row."""
+    from src.fedify_gateway_client import FollowNotDispatchedError
+
+    db, actor, gateway, policy = _live_setup(tmp_path)
+    async def fail_after_unsubscribe(prepared):
+        outcome = db.bridge_actor_follows.cancel_channel_binding(123)
+        assert outcome.outcome == "await_follow_send"
+        raise FollowNotDispatchedError("local service signing key unavailable")
+
+    gateway.send_prepared_community_follow.side_effect = fail_after_unsubscribe
+    try:
+        result = await _run_live(db, actor, gateway, policy)
+        assert result.reason == "follow_cancelled_during_dispatch"
+        assert db.remote_subscriptions.get_subscription_by_channel(123) is None
+        assert db.bridge_actor_follows.get_bridge_actor_follow(actor) is None
+        gateway.unfollow_community.assert_not_awaited()
+    finally:
+        db.close()
+
+
+@pytest.mark.asyncio
+async def test_safe_same_id_follow_retry_survives_sqlite_restart(tmp_path: Path) -> None:
+    """A confirmed unsent Follow remains prepared across a real DB reopen."""
+    from src.fedify_gateway_client import FollowNotDispatchedError
+
+    db, actor, gateway, policy = _live_setup(tmp_path)
+    gateway.send_prepared_community_follow.side_effect = FollowNotDispatchedError("no key")
+    first = await _run_live(db, actor, gateway, policy)
+    assert first.reason == "follow_sender_resolution_failed"
+    stored_id = db.bridge_actor_follows.get_bridge_actor_follow(actor).follow_activity_id
+    db.close()
+
+    reopened = Database(f"sqlite:///{tmp_path / 'follow.db'}")
+    reopened.migrate()
+    reopened.users.get_user_by_discord_user_id = Mock(return_value=SimpleNamespace(id=1))
+    retry_gateway = AsyncMock()
+    retry_policy = BridgePolicyService(
+        settings=SimpleNamespace(), repository=reopened.bridge_policy_entries,
+    )
+    try:
+        second = await _run_live(reopened, actor, retry_gateway, retry_policy)
+        assert second.applied and second.reason == "pending_remote_confirmation"
+        assert reopened.bridge_actor_follows.get_bridge_actor_follow(actor).follow_activity_id == stored_id
+        retry_gateway.prepare_community_follow.assert_not_awaited()
+        retry_gateway.send_prepared_community_follow.assert_awaited_once()
+    finally:
+        reopened.close()

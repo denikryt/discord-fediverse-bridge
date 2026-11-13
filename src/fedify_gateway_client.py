@@ -9,6 +9,10 @@ import httpx
 from .config import Settings
 
 
+class FollowNotDispatchedError(RuntimeError):
+    """Gateway proved a local Follow signing failure occurred before HTTP send."""
+
+
 @dataclass(slots=True)
 class FollowCommunityResult:
     # The follow result captures the exact remote metadata that must be stored
@@ -315,6 +319,19 @@ class FedifyGatewayClient:
                 "followActivityId": prepared.follow_activity_id,
             },
         )
+        # Only a structured authenticated gateway response can assert no
+        # remote HTTP attempt began. Generic HTTP 4xx/5xx and timeouts are
+        # ambiguous and must retain the claimed Follow generation.
+        if response.status_code == 422:
+            try:
+                failure = response.json()
+            except ValueError:
+                failure = None
+            if isinstance(failure, dict) and (
+                failure.get("code") == "follow_sender_unavailable"
+                and failure.get("dispatched") is False
+            ):
+                raise FollowNotDispatchedError("Bridge service signing key unavailable")
         response.raise_for_status()
 
     async def follow_community(self, community_actor_url: str) -> FollowCommunityResult:

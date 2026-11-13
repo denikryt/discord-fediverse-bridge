@@ -24,7 +24,7 @@ from .common_preconditions import DISCORD_USER_REGISTERED
 
 from ..bridge_policy import BridgePolicyService
 from ..db import Database
-from ..fedify_gateway_client import FedifyGatewayClient, FollowCommunityResult
+from ..fedify_gateway_client import FedifyGatewayClient, FollowCommunityResult, FollowNotDispatchedError
 from ..db.repositories.bridge_actor_follows import BridgeActorFollowRepository, FollowReservationConflict
 
 logger = logging.getLogger(__name__)
@@ -182,8 +182,22 @@ def _has_no_accepted_channel_subscription(operation_input: SubscribeInput) -> bo
 
 
 def _has_no_pending_channel_subscription(operation_input: SubscribeInput) -> bool:
-    """Return whether the channel lacks an already pending subscription."""
-    return _channel_sub_status(operation_input) != "pending"
+    """Allow retry only when the original Follow is proven not dispatched."""
+    if _channel_sub_status(operation_input) != "pending":
+        return True
+    binding = operation_input.get_existing_subscription()
+    if getattr(binding, "lemmy_community_actor_id", None) != operation_input.actor_id:
+        return False
+    follow = operation_input.get_bridge_actor_follow()
+    # This is only a fast precondition; reservation rechecks everything under
+    # the SQLite writer lock, including the binding's exact Follow generation.
+    return bool(
+        follow is not None
+        and follow.follow_dispatch_state == "prepared"
+        and follow.status == "pending"
+        and not follow.cancel_requested
+        and follow.follow_activity_id == getattr(binding, "follow_activity_id", None)
+    )
 
 
 async def _body(operation_input: SubscribeInput) -> OperationResult:
@@ -287,8 +301,36 @@ async def _body(operation_input: SubscribeInput) -> OperationResult:
         try:
             await operation_input.fedify_gateway.send_prepared_community_follow(committed)
         except Exception as error:
-            # A failed sender lookup is observable, but generic gateway/HTTP
-            # errors do not prove that the remote Group never received Follow.
+            # Only an explicit gateway attestation of a pre-network failure
+            # releases the original attempt; response loss remains ambiguous.
+            if isinstance(error, FollowNotDispatchedError):
+                operation_input.database.bridge_actor_follows.reset_unsent_follow(follow_id)
+                current_binding = operation_input.database.remote_subscriptions.get_subscription_by_channel(
+                    operation_input.channel_id
+                )
+                current_follow = operation_input.database.bridge_actor_follows.get_bridge_actor_follow(
+                    committed.community_actor_url
+                )
+                if current_binding is None or current_follow is None or current_follow.cancel_requested:
+                    return OperationResult(
+                        applied=False, reason="follow_cancelled_during_dispatch",
+                        message="Channel unsubscribed during the unsuccessful Follow attempt; no Follow was sent.",
+                    )
+                if current_follow.follow_dispatch_state == "prepared":
+                    logger.warning(
+                        "Follow sender unavailable before HTTP: group=%s follow_id=%s; safe same-ID retry prepared",
+                        committed.community_actor_url, committed.follow_activity_id,
+                    )
+                    return OperationResult(
+                        applied=False, reason="follow_sender_resolution_failed",
+                        message=("Bridge service signing key unavailable; Follow was not dispatched. "
+                                 "Retry /subscribe-community on this channel after fixing the sender. "
+                                 "The original Follow ID is preserved."),
+                    )
+                # A concurrent accepted or completed generation must not be
+                # downgraded merely because this caller received an error.
+            # Generic gateway/HTTP errors do not prove the remote Group did
+            # not receive Follow, even if their message contains 'No actor'.
             failure_detail = _follow_dispatch_error_summary(error)
             logger.error(
                 "Prepared Follow dispatch unresolved: group=%s follow_id=%s reason=%s; "
@@ -315,16 +357,6 @@ async def _body(operation_input: SubscribeInput) -> OperationResult:
                     applied=False, reason="follow_cancelled_during_dispatch",
                     message=("The channel unsubscribed while Follow delivery was unresolved. "
                              "The original Follow generation is retained for guarded cleanup."),
-                )
-            if failure_detail.startswith("No actor found for the given "):
-                # Fedify resolved no local signing actor, before any HTTP send.
-                # Keep the saved generation but do not suggest NodeBB is merely
-                # delaying Accept for a Follow that did not leave the gateway.
-                return OperationResult(
-                    applied=False, reason="follow_sender_resolution_failed",
-                    message=("Fedify could not resolve the Bridge Service signing actor; "
-                             "Follow was not dispatched. The original Follow ID and "
-                             "pending channel binding are retained for verified recovery."),
                 )
             return OperationResult(
                 applied=True,
