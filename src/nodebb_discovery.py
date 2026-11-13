@@ -228,8 +228,11 @@ def _category_cid(item: dict[str, Any]) -> int | None:
 
 
 def _category_is_candidate(item: dict[str, Any]) -> bool:
-    """Reject categories explicitly hidden, disabled, private or nonfederated."""
-    return not any(item.get(field) in (True, 1, "1") for field in ("disabled", "isSection", "private", "hidden")) and not any(
+    """Reject actual visibility/federation denials, not layout-only sections."""
+    # NodeBB's ``isSection`` groups a category visually on the homepage;
+    # it neither revokes guest access nor prevents its children from federating.
+    # Keep individual read and ActivityPub Group verification in _verified_group.
+    return not any(item.get(field) in (True, 1, "1") for field in ("disabled", "private", "hidden")) and not any(
         item.get(field) in (False, 0, "0") for field in ("federationEnabled", "isFederated", "public")
     )
 
@@ -249,8 +252,8 @@ def _flatten_categories(items: list[Any]) -> list[dict[str, Any]]:
         seen.add(cid)
         if _category_is_candidate(item):
             result.append(item)
-        # A private/disabled parent does not authorize exposing its children;
-        # NodeBB's anonymous response should have excluded them already.
+        # Descend through public display sections. Do not traverse a denied
+        # parent: its descendants are not independently discoverable here.
         if _category_is_candidate(item) and depth < MAX_CATEGORY_DEPTH:
             children = item.get("children", [])
             if isinstance(children, list):

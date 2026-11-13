@@ -161,7 +161,11 @@ one bounded reason code only; blocked remote origins are rejected before the
 network request. When the Bridge endpoint is unavailable, NodeBB discovery
 checks anonymous `GET /api/categories`, nested categories, public read access,
 and the canonical ActivityPub `Group` actor at `/category/{cid}` before falling
-back to Lemmy. NodeBB handles resolve through WebFinger; public category links
+back to Lemmy. NodeBB's `isSection` is a display-only flag, not a visibility or
+federation denial: public section parents and their children are discovered,
+with each candidate checked independently for guest read access and a valid
+Group actor. Private, disabled and hidden parents are still excluded with
+their descendants. NodeBB handles resolve through WebFinger; public category links
 and `nodebb:` selections are revalidated on submit. NodeBB selection uses
 `remote_nodebb` with no Lemmy numeric ID. Long canonical actor URLs receive
 short-lived autocomplete lookup keys; an expired key is rejected and the user

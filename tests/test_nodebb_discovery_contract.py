@@ -115,6 +115,103 @@ async def test_list_only_anonymously_readable_federative_groups_in_nested_tree()
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("section_has_group_actor", [True, False])
+async def test_public_section_parent_keeps_its_federated_child_categories(
+    section_has_group_actor: bool, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A NodeBB display section is not a visibility denial for itself or its children.
+
+    A moderator lists the instance while Projects is a UI section containing
+    three public federated categories; all verified children must appear even
+    when the section itself does not expose a usable Group actor.
+    """
+    server = NodeBBFixtureServer()
+    server.listing = {"categories": [
+        {"cid": 50, "name": "Projects", "handle": "projects", "isSection": True,
+         "children": [
+             {"cid": 51, "name": "Blender:Basics Course", "handle": "blender"},
+             {"cid": 52, "name": "NodeForge", "handle": "nodeforge"},
+             {"cid": 53, "name": "АГОНЬ BMX", "handle": "bmx"},
+         ]},
+        {"cid": 60, "name": "Updates", "handle": "updates"},
+        {"cid": 61, "name": "General Discussion", "handle": "general"},
+        {"cid": 62, "name": "Blogs", "handle": "blogs"},
+    ]}
+
+    categories = [server.listing["categories"][0], *server.listing["categories"][0]["children"],
+                  *server.listing["categories"][1:]]
+    by_cid = {category["cid"]: category for category in categories}
+
+    async def fetch(url: str, accept: str) -> dict:
+        """Model public JSON and actor documents for every category/section."""
+        if url == f"{ORIGIN}/api/categories":
+            return server.listing
+        if url.startswith(f"{ORIGIN}/api/category/"):
+            cid = int(url.rsplit("/", 1)[1])
+            return by_cid[cid]
+        if url.startswith(f"{ORIGIN}/category/"):
+            cid = int(url.rsplit("/", 1)[1])
+            if cid == 50 and not section_has_group_actor:
+                raise NodeBBUnavailable()
+            category = by_cid[cid]
+            return {**server.actor, "id": url, "type": "Group", "inbox": f"{url}/inbox",
+                    "name": category["name"], "preferredUsername": category["handle"],
+                    "url": f"{url}/{category['handle']}"}
+        raise AssertionError(f"Unexpected external JSON fetch: {url}")
+
+    groups = await fetch_nodebb_groups(
+        ORIGIN, policy_service=PublicPolicy(), fetch_json=fetch,
+    )
+    found = [group.actor_id for group in groups]
+    expected = ([f"{ORIGIN}/category/50"] if section_has_group_actor else []) + [
+        f"{ORIGIN}/category/{cid}" for cid in (51, 52, 53, 60, 61, 62)
+    ]
+    assert found == expected
+    assert len(nodebb_autocomplete_choices(groups, "")) == len(expected)
+    # The returned autocomplete values are verified Group IDs, not category slugs.
+    choices = nodebb_autocomplete_choices(groups, "")
+    assert len(choices) == len(expected)
+    assert {value for _, value in choices} == {f"nodebb:{actor}" for actor in expected}
+    assert any("NodeForge" in name for name, _ in choices)
+    assert any("Blender:Basics Course" in name for name, _ in choices)
+
+    # A moderator selecting instance_domain must receive these identities
+    # through the real autocomplete router, not only the lower-level fetcher.
+    from src import community_discovery as discovery
+
+    async def bridge_missing(origin: str):
+        """NodeBB has no Bridge-specific discovery endpoint."""
+        raise discovery.BridgeDiscoveryUnavailable(origin)
+
+    async def get_groups(origin: str, *, policy_service, query: str):
+        """Use real NodeBB verification with the controlled external IO."""
+        return await fetch_nodebb_groups(
+            origin, policy_service=policy_service, fetch_json=fetch, query=query,
+        )
+
+    class NoLemmy:
+        """Ensure known NodeBB discovery never falls back to Lemmy."""
+
+        def __init__(self, origin: str) -> None:
+            """Any invocation would violate the recognized NodeBB route."""
+            raise AssertionError(f"Unexpected Lemmy fallback for {origin}")
+
+    monkeypatch.setattr(discovery, "fetch_nodebb_groups", get_groups)
+    autocomplete = await discovery.autocomplete_communities(
+        None, instance_domain="nodebb.example", current="",
+        fetch_bridge_communities=bridge_missing, lemmy_client_cls=NoLemmy,
+        policy_service=PublicPolicy(),
+    )
+    assert {value for _, value in autocomplete} == {value for _, value in choices}
+    by_name = await discovery.autocomplete_communities(
+        None, instance_domain="nodebb.example", current="NodeForge",
+        fetch_bridge_communities=bridge_missing, lemmy_client_cls=NoLemmy,
+        policy_service=PublicPolicy(),
+    )
+    assert [value for _, value in by_name] == [f"nodebb:{ORIGIN}/category/52"]
+
+
+@pytest.mark.asyncio
 async def test_search_finds_later_category_without_verifying_first_25() -> None:
     """A matching late category is discovered within the bounded API tree."""
     server = NodeBBFixtureServer()
