@@ -49,6 +49,22 @@ class NodeBBDiscoveryError(Exception):
         self.reason_code = reason_code
 
 
+class NodeBBProbeInconclusive(NodeBBDiscoveryError):
+    """The *initial* NodeBB endpoint failed before any NodeBB identity was proven.
+
+    Generic discovery may try Lemmy after this error; explicit NodeBB choices
+    still fail closed. A security-policy or malformed-document error is never
+    downgraded to an inconclusive probe.
+    """
+
+
+def _inconclusive_nodebb_probe(error: NodeBBDiscoveryError) -> NodeBBProbeInconclusive | None:
+    """Classify transport-only first-probe errors; never downgrade policy failure."""
+    if error.reason_code in {"discovery_http_error", "discovery_timeout"}:
+        return NodeBBProbeInconclusive(str(error), reason_code=error.reason_code)
+    return None
+
+
 @dataclass(frozen=True)
 class NodeBBGroup:
     """A verified public NodeBB Group; CID remains only a discovery locator."""
@@ -319,7 +335,13 @@ async def fetch_nodebb_groups(
             fetch(f"{normalized}/api/categories", JSON_ACCEPT), timeout=MAX_DISCOVERY_SECONDS
         )
     except asyncio.TimeoutError as error:
-        raise NodeBBDiscoveryError("NodeBB category discovery timed out.", reason_code="discovery_timeout") from error
+        # The very first request did not establish that this host is NodeBB.
+        raise NodeBBProbeInconclusive("NodeBB category discovery timed out.", reason_code="discovery_timeout") from error
+    except NodeBBDiscoveryError as error:
+        inconclusive = _inconclusive_nodebb_probe(error)
+        if inconclusive is None:
+            raise  # A policy or malformed-response failure must fail closed.
+        raise inconclusive from error
     raw_categories = payload.get("categories") if isinstance(payload, dict) else None
     if not isinstance(raw_categories, list):
         raise NodeBBUnavailable()  # Not a recognizable NodeBB categories API.
@@ -375,7 +397,15 @@ async def probe_nodebb_origin(
     url = f"{normalized}/api/categories"
     _ensure_target(url, normalized, policy_service)
     fetch = fetch_json or SecureNodeBBJSON(normalized, policy_service)
-    payload = await fetch(url, JSON_ACCEPT)
+    try:
+        payload = await fetch(url, JSON_ACCEPT)
+    except asyncio.TimeoutError as error:
+        raise NodeBBProbeInconclusive("NodeBB origin probe timed out.", reason_code="discovery_timeout") from error
+    except NodeBBDiscoveryError as error:
+        inconclusive = _inconclusive_nodebb_probe(error)
+        if inconclusive is None:
+            raise  # A policy or malformed-response failure must fail closed.
+        raise inconclusive from error
     if not isinstance(payload, dict) or not isinstance(payload.get("categories"), list):
         raise NodeBBUnavailable()
     return True

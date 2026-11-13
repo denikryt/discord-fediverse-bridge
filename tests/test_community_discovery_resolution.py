@@ -158,3 +158,79 @@ async def test_direct_instance_autocomplete_labels_include_handle_and_monthly_ac
             "lemmy:https://lemmy.world/c/quiet|quiet|41",
         ),
     ]
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("http_status", [403, 503])
+async def test_manual_lemmy_handle_falls_back_after_unidentified_nodebb_probe(
+    http_status: int, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Manual Lemmy references remain usable when a speculative NodeBB probe fails."""
+    from types import SimpleNamespace
+    from src import nodebb_discovery
+    from src.nodebb_discovery import NodeBBDiscoveryError
+
+    class FailedNodeBBProbe:
+        """Model a non-NodeBB origin failing its NodeBB-specific API endpoint."""
+
+        def __init__(self, origin: str, policy: object) -> None:
+            """Use the actual secure probe constructor arguments."""
+            assert origin == "https://lemmy.world"
+
+        async def __call__(self, url: str, accept: str) -> dict:
+            """Fail before any NodeBB Group identity is observed."""
+            assert url == "https://lemmy.world/api/categories"
+            raise NodeBBDiscoveryError(f"HTTP {http_status}", reason_code="discovery_http_error")
+
+    monkeypatch.setattr(nodebb_discovery, "SecureNodeBBJSON", FailedNodeBBProbe)
+    policy = SimpleNamespace(federation_decision=lambda origin: SimpleNamespace(allowed=True))
+    result = await resolve_selected_community(
+        None, instance_domain=None, community_value="!technology@lemmy.world",
+        fetch_bridge_communities=_no_bridge, lemmy_client_cls=FakeLemmyClient,
+        policy_service=policy,
+    )
+    assert result.source == "remote_lemmy"
+    assert result.actor_id == "https://lemmy.world/c/technology"
+
+    # Explicit NodeBB selections cannot be reinterpreted as a Lemmy target.
+    with pytest.raises(CommunityResolutionError) as error:
+        await resolve_selected_community(
+            None, instance_domain=None,
+            community_value="nodebb:https://lemmy.world/category/42",
+            fetch_bridge_communities=_no_bridge, lemmy_client_cls=FakeLemmyClient,
+            policy_service=policy,
+        )
+    assert error.value.reason_code == "discovery_http_error"
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("unavailable", ["http_error", "not_nodebb"])
+async def test_explicit_category_url_never_downgrades_to_an_unrelated_lemmy_community(
+    unavailable: str, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A manually pasted /category/42 URL cannot silently become Lemmy /c/42."""
+    from types import SimpleNamespace
+    from src import nodebb_discovery
+    from src.nodebb_discovery import NodeBBDiscoveryError, NodeBBUnavailable
+
+    class MissingNodeBBAPI:
+        """Model failure to prove whether the pasted NodeBB category exists."""
+
+        def __init__(self, origin: str, policy: object) -> None:
+            """Bind the expected origin."""
+            assert origin == "https://lemmy.world"
+
+        async def __call__(self, url: str, accept: str) -> dict:
+            """Fail the first NodeBB categories probe."""
+            assert url.endswith("/api/categories")
+            if unavailable == "not_nodebb":
+                raise NodeBBUnavailable()
+            raise NodeBBDiscoveryError("HTTP 503", reason_code="discovery_http_error")
+
+    monkeypatch.setattr(nodebb_discovery, "SecureNodeBBJSON", MissingNodeBBAPI)
+    policy = SimpleNamespace(federation_decision=lambda origin: SimpleNamespace(allowed=True))
+    with pytest.raises(CommunityResolutionError):
+        await resolve_selected_community(
+            None, instance_domain=None,
+            community_value="https://lemmy.world/category/42",
+            fetch_bridge_communities=_no_bridge, lemmy_client_cls=FakeLemmyClient,
+            policy_service=policy,
+        )

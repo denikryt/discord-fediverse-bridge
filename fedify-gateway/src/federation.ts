@@ -145,9 +145,9 @@ export function createGatewayFederation(
         console.log("[Fedify][debug] Received direct Create activity");
       }
       try {
-        // Direct Create handling is the happy path when the remote server does
-        // not wrap local objects inside Announce. Errors must be logged here
-        // because the inbox already returns 202 before async processing finishes.
+        // Direct Create handling is the path when the remote server does not
+        // wrap local objects inside Announce. The synchronous inbox must not
+        // acknowledge events that Python did not persist.
         const event = await normalizeCreateActivity(activity, {
           pythonBridgeClient: getPythonBridgeClient(config),
         });
@@ -168,6 +168,9 @@ export function createGatewayFederation(
           });
       } catch (error) {
         console.error("[Fedify] Error processing direct Create activity", error);
+        // Fedify 2.2.0 maps a rejected synchronous inbox listener to HTTP 500.
+        // Retain upstream retry opportunity instead of swallowing delivery loss.
+        throw error;
       }
     })
     .on(Update, async (ctx, activity) => {
@@ -177,6 +180,7 @@ export function createGatewayFederation(
         await deliverDirectUpdateActivity(config, activity, isDebug, ctx.data);
       } catch (error) {
         console.error("[Fedify] Error processing direct Update activity", error);
+        throw error;
       }
     })
     .on(Delete, async (ctx, activity) => {
@@ -185,6 +189,7 @@ export function createGatewayFederation(
         await deliverDirectDeleteActivity(config, activity, isDebug, ctx.data);
       } catch (error) {
         console.error("[Fedify] Error processing direct Delete activity", error);
+        throw error;
       }
     })
     .on(Announce, async (_ctx, activity) => {
@@ -298,6 +303,9 @@ export function createGatewayFederation(
           "[Fedify] Error processing Announce:",
           error instanceof Error ? error.message : error,
         );
+        // This listener runs before the inbox HTTP response. Do not convert a
+        // failed Python handoff into 202: Fedify must signal 500 to the sender.
+        throw error;
       }
     })
     .on(Follow, async (ctx, activity) => {

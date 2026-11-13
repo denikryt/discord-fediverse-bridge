@@ -37,6 +37,7 @@ const SCENARIOS = [
   "signed-follow",
   "duplicate-follow",
   "signed-nodebb-replay",
+  "signed-nodebb-python-unavailable",
   "mismatched-follow-actor",
   "unsafe-follow-endpoint",
   "undo-workflow",
@@ -57,6 +58,7 @@ interface PythonFixture {
   origin: string;
   events: CapturedBridgeEvent[];
   followers: string[];
+  eventsAvailable: boolean;
   fetch(url: string, init?: RequestInit): Promise<Response | null>;
   close(): Promise<void>;
 }
@@ -96,6 +98,11 @@ async function runScenario(scenario: ScenarioName): Promise<void> {
     case "signed-nodebb-replay":
       await withPublicWorkflowFixture(async ({ app, privateKey, python }) => {
         await assertSignedNodeBBAnnounceReplay(app, privateKey, python);
+      }, true);
+      return;
+    case "signed-nodebb-python-unavailable":
+      await withPublicWorkflowFixture(async ({ app, privateKey, python }) => {
+        await assertSignedNodeBBPythonUnavailable(app, privateKey, python);
       }, true);
       return;
     case "duplicate-follow":
@@ -240,6 +247,32 @@ async function assertSignedNodeBBAnnounceReplay(
     assert.equal(events.at(-1)?.delivery_id, NODEBB_ANNOUNCE);
     assert.equal(events.at(-1)?.actor_id, NODEBB_GROUP);
   }
+}
+
+/** A signed Announce must receive a retryable HTTP failure if Python is offline. */
+async function assertSignedNodeBBPythonUnavailable(
+  app: ReturnType<typeof createGatewayApp>,
+  privateKey: CryptoKey,
+  python: PythonFixture,
+): Promise<void> {
+  // Exercise the actual Fedify inbox listener and the internal Python HTTP edge.
+  const announce = JSON.parse(await readFile(
+    new URL("../../tests/fixtures/nodebb/announce_root_uri.json", import.meta.url), "utf8",
+  )) as Record<string, unknown>;
+  python.eventsAvailable = false;
+  const first = await fetchWithTimeout(app, await signedActivityRequestToInbox(
+    announce, privateKey, `${NODEBB_GROUP}#main-key`, `${ORIGIN}inbox`,
+  ));
+  assert.equal(first.status, 500, "an undelivered signed Announce must not be acknowledged with 202");
+  assert.equal(python.events.length, 0, "Python offline leaves no durable receipt");
+
+  python.eventsAvailable = true;
+  const retry = await fetchWithTimeout(app, await signedActivityRequestToInbox(
+    announce, privateKey, `${NODEBB_GROUP}#main-key`, `${ORIGIN}inbox`,
+  ));
+  assert.equal(retry.status, 202, "the same signed wire ID is retryable after recovery");
+  assert.equal(python.events.length, 1, "recovered delivery reaches Python exactly once");
+  assert.equal(python.events[0]?.delivery_id, NODEBB_ANNOUNCE);
 }
 
 async function assertMismatchedActorDocumentRejected(
@@ -444,6 +477,7 @@ function startRecordingPythonFixture(publicKeyPem: string, privateKeyPem: string
     origin,
     events,
     followers,
+    eventsAvailable: true,
     async fetch(url: string, init?: RequestInit): Promise<Response | null> {
       if (!url.startsWith(origin)) return null;
       const requestUrl = new URL(url);
@@ -451,6 +485,10 @@ function startRecordingPythonFixture(publicKeyPem: string, privateKeyPem: string
       const body = typeof init?.body === "string" ? init.body : "";
 
       if (requestUrl.pathname === "/internal/activitypub/events" && method === "POST") {
+        if (!this.eventsAvailable) {
+          // Model a stopped Python service before it can write a SQLite receipt.
+          throw new Error("fixture Python service is offline");
+        }
         const event = JSON.parse(body) as CapturedBridgeEvent;
         events.push(event);
         if (event.event_type === "local.follow_requested" && event.actor_id != null && !followers.includes(event.actor_id)) {

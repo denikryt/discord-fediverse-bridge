@@ -118,3 +118,14 @@ Inbound personal-feed comments are retained even when the active binding is remo
   listener work. Added a signed public-inbox replay regression, not yet run
   in this environment: npm cache lacks dependencies. CP24 release acceptance
   remains open; the SQLite v1 schema is unchanged by this adjustment.
+
+- B6 gateway/discovery review (2026-11-13): Fedify 2.2.0 synchronous inbox
+  returns HTTP 500 for listener failures. Create/Update/Delete/Announce
+  handlers now rethrow Python handoff exceptions rather than logging and
+  returning a misleading 202. A signed Python-offline → retry regression
+  is added but remains unexecuted without the gateway dependencies.
+  Unproven NodeBB `/api/categories` probes returning transport errors no
+  longer mask healthy Lemmy discovery; confirmed NodeBB Group validation,
+  explicit `/category/<cid>` choices and denied-origin policy remain strict.
+  DB v1 unchanged. Full CP24 suite and real Discord/NodeBB interoperability
+  still require separate acceptance.

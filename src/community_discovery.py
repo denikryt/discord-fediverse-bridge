@@ -20,7 +20,7 @@ from urllib.parse import urlparse
 import httpx
 
 from .nodebb_discovery import (
-    NodeBBDiscoveryError, NodeBBUnavailable, decode_nodebb_choice,
+    NodeBBDiscoveryError, NodeBBProbeInconclusive, NodeBBUnavailable, decode_nodebb_choice,
     fetch_nodebb_groups, nodebb_autocomplete_choices, probe_nodebb_origin,
     resolve_nodebb_group,
 )
@@ -320,8 +320,11 @@ async def autocomplete_communities(
         # socket boundary in addition to the command-level policy gate.
         try:
             groups = await fetch_nodebb_groups(origin, policy_service=policy_service, query=query)
-        except NodeBBUnavailable:
-            pass  # No NodeBB API on this host: retain the established Lemmy route.
+        except (NodeBBUnavailable, NodeBBProbeInconclusive):
+            # A missing/failed *probe* is not proof that a Lemmy origin is
+            # NodeBB. Try the real Lemmy API rather than hiding its results.
+            # Policy denials and verified-Group validation still fail closed.
+            pass
         except NodeBBDiscoveryError as error:
             report_empty(error.reason_code)
             return []
@@ -548,7 +551,11 @@ async def _try_resolve_nodebb(
         return None
     try:
         await probe_nodebb_origin(origin, policy_service=policy_service)
-    except NodeBBUnavailable:
+    except (NodeBBUnavailable, NodeBBProbeInconclusive) as error:
+        # Only a generic handle/name can safely fall through to Lemmy. An
+        # explicit NodeBB category URL must never be rewritten into /c/<cid>.
+        if urlparse(value).path.startswith("/category/"):
+            raise _nodebb_resolution_error(error) from error
         return None
     except NodeBBDiscoveryError as error:
         raise _nodebb_resolution_error(error) from error

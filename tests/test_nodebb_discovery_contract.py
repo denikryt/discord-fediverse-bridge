@@ -385,3 +385,41 @@ async def test_non_nodebb_host_retains_existing_lemmy_fallback(monkeypatch) -> N
         policy_service=PublicPolicy(),
     )
     assert selected.source == "remote_lemmy"
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("http_status", [403, 503])
+async def test_unidentified_nodebb_probe_failure_can_fall_back_to_lemmy(http_status: int) -> None:
+    """An HTTP error on the *first* categories probe cannot prove a NodeBB origin."""
+    from src.nodebb_discovery import NodeBBProbeInconclusive, probe_nodebb_origin
+
+    async def denied_categories(url: str, accept: str) -> dict:
+        """Model a non-NodeBB host answering the speculative categories path."""
+        assert url == f"{ORIGIN}/api/categories"
+        raise NodeBBDiscoveryError(
+            f"speculative categories path returned HTTP {http_status}",
+            reason_code="discovery_http_error",
+        )
+
+    for operation in (
+        lambda: fetch_nodebb_groups(ORIGIN, policy_service=PublicPolicy(), fetch_json=denied_categories),
+        lambda: probe_nodebb_origin(ORIGIN, policy_service=PublicPolicy(), fetch_json=denied_categories),
+    ):
+        with pytest.raises(NodeBBProbeInconclusive) as outcome:
+            await operation()
+        assert outcome.value.reason_code == "discovery_http_error"
+
+
+@pytest.mark.asyncio
+async def test_verified_nodebb_category_failure_is_not_unidentified_probe() -> None:
+    """A category error after a valid NodeBB listing must not select a Lemmy identity."""
+    from src.nodebb_discovery import NodeBBProbeInconclusive
+
+    async def denied_detail(url: str, accept: str) -> dict:
+        """Prove the host first, then fail while verifying a candidate Group."""
+        if url == f"{ORIGIN}/api/categories":
+            return {"categories": [{"cid": 42, "name": "Discussion", "handle": "discussion"}]}
+        raise NodeBBDiscoveryError("category detail unavailable", reason_code="discovery_http_error")
+
+    # Per-category errors are skipped, not reclassified as an unknown server.
+    result = await fetch_nodebb_groups(ORIGIN, policy_service=PublicPolicy(), fetch_json=denied_detail)
+    assert result == []

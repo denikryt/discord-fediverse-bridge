@@ -243,3 +243,45 @@ async def test_bridge_malformed_discovery_failure_does_not_return_unverified_cho
     )
     assert choices == []
     assert reasons == ["malformed_response"]
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("http_status", [403, 503])
+async def test_ambiguous_nodebb_categories_http_failure_does_not_hide_healthy_lemmy(
+    http_status: int, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A working Lemmy listing wins after a speculative NodeBB probe gets 403/503."""
+    from types import SimpleNamespace
+    from src import nodebb_discovery
+    from src.nodebb_discovery import NodeBBDiscoveryError
+
+    class CategoriesHTTPFailure:
+        """Model a candidate origin with only an error at /api/categories."""
+
+        def __init__(self, origin: str, policy: object) -> None:
+            """Accept the production adapter's constructor arguments."""
+            assert origin == "https://lemmy.test"
+
+        async def __call__(self, url: str, accept: str) -> dict:
+            """Return the observed speculative HTTP failure, never Group evidence."""
+            assert url == "https://lemmy.test/api/categories"
+            raise NodeBBDiscoveryError(
+                f"HTTP {http_status}", reason_code="discovery_http_error",
+            )
+
+    monkeypatch.setattr(nodebb_discovery, "SecureNodeBBJSON", CategoriesHTTPFailure)
+    LemmyClient.calls.clear()
+    diagnostics: list[str] = []
+
+    async def no_bridge(origin: str) -> list:
+        """Rule out the already supported remote-Bridge discovery path."""
+        raise BridgeDiscoveryUnavailable(origin)
+
+    choices = await autocomplete_communities(
+        None, instance_domain="lemmy.test", current="lemmy",
+        fetch_bridge_communities=no_bridge, lemmy_client_cls=LemmyClient,
+        policy_service=SimpleNamespace(federation_decision=lambda origin: SimpleNamespace(allowed=True)),
+        on_diagnostic=diagnostics.append,
+    )
+    assert len(choices) == 1 and choices[0][1].startswith("lemmy:")
+    assert LemmyClient.calls == ["https://lemmy.test"]
+    assert diagnostics == []
