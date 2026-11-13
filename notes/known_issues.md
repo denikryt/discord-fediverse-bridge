@@ -108,3 +108,13 @@ Inbound personal-feed comments are retained even when the active binding is remo
   Fedify-signed HTTP and full SDK suites are still required for CP24 acceptance.
   No SQLite v1 schema change was made here. Prior CP24 candidate v1 databases
   with different DDL remain unsupported without a separately scoped migration.
+
+- Fedify 2.2.0 queued inbox replay (2026-11-13): the original 2.2.0 inbox
+  worker unconditionally uses `(origin, activity.id)` as its cache key, ignoring
+  `withIdempotency()` when dequeuing. Gateway now uses Fedify's verified
+  synchronous inbox listener and retains the existing queued outbox/fanout;
+  this allows same-wire NodeBB Announce to reach Python's per-forum CAS. HTTP
+  still responds 202 after listener completion, with latency proportional to
+  listener work. Added a signed public-inbox replay regression, not yet run
+  in this environment: npm cache lacks dependencies. CP24 release acceptance
+  remains open; the SQLite v1 schema is unchanged by this adjustment.

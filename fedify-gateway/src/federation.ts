@@ -49,10 +49,16 @@ export function createGatewayFederation(
   // The federation definition keeps protocol-specific concerns in one place so
   // the rest of the gateway can stay focused on normalization and delivery.
   const isDebug = config.logLevel === "debug";
+  // Fedify 2.2.0 inbox workers deduplicate by origin + wire ID, ignoring
+  // withIdempotency(). NodeBB must reach Python on a signed same-ID replay
+  // to finish missing Discord targets. Dispatch inbound listeners directly
+  // after Fedify authentication; retain the existing queued outbound send.
+  // This keeps HTTP 202 but waits for the listener before responding.
+  const outboundQueue = new InProcessMessageQueue();
   const federation = createFederation<GatewayContextData>({
     origin: config.fedifyOrigin,
     kv: new MemoryKvStore(),
-    queue: new InProcessMessageQueue(),
+    queue: { outbox: outboundQueue, fanout: outboundQueue },
     skipSignatureVerification: config.skipSignatureVerificationForTests === true,
   });
 

@@ -256,6 +256,19 @@ Supported inbound activity patterns include:
 
 The project does not provide generic inbox processing for every ActivityStreams activity type.
 
+**Inbox processing on pinned Fedify 2.2.0.** Incoming activities are handled by
+Fedify's authenticated listener on the request path, rather than its built-in
+inbox worker. This is necessary because the 2.2.0 queue worker deduplicates
+again by `(origin, activity.id)` and ignores the custom per-inbox idempotency
+strategy: a signed NodeBB Group `Announce` replay would otherwise be lost before
+Python could finish an eligible failed Discord target. The verified callback
+still controls which activity reaches Python; Python's receipt/canonical CAS
+preserves completed/unknown sends without blind resend. Other inbound events
+retain their per-inbox idempotency keys. HTTP POST still returns 202 for
+accepted activity, but now waits for the verified inbox listener to finish.
+Outgoing activity and fanout remain queued using the existing in-process queue;
+no new transport or background recovery worker is introduced.
+
 Unsupported or out-of-scope inbound behavior includes, unless explicitly added by a future plan:
 
 ```text
