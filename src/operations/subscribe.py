@@ -13,7 +13,10 @@ community. Subsequent subscriptions reuse the existing follow state.
 
 from __future__ import annotations
 
+import logging
 from dataclasses import dataclass, field
+
+import httpx
 
 from discordops import OperationDefinition, OperationResult, Precondition
 
@@ -23,6 +26,34 @@ from ..bridge_policy import BridgePolicyService
 from ..db import Database
 from ..fedify_gateway_client import FedifyGatewayClient, FollowCommunityResult
 from ..db.repositories.bridge_actor_follows import BridgeActorFollowRepository, FollowReservationConflict
+
+logger = logging.getLogger(__name__)
+
+
+def _follow_dispatch_error_summary(error: Exception) -> str:
+    """Return a safe diagnostic without logging gateway payloads or secrets.
+
+    A verified local actor lookup failure has a useful non-secret error text.
+    Other gateway failures may contain request data, so log only their status
+    or exception class while retaining the original uncertain send state.
+    """
+    if isinstance(error, httpx.HTTPStatusError):
+        try:
+            detail = error.response.json().get("error")
+        except (ValueError, AttributeError):
+            detail = None
+        if (
+            isinstance(detail, str)
+            and detail.startswith((
+                "No actor found for the given username ",
+                "No actor found for the given identifier ",
+            ))
+            and len(detail) < 200
+            and all(character.isprintable() for character in detail)
+        ):
+            return detail
+        return f"gateway HTTP {error.response.status_code}"
+    return type(error).__name__
 
 
 @dataclass
@@ -255,7 +286,16 @@ async def _body(operation_input: SubscribeInput) -> OperationResult:
     if prepared_to_send and operation_input.database.bridge_actor_follows.claim_prepared_follow(follow_id):
         try:
             await operation_input.fedify_gateway.send_prepared_community_follow(committed)
-        except Exception:
+        except Exception as error:
+            # A failed sender lookup is observable, but generic gateway/HTTP
+            # errors do not prove that the remote Group never received Follow.
+            failure_detail = _follow_dispatch_error_summary(error)
+            logger.error(
+                "Prepared Follow dispatch unresolved: group=%s follow_id=%s reason=%s; "
+                "retaining the original sending generation",
+                committed.community_actor_url, committed.follow_activity_id,
+                failure_detail,
+            )
             # A lost response is ambiguous, not a proven failed delivery. The
             # original Follow ID remains in ``sending`` for on-demand recovery.
             # A moderator can cancel the channel while HTTP is in flight; a
@@ -275,6 +315,16 @@ async def _body(operation_input: SubscribeInput) -> OperationResult:
                     applied=False, reason="follow_cancelled_during_dispatch",
                     message=("The channel unsubscribed while Follow delivery was unresolved. "
                              "The original Follow generation is retained for guarded cleanup."),
+                )
+            if failure_detail.startswith("No actor found for the given "):
+                # Fedify resolved no local signing actor, before any HTTP send.
+                # Keep the saved generation but do not suggest NodeBB is merely
+                # delaying Accept for a Follow that did not leave the gateway.
+                return OperationResult(
+                    applied=False, reason="follow_sender_resolution_failed",
+                    message=("Fedify could not resolve the Bridge Service signing actor; "
+                             "Follow was not dispatched. The original Follow ID and "
+                             "pending channel binding are retained for verified recovery."),
                 )
             return OperationResult(
                 applied=True,

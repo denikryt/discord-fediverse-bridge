@@ -67,7 +67,15 @@ export function registerInternalFollowRoutes(
       });
       return context.json({ ok: true });
     } catch (error) {
-      return context.json({ error: error instanceof Error ? error.message : "Follow send failed" }, { status: 500 });
+      // Report the failure at the gateway boundary. A 500 does not prove that
+      // a potentially started network delivery was rejected by the remote Group.
+      const reason = error instanceof Error ? error.message : "Follow send failed";
+      console.error("[Follow] Prepared Follow dispatch failed", {
+        communityActorUrl: payload.communityActorUrl,
+        followActivityId: payload.followActivityId,
+        error: reason,
+      });
+      return context.json({ error: reason }, { status: 500 });
     }
   });
 

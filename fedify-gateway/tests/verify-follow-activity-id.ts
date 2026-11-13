@@ -44,11 +44,11 @@ async function main(): Promise<void> {
             return new URL(`${TEST_ORIGIN}/actors/services/bridge`);
           },
           async sendActivity(
-            sender: { username?: string },
+            sender: { identifier?: string },
             recipient: { id: URL; inboxId: URL },
             activity: { id?: URL },
           ): Promise<void> {
-            assert.equal(sender.username, "services/bridge");
+            assert.equal(sender.identifier, "services/bridge");
             sentActivities.push({
               recipients: [{ id: recipient.id.href, inboxId: recipient.inboxId.href }],
               activity,

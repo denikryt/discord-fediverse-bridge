@@ -6,6 +6,8 @@ from src.bridge_policy import BridgePolicyService
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, Mock
 
+import httpx
+
 import pytest
 
 from discordops import run_operation_definition_async
@@ -254,6 +256,40 @@ async def test_subscribe_operation_marks_failed_when_follow_dispatch_fails(tmp_p
         assert row.follow_activity_id
         assert db.remote_subscriptions.get_subscription_by_channel(123).status == "pending"
         gateway.follow_community.assert_not_awaited()
+    finally:
+        db.close()
+
+
+@pytest.mark.asyncio
+async def test_follow_actor_resolution_failure_is_logged_without_losing_generation(
+    tmp_path: Path, caplog: pytest.LogCaptureFixture,
+) -> None:
+    """A gateway sender-lookup error is visible; the committed Follow is not replaced.
+
+    The internal gateway returns the real Fedify failure. Since generic HTTP
+    failures are potentially ambiguous, this operation keeps the original
+    Follow ID and its pending binding rather than allocating a second Follow.
+    """
+    db, actor, gateway, policy = _live_setup(tmp_path)
+    request = httpx.Request("POST", "http://gateway.test/send-prepared-community-follow")
+    response = httpx.Response(
+        500,
+        json={"error": 'No actor found for the given username "services/bridge".'},
+        request=request,
+    )
+    gateway.send_prepared_community_follow.side_effect = httpx.HTTPStatusError(
+        "Follow sender resolution failed", request=request, response=response,
+    )
+    try:
+        result = await _run_live(db, actor, gateway, policy)
+        assert not result.applied and result.reason == "follow_sender_resolution_failed"
+        assert "Follow was not dispatched" in result.message
+        assert 'No actor found for the given username "services/bridge".' in caplog.text
+        follow = db.bridge_actor_follows.get_bridge_actor_follow(actor)
+        assert follow.follow_dispatch_state == "sending"
+        assert follow.follow_activity_id == gateway.prepare_community_follow.return_value.follow_activity_id
+        assert db.remote_subscriptions.get_subscription_by_channel(123).status == "pending"
+        gateway.send_prepared_community_follow.assert_awaited_once()
     finally:
         db.close()
 

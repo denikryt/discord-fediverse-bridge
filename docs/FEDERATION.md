@@ -186,7 +186,16 @@ sender. A second channel reuses that generation; the sender uses a durable
 A signed `Accept(Follow)` must identify that exact activity and originate from
 its original Group; an early Accept is not reverted by a later HTTP result.
 Only a confirmed `threadiverse` profile may be implicitly accepted on inbound
-content. NodeBB and `unknown` require explicit signed Accept. A possible
+content. NodeBB and `unknown` require explicit signed Accept. Both the
+prepared and bootstrap Follow sender pass Fedify the service **identifier**
+(`services/bridge`, not the public WebFinger username `bridge`) so Fedify uses
+the persisted service key without running the handle mapper. Sender-lookup
+failures are logged by the gateway and Python with the original Follow ID and
+reported to Discord as `follow_sender_resolution_failed` rather than
+misrepresenting an untransmitted Follow as awaiting NodeBB Accept.
+A previously retained `sending` Follow is not resent automatically after a
+binary upgrade: its remote delivery must be verified before an operator can
+safely clear or retry the original generation. A possible
 network send with no response remains `sending`/pending with the same ID and
 must not be retried as a new Follow. The last Discord channel unsubscribes
 under the same SQLite writer boundary: an unclaimed `prepared` Follow is

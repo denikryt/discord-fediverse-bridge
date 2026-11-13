@@ -69,8 +69,11 @@ export async function sendPreparedCommunityFollow(
     actor: ctx.getActorUri(actorTail),
     object: actor,
   });
+  // This slash-containing tail is a dispatcher identifier, not a WebFinger
+  // username. Fedify would call mapHandle("services/bridge") for username,
+  // which cannot resolve the service key (the public handle is "bridge").
   await ctx.sendActivity(
-    { username: actorTail },
+    { identifier: actorTail },
     { id: actor, inboxId: inbox },
     follow,
   );
@@ -122,8 +125,10 @@ export async function followCommunity(
 
   // Fedify signs and delivers the activity; this helper only prepares the
   // target identity and object URLs.
+  // The service sender is addressed by the typed actor identifier, not by
+  // its public WebFinger username ("bridge").
   await ctx.sendActivity(
-    { username: serviceActorTail },
+    { identifier: serviceActorTail },
     { id: new URL(communityId), inboxId: new URL(inboxUrl) },
     follow,
   );
