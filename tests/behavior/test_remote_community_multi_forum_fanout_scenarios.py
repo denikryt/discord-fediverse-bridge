@@ -441,3 +441,66 @@ async def test_legacy_remote_group_without_first_create_snapshot_refuses_new_for
         assert forums[101].create_thread.await_count == 0
     finally:
         db.close()
+
+@pytest.mark.asyncio
+async def test_unsubscribe_at_root_claim_boundary_cannot_send_to_stale_forum(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A channel removed after candidate discovery gets no post claim or REST call."""
+    from src.models import ChannelCommunitySubscription
+
+    db, rt, context, forums, _ = _setup(tmp_path, {100: (200, 300)})
+    repository = db.discord_fanout_groups
+    original_reserve = repository.reserve_remote_target
+
+    def unsubscribe_then_reserve(*, kind: str, group_id: int, discord_channel_id: int):
+        """Model an Undo committed between runtime admission and writer claim."""
+        with db.session() as session:
+            subscription = session.scalar(select(ChannelCommunitySubscription))
+            subscription.status = "pending"
+        return original_reserve(kind=kind, group_id=group_id, discord_channel_id=discord_channel_id)
+
+    monkeypatch.setattr(repository, "reserve_remote_target", unsubscribe_then_reserve)
+    try:
+        result = await rt.handle_inbound_post(_event(), context)
+        assert result.status == "skipped"
+        assert forums[100].create_thread.await_count == 0
+        with db.session() as session:
+            assert session.scalars(select(CommunityDiscordTargetClaim)).all() == []
+    finally:
+        db.close()
+
+
+@pytest.mark.asyncio
+async def test_rebinding_at_reply_claim_boundary_cannot_send_to_foreign_group(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A channel rebound to Group B cannot receive a stale Group A reply."""
+    from src.models import ChannelCommunitySubscription
+
+    db, rt, context, _forums, threads = _setup(tmp_path, {100: (200, 300)})
+    try:
+        await rt.handle_inbound_post(_event(), context)
+        repository = db.discord_fanout_groups
+        original_reserve = repository.reserve_remote_target
+
+        def rebind_then_reserve(*, kind: str, group_id: int, discord_channel_id: int):
+            """Model an accepted replacement binding during the reply admission gap."""
+            with db.session() as session:
+                subscription = session.scalar(select(ChannelCommunitySubscription))
+                subscription.lemmy_community_actor_id = GROUP_B
+            return original_reserve(kind=kind, group_id=group_id, discord_channel_id=discord_channel_id)
+
+        monkeypatch.setattr(repository, "reserve_remote_target", rebind_then_reserve)
+        reply = await rt.handle_inbound_comment(
+            _event(kind="comment", parent=ROOT), context,
+        )
+        assert reply.status == "skipped"
+        assert threads[200].send.await_count == 0
+        with db.session() as session:
+            claims = session.scalars(select(CommunityDiscordTargetClaim).where(
+                CommunityDiscordTargetClaim.kind == "comment"
+            )).all()
+            assert claims == []
+    finally:
+        db.close()

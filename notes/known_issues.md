@@ -129,3 +129,5 @@ Inbound personal-feed comments are retained even when the active binding is remo
   explicit `/category/<cid>` choices and denied-origin policy remain strict.
   DB v1 unchanged. Full CP24 suite and real Discord/NodeBB interoperability
   still require separate acceptance.
+
+- Verified (2026-11-13): remote Group per-forum post/reply claims now verify current `accepted` channel binding for the canonical Group inside the SQLite `BEGIN IMMEDIATE` transaction. A stale candidate after Undo/rebind gets `not_subscribed` with no new attempt. Existing `unknown` remains non-retryable; a binding change after the transaction commits but before Discord REST is still possible and is not represented as an external-send lock. Full Fedify/Discord integration remains unverified.

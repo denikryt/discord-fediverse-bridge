@@ -348,11 +348,8 @@ class CommunityRuntime:
         delivered = 0
         for subscription in accepted:
             channel = subscription.discord_channel_id
-            # Recheck the current binding immediately before obtaining a claim.
-            if channel not in {s.discord_channel_id for s in get_accepted_subscriptions(
-                self.database, event.community_actor_id
-            )}:
-                continue
+            # The claim transaction, not this earlier candidate list, owns
+            # the final binding/tenant admission decision before Discord REST.
             reservation = repository.reserve_remote_target(
                 kind="post", group_id=thread_group.id, discord_channel_id=channel
             )
@@ -497,8 +494,9 @@ class CommunityRuntime:
         allowed_channels = {s.discord_channel_id for s in accepted}
         for delivery in delivered_threads:
             channel = delivery.discord_channel_id
-            if channel not in allowed_channels or channel not in {s.discord_channel_id for s in
-                get_accepted_subscriptions(self.database, event.community_actor_id)}:
+            # Only initially eligible root surfaces are candidates. The writer
+            # transaction revalidates the current accepted Group binding.
+            if channel not in allowed_channels:
                 continue
             reservation = repository.reserve_remote_target(
                 kind="comment", group_id=message_group.id, discord_channel_id=channel

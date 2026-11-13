@@ -12,6 +12,7 @@ from ...models import (
     CommunityThreadGroup,
     CommunityThreadGroupDelivery,
     CommunityDiscordTargetClaim,
+    ChannelCommunitySubscription,
 )
 from .base import BaseRepository
 
@@ -397,8 +398,10 @@ class DiscordFanoutGroupRepository(BaseRepository):
     ) -> RemoteTargetReservation:
         """Use one serialized v1 claim before each potentially mutating Discord REST call.
 
-        Completed/unknown/in-flight attempts cannot be sent again without proof.
-        Only an explicitly failed pre-send attempt can receive a new token.
+        The current channel binding must still be accepted for this immutable
+        Group inside the writer transaction. Otherwise return not_subscribed
+        without altering an existing claim. Completed/unknown/in-flight attempts
+        cannot be resent; only proven failed pre-send attempts can get a new token.
         """
         if kind not in ("post", "comment"):
             raise ValueError("invalid remote target kind")
@@ -407,6 +410,20 @@ class DiscordFanoutGroupRepository(BaseRepository):
         delivery = CommunityThreadGroupDelivery if kind == "post" else CommunityMessageGroupDelivery
         delivery_fk = delivery.thread_group_id if kind == "post" else delivery.message_group_id
         with self.immediate_session() as session:
+            # A previously read candidate is not permission to place content.
+            # Resolve the immutable canonical Group inside the same SQLite writer
+            # transaction as the delivery/claim decision, and require an exact,
+            # currently accepted channel binding before any new Discord attempt.
+            group = session.get(
+                CommunityThreadGroup if kind == "post" else CommunityMessageGroup,
+                group_id,
+            )
+            if group is None or session.scalar(select(ChannelCommunitySubscription.id).where(
+                ChannelCommunitySubscription.discord_channel_id == discord_channel_id,
+                ChannelCommunitySubscription.lemmy_community_actor_id == group.community_actor_id,
+                ChannelCommunitySubscription.status == "accepted",
+            )) is None:
+                return RemoteTargetReservation("not_subscribed")
             if session.scalar(select(delivery.id).where(
                 delivery_fk == group_id, delivery.discord_channel_id == discord_channel_id
             )) is not None:
