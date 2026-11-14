@@ -135,6 +135,7 @@ async def test_conflicting_owner_duplicate_does_not_fanout_or_change_original(tm
     result = await h.handle_post(_event(activity="create/spoof", owner="https://evil.example/person"), runtime=None)
     assert result.status == "skipped"
     forum.create_thread.assert_awaited_once()
+    assert forum.create_thread.await_args.kwargs["suppress_embeds"] is True
     h.surface_fanout.fanout_thread_to_local_subscribers.assert_not_awaited()
     h.federation_fanout.relay_create.assert_not_awaited()
     original = db.local_community_content.get_local_community_thread_by_ap_object_id(ROOT, local_community_id=groups[0].id)
@@ -170,6 +171,7 @@ async def test_reply_parent_and_host_attempt_belong_to_same_tenant(tmp_path):
     assert (await h.handle_comment(_event(comment=True), runtime=None)).status == "processed"
     assert (await h.handle_comment(_event(GROUP_B, comment=True), runtime=None)).status == "skipped"
     assert thread.send.await_count == 1
+    assert thread.send.await_args.kwargs["suppress_embeds"] is True
     original = db.local_community_content.get_local_community_message_by_ap_object_id(AUTHOR + "/objects/comments/1", local_community_id=groups[0].id)
     assert original.source_owner_actor_id == AUTHOR and original.host_delivery_state == "delivered"
     db.close()

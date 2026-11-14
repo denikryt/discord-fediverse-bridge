@@ -217,7 +217,7 @@ class DiscordFanout:
                 continue
             try:
                 forum_channel = await self.bot.fetch_forum_channel(channel_id)
-                result = await forum_channel.create_thread(name=title, content=body)
+                result = await forum_channel.create_thread(name=title, content=body, suppress_embeds=True)
                 thread, message = _unpack_thread_result(result)
                 results.append(
                     MirrorResult(
@@ -279,7 +279,7 @@ class DiscordFanout:
                     thread,
                     reply_context.get_reference_for_thread(delivery.discord_thread_id),
                 )
-                sent = await thread.send(content=content, reference=reference)
+                sent = await thread.send(content=content, reference=reference, suppress_embeds=True)
                 results.append(
                     MirrorMessageResult(
                         channel_id=delivery.discord_channel_id,

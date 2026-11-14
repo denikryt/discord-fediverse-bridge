@@ -158,7 +158,7 @@ class LocalCommunityInboundCreateHandler:
             )
             raise
         try:
-            created = await forum_channel.create_thread(name=title, content=content)
+            created = await forum_channel.create_thread(name=title, content=content, suppress_embeds=True)
             created_thread, starter_message = unpack_created_thread(created)
         except Exception:
             self.database.local_community_content.finish_inbound_host_attempt(
@@ -313,7 +313,7 @@ class LocalCommunityInboundCreateHandler:
             )
             raise
         try:
-            created_message = await discord_thread.send(content, **send_kwargs)
+            created_message = await discord_thread.send(content, suppress_embeds=True, **send_kwargs)
         except Exception:
             self.database.local_community_content.finish_inbound_host_attempt(
                 canonical_id=message_row.id, attempt_id=reservation.attempt_id,

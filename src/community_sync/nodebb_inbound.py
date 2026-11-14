@@ -7,12 +7,13 @@ HTTP adapter; claimed note authors are pinned to immutable canonical rows.
 
 from __future__ import annotations
 
+import asyncio
 from datetime import datetime, timezone
 from typing import Any
 
 from ..activitypub_models import ActivityPubEvent, RemoteGroupAnnounceEvent
 from ..inbound_activity_outcomes import InboundActivityOutcome
-from ..nodebb_discovery import AP_ACCEPT, NodeBBDiscoveryError, SecureNodeBBJSON, _origin
+from ..nodebb_discovery import AP_ACCEPT, NodeBBDiscoveryError, NodeBBUnavailable, SecureNodeBBJSON, _origin
 from .inbound_mapping import get_accepted_subscriptions
 from .nodebb_backfill import _uri, fetch_verified_historical_root
 
@@ -48,9 +49,35 @@ def _confirmed_note(note: dict[str, Any], object_id: str, group_id: str,
     return True
 
 
+async def _author_username(owner: str, policy: object) -> str:
+    """Resolve a NodeBB Person's display handle without changing AP ownership.
+
+    Profile fetching is optional presentation data. Failed or inconsistent actor
+    documents cannot block verified Group content or redefine its owner ID.
+    """
+    fallback = owner.rstrip("/").rsplit("/", 1)[-1] or "remote"
+    try:
+        # Actor labels are non-authoritative presentation metadata: keep this
+        # optional fetch shorter than the full Group/Note verification budget.
+        actor = await asyncio.wait_for(
+            SecureNodeBBJSON(_origin(owner), policy)(owner, AP_ACCEPT), timeout=3.0,
+        )
+    except (NodeBBDiscoveryError, NodeBBUnavailable, OSError, ValueError, TypeError, KeyError):
+        return fallback
+    if not isinstance(actor, dict) or actor.get("id") != owner or actor.get("type") != "Person":
+        return fallback
+    username = actor.get("preferredUsername")
+    # It becomes part of a Discord Markdown attribution label. Never accept a
+    # foreign actor, a second @domain, a control character or formatting ticks.
+    if (isinstance(username, str) and 0 < len(username) <= 100
+            and not any(ch.isspace() or ch in "@`" or ord(ch) < 32 for ch in username)):
+        return username
+    return fallback
+
+
 def _normalized_event(
     note: dict[str, Any], group_id: str, announce_id: str,
-    *, root_id: str | None = None, parent_id: str | None = None,
+    *, author_name: str, root_id: str | None = None, parent_id: str | None = None,
     source: dict[str, Any] | None = None, source_activity_id: str | None = None,
 ) -> ActivityPubEvent:
     """Map a checked Note to the established Python community-sync contract."""
@@ -75,7 +102,7 @@ def _normalized_event(
             "ap_id": ap_id, "kind": "comment" if root_id else "post",
             "lemmy_id": 0, "post_lemmy_id": 0 if root_id else None,
             "post_ap_id": root_id, "parent_ap_id": parent_id,
-            "attributed_to_actor_id": owner, "author_name": owner.rstrip("/").split("/")[-1],
+            "attributed_to_actor_id": owner, "author_name": author_name,
             "title": note.get("name") if isinstance(note.get("name"), str) else None,
             "body_markdown": content, "url": ap_id, "published_at": posted,
         },
@@ -135,7 +162,10 @@ async def handle_nodebb_announcement(event: RemoteGroupAnnounceEvent, runtime: o
         parent_id = _uri(note.get("inReplyTo"))
         source_id = event.object.inner_create_id or event.delivery_id
         if parent_id is None:
-            post = _normalized_event(note, group_id, event.delivery_id,
+            username = await _author_username(
+                _uri(note["attributedTo"]), runtime.bridge_policy_service,
+            )
+            post = _normalized_event(note, group_id, event.delivery_id, author_name=username,
                                      source=event.source_activity_json, source_activity_id=source_id)
             return await runtime.community_runtime.handle_inbound_post(post, runtime)
 
@@ -175,13 +205,19 @@ async def handle_nodebb_announcement(event: RemoteGroupAnnounceEvent, runtime: o
             if (proof is None or not _confirmed_note(proof, root_id, group_id, context)
                     or _uri(proof.get("attributedTo")) != _uri(root_note.get("attributedTo"))):
                 return deny("deferred_unsupported_historical_root", deferred=True)
+            root_username = await _author_username(
+                _uri(proof["attributedTo"]), runtime.bridge_policy_service,
+            )
             root = _normalized_event(proof, group_id, root_id,
-                                     source_activity_id=root_id)
+                                     author_name=root_username, source_activity_id=root_id)
             await runtime.community_runtime.handle_inbound_post(root, runtime)
             existing_root = repository.get_thread_group_by_ap_object(root_id, community_actor_id=group_id)
             if existing_root is None:
                 return deny("verified historical root Discord placement not confirmed", deferred=True)
-        reply = _normalized_event(note, group_id, event.delivery_id,
+        reply_username = await _author_username(
+            _uri(note["attributedTo"]), runtime.bridge_policy_service,
+        )
+        reply = _normalized_event(note, group_id, event.delivery_id, author_name=reply_username,
                                   root_id=root_id, parent_id=parent_id,
                                   source=event.source_activity_json, source_activity_id=source_id)
         return await runtime.community_runtime.handle_inbound_comment(reply, runtime)

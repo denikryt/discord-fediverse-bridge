@@ -437,10 +437,10 @@ async def test_worker_creates_deterministic_thread_and_sends_without_mentions(
         destination_channel_id=10,
         parent_known=True,
     )
-    sent: list[tuple[str, object]] = []
+    sent: list[tuple[str, object, bool]] = []
 
-    async def send(content: str, *, allowed_mentions: object) -> object:
-        sent.append((content, allowed_mentions))
+    async def send(content: str, *, allowed_mentions: object, suppress_embeds: bool) -> object:
+        sent.append((content, allowed_mentions, suppress_embeds))
         return SimpleNamespace(id=777)
 
     thread = SimpleNamespace(send=send)
@@ -464,6 +464,7 @@ async def test_worker_creates_deterministic_thread_and_sends_without_mentions(
 
     assert sent and sent[0][0].endswith("hello @everyone")
     assert isinstance(sent[0][1], discord.AllowedMentions)
+    assert sent[0][2] is True
     with database.session() as session:
         delivery = session.get(InboundDiscordDelivery, created.delivery_id)
         assert delivery.state == "delivered"

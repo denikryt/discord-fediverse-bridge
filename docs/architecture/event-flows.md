@@ -301,8 +301,15 @@ This document explains the major runtime traces through the bridge: user/platfor
    checks canonical object ID, audience, recipients, author and topic context.
    A root Note is a post; a Note with `inReplyTo` is a reply, whose parent chain
    is bounded. The Group signature proves distribution, not a Person signature.
+   For Discord attribution, Python optionally fetches the exact `attributedTo`
+   Person actor via the bounded policy-checked HTTPS adapter and uses a validated
+   `preferredUsername`. Failure leaves a last-path-segment display fallback;
+   neither the fetched label nor that fallback changes canonical owner identity.
 4. For a root created before Follow, an official Group outbox item must
    announce its exact ID; no match within the bounded view yields a deferred
    result, not an inferred membership from `context` or `audience`.
 5. Existing `CommunityRuntime` reserves canonical Group/owner and Discord
    targets before REST. Unknown Discord outcomes remain unresolved.
+   New Discord forum starters and replies suppress automatic link embeds, as
+   do sibling/local-community mirrors and personal-feed replies. This does
+   not edit existing Discord messages or retroactively repair saved names.

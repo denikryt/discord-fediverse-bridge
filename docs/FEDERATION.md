@@ -187,6 +187,18 @@ implemented on this branch. These paths have focused fixture/SQLite tests, but
 without the actual gateway and Discord dependencies. Discovery alone does not
 prove remote acceptance of a Follow or publication.
 
+For a verified NodeBB `Announce(Note|Article)`, the displayed Discord author
+handle is read from the exact `attributedTo` Person actor's `preferredUsername`
+when a bounded, policy-checked actor fetch succeeds. That fetched string is
+presentation metadata only; canonical object ownership, Group membership and
+mutation authorization continue to use the original actor URL. An unavailable
+or inconsistent actor document falls back to the actor URL's last segment.
+New bridge-created Discord forum starters and mirrored replies use
+`suppress_embeds=True` to avoid automatic link-preview cards; the original
+text and URLs remain. This suppresses all embeds on those new messages, not
+only link cards. Previously persisted author labels and already sent Discord
+messages are not automatically rewritten.
+
 Remote subscriptions now reserve the canonical Group actor, verified inbox,
 immutable outbound Follow activity ID, software profile, and the first Discord
 channel binding in one SQLite transaction **before** invoking the Fedify

@@ -105,6 +105,8 @@ async def test_group_announce_uri_root_reply_author_preserved(tmp_path: Path, mo
         assert (root.status, reply.status) == ("processed", "processed")
         assert forum.create_thread.await_count == 1
         assert thread.send.await_count == 1
+        assert forum.create_thread.await_args.kwargs["suppress_embeds"] is True
+        assert thread.send.await_args.kwargs["suppress_embeds"] is True
         row = db.discord_fanout_groups.get_thread_group_by_ap_object(ROOT, community_actor_id=GROUP)
         assert row.source_owner_actor_id == "https://author.example/actors/alice"
         row = db.discord_fanout_groups.get_message_group_by_ap_object(REPLY, community_actor_id=GROUP)
@@ -175,7 +177,11 @@ async def test_nested_create_uses_outer_announce_and_immutable_owner(tmp_path: P
         def __init__(self, _origin, _policy):
             pass
         async def __call__(self, url, _accept):
-            assert url == GROUP  # The Note is inline: no remote Note fetch.
+            # Inline Note avoids a Note fetch, but attribution may still fetch
+            # the author's Person actor for preferredUsername.
+            if url == "https://nodebb.example/uid/7":
+                return {"id": url, "type": "Person", "preferredUsername": "alice"}
+            assert url == GROUP
             return _fixture("category_actor.json")
     monkeypatch.setattr(module, "SecureNodeBBJSON", FixtureFetch)
     try:
@@ -205,5 +211,115 @@ async def test_mismatched_note_audience_rejected_before_host(tmp_path: Path, mon
         result = await handle_nodebb_announcement(_event("announce_root_uri.json"), runtime)
         assert result.status == "skipped" and forum.create_thread.await_count == 0
         assert db.discord_fanout_groups.get_thread_group_by_ap_object(ROOT, community_actor_id=GROUP) is None
+    finally:
+        db.close()
+
+
+@pytest.mark.asyncio
+async def test_nodebb_author_preferred_username_used_for_root_and_reply(tmp_path: Path, monkeypatch) -> None:
+    """A numeric NodeBB actor UID renders its AP preferredUsername on both surfaces."""
+    db, runtime, forum, thread = _runtime(tmp_path)
+    owner = "https://nodebb.example/uid/2"
+    docs = {
+        GROUP: _fixture("category_actor.json"),
+        ROOT: _fixture("root_note.json"),
+        REPLY: _fixture("reply_note.json"),
+        owner: {"id": owner, "type": "Person", "preferredUsername": "nachitima"},
+    }
+    docs[ROOT]["attributedTo"] = owner
+    docs[REPLY]["attributedTo"] = owner
+
+    class FixtureFetch:
+        """Supply signed-object fixtures at the network boundary."""
+        def __init__(self, _origin, _policy):
+            pass
+
+        async def __call__(self, url, _accept):
+            return docs[url]
+
+    import src.community_sync.nodebb_inbound as module
+    monkeypatch.setattr(module, "SecureNodeBBJSON", FixtureFetch)
+    try:
+        assert (await handle_nodebb_announcement(_event("announce_root_uri.json"), runtime)).status == "processed"
+        assert (await handle_nodebb_announcement(_event("announce_reply_uri.json"), runtime)).status == "processed"
+        starter_body = forum.create_thread.await_args.kwargs["content"]
+        reply_body = thread.send.await_args.args[0]
+        assert "nachitima@nodebb.example" in starter_body
+        assert "nachitima@nodebb.example" in reply_body
+        assert "2@nodebb.example" not in starter_body
+        assert "2@nodebb.example" not in reply_body
+        root_row = db.discord_fanout_groups.get_thread_group_by_ap_object(ROOT, community_actor_id=GROUP)
+        reply_row = db.discord_fanout_groups.get_message_group_by_ap_object(REPLY, community_actor_id=GROUP)
+        assert root_row.source_owner_actor_id == owner
+        assert reply_row.source_owner_actor_id == owner
+    finally:
+        db.close()
+
+
+@pytest.mark.asyncio
+async def test_nodebb_author_unavailable_falls_back_without_changing_owner(tmp_path: Path, monkeypatch) -> None:
+    """Failure to fetch an author profile never blocks verified Group delivery."""
+    db, runtime, forum, _ = _runtime(tmp_path)
+    owner = "https://nodebb.example/uid/2"
+    docs = {GROUP: _fixture("category_actor.json"), ROOT: _fixture("root_note.json")}
+    docs[ROOT]["attributedTo"] = owner
+    calls: list[str] = []
+
+    class FixtureFetch:
+        """Emulate a missing optional author actor while root Note is available."""
+        def __init__(self, _origin, _policy):
+            pass
+
+        async def __call__(self, url, _accept):
+            calls.append(url)
+            if url == owner:
+                raise OSError("actor temporarily unavailable")
+            return docs[url]
+
+    import src.community_sync.nodebb_inbound as module
+    monkeypatch.setattr(module, "SecureNodeBBJSON", FixtureFetch)
+    try:
+        result = await handle_nodebb_announcement(_event("announce_root_uri.json"), runtime)
+        assert result.status == "processed"
+        assert calls.count(owner) == 1
+        assert "2@nodebb.example" in forum.create_thread.await_args.kwargs["content"]
+        row = db.discord_fanout_groups.get_thread_group_by_ap_object(ROOT, community_actor_id=GROUP)
+        assert row.source_owner_actor_id == owner
+    finally:
+        db.close()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("profile", [
+    {"id": "https://other.example/uid/2", "type": "Person", "preferredUsername": "forged"},
+    {"id": "https://nodebb.example/uid/2", "type": "Person", "preferredUsername": "forged@other.example"},
+])
+async def test_nodebb_author_ignores_untrusted_profile_labels(
+    tmp_path: Path, monkeypatch, profile: dict,
+) -> None:
+    """Unrelated actors and malformed handles never replace the saved owner."""
+    db, runtime, forum, _ = _runtime(tmp_path)
+    owner = "https://nodebb.example/uid/2"
+    docs = {GROUP: _fixture("category_actor.json"), ROOT: _fixture("root_note.json"), owner: profile}
+    docs[ROOT]["attributedTo"] = owner
+
+    class FixtureFetch:
+        """Return a claimed profile with invalid identity or attribution label."""
+        def __init__(self, _origin, _policy):
+            pass
+
+        async def __call__(self, url, _accept):
+            return docs[url]
+
+    import src.community_sync.nodebb_inbound as module
+    monkeypatch.setattr(module, "SecureNodeBBJSON", FixtureFetch)
+    try:
+        result = await handle_nodebb_announcement(_event("announce_root_uri.json"), runtime)
+        assert result.status == "processed"
+        content = forum.create_thread.await_args.kwargs["content"]
+        assert "forged" not in content
+        assert "2@nodebb.example" in content
+        row = db.discord_fanout_groups.get_thread_group_by_ap_object(ROOT, community_actor_id=GROUP)
+        assert row.source_owner_actor_id == owner
     finally:
         db.close()

@@ -219,6 +219,7 @@ class LocalCommunityDiscordFanout:
                 )
                 created = await forum.create_thread(
                     name=title,
+                    suppress_embeds=True,
                     content=_format_local_mirror_body(
                         author_display_name=author_display_name,
                         content=content,
@@ -328,6 +329,7 @@ class LocalCommunityDiscordFanout:
                         author_display_name=author_display_name,
                         content=content,
                     ),
+                    suppress_embeds=True,
                     **send_kwargs,
                 )
                 self.database.local_community_surfaces.create_local_community_message_surface(
