@@ -588,6 +588,7 @@ async def test_discord_fanout_uses_registered_handle_not_mutable_nickname(
     forum.create_thread.assert_awaited_once_with(
         name="Topic",
         content="`Alice@bridge.example:8443`\n\nhello",
+        suppress_embeds=True,
     )
 
 

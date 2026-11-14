@@ -303,10 +303,10 @@ async def test_phase5_inbound_post_creates_thread_group_and_deliveries(
         f"https://{LEMMY_EXAMPLE_DOMAIN}/post/1"
     )
     forum_ch_100.create_thread.assert_any_await(
-        name="Test Post", content=expected_content
+        name="Test Post", content=expected_content, suppress_embeds=True
     )
     forum_ch_101.create_thread.assert_any_await(
-        name="Test Post", content=expected_content
+        name="Test Post", content=expected_content, suppress_embeds=True
     )
 
     # No PostLink rows must have been written.

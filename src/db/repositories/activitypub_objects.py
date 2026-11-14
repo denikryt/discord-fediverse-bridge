@@ -1,12 +1,14 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+import json
 from datetime import datetime
 
 from sqlalchemy import func, select
 
 from ...models import (
     PublishedActivityObject,
+    UserActorOutboundSource,
     User,
     utcnow,
 )
@@ -62,6 +64,48 @@ class ActivityPubObjectRepository(BaseRepository):
             session.add(published_object)
             session.flush()
             return published_object
+
+    def get_original_create_object_shape(
+        self, published_object: PublishedActivityObject,
+    ) -> tuple[str | None, str | None]:
+        """Recover public type/context from the immutable persisted Create.
+
+        Do not guess remote software from a path, title or current Follow: the
+        original serialized Create is the evidence for public dereference and
+        outbox reconstruction. Older published rows without an outbox source
+        retain their existing Page/Note rendering contract.
+        """
+        with self.session() as session:
+            source = session.scalar(select(UserActorOutboundSource).where(
+                UserActorOutboundSource.published_object_id == published_object.id,
+                UserActorOutboundSource.source_kind == "content_create",
+                UserActorOutboundSource.activity_id == published_object.activity_id,
+            ))
+            if source is None:
+                return None, None
+            if source.activity_json is None:
+                raise ValueError("Published Create source is missing immutable JSON")
+            try:
+                activity = json.loads(source.activity_json)
+                obj = activity["object"]
+                if (activity["type"] != "Create"
+                        or activity["id"] != published_object.activity_id
+                        or activity["actor"] != published_object.actor_url
+                        or not isinstance(obj, dict)
+                        or obj["id"] != published_object.object_id
+                        or obj["attributedTo"] != published_object.actor_url
+                        or obj["type"] not in ("Note", "Page")):
+                    raise ValueError("Create identity conflicts with published object")
+                if published_object.publication_context == "community" and (
+                    obj.get("audience") != published_object.community_actor_url
+                ):
+                    raise ValueError("Create Group differs from published object")
+                context = obj.get("context")
+                if context is not None and (not isinstance(context, str) or not context):
+                    raise ValueError("Invalid immutable Create context")
+            except (KeyError, TypeError, json.JSONDecodeError) as exc:
+                raise ValueError("Malformed immutable published Create") from exc
+            return obj["type"], context
 
     def get_published_activity_object_by_object_id(
         self, object_id: str

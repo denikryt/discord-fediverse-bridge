@@ -229,10 +229,10 @@ async def test_local_community_comment_delete_sends_ap_delete(tmp_path: Path) ->
 
 
 @pytest.mark.asyncio
-async def test_inbound_local_community_post_update_edits_discord_starter(
+async def test_legacy_post_update_without_owner_is_denied(
     tmp_path: Path,
 ) -> None:
-    """A remote post update for a local community should edit the starter message."""
+    """Unknown legacy owner cannot acquire post edit permission from a new event."""
     database, local_runtime = _runtime(tmp_path)
     local_community = _local_community(database)
     database.local_community_content.create_local_community_thread(
@@ -264,17 +264,17 @@ async def test_inbound_local_community_post_update_edits_discord_starter(
         _local_post_event(event_type="post.updated"), runtime
     )
 
-    assert result.status == "processed"
-    starter_message.edit.assert_awaited_once_with(
-        content="**Remote topic**\n\nAuthor: `bob@lemmy.example`\n\nupdated remote post body\n\nhttps://lemmy.example/post/1"
-    )
+    # These old fixtures intentionally have no immutable owner or verified
+    # signed sender. CP22 must deny them rather than infer the owner now.
+    assert result.status == "skipped"
+    starter_message.edit.assert_not_awaited()
 
 
 @pytest.mark.asyncio
-async def test_inbound_local_community_post_delete_marks_discord_starter_deleted(
+async def test_legacy_post_delete_without_owner_is_denied(
     tmp_path: Path,
 ) -> None:
-    """A remote post delete for a local community should mark the starter deleted."""
+    """Unknown legacy owner cannot authorize remote post deletion."""
     database, local_runtime = _runtime(tmp_path)
     local_community = _local_community(database)
     database.local_community_content.create_local_community_thread(
@@ -306,15 +306,15 @@ async def test_inbound_local_community_post_delete_marks_discord_starter_deleted
         _local_post_event(event_type="post.deleted"), runtime
     )
 
-    assert result.status == "processed"
-    starter_message.edit.assert_awaited_once_with(content="*deleted by creator*")
+    assert result.status == "skipped"
+    starter_message.edit.assert_not_awaited()
 
 
 @pytest.mark.asyncio
-async def test_inbound_local_community_comment_update_edits_discord_message(
+async def test_legacy_comment_update_without_owner_is_denied(
     tmp_path: Path,
 ) -> None:
-    """A remote comment update for a local community should edit the Discord copy."""
+    """Unknown legacy reply owner cannot authorize a later edit."""
     database, local_runtime = _runtime(tmp_path)
     local_community = _local_community(database)
     thread_row = database.local_community_content.create_local_community_thread(
@@ -356,17 +356,15 @@ async def test_inbound_local_community_comment_update_edits_discord_message(
         runtime,
     )
 
-    assert result.status == "processed"
-    mirrored_message.edit.assert_awaited_once_with(
-        content="`bob@lemmy.example`\n\nupdated remote comment body"
-    )
+    assert result.status == "skipped"
+    mirrored_message.edit.assert_not_awaited()
 
 
 @pytest.mark.asyncio
-async def test_inbound_local_community_comment_delete_marks_discord_message_deleted(
+async def test_legacy_comment_delete_without_owner_is_denied(
     tmp_path: Path,
 ) -> None:
-    """A remote comment delete for a local community should mark the Discord copy deleted."""
+    """Unknown legacy reply owner cannot authorize deletion."""
     database, local_runtime = _runtime(tmp_path)
     local_community = _local_community(database)
     thread_row = database.local_community_content.create_local_community_thread(
@@ -408,5 +406,5 @@ async def test_inbound_local_community_comment_delete_marks_discord_message_dele
         runtime,
     )
 
-    assert result.status == "processed"
-    mirrored_message.edit.assert_awaited_once_with(content="*deleted by creator*")
+    assert result.status == "skipped"
+    mirrored_message.edit.assert_not_awaited()

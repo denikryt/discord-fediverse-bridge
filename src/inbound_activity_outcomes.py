@@ -25,5 +25,6 @@ class InboundActivityOutcome(StrEnum):
     IGNORED_UNKNOWN_LOCAL_COMMUNITY = "ignored_unknown_local_community"
     IGNORED_ACTOR_NOT_SUBSCRIBER = "ignored_actor_not_subscriber"
     IGNORED_UNMAPPED_CONTEXT = "ignored_unmapped_context"
+    IGNORED_UNAUTHORIZED_MUTATION = "ignored_unauthorized_mutation"
     DEFERRED_MISSING_DEPENDENCY = "deferred_missing_dependency"
     PROCESSING_FAILED = "processing_failed"

@@ -130,7 +130,7 @@ async def _create_inbound_discord_thread(
         actor_id=event.actor_id,
     )
 
-    result = await forum_channel.create_thread(name=title, content=body)
+    result = await forum_channel.create_thread(name=title, content=body, suppress_embeds=True)
     thread = getattr(result, "thread", None)
     message = getattr(result, "message", None)
     if thread is None and isinstance(result, tuple):
@@ -176,7 +176,7 @@ async def _send_inbound_comment(
         comment.url,
         actor_id=event.actor_id,
     )
-    message = await thread.send(body, reference=reference)
+    message = await thread.send(body, reference=reference, suppress_embeds=True)
     logger.info(
         "Created Discord message %s from ActivityPub comment %s",
         message.id,

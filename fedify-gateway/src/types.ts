@@ -20,7 +20,11 @@ export interface BridgeObject {
 
 export interface BridgeContentEvent {
   actor_id: string;
+  /** Outer Fedify-authenticated sender, not the inner Announce(Create) author. */
+  verified_sender_actor_id?: string | null;
   community_actor_id?: string | null;
+  /** Gateway-confirmed local Group recipient; never client-selected. */
+  verified_destination_group_actor_id?: string | null;
   target?: BridgeTarget | null;
   delivery_id: string;
   event_type:
@@ -40,6 +44,21 @@ export interface BridgeContentEvent {
 // BridgeEvent stays as the content-event alias so the existing normalization
 // pipeline keeps its current naming while follow lifecycle uses a separate type.
 export type BridgeEvent = BridgeContentEvent;
+
+/** Signed Group distribution, with object dereferencing delegated to Python. */
+export interface RemoteGroupAnnounceEvent {
+  event_type: "remote.group_announced";
+  delivery_id: string;
+  occurred_at: string;
+  actor_id: string;
+  community_actor_id: string;
+  source_activity_json: Record<string, unknown>;
+  object: {
+    ap_id: string;
+    inline_object: Record<string, unknown> | null;
+    inner_create_id: string | null;
+  };
+}
 
 export interface FollowLifecycleObject {
   follow_activity_id: string;
@@ -86,6 +105,7 @@ export interface LocalUnfollowRequestedEvent {
 
 export type InternalBridgeEvent =
   | BridgeContentEvent
+  | RemoteGroupAnnounceEvent
   | FollowAcceptedEvent
   | LocalFollowRequestedEvent
   | LocalUnfollowRequestedEvent;
@@ -111,6 +131,29 @@ export interface RenderPersonalFeedRequest {
 }
 
 export interface RenderPersonalFeedResult {
+  activityId: string;
+  objectId: string;
+  publishedAt: string;
+  activityJson: Record<string, unknown>;
+}
+
+export interface RenderCommunityCreateRequest {
+  /** Caller-owned identity; never generated from gateway wall-clock time. */
+  actorUsername: string;
+  communityActorUrl: string;
+  softwareProfile: "nodebb" | "threadiverse" | "bridge";
+  kind: "post" | "comment";
+  operationId: string;
+  activityId: string;
+  objectId: string;
+  title: string | null;
+  bodyMarkdown: string;
+  publishedAt: string;
+  inReplyToObjectId: string | null;
+  conversationRootObjectId: string | null;
+}
+
+export interface RenderCommunityCreateResult {
   activityId: string;
   objectId: string;
   publishedAt: string;
@@ -179,6 +222,9 @@ export interface UpdateContentRequest {
   mutationTimestamp?: string | null;
   expectedRevision?: number | null;
   nextRevision?: number | null;
+  // Only immutable, Python-verified remote Group mutations use render-only.
+  renderOnly?: boolean;
+  softwareProfile?: "nodebb" | "threadiverse" | "bridge" | null;
 }
 
 export interface DeleteContentRequest {
@@ -194,6 +240,9 @@ export interface DeleteContentRequest {
   mutationTimestamp?: string | null;
   expectedRevision?: number | null;
   nextRevision?: number | null;
+  // Only immutable, Python-verified remote Group mutations use render-only.
+  renderOnly?: boolean;
+  softwareProfile?: "nodebb" | "threadiverse" | "bridge" | null;
 }
 
 export interface AcceptLocalCommunityFollowRequest {
@@ -234,6 +283,8 @@ export interface SendLocalCommunityRelayOutcome {
   ok: boolean;
   activityId: string | null;
   error: string | null;
+  /** Evidence that the gateway rejected this target before any network send. */
+  safeToRetry?: boolean;
 }
 
 export interface SendLocalCommunityRelayResult {

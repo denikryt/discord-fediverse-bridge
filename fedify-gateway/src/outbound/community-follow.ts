@@ -6,6 +6,7 @@
  */
 
 import { Follow, Undo } from "@fedify/vocab";
+import { createHash } from "node:crypto";
 import type { Federation } from "@fedify/fedify";
 
 import type { GatewayConfig } from "../config.js";
@@ -16,10 +17,87 @@ import { renderPublicActivityJson } from "./activity-json.js";
 import { fetchRemoteCommunity } from "./remote-actor.js";
 import { sendSignedJsonActivity, shouldLogSignedJsonDelivery } from "./signed-json-delivery.js";
 
+/** Identifies a locally proven failure before any remote HTTP Follow is attempted. */
+export class FollowSenderUnavailableError extends Error {
+  constructor() {
+    super("Bridge service signing key unavailable");
+    this.name = "FollowSenderUnavailableError";
+  }
+}
+
 export interface FollowCommunityResult {
   communityActorUrl: string;
   communityInboxUrl: string;
   followActivityId: string;
+}
+
+/** Prepare an immutable Follow identity and verified target without sending. */
+export async function prepareCommunityFollow(
+  config: GatewayConfig,
+  communityActorUrl: string,
+): Promise<FollowCommunityResult> {
+  // The Python writer must commit this complete tuple and a channel binding
+  // before a sender is allowed to contact the remote inbox.
+  const { communityId, inboxUrl } = await fetchRemoteCommunity(communityActorUrl);
+  return {
+    communityActorUrl: communityId,
+    communityInboxUrl: inboxUrl,
+    followActivityId: buildServiceFollowActivityId(
+      config.fedifyOrigin,
+      config.actorIdentifier,
+      `${Date.now()}-${Math.random().toString(36).slice(2)}`,
+    ).href,
+  };
+}
+
+/** Send exactly the Follow reserved by the Python persistence boundary. */
+export async function sendPreparedCommunityFollow(
+  federation: Federation<GatewayConfig>,
+  config: GatewayConfig,
+  prepared: FollowCommunityResult,
+): Promise<void> {
+  // Never synthesize a replacement ID or re-fetch a possibly changed target:
+  // both the original actor and inbox are part of the durable reservation.
+  const actor = new URL(prepared.communityActorUrl);
+  const inbox = new URL(prepared.communityInboxUrl);
+  const followId = new URL(prepared.followActivityId);
+  if (actor.protocol !== "https:" || inbox.protocol !== "https:") {
+    throw new Error("prepared Follow recipient must use HTTPS");
+  }
+  const expectedPrefix = buildServiceFollowActivityId(
+    config.fedifyOrigin, config.actorIdentifier, "placeholder",
+  ).href.replace(/placeholder$/, "");
+  if (!followId.href.startsWith(expectedPrefix) || followId.origin !== new URL(config.fedifyOrigin).origin) {
+    throw new Error("prepared Follow ID does not belong to this bridge service");
+  }
+  const ctx = federation.createContext(new URL(config.fedifyOrigin), config);
+  const actorTail = `services/${config.actorIdentifier}`;
+  // Resolve the configured Service key before invoking Fedify. This is the
+  // only failure we can prove happened before remote HTTP delivery and thus
+  // safely unlock for retry with the same durable Follow ID.
+  try {
+    if (await loadActorKeyPair(config, actorTail) == null) {
+      throw new FollowSenderUnavailableError();
+    }
+  } catch {
+    throw new FollowSenderUnavailableError();
+  }
+  const follow = new Follow({
+    id: followId,
+    actor: ctx.getActorUri(actorTail),
+    object: actor,
+  });
+  // This slash-containing tail is a dispatcher identifier, not a WebFinger
+  // username. Fedify would call mapHandle("services/bridge") for username,
+  // which cannot resolve the service key (the public handle is "bridge").
+  await ctx.sendActivity(
+    { identifier: actorTail },
+    { id: actor, inboxId: inbox },
+    follow,
+    // Follow is already durable in Python. Bypass Fedify's volatile outbox
+    // queue so a successful return means HTTP delivery, not queue admission.
+    { immediate: true },
+  );
 }
 
 /** Publish one bridge actor Follow activity to a remote community actor. */
@@ -68,10 +146,14 @@ export async function followCommunity(
 
   // Fedify signs and delivers the activity; this helper only prepares the
   // target identity and object URLs.
+  // The service sender is addressed by the typed actor identifier, not by
+  // its public WebFinger username ("bridge").
   await ctx.sendActivity(
-    { username: serviceActorTail },
+    { identifier: serviceActorTail },
     { id: new URL(communityId), inboxId: new URL(inboxUrl) },
     follow,
+    // Operational bootstrap uses the same synchronous HTTP semantics.
+    { immediate: true },
   );
 
   console.log("[Follow] Successfully sent Follow activity");
@@ -88,12 +170,20 @@ export async function unfollowCommunity(
   config: GatewayConfig,
   communityActorUrl: string,
   followActivityId: string,
+  originalInboxUrl?: string,
 ): Promise<void> {
   const ctx = federation.createContext(new URL(config.fedifyOrigin), config);
   const serviceActorTail = `services/${config.actorIdentifier}`;
   const actorUri = ctx.getActorUri(serviceActorTail);
 
-  const { communityId, inboxUrl } = await fetchRemoteCommunity(communityActorUrl);
+  // The Undo must go to the original, verified Group recipient. Fetching a
+  // changed actor document after cancellation could redirect this generation.
+  const { communityId, inboxUrl } = originalInboxUrl == null
+    ? await fetchRemoteCommunity(communityActorUrl)
+    : { communityId: communityActorUrl, inboxUrl: originalInboxUrl };
+  if (new URL(communityId).protocol !== "https:" || new URL(inboxUrl).protocol !== "https:") {
+    throw new Error("saved Undo recipient must use HTTPS");
+  }
 
   const undo = buildLemmyCompatibleUnfollowActivity(
     config,
@@ -155,7 +245,7 @@ export function buildLemmyCompatibleUnfollowActivity(
     id: buildServiceUndoFollowActivityId(
       config.fedifyOrigin,
       config.actorIdentifier,
-      `${Date.now()}-${Math.random().toString(36).slice(2)}`,
+      createHash("sha256").update(followActivityId, "utf8").digest("hex"),
     ),
     actor: actorUri,
     object: new Follow({

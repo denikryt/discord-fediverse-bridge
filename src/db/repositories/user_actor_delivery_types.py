@@ -24,6 +24,8 @@ class ClaimedUserActorDelivery:
     represented_actor_ids: tuple[str, ...]
     activity_json: dict
     claim_token: str
+    # Verified original Group grants are separate from User Actor follower grants.
+    direct_group_routes: tuple[tuple[str, str], ...] = ()
 
 
 @dataclass(frozen=True, slots=True)

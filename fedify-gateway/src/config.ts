@@ -19,6 +19,8 @@ export interface GatewayContextData extends GatewayConfig {
   // recovery may need the original JSON body.
   activitypubRawJson?: unknown;
   activitypubRawBodySha256?: string;
+  /** Server-derived inbox class survives Fedify's asynchronous callbacks. */
+  activitypubInboxPath?: "shared" | "actor";
   activitypubInboxOwner?: {
     kind: "service" | "user" | "community";
     identifier: string;

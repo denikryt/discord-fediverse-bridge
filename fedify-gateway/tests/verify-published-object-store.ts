@@ -21,6 +21,7 @@ const PUBLIC_IRI = "https://www.w3.org/ns/activitystreams#Public";
 const CANONICAL_ALICE_ACTOR = `${BRIDGE_ORIGIN}/actors/users/alice`;
 
 async function main(): Promise<void> {
+  testPublicNodebbObjectMatchesStoredCreate();
   await testStoredPostBuildsPageJsonAndResolvesWithoutHttp();
   await testStoredCommentWalksLocalReplyChainWithoutHttp();
   await testStoredActivitiesLoadByActivityIdAndRenderCreate();
@@ -28,6 +29,30 @@ async function main(): Promise<void> {
   await testActivityLookupHandlesUnknownAndMissingTable();
   await testStoredObjectsRemainReadableAcrossFreshDbOpens();
   console.log("published object store verification passed");
+}
+
+/** A public dereference/outbox object must retain the verified Create's format. */
+function testPublicNodebbObjectMatchesStoredCreate(): void {
+  const root = `${BRIDGE_ORIGIN}/actors/users/alice/objects/posts/nodebb-root`;
+  const base = {
+    actorUsername: "alice", actorUrl: CANONICAL_ALICE_ACTOR,
+    publicationContext: "community" as const, communityActorUrl: "https://nodebb.example/category/42",
+    activityId: `${BRIDGE_ORIGIN}/actors/users/alice/activities/create/posts/nodebb-root`,
+    objectId: root, kind: "post" as const, title: "NodeBB topic", bodyMarkdown: "First text",
+    inReplyToObjectId: null, publishedAt: "2026-05-08T12:00:00Z",
+    discordGuildId: 1, discordChannelId: 2, discordMessageId: 3,
+    originalObjectType: "Note" as const, originalObjectContext: root,
+  };
+  const object = buildPublishedActivityObjectJson(base);
+  assert.equal(object.type, "Note");
+  assert.equal(object.context, root);
+  const create = buildPublishedCreateActivityJson(base);
+  assert.deepEqual(create.object, object);
+  assert.equal((create.object as Record<string, unknown>).context, root);
+  // Existing Lemmy root posts retain the historical Page contract.
+  assert.equal(buildPublishedActivityObjectJson({
+    ...base, originalObjectType: "Page", originalObjectContext: null,
+  }).type, "Page");
 }
 
 async function testStoredPostBuildsPageJsonAndResolvesWithoutHttp(): Promise<void> {

@@ -51,8 +51,14 @@ class ActivityPubEvent(BaseModel):
     delivery_id: str
     occurred_at: datetime
     community_actor_id: str | None = None
+    # Gateway-owned recipient proof. Only authenticated local-Group content
+    # uses it; never derive this identity in Python from arbitrary addressing.
+    verified_destination_group_actor_id: str | None = None
     target: ActivityPubTarget | None = None
     actor_id: str
+    # Server-generated evidence from the outer Fedify-verified activity.
+    # An Announce cannot certify that its embedded Person signed a Create.
+    verified_sender_actor_id: str | None = None
     object: ActivityPubObject
     source_activity_json: dict[str, Any] | None = None
     source_activity_id: str | None = None
@@ -60,6 +66,14 @@ class ActivityPubEvent(BaseModel):
 
     @model_validator(mode="after")
     def validate_event_shape(self) -> "ActivityPubEvent":
+        # A scoped receipt must be tied to exactly the canonical community
+        # selected at the signed inbox boundary. Personal feeds stay global.
+        verified = self.verified_destination_group_actor_id
+        if verified is not None and (
+            not verified or verified != self.community_actor_id
+            or (self.target is not None and self.target.kind != "community")
+        ):
+            raise ValueError("verified destination must match community actor")
         # The event type and object kind must stay in sync because downstream
         # handlers branch on that contract instead of re-inspecting payloads.
         post_events = {"post.created", "post.updated", "post.deleted"}
@@ -94,6 +108,52 @@ class ActivityPubEvent(BaseModel):
                 raise ValueError("comment.created requires object.post_lemmy_id")
             if self.object.lemmy_id is None:
                 raise ValueError("community content requires object.lemmy_id")
+        return self
+
+
+class RemoteGroupAnnounceObject(BaseModel):
+    """One verified Group distribution target, not a Person-signed Create."""
+
+    model_config = ConfigDict(extra="forbid")
+    ap_id: str
+    inline_object: dict[str, Any] | None = None
+    inner_create_id: str | None = None
+
+
+class RemoteGroupAnnounceEvent(BaseModel):
+    """Pass a signed Group Announce to Python for secure NodeBB object resolution.
+
+    Fedify validates the incoming request before the gateway builds this event.
+    Python must additionally validate the accepted NodeBB Follow and canonical
+    Group identity before it trusts an inline object or fetches an URI target.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+    event_type: Literal["remote.group_announced"]
+    actor_id: str
+    community_actor_id: str
+    delivery_id: str
+    occurred_at: datetime
+    object: RemoteGroupAnnounceObject
+    source_activity_json: dict[str, Any]
+
+    @model_validator(mode="after")
+    def validate_signed_envelope_identity(self) -> "RemoteGroupAnnounceEvent":
+        """Reject internal mismatches before receipt admission or any fetch."""
+        source = self.source_activity_json
+        if (source.get("type") != "Announce" or source.get("id") != self.delivery_id
+                or source.get("actor") != self.actor_id or self.actor_id != self.community_actor_id):
+            raise ValueError("Group distribution identity conflicts with signed envelope")
+        obj = source.get("object")
+        if isinstance(obj, dict) and obj.get("type") == "Create":
+            if obj.get("id") != self.object.inner_create_id:
+                raise ValueError("inner Create identity conflicts with signed envelope")
+            obj = obj.get("object")
+        source_id = obj if isinstance(obj, str) else obj.get("id") if isinstance(obj, dict) else None
+        if source_id != self.object.ap_id:
+            raise ValueError("Group distributed object identity mismatch")
+        if isinstance(obj, dict) and obj != self.object.inline_object:
+            raise ValueError("Group distributed inline object mismatch")
         return self
 
 
@@ -167,6 +227,7 @@ class LocalUnfollowRequestEvent(BaseModel):
 
 BridgeGatewayEvent = Annotated[
     ActivityPubEvent
+    | RemoteGroupAnnounceEvent
     | FollowLifecycleEvent
     | LocalFollowRequestEvent
     | LocalUnfollowRequestEvent,

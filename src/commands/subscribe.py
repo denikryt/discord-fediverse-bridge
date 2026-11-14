@@ -217,8 +217,12 @@ def _community_autocomplete(
                     policy_snapshot=policy_service.snapshot(),
                 )
             except Exception:
-                logger.exception("Failed to autocomplete communities from Lemmyverse")
+                logger.info(
+                    "Community autocomplete empty origin=none reason=discovery_http_error"
+                )
                 return []
+            if not raw_choices:
+                logger.info("Community autocomplete empty origin=none reason=missing_instance")
             return [
                 app_commands.Choice(name=name, value=value)
                 for name, value in raw_choices
@@ -226,13 +230,27 @@ def _community_autocomplete(
 
         try:
             normalized_origin = normalize_instance_domain(instance_url)
-        except CommunityResolutionError:
+        except (CommunityResolutionError, ValueError):
+            logger.info("Community autocomplete empty origin=invalid reason=missing_instance")
             return []
         if (
             not is_bridge_origin(normalized_origin, settings)
             and not policy_service.federation_decision(normalized_origin).allowed
         ):
+            logger.info(
+                "Community autocomplete empty origin=%s reason=denied_origin",
+                normalized_origin,
+            )
             return []
+
+        def report_discovery_reason(code: str) -> None:
+            """Log one vetted status code, never remote payloads or credentials."""
+            logger.info(
+                "Community autocomplete empty origin=%s reason=%s",
+                normalized_origin,
+                code,
+            )
+
         try:
             raw_choices = await autocomplete_communities(
                 settings,
@@ -240,11 +258,13 @@ def _community_autocomplete(
                 current=current,
                 fetch_bridge_communities=fetch_bridge_community_summaries,
                 lemmy_client_cls=LemmyClient,
+                on_diagnostic=report_discovery_reason,
+                policy_service=policy_service,
             )
         except Exception:
-            logger.exception(
-                "Failed to autocomplete communities from %s", normalized_origin
-            )
+            # The internal diagnostic is deliberately bounded to a stable code.
+            # Arbitrary HTTP exception messages may contain private response data.
+            report_discovery_reason("malformed_response")
             return []
         return [
             app_commands.Choice(name=name, value=value) for name, value in raw_choices

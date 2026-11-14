@@ -97,7 +97,7 @@ function buildUpdateActivity(
     : Temporal.Instant.from(request.mutationTimestamp);
 
   let object;
-  if (request.kind === "post") {
+  if (request.kind === "post" && request.softwareProfile !== "nodebb") {
     object = new Page({
       id: objectId,
       name: request.title ?? "Untitled Discord Post",
@@ -120,6 +120,7 @@ function buildUpdateActivity(
       source,
       content: htmlContent,
       updated,
+      ...(request.kind === "post" ? { name: request.title ?? "Untitled Discord Post" } : {}),
     };
     if (request.inReplyToObjectId) {
       noteParams.replyTarget = new URL(request.inReplyToObjectId);
@@ -175,6 +176,48 @@ function buildDeleteActivity(
   };
 }
 
+/** Refuse any unproven render-only mutation at the gateway boundary. */
+function validateDirectMutationRender(request: UpdateContentRequest | DeleteContentRequest): void {
+  if (request.publicationContext !== "community" ||
+      !request.communityActorUrl ||
+      !request.operationId || !request.activityId ||
+      request.targetInboxUrls != null ||
+      !["nodebb", "threadiverse", "bridge"].includes(request.softwareProfile ?? "")) {
+    throw new Error("remote Group mutation render requires immutable verified Create provenance");
+  }
+  const group = new URL(request.communityActorUrl);
+  if (group.protocol !== "https:" || group.hash || group.username || group.password) {
+    throw new Error("remote Group mutation requires an HTTPS canonical actor");
+  }
+  if (request.softwareProfile === "nodebb" &&
+      (!request.conversationRootObjectId ||
+       new URL(request.conversationRootObjectId).protocol !== "https:")) {
+    throw new Error("NodeBB mutation requires the persisted conversation root");
+  }
+}
+
+/** Preserve the persisted NodeBB conversation root in the signed JSON payload.
+ *
+ * Fedify's Note constructor currently drops `context` during serialization.
+ * The render-only community path signs the resulting JSON, not the transient
+ * Note object, so add the verified root after serialization and before commit.
+ */
+async function serializeUpdate(
+  activity: Update, request: UpdateContentRequest,
+): Promise<Record<string, unknown>> {
+  const json = await renderPublicActivityJson(activity);
+  if (request.softwareProfile === "nodebb" && request.conversationRootObjectId) {
+    const obj = json.object;
+    if (obj == null || typeof obj !== "object" || Array.isArray(obj) ||
+        (obj as Record<string, unknown>).type !== "Note" ||
+        (obj as Record<string, unknown>).id !== request.apObjectId) {
+      throw new Error("NodeBB Update is missing its canonical Note identity");
+    }
+    (obj as Record<string, unknown>).context = new URL(request.conversationRootObjectId).href;
+  }
+  return json;
+}
+
 /** Build and deliver or render one canonical content Update activity. */
 export async function updateContent(
   federation: Federation<GatewayConfig>,
@@ -183,12 +226,29 @@ export async function updateContent(
 ): Promise<CanonicalMutationResult> {
   // Update delivery mirrors publish delivery: same actor URI, same community
   // fetch, but wraps the object in an Update activity instead of Create.
+  // NodeBB context is preserved in the saved signed JSON only; the old
+  // Fedify.sendActivity object path cannot serialize it and must fail closed.
+  if (request.softwareProfile === "nodebb" && request.publicationContext === "community" &&
+      request.renderOnly !== true) {
+    throw new Error("NodeBB Update requires durable render-only delivery");
+  }
   const builtUpdate = buildUpdateActivity(config, request);
+  if (request.renderOnly === true) {
+    // Unlike the legacy remote path, this call must not perform discovery or
+    // Fedify.sendActivity. Python commits the canonical mutation first, then
+    // the existing User Actor worker authorizes its original Group recipient.
+    validateDirectMutationRender(request);
+    return {
+      activityId: builtUpdate.activityId.href,
+      objectId: request.apObjectId,
+      activityJson: await serializeUpdate(builtUpdate.activity, request),
+    };
+  }
   if (request.publicationContext === "personal_feed") {
     return {
       activityId: builtUpdate.activityId.href,
       objectId: request.apObjectId,
-      activityJson: await renderPublicActivityJson(builtUpdate.activity),
+      activityJson: await serializeUpdate(builtUpdate.activity, request),
     };
   }
   if (request.communityActorUrl == null) throw new Error("community mutation requires communityActorUrl");
@@ -196,7 +256,7 @@ export async function updateContent(
     return {
       activityId: builtUpdate.activityId.href,
       objectId: request.apObjectId,
-      activityJson: await renderPublicActivityJson(builtUpdate.activity),
+      activityJson: await serializeUpdate(builtUpdate.activity, request),
     };
   }
 
@@ -226,7 +286,7 @@ export async function updateContent(
     return {
       activityId: builtUpdate.activityId.href,
       objectId: request.apObjectId,
-      activityJson: await renderPublicActivityJson(builtUpdate.activity),
+      activityJson: await serializeUpdate(builtUpdate.activity, request),
     };
   } catch (err) {
     console.error("[Update] sendActivity failed:", err);
@@ -243,6 +303,14 @@ export async function deleteContent(
   // Delete delivery uses the AP object URL as the object field (string form, not
   // a full object), matching the Lemmy federation protocol for Delete activities.
   const builtDelete = buildDeleteActivity(config, request);
+  if (request.renderOnly === true) {
+    validateDirectMutationRender(request);
+    return {
+      activityId: builtDelete.activityId.href,
+      objectId: request.apObjectId,
+      activityJson: await renderPublicActivityJson(builtDelete.activity),
+    };
+  }
   if (request.publicationContext === "personal_feed") {
     return {
       activityId: builtDelete.activityId.href,

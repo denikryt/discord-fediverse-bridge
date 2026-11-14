@@ -1,0 +1,23 @@
+{
+  "@context": [
+    "https://www.w3.org/ns/activitystreams",
+    "https://w3id.org/security/v1",
+    "https://join-lemmy.org/context.json"
+  ],
+  "endpoints": {
+    "sharedInbox": "https://nodebb.example/inbox"
+  },
+  "id": "https://nodebb.example/category/42",
+  "inbox": "https://nodebb.example/category/42/inbox",
+  "name": "Discussion",
+  "outbox": "https://nodebb.example/category/42/outbox",
+  "postingRestrictedToMods": false,
+  "preferredUsername": "discussion",
+  "publicKey": {
+    "id": "https://nodebb.example/category/42#key",
+    "owner": "https://nodebb.example/category/42",
+    "publicKeyPem": "FIXTURE_ONLY_PUBLIC_KEY"
+  },
+  "type": "Group",
+  "url": "https://nodebb.example/category/42/discussion"
+}

@@ -12,6 +12,8 @@ from sqlalchemy.orm import Session
 
 from ...models import (
     User,
+    BridgeActorFollow,
+    ChannelCommunitySubscription,
     UserActorFollower,
     UserActorOutboundDelivery,
     UserActorOutboundDeliveryFollower,
@@ -62,7 +64,7 @@ class UserActorDeliveryClaimRepository:
                 if newer_delete_status == "delivered":
                     self._mark_terminal_without_claim(delivery, status="superseded")
                     continue
-                if newer_delete_status in {"pending", "failed", "sending"}:
+                if newer_delete_status in {"pending", "failed", "sending", "unknown"}:
                     continue
 
                 # A newer acknowledged profile makes this older replacement
@@ -77,13 +79,30 @@ class UserActorDeliveryClaimRepository:
                 ):
                     continue
 
-                # Historical audience rows are transportable only while an
-                # exact snapshotted follower incarnation remains accepted.
+                # The first Group-targeted Create retains immutable Follow and
+                # inbox proof; revalidate all saved grants under this writer lock.
+                # A revoked Group cannot be revived by an unrelated follower
+                # whose shared endpoint happens to be identical.
+                direct_routes = self._eligible_direct_routes(session, source)
+                # A previously claimed direct send remains ambiguous even if
+                # its Follow was revoked while the worker was unavailable.
+                # Classify the old attempt before checking current eligibility.
+                if delivery.status == "sending" and direct_routes is not None:
+                    self._mark_terminal_without_claim(delivery, status="unknown")
+                    delivery.last_error = "direct Group send may have completed before worker restart"
+                    delivery.next_attempt_at = None
+                    continue
+                if direct_routes is not None and not direct_routes:
+                    self._mark_terminal_without_claim(delivery, status="ineligible")
+                    continue
                 represented_actor_ids = self._eligible_actor_ids(
                     session, delivery.id, source.user_id
                 )
+                group_ids = tuple(actor for actor, inbox in (direct_routes or ())
+                                  if inbox == delivery.target_endpoint_url)
+                allowed_actors = tuple(dict.fromkeys((*represented_actor_ids, *group_ids)))
                 user = session.get(User, source.user_id)
-                if not represented_actor_ids or user is None:
+                if not allowed_actors or user is None:
                     self._mark_terminal_without_claim(delivery, status="ineligible")
                     continue
 
@@ -91,7 +110,8 @@ class UserActorDeliveryClaimRepository:
                     delivery=delivery,
                     source=source,
                     user=user,
-                    represented_actor_ids=represented_actor_ids,
+                    represented_actor_ids=allowed_actors,
+                    direct_group_routes=direct_routes or (),
                     claimed_at=now,
                 )
                 claimed.append(claimed_delivery)
@@ -175,6 +195,10 @@ class UserActorDeliveryClaimRepository:
         """Return the nearest newer terminal Delete status for content rows."""
         if source.source_kind not in {"content_create", "content_update"}:
             return None
+        # Direct Group mutations cannot replace an unsent Create; preserving
+        # chronological Create→Update→Delete is required even for terminal Delete.
+        if UserActorDeliveryClaimRepository._has_direct_group_snapshot(source):
+            return None
         return session.scalar(
             select(UserActorOutboundDelivery.status)
             .join(UserActorOutboundSource)
@@ -185,7 +209,7 @@ class UserActorDeliveryClaimRepository:
                 UserActorOutboundSource.logical_version > source.logical_version,
                 UserActorOutboundSource.source_kind == "content_delete",
                 UserActorOutboundDelivery.status.in_(
-                    ("pending", "failed", "sending", "delivered")
+                    ("pending", "failed", "sending", "unknown", "delivered")
                 ),
             )
             .order_by(UserActorOutboundSource.logical_version.desc())
@@ -230,9 +254,11 @@ class UserActorDeliveryClaimRepository:
     ) -> bool:
         """Apply FIFO except that terminal Delete may bypass unsent failures."""
         blocking_statuses = (
-            ("sending",)
+            ("pending", "failed", "sending", "unknown", "ineligible", "superseded")
+            if UserActorDeliveryClaimRepository._has_direct_group_snapshot(source)
+            else ("sending", "unknown")
             if source.source_kind == "content_delete"
-            else ("pending", "failed", "sending")
+            else ("pending", "failed", "sending", "unknown")
         )
         return (
             session.scalar(
@@ -266,6 +292,7 @@ class UserActorDeliveryClaimRepository:
         source: UserActorOutboundSource,
         user: User,
         represented_actor_ids: tuple[str, ...],
+        direct_group_routes: tuple[tuple[str, str], ...],
         claimed_at: datetime,
     ) -> ClaimedUserActorDelivery:
         """Transition one eligible candidate to sending and return its payload."""
@@ -283,9 +310,72 @@ class UserActorDeliveryClaimRepository:
             actor_url=user.actor_url,
             target_endpoint_url=delivery.target_endpoint_url,
             represented_actor_ids=represented_actor_ids,
+            direct_group_routes=direct_group_routes,
             activity_json=json.loads(source.activity_json),
             claim_token=token,
         )
+
+    @staticmethod
+    def _has_direct_group_snapshot(source: UserActorOutboundSource) -> bool:
+        """Identify a direct-grant content source without reclassifying followers."""
+        try:
+            snapshot = json.loads(source.snapshot_json)
+        except (TypeError, ValueError):
+            return False
+        return isinstance(snapshot, dict) and "directGroupRecipients" in snapshot
+
+    @staticmethod
+    def _eligible_direct_routes(
+        session: Session, source: UserActorOutboundSource,
+    ) -> tuple[tuple[str, str], ...] | None:
+        """Verify the immutable original Group Follow and binding, if present.
+
+        ``None`` means a follower-only source. Empty tuple means the Group
+        grant was removed, modified or malformed, and must block all fanout.
+        """
+        try:
+            snapshot = json.loads(source.snapshot_json)
+        except (TypeError, ValueError):
+            return ()
+        if not isinstance(snapshot, dict) or "directGroupRecipients" not in snapshot:
+            return None
+        recipients = snapshot.get("directGroupRecipients")
+        if source.source_kind not in {"content_create", "content_update", "content_delete"} or not isinstance(recipients, list) or not recipients:
+            return ()
+        accepted: list[tuple[str, str]] = []
+        for recipient in recipients:
+            if not isinstance(recipient, dict):
+                return ()
+            try:
+                actor = recipient["actorId"]
+                inbox = recipient["inboxUrl"]
+                follow_id = recipient["followActivityId"]
+                profile = recipient["softwareProfile"]
+                channel_id = recipient["discordChannelId"]
+                guild_id = recipient["discordGuildId"]
+            except KeyError:
+                return ()
+            follow = session.scalar(select(BridgeActorFollow).where(
+                BridgeActorFollow.community_actor_id == actor,
+                BridgeActorFollow.community_inbox_url == inbox,
+                BridgeActorFollow.follow_activity_id == follow_id,
+                BridgeActorFollow.remote_software_profile == profile,
+                BridgeActorFollow.status == "accepted",
+                BridgeActorFollow.cancel_requested.is_(False),
+                BridgeActorFollow.follow_dispatch_state == "sent",
+            ))
+            binding = session.scalar(select(ChannelCommunitySubscription).where(
+                ChannelCommunitySubscription.discord_channel_id == channel_id,
+                ChannelCommunitySubscription.discord_guild_id == guild_id,
+                ChannelCommunitySubscription.lemmy_community_actor_id == actor,
+                ChannelCommunitySubscription.community_inbox_url == inbox,
+                ChannelCommunitySubscription.follow_activity_id == follow_id,
+                ChannelCommunitySubscription.status == "accepted",
+            ))
+            if follow is None or binding is None or profile not in {"nodebb", "threadiverse", "bridge"}:
+                return ()
+            accepted.append((actor, inbox))
+        return tuple(accepted)
 
     @staticmethod
     def _eligible_actor_ids(

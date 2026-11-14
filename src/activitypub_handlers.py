@@ -44,9 +44,9 @@ class HandlerResult:
 
 
 async def dispatch_activitypub_event(
-    event: BridgeGatewayEvent, runtime: Runtime
+    event: BridgeGatewayEvent, runtime: Runtime, *, is_retry: bool = False
 ) -> HandlerResult:
-    """Route one inbound ActivityPub event after federation policy admission."""
+    """Route an event, carrying only server-derived Follow retry provenance."""
     subject = _allowlist_subject(event, runtime)
     decision = runtime.bridge_policy_service.federation_decision(subject)
     if not decision.allowed:
@@ -95,6 +95,13 @@ async def dispatch_activitypub_event(
             else InboundActivityOutcome.IGNORED_ALREADY_APPLIED,
             detail=result.reason,
         )
+
+    # Remote Group Announce is verified by Fedify but its Note may be a URI.
+    # Resolve it only after the received Group and accepted software profile
+    # have been checked by the policy-bound NodeBB reader.
+    if event.event_type == "remote.group_announced":
+        from .community_sync.nodebb_inbound import handle_nodebb_announcement
+        return await handle_nodebb_announcement(event, runtime)
 
     # Keep dispatch explicit so supported inbound event types stay obvious.
     if event.event_type == "post.created":
@@ -149,6 +156,7 @@ async def dispatch_activitypub_event(
             remote_actor_id=event.actor_id,
             remote_inbox_url=event.object.remote_inbox_url,
             follow_activity_id=event.object.follow_activity_id,
+            is_retry=is_retry,
         )
     if event.event_type == "local.unfollow_requested":
         if event.target_actor_kind == "user":
@@ -356,6 +364,19 @@ async def handle_follow_accepted(
             detail="bridge follow activity is not mapped",
         )
 
+    if (
+        event.actor_id != bridge_follow.community_actor_id
+        or event.community_actor_id != bridge_follow.community_actor_id
+        or bridge_follow.cancel_requested
+    ):
+        # The signed distributor must be the canonical target of the original
+        # Follow; an Accept with the same Follow ID from another Group is inert.
+        return HandlerResult(
+            status="skipped",
+            outcome=InboundActivityOutcome.IGNORED_UNKNOWN_FOLLOW,
+            detail="Accept sender or Follow generation does not match verified Group",
+        )
+
     if bridge_follow.status == "accepted":
         return HandlerResult(
             status="skipped",
@@ -370,13 +391,20 @@ async def handle_follow_accepted(
     pending_subs = runtime.database.remote_subscriptions.get_pending_channel_subscriptions_for_community(
         community_actor_id
     )
-    runtime.database.bridge_actor_follows.mark_bridge_actor_follow_accepted(
-        community_actor_id
+    accepted = runtime.database.bridge_actor_follows.accept_verified_follow(
+        follow_activity_id=follow_activity_id, actor_id=event.actor_id
     )
+    if not accepted:
+        return HandlerResult(
+            status="skipped",
+            outcome=InboundActivityOutcome.IGNORED_UNKNOWN_FOLLOW,
+            detail="Follow was cancelled or changed before Accept commit",
+        )
 
-    # DM every Discord user who was waiting on this community.
+    # Only the original generation is authorized by this Accept.
     for sub in pending_subs:
-        await _notify_channel_accepted(sub, runtime)
+        if sub.follow_activity_id == follow_activity_id:
+            await _notify_channel_accepted(sub, runtime)
 
     return HandlerResult(
         status="processed",
@@ -396,7 +424,12 @@ async def _maybe_implicit_accept(community_actor_id: str, runtime: Runtime) -> N
     bridge_follow = runtime.database.bridge_actor_follows.get_bridge_actor_follow(
         community_actor_id
     )
-    if bridge_follow is None or bridge_follow.status != "pending":
+    if (
+        bridge_follow is None
+        or bridge_follow.status != "pending"
+        or bridge_follow.remote_software_profile != "threadiverse"
+        or bridge_follow.cancel_requested
+    ):
         # Either already accepted/failed or no follow row at all — nothing to promote.
         return
 
@@ -406,11 +439,9 @@ async def _maybe_implicit_accept(community_actor_id: str, runtime: Runtime) -> N
         community_actor_id,
     )
 
-    # Capture pending subs before marking accepted so DMs can be sent.
-    pending_subs = runtime.database.remote_subscriptions.get_pending_channel_subscriptions_for_community(
-        community_actor_id
-    )
-    runtime.database.bridge_actor_follows.mark_bridge_actor_follow_accepted(
+    # The repository repeats the verified profile and cancellation predicates
+    # atomically with its state change; this earlier read is not authority.
+    pending_subs = runtime.database.bridge_actor_follows.accept_implicit_threadiverse_follow(
         community_actor_id
     )
 
@@ -442,7 +473,12 @@ def _should_skip_unsubscribed_remote_create(
         event.community_actor_id
     )
     if bridge_follow is not None and bridge_follow.status == "pending":
-        return False
+        # NodeBB and unknown Group profiles require explicit signed Accept.
+        # A signed Announce alone never activates pending Discord bindings.
+        return (
+            bridge_follow.remote_software_profile != "threadiverse"
+            or bridge_follow.cancel_requested
+        )
 
     if event.event_type == "post.created":
         # Unsubscribed posts are only relevant if they already map to a stored
@@ -450,7 +486,7 @@ def _should_skip_unsubscribed_remote_create(
         # be acknowledged and ignored locally.
         return (
             runtime.database.discord_fanout_groups.get_thread_group_by_ap_object(
-                event.object.ap_id
+                event.object.ap_id, community_actor_id=event.community_actor_id
             )
             is None
         )
@@ -462,7 +498,7 @@ def _should_skip_unsubscribed_remote_create(
         if (
             event.object.post_ap_id
             and runtime.database.discord_fanout_groups.get_thread_group_by_ap_object(
-                event.object.post_ap_id
+                event.object.post_ap_id, community_actor_id=event.community_actor_id
             )
             is not None
         ):
@@ -470,7 +506,7 @@ def _should_skip_unsubscribed_remote_create(
         if (
             event.object.parent_ap_id
             and runtime.database.discord_fanout_groups.get_message_group_by_ap_object(
-                event.object.parent_ap_id
+                event.object.parent_ap_id, community_actor_id=event.community_actor_id
             )
             is not None
         ):
@@ -516,22 +552,25 @@ async def _notify_channel_accepted(subscription: object, runtime: Runtime) -> No
 
 def _is_discord_originated_echo(event: ActivityPubEvent, runtime: Runtime) -> bool:
     """Return whether an inbound AP event matches a prior Discord-originated publish."""
-    # Outbound Discord publishes persist both activity_id and object_id, so
-    # inbound loop suppression checks both keys before any Discord fanout.
-    if (
+    # The global MessageMapping table can also reference an inbound host
+    # placement for a different LocalCommunity. Only a proven Discord-origin
+    # publish in the *same* community is an echo; an inbound AP reference is
+    # never a reason to suppress a separately authorized Group delivery.
+    for mapping in (
         runtime.database.message_mappings.get_message_mapping_by_object_id(
             event.object.ap_id
-        )
-        is not None
-    ):
-        return True
-    if (
+        ),
         runtime.database.message_mappings.get_message_mapping_by_activity_id(
             event.delivery_id
-        )
-        is not None
+        ),
     ):
-        return True
+        if (
+            mapping is not None
+            and mapping.source_platform == "discord"
+            and mapping.actor_url == event.actor_id
+            and mapping.community_actor_url == event.community_actor_id
+        ):
+            return True
     # Lemmy re-wraps our outbound activities in an Announce with a new ap_id, so
     # the object_id check above misses the echo. If the actor is one of our own
     # registered users, the activity originated here and must be suppressed.

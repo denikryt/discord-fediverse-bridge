@@ -15,6 +15,7 @@ import type { PublishContentRequest, PublishContentResult } from "../types.js";
 import { buildGatewayUrl, buildUserActorUri } from "./gateway-url.js";
 import { renderPublicActivityJson } from "./activity-json.js";
 import { fetchRemoteCommunity } from "./remote-actor.js";
+import { markdownToHtml } from "./community-create-renderer.js";
 
 /** Publish one user-authored Create activity to a remote community inbox. */
 export async function publishContent(
@@ -147,10 +148,4 @@ function buildPublishObject(
   });
 }
 
-/** Convert markdown paragraphs to the existing unescaped community HTML policy. */
-export function markdownToHtml(markdown: string): string {
-  return markdown
-    .split(/\n\n+/)
-    .map((p) => `<p>${p.trim().replace(/\n/g, "<br>")}</p>`)
-    .join("\n");
-}
+export { renderCommunityCreate, markdownToHtml } from "./community-create-renderer.js";

@@ -6,6 +6,7 @@ import argparse
 import hashlib
 import json
 import os
+import secrets
 import shutil
 import signal
 import sqlite3
@@ -24,6 +25,186 @@ COMPLETE_BACKUP_SUFFIX = ".tar.gz"
 TEMP_SUFFIX = ".partial"
 MANIFEST_VERSION = 1
 RESTORE_MARKER = ".bridge-restore-state.json"
+
+# Exact SQLite DDL manifests from the tagged release writer and the unchanged
+# main writer. They are an archive source guard, not a substitute for migration
+# identity/row admission performed by the versioned runner (CP03/CP04).
+_SOURCE_SCHEMA_DIGESTS = {
+    "4edc027e25054a91cc3e5144bc5bc37ee955339fc3492192cc707b9cf177537d": "released_v0",
+    "3b5a087fc4d5df3452d4ff8b63de9b2bfe8ec4c4740fd5cc05c2911df2bf408b": "known_main_v0",
+}
+
+
+def schema_entries_fingerprint(entries: object) -> str:
+    """Hash complete SQLite DDL without incidental trailing formatting changes.
+
+    SQLite's `iterdump` removes per-line trailing whitespace from stored DDL.
+    Preserve every other token, constraint, index, trigger and table identity
+    instead of treating a table count or one column as source evidence.
+    """
+    canonical_entries = [
+        (
+            kind, name, table,
+            "\n".join(line.rstrip() for line in sql.splitlines()) if sql else None,
+        )
+        for kind, name, table, sql in entries
+    ]
+    return hashlib.sha256(
+        json.dumps(canonical_entries, ensure_ascii=True, separators=(",", ":")).encode()
+    ).hexdigest()
+
+
+def classify_legacy_sqlite_schema(entries: object) -> str | None:
+    """Classify only the two source-writer DDL profiles in the feature scope."""
+    return _SOURCE_SCHEMA_DIGESTS.get(schema_entries_fingerprint(entries))
+
+
+def inspect_migration_backup_source(database: Path) -> str:
+    """Classify a schema-exact, unversioned backup source without SQLite writes.
+
+    This is deliberately stricter than ordinary backups: unknown or partially
+    upgraded layouts cannot be passed to the subsequent v0→v1 runner by merely
+    supplying a convenient source label. Persisted identities need additional
+    read-only migration admission before any upgrade writes.
+    """
+    # mode=ro prevents SQLite from silently creating an absent source DB.
+    with sqlite3.connect(f"{database.absolute().as_uri()}?mode=ro", uri=True) as connection:
+        if connection.execute("PRAGMA user_version").fetchone()[0] != 0:
+            raise RuntimeError("migration backup requires an unversioned v0 database")
+        entries = connection.execute("""
+            SELECT type, name, tbl_name, sql
+            FROM sqlite_master WHERE name NOT LIKE 'sqlite_%'
+            ORDER BY type, name, tbl_name
+        """).fetchall()
+        profile = classify_legacy_sqlite_schema(entries)
+        if profile is None:
+            raise RuntimeError("unsupported or modified SQLite v0 backup source profile")
+        return profile
+
+
+def create_migration_backup(
+    database: Path,
+    media_root: Path,
+    output_dir: Path,
+    *,
+    media_lock_path: Path,
+    lock_timeout_seconds: float = 30,
+    now: datetime | None = None,
+) -> Path:
+    """Create a verified, no-clobber pre-upgrade archive under `output_dir/migrations`.
+
+    The caller must already hold the existing EX deployment lock across source
+    admission, this backup, and the eventual writer transaction. Acquiring a
+    second deployment lock here would deadlock startup; this helper acquires
+    only the media reader lock. No ordinary retention policy reaches the
+    dedicated migration directory, and source SQLite is never modified.
+    """
+    profile = inspect_migration_backup_source(database)
+    protected = output_dir / "migrations"
+    if output_dir.is_symlink() or protected.is_symlink():
+        raise RuntimeError("migration backup output directory must not be a symlink")
+    protected.mkdir(parents=True, exist_ok=True, mode=0o700)
+    timestamp = (now or datetime.now(timezone.utc)).strftime("%Y%m%dT%H%M%SZ")
+    prefix = f"{BACKUP_PREFIX}migration-{timestamp}-{secrets.token_hex(8)}"
+    fd, temporary_name = tempfile.mkstemp(
+        prefix=".migration-", suffix=TEMP_SUFFIX, dir=protected
+    )
+    os.close(fd)
+    temporary = Path(temporary_name)
+    try:
+        with FileLock(media_lock_path).acquire(
+            exclusive=False, timeout_seconds=lock_timeout_seconds
+        ):
+            _write_complete_archive(
+                database, media_root, protected, temporary, source_profile=profile
+            )
+        os.chmod(temporary, 0o600)
+        # POSIX link(2) is atomic and refuses to replace an existing archive.
+        # Even a fixed timestamp/random token cannot overwrite older evidence.
+        for collision in range(100):
+            suffix = f"-{collision}" if collision else ""
+            final = protected / f"{prefix}{suffix}{COMPLETE_BACKUP_SUFFIX}"
+            try:
+                os.link(temporary, final)
+                _fsync_directory(protected)
+                return final
+            except FileExistsError:
+                continue
+        raise RuntimeError("could not reserve a unique migration backup filename")
+    finally:
+        temporary.unlink(missing_ok=True)
+
+
+def _write_complete_archive(
+    database: Path,
+    media_root: Path,
+    output_dir: Path,
+    temporary: Path,
+    *,
+    source_profile: str | None = None,
+) -> None:
+    """Snapshot DB and media together, then validate archive bytes before publish."""
+    with tempfile.TemporaryDirectory(dir=output_dir) as work_dir_text:
+        work_dir = Path(work_dir_text)
+        snapshot = work_dir / "bridge.db"
+        with (
+            sqlite3.connect(database) as source,
+            sqlite3.connect(snapshot) as destination,
+        ):
+            source.backup(destination)
+        validate_snapshot(snapshot)
+        if (
+            source_profile is not None
+            and inspect_migration_backup_source(snapshot) != source_profile
+        ):
+            raise RuntimeError("SQLite source profile changed while backing up")
+        assets = _referenced_assets(snapshot)
+        manifest: dict[str, object] = {
+            "version": MANIFEST_VERSION,
+            "database": "bridge.db",
+            "database_sha256": _sha256(snapshot),
+            "media": [],
+        }
+        if source_profile is not None:
+            # This additive field is optional, so legacy manifest-v1 archives
+            # remain readable by the original restore path.
+            manifest["source_profile"] = source_profile
+        media_destination = work_dir / "profile-media" / "objects"
+        media_destination.mkdir(parents=True, exist_ok=True)
+        for asset in assets:
+            source_path = _safe_media_path(media_root, asset["storage_key"])
+            if not source_path.is_file() or source_path.is_symlink():
+                raise RuntimeError("referenced profile media is missing")
+            digest = _sha256(source_path)
+            if digest != asset["sha256_hex"]:
+                raise RuntimeError("referenced profile media hash mismatch")
+            destination = media_destination / asset["storage_key"]
+            destination.parent.mkdir(parents=True, exist_ok=True)
+            shutil.copy2(source_path, destination)
+            manifest["media"].append(asset)
+        (work_dir / "manifest.json").write_text(
+            json.dumps(manifest, sort_keys=True), encoding="utf-8"
+        )
+        with tarfile.open(temporary, "w:gz") as archive:
+            archive.add(snapshot, arcname="bridge.db", recursive=False)
+            archive.add(
+                work_dir / "manifest.json", arcname="manifest.json", recursive=False
+            )
+            for asset in assets:
+                storage_key = str(asset["storage_key"])
+                archive.add(
+                    media_destination / storage_key,
+                    arcname=f"profile-media/objects/{storage_key}",
+                    recursive=False,
+                )
+        # A valid SQLite snapshot is not enough; all tar entries, declared
+        # hashes and media references must also survive extraction/validation.
+        with tempfile.TemporaryDirectory(dir=output_dir) as verification_text:
+            verification = Path(verification_text)
+            _safe_extract(temporary, verification)
+            _validate_complete_tree(verification)
+        with temporary.open("rb") as file:
+            os.fsync(file.fileno())
 
 
 def create_backup(
@@ -72,55 +253,10 @@ def create_complete_backup(
         with FileLock(media_lock_path).acquire(
             exclusive=False, timeout_seconds=lock_timeout_seconds
         ):
-            with tempfile.TemporaryDirectory(dir=output_dir) as work_dir_text:
-                work_dir = Path(work_dir_text)
-                snapshot = work_dir / "bridge.db"
-                with (
-                    sqlite3.connect(database) as source,
-                    sqlite3.connect(snapshot) as destination,
-                ):
-                    source.backup(destination)
-                validate_snapshot(snapshot)
-                assets = _referenced_assets(snapshot)
-                manifest: dict[str, object] = {
-                    "version": MANIFEST_VERSION,
-                    "database": "bridge.db",
-                    "database_sha256": _sha256(snapshot),
-                    "media": [],
-                }
-                media_destination = work_dir / "profile-media" / "objects"
-                media_destination.mkdir(parents=True, exist_ok=True)
-                for asset in assets:
-                    source_path = _safe_media_path(media_root, asset["storage_key"])
-                    if not source_path.is_file() or source_path.is_symlink():
-                        raise RuntimeError("referenced profile media is missing")
-                    digest = _sha256(source_path)
-                    if digest != asset["sha256_hex"]:
-                        raise RuntimeError("referenced profile media hash mismatch")
-                    destination = media_destination / asset["storage_key"]
-                    destination.parent.mkdir(parents=True, exist_ok=True)
-                    shutil.copy2(source_path, destination)
-                    manifest["media"].append(asset)
-                (work_dir / "manifest.json").write_text(
-                    json.dumps(manifest, sort_keys=True), encoding="utf-8"
-                )
-                with tarfile.open(temporary, "w:gz") as archive:
-                    archive.add(snapshot, arcname="bridge.db", recursive=False)
-                    archive.add(
-                        work_dir / "manifest.json",
-                        arcname="manifest.json",
-                        recursive=False,
-                    )
-                    for asset in assets:
-                        storage_key = str(asset["storage_key"])
-                        archive.add(
-                            media_destination / storage_key,
-                            arcname=f"profile-media/objects/{storage_key}",
-                            recursive=False,
-                        )
-                os.chmod(temporary, 0o600)
-                os.replace(temporary, final)
-                _fsync_directory(output_dir)
+            _write_complete_archive(database, media_root, output_dir, temporary)
+            os.chmod(temporary, 0o600)
+            os.replace(temporary, final)
+            _fsync_directory(output_dir)
     return final
 
 
@@ -440,6 +576,15 @@ def serve(
 def _referenced_assets(snapshot: Path) -> list[dict[str, object]]:
     """Read exactly the immutable objects referenced by one completed snapshot."""
     with sqlite3.connect(snapshot) as connection:
+        has_media_table = connection.execute(
+            "SELECT 1 FROM sqlite_master WHERE type='table' AND name='profile_media_assets'"
+        ).fetchone() is not None
+        if not has_media_table:
+            if inspect_migration_backup_source(snapshot) != "released_v0":
+                raise RuntimeError("unsupported source without a profile media table")
+            # No media schema existed in the tagged release. Inventing empty
+            # profile-media rows or running a SELECT from that table is wrong.
+            return []
         rows = connection.execute("""
             SELECT DISTINCT a.storage_key, a.sha256_hex, a.public_id, a.media_kind,
                             a.content_type, a.byte_size, a.width, a.height
@@ -590,6 +735,12 @@ def _validate_complete_tree(root: Path) -> None:
     validate_snapshot(database)
     if _sha256(database) != manifest.get("database_sha256"):
         raise RuntimeError("backup database hash mismatch")
+    source_profile = manifest.get("source_profile")
+    if source_profile is not None and (
+        source_profile not in {"released_v0", "known_main_v0"}
+        or inspect_migration_backup_source(database) != source_profile
+    ):
+        raise RuntimeError("backup source profile does not match SQLite schema")
 
     snapshot_assets = {
         str(item["storage_key"]): item for item in _referenced_assets(database)

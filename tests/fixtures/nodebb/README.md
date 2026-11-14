@@ -1,0 +1,3 @@
+# Pinned NodeBB v4.16.3 scenario data
+
+These compact payloads are **constructed examples**, not independently signed HTTP captures. Their structural fields are checked against NodeBB `v4.16.3` implementations at `src/activitypub/mocks.js::actors.category`, `::notes.public`, `::activities.announce`, and `src/controllers/activitypub/index.js::getCategoryOutbox`. They are used for reproducible root/reply, URI/Nested Create and exact category outbox membership cases. Network/authenticity validation and a real upstream fixture must still be tested at CP09/CP13. `FIXTURE_ONLY_PUBLIC_KEY` is deliberately not a real private/public key pair.

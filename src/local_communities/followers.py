@@ -47,10 +47,19 @@ class LocalCommunityFollowerHandler:
         remote_actor_id: str,
         remote_inbox_url: str,
         follow_activity_id: str,
+        is_retry: bool = False,
     ) -> HandlerResult:
-        """Persist and accept one remote follow request for a local community."""
+        """Accept a verified first-seen Follow or safely retry its generation."""
         from ..activitypub_handlers import HandlerResult as _HandlerResult
 
+        # A missing Follow ID can never establish a new accepted generation;
+        # Undo must also carry the exact original ID for guarded removal.
+        if not follow_activity_id:
+            return _HandlerResult(
+                status="skipped",
+                outcome=InboundActivityOutcome.IGNORED_UNKNOWN_FOLLOW,
+                detail="missing original Follow activity ID",
+            )
         local_community = (
             self.database.local_communities.get_local_community_by_actor_url(
                 local_community_actor_id
@@ -99,6 +108,7 @@ class LocalCommunityFollowerHandler:
                         remote_actor_id=remote_actor_id,
                         remote_inbox_url=admitted_inbox_url,
                         follow_activity_id=follow_activity_id,
+                        is_retry=is_retry,
                     )
                 )
         except Exception as exc:
@@ -117,20 +127,35 @@ class LocalCommunityFollowerHandler:
                     detail="Follow ID belongs to another remote-subscriber relationship",
                 )
             raise
+        # A retry must never resurrect a relationship after Undo or replace
+        # a newer accepted Follow. Both decisions precede any gateway effect.
+        if transition.transition in {
+            "superseded_retry", "unproven_retry_after_unsubscribe"
+        }:
+            return _HandlerResult(
+                status="skipped",
+                outcome=InboundActivityOutcome.IGNORED_ALREADY_APPLIED,
+                detail=(
+                    "superseded Follow retry"
+                    if transition.transition == "superseded_retry"
+                    else "unproven Follow retry after unsubscribe"
+                ),
+            )
         detail = f"local community remote subscriber {transition.transition}"
+        accepted_inbox_url = transition.accepted_inbox_url or admitted_inbox_url
 
         logger.info(
             "Accepting local-community Follow community=%s remote_actor=%s inbox=%s follow_activity=%s",
             getattr(local_community, "slug"),
             remote_actor_id,
-            admitted_inbox_url,
+            accepted_inbox_url,
             follow_activity_id,
         )
         await self.fedify_gateway.accept_local_community_follow(
             community_slug=getattr(local_community, "slug"),
             community_actor_url=getattr(local_community, "actor_url"),
             remote_actor_id=remote_actor_id,
-            remote_inbox_url=admitted_inbox_url,
+            remote_inbox_url=accepted_inbox_url,
             follow_activity_id=follow_activity_id,
         )
         return _HandlerResult(
@@ -158,31 +183,30 @@ class LocalCommunityFollowerHandler:
                 outcome=InboundActivityOutcome.IGNORED_UNKNOWN_LOCAL_COMMUNITY,
                 detail="unknown local community",
             )
-        remote_subscriber = self.database.remote_subscribers.get_remote_subscriber(
+        # The original Follow ID must match the accepted generation in the
+        # *same* SQL DELETE. A separate lookup would race with Follow(new).
+        removed = self.database.remote_subscribers.delete_accepted_if_current_follow(
             local_community_id=getattr(local_community, "id"),
             remote_actor_id=remote_actor_id,
+            follow_activity_id=follow_activity_id,
         )
-        if remote_subscriber is None:
+        if not removed:
+            # The guarded write has already decided the relationship outcome.
+            # This read is diagnostic only and preserves legacy duplicate-Undo
+            # wording without allowing a read-then-delete race.
+            still_subscribed = self.database.remote_subscribers.get_remote_subscriber(
+                local_community_id=getattr(local_community, "id"),
+                remote_actor_id=remote_actor_id,
+            )
             return _HandlerResult(
                 status="skipped",
                 outcome=InboundActivityOutcome.IGNORED_UNKNOWN_FOLLOW,
-                detail="local community remote subscriber not found",
+                detail=(
+                    "local community remote subscriber not found"
+                    if still_subscribed is None
+                    else "no accepted subscriber with matching Follow ID"
+                ),
             )
-        if (
-            follow_activity_id is not None
-            and getattr(remote_subscriber, "follow_activity_id") != follow_activity_id
-        ):
-            logger.info(
-                "Local-community unfollow Follow ID mismatch community=%s remote_actor=%s stored=%s incoming=%s",
-                getattr(local_community, "slug"),
-                remote_actor_id,
-                getattr(remote_subscriber, "follow_activity_id"),
-                follow_activity_id,
-            )
-        self.database.remote_subscribers.delete_remote_subscriber(
-            local_community_id=getattr(local_community, "id"),
-            remote_actor_id=remote_actor_id,
-        )
         return _HandlerResult(
             status="processed",
             outcome=InboundActivityOutcome.APPLIED,

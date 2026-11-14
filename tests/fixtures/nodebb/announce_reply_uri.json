@@ -1,0 +1,13 @@
+{
+  "@context": "https://www.w3.org/ns/activitystreams",
+  "actor": "https://nodebb.example/category/42",
+  "cc": [
+    "https://nodebb.example/category/42/followers"
+  ],
+  "id": "https://nodebb.example/post/102#activity/announce/cid/42",
+  "object": "https://nodebb.example/post/102",
+  "to": [
+    "https://www.w3.org/ns/activitystreams#Public"
+  ],
+  "type": "Announce"
+}

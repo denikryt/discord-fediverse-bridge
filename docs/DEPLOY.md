@@ -213,3 +213,15 @@ The bot also needs permission in each bound feed channel to view the channel, re
 ## Stage 9 maintenance
 
 Use `bridge-user-deliveries` for bounded, database-only diagnostics and explicit retry resets. Bulk retry requires `--username --all-failed --limit` and processes at most 100 rows. Use `bridge-profile-media cleanup` with explicit database, media root, deployment lock, and media lock paths. A complete backup must contain both the SQLite database and profile-media volume; exporting a container image is not a volume backup.
+
+## Upgrading a pre-v1 SQLite deployment
+
+The first versioned database release requires a strictly offline cutover:
+stop and disable **all** pre-v1 workers and their restart supervisors before
+starting new binaries. Do not mix old and new code against one SQLite file.
+The new startup performs source validation, a protected no-clobber migration
+backup and an atomic `0→1` upgrade under the existing exclusive deployment
+lock, then reacquires a shared lifetime lock and validates v1 read-only.
+See `docs/development/database-migrations.md` for exact systemd/Compose
+operator gates, `/data/backups/migrations/` archives, restore and failure
+recovery commands. An advisory lock is not a mixed-version upgrade protocol.

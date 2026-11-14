@@ -149,6 +149,31 @@ class SubscribeCommunityCommandHandler:
 
         try:
             resolved = await self._resolve_selected(request)
+            if resolved.source in {"remote_lemmy", "remote_bridge"} and (
+                request.community.startswith(("lemmy:", "bridge-remote:"))
+                or "|" in request.community
+            ):
+                # Discord choice values are editable client input. A numeric
+                # Lemmy ID or bridge prefix is not evidence of remote software;
+                # resolve the claimed canonical actor via its public API again.
+                authoritative = await self._resolve_selected(
+                    SubscribeCommunityRequest(
+                        interaction=request.interaction,
+                        community=resolved.actor_id,
+                        channel=request.channel,
+                        instance_domain=request.instance_domain,
+                    )
+                )
+                if (
+                    authoritative.actor_id != resolved.actor_id
+                    or authoritative.source != resolved.source
+                    or (resolved.numeric_id is not None and
+                        authoritative.numeric_id != resolved.numeric_id)
+                ):
+                    raise CommunityResolutionError(
+                        "Selected community identity does not match verified remote discovery."
+                    )
+                resolved = authoritative
         except CommunityResolutionError as error:
             logger.warning(
                 "Failed to resolve subscribe target %s: %s", request.community, error
@@ -228,6 +253,7 @@ class SubscribeCommunityCommandHandler:
             community_value=request.community,
             fetch_bridge_communities=self._fetch_bridge_communities_getter(),
             lemmy_client_cls=self._lemmy_client_cls_getter(),
+            policy_service=self.policy_service,
         )
 
     async def _ensure_numeric_id(
@@ -410,6 +436,11 @@ class SubscribeCommunityCommandHandler:
                 numeric_id=resolved.numeric_id,
                 community_handle=resolved.handle,
                 policy_service=self.policy_service,
+                remote_software_profile={
+                    "remote_nodebb": "nodebb",
+                    "remote_lemmy": "threadiverse",
+                    "remote_bridge": "bridge",
+                }.get(resolved.source, "unknown"),
             ),
         )
 
@@ -430,8 +461,12 @@ class SubscribeCommunityCommandHandler:
                 actor_id=target.resolved.actor_id,
                 name=target.resolved.name,
                 handle=target.resolved.handle,
-                waiting_for_accept="Waiting for federation acceptance."
-                in result.message,
+                # The operation's semantic result is authoritative. A failed
+                # gateway response can leave a committed pending binding.
+                waiting_for_accept=(
+                    getattr(result, "reason", None) == "pending_remote_confirmation"
+                    or "Waiting for federation acceptance." in result.message
+                ),
             )
             send_kwargs["allowed_mentions"] = _no_ping_allowed_mentions()
         await request.interaction.response.send_message(message, **send_kwargs)

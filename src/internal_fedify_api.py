@@ -153,6 +153,9 @@ class PublishedObjectResponse(BaseModel):
     title: str | None
     body_markdown: str
     in_reply_to_object_id: str | None
+    # Derived from the persisted original Create, not a current remote Follow.
+    original_object_type: str | None = None
+    original_object_context: str | None = None
     published_at: str
     discord_guild_id: int | None
     discord_channel_id: int | None
@@ -210,7 +213,12 @@ def create_internal_fedify_router(runtime: Runtime) -> APIRouter:
 
     def published_object_payload(row: object) -> PublishedObjectResponse:
         """Map the durable public object contract without delivery metadata."""
+        original_type, original_context = (
+            runtime.database.activitypub_objects.get_original_create_object_shape(row)
+        )
         return PublishedObjectResponse(
+            original_object_type=original_type,
+            original_object_context=original_context,
             actor_username=row.actor_username,
             actor_url=row.actor_url,
             publication_context=row.publication_context,
@@ -524,22 +532,7 @@ def create_internal_fedify_router(runtime: Runtime) -> APIRouter:
             )
         if row is None:
             raise HTTPException(status_code=404, detail="Published object not found")
-        return PublishedObjectResponse(
-            actor_username=row.actor_username,
-            actor_url=row.actor_url,
-            publication_context=row.publication_context,
-            community_actor_url=row.community_actor_url,
-            activity_id=row.activity_id,
-            object_id=row.object_id,
-            kind=row.kind,
-            title=row.title,
-            body_markdown=row.body_markdown,
-            in_reply_to_object_id=row.in_reply_to_object_id,
-            published_at=_isoformat(row.published_at),
-            discord_guild_id=row.discord_guild_id,
-            discord_channel_id=row.discord_channel_id,
-            discord_message_id=row.discord_message_id,
-        )
+        return published_object_payload(row)
 
     @router.post(
         "/conversation-targets/resolve", response_model=ConversationTargetResponse
@@ -580,6 +573,21 @@ def create_internal_fedify_router(runtime: Runtime) -> APIRouter:
         )
         if row is None:
             raise HTTPException(status_code=404, detail="Message mapping not found")
+        if row.source_platform == "activitypub" and row.community_actor_url is not None:
+            local_group = runtime.database.local_communities.get_local_community_by_actor_url(
+                row.community_actor_url
+            )
+            if local_group is not None:
+                tenants = runtime.database.local_community_content.list_delivered_local_group_message_tenants(
+                    request.object_id
+                )
+                if tenants != [local_group.id]:
+                    # Global MessageMapping is a reference, never a tenant
+                    # placement proof: a second Group can host the same AP id.
+                    raise HTTPException(
+                        status_code=409,
+                        detail="ambiguous or unverified local Group parent mapping",
+                    )
         return MessageMappingResponse(
             source_platform=row.source_platform,
             source_id=row.source_id,

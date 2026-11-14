@@ -29,7 +29,11 @@ export async function normalizeCreateActivity(
   }
 
   if (object instanceof Note) {
-    return await normalizeCommentActivity(activity, object, options);
+    // A NodeBB topic starter is a Note with no inReplyTo. It is not a
+    // comment merely because its ActivityStreams type is Note.
+    return object.replyTargetId == null
+      ? await normalizeNoteRootActivity(activity, object)
+      : await normalizeCommentActivity(activity, object, options);
   }
 
   return null;
@@ -55,7 +59,9 @@ export async function normalizeCreateActivityFromJson(
   }
 
   if (object.type === "Note") {
-    return await normalizeCommentActivityFromJson(activity, object, options);
+    return asString(object.inReplyTo) == null && asString(object.replyTarget) == null
+      ? normalizeNoteRootActivityFromJson(activity, object)
+      : await normalizeCommentActivityFromJson(activity, object, options);
   }
 
   return null;
@@ -83,14 +89,20 @@ export async function normalizeUpdateActivityFromJson(
   }
 
   if (object.type === "Note") {
-    const event = await normalizeCommentActivityFromJson(activity, object, options);
+    // NodeBB uses Note for both topic roots and replies. An Update must not
+    // infer "comment" from vocabulary type alone: inReplyTo distinguishes
+    // the canonical root from a reply in the same Group.
+    const isReply = asString(object.inReplyTo) != null || asString(object.replyTarget) != null;
+    const event = isReply
+      ? await normalizeCommentActivityFromJson(activity, object, options)
+      : normalizeNoteRootActivityFromJson(activity, object);
     const revisionTime = asString(object.updated) ?? asString(activity.updated)
       ?? asString(activity.published) ?? event.occurred_at;
-    // For Update, published_at carries the accepted remote revision timestamp
-    // used by the Python ownership+ordering transaction.
+    // Original owner/group verification belongs to Python's canonical Create
+    // boundary; a Group Announce with no independent Person proof is rejected.
     return {
       ...event,
-      event_type: "comment.updated",
+      event_type: isReply ? "comment.updated" : "post.updated",
       occurred_at: revisionTime,
       object: { ...event.object, published_at: revisionTime },
     };
@@ -206,13 +218,63 @@ async function normalizePostActivity(
       author_name: await resolveAuthorName(activity),
       body_markdown: resolveMarkdownBody(object),
       kind: "post",
-      lemmy_id: parseRequiredLemmyNumericId(apId, "post"),
+      lemmy_id: parseInboundPostNumericId(apId, activity.actorId?.href ?? ""),
       parent_ap_id: null,
       post_ap_id: null,
       post_lemmy_id: null,
       published_at: publishedAt,
       title: resolveText(object.name),
       url,
+    },
+  };
+}
+
+/** Normalize a root Note without inventing a Lemmy numeric post identity. */
+async function normalizeNoteRootActivity(
+  activity: Create,
+  object: Note,
+): Promise<BridgeEvent> {
+  const objectId = requireUrl(object.id, "root Note ID");
+  const owner = (object as unknown as { attributionId?: URL }).attributionId?.href;
+  if (!owner || activity.actorId?.href !== owner) {
+    throw new Error("Direct root Note requires signed actor matching attribution");
+  }
+  const published = toIsoString(object.published) ?? toIsoString(activity.published);
+  return {
+    actor_id: owner,
+    community_actor_id: resolveCommunityActorId(object),
+    delivery_id: activity.id?.href ?? randomUUID(),
+    event_type: "post.created",
+    occurred_at: published,
+    object: {
+      ap_id: objectId, author_name: await resolveAuthorName(activity),
+      body_markdown: resolveMarkdownBody(object), kind: "post", lemmy_id: 0,
+      parent_ap_id: null, post_ap_id: null, post_lemmy_id: null,
+      published_at: published, title: resolveText(object.name),
+      url: resolveObjectUrl(object) ?? objectId,
+      attributed_to_actor_id: owner,
+    },
+  };
+}
+
+/** A Group-wrapped root Note has attribution but no independent Person signature. */
+function normalizeNoteRootActivityFromJson(
+  activity: Record<string, unknown>, object: Record<string, unknown>,
+): BridgeEvent {
+  const objectId = requireString(object.id, "root Note ID");
+  const owner = asCanonicalActorId(object.attributedTo);
+  if (!owner) throw new Error("Root Note attribution is missing or ambiguous");
+  const published = asString(object.published) ?? asString(activity.published) ?? new Date().toISOString();
+  return {
+    actor_id: owner, community_actor_id: resolveCommunityActorIdFromJson(object),
+    delivery_id: asString(activity.id) ?? randomUUID(),
+    event_type: "post.created", occurred_at: published,
+    object: {
+      ap_id: objectId, author_name: lastPathSegment(owner),
+      body_markdown: resolveMarkdownBodyFromJson(object), kind: "post", lemmy_id: 0,
+      parent_ap_id: null, post_ap_id: null, post_lemmy_id: null,
+      published_at: published, title: asString(object.name),
+      url: asString(object.url) ?? objectId, attributed_to_actor_id: owner,
     },
   };
 }
@@ -387,7 +449,7 @@ function normalizePostActivityFromJson(
       author_name: resolveAuthorNameFromJson(activity, object),
       body_markdown: resolveMarkdownBodyFromJson(object),
       kind: "post",
-      lemmy_id: parseRequiredLemmyNumericId(apId, "post"),
+      lemmy_id: parseInboundPostNumericId(apId, asCanonicalActorId(activity.actor) ?? ""),
       parent_ap_id: null,
       post_ap_id: null,
       post_lemmy_id: null,
@@ -658,6 +720,12 @@ async function resolveReplyChainContext(
   const nextReplyTarget =
     asString(parentRecord.inReplyTo) ?? asString(parentRecord.replyTarget);
   if (!nextReplyTarget) {
+    // NodeBB topic starters are root Notes, not Lemmy Pages. Their context
+    // identifies the topic but their canonical Note ID identifies the root.
+    // Python still requires a verified Group association before Discord work.
+    if (parentRecord.type === "Note" && asString(parentRecord.context)) {
+      return { postApId: replyTarget, parentApId: null, postSource: "remote" };
+    }
     return {
       postApId: null,
       parentApId: isCommentLikeReplyTarget(replyTarget, parentRecord)
@@ -901,6 +969,31 @@ function tryParseLemmyNumericId(
   return Number.parseInt(match[1], 10);
 }
 
+/** Keep Lemmy post IDs strict while admitting Bridge registered-Person Page IDs.
+ *
+ * A Bridge Page is named in the *author's exact typed* /objects/posts/
+ * namespace. Its opaque source token is not a Lemmy integer; the compatibility
+ * Pydantic field is only a zero sentinel, never canonical object identity.
+ * Final signature, Service and tenant admission happens before Discord effects.
+ */
+function parseInboundPostNumericId(objectId: string, actorId: string): number {
+  try {
+    const object = new URL(objectId);
+    const actor = new URL(actorId);
+    if (
+      object.protocol === "https:" && actor.protocol === "https:"
+      && object.origin === actor.origin
+      && /^\/actors\/users\/[A-Za-z0-9_-]+$/.test(actor.pathname)
+      && object.pathname.startsWith(`${actor.pathname}/objects/posts/`)
+      && /^[A-Za-z0-9_-]+$/.test(object.pathname.slice(`${actor.pathname}/objects/posts/`.length))
+      && !object.search && !object.hash && !actor.search && !actor.hash
+    ) return 0;
+  } catch {
+    // An invalid URI cannot establish Bridge namespace ownership.
+  }
+  return parseRequiredLemmyNumericId(objectId, "post");
+}
+
 function parseRequiredLemmyNumericId(value: string, kind: "post" | "comment"): number {
   const parsed = tryParseLemmyNumericId(value, kind);
   if (parsed == null) {
@@ -917,7 +1010,8 @@ function isCommunityActorId(value: string): boolean {
   const pathname = new URL(value).pathname;
   return (
     /\/c\/[^/]+(?:$|\/)/.test(pathname) ||
-    /\/communities\/[^/]+(?:$|\/)/.test(pathname)
+    /\/communities\/[^/]+(?:$|\/)/.test(pathname) ||
+    /^\/category\/\d+$/.test(pathname)
   );
 }
 

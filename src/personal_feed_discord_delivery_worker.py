@@ -141,6 +141,7 @@ class PersonalFeedDiscordDeliveryWorker:
                 message = await thread.send(
                     prefix + claim.content_markdown,
                     allowed_mentions=discord.AllowedMentions.none(),
+                    suppress_embeds=True,
                 )
                 result_message_id = int(message.id)
         except asyncio.CancelledError:

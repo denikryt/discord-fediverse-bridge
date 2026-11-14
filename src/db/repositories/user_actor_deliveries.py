@@ -82,6 +82,7 @@ class UserActorDeliveryRepository(BaseRepository):
         snapshot: dict,
         followers: list[UserActorFollower],
         direct_target_inbox_urls: list[str] | None = None,
+        direct_group_recipients: list[dict] | None = None,
     ) -> UserActorOutboundSource:
         """Insert one already-rendered content source and immutable audience."""
         return UserActorDeliverySourceRepository.insert_ready_content_source(
@@ -96,6 +97,7 @@ class UserActorDeliveryRepository(BaseRepository):
             snapshot=snapshot,
             followers=followers,
             direct_target_inbox_urls=direct_target_inbox_urls,
+            direct_group_recipients=direct_group_recipients,
         )
 
     def get_source(self, source_id: int) -> UserActorOutboundSource | None:
@@ -192,6 +194,12 @@ class UserActorDeliveryRepository(BaseRepository):
     def mark_submitted(self, delivery_id: int, claim_token: str) -> bool:
         """Count one actual gateway submission for the currently owned claim."""
         return self._outcomes.mark_submitted(delivery_id, claim_token)
+
+    def record_unresolved(
+        self, delivery_id: int, claim_token: str, error: str | None
+    ) -> None:
+        """Mark an ambiguous direct Group attempt as non-retryable unknown."""
+        self._outcomes.record_unresolved(delivery_id, claim_token, error)
 
     def record_outcome(
         self, delivery_id: int, claim_token: str, *, ok: bool, error: str | None = None

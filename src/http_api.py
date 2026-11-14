@@ -10,6 +10,7 @@ from urllib.parse import parse_qs
 from fastapi import FastAPI, Header, HTTPException, Request, Response, status
 from fastapi.responses import FileResponse, HTMLResponse, RedirectResponse
 from fastapi.staticfiles import StaticFiles
+from sqlalchemy.exc import IntegrityError
 
 from .activitypub_handlers import dispatch_activitypub_event
 from .inbound_activity_outcomes import InboundActivityOutcome
@@ -18,7 +19,7 @@ from .dashboard import (
     build_dashboard_payload,
     render_dashboard_html,
 )
-from .activitypub_models import BridgeGatewayEvent
+from .activitypub_models import ActivityPubEvent, BridgeGatewayEvent, RemoteGroupAnnounceEvent
 from .registration_service import (
     RegistrationError,
     generate_oauth_state,
@@ -284,23 +285,61 @@ def create_http_app(runtime: Runtime) -> FastAPI:
             shared_secret=runtime.settings.fedify_shared_secret,
         )
         _validate_delivery_header(x_bridge_delivery_id, event.delivery_id)
+        # The gateway selected this recipient only after verifying the signed
+        # activity and inbox route. Python independently verifies that the
+        # scoped identity is one of our local Group actors before any receipt.
+        _validate_verified_local_group_destination(runtime, event)
 
-        duplicate_response = _begin_event_processing(runtime, event)
+        # NodeBB roots and replies both use /post/{pid}; resolve a signed
+        # Delete's kind from the verified Group's canonical DB identity before
+        # receipt admission. The wire delivery ID/header never changes.
+        if getattr(event, "event_type", None) in {"post.deleted", "comment.deleted"}:
+            from .community_sync.edit_delete import canonicalize_remote_delete_kind
+            event = canonicalize_remote_delete_kind(runtime.database, event)
+
+        # The original receipt remains immutable for a remote Group replay;
+        # keep its result for the HTTP duplicate contract after revalidation.
+        original_receipt = None
+        if event.event_type in {"post.created", "comment.created", "remote.group_announced"}:
+            original_receipt = runtime.database.event_receipts.get_event_receipt(
+                event.delivery_id,
+                verified_destination_group_actor_id=_receipt_group_scope(event),
+            )
+        # Only a durable failed/deferred receipt establishes that this
+        # Follow ID was observed before. Keep the internal provenance before
+        # resetting the receipt for retry; never trust an external flag.
+        duplicate_response, is_retry = _begin_event_attempt(runtime, event)
         if duplicate_response is not None:
             return duplicate_response
 
         try:
-            result = await dispatch_activitypub_event(event, runtime)
+            result = await dispatch_activitypub_event(event, runtime, is_retry=is_retry)
         except Exception as exc:
-            _mark_event_failed(runtime, event.delivery_id, str(exc))
+            # A resume never owns the successful first wire receipt. A failed
+            # revalidation can leave a target pending, but must not rewrite
+            # the original authenticated outcome as processing_failed.
+            if not _is_resumable_remote_group_receipt(event, original_receipt):
+                _mark_event_failed(runtime, event.delivery_id, str(exc),
+                                   verified_destination_group_actor_id=_receipt_group_scope(event))
             logger.exception(
                 "ActivityPub event handling failed for delivery %s", event.delivery_id
             )
             raise
 
         _finish_event_processing(
-            runtime, event.delivery_id, result.status, result.outcome, result.detail
+            runtime, event.delivery_id, result.status, result.outcome, result.detail,
+            verified_destination_group_actor_id=_receipt_group_scope(event),
         )
+        if (_is_resumable_remote_group_receipt(event, original_receipt)
+                and result.status == "skipped"
+                and result.outcome == InboundActivityOutcome.IGNORED_ALREADY_APPLIED):
+            # A valid repeat reached the canonical fanout and found no safe
+            # missing target; keep the previous public duplicate response.
+            return {
+                "status": "duplicate",
+                "outcome": original_receipt.outcome,
+                "detail": original_receipt.detail or original_receipt.status,
+            }
         return {
             "status": result.status,
             "outcome": result.outcome.value,
@@ -447,49 +486,172 @@ def _validate_delivery_header(
         )
 
 
+def _receipt_group_scope(event: BridgeGatewayEvent) -> str | None:
+    """Only verified local content owns a scoped receipt; all else is global."""
+    if isinstance(event, ActivityPubEvent):
+        return event.verified_destination_group_actor_id
+    return None
+
+
+def _validate_verified_local_group_destination(
+    runtime: Runtime, event: BridgeGatewayEvent,
+) -> None:
+    """Reject local-Group content lacking a trusted gateway-selected tenant.
+
+    Remote NodeBB/Lemmy Group distributions, ordinary Follow and personal feed
+    traffic retain their independent ingress/receipt domains. Local groups
+    cannot be chosen from an unverified first ``to``/``cc`` candidate.
+    """
+    if not isinstance(event, ActivityPubEvent):
+        return
+    scope = event.verified_destination_group_actor_id
+    candidate = event.community_actor_id
+    local_target = (runtime.database.local_communities.get_local_community_by_actor_url(candidate)
+                    if candidate else None)
+    if scope is None:
+        if local_target is not None:
+            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST,
+                                detail="Local Group content requires verified destination")
+        return
+    if scope != candidate or local_target is None or local_target.actor_url != scope:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST,
+                            detail="Unverified local Group destination")
+
+
+def _is_resumable_remote_group_receipt(
+    event: BridgeGatewayEvent, receipt: object | None,
+) -> bool:
+    """Identify a terminal remote Create eligible for canonical target rechecking.
+
+    This does not authorize a delivery. The gateway must still authenticate
+    the envelope, and the runtime rechecks the Group Follow, original owner,
+    subscription and per-forum CAS before any Discord REST call.
+    """
+    if receipt is None or not isinstance(event, (ActivityPubEvent, RemoteGroupAnnounceEvent)):
+        return False
+    if _receipt_group_scope(event) is not None:
+        return False  # Local Group receipts retain their tenant-specific contract.
+    if event.event_type not in {"post.created", "comment.created", "remote.group_announced"}:
+        return False
+    return (
+        receipt.status in {"processed", "skipped"}
+        and receipt.event_type == event.event_type
+        and receipt.object_ap_id == _event_object_id(event)
+        and receipt.outcome in {
+            InboundActivityOutcome.APPLIED.value,
+            InboundActivityOutcome.IGNORED_ALREADY_APPLIED.value,
+        }
+        and event.community_actor_id is not None
+        and (not isinstance(event, ActivityPubEvent)
+             or event.target is None or event.target.kind == "community")
+    )
+
+
 def _begin_event_processing(
     runtime: Runtime, event: BridgeGatewayEvent
 ) -> dict[str, str | None] | None:
-    """Begin one delivery attempt or return the stored duplicate result."""
+    """Keep the public receipt helper's response contract for existing callers."""
+    result, _is_retry = _begin_event_attempt(runtime, event)
+    return result
+
+
+def _begin_event_attempt(
+    runtime: Runtime, event: BridgeGatewayEvent
+) -> tuple[dict[str, str | None] | None, bool]:
+    """Claim a receipt and capture Follow retry provenance before resetting it.
+
+    The retry flag is internal-only and meaningful solely for community
+    Follow requests. A failed receipt may outlive a successful Undo, so the
+    subscriber repository must still decide if this generation is current.
+    """
     # Receipt state is the source of truth for idempotency across duplicate and
     # retry deliveries from the gateway.
-    existing = runtime.database.event_receipts.get_event_receipt(event.delivery_id)
+    scope = _receipt_group_scope(event)
+    existing = runtime.database.event_receipts.get_event_receipt(
+        event.delivery_id, verified_destination_group_actor_id=scope)
     if existing is None:
-        runtime.database.event_receipts.create_event_receipt(
-            delivery_id=event.delivery_id,
-            event_type=event.event_type,
-            object_ap_id=_event_object_id(event),
-            status="in_progress",
-        )
-        return None
+        try:
+            runtime.database.event_receipts.create_event_receipt(
+                delivery_id=event.delivery_id,
+                verified_destination_group_actor_id=scope,
+                event_type=event.event_type,
+                object_ap_id=_event_object_id(event),
+                status="in_progress",
+            )
+            return None, False
+        except IntegrityError:
+            # Another handler may have reserved the same wire ID and Group
+            # between our read and INSERT. Do not convert that valid duplicate
+            # race into HTTP 500 or borrow another tenant's receipt.
+            existing = runtime.database.event_receipts.get_event_receipt(
+                event.delivery_id, verified_destination_group_actor_id=scope)
+            if existing is None:
+                raise
 
+    # A wire ID reused for a different object within the same verified Group
+    # cannot borrow an earlier terminal result or mutate that object's receipt.
+    if scope is not None and (
+        existing.event_type != event.event_type
+        or existing.object_ap_id != _event_object_id(event)
+    ):
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT,
+                            detail="Delivery identity conflicts within receipt scope")
     if existing.status == "in_progress":
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
             detail="Delivery is already in progress",
         )
     if existing.status in {"processed", "skipped"}:
+        # A repeated *authenticated* remote Group Create can complete targets
+        # that provably failed before Discord REST. The terminal receipt
+        # describes the previous attempt, not all future subscribed forums.
+        # Local Group content keeps its separately scoped duplicate contract.
+        can_resume_remote = _is_resumable_remote_group_receipt(event, existing)
+        if can_resume_remote:
+            # Preserve the terminal receipt: each *eligible target* is fenced
+            # by its canonical Group/Discord CAS claim in the runtime. This
+            # allows retries without mutating receipt provenance or allowing
+            # a bad duplicate envelope to replace the earlier applied result.
+            return None, False
         return {
             "status": "duplicate",
             "outcome": existing.outcome,
             "detail": existing.detail or existing.status,
-        }
+        }, False
+    is_retry = event.event_type == "local.follow_requested" and (
+        existing.event_type == event.event_type
+        and existing.object_ap_id == _event_object_id(event)
+    )
+    # If the same wire ID once carried a different event/object, it cannot
+    # safely prove a new Follow first-seen or legitimate retry generation.
+    if event.event_type == "local.follow_requested" and not is_retry:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="Follow delivery ID conflicts with a prior event",
+        )
+    if existing.status not in {"failed", "deferred"}:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="Unsupported receipt state for Follow retry",
+        )
     if existing.status == "deferred":
         runtime.database.event_receipts.update_event_receipt(
             delivery_id=event.delivery_id,
+            verified_destination_group_actor_id=scope,
             status="in_progress",
             outcome=None,
             detail="retrying deferred delivery",
         )
-        return None
+        return None, is_retry
 
     runtime.database.event_receipts.update_event_receipt(
         delivery_id=event.delivery_id,
+        verified_destination_group_actor_id=scope,
         status="in_progress",
         outcome=None,
         detail="retrying failed delivery",
     )
-    return None
+    return None, is_retry
 
 
 def _event_object_id(event: BridgeGatewayEvent) -> str:
@@ -508,20 +670,36 @@ def _finish_event_processing(
     status_value: str,
     outcome: InboundActivityOutcome,
     detail: str,
+    *, verified_destination_group_actor_id: str | None = None,
 ) -> None:
-    """Persist one terminal result as an atomic receipt transition."""
+    """Persist first-time outcomes without rewriting an applied remote receipt."""
+    if verified_destination_group_actor_id is None:
+        existing = runtime.database.event_receipts.get_event_receipt(delivery_id)
+        if (existing is not None and existing.status in {"processed", "skipped"}
+                and existing.outcome in {
+                    InboundActivityOutcome.APPLIED.value,
+                    InboundActivityOutcome.IGNORED_ALREADY_APPLIED.value,
+                }):
+            # A duplicate remote Group Create may have filled another forum,
+            # but its first terminal receipt remains the historical wire result.
+            return
     runtime.database.event_receipts.update_event_receipt(
         delivery_id=delivery_id,
+        verified_destination_group_actor_id=verified_destination_group_actor_id,
         status=status_value,
         outcome=outcome,
         detail=detail,
     )
 
 
-def _mark_event_failed(runtime: Runtime, delivery_id: str, detail: str) -> None:
-    """Persist an exception as a failed attempt with a stable outcome."""
+def _mark_event_failed(
+    runtime: Runtime, delivery_id: str, detail: str, *,
+    verified_destination_group_actor_id: str | None = None,
+) -> None:
+    """Persist one failed attempt without affecting another Group's receipt."""
     runtime.database.event_receipts.update_event_receipt(
         delivery_id=delivery_id,
+        verified_destination_group_actor_id=verified_destination_group_actor_id,
         status="failed",
         outcome=InboundActivityOutcome.PROCESSING_FAILED,
         detail=detail,

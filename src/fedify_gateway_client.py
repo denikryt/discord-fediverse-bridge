@@ -9,6 +9,10 @@ import httpx
 from .config import Settings
 
 
+class FollowNotDispatchedError(RuntimeError):
+    """Gateway proved a local Follow signing failure occurred before HTTP send."""
+
+
 @dataclass(slots=True)
 class FollowCommunityResult:
     # The follow result captures the exact remote metadata that must be stored
@@ -54,6 +58,34 @@ class PublishContentRequest:
     operation_id: str | None = None
     activity_id: str | None = None
     mutation_timestamp: str | None = None
+
+
+@dataclass(slots=True)
+class RenderCommunityCreateRequest:
+    """Describe one immutable community Create for the gateway's pure renderer."""
+
+    actor_username: str
+    community_actor_url: str
+    software_profile: str
+    kind: str
+    operation_id: str
+    activity_id: str
+    object_id: str
+    title: str | None
+    body_markdown: str
+    published_at: str
+    in_reply_to_object_id: str | None = None
+    conversation_root_object_id: str | None = None
+
+
+@dataclass(slots=True)
+class RenderCommunityCreateResult:
+    """Return exact identities and JSON without delivering them to the network."""
+
+    activity_id: str
+    object_id: str
+    published_at: str
+    activity_json: dict = field(default_factory=dict)
 
 
 @dataclass(slots=True)
@@ -139,6 +171,9 @@ class UpdateContentRequest:
     mutation_timestamp: str | None = None
     expected_revision: int | None = None
     next_revision: int | None = None
+    render_only: bool = False
+    software_profile: str | None = None
+    conversation_root_object_id: str | None = None
 
 
 @dataclass(slots=True)
@@ -154,6 +189,9 @@ class DeleteContentRequest:
     mutation_timestamp: str | None = None
     expected_revision: int | None = None
     next_revision: int | None = None
+    render_only: bool = False
+    software_profile: str | None = None
+    conversation_root_object_id: str | None = None
 
 
 @dataclass(slots=True)
@@ -175,6 +213,8 @@ class SendLocalCommunityRelayOutcome:
     target_remote_actor_id: str
     activity_id: str | None = None
     error: str | None = None
+    # True only when the gateway proves no HTTP delivery was attempted.
+    safe_to_retry: bool = False
 
 
 @dataclass(slots=True)
@@ -253,6 +293,47 @@ class FedifyGatewayClient:
         )
         response.raise_for_status()
 
+    async def prepare_community_follow(self, community_actor_url: str) -> FollowCommunityResult:
+        """Resolve and allocate one immutable Follow tuple without network delivery."""
+        response = await self._client.post(
+            "/prepare-community-follow",
+            headers={"Authorization": f"Bearer {self._shared_secret}"},
+            json={"communityActorUrl": community_actor_url},
+        )
+        response.raise_for_status()
+        payload = response.json()
+        return FollowCommunityResult(
+            community_actor_url=payload["communityActorUrl"],
+            community_inbox_url=payload["communityInboxUrl"],
+            follow_activity_id=payload["followActivityId"],
+        )
+
+    async def send_prepared_community_follow(self, prepared: FollowCommunityResult) -> None:
+        """Send only the Follow identity and recipient already committed in SQLite."""
+        response = await self._client.post(
+            "/send-prepared-community-follow",
+            headers={"Authorization": f"Bearer {self._shared_secret}"},
+            json={
+                "communityActorUrl": prepared.community_actor_url,
+                "communityInboxUrl": prepared.community_inbox_url,
+                "followActivityId": prepared.follow_activity_id,
+            },
+        )
+        # Only a structured authenticated gateway response can assert no
+        # remote HTTP attempt began. Generic HTTP 4xx/5xx and timeouts are
+        # ambiguous and must retain the claimed Follow generation.
+        if response.status_code == 422:
+            try:
+                failure = response.json()
+            except ValueError:
+                failure = None
+            if isinstance(failure, dict) and (
+                failure.get("code") == "follow_sender_unavailable"
+                and failure.get("dispatched") is False
+            ):
+                raise FollowNotDispatchedError("Bridge service signing key unavailable")
+        response.raise_for_status()
+
     async def follow_community(self, community_actor_url: str) -> FollowCommunityResult:
         """Trigger one gateway-side Follow and return the stored metadata."""
         # The request is authenticated because this endpoint is a trusted
@@ -292,6 +373,37 @@ class FedifyGatewayClient:
         response.raise_for_status()
         payload = response.json()
         return RenderPersonalFeedResult(
+            activity_id=payload["activityId"],
+            object_id=payload["objectId"],
+            published_at=payload["publishedAt"],
+            activity_json=payload["activityJson"],
+        )
+
+    async def render_community_create(
+        self, request: RenderCommunityCreateRequest
+    ) -> RenderCommunityCreateResult:
+        """Render canonical Create JSON without signing, fetching or sending it."""
+        response = await self._client.post(
+            "/render-community-create",
+            headers={"Authorization": f"Bearer {self._shared_secret}"},
+            json={
+                "actorUsername": request.actor_username,
+                "communityActorUrl": request.community_actor_url,
+                "softwareProfile": request.software_profile,
+                "kind": request.kind,
+                "operationId": request.operation_id,
+                "activityId": request.activity_id,
+                "objectId": request.object_id,
+                "title": request.title,
+                "bodyMarkdown": request.body_markdown,
+                "publishedAt": request.published_at,
+                "inReplyToObjectId": request.in_reply_to_object_id,
+                "conversationRootObjectId": request.conversation_root_object_id,
+            },
+        )
+        response.raise_for_status()
+        payload = response.json()
+        return RenderCommunityCreateResult(
             activity_id=payload["activityId"],
             object_id=payload["objectId"],
             published_at=payload["publishedAt"],
@@ -360,7 +472,8 @@ class FedifyGatewayClient:
         )
 
     async def unfollow_community(
-        self, community_actor_url: str, follow_activity_id: str
+        self, community_actor_url: str, follow_activity_id: str,
+        *, original_inbox_url: str | None = None,
     ) -> UnfollowCommunityResult:
         """Trigger one gateway-side Undo(Follow) to remove a community follow.
 
@@ -374,6 +487,7 @@ class FedifyGatewayClient:
                 json={
                     "communityActorUrl": community_actor_url,
                     "followActivityId": follow_activity_id,
+                    **({"communityInboxUrl": original_inbox_url} if original_inbox_url else {}),
                 },
             )
         except httpx.HTTPError as exc:
@@ -417,6 +531,9 @@ class FedifyGatewayClient:
                 "mutationTimestamp": request.mutation_timestamp,
                 "expectedRevision": request.expected_revision,
                 "nextRevision": request.next_revision,
+                "renderOnly": request.render_only,
+                "softwareProfile": request.software_profile,
+                "conversationRootObjectId": request.conversation_root_object_id,
             },
         )
         response.raise_for_status()
@@ -445,6 +562,9 @@ class FedifyGatewayClient:
                 "mutationTimestamp": request.mutation_timestamp,
                 "expectedRevision": request.expected_revision,
                 "nextRevision": request.next_revision,
+                "renderOnly": request.render_only,
+                "softwareProfile": request.software_profile,
+                "conversationRootObjectId": request.conversation_root_object_id,
             },
         )
         response.raise_for_status()
@@ -488,6 +608,7 @@ class FedifyGatewayClient:
                     target_remote_actor_id=str(item["targetRemoteActorId"]),
                     activity_id=item.get("activityId"),
                     error=item.get("error"),
+                    safe_to_retry=item.get("safeToRetry") is True,
                 )
                 for item in payload.get("outcomes", [])
             ]

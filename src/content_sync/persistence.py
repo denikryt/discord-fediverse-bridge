@@ -9,6 +9,8 @@ from sqlalchemy import or_, select
 from sqlalchemy.exc import IntegrityError
 
 from ..models import (
+    BridgeActorFollow,
+    ChannelCommunitySubscription,
     MessageMapping,
     PublishedActivityObject,
     User,
@@ -74,6 +76,7 @@ def _existing_result(
     conversation_root_object_id: str | None = None,
     source_kind: str = "content_create",
     logical_version: int = 1,
+    direct_group_recipients: list[dict] | None = None,
 ) -> PersistPublishResult:
     """Resolve only a complete, internally consistent durable publication graph."""
     published = session.scalar(
@@ -129,6 +132,14 @@ def _existing_result(
         raise PublicationConflictError(
             "outbound source has incompatible publication identity"
         )
+    if direct_group_recipients is not None:
+        import json
+
+        snapshot = json.loads(source.snapshot_json)
+        if snapshot.get("directGroupRecipients") != direct_group_recipients:
+            raise PublicationConflictError(
+                "existing Create has incompatible immutable direct Group recipients"
+            )
     return PersistPublishResult(source.id, False)
 
 
@@ -148,6 +159,7 @@ def inspect_publish_artifacts(
     kind: str = "post",
     in_reply_to_object_id: str | None = None,
     conversation_root_object_id: str | None = None,
+    direct_group_recipients: list[dict] | None = None,
 ) -> PersistPublishResult | None:
     """Return an exact durable duplicate or fail closed on partial/conflicting state."""
     expected = dict(
@@ -189,6 +201,7 @@ def inspect_publish_artifacts(
             kind=kind,
             in_reply_to_object_id=in_reply_to_object_id,
             conversation_root_object_id=conversation_root_object_id,
+            direct_group_recipients=direct_group_recipients,
         )
 
 
@@ -213,6 +226,7 @@ def persist_publish_artifacts(
     discord_guild_id: int | None = None,
     published_at: datetime | None = None,
     direct_target_inbox_urls: list[str] | None = None,
+    direct_group_recipients: list[dict] | None = None,
 ) -> PersistPublishResult:
     """Commit mapping, public object, and fixed follower audience atomically.
 
@@ -238,6 +252,32 @@ def persist_publish_artifacts(
                 raise ValueError(
                     "canonical actor does not match a registered User Actor"
                 )
+            if direct_group_recipients is not None:
+                # Recheck Follow, binding and inbox under the *same* SQLite writer
+                # transaction that commits the immutable Create and target.
+                for recipient in direct_group_recipients:
+                    follow = session.scalar(select(BridgeActorFollow).where(
+                        BridgeActorFollow.community_actor_id == recipient["actorId"],
+                        BridgeActorFollow.follow_activity_id == recipient["followActivityId"],
+                        BridgeActorFollow.community_inbox_url == recipient["inboxUrl"],
+                        BridgeActorFollow.remote_software_profile == recipient["softwareProfile"],
+                        BridgeActorFollow.status == "accepted",
+                        BridgeActorFollow.cancel_requested.is_(False),
+                        BridgeActorFollow.follow_dispatch_state == "sent",
+                    ))
+                    binding = session.scalar(select(ChannelCommunitySubscription).where(
+                        ChannelCommunitySubscription.discord_channel_id == recipient["discordChannelId"],
+                        ChannelCommunitySubscription.lemmy_community_actor_id == recipient["actorId"],
+                        ChannelCommunitySubscription.follow_activity_id == recipient["followActivityId"],
+                        ChannelCommunitySubscription.community_inbox_url == recipient["inboxUrl"],
+                        ChannelCommunitySubscription.status == "accepted",
+                    ))
+                    if follow is None or binding is None or (
+                        binding.discord_guild_id != recipient["discordGuildId"]
+                    ):
+                        raise PublicationConflictError(
+                            "direct Group recipient is no longer backed by the accepted Follow generation"
+                        )
             existing = session.scalar(
                 select(MessageMapping).where(
                     MessageMapping.source_platform == "discord",
@@ -264,6 +304,7 @@ def persist_publish_artifacts(
                     kind=kind,
                     in_reply_to_object_id=in_reply_to_object_id,
                     conversation_root_object_id=conversation_root_object_id,
+                    direct_group_recipients=direct_group_recipients,
                 )
 
             mapping = MessageMapping(
@@ -315,9 +356,11 @@ def persist_publish_artifacts(
                     "objectId": object_id,
                     "activityType": "Create",
                     "contentRevision": 1,
+                    **({"directGroupRecipients": direct_group_recipients} if direct_group_recipients is not None else {}),
                 },
                 followers=followers,
                 direct_target_inbox_urls=direct_target_inbox_urls,
+                direct_group_recipients=direct_group_recipients,
             )
             return PersistPublishResult(source.id, True)
     except IntegrityError:
@@ -353,6 +396,7 @@ def persist_publish_artifacts(
                     kind=kind,
                     in_reply_to_object_id=in_reply_to_object_id,
                     conversation_root_object_id=conversation_root_object_id,
+                    direct_group_recipients=direct_group_recipients,
                 )
         raise PublicationConflictError(
             "uniqueness collision did not resolve to the expected canonical publication"

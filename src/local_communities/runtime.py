@@ -69,6 +69,7 @@ class LocalCommunityRuntime:
             surface_fanout=self.surface_fanout,
             federation_fanout=self.federation_fanout,
             discord_client_provider=lambda: self.bot,
+            bridge_policy_service=bridge_policy_service,
         )
         self.mutation_handler = LocalCommunityMutationHandler(
             database=database,
@@ -242,13 +243,15 @@ class LocalCommunityRuntime:
         remote_actor_id: str,
         remote_inbox_url: str,
         follow_activity_id: str,
+        is_retry: bool = False,
     ) -> HandlerResult:
-        """Persist and accept one remote follow request for a local community."""
+        """Persist a first-seen Follow or safely retry its saved generation."""
         return await self.follower_handler.handle_follow_request(
             local_community_actor_id=local_community_actor_id,
             remote_actor_id=remote_actor_id,
             remote_inbox_url=remote_inbox_url,
             follow_activity_id=follow_activity_id,
+            is_retry=is_retry,
         )
 
     async def handle_unfollow_request(

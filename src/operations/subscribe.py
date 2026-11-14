@@ -13,7 +13,10 @@ community. Subsequent subscriptions reuse the existing follow state.
 
 from __future__ import annotations
 
+import logging
 from dataclasses import dataclass, field
+
+import httpx
 
 from discordops import OperationDefinition, OperationResult, Precondition
 
@@ -21,7 +24,36 @@ from .common_preconditions import DISCORD_USER_REGISTERED
 
 from ..bridge_policy import BridgePolicyService
 from ..db import Database
-from ..fedify_gateway_client import FedifyGatewayClient
+from ..fedify_gateway_client import FedifyGatewayClient, FollowCommunityResult, FollowNotDispatchedError
+from ..db.repositories.bridge_actor_follows import BridgeActorFollowRepository, FollowReservationConflict
+
+logger = logging.getLogger(__name__)
+
+
+def _follow_dispatch_error_summary(error: Exception) -> str:
+    """Return a safe diagnostic without logging gateway payloads or secrets.
+
+    A verified local actor lookup failure has a useful non-secret error text.
+    Other gateway failures may contain request data, so log only their status
+    or exception class while retaining the original uncertain send state.
+    """
+    if isinstance(error, httpx.HTTPStatusError):
+        try:
+            detail = error.response.json().get("error")
+        except (ValueError, AttributeError):
+            detail = None
+        if (
+            isinstance(detail, str)
+            and detail.startswith((
+                "No actor found for the given username ",
+                "No actor found for the given identifier ",
+            ))
+            and len(detail) < 200
+            and all(character.isprintable() for character in detail)
+        ):
+            return detail
+        return f"gateway HTTP {error.response.status_code}"
+    return type(error).__name__
 
 
 @dataclass
@@ -42,6 +74,7 @@ class SubscribeInput:
     numeric_id: int | None
     community_handle: str
     policy_service: BridgePolicyService
+    remote_software_profile: str = "unknown"
     guild_id: int | None = None
     _bridge_user: object | None = field(default=None, init=False, repr=False)
     _bridge_user_loaded: bool = field(default=False, init=False, repr=False)
@@ -149,158 +182,229 @@ def _has_no_accepted_channel_subscription(operation_input: SubscribeInput) -> bo
 
 
 def _has_no_pending_channel_subscription(operation_input: SubscribeInput) -> bool:
-    """Return whether the channel lacks an already pending subscription."""
-    return _channel_sub_status(operation_input) != "pending"
+    """Allow retry only when the original Follow is proven not dispatched."""
+    if _channel_sub_status(operation_input) != "pending":
+        return True
+    binding = operation_input.get_existing_subscription()
+    if getattr(binding, "lemmy_community_actor_id", None) != operation_input.actor_id:
+        return False
+    follow = operation_input.get_bridge_actor_follow()
+    # This is only a fast precondition; reservation rechecks everything under
+    # the SQLite writer lock, including the binding's exact Follow generation.
+    return bool(
+        follow is not None
+        and follow.follow_dispatch_state == "prepared"
+        and follow.status == "pending"
+        and not follow.cancel_requested
+        and follow.follow_activity_id == getattr(binding, "follow_activity_id", None)
+    )
 
 
 async def _body(operation_input: SubscribeInput) -> OperationResult:
-    """Dispatch one bridge follow and persist the resulting lifecycle state.
+    """Reserve the original Follow and channel before CAS-claimed federation send.
 
-    Preconditions already blocked the accepted and pending channel-level
-    cases. The body handles three remaining paths:
-
-    1. Bridge follow accepted for another channel → create channel row as
-       accepted immediately (bridge actor already federated).
-    2. Bridge follow pending for another channel → piggyback; create channel
-       row as pending so it activates when the shared Accept arrives.
-    3. No bridge follow (or failed) → send Follow, persist both rows.
+    A later gateway timeout is not evidence that no Follow reached the remote
+    Group. The same immutable generation therefore remains pending until a
+    signed Accept or the guarded cancellation flow (CP11) resolves it.
     """
-    existing_channel_sub = operation_input.get_existing_subscription()
-    if existing_channel_sub is not None and existing_channel_sub.status == "failed":
-        # Failed rows are retriable. Delete the stale channel row first so the
-        # UNIQUE constraint on discord_channel_id allows the replacement insert.
-        operation_input.database.remote_subscriptions.delete_subscription(
-            operation_input.channel_id
-        )
-
-    existing_follow = operation_input.get_bridge_actor_follow()
-
-    if existing_follow is not None and existing_follow.status == "accepted":
-        # Another channel already established the AP-level follow and it was
-        # accepted. Create the new channel row immediately as accepted.
-        operation_input.database.remote_subscriptions.create_subscription(
-            discord_channel_id=operation_input.channel_id,
-            discord_guild_id=operation_input.guild_id,
-            lemmy_community_actor_id=operation_input.actor_id,
-            lemmy_community_name=operation_input.community_name,
-            lemmy_community_id=operation_input.numeric_id,
-            community_handle=operation_input.community_handle,
-            community_inbox_url=existing_follow.community_inbox_url,
-            follow_activity_id=existing_follow.follow_activity_id,
-            initiated_by_discord_user_id=operation_input.discord_user_id,
-            status="accepted",
-        )
-        return OperationResult(
-            applied=True,
-            message=(
-                f"Subscribed {operation_input.channel_mention} to "
-                f"**{_requested_community_label(operation_input)}**."
-            ),
-        )
-
-    if existing_follow is not None and existing_follow.status == "pending":
-        # A Follow is already in flight — piggyback on it. Create a pending
-        # channel row so this channel activates when the shared Accept arrives.
-        operation_input.database.remote_subscriptions.create_subscription(
-            discord_channel_id=operation_input.channel_id,
-            discord_guild_id=operation_input.guild_id,
-            lemmy_community_actor_id=operation_input.actor_id,
-            lemmy_community_name=operation_input.community_name,
-            lemmy_community_id=operation_input.numeric_id,
-            community_handle=operation_input.community_handle,
-            community_inbox_url=existing_follow.community_inbox_url,
-            follow_activity_id=existing_follow.follow_activity_id,
-            initiated_by_discord_user_id=operation_input.discord_user_id,
-            status="pending",
-        )
-        return OperationResult(
-            applied=True,
-            message=(
-                f"Sent a bridge follow for {operation_input.channel_mention} -> "
-                f"**{_requested_community_label(operation_input)}**. Waiting for federation acceptance."
-            ),
-        )
-
-    # No existing bridge follow (or failed) — send a fresh Follow.
-    if existing_follow is not None and existing_follow.status == "failed":
-        # Remove the stale failed bridge follow row before creating a fresh one.
-        operation_input.database.bridge_actor_follows.delete_bridge_actor_follow(
-            operation_input.actor_id
-        )
-
-    decision = operation_input.policy_service.federation_decision(
-        operation_input.actor_id
-    )
+    decision = operation_input.policy_service.federation_decision(operation_input.actor_id)
     if not decision.allowed:
         return OperationResult(
             applied=False,
-            message=(
-                f"Could not subscribe {operation_input.channel_mention} to "
-                f"**{_requested_community_label(operation_input)}** because federation policy denies the instance."
-            ),
             reason="federation_policy_denied",
+            message=f"Federation policy denies **{_requested_community_label(operation_input)}**.",
         )
 
-    try:
-        follow_result = await operation_input.fedify_gateway.follow_community(
-            operation_input.actor_id
-        )
-    except Exception:
-        # Follow dispatch failures must be durable local state so moderators can
-        # see an explicit failed attempt instead of a fake pending row.
-        operation_input.database.bridge_actor_follows.create_bridge_actor_follow(
-            community_actor_id=operation_input.actor_id,
-            follow_activity_id=None,
-            community_inbox_url=None,
-            status="failed",
-        )
-        operation_input.database.remote_subscriptions.create_subscription(
-            discord_channel_id=operation_input.channel_id,
-            discord_guild_id=operation_input.guild_id,
-            lemmy_community_actor_id=operation_input.actor_id,
-            lemmy_community_name=operation_input.community_name,
-            lemmy_community_id=operation_input.numeric_id,
-            community_handle=operation_input.community_handle,
-            community_inbox_url=None,
-            follow_activity_id=None,
-            status="failed",
-        )
+    existing = operation_input.get_bridge_actor_follow()
+    if existing is not None and existing.follow_dispatch_state == "undo_sending":
+        # A signed Undo may already have left this process. Restart does not
+        # establish its outcome, so no new Follow generation can be prepared.
+        from .unsubscribe import _unresolved_undo_message
         return OperationResult(
             applied=False,
-            message=(
-                f"Could not subscribe {operation_input.channel_mention} to "
-                f"**{_requested_community_label(operation_input)}** because the bridge Follow request failed."
+            reason="remote_follow_cleanup_unresolved",
+            message=_unresolved_undo_message(
+                existing.community_actor_id, existing.follow_activity_id or "missing"
             ),
-            reason="follow_dispatch_failed",
         )
+    if existing is not None and existing.status in ("pending", "accepted"):
+        # Reuse the original actor/inbox/ID; discovery is not authoritative
+        # over a previously committed Follow generation.
+        if not existing.follow_activity_id or not existing.community_inbox_url:
+            return OperationResult(applied=False, reason="follow_identity_unresolved",
+                                   message="Existing Follow has incomplete identity; operator verification is required.")
+        prepared = FollowCommunityResult(
+            community_actor_url=existing.community_actor_id,
+            community_inbox_url=existing.community_inbox_url,
+            follow_activity_id=existing.follow_activity_id,
+        )
+    else:
+        try:
+            prepared = await operation_input.fedify_gateway.prepare_community_follow(operation_input.actor_id)
+        except Exception:
+            # Preparation is read-only with respect to AP send. A failed
+            # discovery must not create a fake failed relationship.
+            return OperationResult(applied=False, reason="follow_prepare_failed",
+                                   message="Could not verify the remote Group for Follow; no Follow was sent.")
 
-    # Persist the bridge-actor follow row first, then the channel subscription.
-    # The follow row is the AP-level source of truth; the channel row is the
-    # Discord-facing routing record.
-    operation_input.database.bridge_actor_follows.create_bridge_actor_follow(
-        community_actor_id=follow_result.community_actor_url,
-        follow_activity_id=follow_result.follow_activity_id,
-        community_inbox_url=follow_result.community_inbox_url,
-        status="pending",
+    if prepared.community_actor_url != operation_input.actor_id:
+        return OperationResult(applied=False, reason="follow_actor_mismatch",
+                               message="Remote Group identity changed during Follow preparation.")
+    if not prepared.follow_activity_id or not prepared.community_inbox_url:
+        return OperationResult(applied=False, reason="follow_identity_unresolved",
+                               message="Remote Group did not provide a complete Follow target.")
+    if not operation_input.policy_service.federation_decision(prepared.community_inbox_url).allowed:
+        return OperationResult(applied=False, reason="federation_policy_denied",
+                               message="Federation policy denies the verified Group inbox.")
+
+    try:
+        # The IMMEDIATE lock serializes concurrent bindings to the same Group.
+        # No gateway send occurs until both entities are committed.
+        with operation_input.database.immediate_session() as session:
+            follow, prepared_to_send = BridgeActorFollowRepository.reserve_with_binding(
+                session,
+                community_actor_id=prepared.community_actor_url,
+                follow_activity_id=prepared.follow_activity_id,
+                community_inbox_url=prepared.community_inbox_url,
+                remote_software_profile=operation_input.remote_software_profile,
+                discord_channel_id=operation_input.channel_id,
+                discord_guild_id=operation_input.guild_id,
+                community_name=operation_input.community_name,
+                numeric_id=operation_input.numeric_id,
+                community_handle=operation_input.community_handle,
+                initiated_by_discord_user_id=operation_input.discord_user_id,
+            )
+            follow_id = follow.id
+            committed = FollowCommunityResult(
+                community_actor_url=follow.community_actor_id,
+                community_inbox_url=follow.community_inbox_url,
+                follow_activity_id=follow.follow_activity_id,
+            )
+    except FollowReservationConflict as error:
+        if "cleanup" in str(error):
+            # A concurrent unsubscriber might have claimed Undo since this
+            # operation's earlier read. Report the exact retained generation.
+            from .unsubscribe import _unresolved_undo_message
+            current = operation_input.database.bridge_actor_follows.get_bridge_actor_follow(
+                operation_input.actor_id
+            )
+            if current is not None and current.follow_dispatch_state == "undo_sending":
+                return OperationResult(
+                    applied=False, reason="remote_follow_cleanup_unresolved",
+                    message=_unresolved_undo_message(
+                        current.community_actor_id, current.follow_activity_id or "missing"
+                    ),
+                )
+        return OperationResult(applied=False, reason="follow_reservation_conflict", message=str(error))
+
+    if prepared_to_send and operation_input.database.bridge_actor_follows.claim_prepared_follow(follow_id):
+        try:
+            await operation_input.fedify_gateway.send_prepared_community_follow(committed)
+        except Exception as error:
+            # Only an explicit gateway attestation of a pre-network failure
+            # releases the original attempt; response loss remains ambiguous.
+            if isinstance(error, FollowNotDispatchedError):
+                operation_input.database.bridge_actor_follows.reset_unsent_follow(follow_id)
+                current_binding = operation_input.database.remote_subscriptions.get_subscription_by_channel(
+                    operation_input.channel_id
+                )
+                current_follow = operation_input.database.bridge_actor_follows.get_bridge_actor_follow(
+                    committed.community_actor_url
+                )
+                if current_binding is None or current_follow is None or current_follow.cancel_requested:
+                    return OperationResult(
+                        applied=False, reason="follow_cancelled_during_dispatch",
+                        message="Channel unsubscribed during the unsuccessful Follow attempt; no Follow was sent.",
+                    )
+                if current_follow.follow_dispatch_state == "prepared":
+                    logger.warning(
+                        "Follow sender unavailable before HTTP: group=%s follow_id=%s; safe same-ID retry prepared",
+                        committed.community_actor_url, committed.follow_activity_id,
+                    )
+                    return OperationResult(
+                        applied=False, reason="follow_sender_resolution_failed",
+                        message=("Bridge service signing key unavailable; Follow was not dispatched. "
+                                 "Retry /subscribe-community on this channel after fixing the sender. "
+                                 "The original Follow ID is preserved."),
+                    )
+                # A concurrent accepted or completed generation must not be
+                # downgraded merely because this caller received an error.
+            # Generic gateway/HTTP errors do not prove the remote Group did
+            # not receive Follow, even if their message contains 'No actor'.
+            failure_detail = _follow_dispatch_error_summary(error)
+            logger.error(
+                "Prepared Follow dispatch unresolved: group=%s follow_id=%s reason=%s; "
+                "retaining the original sending generation",
+                committed.community_actor_url, committed.follow_activity_id,
+                failure_detail,
+            )
+            # A lost response is ambiguous, not a proven failed delivery. The
+            # original Follow ID remains in ``sending`` for on-demand recovery.
+            # A moderator can cancel the channel while HTTP is in flight; a
+            # timed-out sender must not subsequently claim it is subscribed.
+            current_binding = operation_input.database.remote_subscriptions.get_subscription_by_channel(
+                operation_input.channel_id
+            )
+            current_follow = operation_input.database.bridge_actor_follows.get_bridge_actor_follow(
+                committed.community_actor_url
+            )
+            if (
+                current_binding is None
+                or current_follow is None
+                or current_follow.cancel_requested
+            ):
+                return OperationResult(
+                    applied=False, reason="follow_cancelled_during_dispatch",
+                    message=("The channel unsubscribed while Follow delivery was unresolved. "
+                             "The original Follow generation is retained for guarded cleanup."),
+                )
+            return OperationResult(
+                applied=True,
+                reason="pending_remote_confirmation",
+                message=(f"Follow for **{_requested_community_label(operation_input)}** is pending "
+                         "remote confirmation; the original Follow ID is retained. "
+                         "Waiting for federation acceptance."),
+            )
+        operation_input.database.bridge_actor_follows.complete_prepared_follow(follow_id)
+
+        # The last channel may have unsubscribed while HTTP was in flight.
+        # Only a *proven* completed Follow may proceed to a claimed Undo.
+        post_send = operation_input.database.bridge_actor_follows.get_bridge_actor_follow(
+            committed.community_actor_url
+        )
+        if post_send is not None and post_send.cancel_requested:
+            from .unsubscribe import complete_cancelled_remote_follow
+            await complete_cancelled_remote_follow(
+                database=operation_input.database,
+                fedify_gateway=operation_input.fedify_gateway,
+                policy_service=operation_input.policy_service,
+                community_actor_id=committed.community_actor_url,
+                community_inbox_url=committed.community_inbox_url,
+                follow_activity_id=committed.follow_activity_id,
+            )
+
+    # Another channel may have already received the signed Accept while our
+    # HTTP request was in flight. Never downgrade that accepted DB state.
+    current = operation_input.database.bridge_actor_follows.get_bridge_actor_follow(committed.community_actor_url)
+    binding = operation_input.database.remote_subscriptions.get_subscription_by_channel(
+        operation_input.channel_id
     )
-    operation_input.database.remote_subscriptions.create_subscription(
-        discord_channel_id=operation_input.channel_id,
-        discord_guild_id=operation_input.guild_id,
-        lemmy_community_actor_id=follow_result.community_actor_url,
-        lemmy_community_name=operation_input.community_name,
-        lemmy_community_id=operation_input.numeric_id,
-        community_handle=operation_input.community_handle,
-        community_inbox_url=follow_result.community_inbox_url,
-        follow_activity_id=follow_result.follow_activity_id,
-        initiated_by_discord_user_id=operation_input.discord_user_id,
-        status="pending",
-    )
+    if current is None or binding is None or current.cancel_requested:
+        # An unsubscribe may have cancelled this command's binding between
+        # commit and HTTP return. Do not claim the channel is still active.
+        return OperationResult(
+            applied=False, reason="follow_cancelled_during_dispatch",
+            message="Follow was cancelled by a concurrent unsubscribe; no active channel subscription remains.",
+        )
+    if current is not None and current.status == "accepted":
+        return OperationResult(applied=True, message=(
+            f"Subscribed {operation_input.channel_mention} to **{_requested_community_label(operation_input)}**."
+        ))
     return OperationResult(
         applied=True,
-        message=(
-            f"Sent a bridge follow for {operation_input.channel_mention} -> "
-            f"**{_requested_community_label(operation_input)}**. Waiting for federation acceptance."
-        ),
+        reason="pending_remote_confirmation",
+        message=(f"Reserved a bridge follow for {operation_input.channel_mention} -> "
+                 f"**{_requested_community_label(operation_input)}**. Waiting for federation acceptance."),
     )
 
 

@@ -9,6 +9,10 @@ no longer tied to the older Discord-only service label.
 from __future__ import annotations
 
 import logging
+import json
+from datetime import datetime, timezone
+from hashlib import sha256
+from urllib.parse import urlsplit
 from dataclasses import dataclass
 from typing import Awaitable, Callable
 
@@ -20,7 +24,18 @@ from .content_sync.outbound_publish import (
     build_discord_comment_body,
     build_discord_post_title,
 )
-from .content_sync.persistence import persist_publish_artifacts
+from .content_sync.persistence import (
+    PublicationConflictError,
+    inspect_publish_artifacts,
+    persist_publish_artifacts,
+)
+from .activitypub_identity_urls import (
+    build_user_comment_object_id,
+    build_user_post_object_id,
+    build_user_create_comment_activity_id,
+    build_user_create_post_activity_id,
+)
+from .fedify_gateway_client import RenderCommunityCreateRequest
 
 logger = logging.getLogger(__name__)
 
@@ -38,6 +53,8 @@ class PublishResult:
     reason: str
     activity_id: str | None = None
     object_id: str | None = None
+    locally_accepted: bool = False
+    delivery_state: str | None = None
 
 
 class ContentPublishService:
@@ -144,6 +161,7 @@ class ContentPublishService:
             community_actor_url=subscription.lemmy_community_actor_id,
             parent_object_id=reply_target_ap_id,
             publish_call=self.fedify_gateway.publish_content,
+            conversation_root_object_id=thread_group.ap_object_id,
         )
 
     async def publish_local_thread_starter(
@@ -203,6 +221,15 @@ class ContentPublishService:
             bridge_prefix=self.bridge_prefix,
         )
         title = build_discord_post_title(thread_name=getattr(thread, "name"))
+        if target_inbox_urls is None:
+            # Remote Groups use render-only persistence; direct delivery remains
+            # pending until the existing worker authorizes a route (CP16).
+            return await self._publish_remote_create(
+                user=user, source_message=starter_message, thread=thread,
+                community_actor_url=community_actor_url, kind="post", title=title,
+                body_markdown=body, in_reply_to_object_id=None,
+                conversation_root_object_id=None,
+            )
         publish_result = await publish_call(
             self._build_publish_request(
                 actor_username=user.activitypub_username,
@@ -254,6 +281,7 @@ class ContentPublishService:
         parent_object_id: str,
         publish_call: Callable[[object], Awaitable[object]],
         target_inbox_urls: list[str] | None = None,
+        conversation_root_object_id: str | None = None,
     ) -> PublishResult:
         """Publish one Discord comment through the supplied gateway path."""
         thread = getattr(message, "channel")
@@ -271,6 +299,13 @@ class ContentPublishService:
             content=getattr(message, "content"),
             bridge_prefix=self.bridge_prefix,
         )
+        if target_inbox_urls is None:
+            return await self._publish_remote_create(
+                user=user, source_message=message, thread=thread,
+                community_actor_url=community_actor_url, kind="comment", title=None,
+                body_markdown=body, in_reply_to_object_id=parent_object_id,
+                conversation_root_object_id=conversation_root_object_id or parent_object_id,
+            )
         publish_result = await publish_call(
             self._build_publish_request(
                 actor_username=user.activitypub_username,
@@ -312,6 +347,175 @@ class ContentPublishService:
             reason="published",
             activity_id=publish_result.activity_id,
             object_id=publish_result.object_id,
+        )
+
+    async def _publish_remote_create(
+        self, *, user: object, source_message: object, thread: object,
+        community_actor_url: str, kind: str, title: str | None,
+        body_markdown: str, in_reply_to_object_id: str | None,
+        conversation_root_object_id: str | None,
+    ) -> PublishResult:
+        """Commit an immutable remote Create and original Group recipient before delivery.
+
+        The verified software/Follower generation belongs to one Follow row;
+        absence of proof must never be downgraded to a guessed Lemmy Page.
+        """
+        channel_id = getattr(thread, "parent_id", None)
+        # An existing Discord source cannot be redirected to a different
+        # canonical Group even if that Group no longer has a live binding.
+        prior = self.database.message_mappings.get_message_mapping_by_discord_message_id(
+            getattr(source_message, "id", None)
+        )
+        if prior is not None and prior.source_platform == "discord" and (
+            prior.community_actor_url != community_actor_url or prior.actor_url != str(user.actor_url)
+        ):
+            raise PublicationConflictError("Discord source already belongs to another Person or Group")
+        subscription = self.database.remote_subscriptions.get_subscription_by_channel(channel_id)
+        if subscription is None or subscription.status != "accepted" or (
+            subscription.lemmy_community_actor_id != community_actor_url
+        ):
+            return PublishResult(status="rejected", reason="remote_binding_not_accepted")
+        follow = self.database.bridge_actor_follows.get_bridge_actor_follow(community_actor_url)
+        if (
+            follow is None or follow.status != "accepted"
+            or follow.cancel_requested or follow.follow_dispatch_state != "sent"
+            or not follow.follow_activity_id or not follow.community_inbox_url
+            or subscription.follow_activity_id != follow.follow_activity_id
+            or subscription.community_inbox_url != follow.community_inbox_url
+        ):
+            return PublishResult(status="rejected", reason="remote_follow_unverified")
+        profile = str(follow.remote_software_profile)
+        if profile not in {"nodebb", "threadiverse", "bridge"}:
+            return PublishResult(status="rejected", reason="software_profile_unverified")
+        # Policy must admit both the verified Group and its saved endpoint.
+        for candidate in (community_actor_url, follow.community_inbox_url):
+            if not self.bridge_policy_service.federation_decision(candidate).allowed:
+                return PublishResult(status="rejected", reason="federation_policy_denied")
+        guild_id = (
+            getattr(thread, "guild_id", None)
+            or getattr(source_message, "guild_id", None)
+            or subscription.discord_guild_id
+        )
+        if not isinstance(guild_id, int) or guild_id <= 0 or (
+            subscription.discord_guild_id is not None
+            and guild_id != subscription.discord_guild_id
+        ):
+            return PublishResult(status="rejected", reason="missing_or_mismatched_guild")
+        message_id = getattr(source_message, "id", None)
+        if not isinstance(message_id, int) or message_id <= 0:
+            return PublishResult(status="rejected", reason="invalid_source_message")
+        created_at = getattr(source_message, "created_at", None)
+        if not isinstance(created_at, datetime) or created_at.tzinfo is None:
+            return PublishResult(status="rejected", reason="missing_source_timestamp")
+        created_at = created_at.astimezone(timezone.utc)
+        published_at = created_at.isoformat(timespec="milliseconds").replace("+00:00", "Z")
+        username = str(user.activitypub_username)
+        actor_url = str(user.actor_url)
+        origin = urlsplit(actor_url)
+        if (
+            origin.scheme != "https" or not origin.netloc
+            or actor_url != f"{origin.scheme}://{origin.netloc}/actors/users/{username}"
+        ):
+            return PublishResult(status="rejected", reason="noncanonical_registered_actor")
+        canonical_origin = f"{origin.scheme}://{origin.netloc}"
+        if self.settings is not None and canonical_origin != self.settings.normalized_fedify_origin:
+            return PublishResult(status="rejected", reason="registered_actor_origin_mismatch")
+
+        # A Discord source/Person/Group/kind maps to one immutable AP identity,
+        # regardless of gateway latency, duplicate events or wall-clock time.
+        operation_key = ["community-create", guild_id, channel_id, message_id,
+                         actor_url, community_actor_url, kind]
+        operation_id = sha256(json.dumps(operation_key, separators=(",", ":")).encode()).hexdigest()
+        build_object = build_user_post_object_id if kind == "post" else build_user_comment_object_id
+        build_create = build_user_create_post_activity_id if kind == "post" else build_user_create_comment_activity_id
+        object_id = build_object(origin=canonical_origin, username=username, object_id=operation_id)
+        activity_id = build_create(origin=canonical_origin, username=username, activity_id=operation_id)
+        root_id = conversation_root_object_id or object_id
+        recipient = {
+            "actorId": community_actor_url,
+            "inboxUrl": follow.community_inbox_url,
+            "followActivityId": follow.follow_activity_id,
+            "discordChannelId": channel_id,
+            "discordGuildId": guild_id,
+            "softwareProfile": profile,
+        }
+        expected = dict(
+            source_id=str(message_id), actor_url=actor_url,
+            publication_context="community", community_actor_url=community_actor_url,
+            discord_guild_id=guild_id, discord_channel_id=channel_id,
+            discord_message_id=message_id, activity_id=activity_id, object_id=object_id,
+            published_at=created_at, kind=kind,
+            in_reply_to_object_id=in_reply_to_object_id,
+            conversation_root_object_id=root_id,
+            direct_group_recipients=[recipient],
+        )
+        existing = inspect_publish_artifacts(self.database, **expected)
+        if existing is not None:
+            return PublishResult(
+                status="queued", reason="already_locally_accepted",
+                activity_id=activity_id, object_id=object_id,
+                locally_accepted=True, delivery_state="queued",
+            )
+        rendered = await self.fedify_gateway.render_community_create(
+            RenderCommunityCreateRequest(
+                actor_username=username, community_actor_url=community_actor_url,
+                software_profile=profile, kind=kind, operation_id=operation_id,
+                activity_id=activity_id, object_id=object_id, title=title,
+                body_markdown=body_markdown, published_at=published_at,
+                in_reply_to_object_id=in_reply_to_object_id,
+                conversation_root_object_id=root_id,
+            )
+        )
+        activity_json = rendered.activity_json
+        if not isinstance(activity_json, dict):
+            raise PublicationConflictError("gateway returned no canonical community Create")
+        object_json = activity_json.get("object")
+        public = "https://www.w3.org/ns/activitystreams#Public"
+        expected_to = [public, community_actor_url]
+        # A malformed/altered render response never becomes the canonical
+        # source that the existing signing worker later delivers. Addressing
+        # is just as important as IDs: a second recipient could leak content.
+        if (
+            rendered.activity_id != activity_id or rendered.object_id != object_id
+            or rendered.published_at != published_at
+            or not isinstance(object_json, dict)
+            or activity_json.get("id") != activity_id
+            or activity_json.get("actor") != actor_url
+            or activity_json.get("type") != "Create"
+            or activity_json.get("to") != expected_to
+            or activity_json.get("cc") != [actor_url, f"{actor_url}/followers"]
+            or object_json.get("id") != object_id
+            or object_json.get("attributedTo") != actor_url
+            or object_json.get("type") != ("Note" if profile == "nodebb" or kind == "comment" else "Page")
+            or object_json.get("audience") != community_actor_url
+            or object_json.get("to") != expected_to
+            or object_json.get("published") != published_at
+            or not isinstance(object_json.get("source"), dict)
+            or object_json["source"].get("content") != body_markdown
+            or object_json.get("inReplyTo") != in_reply_to_object_id
+            or (kind == "post" and object_json.get("name") != title)
+            or (profile == "nodebb" and object_json.get("context") != root_id)
+        ):
+            raise PublicationConflictError("gateway changed immutable community Create identity")
+        persisted = persist_publish_artifacts(
+            self.database, source_id=str(message_id), actor_username=username,
+            actor_url=actor_url, community_actor_url=community_actor_url,
+            activity_id=activity_id, object_id=object_id,
+            activity_json=activity_json, kind=kind, title=title,
+            body_markdown=body_markdown,
+            in_reply_to_object_id=in_reply_to_object_id,
+            conversation_root_object_id=root_id,
+            discord_channel_id=channel_id, discord_guild_id=guild_id,
+            discord_message_id=message_id, published_at=created_at,
+            direct_group_recipients=[recipient],
+        )
+        if persisted.created and self.delivery_worker is not None:
+            self.delivery_worker.wake()
+        # Worker transport submission / Group acceptance is NOT confirmed here.
+        return PublishResult(
+            status="queued", reason="locally_accepted" if persisted.created else "already_locally_accepted",
+            activity_id=activity_id, object_id=object_id,
+            locally_accepted=True, delivery_state="queued",
         )
 
     def canonical_author_name_for_discord(self, author: object) -> str:

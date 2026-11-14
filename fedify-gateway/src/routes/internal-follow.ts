@@ -12,10 +12,13 @@ import {
   acceptLocalCommunityFollow,
   acceptUserActorFollow,
   followCommunity,
+  prepareCommunityFollow,
+  sendPreparedCommunityFollow,
   unfollowCommunity,
 } from "../federation-outbound.js";
 import type { AcceptLocalCommunityFollowRequest, AcceptUserActorFollowRequest } from "../types.js";
 import { hasValidInternalAuthorization } from "./internal-auth.js";
+import { FollowSenderUnavailableError } from "../outbound/community-follow.js";
 
 export interface InternalFollowRouteDependencies {
   config: GatewayConfig;
@@ -28,6 +31,60 @@ export function registerInternalFollowRoutes(
   dependencies: InternalFollowRouteDependencies,
 ): void {
   const { config, fedify } = dependencies;
+
+  app.post("/prepare-community-follow", async (context) => {
+    // Discovery is allowed here, but this endpoint must never send an AP Follow.
+    if (!hasValidInternalAuthorization(config, context.req.header("Authorization") ?? null)) {
+      return context.json({ error: "invalid authorization" }, { status: 401 });
+    }
+    const { communityActorUrl } = await context.req.json();
+    if (typeof communityActorUrl !== "string" || !communityActorUrl) {
+      return context.json({ error: "communityActorUrl is required" }, { status: 400 });
+    }
+    try {
+      return context.json(await prepareCommunityFollow(config, communityActorUrl));
+    } catch (error) {
+      return context.json({ error: error instanceof Error ? error.message : "actor lookup failed" }, { status: 500 });
+    }
+  });
+
+  app.post("/send-prepared-community-follow", async (context) => {
+    // The caller already committed the exact actor/inbox/Follow tuple.  This
+    // route cannot generate a new ID or pick a different remote recipient.
+    if (!hasValidInternalAuthorization(config, context.req.header("Authorization") ?? null)) {
+      return context.json({ error: "invalid authorization" }, { status: 401 });
+    }
+    const payload = await context.req.json() as Record<string, unknown>;
+    if (["communityActorUrl", "communityInboxUrl", "followActivityId"].some(
+      (field) => typeof payload[field] !== "string" || !payload[field],
+    )) {
+      return context.json({ error: "prepared Follow tuple is incomplete" }, { status: 400 });
+    }
+    try {
+      await sendPreparedCommunityFollow(fedify, config, {
+        communityActorUrl: payload.communityActorUrl as string,
+        communityInboxUrl: payload.communityInboxUrl as string,
+        followActivityId: payload.followActivityId as string,
+      });
+      return context.json({ ok: true });
+    } catch (error) {
+      // Report the failure at the gateway boundary. A 500 does not prove that
+      // a potentially started network delivery was rejected by the remote Group.
+      const localFailure = error instanceof FollowSenderUnavailableError;
+      const reason = error instanceof Error ? error.message : "Follow send failed";
+      console.error("[Follow] Prepared Follow dispatch failed", {
+        communityActorUrl: payload.communityActorUrl,
+        followActivityId: payload.followActivityId,
+        error: reason,
+      });
+      if (localFailure) {
+        // A structured admission failure is the only way Python may release
+        // the existing sending claim for a safe on-demand same-ID retry.
+        return context.json({ error: reason, code: "follow_sender_unavailable", dispatched: false }, { status: 422 });
+      }
+      return context.json({ error: reason }, { status: 500 });
+    }
+  });
 
   app.post("/follow-community", async (context) => {
     // This endpoint exists as an operational bootstrap path until follow logic
@@ -57,7 +114,7 @@ export function registerInternalFollowRoutes(
     if (!hasValidInternalAuthorization(config, context.req.header("Authorization") ?? null)) {
       return context.json({ error: "invalid authorization" }, { status: 401 });
     }
-    const { communityActorUrl, followActivityId } = await context.req.json();
+    const { communityActorUrl, followActivityId, communityInboxUrl } = await context.req.json();
 
     if (!communityActorUrl || typeof communityActorUrl !== "string") {
       return context.json(
@@ -72,8 +129,11 @@ export function registerInternalFollowRoutes(
       );
     }
 
+    if (communityInboxUrl !== undefined && (typeof communityInboxUrl !== "string" || !communityInboxUrl)) {
+      return context.json({ error: "communityInboxUrl must be a nonempty URL" }, { status: 400 });
+    }
     try {
-      await unfollowCommunity(fedify, config, communityActorUrl, followActivityId);
+      await unfollowCommunity(fedify, config, communityActorUrl, followActivityId, communityInboxUrl);
       return context.json({ ok: true });
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);

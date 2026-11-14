@@ -223,7 +223,9 @@ class BridgeBot(discord.Client):
                 thread=thread,
                 starter_message=starter_message,
             )
-            if result.status == "published":
+            # Queued means the outbound Create was already durably committed;
+            # do not re-publish on another Discord thread-create callback.
+            if result.status == "published" or getattr(result, "locally_accepted", False):
                 self._synced_threads.add(thread.id)
 
     async def on_message(self, message: discord.Message) -> None:

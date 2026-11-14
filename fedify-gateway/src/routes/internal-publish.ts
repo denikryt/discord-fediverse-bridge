@@ -13,6 +13,7 @@ import {
   publishContent,
   publishLocalCommunityContent,
   renderPersonalFeedCreate,
+  renderCommunityCreate,
   updateContent,
 } from "../federation-outbound.js";
 import type {
@@ -20,6 +21,7 @@ import type {
   PublishContentRequest,
   PublishLocalCommunityContentRequest,
   RenderPersonalFeedRequest,
+  RenderCommunityCreateRequest,
   UpdateContentRequest,
 } from "../types.js";
 import { hasValidInternalAuthorization } from "./internal-auth.js";
@@ -54,6 +56,33 @@ export function registerInternalPublishRoutes(
     }
     try {
       return context.json(renderPersonalFeedCreate(config, payload as RenderPersonalFeedRequest));
+    } catch (error) {
+      return context.json({ error: error instanceof Error ? error.message : String(error) }, { status: 400 });
+    }
+  });
+
+  app.post("/render-community-create", async (context) => {
+    // This route must remain render-only; it cannot fetch a remote Group or
+    // perform Fedify.sendActivity before Python commits the source graph.
+    if (!hasValidInternalAuthorization(config, context.req.header("Authorization") ?? null)) {
+      return context.json({ error: "invalid authorization" }, { status: 401 });
+    }
+    const payload = (await context.req.json()) as Partial<RenderCommunityCreateRequest>;
+    if (
+      typeof payload.actorUsername !== "string" ||
+      typeof payload.communityActorUrl !== "string" ||
+      typeof payload.operationId !== "string" ||
+      typeof payload.activityId !== "string" ||
+      typeof payload.objectId !== "string" ||
+      typeof payload.bodyMarkdown !== "string" ||
+      typeof payload.publishedAt !== "string" ||
+      (payload.kind !== "post" && payload.kind !== "comment") ||
+      (payload.softwareProfile !== "nodebb" && payload.softwareProfile !== "threadiverse" && payload.softwareProfile !== "bridge")
+    ) {
+      return context.json({ error: "invalid community Create render request" }, { status: 400 });
+    }
+    try {
+      return context.json(renderCommunityCreate(config, payload as RenderCommunityCreateRequest));
     } catch (error) {
       return context.json({ error: error instanceof Error ? error.message : String(error) }, { status: 400 });
     }
@@ -186,6 +215,8 @@ export function registerInternalPublishRoutes(
         mutationTimestamp: typeof payload.mutationTimestamp === "string" ? payload.mutationTimestamp : null,
         expectedRevision: typeof payload.expectedRevision === "number" ? payload.expectedRevision : null,
         nextRevision: typeof payload.nextRevision === "number" ? payload.nextRevision : null,
+        renderOnly: payload.renderOnly === true,
+        softwareProfile: payload.softwareProfile === "nodebb" || payload.softwareProfile === "bridge" || payload.softwareProfile === "threadiverse" ? payload.softwareProfile : null,
       });
       return context.json(result);
     } catch (error) {
@@ -231,6 +262,8 @@ export function registerInternalPublishRoutes(
         mutationTimestamp: typeof payload.mutationTimestamp === "string" ? payload.mutationTimestamp : null,
         expectedRevision: typeof payload.expectedRevision === "number" ? payload.expectedRevision : null,
         nextRevision: typeof payload.nextRevision === "number" ? payload.nextRevision : null,
+        renderOnly: payload.renderOnly === true,
+        softwareProfile: payload.softwareProfile === "nodebb" || payload.softwareProfile === "bridge" || payload.softwareProfile === "threadiverse" ? payload.softwareProfile : null,
       });
       return context.json(result);
     } catch (error) {

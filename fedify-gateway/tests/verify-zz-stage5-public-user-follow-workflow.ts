@@ -10,6 +10,7 @@
  */
 import assert from "node:assert/strict";
 import { webcrypto } from "node:crypto";
+import { readFile } from "node:fs/promises";
 
 import { signRequest } from "@fedify/fedify";
 import { preloadedContexts } from "@fedify/vocab-runtime";
@@ -26,6 +27,8 @@ const BOB_SHARED_INBOX = "https://remote.example/inbox";
 const MISMATCH_DOC_ACTOR = "https://mismatch.example/users/bob";
 const BOB_IMPERSONATOR_ACTOR = `${BOB_ACTOR}/impersonator`;
 const UNSAFE_ACTOR = "https://unsafe.example/users/bob";
+const NODEBB_GROUP = "https://nodebb.example/category/42";
+const NODEBB_ANNOUNCE = "https://nodebb.example/post/101#activity/announce/cid/42";
 const OTHER_ACTOR = "https://other.example/users/mallory";
 let pythonFixtureCounter = 0;
 
@@ -33,6 +36,8 @@ const SCENARIOS = [
   "unsigned-follow",
   "signed-follow",
   "duplicate-follow",
+  "signed-nodebb-replay",
+  "signed-nodebb-python-unavailable",
   "mismatched-follow-actor",
   "unsafe-follow-endpoint",
   "undo-workflow",
@@ -53,6 +58,7 @@ interface PythonFixture {
   origin: string;
   events: CapturedBridgeEvent[];
   followers: string[];
+  eventsAvailable: boolean;
   fetch(url: string, init?: RequestInit): Promise<Response | null>;
   close(): Promise<void>;
 }
@@ -88,6 +94,16 @@ async function runScenario(scenario: ScenarioName): Promise<void> {
       await withPublicWorkflowFixture(async ({ app, privateKey, python }) => {
         await assertSignedFollowReachesPublicListener(app, privateKey, python, "https://remote.example/activities/follow/happy");
       });
+      return;
+    case "signed-nodebb-replay":
+      await withPublicWorkflowFixture(async ({ app, privateKey, python }) => {
+        await assertSignedNodeBBAnnounceReplay(app, privateKey, python);
+      }, true);
+      return;
+    case "signed-nodebb-python-unavailable":
+      await withPublicWorkflowFixture(async ({ app, privateKey, python }) => {
+        await assertSignedNodeBBPythonUnavailable(app, privateKey, python);
+      }, true);
       return;
     case "duplicate-follow":
       await withPublicWorkflowFixture(async ({ app, privateKey, python }) => {
@@ -125,13 +141,17 @@ function parseScenarioName(value: string): ScenarioName {
 
 async function withPublicWorkflowFixture(
   run: (context: PublicWorkflowFixtureContext) => Promise<void>,
+  verifySignatures = false,
 ): Promise<void> {
   const remoteKeys = await importFixedRsaKeyPair();
   const publicKeyPem = await exportPublicKeyPem(remoteKeys.publicKey);
   const privateKeyPem = await exportPrivateKeyPem(remoteKeys.privateKey);
   const python = startRecordingPythonFixture(publicKeyPem, privateKeyPem);
   const restoreFetch = installFixtureFetch(publicKeyPem, python);
-  const app = createGatewayApp(buildConfig(python.origin));
+  const app = createGatewayApp({
+    ...buildConfig(python.origin),
+    skipSignatureVerificationForTests: !verifySignatures,
+  });
 
   try {
     await run({ app, privateKey: remoteKeys.privateKey, python });
@@ -195,6 +215,64 @@ async function assertSameIdPublicDuplicateDoesNotReachPythonAgain(
   assert.ok([202, 204].includes(response.status), `duplicate Follow should be accepted/idempotent, got ${response.status}`);
   await waitForNoAdditionalEvents(python, before, 250);
   assert.equal(python.events.length, before, "Fedify per-inbox idempotency means same-ID public duplicate is not an Accept recovery path");
+}
+
+/** A verified same-wire Announce must enter the Python fanout on every receipt. */
+async function assertSignedNodeBBAnnounceReplay(
+  app: ReturnType<typeof createGatewayApp>,
+  privateKey: CryptoKey,
+  python: PythonFixture,
+): Promise<void> {
+  // Unlike the Follow fixtures, this scenario enables Fedify HTTP-signature
+  // verification and posts twice through the public Hono/Fedify inbox.
+  const announce = JSON.parse(await readFile(
+    new URL("../../tests/fixtures/nodebb/announce_root_uri.json", import.meta.url), "utf8",
+  )) as Record<string, unknown>;
+  assert.equal(announce.id, NODEBB_ANNOUNCE, "pinned Group wire ID must not change");
+  const unsigned = await fetchWithTimeout(app, new Request(`${ORIGIN}inbox`, {
+    method: "POST",
+    headers: { "Content-Type": "application/activity+json" },
+    body: JSON.stringify(announce),
+  }));
+  assert.equal(unsigned.status, 401, "unsigned Group Announce must not enter Python");
+  assert.equal(python.events.length, 0);
+  for (let count = 1; count <= 2; count++) {
+    const request = await signedActivityRequestToInbox(
+      announce, privateKey, `${NODEBB_GROUP}#main-key`, `${ORIGIN}inbox`,
+    );
+    const response = await fetchWithTimeout(app, request);
+    assert.equal(response.status, 202, `signed Group Announce #${count} must be accepted`);
+    const events = python.events.filter((event) => event.event_type === "remote.group_announced");
+    assert.equal(events.length, count, "same verified wire ID must reach Python again");
+    assert.equal(events.at(-1)?.delivery_id, NODEBB_ANNOUNCE);
+    assert.equal(events.at(-1)?.actor_id, NODEBB_GROUP);
+  }
+}
+
+/** A signed Announce must receive a retryable HTTP failure if Python is offline. */
+async function assertSignedNodeBBPythonUnavailable(
+  app: ReturnType<typeof createGatewayApp>,
+  privateKey: CryptoKey,
+  python: PythonFixture,
+): Promise<void> {
+  // Exercise the actual Fedify inbox listener and the internal Python HTTP edge.
+  const announce = JSON.parse(await readFile(
+    new URL("../../tests/fixtures/nodebb/announce_root_uri.json", import.meta.url), "utf8",
+  )) as Record<string, unknown>;
+  python.eventsAvailable = false;
+  const first = await fetchWithTimeout(app, await signedActivityRequestToInbox(
+    announce, privateKey, `${NODEBB_GROUP}#main-key`, `${ORIGIN}inbox`,
+  ));
+  assert.equal(first.status, 500, "an undelivered signed Announce must not be acknowledged with 202");
+  assert.equal(python.events.length, 0, "Python offline leaves no durable receipt");
+
+  python.eventsAvailable = true;
+  const retry = await fetchWithTimeout(app, await signedActivityRequestToInbox(
+    announce, privateKey, `${NODEBB_GROUP}#main-key`, `${ORIGIN}inbox`,
+  ));
+  assert.equal(retry.status, 202, "the same signed wire ID is retryable after recovery");
+  assert.equal(python.events.length, 1, "recovered delivery reaches Python exactly once");
+  assert.equal(python.events[0]?.delivery_id, NODEBB_ANNOUNCE);
 }
 
 async function assertMismatchedActorDocumentRejected(
@@ -307,9 +385,16 @@ function buildUndo(id: string, actor: string, object: Record<string, unknown>): 
 }
 
 async function signedActivityRequest(activity: Record<string, unknown>, privateKey: CryptoKey, keyId: string): Promise<Request> {
+  return signedActivityRequestToInbox(activity, privateKey, keyId, `${ORIGIN}actors/users/alice/inbox`);
+}
+
+/** Sign a request for a specific real public inbox, preserving the wire payload. */
+async function signedActivityRequestToInbox(
+  activity: Record<string, unknown>, privateKey: CryptoKey, keyId: string, inbox: string,
+): Promise<Request> {
   const body = JSON.stringify(activity);
   const bodyBytes = new TextEncoder().encode(body);
-  return await signRequest(new Request(`${ORIGIN}actors/users/alice/inbox`, {
+  return await signRequest(new Request(inbox, {
     method: "POST",
     headers: { "Content-Type": "application/activity+json", Accept: "application/activity+json" },
     body,
@@ -332,6 +417,13 @@ function installFixtureFetch(publicKeyPem: string, python: PythonFixture): () =>
     }
     if (url.startsWith("https://remote.example/activities/follow/")) {
       return activityJsonResponse(buildFollow(url, url.endsWith("/impersonated") ? BOB_ACTOR : BOB_ACTOR));
+    }
+    if (url === NODEBB_GROUP || url === `${NODEBB_GROUP}#main-key`) {
+      return activityJsonResponse({
+        ...buildActorDocument(NODEBB_GROUP, `${NODEBB_GROUP}/inbox`, publicKeyPem, null),
+        type: "Group",
+        preferredUsername: "discussion",
+      });
     }
     if (url === BOB_ACTOR || url === `${BOB_ACTOR}#main-key`) {
       return activityJsonResponse(buildActorDocument(BOB_ACTOR, BOB_INBOX, publicKeyPem, BOB_SHARED_INBOX));
@@ -385,6 +477,7 @@ function startRecordingPythonFixture(publicKeyPem: string, privateKeyPem: string
     origin,
     events,
     followers,
+    eventsAvailable: true,
     async fetch(url: string, init?: RequestInit): Promise<Response | null> {
       if (!url.startsWith(origin)) return null;
       const requestUrl = new URL(url);
@@ -392,6 +485,10 @@ function startRecordingPythonFixture(publicKeyPem: string, privateKeyPem: string
       const body = typeof init?.body === "string" ? init.body : "";
 
       if (requestUrl.pathname === "/internal/activitypub/events" && method === "POST") {
+        if (!this.eventsAvailable) {
+          // Model a stopped Python service before it can write a SQLite receipt.
+          throw new Error("fixture Python service is offline");
+        }
         const event = JSON.parse(body) as CapturedBridgeEvent;
         events.push(event);
         if (event.event_type === "local.follow_requested" && event.actor_id != null && !followers.includes(event.actor_id)) {

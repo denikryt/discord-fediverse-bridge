@@ -154,6 +154,18 @@ async function testRelaySignsWithCanonicalCommunityKey(config: GatewayConfig): P
   restoreFetch();
 
   assert.equal(result.outcomes[0]?.ok, true);
+  assert.equal(result.outcomes[0]?.safeToRetry, false);
+
+  // A mismatched signing actor fails before network and explicitly proves
+  // that retrying with an independently verified canonical payload is safe.
+  const spoofed = await sendLocalCommunityRelay({} as never, config, {
+    ...request,
+    deliveries: [{ ...request.deliveries[0]!,
+      activityJson: { ...activityJson, actor: `${REMOTE_ORIGIN}ap/users/attacker` },
+    }],
+  });
+  assert.equal(spoofed.outcomes[0]?.ok, false);
+  assert.equal(spoofed.outcomes[0]?.safeToRetry, true);
   assert.equal(deliveries.length, 1);
   assert.equal(deliveries[0]?.payload.id, activityJson.id);
   assert.equal(deliveries[0]?.payload.type, activityJson.type);

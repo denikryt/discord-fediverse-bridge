@@ -357,6 +357,7 @@ name = "discord-lemmy-bridge"
 version = "0.1.0"
 source = { editable = "." }
 dependencies = [
+    { name = "aiohttp" },
     { name = "alembic" },
     { name = "discord-py" },
     { name = "fastapi" },
@@ -377,6 +378,7 @@ dev = [
 
 [package.metadata]
 requires-dist = [
+    { name = "aiohttp", specifier = ">=3.9.0" },
     { name = "alembic", specifier = ">=1.14.0" },
     { name = "discord-py", specifier = ">=2.6.0" },
     { name = "fastapi", specifier = ">=0.115.0" },

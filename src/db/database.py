@@ -72,9 +72,9 @@ class Database:
         self.management_audit = ManagementAuditRecorder(self.management_audit_events)
         self.remote_subscribers = RemoteSubscriberRepository(self.session)
         self.local_subscribers = LocalSubscriberRepository(self.session)
-        self.local_community_content = LocalCommunityContentRepository(self.session)
+        self.local_community_content = LocalCommunityContentRepository(self.session, self.immediate_session)
         self.local_community_surfaces = LocalCommunitySurfaceRepository(self.session)
-        self.local_community_relay = LocalCommunityRelayRepository(self.session)
+        self.local_community_relay = LocalCommunityRelayRepository(self.session, self.immediate_session)
         self.remote_subscriptions = RemoteSubscriptionRepository(self.session)
         self.bridge_actor_follows = BridgeActorFollowRepository(self.session)
         self.bridge_policy_entries = BridgePolicyEntryRepository(self.session)
@@ -98,7 +98,7 @@ class Database:
         self.activitypub_objects = ActivityPubObjectRepository(self.session)
         self.remote_actors = RemoteActorRepository(self.session)
         self.legacy_lemmy_mappings = LegacyLemmyMappingRepository(self.session)
-        self.discord_fanout_groups = DiscordFanoutGroupRepository(self.session)
+        self.discord_fanout_groups = DiscordFanoutGroupRepository(self.session, self.immediate_session)
         self.discord_directory = DiscordDirectoryRepository(self.session)
         self.guild_invite_publications = GuildInvitePublicationRepository(self.session)
         self.management_actions = ManagementActions(
@@ -117,8 +117,8 @@ class Database:
     def migrate(
         self, stage4_identity: Stage4IdentityMigrationConfig | None = None
     ) -> None:
-        """Apply schema and identity migrations that create_all cannot handle."""
-        migrations.migrate(self.engine, stage4_identity=stage4_identity)
+        """Admit SQLite input and run the one-time versioned transaction."""
+        migrations.run_pending_migrations(self.engine, stage4_identity=stage4_identity)
 
     @contextmanager
     def immediate_session(self) -> Iterator[Session]:

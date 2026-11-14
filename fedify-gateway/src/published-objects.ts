@@ -39,9 +39,17 @@ export function buildPublishedActivityObjectJson(
     source: { content: record.bodyMarkdown, mediaType: "text/markdown" },
     content: htmlContent, published, url: record.objectId,
   };
-  return record.kind === "post"
-    ? { ...base, type: "Page", name: record.title ?? "Untitled Discord Post" }
-    : { ...base, type: "Note", ...(record.inReplyToObjectId ? { inReplyTo: record.inReplyToObjectId } : {}) };
+  // The immutable Create's verified type/context wins over the legacy
+  // kind-based fallback. NodeBB roots are Notes, not Lemmy Pages; both public
+  // GET and outbox must expose the same AP object as the delivered Create.
+  const originalType = record.originalObjectType ?? (record.kind === "post" ? "Page" : "Note");
+  return {
+    ...base,
+    type: originalType,
+    ...(record.kind === "post" ? { name: record.title ?? "Untitled Discord Post" } : {}),
+    ...(record.inReplyToObjectId ? { inReplyTo: record.inReplyToObjectId } : {}),
+    ...(record.originalObjectContext ? { context: record.originalObjectContext } : {}),
+  };
 }
 
 export function buildPublishedCreateActivityJson(

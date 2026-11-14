@@ -5,7 +5,6 @@ import {
 } from "@fedify/fedify";
 import { Accept, Announce, Create, Delete, Follow, Undo, Update } from "@fedify/vocab";
 
-import { getRawActivity } from "./activitypub-raw-cache.js";
 import {
   buildBridgeServiceActor,
   buildLocalCommunityGroupActor,
@@ -31,11 +30,17 @@ import {
 import { getPythonBridgeClient } from "./python-bridge-client.js";
 import { admitRemoteDeliveryEndpoint, type RemoteEndpointAdmissionOptions } from "./remote-delivery-endpoints.js";
 import { parseTypedActorIdentifier } from "./typed-actor-routing.js";
+import {
+  selectVerifiedLocalGroupDestinations,
+  type VerifiedInboxRoute,
+} from "./local-group-ingress.js";
+import { gatewayInboxIdempotencyKey } from "./inbox-idempotency.js";
 import type {
   BridgeContentEvent,
   FollowAcceptedEvent,
   LocalFollowRequestedEvent,
   LocalUnfollowRequestedEvent,
+  RemoteGroupAnnounceEvent,
 } from "./types.js";
 
 export function createGatewayFederation(
@@ -44,10 +49,16 @@ export function createGatewayFederation(
   // The federation definition keeps protocol-specific concerns in one place so
   // the rest of the gateway can stay focused on normalization and delivery.
   const isDebug = config.logLevel === "debug";
+  // Fedify 2.2.0 inbox workers deduplicate by origin + wire ID, ignoring
+  // withIdempotency(). NodeBB must reach Python on a signed same-ID replay
+  // to finish missing Discord targets. Dispatch inbound listeners directly
+  // after Fedify authentication; retain the existing queued outbound send.
+  // This keeps HTTP 202 but waits for the listener before responding.
+  const outboundQueue = new InProcessMessageQueue();
   const federation = createFederation<GatewayContextData>({
     origin: config.fedifyOrigin,
     kv: new MemoryKvStore(),
-    queue: new InProcessMessageQueue(),
+    queue: { outbox: outboundQueue, fanout: outboundQueue },
     skipSignatureVerification: config.skipSignatureVerificationForTests === true,
   });
 
@@ -126,15 +137,17 @@ export function createGatewayFederation(
 
   federation
     .setInboxListeners("/actors/{+identifier}/inbox", "/inbox")
-    .withIdempotency("per-inbox")
-    .on(Create, async (_ctx, activity) => {
+    .withIdempotency((ctx, activity) => gatewayInboxIdempotencyKey(
+      ctx, activity, activity instanceof Announce,
+    ))
+    .on(Create, async (ctx, activity) => {
       if (isDebug) {
         console.log("[Fedify][debug] Received direct Create activity");
       }
       try {
-        // Direct Create handling is the happy path when the remote server does
-        // not wrap local objects inside Announce. Errors must be logged here
-        // because the inbox already returns 202 before async processing finishes.
+        // Direct Create handling is the path when the remote server does not
+        // wrap local objects inside Announce. The synchronous inbox must not
+        // acknowledge events that Python did not persist.
         const event = await normalizeCreateActivity(activity, {
           pythonBridgeClient: getPythonBridgeClient(config),
         });
@@ -147,39 +160,64 @@ export function createGatewayFederation(
         event.source_activity_json = sourceActivityJson;
         event.source_activity_id = typeof sourceActivityJson.id === "string" ? sourceActivityJson.id : event.delivery_id;
         event.source_announce_id = null;
-        await deliverNormalizedEvent(config, event, {
-          deliveryId: event.delivery_id,
-          eventType: event.event_type,
-          objectId: event.object.ap_id,
-        });
+        await deliverVerifiedLocalContentEvent(config, ctx.data, event,
+          sourceActivityJson, {
+            deliveryId: event.delivery_id,
+            eventType: event.event_type,
+            objectId: event.object.ap_id,
+          });
       } catch (error) {
         console.error("[Fedify] Error processing direct Create activity", error);
+        // Fedify 2.2.0 maps a rejected synchronous inbox listener to HTTP 500.
+        // Retain upstream retry opportunity instead of swallowing delivery loss.
+        throw error;
       }
     })
-    .on(Update, async (_ctx, activity) => {
+    .on(Update, async (ctx, activity) => {
       try {
         // Direct Update must be forwarded even when the remote server does not
         // wrap it inside Announce.
-        await deliverDirectUpdateActivity(config, activity, isDebug);
+        await deliverDirectUpdateActivity(config, activity, isDebug, ctx.data);
       } catch (error) {
         console.error("[Fedify] Error processing direct Update activity", error);
+        throw error;
       }
     })
-    .on(Delete, async (_ctx, activity) => {
+    .on(Delete, async (ctx, activity) => {
       try {
         // Direct Delete is the delete counterpart to direct Create/Update.
-        await deliverDirectDeleteActivity(config, activity, isDebug);
+        await deliverDirectDeleteActivity(config, activity, isDebug, ctx.data);
       } catch (error) {
         console.error("[Fedify] Error processing direct Delete activity", error);
+        throw error;
       }
     })
-    .on(Announce, async (ctx, activity) => {
+    .on(Announce, async (_ctx, activity) => {
       try {
-        // Lemmy wraps Create, Update, and Delete inside Announce.
-        // Try each type in turn using the cached raw inbox payload.
-        const announceEnvelope = getAnnounceEnvelope(ctx, activity.id?.href ?? null);
-
+        // Only the Fedify-verified Announce is allowed to supply identity and
+        // object provenance. The ID-only pre-verification cache is not a
+        // signed envelope, even if a previously seen request shares this ID.
+        const announceEnvelope = await getVerifiedAnnounceEnvelope(activity);
+        if (announceEnvelope == null) {
+          logDebug(isDebug, "untrusted_raw_announce: verified envelope missing");
+          return;
+        }
         logAnnounceDebug(isDebug, announceEnvelope);
+
+        // A signed NodeBB Group Announce often references a Note by URI,
+        // rather than including a Create. Send verified distribution metadata
+        // to Python so its policy-bound HTTPS reader can safely fetch it.
+        // /category/{cid} is only a routing hint; Python must prove the
+        // persisted accepted NodeBB Group before accepting this event.
+        const nodebbDistribution = buildNodeBBGroupAnnounceEvent(announceEnvelope);
+        if (nodebbDistribution != null) {
+          await deliverNormalizedEvent(config, nodebbDistribution, {
+            announceId: nodebbDistribution.delivery_id,
+            groupActor: nodebbDistribution.community_actor_id,
+            objectId: nodebbDistribution.object.ap_id,
+          });
+          return;
+        }
 
         const createRecord = extractCreateRecord(announceEnvelope.rawRecord);
         if (createRecord != null) {
@@ -194,7 +232,11 @@ export function createGatewayFederation(
           event.source_activity_json = createRecord;
           event.source_activity_id = asString(createRecord.id) ?? event.delivery_id;
           event.source_announce_id = announceEnvelope.announceId;
-          await deliverNormalizedEvent(config, event, {
+          // One wire Announce is one receipt, regardless of the nested Create,
+          // Update, or Delete id. Keep that inner id only as provenance.
+          event.delivery_id = announceEnvelope.announceId;
+          await deliverVerifiedLocalContentEvent(config, _ctx.data, event,
+            announceEnvelope.rawRecord, {
             announceId: announceEnvelope.announceId,
             createId: asString(createRecord.id) ?? event.delivery_id,
             eventType: event.event_type,
@@ -216,7 +258,11 @@ export function createGatewayFederation(
           event.source_activity_json = updateRecord;
           event.source_activity_id = asString(updateRecord.id) ?? event.delivery_id;
           event.source_announce_id = announceEnvelope.announceId;
-          await deliverNormalizedEvent(config, event, {
+          // One wire Announce is one receipt, regardless of the nested Create,
+          // Update, or Delete id. Keep that inner id only as provenance.
+          event.delivery_id = announceEnvelope.announceId;
+          await deliverVerifiedLocalContentEvent(config, _ctx.data, event,
+            announceEnvelope.rawRecord, {
             announceId: announceEnvelope.announceId,
             updateId: asString(updateRecord.id) ?? event.delivery_id,
             eventType: event.event_type,
@@ -235,7 +281,11 @@ export function createGatewayFederation(
           event.source_activity_json = deleteRecord;
           event.source_activity_id = asString(deleteRecord.id) ?? event.delivery_id;
           event.source_announce_id = announceEnvelope.announceId;
-          await deliverNormalizedEvent(config, event, {
+          // One wire Announce is one receipt, regardless of the nested Create,
+          // Update, or Delete id. Keep that inner id only as provenance.
+          event.delivery_id = announceEnvelope.announceId;
+          await deliverVerifiedLocalContentEvent(config, _ctx.data, event,
+            announceEnvelope.rawRecord, {
             announceId: announceEnvelope.announceId,
             deleteId: asString(deleteRecord.id) ?? event.delivery_id,
             eventType: event.event_type,
@@ -246,13 +296,16 @@ export function createGatewayFederation(
 
         logDebug(
           isDebug,
-          "Could not find Create, Update, or Delete in Announce.object from raw JSON",
+          "Verified Announce did not contain a supported nested activity",
         );
       } catch (error) {
         console.error(
           "[Fedify] Error processing Announce:",
           error instanceof Error ? error.message : error,
         );
+        // This listener runs before the inbox HTTP response. Do not convert a
+        // failed Python handoff into 202: Fedify must signal 500 to the sender.
+        throw error;
       }
     })
     .on(Follow, async (ctx, activity) => {
@@ -268,14 +321,9 @@ export function createGatewayFederation(
       });
     })
     .on(Undo, async (ctx, activity) => {
-      const activityId = activity.id?.href;
-      const cachedRaw = activityId == null ? null : getRawActivity(activityId);
-      const rawForUndo = asRecord(cachedRaw?.rawJson ?? ctx.data.activitypubRawJson);
-      const event = await buildLocalUnfollowRequestedEvent(
-        ctx.data,
-        activity,
-        rawForUndo,
-      );
+      // A purported Follow inside pre-verification raw JSON cannot select a
+      // local relationship to delete. The builder uses typed Undo evidence.
+      const event = await buildLocalUnfollowRequestedEvent(ctx.data, activity);
       if (event == null) {
         return;
       }
@@ -288,22 +336,11 @@ export function createGatewayFederation(
       });
     })
     .on(Accept, async (ctx, activity) => {
-      const activityId = activity.id?.href ?? null;
-      const rawJson = ctx.data.activitypubRawJson;
-      console.log("[Fedify][debug] Accept received", {
-        activityId,
-        actorId: activity.actorId?.href,
-        objectId: activity.objectId?.href,
-        rawObject: (rawJson as Record<string, unknown>)?.object,
-      });
-      const event = buildFollowAcceptedEvent(
-        activity,
-        ctx.data,
-        activityId,
-      );
+      // Accept.objectId comes from the verified Fedify activity, including
+      // when the original signed envelope embedded a Follow object.
+      const event = buildFollowAcceptedEvent(activity, ctx.data, activity.id?.href ?? null);
       if (event == null) {
-        logDebug(isDebug, "Accept did not contain a follow activity id");
-        console.log("[Fedify][debug] Accept null event — raw activity:", JSON.stringify(rawJson, null, 2));
+        logDebug(isDebug, "ignored_unknown_follow: verified Accept lacks Follow.id");
         return;
       }
 
@@ -317,9 +354,69 @@ export function createGatewayFederation(
   return federation;
 }
 
+/** Select all verified local destinations before any HTTP receipt or handler.
+ *
+ * One signed Create in shared inbox can belong to several local Groups; each
+ * receives the original wire ID and its own private receipt scope. A delivery
+ * to an actor-specific inbox only reaches the server-owned Group. The remote
+ * NodeBB/Lemmy Group distributor path is intentionally unchanged.
+ */
+async function deliverVerifiedLocalContentEvent(
+  config: GatewayContextData,
+  context: GatewayContextData | undefined,
+  event: BridgeContentEvent,
+  signedActivityJson: Record<string, unknown>,
+  logContext: Record<string, unknown>,
+): Promise<void> {
+  const route: VerifiedInboxRoute = context?.activitypubInboxPath === "shared"
+    ? { kind: "shared" }
+    : context?.activitypubInboxPath === "actor"
+      ? { kind: "actor", owner: context.activitypubInboxOwner }
+      : { kind: "unknown" };
+  const selected = await selectVerifiedLocalGroupDestinations(
+    config.fedifyOrigin, route, signedActivityJson,
+    async (candidate) => {
+      const group = await resolveLocalCommunityByActorUrl(config, candidate);
+      return group?.actorId.href ?? null;
+    },
+  );
+  if (selected.kind === "rejected") {
+    logDebug(config.logLevel === "debug", "Rejected unverified local Group recipient");
+    return;
+  }
+  if (selected.kind === "remote") {
+    await deliverNormalizedEvent(config, event, logContext);
+    return;
+  }
+  if (event.target?.kind === "personal_feed") {
+    logDebug(config.logLevel === "debug", "Personal feed event cannot target a local Group");
+    return;
+  }
+  // Only Fedify's authenticated OUTER activity supplies the sender. Wrapped
+  // Create actors must not inherit a distributor's verified signature.
+  const outerSender = asActivityIri(signedActivityJson.actor);
+  if (outerSender == null) {
+    logDebug(config.logLevel === "debug", "Verified local Group activity lacks an outer actor");
+    return;
+  }
+  // Deliver all independently: a denied/failed Group cannot suppress another
+  // valid tenant from the same signed wire activity.
+  const results = await Promise.allSettled(selected.groups.map(async (groupActorId) =>
+    deliverNormalizedEvent(config, {
+      ...event,
+      verified_sender_actor_id: outerSender,
+      community_actor_id: groupActorId,
+      verified_destination_group_actor_id: groupActorId,
+    }, { ...logContext, verifiedDestinationGroup: groupActorId }),
+  ));
+  if (results.some((result) => result.status === "rejected")) {
+    throw new Error("At least one verified local Group delivery failed");
+  }
+}
+
 async function deliverNormalizedEvent(
   config: GatewayContextData,
-  event: BridgeContentEvent | FollowAcceptedEvent | LocalFollowRequestedEvent | LocalUnfollowRequestedEvent,
+  event: BridgeContentEvent | RemoteGroupAnnounceEvent | FollowAcceptedEvent | LocalFollowRequestedEvent | LocalUnfollowRequestedEvent,
   logContext: Record<string, unknown>,
 ): Promise<void> {
   // All successful normalization funnels through one delivery path so logging
@@ -334,6 +431,7 @@ export async function deliverDirectUpdateActivity(
   config: GatewayContextData,
   activity: Update,
   isDebug = false,
+  trustedContext?: GatewayContextData,
 ): Promise<void> {
   /** Normalize one direct Update and deliver it to the Python bridge. */
   const sourceActivityJson = await activity.toJsonLd() as Record<string, unknown>;
@@ -347,17 +445,18 @@ export async function deliverDirectUpdateActivity(
   event.source_activity_json = sourceActivityJson;
   event.source_activity_id = typeof sourceActivityJson.id === "string" ? sourceActivityJson.id : event.delivery_id;
   event.source_announce_id = null;
-  await deliverNormalizedEvent(config, event, {
-    deliveryId: event.delivery_id,
-    eventType: event.event_type,
-    objectId: event.object.ap_id,
-  });
+  await deliverVerifiedLocalContentEvent(config, trustedContext, event,
+    sourceActivityJson, {
+      deliveryId: event.delivery_id, eventType: event.event_type,
+      objectId: event.object.ap_id,
+    });
 }
 
 export async function deliverDirectDeleteActivity(
   config: GatewayContextData,
   activity: Delete,
   isDebug = false,
+  trustedContext?: GatewayContextData,
 ): Promise<void> {
   /** Normalize one direct Delete and deliver it to the Python bridge. */
   const sourceActivityJson = await activity.toJsonLd() as Record<string, unknown>;
@@ -369,31 +468,45 @@ export async function deliverDirectDeleteActivity(
   event.source_activity_json = sourceActivityJson;
   event.source_activity_id = typeof sourceActivityJson.id === "string" ? sourceActivityJson.id : event.delivery_id;
   event.source_announce_id = null;
-  await deliverNormalizedEvent(config, event, {
-    deliveryId: event.delivery_id,
-    eventType: event.event_type,
-    objectId: event.object.ap_id,
-  });
+  await deliverVerifiedLocalContentEvent(config, trustedContext, event,
+    sourceActivityJson, {
+      deliveryId: event.delivery_id, eventType: event.event_type,
+      objectId: event.object.ap_id,
+    });
 }
 
-function getAnnounceEnvelope(
-  ctx: { data: GatewayContextData },
-  announceId: string | null,
-): {
-  announceId: string | null;
-  rawRecord: Record<string, unknown> | null;
-  rawBodySha256: string | undefined;
-} {
-  // Prefer the payload stored at HTTP-ingest time because queued handler
-  // execution may no longer have the original request-local body attached.
-  const cachedRaw = announceId ? getRawActivity(announceId) : null;
-  const rawJson = cachedRaw?.rawJson ?? ctx.data.activitypubRawJson;
-  return {
-    announceId,
-    rawRecord: asRecord(rawJson),
-    rawBodySha256:
-      cachedRaw?.rawBodySha256 ?? ctx.data.activitypubRawBodySha256,
-  };
+/**
+ * Return only serialization of the Fedify-verified Announce, never ID-only raw.
+ *
+ * The signed distribution identity and object wrapper must originate from the
+ * same authenticated typed object. A missing stable ID or contradictory
+ * serialization is rejected before any Python receipt or Discord effect.
+ */
+export async function getVerifiedAnnounceEnvelope(
+  activity: Announce,
+): Promise<{
+  announceId: string;
+  rawRecord: Record<string, unknown>;
+  rawBodySha256: undefined;
+} | null> {
+  const announceId = activity.id?.href;
+  const actorId = activity.actorId?.href;
+  if (announceId == null || actorId == null) return null;
+  let rawRecord: Record<string, unknown> | null;
+  try {
+    rawRecord = asRecord(await activity.toJsonLd());
+  } catch {
+    return null;
+  }
+  if (rawRecord?.type !== "Announce" || asString(rawRecord.id) !== announceId
+      || asActivityIri(rawRecord.actor) !== actorId) return null;
+
+  // The serialized object must agree with any object identity Fedify already
+  // decoded; an ID-only cache cannot repair a mismatch or missing object.
+  const serializedObjectId = asActivityIri(rawRecord.object);
+  if (serializedObjectId == null || (activity.objectId != null
+      && activity.objectId.href !== serializedObjectId)) return null;
+  return { announceId, rawRecord, rawBodySha256: undefined };
 }
 
 function logAnnounceDebug(
@@ -425,6 +538,51 @@ function logAnnounceDebug(
     nestedObjectId: asString(nestedObject?.id),
     nestedObjectType: asString(nestedObject?.type),
   });
+}
+
+/** Preserve the signed Group envelope instead of dereferencing arbitrary raw URIs. */
+export function buildNodeBBGroupAnnounceEvent(
+  envelope: NonNullable<Awaited<ReturnType<typeof getVerifiedAnnounceEnvelope>>>,
+): RemoteGroupAnnounceEvent | null {
+  const raw = envelope.rawRecord;
+  const groupId = asString(raw.actor);
+  if (groupId == null) return null;
+  let group: URL;
+  try {
+    group = new URL(groupId);
+  } catch {
+    return null;
+  }
+  // The path only selects the NodeBB-specific pipeline; it never proves a
+  // Group or author. That proof belongs to the accepted Follow in Python.
+  if (group.protocol !== "https:" || !/^\/category\/\d+$/.test(group.pathname)
+      || group.search || group.hash || group.username || group.password) return null;
+  const wrapped = asRecord(raw.object);
+  const innerCreate = wrapped?.type === "Create" ? wrapped : null;
+  const target = innerCreate == null ? raw.object : innerCreate.object;
+  const record = asRecord(target);
+  // Fedify may serialize an URI reference as { id } rather than a string.
+  // Neither representation supplies signed Note fields: Python must fetch it.
+  const inline = record != null && (record.type === "Note" || record.type === "Article")
+    ? record : null;
+  if (record != null && inline == null && (Object.keys(record).some((key) => key !== "id"))) return null;
+  const objectId = asActivityIri(target);
+  if (objectId == null || !objectId.startsWith("https://")) return null;
+  const innerCreateId = innerCreate == null ? null : asString(innerCreate.id);
+  if (innerCreate != null && (innerCreateId == null || asActivityIri(innerCreate.actor) == null)) return null;
+  return {
+    event_type: "remote.group_announced",
+    actor_id: groupId,
+    community_actor_id: groupId,
+    delivery_id: envelope.announceId,
+    occurred_at: new Date().toISOString(),
+    source_activity_json: raw,
+    object: {
+      ap_id: objectId,
+      inline_object: inline,
+      inner_create_id: innerCreateId,
+    },
+  };
 }
 
 function extractCreateRecord(
@@ -460,6 +618,11 @@ function asString(value: unknown): string | null {
   return typeof value === "string" ? value : null;
 }
 
+function asActivityIri(value: unknown): string | null {
+  // Fedify may encode an embedded typed object as JSON-LD with a stable id.
+  return asString(value) ?? asString(asRecord(value)?.id);
+}
+
 function asUrlString(value: unknown): string | null {
   if (typeof value === "string") {
     return value;
@@ -476,39 +639,24 @@ function logDebug(isDebug: boolean, message: string): void {
   }
 }
 
+/** Build Accept only from the verified actor and original Follow object ID. */
 export function buildFollowAcceptedEvent(
   activity: Accept,
-  data: GatewayContextData,
-  fallbackDeliveryId: string | null,
+  _data: GatewayContextData,
+  _fallbackDeliveryId: string | null,
 ): FollowAcceptedEvent | null {
-  // The typed Accept activity is the source of truth for follow lifecycle
-  // events. Raw JSON exists only as a fallback because Hono/Fedify request
-  // body handling can be unavailable when the internal queue re-dispatches.
-  const rawJson = data.activitypubRawJson
-    ?? (fallbackDeliveryId != null ? getRawActivity(fallbackDeliveryId)?.rawJson : undefined);
-  const rawRecord = asRecord(rawJson);
-  const actorId = activity.actorId?.href ?? asString(rawRecord?.actor);
-  const objectValue = rawRecord?.object;
-  const objectRecord = asRecord(objectValue);
-  const followActivityId =
-    activity.objectId?.href
-    ?? asString(objectValue)
-    ?? asString(objectRecord?.id);
-  if (actorId == null || followActivityId == null) {
-    return null;
-  }
+  // Raw request-local JSON and the ID-only cache were captured before the
+  // signature check. Neither can supply a missing authenticated Follow.id.
+  const actorId = activity.actorId?.href;
+  const followActivityId = activity.objectId?.href;
+  const acceptId = activity.id?.href;
+  if (actorId == null || followActivityId == null || acceptId == null) return null;
   return {
     actor_id: actorId,
     community_actor_id: actorId,
-    delivery_id:
-      activity.id?.href
-      ?? asString(rawRecord?.id)
-      ?? fallbackDeliveryId
-      ?? `follow-accepted:${followActivityId}`,
+    delivery_id: acceptId,
     event_type: "follow.accepted",
-    object: {
-      follow_activity_id: followActivityId,
-    },
+    object: { follow_activity_id: followActivityId },
     occurred_at: new Date().toISOString(),
   };
 }
@@ -583,16 +731,29 @@ export async function buildLocalFollowRequestedEvent(
   };
 }
 
+/** Build a scoped Undo(Follow) only from the verified typed Undo envelope. */
 export async function buildLocalUnfollowRequestedEvent(
   config: GatewayContextData,
   activity: Undo,
-  rawJson: Record<string, unknown> | null,
 ): Promise<LocalUnfollowRequestedEvent | null> {
-  const undoActorId = activity.actorId?.href ?? asString(rawJson?.actor);
-  const embeddedFollow = asRecord(rawJson?.object);
-  if (undoActorId == null || embeddedFollow?.type !== "Follow") return null;
-  if (asString(embeddedFollow.actor) !== undoActorId) return null;
-  const targetActorId = asString(embeddedFollow.object);
+  const undoActorId = activity.actorId?.href;
+  const undoId = activity.id?.href;
+  if (undoActorId == null || undoId == null) return null;
+
+  let verified: Record<string, unknown> | null;
+  try {
+    verified = asRecord(await activity.toJsonLd());
+  } catch {
+    return null;
+  }
+  if (verified?.type !== "Undo" || asString(verified.id) !== undoId
+      || asActivityIri(verified.actor) !== undoActorId) return null;
+  const embeddedFollow = asRecord(verified.object);
+  const followId = asString(embeddedFollow?.id);
+  if (embeddedFollow?.type !== "Follow" || followId == null
+      || asActivityIri(embeddedFollow.actor) !== undoActorId) return null;
+  if (activity.objectId != null && activity.objectId.href !== followId) return null;
+  const targetActorId = asActivityIri(embeddedFollow.object);
   if (targetActorId == null) return null;
 
   const community = await resolveLocalCommunityByActorUrl(config, targetActorId);
@@ -602,17 +763,16 @@ export async function buildLocalUnfollowRequestedEvent(
     const user = username == null ? null : await loadUserActorIdentity(config, username);
     if (user != null && user.actorId.href === targetActorId) targetKind = "user";
   }
-  if (targetKind == null) return null;
-  if (!matchesActorSpecificInboxOwner(config, targetKind, targetActorId)) {
+  if (targetKind == null || !matchesActorSpecificInboxOwner(config, targetKind, targetActorId)) {
     return null;
   }
   return {
     actor_id: undoActorId,
     target_actor_kind: targetKind,
     target_actor_id: targetActorId,
-    delivery_id: activity.id?.href ?? asString(rawJson?.id) ?? `local-unfollow:${Date.now()}`,
+    delivery_id: undoId,
     event_type: "local.unfollow_requested",
-    object: { follow_activity_id: asString(embeddedFollow.id) },
+    object: { follow_activity_id: followId },
     occurred_at: new Date().toISOString(),
   };
 }
