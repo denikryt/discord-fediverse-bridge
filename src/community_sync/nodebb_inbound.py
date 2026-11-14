@@ -170,6 +170,46 @@ async def handle_nodebb_announcement(event: RemoteGroupAnnounceEvent, runtime: o
             return await runtime.community_runtime.handle_inbound_post(post, runtime)
 
         context = _uri(note.get("context"))
+        repository = db.discord_fanout_groups
+        # A canonical parent already pins both the verified Group and its
+        # Discord thread. NodeBB may assign this reply a different context;
+        # do not fetch the parent or infer a root from context alone.
+        known_parent = repository.get_message_group_by_ap_object(
+            parent_id, community_actor_id=group_id,
+        )
+        known_root = repository.get_thread_group_by_ap_object(
+            parent_id, community_actor_id=group_id,
+        )
+        if known_parent is not None or known_root is not None:
+            root = known_root or repository.get_thread_group_by_id(known_parent.thread_group_id)
+            if (parent_id == object_id or root is None
+                    or root.community_actor_id != group_id or not root.ap_object_id):
+                return deny("reply parent has no valid root in verified Group")
+            # A context that explicitly names a *different known root* is a
+            # contradiction. An unrelated topic/context URI is not root proof.
+            context_root = (repository.get_thread_group_by_ap_object(
+                context, community_actor_id=group_id,
+            ) if context else None)
+            if context_root is not None and context_root.id != root.id:
+                return deny("reply context names a different known root")
+            reply_username = await _author_username(
+                _uri(note["attributedTo"]), runtime.bridge_policy_service,
+            )
+            reply = _normalized_event(
+                note, group_id, event.delivery_id, author_name=reply_username,
+                root_id=root.ap_object_id,
+                parent_id=parent_id if known_parent is not None else None,
+                source=event.source_activity_json, source_activity_id=source_id,
+            )
+            return await runtime.community_runtime.handle_inbound_comment(reply, runtime)
+
+        # A known parent in *another* Group cannot be used as a shortcut or
+        # reinterpreted through the reply's claimed context. Unknown parents
+        # still take the existing bounded, authoritative membership path.
+        if (repository.get_message_group_by_ap_object(parent_id) is not None
+                or repository.get_thread_group_by_ap_object(parent_id) is not None):
+            return deny("reply parent belongs to another Group")
+
         current = parent_id
         seen = {object_id}
         root_note = None

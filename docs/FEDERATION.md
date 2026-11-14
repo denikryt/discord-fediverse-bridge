@@ -199,6 +199,17 @@ text and URLs remain. This suppresses all embeds on those new messages, not
 only link cards. Previously persisted author labels and already sent Discord
 messages are not automatically rewritten.
 
+For signed NodeBB Group replies, `inReplyTo` is first matched to an already
+persisted message or root **within the same canonical Group**. A known reply
+inherits its `thread_group_id`, and a known root supplies its own AP object ID;
+the original direct parent is retained for Discord reply references. This
+allows replies to Discord-authored comments even when NodeBB assigns a different
+`context`. A `context` explicitly naming another mapped root in that Group
+conflicts with the known parent and is rejected. Unknown parents still require
+the existing bounded ancestry fetch and verified historical Group membership;
+`context` alone never establishes root ownership. A direct Create without a
+Group Announce is not generally repaired by this NodeBB-specific path.
+
 Remote subscriptions now reserve the canonical Group actor, verified inbox,
 immutable outbound Follow activity ID, software profile, and the first Discord
 channel binding in one SQLite transaction **before** invoking the Fedify

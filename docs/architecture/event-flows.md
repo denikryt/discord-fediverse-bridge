@@ -34,6 +34,24 @@ This document explains the major runtime traces through the bridge: user/platfor
    Follow; after `undo_sending`, it requires proven cleanup or reports
    `remote_follow_cleanup_unresolved` with the guarded offline operator path.
 
+## Remote NodeBB Group reply routing
+
+1. The gateway supplies a verified signed Group `Announce`; Python validates
+   its accepted NodeBB Follow, actor/inbox, audience, fetched Note and author
+   policy before any canonical Discord effect.
+2. For a reply, `src/community_sync/nodebb_inbound.py` first resolves its
+   `inReplyTo` against the persisted message/root AP ID for **that Group**.
+   A mapped comment supplies its `thread_group_id` and remains the direct
+   parent; a mapped root supplies the topic without a comment parent. A
+   `context` explicitly naming another known root is rejected, but an unrelated
+   NodeBB topic context does not override the exact stored parent mapping.
+3. `CommunityRuntime.handle_inbound_comment()` rechecks the Group, root and
+   parent FK before canonical reservation and Discord delivery. Duplicate
+   Announce/direct Create identities cannot create a second delivered reply.
+4. If the parent is not mapped, the existing bounded authenticated ancestor
+   traversal and verified Group-outbox historical-root checks still apply.
+   A mapped parent belonging to another Group is rejected before any fetch.
+
 ## Local Group inbound post/reply host flow
 
 1. The gateway resolves every authenticated local Group recipient separately
