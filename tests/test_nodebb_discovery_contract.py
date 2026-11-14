@@ -22,7 +22,7 @@ from src.nodebb_discovery import (
     _PublicDNSResolver,
     _flatten_categories,
     decode_nodebb_choice,
-    fetch_nodebb_groups,
+    fetch_nodebb_candidates,
     nodebb_autocomplete_choices,
     resolve_nodebb_group,
 )
@@ -98,20 +98,21 @@ class NodeBBFixtureServer:
 
 
 @pytest.mark.asyncio
-async def test_list_only_anonymously_readable_federative_groups_in_nested_tree() -> None:
-    """Autocomplete excludes find-only categories, disabled actors and descendants of private parents."""
+async def test_listing_builds_candidates_in_one_get_without_claiming_group_identity() -> None:
+    """A moderator lists the public API tree without triggering per-actor network requests."""
     server = NodeBBFixtureServer()
-    groups = await fetch_nodebb_groups(ORIGIN, policy_service=PublicPolicy(), fetch_json=server.get)
-    assert [item.actor_id for item in groups] == [f"{ORIGIN}/category/42", f"{ORIGIN}/category/47"]
-    assert groups[0].handle == "!discussion@nodebb.example"
-    assert all(accept == AP_ACCEPT for url, accept in server.calls if "/category/42" == urlsplit(url).path)
-    assert all("/category/1" not in url and "/category/44" not in url for url, _ in server.calls)
-    assert len(groups) <= 25
-    choices = nodebb_autocomplete_choices(groups, "DISCUSSION")
+    candidates = await fetch_nodebb_candidates(ORIGIN, policy_service=PublicPolicy(), fetch_json=server.get)
+    # 45 is unreadable on the detail endpoint; 46 returns Person. They are
+    # suggestions only, while private parents and explicit federation denials are excluded.
+    assert [item.cid for item in candidates] == [42, 45, 46, 47]
+    assert candidates[0].handle == "!discussion@nodebb.example"
+    assert server.calls == [(f"{ORIGIN}/api/categories", "application/json")]
+    choices = nodebb_autocomplete_choices(candidates, "DISCUSSION")
     assert len(choices) == 1
     assert choices[0][1] == f"nodebb:{ORIGIN}/category/42"
     assert all(len(name) <= 100 and len(value) <= 100 for name, value in choices)
-    assert nodebb_autocomplete_choices(groups, "https://nodebb.example/category/47")[0][1].endswith("/47")
+    assert nodebb_autocomplete_choices(candidates, "https://nodebb.example/category/47")[0][1].endswith("/47")
+    assert nodebb_autocomplete_choices(candidates, " ") == nodebb_autocomplete_choices(candidates, "")
 
 
 @pytest.mark.asyncio
@@ -159,17 +160,18 @@ async def test_public_section_parent_keeps_its_federated_child_categories(
                     "url": f"{url}/{category['handle']}"}
         raise AssertionError(f"Unexpected external JSON fetch: {url}")
 
-    groups = await fetch_nodebb_groups(
+    candidates = await fetch_nodebb_candidates(
         ORIGIN, policy_service=PublicPolicy(), fetch_json=fetch,
     )
-    found = [group.actor_id for group in groups]
-    expected = ([f"{ORIGIN}/category/50"] if section_has_group_actor else []) + [
+    found = [item.actor_url for item in candidates]
+    expected = [f"{ORIGIN}/category/50"] + [
         f"{ORIGIN}/category/{cid}" for cid in (51, 52, 53, 60, 61, 62)
     ]
     assert found == expected
-    assert len(nodebb_autocomplete_choices(groups, "")) == len(expected)
-    # The returned autocomplete values are verified Group IDs, not category slugs.
-    choices = nodebb_autocomplete_choices(groups, "")
+    assert len(nodebb_autocomplete_choices(candidates, "")) == len(expected)
+    # Listing values are candidates, not Group proof; even a display section
+    # without a real Group actor remains visible until selection validation.
+    choices = nodebb_autocomplete_choices(candidates, "")
     assert len(choices) == len(expected)
     assert {value for _, value in choices} == {f"nodebb:{actor}" for actor in expected}
     assert any("NodeForge" in name for name, _ in choices)
@@ -183,10 +185,10 @@ async def test_public_section_parent_keeps_its_federated_child_categories(
         """NodeBB has no Bridge-specific discovery endpoint."""
         raise discovery.BridgeDiscoveryUnavailable(origin)
 
-    async def get_groups(origin: str, *, policy_service, query: str):
-        """Use real NodeBB verification with the controlled external IO."""
-        return await fetch_nodebb_groups(
-            origin, policy_service=policy_service, fetch_json=fetch, query=query,
+    async def get_candidates(origin: str, *, policy_service):
+        """Use the real one-request NodeBB listing with the controlled IO."""
+        return await fetch_nodebb_candidates(
+            origin, policy_service=policy_service, fetch_json=fetch,
         )
 
     class NoLemmy:
@@ -196,7 +198,7 @@ async def test_public_section_parent_keeps_its_federated_child_categories(
             """Any invocation would violate the recognized NodeBB route."""
             raise AssertionError(f"Unexpected Lemmy fallback for {origin}")
 
-    monkeypatch.setattr(discovery, "fetch_nodebb_groups", get_groups)
+    monkeypatch.setattr(discovery, "fetch_nodebb_candidates", get_candidates)
     autocomplete = await discovery.autocomplete_communities(
         None, instance_domain="nodebb.example", current="",
         fetch_bridge_communities=bridge_missing, lemmy_client_cls=NoLemmy,
@@ -209,33 +211,39 @@ async def test_public_section_parent_keeps_its_federated_child_categories(
         policy_service=PublicPolicy(),
     )
     assert [value for _, value in by_name] == [f"nodebb:{ORIGIN}/category/52"]
+    # A section without a valid actor is still discoverable, but is rejected
+    # during command submission before any Follow or DB change.
+    if not section_has_group_actor:
+        with pytest.raises(NodeBBUnavailable):
+            await resolve_nodebb_group(
+                f"{ORIGIN}/category/50", origin=ORIGIN,
+                policy_service=PublicPolicy(), fetch_json=fetch,
+            )
+    else:
+        verified = await resolve_nodebb_group(
+            f"{ORIGIN}/category/50", origin=ORIGIN,
+            policy_service=PublicPolicy(), fetch_json=fetch,
+        )
+        assert verified.inbox == f"{ORIGIN}/category/50/inbox"
 
 
 @pytest.mark.asyncio
 async def test_search_finds_later_category_without_verifying_first_25() -> None:
-    """A matching late category is discovered within the bounded API tree."""
+    """Category after the first 25 choices is searchable without extra HTTP calls."""
     server = NodeBBFixtureServer()
     server.listing = {"categories": [
         {"cid": number, "name": "Unrelated", "handle": "other"}
         for number in range(1, 70)
     ]}
     server.listing["categories"][-1] = {"cid": 69, "name": "Target", "handle": "target"}
-
-    async def fetched(url: str, accept: str) -> dict:
-        """Only the late matching Group is served with matching verified identity."""
-        payload = await server.get(url, accept)
-        if url == f"{ORIGIN}/category/69":
-            return {**payload, "name": "Target", "preferredUsername": "target", "url": f"{url}/target"}
-        if url == f"{ORIGIN}/api/category/69":
-            return {**payload, "name": "Target", "handle": "target"}
-        return payload
-
-    groups = await fetch_nodebb_groups(
-        ORIGIN, policy_service=PublicPolicy(), fetch_json=fetched, query="target",
+    candidates = await fetch_nodebb_candidates(
+        ORIGIN, policy_service=PublicPolicy(), fetch_json=server.get,
     )
-    assert [group.actor_id for group in groups] == [f"{ORIGIN}/category/69"]
-    assert len(nodebb_autocomplete_choices(groups, "TARGET")) == 1
-    assert all("/category/1" not in url for url, _ in server.calls)
+    assert len(nodebb_autocomplete_choices(candidates, "")) == 25
+    assert nodebb_autocomplete_choices(candidates, "TARGET") == [
+        ("Target (target@nodebb.example)", f"nodebb:{ORIGIN}/category/69")
+    ]
+    assert server.calls == [(f"{ORIGIN}/api/categories", "application/json")]
 
 
 @pytest.mark.asyncio
@@ -303,7 +311,7 @@ async def test_policy_denial_performs_zero_fetches_and_choice_rechecks_policy() 
     server = NodeBBFixtureServer()
     policy = PublicPolicy(False)
     with pytest.raises(NodeBBDiscoveryError):
-        await fetch_nodebb_groups(ORIGIN, policy_service=policy, fetch_json=server.get)
+        await fetch_nodebb_candidates(ORIGIN, policy_service=policy, fetch_json=server.get)
     assert server.calls == []
     policy.allowed = True
     group = await resolve_nodebb_group(f"{ORIGIN}/category/42", origin=ORIGIN, policy_service=policy, fetch_json=server.get)
@@ -315,15 +323,16 @@ async def test_policy_denial_performs_zero_fetches_and_choice_rechecks_policy() 
 
 def test_long_actor_choices_have_bounded_tokens_and_expire_without_silent_fallback(monkeypatch) -> None:
     """Loss of a process-local token cannot be mistaken for an authorized actor identity."""
-    from src.nodebb_discovery import NodeBBGroup
-    group = NodeBBGroup(
-        actor_id="https://" + ("a" * 40) + "." + ("b" * 38) + ".example/category/42", inbox="https://example.test/inbox",
-        name="T" * 150, handle="!discussion@example.test",
+    from src.nodebb_discovery import NodeBBCategoryCandidate
+    actor_url = "https://" + ("a" * 40) + "." + ("b" * 38) + ".example/category/42"
+    candidate = NodeBBCategoryCandidate(
+        cid=42, actor_url=actor_url, name="T" * 150,
+        handle="!discussion@example.test", slug="42-discussion",
     )
-    choice = nodebb_autocomplete_choices([group], "")[0]
+    choice = nodebb_autocomplete_choices([candidate], "")[0]
     assert choice[1].startswith("nodebb-key:")
     assert len(choice[0]) <= 100 and len(choice[1]) <= 100
-    assert decode_nodebb_choice(choice[1])[1] == group.actor_id
+    assert decode_nodebb_choice(choice[1])[1] == candidate.actor_url
     key = choice[1].split(":", 1)[1]
     origin, actor, _ = _CHOICE_CACHE.entries[key]
     _CHOICE_CACHE.entries[key] = (origin, actor, 0)
@@ -332,12 +341,12 @@ def test_long_actor_choices_have_bounded_tokens_and_expire_without_silent_fallba
 
 
 def test_nested_category_walk_is_bounded_and_does_not_escape_private_parent() -> None:
-    """An attacker-controlled category tree cannot induce unlimited actor fetches."""
+    """A public nested tree is traversed without leaking hidden descendants."""
     tree = [{"cid": 1, "name": "Hidden", "private": True, "children": [{"cid": 2}]},
             {"cid": 3, "children": [{"cid": n} for n in range(4, 500)]}]
     rows = _flatten_categories(tree)
     assert {item["cid"] for item in rows}.isdisjoint({1, 2})
-    assert len(rows) <= 96
+    assert len(rows) == 497
 
 
 @pytest.mark.asyncio
@@ -367,9 +376,9 @@ async def test_autocomplete_confirmed_nodebb_never_falls_through_to_lemmy(monkey
         """Model a valid NodeBB deployment without Bridge discovery endpoint."""
         raise discovery.BridgeDiscoveryUnavailable(origin)
 
-    async def get_groups(origin: str, *, policy_service, query: str):
-        """Use actual NodeBB category/actor verification with fake external HTTP."""
-        return await fetch_nodebb_groups(origin, policy_service=policy_service, fetch_json=server.get, query=query)
+    async def get_candidates(origin: str, *, policy_service):
+        """Use actual NodeBB listing with fake external HTTP."""
+        return await fetch_nodebb_candidates(origin, policy_service=policy_service, fetch_json=server.get)
 
     class NoLemmy:
         """Reject fallback after NodeBB's API was confirmed."""
@@ -378,8 +387,8 @@ async def test_autocomplete_confirmed_nodebb_never_falls_through_to_lemmy(monkey
             """A Lemmy client would be an observable incorrect network action."""
             raise AssertionError("Lemmy fallback for confirmed NodeBB")
 
-    monkeypatch.setattr(discovery, "fetch_nodebb_groups", get_groups)
-    for query, expected in (("", 2), ("nested", 1), ("unrelated", 0)):
+    monkeypatch.setattr(discovery, "fetch_nodebb_candidates", get_candidates)
+    for query, expected in (("", 4), ("nested", 1), ("unrelated", 0)):
         codes: list[str] = []
         choices = await discovery.autocomplete_communities(
             None, instance_domain="nodebb.example", current=query,
@@ -498,7 +507,7 @@ async def test_unidentified_nodebb_probe_failure_can_fall_back_to_lemmy(http_sta
         )
 
     for operation in (
-        lambda: fetch_nodebb_groups(ORIGIN, policy_service=PublicPolicy(), fetch_json=denied_categories),
+        lambda: fetch_nodebb_candidates(ORIGIN, policy_service=PublicPolicy(), fetch_json=denied_categories),
         lambda: probe_nodebb_origin(ORIGIN, policy_service=PublicPolicy(), fetch_json=denied_categories),
     ):
         with pytest.raises(NodeBBProbeInconclusive) as outcome:
@@ -508,15 +517,194 @@ async def test_unidentified_nodebb_probe_failure_can_fall_back_to_lemmy(http_sta
 
 @pytest.mark.asyncio
 async def test_verified_nodebb_category_failure_is_not_unidentified_probe() -> None:
-    """A category error after a valid NodeBB listing must not select a Lemmy identity."""
-    from src.nodebb_discovery import NodeBBProbeInconclusive
-
+    """Category detail failure occurs at selection; autocomplete does no detail fetch."""
     async def denied_detail(url: str, accept: str) -> dict:
-        """Prove the host first, then fail while verifying a candidate Group."""
+        """Prove listing first; detail is denied independently on submission."""
         if url == f"{ORIGIN}/api/categories":
             return {"categories": [{"cid": 42, "name": "Discussion", "handle": "discussion"}]}
         raise NodeBBDiscoveryError("category detail unavailable", reason_code="discovery_http_error")
 
-    # Per-category errors are skipped, not reclassified as an unknown server.
-    result = await fetch_nodebb_groups(ORIGIN, policy_service=PublicPolicy(), fetch_json=denied_detail)
-    assert result == []
+    result = await fetch_nodebb_candidates(ORIGIN, policy_service=PublicPolicy(), fetch_json=denied_detail)
+    assert [item.cid for item in result] == [42]
+    with pytest.raises(NodeBBDiscoveryError, match="category detail unavailable"):
+        await resolve_nodebb_group(
+            result[0].actor_url, origin=ORIGIN,
+            policy_service=PublicPolicy(), fetch_json=denied_detail,
+        )
+
+
+@pytest.mark.asyncio
+async def test_mod_discord_autocomplete_lists_unverified_categories_with_one_nodebb_request(monkeypatch) -> None:
+    """When moderator opens community, even unreadable/Person candidates appear after one listing GET."""
+    from src import community_discovery as discovery
+    server = NodeBBFixtureServer()
+
+    async def bridge_missing(origin: str):
+        """Stand in for absent Bridge discovery, not an ActivityPub identity."""
+        raise discovery.BridgeDiscoveryUnavailable(origin)
+
+    async def candidates(origin: str, *, policy_service):
+        """Use the real listing conversion with the fixture HTTP boundary."""
+        from src.nodebb_discovery import fetch_nodebb_candidates
+        return await fetch_nodebb_candidates(origin, policy_service=policy_service, fetch_json=server.get)
+
+    class NoLemmy:
+        """Reject incorrect fallback from an identified NodeBB listing."""
+
+        def __init__(self, origin: str) -> None:
+            """Lemmy must not handle a confirmed NodeBB origin."""
+            raise AssertionError(f"Lemmy fallback: {origin}")
+
+    monkeypatch.setattr(discovery, "fetch_nodebb_candidates", candidates)
+    for query, expected in (("", 4), (" ", 4), ("read-only", 1), ("DISCUSSION", 1)):
+        server.calls.clear()
+        suggestions = await discovery.autocomplete_communities(
+            None, instance_domain="nodebb.example", current=query,
+            fetch_bridge_communities=bridge_missing, lemmy_client_cls=NoLemmy,
+            policy_service=PublicPolicy(),
+        )
+        assert len(suggestions) == expected
+        assert server.calls == [(f"{ORIGIN}/api/categories", "application/json")]
+    # Returned category is a candidate, even if its real actor is not a Group.
+    assert suggestions[0][1] == f"nodebb:{ORIGIN}/category/42"
+
+
+@pytest.mark.asyncio
+async def test_unverified_autocomplete_selection_denied_before_follow_effects(monkeypatch) -> None:
+    """After listing, the same command must reject unreadable/Person category before subscribe."""
+    from src import community_discovery as discovery
+    from src.nodebb_discovery import fetch_nodebb_candidates
+    server = NodeBBFixtureServer()
+    candidates = await fetch_nodebb_candidates(ORIGIN, policy_service=PublicPolicy(), fetch_json=server.get)
+    options = nodebb_autocomplete_choices(candidates, "")
+    assert len(options) == 4
+    by_id = {value.rsplit("/", 1)[1]: value for _, value in options}
+
+    async def probe(origin: str, *, policy_service):
+        """Resolve with the actual NodeBB probe and controlled network transport."""
+        from src.nodebb_discovery import probe_nodebb_origin
+        return await probe_nodebb_origin(origin, policy_service=policy_service, fetch_json=server.get)
+
+    async def resolve(value: str, *, origin: str, policy_service):
+        """Run the verified category/read/actor checks used before SubscribeInput."""
+        return await resolve_nodebb_group(value, origin=origin, policy_service=policy_service, fetch_json=server.get)
+
+    monkeypatch.setattr(discovery, "probe_nodebb_origin", probe)
+    monkeypatch.setattr(discovery, "resolve_nodebb_group", resolve)
+    for invalid in ("45", "46"):
+        with pytest.raises(discovery.CommunityResolutionError):
+            await discovery.resolve_selected_community(
+                None, instance_domain="nodebb.example", community_value=by_id[invalid],
+                fetch_bridge_communities=None, lemmy_client_cls=None, policy_service=PublicPolicy(),
+            )
+    selected = await discovery.resolve_selected_community(
+        None, instance_domain="nodebb.example", community_value=by_id["42"],
+        fetch_bridge_communities=None, lemmy_client_cls=None, policy_service=PublicPolicy(),
+    )
+    assert selected.source == "remote_nodebb"
+    assert selected.actor_id == f"{ORIGIN}/category/42"
+    assert selected.remote_software == "nodebb"
+    assert any(url == f"{ORIGIN}/category/42" for url, _ in server.calls)
+
+
+def test_listing_bounds_cannot_silently_hide_categories() -> None:
+    """An oversized/deep tree reports failure instead of silently dropping searchable children."""
+    from src.nodebb_discovery import MAX_CATEGORY_NODES, MAX_CATEGORY_DEPTH
+    large = [{"cid": cid, "name": f"Category {cid}"} for cid in range(1, MAX_CATEGORY_NODES + 2)]
+    with pytest.raises(NodeBBDiscoveryError, match="limit"):
+        _flatten_categories(large)
+    nested: dict = {"cid": MAX_CATEGORY_DEPTH + 2, "name": "Deep"}
+    for cid in range(MAX_CATEGORY_DEPTH + 1, 0, -1):
+        nested = {"cid": cid, "name": "Level", "children": [nested]}
+    with pytest.raises(NodeBBDiscoveryError, match="depth"):
+        _flatten_categories([nested])
+
+@pytest.mark.asyncio
+async def test_full_handle_and_duplicate_parent_do_not_hide_valid_category_children() -> None:
+    """List navigation preserves nested categories and does not duplicate an API-provided host."""
+    server = NodeBBFixtureServer()
+    server.listing = {"categories": [
+        {"cid": 1, "name": "Parent", "handle": "!parent@nodebb.example"},
+        {"cid": 1, "name": "Repeated", "children": [
+            {"cid": 3, "name": "Child", "handle": "!child@nodebb.example"},
+        ]},
+        {"name": "Display wrapper", "children": [
+            {"cid": 4, "name": "Second child", "handle": "second"},
+        ]},
+    ]}
+    candidates = await fetch_nodebb_candidates(ORIGIN, policy_service=PublicPolicy(), fetch_json=server.get)
+    assert [item.cid for item in candidates] == [1, 3, 4]
+    assert [item.handle for item in candidates] == [
+        "!parent@nodebb.example", "!child@nodebb.example", "!second@nodebb.example",
+    ]
+    assert server.calls == [(f"{ORIGIN}/api/categories", "application/json")]
+
+@pytest.mark.asyncio
+async def test_verified_candidate_allows_one_durable_follow_binding_after_submit(tmp_path, monkeypatch) -> None:
+    """Moderator action: invalid choices leave SQLite empty; a verified Group can reserve Follow.
+
+    The gateway is an external boundary: this checks the real NodeBB resolver
+    and database reservation, not HTTP signature/delivery of the Follow itself.
+    """
+    from src import community_discovery as discovery
+    from src.db import Database
+    from src.db.repositories.bridge_actor_follows import BridgeActorFollowRepository
+    from src.models import BridgeActorFollow, ChannelCommunitySubscription
+
+    server = NodeBBFixtureServer()
+    candidates = await fetch_nodebb_candidates(ORIGIN, policy_service=PublicPolicy(), fetch_json=server.get)
+
+    async def probe(origin: str, *, policy_service):
+        """Use real HTTP-boundary probe with the fake remote endpoint."""
+        from src.nodebb_discovery import probe_nodebb_origin
+        return await probe_nodebb_origin(origin, policy_service=policy_service, fetch_json=server.get)
+
+    async def resolve(value: str, *, origin: str, policy_service):
+        """Always verify current category permissions and Group actor."""
+        return await resolve_nodebb_group(value, origin=origin, policy_service=policy_service, fetch_json=server.get)
+
+    monkeypatch.setattr(discovery, "probe_nodebb_origin", probe)
+    monkeypatch.setattr(discovery, "resolve_nodebb_group", resolve)
+    db = Database(f"sqlite:///{tmp_path / 'nodebb-candidate-follow.sqlite'}")
+    db.create_all()
+    try:
+        for candidate in candidates:
+            selected_value = f"nodebb:{candidate.actor_url}"
+            if candidate.cid in {45, 46}:
+                with pytest.raises(discovery.CommunityResolutionError):
+                    await discovery.resolve_selected_community(
+                        None, instance_domain="nodebb.example", community_value=selected_value,
+                        fetch_bridge_communities=None, lemmy_client_cls=None,
+                        policy_service=PublicPolicy(),
+                    )
+        with db.session() as session:
+            assert session.query(BridgeActorFollow).count() == 0
+            assert session.query(ChannelCommunitySubscription).count() == 0
+
+        selected = await discovery.resolve_selected_community(
+            None, instance_domain="nodebb.example",
+            community_value=f"nodebb:{ORIGIN}/category/42",
+            fetch_bridge_communities=None, lemmy_client_cls=None,
+            policy_service=PublicPolicy(),
+        )
+        assert selected.source == "remote_nodebb" and selected.numeric_id is None
+        with db.immediate_session() as session:
+            follow, must_send = BridgeActorFollowRepository.reserve_with_binding(
+                session,
+                community_actor_id=selected.actor_id,
+                community_inbox_url=f"{ORIGIN}/category/42/inbox",
+                follow_activity_id="https://bridge.example/activities/follow/one",
+                remote_software_profile=selected.remote_software,
+                discord_channel_id=100,
+                discord_guild_id=5,
+                community_name=selected.name,
+                numeric_id=selected.numeric_id,
+                community_handle=selected.handle,
+                initiated_by_discord_user_id="10",
+            )
+            assert must_send and follow.follow_dispatch_state == "prepared"
+        with db.session() as session:
+            assert session.query(BridgeActorFollow).count() == 1
+            assert session.query(ChannelCommunitySubscription).count() == 1
+    finally:
+        db.close()

@@ -21,7 +21,7 @@ import httpx
 
 from .nodebb_discovery import (
     NodeBBDiscoveryError, NodeBBProbeInconclusive, NodeBBUnavailable, decode_nodebb_choice,
-    fetch_nodebb_groups, nodebb_autocomplete_choices, probe_nodebb_origin,
+    fetch_nodebb_candidates, nodebb_autocomplete_choices, probe_nodebb_origin,
     resolve_nodebb_group,
 )
 
@@ -319,7 +319,7 @@ async def autocomplete_communities(
         # Lemmy. The HTTP adapter performs DNS/IP and redirect admission at the
         # socket boundary in addition to the command-level policy gate.
         try:
-            groups = await fetch_nodebb_groups(origin, policy_service=policy_service, query=query)
+            candidates = await fetch_nodebb_candidates(origin, policy_service=policy_service)
         except (NodeBBUnavailable, NodeBBProbeInconclusive):
             # A missing/failed *probe* is not proof that a Lemmy origin is
             # NodeBB. Try the real Lemmy API rather than hiding its results.
@@ -329,9 +329,9 @@ async def autocomplete_communities(
             report_empty(error.reason_code)
             return []
         else:
-            nodebb_choices = nodebb_autocomplete_choices(groups, query)
+            nodebb_choices = nodebb_autocomplete_choices(candidates, query)
             if not nodebb_choices:
-                report_empty("filter_no_match" if query else "no_public_groups")
+                report_empty("filter_no_match" if candidates else "no_public_groups")
             return nodebb_choices
 
     remote_client = lemmy_client_cls(origin)

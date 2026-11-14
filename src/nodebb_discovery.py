@@ -26,8 +26,8 @@ from .bridge_policy import BridgePolicyService
 
 AP_ACCEPT = 'application/activity+json, application/ld+json; profile="https://www.w3.org/ns/activitystreams"'
 JSON_ACCEPT = "application/json"
-MAX_CATEGORY_NODES = 96
-MAX_CATEGORY_DEPTH = 5
+MAX_CATEGORY_NODES = 4096
+MAX_CATEGORY_DEPTH = 24
 MAX_CATEGORY_RESULTS = 25
 MAX_RESPONSE_BYTES = 1_048_576
 MAX_REDIRECTS = 3
@@ -74,6 +74,17 @@ class NodeBBGroup:
     name: str
     handle: str
     url: str | None = None
+
+
+@dataclass(frozen=True)
+class NodeBBCategoryCandidate:
+    """An unverified listing entry; actor_url is a locator, not an AP identity proof."""
+
+    cid: int
+    actor_url: str
+    name: str
+    handle: str
+    slug: str
 
 
 def _origin(value: str) -> str:
@@ -238,26 +249,38 @@ def _category_is_candidate(item: dict[str, Any]) -> bool:
 
 
 def _flatten_categories(items: list[Any]) -> list[dict[str, Any]]:
-    """Walk a bounded tree with unique CIDs, including nested children."""
+    """Traverse public category subtrees; explicitly reject oversized/deep API trees.
+
+    Search must not silently hide otherwise valid categories beyond an
+    arbitrary first-page cutoff. Limits protect the synchronous autocomplete
+    path from a maliciously large listing, with an observable error instead.
+    """
     result: list[dict[str, Any]] = []
     seen: set[int] = set()
+    inspected = 0
     stack = [(item, 0) for item in reversed(items)]
-    while stack and len(result) < MAX_CATEGORY_NODES:
+    while stack:
         item, depth = stack.pop()
+        inspected += 1
+        if inspected > MAX_CATEGORY_NODES:
+            raise NodeBBDiscoveryError("NodeBB category listing exceeds node limit.", reason_code="malformed_response")
         if not isinstance(item, dict):
             continue
-        cid = _category_cid(item)
-        if cid is None or cid in seen:
+        if not _category_is_candidate(item):
+            # An inaccessible parent cannot prove its descendants public.
             continue
-        seen.add(cid)
-        if _category_is_candidate(item):
+        cid = _category_cid(item)
+        if cid is not None and cid not in seen:
+            seen.add(cid)
             result.append(item)
-        # Descend through public display sections. Do not traverse a denied
-        # parent: its descendants are not independently discoverable here.
-        if _category_is_candidate(item) and depth < MAX_CATEGORY_DEPTH:
-            children = item.get("children", [])
-            if isinstance(children, list):
-                stack.extend((child, depth + 1) for child in reversed(children[:MAX_CATEGORY_NODES]))
+        # A duplicate CID or malformed display-only parent must not hide valid
+        # descendants. All nodes still count against the traversal budget.
+        children = item.get("children", [])
+        if not isinstance(children, list) or not children:
+            continue
+        if depth >= MAX_CATEGORY_DEPTH:
+            raise NodeBBDiscoveryError("NodeBB category tree exceeds depth limit.", reason_code="malformed_response")
+        stack.extend((child, depth + 1) for child in reversed(children))
     return result
 
 
@@ -323,72 +346,57 @@ async def _verified_group(
     )
 
 
-async def fetch_nodebb_groups(
+async def fetch_nodebb_candidates(
     origin: str, *, policy_service: BridgePolicyService,
     fetch_json: Callable[[str, str], Awaitable[dict[str, Any]]] | None = None,
-    query: str = "",
-) -> list[NodeBBGroup]:
-    """Discover at most 25 publicly readable and verified NodeBB category Groups."""
+) -> list[NodeBBCategoryCandidate]:
+    """Read one public NodeBB category listing; do not fetch individual actors.
+
+    These are only autocomplete candidates. A chosen CID requires fresh
+    /api/category/{cid} and ActivityPub Group validation before Follow.
+    """
     normalized = _origin(origin)
     _ensure_target(f"{normalized}/api/categories", normalized, policy_service)
     fetch = fetch_json or SecureNodeBBJSON(normalized, policy_service)
-    deadline = time.monotonic() + MAX_DISCOVERY_SECONDS
     try:
         payload = await asyncio.wait_for(
             fetch(f"{normalized}/api/categories", JSON_ACCEPT), timeout=MAX_DISCOVERY_SECONDS
         )
     except asyncio.TimeoutError as error:
-        # The very first request did not establish that this host is NodeBB.
         raise NodeBBProbeInconclusive("NodeBB category discovery timed out.", reason_code="discovery_timeout") from error
     except NodeBBDiscoveryError as error:
         inconclusive = _inconclusive_nodebb_probe(error)
         if inconclusive is None:
-            raise  # A policy or malformed-response failure must fail closed.
+            raise  # The policy and malformed-document boundaries fail closed.
         raise inconclusive from error
     raw_categories = payload.get("categories") if isinstance(payload, dict) else None
     if not isinstance(raw_categories, list):
         raise NodeBBUnavailable()  # Not a recognizable NodeBB categories API.
-    candidates = _flatten_categories(raw_categories)
-    needle = query.strip().lstrip("!").casefold()
-    if needle:
-        # Filter by public listing first: verifying the first 25 unrelated
-        # categories must not hide a later matching NodeBB category.
-        host = urlsplit(normalized).hostname or ""
-        candidates = [item for item in candidates if any(
-            needle in value.casefold() for value in (
-                str(item.get("name") or ""), str(item.get("handle") or ""),
-                f"{item.get('handle') or ''}@{host}",
-                str(item.get("slug") or ""),
-                f"{normalized}/category/{_category_cid(item)}",
-                f"{normalized}/category/{item.get('slug') or ''}",
-            )
-        )]
-    verified: list[NodeBBGroup] = []
-    # Bound sequential requests (stronger than a concurrency cap) and stop as
-    # soon as Discord's 25-choice budget is filled.
-    for item in candidates[:48]:
+
+    host = urlsplit(normalized).netloc
+    candidates: list[NodeBBCategoryCandidate] = []
+    for item in _flatten_categories(raw_categories):
         cid = _category_cid(item)
         if cid is None:
             continue
-        try:
-            remaining = deadline - time.monotonic()
-            if remaining <= 0:
-                raise asyncio.TimeoutError()
-            group = await asyncio.wait_for(
-                _verified_group(
-                    cid, normalized, policy_service, fetch,
-                    name_hint=str(item.get("name") or ""),
-                    handle_hint=str(item.get("handle") or ""),
-                ), timeout=remaining,
-            )
-        except asyncio.TimeoutError as error:
-            raise NodeBBDiscoveryError("NodeBB category discovery timed out.", reason_code="discovery_timeout") from error
-        except (NodeBBUnavailable, NodeBBDiscoveryError):
-            continue
-        verified.append(group)
-        if len(verified) >= MAX_CATEGORY_RESULTS:
-            break
-    return verified
+        name = item.get("name")
+        handle = item.get("handle")
+        slug = item.get("slug")
+        # The API may advertise a complete !handle@host or only a short name.
+        # Do not append a second hostname to complete handles.
+        raw_handle = handle.lstrip("!") if isinstance(handle, str) else ""
+        if raw_handle and "@" not in raw_handle:
+            raw_handle = f"{raw_handle}@{host}"
+        displayed_handle = f"!{raw_handle}" if raw_handle else ""
+        # Every displayed value remains an *unverified* category locator.
+        candidates.append(NodeBBCategoryCandidate(
+            cid=cid,
+            actor_url=f"{normalized}/category/{cid}",
+            name=name if isinstance(name, str) and name.strip() else f"Category #{cid}",
+            handle=displayed_handle,
+            slug=slug if isinstance(slug, str) else "",
+        ))
+    return candidates
 
 
 async def probe_nodebb_origin(
@@ -475,11 +483,11 @@ class _NodeBBChoiceCache:
         """Store a short-lived map of canonical URL and origin by opaque key."""
         self.entries: OrderedDict[str, tuple[str, str, float]] = OrderedDict()
 
-    def make(self, group: NodeBBGroup) -> str:
-        """Encode long identities in a stable short key without truncating IDs."""
-        origin = _origin(group.actor_id)
-        key = hashlib.sha256(f"{origin}\0{group.actor_id}".encode()).hexdigest()[:28]
-        self.entries[key] = (origin, group.actor_id, time.monotonic() + CHOICE_TTL_SECONDS)
+    def make(self, actor_url: str) -> str:
+        """Cache only an untrusted long locator, never a verified Group identity."""
+        origin = _origin(actor_url)
+        key = hashlib.sha256(f"{origin}\0{actor_url}".encode()).hexdigest()[:28]
+        self.entries[key] = (origin, actor_url, time.monotonic() + CHOICE_TTL_SECONDS)
         self.entries.move_to_end(key)
         while len(self.entries) > 128:
             self.entries.popitem(last=False)
@@ -500,20 +508,29 @@ class _NodeBBChoiceCache:
 _CHOICE_CACHE = _NodeBBChoiceCache()
 
 
-def nodebb_autocomplete_choices(groups: list[NodeBBGroup], query: str) -> list[tuple[str, str]]:
-    """Return Discord-compliant labels and exact canonical actor choices."""
+def nodebb_autocomplete_choices(
+    candidates: list[NodeBBCategoryCandidate], query: str,
+) -> list[tuple[str, str]]:
+    """Search all listing candidates, then return at most 25 Discord-safe choices.
+
+    A choice carries a candidate URL, not authenticated Group evidence. The
+    selected value is resolved against the live category/read/actor endpoints.
+    """
     choices: list[tuple[str, str]] = []
     needle = query.strip().lstrip("!").casefold()
-    for group in groups:
-        candidates = (group.name, group.handle.lstrip("!"), group.actor_id, group.url or "")
-        if needle and not any(needle in candidate.casefold() for candidate in candidates):
+    for candidate in candidates:
+        host = urlsplit(candidate.actor_url).netloc
+        possible_matches = (
+            candidate.name, candidate.handle.lstrip("!"), candidate.actor_url,
+            candidate.slug, f"{host}/category/{candidate.slug}",
+        )
+        if needle and not any(needle in value.casefold() for value in possible_matches):
             continue
-        suffix = f" ({group.handle.lstrip('!')})"
-        budget = max(0, 100 - len(suffix))
-        label = (group.name[:budget] + suffix)[:100] if budget else suffix[:100]
-        value = f"nodebb:{group.actor_id}"
+        suffix = f" ({candidate.handle.lstrip('!')})" if candidate.handle else f" (#{candidate.cid})"
+        label = (candidate.name[:max(0, 100 - len(suffix))] + suffix)[:100]
+        value = f"nodebb:{candidate.actor_url}"
         if len(value) > 100:
-            value = _CHOICE_CACHE.make(group)
+            value = _CHOICE_CACHE.make(candidate.actor_url)
         choices.append((label, value))
         if len(choices) == MAX_CATEGORY_RESULTS:
             break
