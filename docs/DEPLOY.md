@@ -16,7 +16,7 @@ Open `.env` and set at least:
 COMPOSE_PROJECT_NAME=discord-bridge-prod
 COMPOSE_ENV_FILE=.env
 
-BRIDGE_VERSION=0.1.0
+BRIDGE_VERSION=replace-with-published-version
 BRIDGE_IMAGE=ghcr.io/YOUR_GITHUB_OWNER/discord-fediverse-bridge
 GATEWAY_IMAGE=ghcr.io/YOUR_GITHUB_OWNER/discord-fediverse-bridge-gateway
 
@@ -136,10 +136,10 @@ curl -fsS http://127.0.0.1:3100/healthz
 
 ## Update production to another version
 
-Change only `BRIDGE_VERSION` in `.env`, for example:
+Change only `BRIDGE_VERSION` in `.env` to the published image version, for example:
 
 ```env
-BRIDGE_VERSION=0.2.0
+BRIDGE_VERSION=replace-with-published-version
 ```
 
 Then run:

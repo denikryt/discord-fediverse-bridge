@@ -114,7 +114,6 @@ This document is a short, feature-oriented index of the test suite. It helps mai
 - Public URL and OAuth redirect configuration — [`tests/test_public_base_url_config.py`](../../tests/test_public_base_url_config.py)
 - Discord OAuth client request/response contract — [`tests/test_discord_oauth_client.py`](../../tests/test_discord_oauth_client.py)
 - Docker deployment contract — [`tests/test_docker_deployment.py`](../../tests/test_docker_deployment.py)
-- Project version contract — [`tests/test_project_version.py`](../../tests/test_project_version.py)
 
 ## Finding existing coverage
 

@@ -1,7 +1,6 @@
 {
   "name": "discord-lemmy-bridge-fedify-gateway",
   "private": true,
-  "version": "0.1.0",
   "type": "module",
   "scripts": {
     "dev": "node --env-file=../.env ./node_modules/.bin/tsx watch src/server.ts",
@@ -11,7 +10,6 @@
     "follow-community": "node --env-file=../.env ./node_modules/.bin/tsx src/follow-community-cli.ts",
     "unfollow-community": "node --env-file=../.env ./node_modules/.bin/tsx src/unfollow-community-cli.ts",
     "verify:local-community-canonical-key": "node --env-file=../.env ./node_modules/.bin/tsx tests/verify-local-community-canonical-key.ts",
-    "test:project-version": "./node_modules/.bin/tsx tests/verify-project-version.ts",
     "test:docker-contract": "./node_modules/.bin/tsx src/test-docker-contract.ts",
     "test:bridge-key-store": "./node_modules/.bin/tsx tests/verify-bridge-actor-key-store.ts"
   },
