@@ -445,7 +445,7 @@ async def test_remote_reply_to_local_discord_content_reaches_host(tmp_path, nest
         "source_activity_json": {"type": "Create", "actor": PERSON,
             "object": {"type": "Note", "id": reply_id, "attributedTo": PERSON}},
         "object": {"ap_id": reply_id, "kind": "comment", "lemmy_id": 0, "post_ap_id": root_id, "post_lemmy_id": 0,
-            "parent_ap_id": parent_id, "published_at": "2026-11-12T01:05:00Z",
+            "parent_ap_id": parent_id if nested else None, "published_at": "2026-11-12T01:05:00Z",
             "author_name": "alice", "body_markdown": "reply", "attributed_to_actor_id": PERSON},
     })
     result = await handler.handle_comment(reply, runtime=None)
@@ -453,10 +453,12 @@ async def test_remote_reply_to_local_discord_content_reaches_host(tmp_path, nest
     saved = db.local_community_content.get_local_community_message_by_ap_object_id(reply_id, local_community_id=community.id)
     assert saved is not None and saved.parent_ap_object_id == parent_id
     assert db.local_community_surfaces.get_host_local_community_message_surface(saved.id).discord_message_id == 804
+    # Replaying the same gateway event must reuse the confirmed host message.
+    assert (await handler.handle_comment(reply, runtime=None)).status == "skipped"
     discord_thread.send.assert_awaited_once()
     # The same owner must be able to edit the admitted reply afterwards.
     from src.local_communities.mutations import LocalCommunityMutationHandler
-    surfaces = SimpleNamespace(fanout_message_edit=AsyncMock())
+    surfaces = SimpleNamespace(fanout_message_edit=AsyncMock(), fanout_message_delete=AsyncMock())
     mutation = LocalCommunityMutationHandler(
         database=db, fedify_gateway=AsyncMock(), bridge_policy_service=policy,
         surface_fanout=surfaces, federation_fanout=SimpleNamespace(relay_update_or_delete=AsyncMock()),
@@ -469,4 +471,10 @@ async def test_remote_reply_to_local_discord_content_reaches_host(tmp_path, nest
     })
     assert (await mutation.handle_inbound_comment_update(update, None)).status == "processed"
     surfaces.fanout_message_edit.assert_awaited_once()
+    delete = reply.model_copy(update={
+        "event_type": "comment.deleted",
+        "source_activity_json": {"type": "Delete", "actor": PERSON, "object": reply_id},
+    })
+    assert (await mutation.handle_inbound_comment_delete(delete, None)).status == "processed"
+    surfaces.fanout_message_delete.assert_awaited_once()
     db.close()

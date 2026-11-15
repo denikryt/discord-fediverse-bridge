@@ -135,7 +135,7 @@ def _verified_outer_person(event: ActivityPubEvent, activity_type: str = "Create
             # Signed ancestry is authoritative. Never authorize a modification
             # against a normalized parent that hides a different signed parent.
             if (event.object.kind != "comment"
-                    or obj["inReplyTo"] != event.object.parent_ap_id):
+                    or obj["inReplyTo"] != (event.object.parent_ap_id or event.object.post_ap_id)):
                 return False
     else:
         return False
