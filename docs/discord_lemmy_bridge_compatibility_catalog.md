@@ -155,7 +155,6 @@ These paths are not protecting external federation identity or old database shap
 - `src/local_communities/runtime.py`
 - `src/local_communities/federation_fanout.py`
 - several behavior tests
-- `notes/known_issues.md`
 
 **What it does**
 

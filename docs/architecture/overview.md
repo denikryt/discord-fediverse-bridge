@@ -65,7 +65,7 @@ Python owns the SQLite schema and all domain state. The gateway reads the same D
 
 ## Where to start reading
 
-Start with this document, then read `docs/architecture/bridge-modes.md` for conceptual boundaries, `docs/architecture/event-flows.md` for runtime traces, `docs/architecture/http-routes.md` for route ownership, `docs/architecture/database-map.md` for table ownership, and `docs/development/navigation.md` for task-oriented file pointers.
+Start with this document, then read `docs/architecture/bridge-modes.md` for conceptual boundaries, `docs/architecture/event-flows.md` for runtime traces, `docs/architecture/http-routes.md` for route ownership, and `docs/architecture/database-map.md` for table ownership.
 
 ## What this document does not cover
 

@@ -119,7 +119,6 @@ TECHNICAL_CONTRACT_ENTRIES = (
         (
             "tests/verify-env-loading.ts",
             "tests/verify-gateway-url.ts",
-            "tests/verify-project-version.ts",
         ),
     ),
     TechnicalContractEntry(

@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "discord-lemmy-bridge"
-version = "0.1.0"
+dynamic = ["version"]
 description = "Discord forum to Lemmy community bridge"
 requires-python = ">=3.12"
 dependencies = [
@@ -34,6 +34,9 @@ bridge-profile-media = "src.profile_media_admin:main"
 
 [tool.setuptools]
 py-modules = []
+
+[tool.setuptools.dynamic]
+version = {file = ["VERSION"]}
 
 [tool.setuptools.packages.find]
 include = ["src*"]

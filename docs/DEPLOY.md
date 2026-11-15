@@ -16,7 +16,7 @@ Open `.env` and set at least:
 COMPOSE_PROJECT_NAME=discord-bridge-prod
 COMPOSE_ENV_FILE=.env
 
-BRIDGE_VERSION=0.1.0
+BRIDGE_VERSION=replace-with-published-version
 BRIDGE_IMAGE=ghcr.io/YOUR_GITHUB_OWNER/discord-fediverse-bridge
 GATEWAY_IMAGE=ghcr.io/YOUR_GITHUB_OWNER/discord-fediverse-bridge-gateway
 
@@ -136,10 +136,10 @@ curl -fsS http://127.0.0.1:3100/healthz
 
 ## Update production to another version
 
-Change only `BRIDGE_VERSION` in `.env`, for example:
+Change only `BRIDGE_VERSION` in `.env` to the published image version, for example:
 
 ```env
-BRIDGE_VERSION=0.2.0
+BRIDGE_VERSION=replace-with-published-version
 ```
 
 Then run:
@@ -222,6 +222,22 @@ starting new binaries. Do not mix old and new code against one SQLite file.
 The new startup performs source validation, a protected no-clobber migration
 backup and an atomic `0→1` upgrade under the existing exclusive deployment
 lock, then reacquires a shared lifetime lock and validates v1 read-only.
-See `docs/development/database-migrations.md` for exact systemd/Compose
-operator gates, `/data/backups/migrations/` archives, restore and failure
-recovery commands. An advisory lock is not a mixed-version upgrade protocol.
+Keep a verified backup of the database and profile media. Supported v0 schemas
+are the tagged v0.1.0 schema and the recognised main schema; an unknown schema
+stops startup without migration. The automatic migration backup is stored in
+`/data/backups/migrations/` when the database is `/data/bridge.db`.
+
+If migration fails, keep the services stopped and investigate a copy of the
+database. To restore a verified migration archive, run the backup restore
+command in the bridge environment with the correct paths:
+
+```bash
+python -m src.db.backup restore \
+  --database /data/bridge.db \
+  --media-root /data/profile-media \
+  --deployment-lock /data/deployment-state.lock \
+  --source /data/backups/migrations/<verified-backup>.tar.gz
+```
+
+The restored database remains at v0. Start only the intended application
+version after confirming that all other database writers remain stopped.
