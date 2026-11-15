@@ -7,8 +7,9 @@
  */
 
 import assert from "node:assert/strict";
+import { Create } from "@fedify/vocab";
 
-import { normalizeCreateActivityFromJson } from "../src/normalize.js";
+import { normalizeCreateActivity, normalizeCreateActivityFromJson } from "../src/normalize.js";
 
 const COMMUNITY_URL = "https://bridge.example/actors/communities/hackers";
 
@@ -16,7 +17,29 @@ async function main(): Promise<void> {
   await testDirectCreateToTypedLocalCommunityPathNormalizesPost();
   await testSignedBridgePersonOpaquePageUsesNonLemmySentinel();
   await testUnrelatedOpaquePageStillRequiresLemmyNumericId();
+  await testResolvedActorRemainsIdentifiableInVerifiedCreate();
   console.log("verify:normalize-local-community-create passed");
+}
+
+/** A resolved Person stays identifiable in Fedify's serialized Create. */
+async function testResolvedActorRemainsIdentifiableInVerifiedCreate(): Promise<void> {
+  const actor = "https://remote.example/actors/users/alice";
+  const objectId = `${actor}/objects/posts/opaque-token`;
+  const activity = await Create.fromJsonLd({
+    "@context": "https://www.w3.org/ns/activitystreams",
+    type: "Create", id: `${actor}/activities/create/posts/opaque-token`,
+    actor: { type: "Person", id: actor, preferredUsername: "alice" },
+    object: {
+      type: "Page", id: objectId, attributedTo: actor,
+      audience: COMMUNITY_URL, to: [COMMUNITY_URL],
+      published: "2026-11-12T00:00:00Z", name: "Bridge topic",
+    },
+  });
+  const event = await normalizeCreateActivity(activity);
+  const serialized = await activity.toJsonLd() as Record<string, unknown>;
+  const serializedActor = serialized.actor as { id?: string };
+  assert.equal(event?.actor_id, actor);
+  assert.equal(serializedActor.id, actor);
 }
 
 /**

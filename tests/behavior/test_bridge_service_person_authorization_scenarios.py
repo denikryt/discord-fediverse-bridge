@@ -205,7 +205,8 @@ async def test_unauthorized_duplicate_cannot_fanout_or_lookup_host(tmp_path):
 
 
 @pytest.mark.asyncio
-async def test_signed_bridge_person_creates_one_host_thread_for_its_tenant(tmp_path):
+@pytest.mark.parametrize("embedded_actor", [False, True])
+async def test_signed_bridge_person_creates_one_host_thread_for_its_tenant(tmp_path, embedded_actor):
     """A valid Service-subscribed Person reaches the host once with DB mapping."""
     db, community, _, policy = _db(tmp_path)
     created = SimpleNamespace(id=801)
@@ -222,7 +223,11 @@ async def test_signed_bridge_person_creates_one_host_thread_for_its_tenant(tmp_p
         discord_client_provider=lambda: bot, bridge_policy_service=policy,
         actor_fetcher=_fetch(),
     )
-    result = await handler.handle_post(_event(), runtime=None)
+    event = _event()
+    if embedded_actor:
+        # Fedify can expand the verified Person while resolving its display name.
+        event.source_activity_json["actor"] = {"id": PERSON, "type": "Person"}
+    result = await handler.handle_post(event, runtime=None)
     assert result.status == "processed"
     row = db.local_community_content.get_local_community_thread_by_ap_object_id(OBJECT)
     assert row is not None and row.local_community_id == community.id
@@ -296,7 +301,8 @@ async def test_blocked_origin_denies_before_actor_fetch(tmp_path):
 
 
 @pytest.mark.asyncio
-async def test_signed_person_reply_through_service_uses_verified_parent(tmp_path):
+@pytest.mark.parametrize("embedded_actor", [False, True])
+async def test_signed_person_reply_through_service_uses_verified_parent(tmp_path, embedded_actor):
     """A signed Bridge Person reply reaches the host only through its local Group root."""
     db, community, _, policy = _db(tmp_path)
     created = SimpleNamespace(id=801)
@@ -329,6 +335,9 @@ async def test_signed_person_reply_through_service_uses_verified_parent(tmp_path
             "body_markdown": "reply", "url": comment_id,
             "attributed_to_actor_id": PERSON},
     })
+    if embedded_actor:
+        # Preserve the signed actor identity when Fedify expands its document.
+        reply.source_activity_json["actor"] = {"id": PERSON, "type": "Person"}
     result = await handler.handle_comment(reply, runtime=None)
     assert result.status == "processed"
     message = db.local_community_content.get_local_community_message_by_ap_object_id(comment_id)
@@ -341,4 +350,19 @@ async def test_signed_person_reply_through_service_uses_verified_parent(tmp_path
     }), runtime=None)
     assert invalid.outcome is InboundActivityOutcome.IGNORED_ACTOR_NOT_SUBSCRIBER
     thread.send.assert_awaited_once()
+    db.close()
+
+
+@pytest.mark.asyncio
+async def test_embedded_actor_with_different_id_cannot_publish(tmp_path):
+    """An expanded actor must still match the authenticated outer sender."""
+    db, community, _, policy = _db(tmp_path)
+    event = _event()
+    event.source_activity_json["actor"] = {"id": SERVICE, "type": "Person"}
+    result = await authorize_inbound_source(
+        event=event, local_community_id=community.id,
+        database=db, policy=policy, fetch_actor=_fetch(),
+    )
+    assert result is None
+    assert db.local_community_content.get_local_community_thread_by_ap_object_id(OBJECT) is None
     db.close()

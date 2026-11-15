@@ -106,10 +106,15 @@ def _verified_outer_person(event: ActivityPubEvent, activity_type: str = "Create
     ):
         return False
     source = event.source_activity_json
+    # Fedify may expand the verified actor while resolving its display name;
+    # compare its ID with the authenticated sender in either representation.
+    source_actor = source.get("actor") if isinstance(source, dict) else None
+    if isinstance(source_actor, dict):
+        source_actor = source_actor.get("id")
     if (
         not isinstance(source, dict)
         or source.get("type") != activity_type
-        or source.get("actor") != event.actor_id
+        or source_actor != event.actor_id
     ):
         return False
     obj = source.get("object")
