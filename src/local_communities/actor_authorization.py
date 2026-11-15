@@ -13,7 +13,7 @@ from dataclasses import dataclass
 from typing import Awaitable, Callable
 from urllib.parse import urlsplit
 
-from ..activitypub_models import ActivityPubEvent
+from ..activitypub_models import ActivityPubEvent, activity_actor_id
 from ..bridge_policy import BridgePolicyService
 from ..db import Database
 from ..nodebb_discovery import AP_ACCEPT, SecureNodeBBJSON, _origin
@@ -106,10 +106,13 @@ def _verified_outer_person(event: ActivityPubEvent, activity_type: str = "Create
     ):
         return False
     source = event.source_activity_json
+    # Fedify may expand the verified actor while resolving its display name;
+    # compare its ID with the authenticated sender in either representation.
+    source_actor = activity_actor_id(source.get("actor")) if isinstance(source, dict) else None
     if (
         not isinstance(source, dict)
         or source.get("type") != activity_type
-        or source.get("actor") != event.actor_id
+        or source_actor != event.actor_id
     ):
         return False
     obj = source.get("object")
@@ -132,7 +135,7 @@ def _verified_outer_person(event: ActivityPubEvent, activity_type: str = "Create
             # Signed ancestry is authoritative. Never authorize a modification
             # against a normalized parent that hides a different signed parent.
             if (event.object.kind != "comment"
-                    or obj["inReplyTo"] != event.object.parent_ap_id):
+                    or obj["inReplyTo"] != (event.object.parent_ap_id or event.object.post_ap_id)):
                 return False
     else:
         return False

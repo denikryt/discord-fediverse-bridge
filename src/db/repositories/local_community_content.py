@@ -45,6 +45,29 @@ class LocalCommunityContentRepository(BaseRepository):
         self._immediate_session = immediate_session_provider or session_provider
 
     @staticmethod
+    def _confirmed_host_parent(session, *, community_id: int, thread_id: int, object_id: str) -> bool:
+        """Confirm a nested parent belongs to this Group and has a host surface."""
+        parent = session.scalar(select(LocalCommunityMessage).join(
+            LocalCommunityMessageSurface,
+            LocalCommunityMessageSurface.local_community_message_id == LocalCommunityMessage.id,
+        ).join(
+            LocalCommunityThreadSurface,
+            LocalCommunityThreadSurface.id == LocalCommunityMessageSurface.local_community_thread_surface_id,
+        ).where(
+            LocalCommunityMessage.local_community_id == community_id,
+            LocalCommunityMessage.local_community_thread_id == thread_id,
+            LocalCommunityMessage.ap_object_id == object_id,
+            LocalCommunityMessageSurface.role == "host",
+            LocalCommunityThreadSurface.role == "host",
+            LocalCommunityThreadSurface.local_community_thread_id == thread_id,
+        ))
+        # Local Discord messages already have a host surface; inbound attempts
+        # must additionally have a confirmed successful delivery.
+        return parent is not None and (
+            parent.direction == "discord_to_ap" or parent.host_delivery_state == "delivered"
+        )
+
+    @staticmethod
     def _claim_host(row: LocalCommunityThread | LocalCommunityMessage) -> HostReservation:
         """Claim the unique canonical host before any Discord creation request.
 
@@ -155,17 +178,13 @@ class LocalCommunityContentRepository(BaseRepository):
             thread = session.get(LocalCommunityThread, local_community_thread_id)
             if thread is None or thread.local_community_id != local_community_id:
                 raise HostIdentityConflict("parent thread belongs to another Group")
-            # A nested parent must already be a confirmed host reply in this
-            # exact root; a same-object mapping in a neighboring tenant cannot
-            # select the Discord parent for this reply.
+            # A host surface proves local-origin delivery; inbound parents
+            # additionally require their persisted delivery confirmation.
             if parent_ap_object_id != thread.ap_object_id:
-                parent = session.scalar(select(LocalCommunityMessage).where(
-                    LocalCommunityMessage.local_community_id == local_community_id,
-                    LocalCommunityMessage.ap_object_id == parent_ap_object_id,
-                    LocalCommunityMessage.local_community_thread_id == local_community_thread_id,
-                    LocalCommunityMessage.host_delivery_state == "delivered",
-                ))
-                if parent is None:
+                if not self._confirmed_host_parent(
+                    session, community_id=local_community_id, thread_id=local_community_thread_id,
+                    object_id=parent_ap_object_id,
+                ):
                     raise HostIdentityConflict("parent reply not delivered in target Group")
             row = session.scalar(select(LocalCommunityMessage).where(
                 LocalCommunityMessage.local_community_id == local_community_id,
@@ -302,8 +321,7 @@ class LocalCommunityContentRepository(BaseRepository):
                 thread = session.get(LocalCommunityThread, row.local_community_thread_id)
                 if (
                     thread is None or thread.local_community_id != local_community_id
-                    or thread.direction != "ap_to_discord"
-                    or thread.host_delivery_state != "delivered"
+                    or (thread.direction == "ap_to_discord" and thread.host_delivery_state != "delivered")
                 ):
                     raise HostIdentityConflict("comment root is not hosted in this Group")
                 # Update must carry a consistent root/parent. Delete(Tombstone)
@@ -316,13 +334,10 @@ class LocalCommunityContentRepository(BaseRepository):
                 if parent_ap_id is not None and parent_ap_id != row.parent_ap_object_id:
                     raise HostIdentityConflict("comment parent differs from original Create")
                 if row.parent_ap_object_id != thread.ap_object_id:
-                    parent = session.scalar(select(LocalCommunityMessage.id).where(
-                        LocalCommunityMessage.local_community_id == local_community_id,
-                        LocalCommunityMessage.local_community_thread_id == thread.id,
-                        LocalCommunityMessage.ap_object_id == row.parent_ap_object_id,
-                        LocalCommunityMessage.host_delivery_state == "delivered",
-                    ))
-                    if parent is None:
+                    if not self._confirmed_host_parent(
+                        session, community_id=local_community_id, thread_id=thread.id,
+                        object_id=row.parent_ap_object_id,
+                    ):
                         raise HostIdentityConflict("original nested parent not hosted in this Group")
                 surface_id = session.scalar(select(LocalCommunityMessageSurface.id).where(
                     LocalCommunityMessageSurface.local_community_message_id == row.id,

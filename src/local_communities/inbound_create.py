@@ -227,11 +227,14 @@ class LocalCommunityInboundCreateHandler:
             )
         obj = getattr(event, "object")
         tenant_id = getattr(local_community, "id")
+        # Gateway uses a null nested parent for replies directly to the root.
+        # Canonical storage records that root as the concrete parent identity.
+        parent_id = getattr(obj, "parent_ap_id") or getattr(obj, "post_ap_id")
         first_content = format_inbound_comment_body(event)
         thread_row = self.database.local_community_content.get_local_community_thread_by_ap_object_id(
             getattr(obj, "post_ap_id"), local_community_id=tenant_id,
         )
-        if thread_row is None or getattr(thread_row, "direction") != "ap_to_discord":
+        if thread_row is None:
             return _HandlerResult(
                 status="skipped", outcome=InboundActivityOutcome.IGNORED_UNMAPPED_CONTEXT,
                 detail="comment parent post is not mapped in target Group",
@@ -252,7 +255,7 @@ class LocalCommunityInboundCreateHandler:
                 local_community_thread_id=getattr(thread_row, "id"),
                 ap_activity_id=getattr(event, "delivery_id"),
                 ap_object_id=getattr(obj, "ap_id"),
-                parent_ap_object_id=getattr(obj, "parent_ap_id"),
+                parent_ap_object_id=parent_id,
                 source_owner_actor_id=authorized.author_actor_id,
                 origin_subscriber_actor_id=authorized.subscriber_actor_id,
                 inbound_create_snapshot={"content": first_content},
@@ -296,7 +299,7 @@ class LocalCommunityInboundCreateHandler:
             )
             parent_discord_message_id = resolve_inbound_reply_target(
                 database=self.database,
-                parent_ap_object_id=getattr(obj, "parent_ap_id"),
+                parent_ap_object_id=parent_id,
                 thread_row=thread_row,
             )
             if parent_discord_message_id is None:
@@ -336,7 +339,7 @@ class LocalCommunityInboundCreateHandler:
             activity_id=getattr(event, "source_activity_id", None) or getattr(event, "delivery_id"),
             object_id=getattr(obj, "ap_id"),
             root_object_id=getattr(obj, "post_ap_id"),
-            parent_object_id=getattr(obj, "parent_ap_id"),
+            parent_object_id=parent_id,
             actor_id=getattr(event, "actor_id"),
             actor_name=getattr(obj, "author_name", None),
             content_markdown=getattr(obj, "body_markdown", None) or "",

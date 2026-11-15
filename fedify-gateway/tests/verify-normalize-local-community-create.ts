@@ -7,8 +7,10 @@
  */
 
 import assert from "node:assert/strict";
+import { Create } from "@fedify/vocab";
+import type { PythonBridgeReadClient } from "../src/python-bridge-client.js";
 
-import { normalizeCreateActivityFromJson } from "../src/normalize.js";
+import { normalizeCreateActivity, normalizeCreateActivityFromJson } from "../src/normalize.js";
 
 const COMMUNITY_URL = "https://bridge.example/actors/communities/hackers";
 
@@ -16,7 +18,58 @@ async function main(): Promise<void> {
   await testDirectCreateToTypedLocalCommunityPathNormalizesPost();
   await testSignedBridgePersonOpaquePageUsesNonLemmySentinel();
   await testUnrelatedOpaquePageStillRequiresLemmyNumericId();
+  await testResolvedActorRemainsIdentifiableInVerifiedCreate();
+  await testCommunityReplyParentContract();
   console.log("verify:normalize-local-community-create passed");
+}
+
+/** Real Fedify normalization distinguishes a root reply from a nested reply. */
+async function testCommunityReplyParentContract(): Promise<void> {
+  const actor = "https://remote.example/actors/users/alice";
+  const root = "https://bridge.example/actors/users/local/objects/posts/1";
+  const parent = "https://bridge.example/actors/users/local/objects/comments/1";
+  // Only the outer Python HTTP reads are replaced; normalize real Fedify Notes.
+  const client = {
+    loadConversationTargetByObjectId: async () => null,
+    loadPublishedActivityObjectByObjectId: async (id: string) => ({
+      kind: id === root ? "post" : "comment", objectId: id,
+      inReplyToObjectId: id === root ? null : root,
+    }),
+  } as unknown as PythonBridgeReadClient;
+  for (const target of [root, parent]) {
+    const activity = await Create.fromJsonLd({
+      "@context": "https://www.w3.org/ns/activitystreams", type: "Create",
+      id: `${actor}/activities/create/comments/1`,
+      actor: { type: "Person", id: actor, preferredUsername: "alice" },
+      object: { type: "Note", id: `${actor}/objects/comments/1`,
+        attributedTo: actor, audience: COMMUNITY_URL, inReplyTo: target,
+        published: "2026-11-12T00:00:00Z", content: "What's up!" },
+    });
+    const event = await normalizeCreateActivity(activity, { pythonBridgeClient: client });
+    assert.equal(event?.object.post_ap_id, root);
+    assert.equal(event?.object.parent_ap_id, target === root ? null : parent);
+  }
+}
+
+/** A resolved Person stays identifiable in Fedify's serialized Create. */
+async function testResolvedActorRemainsIdentifiableInVerifiedCreate(): Promise<void> {
+  const actor = "https://remote.example/actors/users/alice";
+  const objectId = `${actor}/objects/posts/opaque-token`;
+  const activity = await Create.fromJsonLd({
+    "@context": "https://www.w3.org/ns/activitystreams",
+    type: "Create", id: `${actor}/activities/create/posts/opaque-token`,
+    actor: { type: "Person", id: actor, preferredUsername: "alice" },
+    object: {
+      type: "Page", id: objectId, attributedTo: actor,
+      audience: COMMUNITY_URL, to: [COMMUNITY_URL],
+      published: "2026-11-12T00:00:00Z", name: "Bridge topic",
+    },
+  });
+  const event = await normalizeCreateActivity(activity);
+  const serialized = await activity.toJsonLd() as Record<string, unknown>;
+  const serializedActor = serialized.actor as { id?: string };
+  assert.equal(event?.actor_id, actor);
+  assert.equal(serializedActor.id, actor);
 }
 
 /**

@@ -422,13 +422,15 @@ class LocalCommunityMutationHandler:
                 detail="mutation owner or subscriber origin is no longer permitted",
             )
         obj = getattr(event, "object")
+        # Gateway omits a nested parent when the reply targets its root topic.
+        parent_id = getattr(obj, "parent_ap_id", None) or getattr(obj, "post_ap_id", None)
         try:
             found = self.database.local_community_content.authorize_inbound_mutation(
                 local_community_id=tenant_id, ap_object_id=getattr(obj, "ap_id"),
                 kind=kind, owner_actor_id=authorized.author_actor_id,
                 origin_subscriber_actor_id=authorized.subscriber_actor_id,
                 post_ap_id=getattr(obj, "post_ap_id", None),
-                parent_ap_id=getattr(obj, "parent_ap_id", None),
+                parent_ap_id=parent_id if kind == "comment" else None,
                 operation=operation,
             )
         except HostIdentityConflict:
