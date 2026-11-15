@@ -76,8 +76,8 @@ post it rejected under its minimum-length rule.
 
 The bridge stores mappings and delivery state to avoid loops and duplicate
 sends. A delivery whose network outcome is unknown is not blindly retried;
-remote delivery is not exactly once. For exceptional Follow recovery, see
-[federation recovery](development/federation-recovery.md).
+remote delivery is not exactly once. Follow recovery requires confirmation of
+the remote state before any local subscription state is changed.
 
 The bridge does not implement ActivityPub client-to-server, NodeInfo, generic
 boost handling, voting, likes, polls, reactions, or historical Discord channel

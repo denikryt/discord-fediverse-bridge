@@ -222,6 +222,22 @@ starting new binaries. Do not mix old and new code against one SQLite file.
 The new startup performs source validation, a protected no-clobber migration
 backup and an atomic `0→1` upgrade under the existing exclusive deployment
 lock, then reacquires a shared lifetime lock and validates v1 read-only.
-See `docs/development/database-migrations.md` for exact systemd/Compose
-operator gates, `/data/backups/migrations/` archives, restore and failure
-recovery commands. An advisory lock is not a mixed-version upgrade protocol.
+Keep a verified backup of the database and profile media. Supported v0 schemas
+are the tagged v0.1.0 schema and the recognised main schema; an unknown schema
+stops startup without migration. The automatic migration backup is stored in
+`/data/backups/migrations/` when the database is `/data/bridge.db`.
+
+If migration fails, keep the services stopped and investigate a copy of the
+database. To restore a verified migration archive, run the backup restore
+command in the bridge environment with the correct paths:
+
+```bash
+python -m src.db.backup restore \
+  --database /data/bridge.db \
+  --media-root /data/profile-media \
+  --deployment-lock /data/deployment-state.lock \
+  --source /data/backups/migrations/<verified-backup>.tar.gz
+```
+
+The restored database remains at v0. Start only the intended application
+version after confirming that all other database writers remain stopped.

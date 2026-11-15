@@ -150,7 +150,7 @@ Current limitations include:
 - remote handle resolution for moderation is limited compared with full actor discovery;
 - remote servers retain their own independent moderation and storage behavior.
 
-See [notes/known_issues.md](notes/known_issues.md) for verified limitations and open defects.
+See [docs/known_issues.md](docs/known_issues.md) for verified limitations and open defects.
 
 ## Discord access and permissions
 
@@ -242,7 +242,6 @@ Architecture references:
 - [docs/architecture/http-routes.md](docs/architecture/http-routes.md)
 - [docs/architecture/database-map.md](docs/architecture/database-map.md)
 - [docs/architecture/gateway-python-contract.md](docs/architecture/gateway-python-contract.md)
-- [docs/development/navigation.md](docs/development/navigation.md)
 
 ## Tests
 
@@ -260,8 +259,6 @@ cd fedify-gateway
 npm run check
 npm test
 ```
-
-Test mechanisms and focused commands are documented in [docs/development/test-assurance.md](docs/development/test-assurance.md).
 
 Deployment instructions are in [docs/DEPLOY.md](docs/DEPLOY.md).
 ## User Actor outbox and operations
