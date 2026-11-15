@@ -231,7 +231,7 @@ class LocalCommunityInboundCreateHandler:
         thread_row = self.database.local_community_content.get_local_community_thread_by_ap_object_id(
             getattr(obj, "post_ap_id"), local_community_id=tenant_id,
         )
-        if thread_row is None or getattr(thread_row, "direction") != "ap_to_discord":
+        if thread_row is None:
             return _HandlerResult(
                 status="skipped", outcome=InboundActivityOutcome.IGNORED_UNMAPPED_CONTEXT,
                 detail="comment parent post is not mapped in target Group",

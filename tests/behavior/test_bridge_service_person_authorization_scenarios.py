@@ -366,3 +366,107 @@ async def test_embedded_actor_with_different_id_cannot_publish(tmp_path):
     assert result is None
     assert db.local_community_content.get_local_community_thread_by_ap_object_id(OBJECT) is None
     db.close()
+
+
+@pytest.mark.asyncio
+async def test_expanded_actor_post_reaches_real_relay_without_duplicate_host(tmp_path):
+    """A subscribed Person's expanded actor survives host creation and real relay admission."""
+    from src.local_communities.federation_fanout import LocalCommunityFederationFanout
+    from src.fedify_gateway_client import SendLocalCommunityRelayOutcome, SendLocalCommunityRelayResult
+
+    db, community, _, policy = _db(tmp_path)
+    other = "https://other.example/actors/services/bridge"
+    db.remote_subscribers.create_remote_subscriber(
+        local_community_id=community.id, remote_actor_id=other,
+        remote_inbox_url=other + "/inbox", follow_activity_id=other + "/follow/1",
+    )
+    forum = SimpleNamespace(create_thread=AsyncMock(return_value=(SimpleNamespace(id=801), SimpleNamespace(id=802))))
+    bot = SimpleNamespace(wait_until_bridge_ready=AsyncMock(), fetch_forum_channel=AsyncMock(return_value=forum))
+    async def send_relay(*, signing_actor_url, deliveries):
+        """Confirm each fake network delivery using its original reserved identity."""
+        return SendLocalCommunityRelayResult(outcomes=[SendLocalCommunityRelayOutcome(
+            delivery_id=item.delivery_id, ok=True, target_remote_actor_id=item.target_remote_actor_id,
+            activity_id=item.activity_json["id"],
+        ) for item in deliveries])
+    gateway = SimpleNamespace(send_local_community_relay=AsyncMock(side_effect=send_relay))
+    relay = LocalCommunityFederationFanout(database=db, fedify_gateway=gateway, policy_service=policy)
+    handler = LocalCommunityInboundCreateHandler(
+        database=db, surface_fanout=AsyncMock(), federation_fanout=relay,
+        discord_client_provider=lambda: bot, bridge_policy_service=policy, actor_fetcher=_fetch(),
+    )
+    event = _event()
+    event.source_activity_json["actor"] = {"id": PERSON, "type": "Person"}
+    assert (await handler.handle_post(event, runtime=None)).status == "processed"
+    # A replay may serialize the same verified actor as an IRI instead.
+    assert (await handler.handle_post(_event(), runtime=None)).status == "skipped"
+    assert db.local_community_content.get_local_community_thread_by_ap_object_id(OBJECT).host_delivery_state == "delivered"
+    forum.create_thread.assert_awaited_once()
+    deliveries = db.local_community_relay.list_delivered_local_community_create_relay_targets(
+        local_community_id=community.id, source_object_ap_id=OBJECT,
+    )
+    assert [row.target_remote_actor_id for row in deliveries] == [other]
+    gateway.send_local_community_relay.assert_awaited_once()
+    db.close()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("nested", [False, True])
+async def test_remote_reply_to_local_discord_content_reaches_host(tmp_path, nested):
+    """A subscribed Person can reply to a local root or its local comment."""
+    from src.local_communities.federation_fanout import LocalCommunityFederationFanout
+
+    db, community, _, policy = _db(tmp_path)
+    root_id = "https://bridge.example/actors/users/local/objects/posts/1"
+    root = db.local_community_content.create_local_community_thread(
+        local_community_id=community.id, discord_thread_id=801, discord_starter_message_id=802,
+        ap_activity_id=root_id + "/create", ap_object_id=root_id,
+        direction="discord_to_ap", origin_kind="discord_local",
+    )
+    parent_id = root_id
+    if nested:
+        parent_id = "https://bridge.example/actors/users/local/objects/comments/1"
+        db.local_community_content.create_local_community_message(
+            local_community_thread_id=root.id, discord_message_id=803,
+            ap_activity_id=parent_id + "/create", ap_object_id=parent_id,
+            parent_ap_object_id=root_id, parent_discord_message_id=802, direction="discord_to_ap",
+        )
+    discord_thread = SimpleNamespace(id=801, guild_id=10, send=AsyncMock(return_value=SimpleNamespace(id=804)))
+    bot = SimpleNamespace(get_thread_by_id=AsyncMock(return_value=discord_thread))
+    handler = LocalCommunityInboundCreateHandler(
+        database=db, surface_fanout=AsyncMock(),
+        federation_fanout=LocalCommunityFederationFanout(database=db, fedify_gateway=AsyncMock(), policy_service=policy),
+        discord_client_provider=lambda: bot, bridge_policy_service=policy, actor_fetcher=_fetch(),
+    )
+    reply_id = PERSON + "/objects/comments/new"
+    reply = ActivityPubEvent.model_validate({
+        "event_type": "comment.created", "delivery_id": reply_id + "/create",
+        "occurred_at": "2026-11-12T01:05:00Z", "community_actor_id": HOST,
+        "verified_destination_group_actor_id": HOST, "verified_sender_actor_id": PERSON, "actor_id": PERSON,
+        "source_activity_json": {"type": "Create", "actor": PERSON,
+            "object": {"type": "Note", "id": reply_id, "attributedTo": PERSON}},
+        "object": {"ap_id": reply_id, "kind": "comment", "lemmy_id": 0, "post_ap_id": root_id, "post_lemmy_id": 0,
+            "parent_ap_id": parent_id, "published_at": "2026-11-12T01:05:00Z",
+            "author_name": "alice", "body_markdown": "reply", "attributed_to_actor_id": PERSON},
+    })
+    result = await handler.handle_comment(reply, runtime=None)
+    assert result.status == "processed"
+    saved = db.local_community_content.get_local_community_message_by_ap_object_id(reply_id, local_community_id=community.id)
+    assert saved is not None and saved.parent_ap_object_id == parent_id
+    assert db.local_community_surfaces.get_host_local_community_message_surface(saved.id).discord_message_id == 804
+    discord_thread.send.assert_awaited_once()
+    # The same owner must be able to edit the admitted reply afterwards.
+    from src.local_communities.mutations import LocalCommunityMutationHandler
+    surfaces = SimpleNamespace(fanout_message_edit=AsyncMock())
+    mutation = LocalCommunityMutationHandler(
+        database=db, fedify_gateway=AsyncMock(), bridge_policy_service=policy,
+        surface_fanout=surfaces, federation_fanout=SimpleNamespace(relay_update_or_delete=AsyncMock()),
+        is_community_id_disabled=lambda _id: False, actor_fetcher=_fetch(),
+    )
+    update = reply.model_copy(update={
+        "event_type": "comment.updated",
+        "source_activity_json": {"type": "Update", "actor": PERSON,
+            "object": {"id": reply_id, "attributedTo": PERSON, "inReplyTo": parent_id}},
+    })
+    assert (await mutation.handle_inbound_comment_update(update, None)).status == "processed"
+    surfaces.fanout_message_edit.assert_awaited_once()
+    db.close()

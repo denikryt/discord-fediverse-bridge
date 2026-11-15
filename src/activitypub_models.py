@@ -8,6 +8,13 @@ from typing import Annotated, Any, Literal
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 
+def activity_actor_id(value: Any) -> str | None:
+    """Read one actor ID from a string or an embedded ActivityPub actor."""
+    if isinstance(value, dict):
+        value = value.get("id")
+    return value if isinstance(value, str) and value else None
+
+
 class ActivityPubObject(BaseModel):
     # This is the normalized object shape that the Python bridge accepts from
     # the Fedify gateway, regardless of raw ActivityPub vocabulary details.

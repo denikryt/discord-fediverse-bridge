@@ -13,7 +13,7 @@ from dataclasses import dataclass
 from typing import Awaitable, Callable
 from urllib.parse import urlsplit
 
-from ..activitypub_models import ActivityPubEvent
+from ..activitypub_models import ActivityPubEvent, activity_actor_id
 from ..bridge_policy import BridgePolicyService
 from ..db import Database
 from ..nodebb_discovery import AP_ACCEPT, SecureNodeBBJSON, _origin
@@ -108,9 +108,7 @@ def _verified_outer_person(event: ActivityPubEvent, activity_type: str = "Create
     source = event.source_activity_json
     # Fedify may expand the verified actor while resolving its display name;
     # compare its ID with the authenticated sender in either representation.
-    source_actor = source.get("actor") if isinstance(source, dict) else None
-    if isinstance(source_actor, dict):
-        source_actor = source_actor.get("id")
+    source_actor = activity_actor_id(source.get("actor")) if isinstance(source, dict) else None
     if (
         not isinstance(source, dict)
         or source.get("type") != activity_type

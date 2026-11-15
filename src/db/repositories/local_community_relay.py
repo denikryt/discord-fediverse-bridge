@@ -12,6 +12,7 @@ from uuid import uuid4
 
 from sqlalchemy import select
 
+from ...activitypub_models import activity_actor_id
 from ...models import (
     LocalCommunityRelayDelivery,
     LocalCommunityRelaySourceActivity,
@@ -80,18 +81,18 @@ class LocalCommunityRelayRepository(BaseRepository):
                 # Every variant of one Create must preserve the verified owner,
                 # original Service and object kind; a later body never replaces
                 # the frozen source or the first normalized relay projection.
-                original_actor = source.source_activity_json.get("actor")
-                new_actor = source_activity_json.get("actor")
+                original_actor = activity_actor_id(source.source_activity_json.get("actor"))
+                new_actor = activity_actor_id(source_activity_json.get("actor"))
                 if (
                     source.object_kind != object_kind
                     or source.origin_remote_actor_id != origin_remote_actor_id
-                    or not isinstance(original_actor, str)
+                    or not original_actor
                     or original_actor != new_actor
                 ):
                     raise RelayIdentityConflict("immutable relay source owner/origin mismatch")
                 return source
-            actor = source_activity_json.get("actor")
-            if not isinstance(actor, str) or not actor:
+            actor = activity_actor_id(source_activity_json.get("actor"))
+            if not actor:
                 raise RelayIdentityConflict("relay source must contain verified author actor")
             source_object = source_activity_json.get("object")
             first_object_id = (

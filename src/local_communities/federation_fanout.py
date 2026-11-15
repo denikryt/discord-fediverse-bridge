@@ -19,6 +19,7 @@ from ..activitypub_identity_urls import (
     build_community_announce_post_activity_id,
 )
 from ..db import Database
+from ..activitypub_models import activity_actor_id
 from ..db.repositories.local_community_relay import RelayIdentityConflict
 from ..bridge_policy import BridgePolicyService
 from ..fedify_gateway_client import SendLocalCommunityRelayDelivery
@@ -116,7 +117,7 @@ class LocalCommunityFederationFanout:
         if source_owner_actor_id is not None and (
             getattr(event, "actor_id", None) != source_owner_actor_id
             or not isinstance(getattr(event, "source_activity_json", None), dict)
-            or event.source_activity_json.get("actor") != source_owner_actor_id
+            or activity_actor_id(event.source_activity_json.get("actor")) != source_owner_actor_id
         ):
             raise RelayIdentityConflict("relay Create does not match original canonical owner")
         original_origin = origin_subscriber_actor_id or getattr(event, "actor_id")
@@ -136,7 +137,7 @@ class LocalCommunityFederationFanout:
         if source_owner_actor_id is not None and (
             getattr(event, "actor_id", None) != source_owner_actor_id
             or not isinstance(getattr(event, "source_activity_json", None), dict)
-            or event.source_activity_json.get("actor") != source_owner_actor_id
+            or activity_actor_id(event.source_activity_json.get("actor")) != source_owner_actor_id
         ):
             raise RelayIdentityConflict("relay mutation does not match original canonical owner")
         create_targets = self.database.local_community_relay.list_delivered_local_community_create_relay_targets(
