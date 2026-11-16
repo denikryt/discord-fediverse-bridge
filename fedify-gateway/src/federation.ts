@@ -3,7 +3,7 @@ import {
   InProcessMessageQueue,
   MemoryKvStore,
 } from "@fedify/fedify";
-import { Accept, Announce, Create, Delete, Follow, Reject, Undo, Update } from "@fedify/vocab";
+import { Accept, Announce, Create, Delete, Follow, Note, Reject, Undo, Update } from "@fedify/vocab";
 
 import {
   buildBridgeServiceActor,
@@ -23,6 +23,7 @@ import { buildLocalCommunityPublicKeyCarrier } from "./local-community-keys.js";
 import type { GatewayContextData } from "./config.js";
 import {
   normalizeCreateActivity,
+  normalizeDirectRemotePersonEventFromJson,
   normalizeCreateActivityFromJson,
   normalizeUpdateActivityFromJson,
   normalizeDeleteActivityFromJson,
@@ -41,7 +42,17 @@ import type {
   LocalFollowRequestedEvent,
   LocalUnfollowRequestedEvent,
   RemoteGroupAnnounceEvent,
+  RemotePersonContentEvent,
 } from "./types.js";
+
+/** Keep remote Person direct content out of Group distribution paths. */
+function isRemotePersonContentEvent(
+  event: BridgeContentEvent | RemotePersonContentEvent,
+): event is RemotePersonContentEvent {
+  return event.event_type === "remote.person.created"
+    || event.event_type === "remote.person.updated"
+    || event.event_type === "remote.person.deleted";
+}
 
 export function createGatewayFederation(
   config: GatewayContextData,
@@ -148,6 +159,23 @@ export function createGatewayFederation(
         // Direct Create handling is the path when the remote server does not
         // wrap local objects inside Announce. The synchronous inbox must not
         // acknowledge events that Python did not persist.
+        // Only the direct Fedify-verified Create can establish a signed Person
+        // root. Group-wrapped Create(Note) remains on the legacy Announce path.
+        const outerJson = await activity.toJsonLd() as Record<string, unknown>;
+        const directObject = await activity.getObject({ suppressError: true });
+        if (directObject instanceof Note && directObject.replyTargetId == null) {
+          const noteJson = await directObject.toJsonLd() as Record<string, unknown>;
+          const personEvent = normalizeDirectRemotePersonEventFromJson({
+            ...outerJson, object: noteJson,
+          });
+          if (personEvent != null) {
+            await deliverNormalizedEvent(config, personEvent, {
+              deliveryId: personEvent.delivery_id,
+              eventType: personEvent.event_type, objectId: personEvent.object.ap_id,
+            });
+            return;
+          }
+        }
         const event = await normalizeCreateActivity(activity, {
           pythonBridgeClient: getPythonBridgeClient(config),
         });
@@ -255,6 +283,11 @@ export function createGatewayFederation(
             logDebug(isDebug, "normalizeUpdateActivityFromJson returned null");
             return;
           }
+          if (isRemotePersonContentEvent(event)) {
+            // The verified outer Announce signer is a distributor, not proof
+            // that the embedded remote Person signed this mutation.
+            return;
+          }
           event.source_activity_json = updateRecord;
           event.source_activity_id = asString(updateRecord.id) ?? event.delivery_id;
           event.source_announce_id = announceEnvelope.announceId;
@@ -276,6 +309,11 @@ export function createGatewayFederation(
           const event = await normalizeDeleteActivityFromJson(deleteRecord, { pythonBridgeClient: getPythonBridgeClient(config) });
           if (event == null) {
             logDebug(isDebug, "normalizeDeleteActivityFromJson returned null");
+            return;
+          }
+          if (isRemotePersonContentEvent(event)) {
+            // The verified outer Announce signer is a distributor, not proof
+            // that the embedded remote Person signed this mutation.
             return;
           }
           event.source_activity_json = deleteRecord;
@@ -427,7 +465,7 @@ async function deliverVerifiedLocalContentEvent(
 
 async function deliverNormalizedEvent(
   config: GatewayContextData,
-  event: BridgeContentEvent | RemoteGroupAnnounceEvent | FollowAcceptedEvent | LocalFollowRequestedEvent | LocalUnfollowRequestedEvent,
+  event: BridgeContentEvent | RemotePersonContentEvent | RemoteGroupAnnounceEvent | FollowAcceptedEvent | LocalFollowRequestedEvent | LocalUnfollowRequestedEvent,
   logContext: Record<string, unknown>,
 ): Promise<void> {
   // All successful normalization funnels through one delivery path so logging
@@ -455,6 +493,12 @@ export async function deliverDirectUpdateActivity(
   }
   event.source_activity_json = sourceActivityJson;
   event.source_activity_id = typeof sourceActivityJson.id === "string" ? sourceActivityJson.id : event.delivery_id;
+  if (isRemotePersonContentEvent(event)) {
+    await deliverNormalizedEvent(config, event, {
+      deliveryId: event.delivery_id, eventType: event.event_type, objectId: event.object.ap_id,
+    });
+    return;
+  }
   event.source_announce_id = null;
   await deliverVerifiedLocalContentEvent(config, trustedContext, event,
     sourceActivityJson, {
@@ -478,6 +522,12 @@ export async function deliverDirectDeleteActivity(
   }
   event.source_activity_json = sourceActivityJson;
   event.source_activity_id = typeof sourceActivityJson.id === "string" ? sourceActivityJson.id : event.delivery_id;
+  if (isRemotePersonContentEvent(event)) {
+    await deliverNormalizedEvent(config, event, {
+      deliveryId: event.delivery_id, eventType: event.event_type, objectId: event.object.ap_id,
+    });
+    return;
+  }
   event.source_announce_id = null;
   await deliverVerifiedLocalContentEvent(config, trustedContext, event,
     sourceActivityJson, {

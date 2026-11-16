@@ -6,7 +6,7 @@ import { Page } from "@fedify/vocab";
 import { type Object as ActivityObject } from "@fedify/vocab";
 
 import type { PythonBridgeReadClient } from "./python-bridge-client.js";
-import type { BridgeEvent } from "./types.js";
+import type { BridgeEvent, RemotePersonContentEvent } from "./types.js";
 
 export interface NormalizeOptions {
   /** Internal bridge lookup boundary used for local parent/object resolution. */
@@ -37,6 +37,48 @@ export async function normalizeCreateActivity(
   }
 
   return null;
+}
+
+/** Normalize only a verified direct Person root, never a Group Announce. */
+export function normalizeDirectRemotePersonEventFromJson(
+  activity: Record<string, unknown>,
+): RemotePersonContentEvent | null {
+  const type = activity.type;
+  if (type !== "Create" && type !== "Update" && type !== "Delete") return null;
+  const actor = asCanonicalActorId(activity.actor);
+  const id = asString(activity.id);
+  if (actor == null || id == null) return null;
+  const object = asRecord(activity.object);
+  const apId = object == null ? asString(activity.object) : asString(object.id);
+  if (apId == null) return null;
+  // Delete has no embedded Note and requires canonical Python ownership proof.
+  // Existing Group/personal Delete paths are checked before this fallback.
+  if (type !== "Delete") {
+    if (object?.type !== "Note" || asCanonicalActorId(object.attributedTo) !== actor
+        || asString(object.inReplyTo) != null
+        || tryResolveCommunityActorIdFromJson(object) != null
+        || !normalizeStringArray(object.to).includes("https://www.w3.org/ns/activitystreams#Public")
+        || !normalizeStringArray(activity.to).includes("https://www.w3.org/ns/activitystreams#Public")) return null;
+  }
+  const occurred = asString(object?.updated) ?? asString(object?.published)
+    ?? asString(activity.published) ?? new Date().toISOString();
+  return {
+    event_type: type === "Create" ? "remote.person.created"
+      : type === "Update" ? "remote.person.updated" : "remote.person.deleted",
+    delivery_id: id,
+    occurred_at: occurred,
+    actor_id: actor,
+    verified_sender_actor_id: actor,
+    source_activity_id: id,
+    source_activity_json: activity,
+    object: {
+      ap_id: apId,
+      author_name: asString(object?.name) ?? lastPathSegment(actor),
+      avatar_url: null,
+      body_markdown: object == null ? null : resolveMarkdownBodyFromJson(object),
+      published_at: asString(object?.published),
+    },
+  };
 }
 
 export async function normalizeCreateActivityFromJson(
@@ -70,7 +112,7 @@ export async function normalizeCreateActivityFromJson(
 export async function normalizeUpdateActivityFromJson(
   activity: unknown,
   options: NormalizeOptions = {},
-): Promise<BridgeEvent | null> {
+): Promise<BridgeEvent | RemotePersonContentEvent | null> {
   // Handles the unwrapped Update record extracted from Announce(Update(...)).
   // Delegates to the same sub-normalizers as Create but overrides event_type.
   if (!isRecord(activity) || activity.type !== "Update") {
@@ -89,6 +131,8 @@ export async function normalizeUpdateActivityFromJson(
   }
 
   if (object.type === "Note") {
+    const remote = normalizeDirectRemotePersonEventFromJson(activity);
+    if (remote != null) return remote;
     // NodeBB uses Note for both topic roots and replies. An Update must not
     // infer "comment" from vocabulary type alone: inReplyTo distinguishes
     // the canonical root from a reply in the same Group.
@@ -114,7 +158,7 @@ export async function normalizeUpdateActivityFromJson(
 export async function normalizeDeleteActivityFromJson(
   activity: unknown,
   options: NormalizeOptions = {},
-): Promise<BridgeEvent | null> {
+): Promise<BridgeEvent | RemotePersonContentEvent | null> {
   // Handles the unwrapped Delete record extracted from Announce(Delete(...)).
   // Lemmy 0.19 sends object as a plain string URL (primary path).
   // Older format fallback: object may be { id: "..." }.
@@ -164,7 +208,7 @@ export async function normalizeDeleteActivityFromJson(
   // Infer kind from the URL path: /post/ → post, /comment/ → comment.
   const kind = inferKindFromApId(apId);
   if (!kind) {
-    return null;
+    return normalizeDirectRemotePersonEventFromJson(activity);
   }
 
   const eventType = kind === "post" ? "post.deleted" : "comment.deleted";

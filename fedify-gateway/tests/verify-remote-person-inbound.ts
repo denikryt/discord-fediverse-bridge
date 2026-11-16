@@ -1,0 +1,48 @@
+/** Direct remote Person root/Update identity and Group regression scenarios. */
+import assert from "node:assert/strict";
+import { normalizeDirectRemotePersonEventFromJson, normalizeUpdateActivityFromJson } from "../src/normalize.js";
+
+const ACTOR = "https://mastodon.example/users/bob";
+const NOTE = `${ACTOR}/statuses/7`;
+const PUBLIC = "https://www.w3.org/ns/activitystreams#Public";
+const note = (extra: Record<string, unknown> = {}) => ({
+  type: "Note", id: NOTE, attributedTo: ACTOR,
+  content: "Public post", to: [PUBLIC], published: "2026-11-16T01:00:00Z", ...extra,
+});
+const activity = (type: "Create" | "Update", extra: Record<string, unknown> = {}) => ({
+  type, id: `${ACTOR}/activities/${type.toLowerCase()}/7`, actor: ACTOR,
+  object: note(), to: [PUBLIC], ...extra,
+});
+
+async function main(): Promise<void> {
+  const create = normalizeDirectRemotePersonEventFromJson(activity("Create"));
+  assert.equal(create?.event_type, "remote.person.created");
+  assert.equal(create?.actor_id, ACTOR);
+  assert.equal(create?.object.ap_id, NOTE);
+  assert.equal(create?.object.body_markdown, "Public post");
+
+  const update = await normalizeUpdateActivityFromJson(activity("Update"));
+  assert.equal(update?.event_type, "remote.person.updated");
+  assert.equal(update?.object.ap_id, NOTE);
+
+  // A forged attribution and followers-only post must never create work.
+  assert.equal(normalizeDirectRemotePersonEventFromJson(activity("Create", {
+    object: note({ attributedTo: "https://bad.example/user" }),
+  })), null);
+  assert.equal(normalizeDirectRemotePersonEventFromJson(activity("Create", {
+    object: note({ to: [`${ACTOR}/followers`] }),
+  })), null);
+
+  // Group targeting remains the NodeBB/Lemmy path; wrapping does not prove
+  // that the inner Person independently signed the Create.
+  const group = "https://nodebb.example/category/17";
+  assert.equal(normalizeDirectRemotePersonEventFromJson(activity("Create", {
+    object: note({ audience: group }),
+  })), null);
+  assert.equal(normalizeDirectRemotePersonEventFromJson(activity("Create", {
+    object: note({ inReplyTo: `${ACTOR}/statuses/1` }),
+  })), null);
+  console.log("remote Person root normalization passed");
+}
+
+await main();

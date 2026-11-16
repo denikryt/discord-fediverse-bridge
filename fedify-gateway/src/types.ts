@@ -41,6 +41,24 @@ export interface BridgeContentEvent {
   source_announce_id?: string | null;
 }
 
+/** Authenticated direct Person Note without a synthetic community or Lemmy ID. */
+export interface RemotePersonContentEvent {
+  event_type: "remote.person.created" | "remote.person.updated" | "remote.person.deleted";
+  delivery_id: string;
+  occurred_at: string;
+  actor_id: string;
+  verified_sender_actor_id: string;
+  source_activity_id: string | null;
+  source_activity_json: Record<string, unknown>;
+  object: {
+    ap_id: string;
+    author_name: string | null;
+    avatar_url: string | null;
+    body_markdown: string | null;
+    published_at: string | null;
+  };
+}
+
 // BridgeEvent stays as the content-event alias so the existing normalization
 // pipeline keeps its current naming while follow lifecycle uses a separate type.
 export type BridgeEvent = BridgeContentEvent;
@@ -106,6 +124,7 @@ export interface LocalUnfollowRequestedEvent {
 export type InternalBridgeEvent =
   | BridgeContentEvent
   | RemoteGroupAnnounceEvent
+  | RemotePersonContentEvent
   | FollowAcceptedEvent
   | LocalFollowRequestedEvent
   | LocalUnfollowRequestedEvent;

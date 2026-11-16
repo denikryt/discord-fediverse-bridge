@@ -16,6 +16,7 @@ from .community_moderation import (
 from .inbound_activity_outcomes import InboundActivityOutcome
 from .activitypub_models import (
     ActivityPubEvent,
+    RemotePersonContentEvent,
     BridgeGatewayEvent,
     FollowLifecycleEvent,
     LocalFollowRequestEvent,
@@ -78,6 +79,22 @@ async def dispatch_activitypub_event(
         community_ban = find_local_community_actor_ban_for_event(event, runtime)
         if community_ban is not None:
             return _banned_actor_result(event, community_ban, scope="community")
+
+    # Signed remote Person roots have no Lemmy community identity. Their
+    # canonical object is reserved before any Discord side effects are allowed.
+    if isinstance(event, RemotePersonContentEvent):
+        from .remote_person_inbound import RemotePersonInboundService
+        result = RemotePersonInboundService(runtime.database).reserve(
+            event, guild_allowed=runtime.bridge_policy_service.snapshot().is_discord_guild_allowed,
+        )
+        return HandlerResult(
+            status='processed' if result.status in {'reserved', 'updated', 'deleted'} else 'skipped',
+            outcome=InboundActivityOutcome.APPLIED if result.status in {'reserved', 'updated', 'deleted'}
+                else InboundActivityOutcome.IGNORED_ALREADY_APPLIED
+                if result.status in {'duplicate', 'stale'}
+                else InboundActivityOutcome.IGNORED_UNMAPPED_CONTEXT,
+            detail=result.status,
+        )
 
     # Personal-feed object ownership is resolved before any community path.
     if _is_personal_feed_event(event):
@@ -620,7 +637,10 @@ def _is_local_community_target(event: ActivityPubEvent, runtime: Runtime) -> boo
 
 def _allowlist_subject(event: BridgeGatewayEvent, runtime: Runtime) -> str:
     """Return the remote URL whose instance should be checked against the allowlist."""
-    if hasattr(event, "target_actor_kind") or _is_personal_feed_event(event):
+    if (isinstance(event, RemotePersonContentEvent)
+            or hasattr(event, "target_actor_kind") or _is_personal_feed_event(event)):
+        # A directly signed remote Person Note has no community actor. Check
+        # federation allow/deny policy against the authenticated author.
         return getattr(event, "actor_id")
     if (
         hasattr(event, "community_actor_id")

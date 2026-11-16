@@ -232,9 +232,44 @@ class LocalUnfollowRequestEvent(BaseModel):
     object: LocalUnfollowRequestObject
 
 
+class RemotePersonObject(BaseModel):
+    """One public remote Person Note, independent of Lemmy numeric IDs."""
+
+    model_config = ConfigDict(extra="forbid")
+    ap_id: str
+    author_name: str | None = None
+    avatar_url: str | None = None
+    body_markdown: str | None = None
+    published_at: datetime | None = None
+
+
+class RemotePersonContentEvent(BaseModel):
+    """A Fedify-authenticated remote Person root Create/Update/Delete."""
+
+    model_config = ConfigDict(extra="forbid")
+    event_type: Literal["remote.person.created", "remote.person.updated", "remote.person.deleted"]
+    delivery_id: str
+    occurred_at: datetime
+    actor_id: str
+    verified_sender_actor_id: str
+    source_activity_id: str | None = None
+    source_activity_json: dict[str, Any]
+    object: RemotePersonObject
+
+    @model_validator(mode="after")
+    def check_signed_identity(self) -> "RemotePersonContentEvent":
+        """Reject any inner actor that differs from Fedify's signed sender."""
+        if not self.actor_id or self.actor_id != self.verified_sender_actor_id:
+            raise ValueError('remote Person actor must match signed sender')
+        if not self.object.ap_id:
+            raise ValueError('remote Person object ID is required')
+        return self
+
+
 BridgeGatewayEvent = Annotated[
     ActivityPubEvent
     | RemoteGroupAnnounceEvent
+    | RemotePersonContentEvent
     | FollowLifecycleEvent
     | LocalFollowRequestEvent
     | LocalUnfollowRequestEvent,
