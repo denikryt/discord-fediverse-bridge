@@ -44,6 +44,18 @@ class DiscordEventRouter:
         )
         self.personal_feed_publisher = personal_feed_publisher
         self.personal_feed_conversation_runtime = personal_feed_conversation_runtime
+        self.remote_person_conversation_runtime: object | None = None
+
+    def bind_remote_person_conversations(self, runtime: object) -> None:
+        """Inject the user-owned remote-thread path after Discord bot construction."""
+        if self.remote_person_conversation_runtime is not None:
+            raise RuntimeError('Remote Person conversations already bound')
+        self.remote_person_conversation_runtime = runtime
+
+    def is_remote_person_thread(self, thread_id: int | None) -> bool:
+        """Recognize a retained webhook-root public thread, not community mode."""
+        return bool(thread_id and self.remote_person_conversation_runtime is not None
+                    and self.remote_person_conversation_runtime.get_remote_root_copy(thread_id))
 
     def _is_guild_allowed(self, guild_id: int | str | None) -> bool:
         """Evaluate one Discord event against the current guild policy."""
@@ -161,6 +173,12 @@ class DiscordEventRouter:
         if not self._is_guild_allowed(guild_id):
             return None
         thread = getattr(message, "channel")
+        if self.is_remote_person_thread(getattr(thread, "id", None)):
+            if self.remote_person_conversation_runtime is None:
+                return None
+            return await self.remote_person_conversation_runtime.publish_local_reply(
+                message=message
+            )
         if self.is_personal_feed_thread(getattr(thread, "id", None)):
             if self.personal_feed_conversation_runtime is None:
                 return None

@@ -268,7 +268,8 @@ class BridgeBot(discord.Client):
         if message.channel.parent_id is None:
             return
         if not (
-            self.event_router.is_personal_feed_thread(message.channel.id)
+            self.event_router.is_remote_person_thread(message.channel.id)
+            or self.event_router.is_personal_feed_thread(message.channel.id)
             or self.event_router.is_remote_subscription_forum(message.channel.parent_id)
             or self.event_router.is_local_community_forum(message.channel.parent_id)
         ):

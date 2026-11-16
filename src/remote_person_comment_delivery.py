@@ -197,7 +197,7 @@ class RemotePersonCommentDeliveryWorker:
                     channel_id=copy.discord_channel_id, thread_id=copy.discord_thread_id,
                     root_actor_id=root.remote_actor_id,
                     object_id=canonical.object_id,
-                    body=canonical.content_markdown or '',
+                    body=(getattr(canonical, 'content_markdown', None) or getattr(canonical, 'body_markdown', None) or ''),
                     actor_name=getattr(canonical, 'actor_name', None) or getattr(canonical, 'actor_username', None) or 'Remote user',
                     parent_message_id=parent_message,
                     revision=getattr(canonical, 'revision_fingerprint', None) or str(canonical.content_revision),
@@ -288,7 +288,7 @@ class RemotePersonCommentDeliveryWorker:
                 claim = CommentDispatch(placement_id=row.id, claim_token='', root_id=copy.id,
                     guild_id=copy.discord_guild_id, channel_id=copy.discord_channel_id,
                     thread_id=row.destination_thread_id, root_actor_id=root.remote_actor_id,
-                    object_id=canonical.object_id, body=canonical.content_markdown or '',
+                    object_id=canonical.object_id, body=(getattr(canonical, 'content_markdown', None) or getattr(canonical, 'body_markdown', None) or ''),
                     actor_name=getattr(canonical, 'actor_name', None) or getattr(canonical, 'actor_username', None) or 'Remote user',
                     parent_message_id=None, revision=canonical.revision_fingerprint)
             try:

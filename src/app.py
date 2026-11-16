@@ -42,6 +42,7 @@ from .user_actor_delivery_worker import UserActorDeliveryWorker
 from .remote_person_follow_service import RemotePersonFollowService
 from .remote_person_discord_worker import RemotePersonRootDeliveryWorker
 from .remote_person_comment_delivery import RemotePersonCommentDeliveryWorker
+from .remote_person_conversations import RemotePersonConversationRuntime
 from .personal_feeds import PersonalFeedService
 from .personal_feed_publisher import PersonalFeedPublisher
 from .personal_feed_conversations import PersonalFeedConversationRuntime
@@ -226,8 +227,6 @@ def _build_live_runtime(settings: Settings, deployment_lease: FileLock) -> Runti
             bridge_policy_service=bridge_policy_service,
             personal_feed_service=personal_feed_service,
             personal_feed_publisher=personal_feed_publisher,
-            remote_person_follow_service=remote_person_follow_service,
-            remote_person_root_delivery_worker=remote_person_root_delivery_worker,
             personal_feed_conversation_runtime=personal_feed_conversation_runtime,
         )
         bot = BridgeBot(
@@ -257,6 +256,13 @@ def _build_live_runtime(settings: Settings, deployment_lease: FileLock) -> Runti
             )
         )
         bot.bind_remote_person_root_worker(remote_person_root_delivery_worker)
+        event_router.bind_remote_person_conversations(RemotePersonConversationRuntime(
+            database=database, fedify_gateway=fedify_gateway,
+            policy_service=bridge_policy_service, user_ban_service=user_ban_service,
+            fedify_origin=settings.normalized_fedify_origin,
+            delivery_worker=remote_person_root_delivery_worker,
+            user_delivery_worker=user_actor_delivery_worker,
+        ))
         mutation_context = DiscordMutationContext(
             bridge_policy_service=bridge_policy_service,
             user_actor_delivery_service=user_actor_delivery_service,

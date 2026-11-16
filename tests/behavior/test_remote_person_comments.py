@@ -3,7 +3,17 @@ from __future__ import annotations
 
 import tempfile
 import asyncio
+import importlib.util
+import sys
+import types
 from types import SimpleNamespace
+
+# The persistence service imports a shared package with a Discord type-only
+# annotation. Offline tests supply only this SDK boundary, never AP logic.
+if importlib.util.find_spec('discord') is None:
+    discord_stub = types.ModuleType('discord')
+    discord_stub.MessageReference = type('MessageReference', (), {})
+    sys.modules.setdefault('discord', discord_stub)
 import unittest
 from datetime import datetime, timezone
 from pathlib import Path
@@ -14,9 +24,11 @@ from src.activitypub_models import RemotePersonCommentEvent, RemotePersonContent
 from src.db import Database
 from src.models import (InboundConversationObject, RemotePersonChannelAssignment,
                         RemotePersonCommentPlacement, RemotePersonFollow,
-                        RemotePersonPostDelivery, User)
+                        RemotePersonPostDelivery, PublishedActivityObject, MessageMapping, User)
 from src.remote_person_comments import RemotePersonCommentService
 from src.remote_person_comment_delivery import RemotePersonCommentDeliveryWorker
+from src.remote_person_conversations import RemotePersonConversationRuntime
+from src.fedify_gateway_client import ResolvedRemotePerson, RenderPersonalFeedResult
 from src.remote_person_inbound import PUBLIC, RemotePersonInboundService
 
 BOB = 'https://remote.example/users/bob'
@@ -164,6 +176,98 @@ class RemotePersonComments(unittest.TestCase):
         with self.db.session() as session:
             self.assertEqual({p.state for p in session.scalars(select(RemotePersonCommentPlacement))},
                              {'uncertain'})
+
+
+    def test_local_reply_uses_one_canonical_person_create_and_copy_specific_mirror(self):
+        """A-origin User Actor Note is mirrored as bot in B, never republished."""
+        self.deliver_roots()
+        with self.db.immediate_session() as session:
+            user = session.scalar(select(User))
+            user.discord_user_id = '42'
+        class Gateway:
+            """Capture the exact canonical render and verified remote recipient."""
+            def __init__(self):
+                self.renders = []
+            async def resolve_remote_person(self, actor_id):
+                return ResolvedRemotePerson(actor_id=actor_id, inbox_url=f'{actor_id}/inbox')
+            async def render_personal_feed(self, request):
+                self.renders.append(request)
+                return RenderPersonalFeedResult(
+                    activity_id=request.activity_id, object_id=request.object_id,
+                    published_at=request.published_at,
+                    activity_json={'id': request.activity_id, 'type': 'Create',
+                        'actor': 'https://bridge.test/actors/users/alice',
+                        'to': [PUBLIC],
+                        'cc': ['https://bridge.test/actors/users/alice', 'https://bridge.test/actors/users/alice/followers', *request.direct_person_actor_ids],
+                        'object': {'id': request.object_id, 'type': 'Note',
+                            'attributedTo': 'https://bridge.test/actors/users/alice',
+                            'inReplyTo': request.in_reply_to_object_id, 'to': [PUBLIC],
+                            'cc': ['https://bridge.test/actors/users/alice/followers', *request.direct_person_actor_ids]}},
+                )
+        class Policy:
+            """Permit authorized public remote-Person and guild routing."""
+            def is_discord_guild_allowed(self, guild_id):
+                return guild_id == 1
+            def federation_decision(self, actor_id):
+                return SimpleNamespace(allowed=True)
+            def snapshot(self):
+                return self
+        class Ban:
+            """Use no global bans for this registered user fixture."""
+            def check_global_discord_user(self, user_id):
+                return SimpleNamespace(banned=False)
+        class Wake:
+            """Record scheduler wake without starting a background thread."""
+            def __init__(self):
+                self.calls = 0
+            def wake(self):
+                self.calls += 1
+        gateway = Gateway()
+        wake = Wake()
+        runtime = RemotePersonConversationRuntime(
+            database=self.db, fedify_gateway=gateway, policy_service=Policy(),
+            user_ban_service=Ban(), fedify_origin='https://bridge.test',
+            delivery_worker=wake, user_delivery_worker=wake)
+        original_thread = 80100
+        message = SimpleNamespace(id=90222, guild=SimpleNamespace(id=1),
+            channel=SimpleNamespace(id=original_thread, parent_id=100),
+            author=SimpleNamespace(id=42), content='This is Alice',
+            reference=None, created_at=self.when)
+        first = asyncio.run(runtime.publish_local_reply(message=message))
+        second = asyncio.run(runtime.publish_local_reply(message=message))
+        self.assertEqual(first.status, 'published')
+        self.assertEqual(second.status, 'already_published')
+        self.assertEqual(len(gateway.renders), 1)
+        self.assertEqual(gateway.renders[0].direct_person_actor_ids, [BOB])
+        with self.db.session() as session:
+            self.assertEqual(session.scalar(select(PublishedActivityObject.object_id)), first.object_id)
+            self.assertEqual(session.scalar(select(MessageMapping.discord_message_id)), 90222)
+            mirror = session.scalar(select(RemotePersonCommentPlacement))
+            self.assertIsNotNone(mirror.published_object_id)
+            self.assertEqual(mirror.destination_thread_id, 80101)
+        worker, edge = self.worker()
+        asyncio.run(worker.drain_once())
+        self.assertEqual(len(edge.calls), 1)
+        self.assertEqual(edge.calls[0].channel_id, 101)
+        self.assertIsNone(edge.calls[0].parent_message_id)
+        # A remote reply to Alice's canonical Note references her original
+        # source message in A and its bot mirror in B.
+        child = self.event(parent=first.object_id,
+            object_id='https://other.example/notes/reply-to-alice')
+        self.assertEqual(self.comments.reserve(child).targets, 2)
+        asyncio.run(worker.drain_once())
+        expected = {100: 90222, 101: edge.calls[0].channel_id * 10000 + 1}
+        self.assertEqual({call.channel_id: call.parent_message_id for call in edge.calls[1:]}, expected)
+        # A Discord Reply in B to A's bot mirror maps to the same canonical
+        # AP parent and creates one new local Note, never a new copy of A.
+        reply_in_b = SimpleNamespace(id=90223, guild=SimpleNamespace(id=1),
+            channel=SimpleNamespace(id=80101, parent_id=101),
+            author=SimpleNamespace(id=42), content='Reply to mirror',
+            reference=SimpleNamespace(message_id=1010001), created_at=self.when)
+        reply = asyncio.run(runtime.publish_local_reply(message=reply_in_b))
+        self.assertEqual(reply.status, 'published')
+        self.assertEqual(gateway.renders[-1].in_reply_to_object_id, first.object_id)
+        self.assertEqual(len(gateway.renders), 2)
 
     def test_two_destinations_and_duplicate(self):
         """One signed Note has one canonical row and one copy per destination."""
