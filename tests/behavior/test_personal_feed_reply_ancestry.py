@@ -9,7 +9,7 @@ import discord
 import pytest
 
 from src.db import Database
-from src.fedify_gateway_client import RenderPersonalFeedResult
+from src.fedify_gateway_client import RenderPersonalFeedResult, ResolvedRemotePerson
 from src.models import InboundDiscordDelivery, PublishedActivityObject, User
 from src.personal_feed_conversations import PersonalFeedConversationRuntime
 from src.personal_feed_discord_delivery_worker import PersonalFeedDiscordDeliveryWorker
@@ -25,10 +25,17 @@ class Gateway:
     def __init__(self) -> None:
         self.requests: list[object] = []
 
+    async def resolve_remote_person(self, actor_id: str) -> ResolvedRemotePerson:
+        """Return a canonical remote Person and its valid inbox at the HTTP edge."""
+        return ResolvedRemotePerson(actor_id, f"{actor_id}/inbox")
+
     async def render_personal_feed(self, request: object) -> RenderPersonalFeedResult:
         """Provide an otherwise valid canonical gateway Create response."""
         self.requests.append(request)
+        actor_url = "https://bridge.example/actors/users/charlie"
+        ids = request.direct_person_actor_ids
         activity = {
+            "cc": [actor_url, f"{actor_url}/followers", *ids],
             "id": request.activity_id,
             "type": "Create",
             "actor": "https://bridge.example/actors/users/charlie",
@@ -36,6 +43,7 @@ class Gateway:
                 "id": request.object_id,
                 "type": "Note",
                 "attributedTo": "https://bridge.example/actors/users/charlie",
+                "cc": [f"{actor_url}/followers", *ids],
                 "inReplyTo": request.in_reply_to_object_id,
                 "content": request.body_markdown,
             },
@@ -96,7 +104,8 @@ def environment(tmp_path):
             check_global_discord_user=lambda _id: SimpleNamespace(banned=False)
         ),
         bridge_policy_service=SimpleNamespace(
-            is_discord_guild_allowed=lambda _id: True
+            is_discord_guild_allowed=lambda _id: True,
+            federation_decision=lambda _url: SimpleNamespace(allowed=True),
         ),
         fedify_origin="https://bridge.example",
     )

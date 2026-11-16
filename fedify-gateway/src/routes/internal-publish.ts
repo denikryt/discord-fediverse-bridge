@@ -5,6 +5,8 @@
  * existing wire payloads and delegate to gateway outbound use cases unchanged.
  */
 import type { Hono } from "hono";
+import { Person } from "@fedify/vocab";
+import { admitRemoteDeliveryEndpoint } from "../remote-delivery-endpoints.js";
 
 import type { GatewayConfig } from "../config.js";
 import type { createGatewayFederation } from "../federation.js";
@@ -38,6 +40,30 @@ export function registerInternalPublishRoutes(
 ): void {
   const { config, fedify } = dependencies;
 
+  app.post("/resolve-remote-person", async (context) => {
+    // Resolve through Fedify rather than trusting an ActivityPub body's
+    // attributedTo or a cache entry whose inbox may have changed.
+    if (!hasValidInternalAuthorization(config, context.req.header("Authorization") ?? null)) {
+      return context.json({ error: "invalid authorization" }, { status: 401 });
+    }
+    const payload = (await context.req.json()) as { actorId?: unknown };
+    if (typeof payload.actorId !== "string") {
+      return context.json({ error: "actorId required" }, { status: 400 });
+    }
+    try {
+      const actorId = admitRemoteDeliveryEndpoint(payload.actorId, { localOrigin: config.fedifyOrigin });
+      const federationContext = fedify.createContext(new URL(config.fedifyOrigin), config);
+      const actor = await federationContext.lookupObject(actorId);
+      if (!(actor instanceof Person) || actor.id?.href !== actorId || !actor.inboxId) {
+        throw new Error("remote object is not the requested Person actor with an inbox");
+      }
+      const inboxUrl = admitRemoteDeliveryEndpoint(actor.inboxId.href, { localOrigin: config.fedifyOrigin });
+      return context.json({ actorId, inboxUrl });
+    } catch (error) {
+      return context.json({ error: error instanceof Error ? error.message : String(error) }, { status: 400 });
+    }
+  });
+
   app.post("/render-personal-feed", async (context) => {
     if (!hasValidInternalAuthorization(config, context.req.header("Authorization") ?? null)) {
       return context.json({ error: "invalid authorization" }, { status: 401 });
@@ -50,7 +76,8 @@ export function registerInternalPublishRoutes(
       typeof payload.objectId !== "string" ||
       typeof payload.bodyMarkdown !== "string" ||
       typeof payload.publishedAt !== "string" ||
-      (payload.kind !== undefined && payload.kind !== "post" && payload.kind !== "comment")
+      (payload.kind !== undefined && payload.kind !== "post" && payload.kind !== "comment") ||
+      (payload.directPersonActorIds !== undefined && (!Array.isArray(payload.directPersonActorIds) || !payload.directPersonActorIds.every((id) => typeof id === "string")))
     ) {
       return context.json({ error: "invalid personal-feed render request" }, { status: 400 });
     }

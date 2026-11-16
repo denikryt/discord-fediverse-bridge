@@ -97,6 +97,7 @@ export interface PublishedActivityObjectRow {
   /** Original serialized Create evidence, never inferred from mutable Follow. */
   originalObjectType?: "Note" | "Page" | null;
   originalObjectContext?: string | null;
+  directPersonActorIds?: string[];
   publishedAt: string;
   discordGuildId: number | null;
   discordChannelId: number | null;
@@ -441,6 +442,10 @@ function mapPublishedObject(row: Record<string, unknown>): PublishedActivityObje
     inReplyToObjectId: nullableString(row, "in_reply_to_object_id"),
     originalObjectType: originalPublishedType(row),
     originalObjectContext: nullableString(row, "original_object_context"),
+    directPersonActorIds: requiredArray(row, "direct_person_actor_ids").map((id) => {
+      if (typeof id !== "string") throw new Error("invalid direct Person audience");
+      return id;
+    }),
     publishedAt: requiredString(row, "published_at"),
     discordGuildId: nullableNumber(row, "discord_guild_id"),
     discordChannelId: nullableNumber(row, "discord_channel_id"),

@@ -269,21 +269,29 @@ class PersonalFeedConversationRuntime:
             return PersonalFeedConversationResult(
                 "already_published", "duplicate", object_id
             )
-        direct_target_inbox_urls: list[str] = []
-        parent_actor_id: str | None = None
+        direct_person_recipients: list[dict[str, str]] = []
         parent_inbound = self.database.personal_feed_conversations.get_inbound_object(
             parent_object_id
         )
         if parent_inbound is not None:
+            # A signed inbound comment supplies the intended actor ID, but not
+            # immutable transport authorization. Dereference the exact Person
+            # through Fedify before rendering its canonical audience.
             parent_actor_id = parent_inbound.actor_id
-        if parent_actor_id is not None:
-            remote_actor = self.database.remote_actors.get_remote_actor_by_actor_url(
-                parent_actor_id
-            )
-            if remote_actor is not None:
-                direct_target_inbox_urls.append(
-                    remote_actor.shared_inbox_url or remote_actor.inbox_url
-                )
+            try:
+                resolved = await self.fedify_gateway.resolve_remote_person(parent_actor_id)
+                if resolved.actor_id != parent_actor_id:
+                    raise ValueError("remote parent actor identity changed during lookup")
+                if not (self.bridge_policy_service.federation_decision(resolved.actor_id).allowed
+                        and self.bridge_policy_service.federation_decision(resolved.inbox_url).allowed):
+                    raise ValueError("remote parent actor or inbox denied by federation policy")
+                direct_person_recipients = [{
+                    "actorId": resolved.actor_id,
+                    "inboxUrl": resolved.inbox_url,
+                }]
+            except Exception as exc:
+                logger.warning("Personal Feed cannot verify direct Person recipient %s: %s", parent_actor_id, exc)
+                return PersonalFeedConversationResult("rejected", "remote_parent_unresolvable")
         rendered = await self.fedify_gateway.render_personal_feed(
             RenderPersonalFeedRequest(
                 actor_username=user.activitypub_username,
@@ -295,6 +303,7 @@ class PersonalFeedConversationRuntime:
                 kind="comment",
                 in_reply_to_object_id=parent_object_id,
                 conversation_root_object_id=root.object_id,
+                direct_person_actor_ids=[row["actorId"] for row in direct_person_recipients],
             )
         )
         persisted = persist_publish_artifacts(
@@ -316,7 +325,7 @@ class PersonalFeedConversationRuntime:
             discord_channel_id=root.discord_channel_id,
             discord_message_id=message_id,
             published_at=created_at,
-            direct_target_inbox_urls=direct_target_inbox_urls,
+            direct_person_recipients=direct_person_recipients,
         )
         if persisted.created and self.delivery_worker is not None:
             self.delivery_worker.wake()

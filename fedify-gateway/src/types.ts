@@ -128,6 +128,7 @@ export interface RenderPersonalFeedRequest {
   kind?: "post" | "comment";
   inReplyToObjectId?: string | null;
   conversationRootObjectId?: string | null;
+  directPersonActorIds?: string[];
 }
 
 export interface RenderPersonalFeedResult {

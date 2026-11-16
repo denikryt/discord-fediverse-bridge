@@ -23,7 +23,8 @@ export function buildPublishedActivityObjectJson(
       url: record.objectId,
       attributedTo,
       to: [ACTIVITYSTREAMS_PUBLIC],
-      cc: [`${attributedTo}/followers`],
+      cc: [`${attributedTo}/followers`, ...(record.directPersonActorIds ?? [])],
+      ...(record.inReplyToObjectId ? { inReplyTo: record.inReplyToObjectId } : {}),
       source: { content: record.bodyMarkdown, mediaType: "text/markdown" },
       content: safeMarkdownToHtml(record.bodyMarkdown),
       published,
@@ -60,7 +61,7 @@ export function buildPublishedCreateActivityJson(
     return {
       "@context": "https://www.w3.org/ns/activitystreams", id: record.activityId,
       type: "Create", actor, to: [ACTIVITYSTREAMS_PUBLIC],
-      cc: [actor, `${actor}/followers`], object: buildPublishedActivityObjectJson(record),
+      cc: [actor, `${actor}/followers`, ...(record.directPersonActorIds ?? [])], object: buildPublishedActivityObjectJson(record),
     };
   }
   if (record.communityActorUrl == null) {

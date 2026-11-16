@@ -116,6 +116,22 @@ class PublishLocalCommunityContentResult:
     activity_json: dict = field(default_factory=dict)
 
 
+@dataclass(frozen=True, slots=True)
+class ResolvedRemotePerson:
+    """Verified canonical Person actor and inbox from Fedify actor dereference."""
+
+    actor_id: str
+    inbox_url: str
+
+
+@dataclass(frozen=True, slots=True)
+class ResolvedRemotePerson:
+    """Verified canonical Person actor and inbox from Fedify actor dereference."""
+
+    actor_id: str
+    inbox_url: str
+
+
 @dataclass(slots=True)
 class RenderPersonalFeedRequest:
     """Carry one deterministic render-only personal-feed publication request."""
@@ -129,6 +145,7 @@ class RenderPersonalFeedRequest:
     kind: str = "post"
     in_reply_to_object_id: str | None = None
     conversation_root_object_id: str | None = None
+    direct_person_actor_ids: list[str] = field(default_factory=list)
 
 
 @dataclass(slots=True)
@@ -351,6 +368,17 @@ class FedifyGatewayClient:
             follow_activity_id=payload["followActivityId"],
         )
 
+    async def resolve_remote_person(self, actor_id: str) -> ResolvedRemotePerson:
+        """Resolve the exact remote Person identity and inbox through Fedify."""
+        response = await self._client.post(
+            "/resolve-remote-person",
+            headers={"Authorization": f"Bearer {self._shared_secret}"},
+            json={"actorId": actor_id},
+        )
+        response.raise_for_status()
+        data = response.json()
+        return ResolvedRemotePerson(actor_id=data["actorId"], inbox_url=data["inboxUrl"])
+
     async def render_personal_feed(
         self, request: RenderPersonalFeedRequest
     ) -> RenderPersonalFeedResult:
@@ -368,6 +396,7 @@ class FedifyGatewayClient:
                 "kind": request.kind,
                 "inReplyToObjectId": request.in_reply_to_object_id,
                 "conversationRootObjectId": request.conversation_root_object_id,
+                "directPersonActorIds": request.direct_person_actor_ids,
             },
         )
         response.raise_for_status()

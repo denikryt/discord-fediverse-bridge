@@ -156,6 +156,7 @@ class PublishedObjectResponse(BaseModel):
     # Derived from the persisted original Create, not a current remote Follow.
     original_object_type: str | None = None
     original_object_context: str | None = None
+    direct_person_actor_ids: list[str] = []
     published_at: str
     discord_guild_id: int | None
     discord_channel_id: int | None
@@ -219,6 +220,10 @@ def create_internal_fedify_router(runtime: Runtime) -> APIRouter:
         return PublishedObjectResponse(
             original_object_type=original_type,
             original_object_context=original_context,
+            direct_person_actor_ids=(
+                runtime.database.activitypub_objects.get_original_direct_person_actor_ids(row)
+                if row.publication_context == "personal_feed" else []
+            ),
             actor_username=row.actor_username,
             actor_url=row.actor_url,
             publication_context=row.publication_context,

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+import json
 from datetime import datetime
 
 from sqlalchemy import or_, select
@@ -77,6 +78,7 @@ def _existing_result(
     source_kind: str = "content_create",
     logical_version: int = 1,
     direct_group_recipients: list[dict] | None = None,
+    direct_person_recipients: list[dict] | None = None,
 ) -> PersistPublishResult:
     """Resolve only a complete, internally consistent durable publication graph."""
     published = session.scalar(
@@ -133,13 +135,15 @@ def _existing_result(
             "outbound source has incompatible publication identity"
         )
     if direct_group_recipients is not None:
-        import json
-
         snapshot = json.loads(source.snapshot_json)
         if snapshot.get("directGroupRecipients") != direct_group_recipients:
             raise PublicationConflictError(
                 "existing Create has incompatible immutable direct Group recipients"
             )
+    if direct_person_recipients is not None:
+        snapshot = json.loads(source.snapshot_json)
+        if snapshot.get("directPersonRecipients", []) != direct_person_recipients:
+            raise PublicationConflictError("existing Create has incompatible direct Person recipient proof")
     return PersistPublishResult(source.id, False)
 
 
@@ -227,6 +231,7 @@ def persist_publish_artifacts(
     published_at: datetime | None = None,
     direct_target_inbox_urls: list[str] | None = None,
     direct_group_recipients: list[dict] | None = None,
+    direct_person_recipients: list[dict] | None = None,
 ) -> PersistPublishResult:
     """Commit mapping, public object, and fixed follower audience atomically.
 
@@ -278,6 +283,25 @@ def persist_publish_artifacts(
                         raise PublicationConflictError(
                             "direct Group recipient is no longer backed by the accepted Follow generation"
                         )
+            if direct_person_recipients is not None:
+                if publication_context not in {"personal_feed", "remote_person_feed"} or kind != "comment":
+                    raise PublicationConflictError("direct Person recipient requires a Person comment")
+                if any(not isinstance(row, dict) or set(row) != {"actorId", "inboxUrl"} for row in direct_person_recipients):
+                    raise PublicationConflictError("invalid direct Person evidence")
+                actor_ids = [row["actorId"] for row in direct_person_recipients]
+                endpoints = [row["inboxUrl"] for row in direct_person_recipients]
+                if (
+                    not all(isinstance(value, str) and value.startswith("https://") for value in actor_ids + endpoints)
+                    or sorted(set(actor_ids)) != actor_ids
+                    or not all(database.user_actor_deliveries.validate_endpoint(url) == url for url in endpoints)):
+                    raise PublicationConflictError("invalid direct Person evidence")
+                obj = activity_json.get("object")
+                if (not isinstance(obj, dict)
+                    or obj.get("inReplyTo") != in_reply_to_object_id
+                    or obj.get("attributedTo") != actor_url
+                    or obj.get("cc") != [f"{actor_url}/followers", *actor_ids]
+                    or activity_json.get("cc") != [actor_url, f"{actor_url}/followers", *actor_ids]):
+                    raise PublicationConflictError("immutable Create audience disagrees with direct Person evidence")
             existing = session.scalar(
                 select(MessageMapping).where(
                     MessageMapping.source_platform == "discord",
@@ -305,6 +329,7 @@ def persist_publish_artifacts(
                     in_reply_to_object_id=in_reply_to_object_id,
                     conversation_root_object_id=conversation_root_object_id,
                     direct_group_recipients=direct_group_recipients,
+                    direct_person_recipients=direct_person_recipients,
                 )
 
             mapping = MessageMapping(
@@ -357,9 +382,10 @@ def persist_publish_artifacts(
                     "activityType": "Create",
                     "contentRevision": 1,
                     **({"directGroupRecipients": direct_group_recipients} if direct_group_recipients is not None else {}),
+                    **({"directPersonRecipients": direct_person_recipients} if direct_person_recipients is not None else {}),
                 },
                 followers=followers,
-                direct_target_inbox_urls=direct_target_inbox_urls,
+                direct_target_inbox_urls=[*(direct_target_inbox_urls or []), *(r["inboxUrl"] for r in (direct_person_recipients or []))],
                 direct_group_recipients=direct_group_recipients,
             )
             return PersistPublishResult(source.id, True)
@@ -397,6 +423,7 @@ def persist_publish_artifacts(
                     in_reply_to_object_id=in_reply_to_object_id,
                     conversation_root_object_id=conversation_root_object_id,
                     direct_group_recipients=direct_group_recipients,
+                    direct_person_recipients=direct_person_recipients,
                 )
         raise PublicationConflictError(
             "uniqueness collision did not resolve to the expected canonical publication"
