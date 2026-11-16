@@ -1,4 +1,4 @@
-"""CP24 release-floor checks for the immutable SQLite v1 schema.
+"""CP24 release-floor checks for the immutable SQLite v2 schema.
 
 These scenarios compare the *actual* versioned migration output with the
 independent historical SQL file. The SQL snapshot is executed only on a
@@ -16,7 +16,7 @@ import pytest
 from src.db import Database
 
 
-V1_SQL = Path(__file__).parents[1] / "src" / "db" / "schema_versions" / "v1.sql"
+CURRENT_SQL = Path(__file__).parents[1] / "src" / "db" / "schema_versions" / "v2.sql"
 
 
 def _manifest(db: Path) -> dict[tuple[str, str], str]:
@@ -33,7 +33,7 @@ def _manifest(db: Path) -> dict[tuple[str, str], str]:
 
 
 @pytest.mark.parametrize("source_schema", ["empty", "released_v0", "known_main_v0"])
-def test_versioned_database_matches_frozen_v1_schema(
+def test_versioned_database_matches_frozen_v2_schema(
     tmp_path: Path, source_schema: str
 ):
     """All supported source profiles upgrade to the same immutable target DDL."""
@@ -53,7 +53,7 @@ def test_versioned_database_matches_frozen_v1_schema(
     # This is a separate disposable test-only SQLite connection. `executescript`
     # must not be used in the production transaction-controlled upgrade path.
     with sqlite3.connect(snapshot) as conn:
-        conn.executescript(V1_SQL.read_text())
+        conn.executescript(CURRENT_SQL.read_text())
     actual = _manifest(migrated)
     frozen = _manifest(snapshot)
     assert actual == frozen
@@ -61,12 +61,12 @@ def test_versioned_database_matches_frozen_v1_schema(
     assert ("index", "uq_local_relay_create") in actual
     assert "canonical_relay_projection_json" in actual[("table", "local_community_relay_source_activities")]
     with sqlite3.connect(migrated) as conn:
-        assert conn.execute("PRAGMA user_version").fetchone()[0] == 1
+        assert conn.execute("PRAGMA user_version").fetchone()[0] == 2
         assert conn.execute("PRAGMA foreign_key_check").fetchall() == []
 
 
-def test_v1_restart_is_read_only_for_saved_relay_and_follow_rows(tmp_path: Path):
-    """A second v1 admission never rewrites accepted state or source content."""
+def test_v2_restart_is_read_only_for_saved_relay_and_follow_rows(tmp_path: Path):
+    """A second v2 admission never rewrites accepted state or source content."""
     db_file = tmp_path / "restart.sqlite"
     database = Database(f"sqlite:///{db_file}")
     database.migrate()
@@ -88,12 +88,12 @@ def test_v1_restart_is_read_only_for_saved_relay_and_follow_rows(tmp_path: Path)
         database.migrate()
         database.close()
     with sqlite3.connect(db_file) as conn:
-        assert conn.execute("PRAGMA user_version").fetchone()[0] == 1
+        assert conn.execute("PRAGMA user_version").fetchone()[0] == 2
         assert conn.execute("SELECT * FROM local_community_relay_source_activities").fetchall() == before
         assert conn.execute("SELECT type,name,sql FROM sqlite_master ORDER BY name").fetchall() == schema_before
 
 
-def test_unknown_drift_in_stamped_v1_is_rejected_without_repair(tmp_path: Path):
+def test_unknown_drift_in_stamped_v2_is_rejected_without_repair(tmp_path: Path):
     """A missing canonical UNIQUE index cannot be silently re-created on startup."""
     db_file = tmp_path / "corrupt.sqlite"
     database = Database(f"sqlite:///{db_file}")
@@ -102,11 +102,11 @@ def test_unknown_drift_in_stamped_v1_is_rejected_without_repair(tmp_path: Path):
     with sqlite3.connect(db_file) as conn:
         conn.execute("DROP INDEX uq_local_relay_create")
         before = _manifest(db_file)
-        assert conn.execute("PRAGMA user_version").fetchone()[0] == 1
+        assert conn.execute("PRAGMA user_version").fetchone()[0] == 2
     database = Database(f"sqlite:///{db_file}")
     with pytest.raises((RuntimeError, ValueError)):
         database.migrate()
     database.close()
     assert _manifest(db_file) == before
     with sqlite3.connect(db_file) as conn:
-        assert conn.execute("PRAGMA user_version").fetchone()[0] == 1
+        assert conn.execute("PRAGMA user_version").fetchone()[0] == 2

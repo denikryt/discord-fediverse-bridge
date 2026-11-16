@@ -15,6 +15,8 @@ from .local_community_surfaces import LocalCommunitySurfaceRepository
 from .local_community_relay import LocalCommunityRelayRepository
 
 from .remote_subscriptions import RemoteSubscriptionRepository
+from .remote_person_follows import RemotePersonFollowRepository
+from .remote_person_feeds import RemotePersonFeedRepository
 from .bridge_actor_follows import BridgeActorFollowRepository
 from .bridge_policy_entries import BridgePolicyEntryRepository
 from .event_receipts import EventReceiptRepository
@@ -42,6 +44,8 @@ __all__ = [
     "LocalCommunitySurfaceRepository",
     "LocalCommunityRelayRepository",
     "RemoteSubscriptionRepository",
+    "RemotePersonFollowRepository",
+    "RemotePersonFeedRepository",
     "BridgeActorFollowRepository",
     "BridgePolicyEntryRepository",
     "EventReceiptRepository",

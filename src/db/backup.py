@@ -60,7 +60,7 @@ def classify_legacy_sqlite_schema(entries: object) -> str | None:
 
 
 def inspect_migration_backup_source(database: Path) -> str:
-    """Classify a schema-exact, unversioned backup source without SQLite writes.
+    """Classify a schema-exact v0 or v1 pre-upgrade backup without writes.
 
     This is deliberately stricter than ordinary backups: unknown or partially
     upgraded layouts cannot be passed to the subsequent v0→v1 runner by merely
@@ -69,13 +69,29 @@ def inspect_migration_backup_source(database: Path) -> str:
     """
     # mode=ro prevents SQLite from silently creating an absent source DB.
     with sqlite3.connect(f"{database.absolute().as_uri()}?mode=ro", uri=True) as connection:
-        if connection.execute("PRAGMA user_version").fetchone()[0] != 0:
-            raise RuntimeError("migration backup requires an unversioned v0 database")
+        version = int(connection.execute("PRAGMA user_version").fetchone()[0])
+        if version not in (0, 1):
+            raise RuntimeError("migration backup requires an admitted v0 or v1 source")
         entries = connection.execute("""
             SELECT type, name, tbl_name, sql
             FROM sqlite_master WHERE name NOT LIKE 'sqlite_%'
             ORDER BY type, name, tbl_name
         """).fetchall()
+        if version == 1:
+            # Compare complete DDL using the same fingerprint as startup; do
+            # not accept a forged version header on a partially upgraded DB.
+            with sqlite3.connect(":memory:") as reference:
+                snapshot = Path(__file__).parent / "schema_versions" / "v1.sql"
+                reference.executescript(snapshot.read_text(encoding="utf-8"))
+                expected = reference.execute(
+                    "SELECT type,name,tbl_name,sql FROM sqlite_master "
+                    "WHERE name NOT LIKE 'sqlite_%' ORDER BY type,name,tbl_name"
+                ).fetchall()
+            if schema_entries_fingerprint(entries) != schema_entries_fingerprint(expected):
+                raise RuntimeError("unsupported or modified SQLite v1 backup source schema")
+            if connection.execute("PRAGMA foreign_key_check").fetchone() is not None:
+                raise RuntimeError("SQLite v1 backup source has foreign-key violations")
+            return "ready_v1"
         profile = classify_legacy_sqlite_schema(entries)
         if profile is None:
             raise RuntimeError("unsupported or modified SQLite v0 backup source profile")
@@ -737,7 +753,7 @@ def _validate_complete_tree(root: Path) -> None:
         raise RuntimeError("backup database hash mismatch")
     source_profile = manifest.get("source_profile")
     if source_profile is not None and (
-        source_profile not in {"released_v0", "known_main_v0"}
+        source_profile not in {"released_v0", "known_main_v0", "ready_v1"}
         or inspect_migration_backup_source(database) != source_profile
     ):
         raise RuntimeError("backup source profile does not match SQLite schema")

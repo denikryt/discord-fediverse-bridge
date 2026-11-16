@@ -1,4 +1,4 @@
-"""Offline EX migration backup and v1 SH-readmission observable regressions."""
+"""Offline EX migration backup and v2 SH-readmission observable regressions."""
 
 from __future__ import annotations
 
@@ -41,15 +41,15 @@ def _prepare(database: Database, path: Path, root: Path) -> Path | None:
 
 
 def test_release_v0_startup_creates_backup_before_stamping_v1(tmp_path: Path) -> None:
-    """The historical source remains restorable after a successful v1 admission."""
+    """The historical source remains restorable after a successful v2 admission."""
     database, path = _database(tmp_path, release=True)
     try:
         archived = _prepare(database, path, tmp_path)
         assert archived is not None and archived.is_file()
         assert archived.parent == tmp_path / "backups" / "migrations"
-        assert read_database_state(database.engine).profile == "ready_v1"
+        assert read_database_state(database.engine).profile == "ready_v2"
         with sqlite3.connect(path) as conn:
-            assert conn.execute("PRAGMA user_version").fetchone() == (1,)
+            assert conn.execute("PRAGMA user_version").fetchone() == (2,)
         # The verified backup is the *original* v0 source, not the new v1.
         restored = tmp_path / "restorable-v0.db"
         import tarfile
@@ -65,7 +65,7 @@ def test_release_v0_startup_creates_backup_before_stamping_v1(tmp_path: Path) ->
             assert original.execute("PRAGMA integrity_check").fetchone() == ("ok",)
             assert original.execute("SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%'").fetchone() == (30,)
         with FileLock(tmp_path / "deployment.lock").acquire(exclusive=False):
-            assert read_database_state(database.engine).profile == "ready_v1"
+            assert read_database_state(database.engine).profile == "ready_v2"
     finally:
         database.close()
 
@@ -81,7 +81,7 @@ def test_v1_restart_under_shared_lock_is_read_only_and_has_no_new_backup(tmp_pat
         assert path.read_bytes() == before
         assert list((tmp_path / "backups" / "migrations").glob("*.tar.gz")) == [first]
         with FileLock(tmp_path / "deployment.lock").acquire(exclusive=False):
-            assert read_database_state(database.engine).profile == "ready_v1"
+            assert read_database_state(database.engine).profile == "ready_v2"
             assert path.read_bytes() == before
     finally:
         database.close()
@@ -111,7 +111,7 @@ def test_empty_v0_can_bootstrap_without_migration_archive(tmp_path: Path) -> Non
     database, path = _database(tmp_path, release=False)
     try:
         assert _prepare(database, path, tmp_path) is None
-        assert read_database_state(database.engine).profile == "ready_v1"
+        assert read_database_state(database.engine).profile == "ready_v2"
         assert not (tmp_path / "backups" / "migrations").exists()
     finally:
         database.close()
@@ -122,7 +122,7 @@ def test_future_version_is_rejected_before_backup_and_network(tmp_path: Path) ->
     database, path = _database(tmp_path, release=True)
     try:
         with sqlite3.connect(path) as conn:
-            conn.execute("PRAGMA user_version=2")
+            conn.execute("PRAGMA user_version=3")
         before = path.read_bytes()
         with pytest.raises(RuntimeError, match="Unsupported SQLite user_version"):
             _prepare(database, path, tmp_path)
@@ -140,7 +140,7 @@ def test_shared_startup_rejects_stale_v0_without_writing(tmp_path: Path) -> None
     try:
         before = path.read_bytes()
         with FileLock(tmp_path / "deployment.lock").acquire(exclusive=False):
-            with pytest.raises(RuntimeError, match="v1 read-only admission failed"):
+            with pytest.raises(RuntimeError, match="current version read-only admission failed"):
                 admit_sqlite_under_shared_lease(database)
         assert path.read_bytes() == before
         assert inspect_migration_backup_source(path) == "released_v0"

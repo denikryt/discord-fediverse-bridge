@@ -1,4 +1,4 @@
-"""Versioned SQLite migration owner and legacy additive/identity helpers.
+"""Versioned SQLite migration owner and legacy identity helpers.
 
 ``Database.migrate`` delegates to ``run_pending_migrations`` for source
 admission, a single writer-owned transaction and final version stamping. The
@@ -87,7 +87,7 @@ class _Stage4UserContentIdentity:
 # SQLite DB-version ownership is independent from application VERSION. Until
 # CP04/CP05 has assembled all v1 constraints and transfer mappings, the step
 # refuses to stamp v1 rather than leaving any runnable partial schema.
-DATABASE_VERSION = 1
+DATABASE_VERSION = 2
 
 
 # The one supported historical upgrade is complete only when its constraints
@@ -101,8 +101,18 @@ def _upgrade_v0_to_v1_step(
     upgrade_v0_to_v1(conn, profile, config)
 
 
+def _upgrade_v1_to_v2_step(
+    conn: Connection, profile: str, config: Stage4IdentityMigrationConfig | None
+) -> None:
+    """Rebuild constrained tables and add independent Person-follow identity."""
+    from .migration_steps.v1_to_v2 import upgrade_v1_to_v2
+
+    upgrade_v1_to_v2(conn, profile, config)
+
+
 MIGRATIONS: dict[int, Callable[[Connection, str, Stage4IdentityMigrationConfig | None], None]] = {
     1: _upgrade_v0_to_v1_step,
+    2: _upgrade_v1_to_v2_step,
 }
 
 
@@ -142,11 +152,11 @@ def _check_database_integrity(conn: Connection) -> None:
         raise RuntimeError("SQLite database failed integrity checking")
 
 
-def _validate_current_v1_schema(conn: Connection) -> None:
-    """Compare v1 physical DDL to its immutable independent snapshot, read-only."""
-    snapshot = Path(__file__).parent / "schema_versions" / "v1.sql"
+def _validate_schema_version(conn: Connection, version: int) -> None:
+    """Compare exact physical DDL to the immutable per-version SQL snapshot."""
+    snapshot = Path(__file__).parent / "schema_versions" / f"v{version}.sql"
     if not snapshot.is_file():
-        raise RuntimeError("SQLite v1 schema snapshot is not ready (CP05 required)")
+        raise RuntimeError(f"SQLite v{version} schema snapshot is missing")
     # The fixed snapshot is executed only in an isolated disposable memory DB,
     # never on the existing app database or its migration connection.
     with sqlite3.connect(":memory:") as reference:
@@ -157,7 +167,7 @@ def _validate_current_v1_schema(conn: Connection) -> None:
             ORDER BY type, name, tbl_name
         """).fetchall()
     if schema_entries_fingerprint(_current_sqlite_schema_entries(conn)) != schema_entries_fingerprint(expected):
-        raise RuntimeError("SQLite v1 physical schema differs from the fixed snapshot")
+        raise RuntimeError(f"SQLite v{version} physical schema differs from the fixed snapshot")
     _check_database_integrity(conn)
 
 
@@ -168,7 +178,10 @@ def _read_state_on_connection(conn: Connection) -> SQLiteDatabaseState:
         raise RuntimeError(f"Unsupported SQLite user_version={version}; target is {DATABASE_VERSION}")
     entries = _current_sqlite_schema_entries(conn)
     if version == DATABASE_VERSION:
-        _validate_current_v1_schema(conn)
+        _validate_schema_version(conn, version)
+        return SQLiteDatabaseState(version, f"ready_v{version}")
+    if version == 1:
+        _validate_schema_version(conn, 1)
         return SQLiteDatabaseState(version, "ready_v1")
     if not entries:
         return SQLiteDatabaseState(version, "empty_v0")
@@ -211,14 +224,12 @@ def _rollback_physical_transaction(conn: Connection) -> None:
 def run_pending_migrations(
     engine: Engine, stage4_identity: Stage4IdentityMigrationConfig | None = None
 ) -> None:
-    """Perform an atomic v0→v1 upgrade, never stamping incomplete target DDL.
+    """Perform an atomic v0/v1→v2 upgrade with exact per-version DDL guards.
 
     Offline startup owns the existing EX deployment lock (CP06). The caller
     must not create tables before the read-only source admission. A second
     contender rechecks the header and physical profile inside BEGIN IMMEDIATE.
     """
-    from . import schema
-
     before = read_database_state(engine)
     if before.version == DATABASE_VERSION:
         return
@@ -230,9 +241,9 @@ def run_pending_migrations(
             if conn.exec_driver_sql("PRAGMA foreign_keys").scalar_one() != 1:
                 raise RuntimeError("Migration writer lacks foreign key enforcement")
             conn.rollback()
-            if before.profile != "empty_v0":
+            if before.version < DATABASE_VERSION:
                 # FK toggling inside a SQLite transaction is a no-op. Disable
-                # only for supported source rebuilds and restore after rollback
+                # only for the planned source/table rebuilds and restore after rollback
                 # or commit, including under injected failure.
                 conn.exec_driver_sql("PRAGMA foreign_keys=OFF")
                 if conn.exec_driver_sql("PRAGMA foreign_keys").scalar_one() != 0:
@@ -242,20 +253,22 @@ def run_pending_migrations(
             conn.exec_driver_sql("BEGIN IMMEDIATE")
             current = _read_state_on_connection(conn)
             if current.version == DATABASE_VERSION:
-                # A concurrent v1 starter completed while we waited for EX.
+                # A concurrent v2 starter completed while we waited for EX.
                 conn.rollback()
                 return
             if current != before:
                 raise RuntimeError("SQLite migration source changed after preflight")
-            if current.profile == "empty_v0":
-                schema.create_all(conn)
-                _install_profile_media_triggers(conn)
-            else:
-                MIGRATIONS[1](conn, current.profile, stage4_identity)
-            _validate_current_v1_schema(conn)
-            # Only the runner can stamp the DB header, after every schema,
-            # relationship and FK invariant has already passed.
-            conn.exec_driver_sql("PRAGMA user_version=1")
+            # Each transition is validated against the physical frozen
+            # snapshot before the next one is attempted. A failed transition
+            # never stamps a partial intermediate version on disk.
+            for target_version in range(current.version + 1, DATABASE_VERSION + 1):
+                if target_version == 1 and current.profile == "empty_v0":
+                    from .migration_steps.v1_schema_reference import create_missing_v1_objects
+                    create_missing_v1_objects(conn, include_triggers=True)
+                else:
+                    MIGRATIONS[target_version](conn, current.profile, stage4_identity)
+                _validate_schema_version(conn, target_version)
+            conn.exec_driver_sql(f"PRAGMA user_version={DATABASE_VERSION}")
             conn.commit()
         except BaseException:
             _rollback_physical_transaction(conn)

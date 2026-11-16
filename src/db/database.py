@@ -34,6 +34,8 @@ from .repositories import (
     RemoteActorRepository,
     RemoteSubscriberRepository,
     RemoteSubscriptionRepository,
+    RemotePersonFollowRepository,
+    RemotePersonFeedRepository,
     UserRepository,
     UserProfileRepository,
     UserActorFollowerRepository,
@@ -76,6 +78,8 @@ class Database:
         self.local_community_surfaces = LocalCommunitySurfaceRepository(self.session)
         self.local_community_relay = LocalCommunityRelayRepository(self.session, self.immediate_session)
         self.remote_subscriptions = RemoteSubscriptionRepository(self.session)
+        self.remote_person_follows = RemotePersonFollowRepository(self.session)
+        self.remote_person_feeds = RemotePersonFeedRepository(self.session)
         self.bridge_actor_follows = BridgeActorFollowRepository(self.session)
         self.bridge_policy_entries = BridgePolicyEntryRepository(self.session)
         self.event_receipts = EventReceiptRepository(self.session)
@@ -117,7 +121,7 @@ class Database:
     def migrate(
         self, stage4_identity: Stage4IdentityMigrationConfig | None = None
     ) -> None:
-        """Admit SQLite input and run the one-time versioned transaction."""
+        """Admit SQLite input and atomically upgrade any supported source to v2."""
         migrations.run_pending_migrations(self.engine, stage4_identity=stage4_identity)
 
     @contextmanager
