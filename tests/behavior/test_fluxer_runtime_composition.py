@@ -3,12 +3,11 @@
 from __future__ import annotations
 
 import json
+import importlib.util
 from pathlib import Path
 
 import httpx
 import pytest
-
-pytest.importorskip("discord", reason="runtime composition requires discord.py")
 
 from src.app import build_runtime
 from src.config import Settings
@@ -18,11 +17,12 @@ from src.http_api import create_http_app
 def _settings(root: Path, *, enabled: bool) -> Settings:
     """Give the real runtime independent database/lease paths and optional Node RPC."""
     raw = {
-        "DISCORD_TOKEN": "test-discord-token",
+        "BRIDGE_PLATFORM": "fluxer" if enabled else "discord",
         "PUBLIC_BASE_URL": "https://bridge.example",
         "FEDIFY_SHARED_SECRET": "test-fedify-bearer",
-        "BRIDGE_SUPER_ADMIN_USER_IDS": "1234",
     }
+    if not enabled:
+        raw.update(DISCORD_TOKEN="test-discord-token", BRIDGE_SUPER_ADMIN_USER_IDS="1234")
     if enabled:
         raw["FLUXER_CONNECTORS_JSON"] = json.dumps([{
             "connector_key": "fluxer-one", "origin": "https://fluxer.example",
@@ -46,7 +46,11 @@ async def test_opt_in_registers_exact_adapter_and_authenticated_http_sink(tmp_pa
         assert runtime.fluxer_adapter is adapter
         assert adapter.connector.instance_origin == "https://fluxer.example"
         assert runtime.fluxer_ingress is not None
-        assert runtime.physical_delivery_scheduler.connector_keys == ("discord-primary", "fluxer-one")
+        assert runtime.physical_delivery_scheduler.connector_keys == ("fluxer-one",)
+        assert runtime.bot is None and runtime.discord_adapter is None
+        assert runtime.discord_oauth_client is None
+        assert runtime.personal_feed_discord_delivery_worker is None
+        assert runtime.physical_mutation_coordinator is None
         assert not adapter.dispatch_ready()
         async with httpx.AsyncClient(transport=httpx.ASGITransport(app=create_http_app(runtime)),
                                      base_url="http://bridge") as client:
@@ -111,6 +115,7 @@ async def test_sidecar_readiness_pins_authenticated_bot_and_rejects_restart_rebi
 
 
 @pytest.mark.asyncio
+@pytest.mark.skipif(importlib.util.find_spec('discord') is None, reason='Discord-only test requires discord.py')
 async def test_disabled_fluxer_has_no_adapter_lane_or_route(tmp_path: Path) -> None:
     """Default startup leaves Discord-only composition and private routes unchanged."""
     runtime = build_runtime(_settings(tmp_path, enabled=False))

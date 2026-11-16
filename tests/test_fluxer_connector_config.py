@@ -29,12 +29,15 @@ class FluxerConfigTests(unittest.TestCase):
     @staticmethod
     def _settings(raw: str | None) -> Settings:
         """Construct Settings through its real environment-keyed validation."""
+        # The operator chooses one platform per service, not an opt-in dual bot.
+        selected = raw is not None
         return Settings.model_validate({
-            "DISCORD_TOKEN": "discord-test",
+            "BRIDGE_PLATFORM": "fluxer" if selected else "discord",
             "PUBLIC_BASE_URL": "https://bridge.example",
             "FEDIFY_SHARED_SECRET": "gateway-secret",
-            "BRIDGE_SUPER_ADMIN_USER_IDS": "1",
-            **({"FLUXER_CONNECTORS_JSON": raw} if raw is not None else {}),
+            **({"DISCORD_TOKEN": "discord-test", "BRIDGE_SUPER_ADMIN_USER_IDS": "1"}
+               if not selected else {}),
+            **({"FLUXER_CONNECTORS_JSON": raw} if selected else {}),
         })
 
     def test_disconnected_default_has_no_connector_config(self) -> None:

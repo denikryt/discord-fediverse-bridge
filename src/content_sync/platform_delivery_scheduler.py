@@ -153,9 +153,12 @@ class PlatformPhysicalDeliveryScheduler:
                     await refresh()
                 readiness = getattr(adapter, 'dispatch_ready', None)
                 if readiness is None or readiness():
-                    # Alternate priority each pass so reconciliations, Creates
-                    # and mutations can all progress without a second worker.
-                    if round_robin % 2 == 0:
+                    if self._mutations is None:
+                        # Fluxer-only #12 has no verified canonical target owner.
+                        # Keep Create recovery active without Discord rendering.
+                        await self._fanout.recover_pending(connector_key=key)
+                    elif round_robin % 2 == 0:
+                        # Alternate claim ordering in Discord's existing lane.
                         await self._fanout.recover_pending(connector_key=key)
                         await self._mutations.drain(connector_key=key, limit=1)
                     else:

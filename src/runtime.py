@@ -3,14 +3,17 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+from typing import TYPE_CHECKING
 
 from .runtime_cleanup import quarantine, release_quarantine
+
+if TYPE_CHECKING:
+    from .discord_bot import BridgeBot
+    from .discord_adapter import DiscordAdapter
 from .community_sync.runtime import CommunityRuntime
 from .bridge_policy import BridgePolicyService
 from .config import Settings
 from .db import Database
-from .discord_bot import BridgeBot
-from .discord_adapter import DiscordAdapter
 from .fluxer_adapter import FluxerAdapter
 from .fluxer_ingress import FluxerInboundHandler
 from .fluxer_rpc_client import FluxerRpcClient
@@ -37,8 +40,8 @@ from .personal_feed_discord_delivery_worker import PersonalFeedDiscordDeliveryWo
 class Runtime:
     """Group the shared long-lived services that request handlers and Discord callbacks need.
 
-    Required services are constructed once in app.py and shared for the bridge
-    lifetime. Fluxer owners are absent only when the connector is disabled.
+    Common services are constructed once in app.py. The selected platform's
+    external owners are present exclusively; absent SDKs are never closed.
     Failed external owners remain strongly retained until process termination.
     """
 
@@ -47,17 +50,17 @@ class Runtime:
     settings: Settings
     database: Database
     fedify_gateway: FedifyGatewayClient
-    discord_oauth_client: DiscordOAuthClient
+    discord_oauth_client: DiscordOAuthClient | None
     content_publish_service: ContentPublishService
     registration_service: RegistrationService
     bridge_policy_service: BridgePolicyService
-    bot: BridgeBot
-    discord_adapter: DiscordAdapter
+    bot: BridgeBot | None
+    discord_adapter: DiscordAdapter | None
     fluxer_adapter: FluxerAdapter | None
     fluxer_rpc: FluxerRpcClient | None
     fluxer_ingress: FluxerInboundHandler | None
     adapter_registry: PlatformAdapterRegistry
-    physical_mutation_coordinator: PlatformPhysicalMutationCoordinator
+    physical_mutation_coordinator: PlatformPhysicalMutationCoordinator | None
     physical_delivery_scheduler: PlatformPhysicalDeliveryScheduler
     physical_dispatch_gate: ConnectorDispatchCapacity
     community_runtime: CommunityRuntime
@@ -67,8 +70,8 @@ class Runtime:
     user_actor_follow_service: UserActorFollowService
     user_actor_delivery_service: UserActorDeliveryService
     user_actor_delivery_worker: UserActorDeliveryWorker
-    personal_feed_conversation_runtime: PersonalFeedConversationRuntime
-    personal_feed_discord_delivery_worker: PersonalFeedDiscordDeliveryWorker
+    personal_feed_conversation_runtime: PersonalFeedConversationRuntime | None
+    personal_feed_discord_delivery_worker: PersonalFeedDiscordDeliveryWorker | None
     deployment_state_lease: FileLock
     runtime_lifetime_lease: FileLock
     _unclosed_owners: list[tuple[object, BaseException]] = field(default_factory=list, init=False, repr=False)
@@ -100,10 +103,11 @@ class Runtime:
         except BaseException as exc:
             errors.append(exc)
 
-        try:
-            self.discord_adapter.close_ingress_admission()
-        except BaseException as exc:
-            errors.append(exc)
+        if self.discord_adapter is not None:
+            try:
+                self.discord_adapter.close_ingress_admission()
+            except BaseException as exc:
+                errors.append(exc)
         if self.fluxer_ingress is not None:
             # This gate closes before stopping lanes or disposing SQLite: an
             # already admitted HTTP callback remains owned until quiesce joins.
@@ -114,15 +118,16 @@ class Runtime:
 
         for operation in (
             *((self.fluxer_ingress.quiesce,) if self.fluxer_ingress is not None else ()),
-            self.discord_adapter.drain_ingress,
+            *((self.discord_adapter.drain_ingress,) if self.discord_adapter is not None else ()),
             self.physical_delivery_scheduler.stop,
             self.physical_dispatch_gate.drain,
-            self.personal_feed_discord_delivery_worker.stop,
+            *((self.personal_feed_discord_delivery_worker.stop,)
+              if self.personal_feed_discord_delivery_worker is not None else ()),
             self.user_actor_delivery_worker.stop,
-            self.discord_adapter.quiesce,
+            *((self.discord_adapter.quiesce,) if self.discord_adapter is not None else ()),
             *((self.fluxer_adapter.quiesce,) if self.fluxer_adapter is not None else ()),
             *((self.fluxer_rpc.close,) if self.fluxer_rpc is not None else ()),
-            self.discord_oauth_client.close,
+            *((self.discord_oauth_client.close,) if self.discord_oauth_client is not None else ()),
             self.fedify_gateway.close,
         ):
             try:

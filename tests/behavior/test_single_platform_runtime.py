@@ -8,7 +8,6 @@ from __future__ import annotations
 
 import asyncio
 import hashlib
-import importlib.util
 import json
 import shutil
 import tempfile
@@ -82,7 +81,6 @@ class ExclusiveConfigurationContracts(unittest.TestCase):
                     Settings.model_validate({**common, **values})
 
 
-@unittest.skipUnless(importlib.util.find_spec("discord"), "discord.py dependency unavailable")
 class ExclusiveRuntimeContracts(unittest.TestCase):
     """Exercise real SQLite ownership and the process's composition root."""
 
@@ -116,6 +114,21 @@ class ExclusiveRuntimeContracts(unittest.TestCase):
             finally:
                 asyncio.run(runtime.close())
 
+    def test_fluxer_runtime_rejects_accidental_discord_owner(self) -> None:
+        """An accidental second platform owner is refused at graph validation."""
+        from src.app import _validate_runtime_graph, build_runtime
+
+        runtime = build_runtime(config(self.root))
+        try:
+            self.assertIsNone(runtime.bot)
+            runtime.bot = object()
+            with self.assertRaisesRegex(RuntimeError, 'Discord services'):
+                _validate_runtime_graph(runtime)
+            runtime.bot = None
+            _validate_runtime_graph(runtime)
+        finally:
+            asyncio.run(runtime.close())
+
     def test_initialized_discord_actor_key_cannot_be_adopted_by_fluxer(self) -> None:
         """An empty Discord deployment can still own a persistent AP signing key."""
         from src.actor_key_service import BridgeActorKeyBootstrap
@@ -146,6 +159,76 @@ class ExclusiveRuntimeContracts(unittest.TestCase):
         with self.assertRaisesRegex((RuntimeError, ValueError), "(mode|Discord|legacy|Fluxer)"):
             build_runtime(config(self.root))
         self.assertEqual(hashlib.sha256(destination.read_bytes()).digest(), before)
+
+
+class ExclusiveSchedulerContracts(unittest.IsolatedAsyncioTestCase):
+    """Keep durable Create recovery without activating Fluxer canonical mutations."""
+
+    async def test_no_mutation_worker_keeps_normal_recovery_running(self) -> None:
+        """Fluxer fanout progresses without invoking a Discord-only formatter."""
+        from src.content_sync.platform_delivery_scheduler import PlatformPhysicalDeliveryScheduler
+        from types import SimpleNamespace
+
+        recovered = asyncio.Event()
+        events = []
+
+        async def recover_pending(*, connector_key: str) -> None:
+            """Observe the actual scheduler-selected connector and wake the test."""
+            events.append(("create", connector_key))
+            recovered.set()
+
+        async def forbid_canonical_mutation(*, connector_key: str, limit: int) -> None:
+            """Any mutation call would violate the disabled Fluxer lane contract."""
+            self.fail("Unowned Fluxer canonical mutation was dispatched")
+
+        adapter = SimpleNamespace(dispatch_ready=lambda: True)
+        registry = SimpleNamespace(get=lambda key: adapter)
+        fanout = SimpleNamespace(registry=registry, recover_pending=recover_pending)
+        scheduler = PlatformPhysicalDeliveryScheduler(
+            connector_keys=("fx-primary",), fanout=fanout, mutations=None,
+            poll_seconds=0.05,
+        )
+        scheduler.start()
+        try:
+            await asyncio.wait_for(recovered.wait(), timeout=1)
+            self.assertEqual(events[0], ("create", "fx-primary"))
+        finally:
+            await scheduler.stop()
+
+    async def test_discord_lane_still_reaches_both_recovery_coordinators(self) -> None:
+        """Existing Discord scheduler continues to recover Creates and edits."""
+        from src.content_sync.platform_delivery_scheduler import PlatformPhysicalDeliveryScheduler
+        from types import SimpleNamespace
+
+        both = asyncio.Event()
+        events = []
+
+        async def recover_pending(*, connector_key: str) -> None:
+            """Record the persistent Create lane's execution."""
+            events.append("create")
+            if "mutation" in events:
+                both.set()
+
+        async def drain(*, connector_key: str, limit: int) -> None:
+            """Record the existing mutation coordinator's scheduled execution."""
+            self.assertEqual((connector_key, limit), ("discord-primary", 1))
+            events.append("mutation")
+            if "create" in events:
+                both.set()
+
+        registry = SimpleNamespace(get=lambda key: SimpleNamespace(dispatch_ready=lambda: True))
+        scheduler = PlatformPhysicalDeliveryScheduler(
+            connector_keys=("discord-primary",),
+            fanout=SimpleNamespace(registry=registry, recover_pending=recover_pending),
+            mutations=SimpleNamespace(drain=drain), poll_seconds=0.05,
+        )
+        scheduler.start()
+        try:
+            await asyncio.wait_for(both.wait(), timeout=1)
+            self.assertIn("create", events)
+            self.assertIn("mutation", events)
+        finally:
+            await scheduler.stop()
 
 
 if __name__ == "__main__":
