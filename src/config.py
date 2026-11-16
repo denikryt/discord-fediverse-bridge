@@ -1,6 +1,7 @@
 """Environment-backed settings for the Python bridge process."""
 
 from urllib.parse import urlsplit
+from typing import Literal
 
 from pydantic import Field, HttpUrl, field_validator, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
@@ -16,7 +17,11 @@ class Settings(BaseSettings):
         env_ignore_empty=True,
     )
 
-    discord_token: str = Field(alias="DISCORD_TOKEN")
+    # A service owns exactly one platform; the default remains old Discord.
+    bridge_platform: Literal["discord", "fluxer"] = Field(
+        default="discord", alias="BRIDGE_PLATFORM"
+    )
+    discord_token: str | None = Field(default=None, alias="DISCORD_TOKEN")
     # Disabled unless the operator explicitly supplies validated connector JSON.
     fluxer_connectors_json: str | None = Field(
         default=None, alias="FLUXER_CONNECTORS_JSON", repr=False
@@ -75,7 +80,9 @@ class Settings(BaseSettings):
     discord_guild_blocklist: list[str] = Field(
         default_factory=list, alias="DISCORD_GUILD_BLOCKLIST"
     )
-    bridge_super_admin_user_ids: list[str] = Field(alias="BRIDGE_SUPER_ADMIN_USER_IDS")
+    bridge_super_admin_user_ids: list[str] = Field(
+        default_factory=list, alias="BRIDGE_SUPER_ADMIN_USER_IDS"
+    )
     profile_media_root: str = Field(
         default="/data/profile-media", alias="PROFILE_MEDIA_ROOT"
     )
@@ -170,12 +177,37 @@ class Settings(BaseSettings):
         return self
 
     @model_validator(mode="after")
-    def _require_bootstrap_super_admin(self) -> "Settings":
-        """Fail startup when no immutable bridge administrator is configured."""
-        if not self.bridge_super_admin_user_ids:
-            raise ValueError(
-                "BRIDGE_SUPER_ADMIN_USER_IDS must contain at least one Discord user ID"
-            )
+    def _validate_exclusive_platform(self) -> "Settings":
+        """Reject incomplete or mixed platform ownership before runtime construction.
+
+        Discord keeps its released credentials contract; standalone Fluxer has
+        its own trusted connector and must never silently initialize Discord.
+        """
+        # Parsing the existing exact connector schema here prevents a malformed
+        # secret from crossing into SQLite or the Node-owned SDK boundary.
+        connectors = self.fluxer_connectors
+        if self.bridge_platform == "discord":
+            if not self.discord_token or not self.discord_token.strip():
+                raise ValueError("DISCORD_TOKEN is required in Discord mode")
+            if not self.bridge_super_admin_user_ids:
+                raise ValueError(
+                    "BRIDGE_SUPER_ADMIN_USER_IDS must contain at least one Discord user ID"
+                )
+            if self.fluxer_connectors_json:
+                raise ValueError("Discord mode cannot configure Fluxer connectors")
+        else:
+            # Credentials supplied for an inactive platform indicate operator
+            # confusion; failing closed is safer than silently ignoring them.
+            if (
+                self.discord_token
+                or self.bridge_super_admin_user_ids
+                or self.discord_oauth_client_id
+                or self.discord_oauth_client_secret
+                or self.discord_oauth_redirect_uri is not None
+            ):
+                raise ValueError("Fluxer-only mode cannot use Discord credentials")
+            if len(connectors) != 1:
+                raise ValueError("Fluxer-only mode requires exactly one trusted connector")
         return self
 
     @model_validator(mode="after")

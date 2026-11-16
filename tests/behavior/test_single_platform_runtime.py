@@ -71,6 +71,11 @@ class ExclusiveConfigurationContracts(unittest.TestCase):
             {"BRIDGE_PLATFORM": "fluxer", **discord, "FLUXER_CONNECTORS_JSON": json.dumps([CONNECTOR])},
             {"BRIDGE_PLATFORM": "fluxer", "FLUXER_CONNECTORS_JSON": "[]"},
             {"BRIDGE_PLATFORM": "discord", **discord, "FLUXER_CONNECTORS_JSON": json.dumps([CONNECTOR])},
+            {"BRIDGE_PLATFORM": "discord", **discord, "FLUXER_CONNECTORS_JSON": "[]"},
+            {"BRIDGE_PLATFORM": "discord", "BRIDGE_SUPER_ADMIN_USER_IDS": "123"},
+            {"BRIDGE_PLATFORM": "fluxer", "FLUXER_CONNECTORS_JSON": json.dumps([CONNECTOR]),
+             "DISCORD_OAUTH_CLIENT_ID": "unexpected-discord-oauth"},
+            {"BRIDGE_PLATFORM": "fluxer", "FLUXER_CONNECTORS_JSON": json.dumps([CONNECTOR, CONNECTOR])},
         ):
             with self.subTest(values=list(values)):
                 with self.assertRaises(ValueError):
