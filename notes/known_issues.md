@@ -649,3 +649,7 @@ Independent VM verification on fluxer-release@2026.1106.212644 found four real r
 ## Fluxer fixture URL maintenance
 
 A complete-history CP041 checkout exposes one existing retired-AP-URL scanner failure in two Fluxer behavioral fixtures. The separate follow-up changes only their activity/inbox/outbox/followers URLs to actor-scoped paths; scanner and behavioral expectations remain unchanged. Final Python suite after both fixes: 2202 passed, 1 skipped (actual Compose), 98 subtests. Fluxer Node 22: 117/117 plus tsc/lock checks. Fedify tsc and 20 security tests pass; normal tsx CLI remains blocked by Unix-socket EPERM (alternative entry point: 51/52 files, same child-CLI blocker). Live rerun of corrected REST writes remains required.
+
+## Plan 145 CP08 — live Fluxer capability verification pending
+
+Current checkout has verified Node ACL behavior for forum vs thread bit 38 and bot-owned mutation view/history eligibility (9 focused tests). Production Fluxer write capabilities remain false. This environment has no installed `@fluxerjs/core`, no Docker CLI and no operator Fluxer instance/credentials; SDK typecheck, physical REST readback, real permission revocation and Compose validation remain NOT RUN. CP08 is not complete and CP09 must not enable writes before the plan's real-instance contract proof.

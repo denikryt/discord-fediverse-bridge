@@ -6,6 +6,9 @@
  */
 import {PrivateRpcError, type RpcHandler} from './transport.ts';
 
+// Fluxer permission bit 38 is not named in SDK v3.3.0's public enum.
+const SEND_MESSAGES_IN_THREADS = 1n << 38n;
+
 const ACTIONS = new Set([
   'view_channel', 'read_history', 'create_forum_post',
   'start_message_thread', 'send_message', 'edit_message', 'delete_message',
@@ -15,12 +18,13 @@ type SdkChannelAcl = {
   id: string;
   isGuild(): boolean;
   isThread(): boolean;
+  isForum(): boolean;
 };
 type SdkMemberAcl = {
   id: string;
   guild: {id: string};
   roles: {roleIds: readonly string[]};
-  permissionsIn(channel: SdkChannelAcl): {has(flag: string): boolean};
+  permissionsIn(channel: SdkChannelAcl): {has(flag: string | bigint): boolean};
 };
 type SdkGuildAcl = {
   id: string;
@@ -50,28 +54,37 @@ function channelGuild(channel: SdkChannelAcl, id: string): string {
   return physicalId(guild);
 }
 
-/** Safely evaluate an operation against already verified effective rights. */
+/** Resolve only action-specific bot ACL, not server-supported write capability.
+ *
+ * Message ownership, forum tag policy, and actual REST write support are
+ * independent checks at the physical executor and capability boundaries.
+ */
 function decide(action: string, can: (flag: string) => boolean,
-                thread: boolean): string {
+                thread: boolean, forum: boolean, canThreadSend: boolean): string {
   if (action === 'view_channel') return can('ViewChannel') ? 'allowed' : 'denied';
   if (action === 'read_history') {
     return can('ViewChannel') && can('ReadMessageHistory') ? 'allowed' : 'denied';
   }
-  if (action === 'send_message' || action === 'create_forum_post') {
-    if (!can('ViewChannel') || !can('SendMessages')) return 'denied';
-    // The SDK's public PermissionFlags omit the server's thread-specific
-    // SEND_MESSAGES_IN_THREADS bit. Ordinary SendMessages is not sufficient
-    // to authorize a thread write, nor do base rights prove a forum POST.
-    return thread || action === 'create_forum_post' ? 'unknown' : 'allowed';
+  if (action === 'create_forum_post') {
+    return forum && can('ViewChannel') && can('SendMessages') ? 'allowed' : 'denied';
+  }
+  if (action === 'send_message') {
+    if (!can('ViewChannel')) return 'denied';
+    // A thread send needs bit 38 on the thread itself. A parent forum's
+    // ordinary SendMessages bit neither grants nor revokes that thread bit.
+    return thread ? (canThreadSend ? 'allowed' : 'denied') :
+      (can('SendMessages') ? 'allowed' : 'denied');
   }
   if (action === 'start_message_thread') {
     if (!can('ViewChannel') || !can('ReadMessageHistory')) return 'denied';
-    // Thread-specific create permissions are not exposed in these SDK flags.
+    // Starting a text-message thread is deliberately unsupported in #12.
     return 'unknown';
   }
-  if ((action === 'edit_message' || action === 'delete_message') &&
-      !can('ViewChannel')) return 'denied';
-  // Message ownership and the exact write contract are separate from ACLs.
+  if (action === 'edit_message' || action === 'delete_message') {
+    // Viewing history is necessary to fetch and verify the exact bot-owned
+    // target. This does not authorize edits to any other author's messages.
+    return can('ViewChannel') && can('ReadMessageHistory') ? 'allowed' : 'denied';
+  }
   return 'unknown';
 }
 
@@ -142,7 +155,11 @@ export function createSdkPermissionHandler(client: SdkPermissionClient): RpcHand
       throw new PrivateRpcError('invalid_request');
     }
     const can = (flag: string) => effective.every(rights => rights.has(flag));
-    for (const action of args.actions) result[action] = decide(action, can, channel.isThread());
+    const canThreadSend = channel.isThread() && effective[0].has(SEND_MESSAGES_IN_THREADS);
+    for (const action of args.actions) {
+      result[action] = decide(action, can, channel.isThread(),
+        channel.isForum(), canThreadSend);
+    }
     return result;
   };
 }

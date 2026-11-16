@@ -7,11 +7,12 @@ import {createSdkPermissionHandler} from '../src/permissions.ts';
 /** Model the authoritative SDK channel type guards and scoped parent. */
 function channel(id, guild='guild-1', parent=null) {
   return {id, guildId:guild, parentId:parent, isGuild:()=>true,
-    isThread:()=>id.startsWith('thread-')};
+    isThread:()=>id.startsWith('thread-'), isForum:()=>id.startsWith('forum-')};
 }
 
 /** Start the real RPC with a fake Fluxer guild/member/roles source. */
-async function harness({missingRole=false, parentDeny=false, offline=false}={}) {
+async function harness({missingRole=false, parentDeny=false, parentNoSend=false,
+                         offline=false, threadSend=false, noHistory=false}={}) {
   const requests=[];
   const channels=new Map([['forum-1',channel('forum-1')],
     ['thread-1',channel('thread-1','guild-1','forum-1')]]);
@@ -20,7 +21,9 @@ async function harness({missingRole=false, parentDeny=false, offline=false}={}) 
       requests.push(['permissionsIn',ch.id]);
       const granted=ch.id==='forum-1' && parentDeny
         ? new Set(['ReadMessageHistory'])
-        : new Set(['ViewChannel','ReadMessageHistory','SendMessages']);
+        : new Set(['ViewChannel',...(!noHistory?['ReadMessageHistory']:[]),
+                   ...(!parentNoSend || ch.isThread()?['SendMessages']:[]),
+                   ...(ch.isThread() && threadSend?[1n << 38n]:[])]);
       return {has:(name)=>granted.has(name)};
     }};
   const guild={id:'guild-1',roles:new Map([['guild-1',{}],['role-1',{}]]),
@@ -66,8 +69,8 @@ test('operator checks current bot ACL: only evidenced view/history/send are allo
     assert.deepEqual(result.body.result,{
       bot_id:'bot-id',channel_id:'forum-1',guild_id:'guild-1',
       view_channel:'allowed',read_history:'allowed',send_message:'allowed',
-      create_forum_post:'unknown',start_message_thread:'unknown',
-      edit_message:'unknown',delete_message:'unknown',
+      create_forum_post:'allowed',start_message_thread:'unknown',
+      edit_message:'allowed',delete_message:'allowed',
     });
     assert.ok(h.requests.some(([op,id,opts])=>op==='channel' && id==='forum-1' && opts.force));
     assert.ok(h.requests.some(([op,id,opts])=>op==='member' && id==='bot-id' && opts.force));
@@ -95,9 +98,34 @@ test('thread SEND_MESSAGES flag does not prove SEND_MESSAGES_IN_THREADS',async()
     const result=await h.check({bot_id:'bot-id',channel_id:'thread-1',
       actions:['send_message','create_forum_post','start_message_thread']});
     assert.equal(result.status,200);
-    assert.equal(result.body.result.send_message,'unknown');
-    assert.equal(result.body.result.create_forum_post,'unknown');
+    assert.equal(result.body.result.send_message,'denied');
+    assert.equal(result.body.result.create_forum_post,'denied');
     assert.equal(result.body.result.start_message_thread,'unknown');
+  }finally{await h.stop();}
+});
+
+test('fresh thread bit 38 allows sending despite absence of parent ordinary send rights',async()=>{
+  const h=await harness({threadSend:true,parentNoSend:true});
+  try {
+    const result=await h.check({bot_id:'bot-id',channel_id:'thread-1',
+      actions:['send_message','create_forum_post','edit_message','delete_message']});
+    assert.equal(result.status,200);
+    assert.equal(result.body.result.send_message,'allowed');
+    assert.equal(result.body.result.create_forum_post,'denied');
+    assert.equal(result.body.result.edit_message,'allowed');
+    assert.equal(result.body.result.delete_message,'allowed');
+  }finally{await h.stop();}
+});
+
+test('bot-owned mutations require current history permission before message ownership lookup',async()=>{
+  const h=await harness({noHistory:true});
+  try {
+    const result=await h.check({bot_id:'bot-id',channel_id:'forum-1',
+      actions:['edit_message','delete_message','read_history']});
+    assert.equal(result.status,200);
+    assert.equal(result.body.result.edit_message,'denied');
+    assert.equal(result.body.result.delete_message,'denied');
+    assert.equal(result.body.result.read_history,'denied');
   }finally{await h.stop();}
 });
 
