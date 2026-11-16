@@ -215,7 +215,7 @@ class DiscordEventRouter:
                 message_id
             )
         )
-        if mapping is not None and mapping.publication_context == "personal_feed":
+        if mapping is not None and mapping.publication_context in ("personal_feed", "remote_person_feed"):
             outcome = await mutation_context.user_actor_delivery_service.submit_update(
                 object_id=mapping.object_id,
                 title=None,
@@ -224,6 +224,11 @@ class DiscordEventRouter:
             )
             if outcome == "accepted":
                 mutation_context.user_actor_delivery_wake.wake()
+                if (mapping.publication_context == "remote_person_feed"
+                        and self.remote_person_conversation_runtime is not None):
+                    worker = self.remote_person_conversation_runtime.delivery_worker
+                    if worker is not None:
+                        worker.wake()
             return
         if self.is_local_community_message(message_id):
             await self.local_community_runtime.handle_discord_message_edit(
@@ -257,12 +262,17 @@ class DiscordEventRouter:
                 message_id
             )
         )
-        if mapping is not None and mapping.publication_context == "personal_feed":
+        if mapping is not None and mapping.publication_context in ("personal_feed", "remote_person_feed"):
             outcome = await mutation_context.user_actor_delivery_service.submit_delete(
                 object_id=mapping.object_id
             )
             if outcome == "accepted":
                 mutation_context.user_actor_delivery_wake.wake()
+                if (mapping.publication_context == "remote_person_feed"
+                        and self.remote_person_conversation_runtime is not None):
+                    worker = self.remote_person_conversation_runtime.delivery_worker
+                    if worker is not None:
+                        worker.wake()
             return
         if self.is_local_community_message(message_id):
             await self.local_community_runtime.handle_discord_message_delete(

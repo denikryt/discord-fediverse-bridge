@@ -67,6 +67,29 @@ class BotCommentTransport:
         )
         return int(message.id)
 
+    async def edit(self, thread_id: int, message_id: int, content: str) -> None:
+        """Change only the bot's existing comment without creating a new message."""
+        import discord
+        thread = self.bot.get_channel(thread_id) or await self.bot.fetch_channel(thread_id)
+        permissions = thread.permissions_for(thread.guild.me)
+        if not (permissions.view_channel and permissions.read_message_history):
+            raise PermissionError('cannot fetch existing bot comment for edit')
+        message = await thread.fetch_message(message_id)
+        if message.author.id != self.bot.user.id:
+            raise PermissionError('cannot mutate a message from another Discord author')
+        await message.edit(content=content, allowed_mentions=discord.AllowedMentions.none())
+
+    async def delete(self, thread_id: int, message_id: int) -> None:
+        """Delete only the original bot-owned comment, never a user's source."""
+        thread = self.bot.get_channel(thread_id) or await self.bot.fetch_channel(thread_id)
+        permissions = thread.permissions_for(thread.guild.me)
+        if not (permissions.view_channel and permissions.read_message_history):
+            raise PermissionError('cannot fetch existing bot comment for deletion')
+        message = await thread.fetch_message(message_id)
+        if message.author.id != self.bot.user.id:
+            raise PermissionError('cannot delete a message from another Discord author')
+        await message.delete()
+
     async def find_uncertain(self, claim: CommentDispatch) -> int | None:
         """Identify a possible prior send by its canonical AP URL, without repost."""
         thread = self.bot.get_channel(claim.thread_id) or await self.bot.fetch_channel(claim.thread_id)
@@ -200,7 +223,8 @@ class RemotePersonCommentDeliveryWorker:
                     body=(getattr(canonical, 'content_markdown', None) or getattr(canonical, 'body_markdown', None) or ''),
                     actor_name=getattr(canonical, 'actor_name', None) or getattr(canonical, 'actor_username', None) or 'Remote user',
                     parent_message_id=parent_message,
-                    revision=getattr(canonical, 'revision_fingerprint', None) or str(canonical.content_revision),
+                    revision=(canonical.revision_fingerprint if isinstance(canonical, InboundConversationObject)
+                              else f'published:{canonical.content_revision}'),
                 )
         return None
 
@@ -262,6 +286,48 @@ class RemotePersonCommentDeliveryWorker:
             return
         self._complete(claim, message_id)
 
+    async def _mutate_retained(self) -> None:
+        """Apply authenticated canonical revisions to all delivered Discord copies."""
+        with self.database.session() as session:
+            pending = []
+            for row in session.scalars(select(RemotePersonCommentPlacement).where(
+                RemotePersonCommentPlacement.state == 'delivered',
+                RemotePersonCommentPlacement.discord_message_id.is_not(None),
+            ).order_by(RemotePersonCommentPlacement.id)):
+                copy = session.get(RemotePersonPostDelivery, row.root_delivery_id)
+                canonical = session.get(InboundConversationObject, row.inbound_object_id) \
+                    if row.inbound_object_id is not None else session.get(PublishedActivityObject, row.published_object_id)
+                if canonical is None or copy is None or row.destination_thread_id is None:
+                    continue
+                revision = (canonical.revision_fingerprint if isinstance(canonical, InboundConversationObject)
+                            else f'published:{canonical.content_revision}')
+                desired = 'deleted' if canonical.deleted_at is not None else revision
+                if row.last_applied_revision == desired:
+                    continue
+                name = getattr(canonical, 'actor_name', None) or getattr(canonical, 'actor_username', None) or 'Remote user'
+                content = getattr(canonical, 'content_markdown', None) or getattr(canonical, 'body_markdown', None) or ''
+                pending.append((row.id, row.destination_thread_id, row.discord_message_id,
+                                desired, f'**{name}:** {content}\n<{canonical.object_id}>'))
+        for placement_id, thread_id, message_id, revision, content in pending[:40]:
+            try:
+                if revision == 'deleted':
+                    await self.transport.delete(thread_id, message_id)
+                else:
+                    await self.transport.edit(thread_id, message_id, content)
+            except asyncio.CancelledError:
+                raise
+            except Exception as exc:
+                with self.database.immediate_session() as session:
+                    row = session.get(RemotePersonCommentPlacement, placement_id)
+                    if row is not None and row.state == 'delivered':
+                        row.last_error = ('comment mutation failed: ' + str(exc))[:500]
+                continue
+            with self.database.immediate_session() as session:
+                row = session.get(RemotePersonCommentPlacement, placement_id)
+                if row is not None and row.state == 'delivered':
+                    row.last_applied_revision = revision
+                    row.last_error = None
+
     async def drain_once(self) -> None:
         """Progress waiting parents and dispatch bounded independent destinations."""
         for _ in range(20):
@@ -300,3 +366,4 @@ class RemotePersonCommentDeliveryWorker:
                 continue
             if found is not None:
                 self._complete(claim, found)
+        await self._mutate_retained()

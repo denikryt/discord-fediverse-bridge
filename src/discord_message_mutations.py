@@ -273,7 +273,7 @@ class DiscordMessageMutationHandler:
         )
         is_personal_message = (
             personal_mapping is not None
-            and personal_mapping.publication_context == "personal_feed"
+            and personal_mapping.publication_context in ("personal_feed", "remote_person_feed")
         )
         is_local_message = self.event_router.is_local_community_message(message_id)
         delivery = (

@@ -15,7 +15,7 @@ if importlib.util.find_spec('discord') is None:
     discord_stub.MessageReference = type('MessageReference', (), {})
     sys.modules.setdefault('discord', discord_stub)
 import unittest
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 from sqlalchemy import select
@@ -79,7 +79,7 @@ class RemotePersonComments(unittest.TestCase):
         self.assertEqual(self.roots.reserve(event).status, 'reserved')
 
     def event(self, *, author=ALICE, parent=NOTE, object_id=COMMENT, public=True,
-              operation='created'):
+              operation='created', when=None):
         """Construct one normalized independently signed ActivityPub comment."""
         kind = {'created': 'Create', 'updated': 'Update', 'deleted': 'Delete'}[operation]
         note = {'id': object_id, 'type': 'Note', 'attributedTo': author,
@@ -88,7 +88,7 @@ class RemotePersonComments(unittest.TestCase):
             'type': kind, 'actor': author, 'to': [PUBLIC] if public else [],
             'object': object_id if operation == 'deleted' else note}
         return RemotePersonCommentEvent(event_type=f'remote.person.comment.{operation}',
-            delivery_id=source['id'], occurred_at=self.when, actor_id=author,
+            delivery_id=source['id'], occurred_at=when or self.when, actor_id=author,
             verified_sender_actor_id=author, source_activity_id=source['id'],
             source_activity_json=source,
             object={'ap_id': object_id, 'parent_ap_id': parent if operation != 'deleted' else None,
@@ -100,6 +100,12 @@ class RemotePersonComments(unittest.TestCase):
             """Capture outbound native references without a Discord connection."""
             def __init__(self):
                 self.calls = []
+                self.edits = []
+                self.deletes = []
+            async def edit(self, thread_id, message_id, content):
+                self.edits.append((thread_id, message_id, content))
+            async def delete(self, thread_id, message_id):
+                self.deletes.append((thread_id, message_id))
             async def send(self, claim):
                 self.calls.append(claim)
                 if timeout:
@@ -268,6 +274,49 @@ class RemotePersonComments(unittest.TestCase):
         self.assertEqual(reply.status, 'published')
         self.assertEqual(gateway.renders[-1].in_reply_to_object_id, first.object_id)
         self.assertEqual(len(gateway.renders), 2)
+        # Mutations of Alice's original source affect only its retained bot
+        # copies. The source in A is not overwritten by the bridge.
+        with self.db.immediate_session() as session:
+            source = session.scalar(select(PublishedActivityObject).where(
+                PublishedActivityObject.object_id == first.object_id))
+            source.body_markdown = 'Edited by Alice'
+            source.content_revision += 1
+        asyncio.run(worker.drain_once())
+        self.assertEqual(len(edge.edits), 1)
+        self.assertIn('Edited by Alice', edge.edits[0][2])
+        with self.db.immediate_session() as session:
+            source = session.scalar(select(PublishedActivityObject).where(
+                PublishedActivityObject.object_id == first.object_id))
+            source.deleted_at = self.when + timedelta(minutes=2)
+        asyncio.run(worker.drain_once())
+        self.assertEqual(len(edge.deletes), 1)
+        self.assertEqual(edge.deletes[0][0], 80101)
+
+    def test_remote_update_delete_mutates_retained_copy_after_unfollow(self):
+        """Original bot message IDs survive Update/Delete and owner cancellation."""
+        self.deliver_roots()
+        self.comments.reserve(self.event())
+        worker, edge = self.worker()
+        asyncio.run(worker.drain_once())
+        self.assertEqual(len(edge.calls), 2)
+        self.assertEqual(edge.edits, [])
+        updated = self.event(operation='updated', when=self.when + timedelta(minutes=1))
+        updated.source_activity_json['object']['content'] = 'Edited'
+        updated.object.body_markdown = 'Edited'
+        self.assertEqual(self.comments.reserve(updated).status, 'updated')
+        with self.db.immediate_session() as session:
+            for follow in session.scalars(select(RemotePersonFollow)):
+                follow.relationship_status = 'cancel_requested'
+        asyncio.run(worker.drain_once())
+        self.assertEqual(len(edge.edits), 2)
+        self.assertTrue(all('Edited' in content for _, _, content in edge.edits))
+        self.assertEqual(self.comments.reserve(self.event(operation='deleted')).status, 'deleted')
+        asyncio.run(worker.drain_once())
+        self.assertEqual(len(edge.deletes), 2)
+        with self.db.session() as session:
+            placements = session.scalars(select(RemotePersonCommentPlacement)).all()
+            self.assertEqual({p.state for p in placements}, {'delivered'})
+            self.assertEqual({p.last_applied_revision for p in placements}, {'deleted'})
 
     def test_two_destinations_and_duplicate(self):
         """One signed Note has one canonical row and one copy per destination."""
