@@ -210,18 +210,32 @@ The bot enables Discord's Message Content intent in code. Keep that privileged i
 
 The bot also needs permission in each bound feed channel to view the channel, read message history, create public threads, send messages in threads, and manage only messages it previously rendered when applying remote Update/Delete. A retained inbound comment is not discarded when Discord is unavailable: the worker performs at most three Discord calls and then records a durable terminal failure. Moving or removing a binding intentionally prevents further synchronization to the old channel; retained history is not replayed into a replacement channel in Stage 8.
 
+
+## Remote Person Feed prerequisites and operations
+
+The bot needs the Message Content intent described above and these **effective** permissions in each assigned guild text channel: `View Channel`, `Read Message History`, `Send Messages`, `Manage Webhooks`, `Create Public Threads`, and `Send Messages in Threads`. `Read Message History` is also required in discussion threads for native Reply and reconciliation. A registered guild user with Discord `Manage Server` can run `/person-feed follow actor channel` and `/person-feed add-channel`; the remaining `/person-feed` operations are restricted to that user's follows through the existing DiscordOps policy.
+
+Top-level posts use an Incoming webhook created by the bot. Keep the original bot-created webhook and its token available in Discord: edits/deletes of previously delivered posts require the **same** webhook, not a replacement. If it was deleted or its token is unavailable, restore that webhook's credentials through an authorized Discord-side recovery process if possible; the bridge records a per-destination failure and will not substitute a new webhook to modify an old post. The token is never stored in SQLite. Check destination delivery states and worker logs when a Discord permission is revoked or a webhook disappears.
+
+If a POST or signed Follow/Undo has an ambiguous HTTP outcome, delivery state remains `uncertain`/`unknown`; it is not safe to reset and resend blindly. Confirm the remote event or original Discord message before explicitly recovering it. Removing the last accepted destination suppresses **unsubmitted** creates; an already-authorized in-flight send may finish. Existing Discord copies still receive authenticated edits/deletes after an unsubscribe. The bridge does not automatically republish historical posts when a new channel is assigned.
+
+## SQLite v2 upgrade
+
+The deployment now uses SQLite schema **v2**. Stop all older bridge processes and restart supervisors before upgrading, and take a complete verified backup of the database and profile media. With the exclusive deployment lock, startup validates the historical v0/v1 physical schema, creates a protected migration backup, and performs the v1→v2 rebuild of the publication-context tables inside one transaction. Fresh deployments create v2 directly. The runner verifies foreign keys, integrity, and the frozen v2 schema fingerprint before admitting the database. An unrecognized or partially migrated schema fails startup; do not run old binaries against a v2 database. Follow the restore procedure below if an upgrade fails.
+
+
 ## Stage 9 maintenance
 
 Use `bridge-user-deliveries` for bounded, database-only diagnostics and explicit retry resets. Bulk retry requires `--username --all-failed --limit` and processes at most 100 rows. Use `bridge-profile-media cleanup` with explicit database, media root, deployment lock, and media lock paths. A complete backup must contain both the SQLite database and profile-media volume; exporting a container image is not a volume backup.
 
-## Upgrading a pre-v1 SQLite deployment
+## Upgrading a pre-v1 SQLite deployment (via v1 to v2)
 
-The first versioned database release requires a strictly offline cutover:
+Legacy SQLite deployments require a strictly offline cutover:
 stop and disable **all** pre-v1 workers and their restart supervisors before
 starting new binaries. Do not mix old and new code against one SQLite file.
 The new startup performs source validation, a protected no-clobber migration
-backup and an atomic `0→1` upgrade under the existing exclusive deployment
-lock, then reacquires a shared lifetime lock and validates v1 read-only.
+backup and an atomic `0→1→2` upgrade under the existing exclusive deployment
+lock, then reacquires a shared lifetime lock and validates v2 read-only.
 Keep a verified backup of the database and profile media. Supported v0 schemas
 are the tagged v0.1.0 schema and the recognised main schema; an unknown schema
 stops startup without migration. The automatic migration backup is stored in

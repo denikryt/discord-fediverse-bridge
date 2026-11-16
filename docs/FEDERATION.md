@@ -1,7 +1,7 @@
 # Federation
 
-The bridge connects Discord forum channels and personal feeds to selected
-ActivityPub communities and actors. Its federation is intended for Lemmy and
+The bridge connects Discord forum channels and user-owned feeds to selected
+ActivityPub communities and Person actors. Its federation is intended for Lemmy and
 other threadiverse software, NodeBB categories, and selected Mastodon-style
 replies. It is not a general-purpose ActivityPub server.
 
@@ -20,7 +20,7 @@ replies. It is not a general-purpose ActivityPub server.
 | Actor | Type | Canonical URL | Use |
 | --- | --- | --- | --- |
 | Bridge | `Service` | `/actors/services/{identifier}` | Follows remote communities on behalf of mapped Discord forums. |
-| Registered user | `Person` | `/actors/users/{username}` | Authors Discord-originated publications and personal-feed content. |
+| Registered user | `Person` | `/actors/users/{username}` | Authors Discord-originated posts/replies and follows remote Person actors. |
 | Local community | `Group` | `/actors/communities/{slug}` | Represents a Discord-backed community and distributes its activity. |
 
 Actors advertise their inbox, outbox, followers, shared inbox, and public keys.
@@ -41,14 +41,15 @@ federation and community policies; it is not generic inbox processing.
 
 | Activity | Incoming | Outgoing |
 | --- | --- | --- |
-| `Follow`, `Undo(Follow)` | Follow or unfollow a local community or user. | Bridge Service follows or unfollows a remote community. |
-| `Accept(Follow)` | Accept a pending remote community Follow. | Accept a Follow of a local community or user. |
-| `Create(Page\|Article\|Note)` | Supported community posts and replies, and personal-feed replies. | User-authored posts and replies: `Page` for threadiverse posts, `Note` for replies and NodeBB topics. |
+| `Follow`, `Undo(Follow)` | Follow or unfollow a local community or user. | Bridge Service follows remote communities; individual registered Person actors independently follow/unfollow remote Person actors. |
+| `Accept(Follow)`, `Reject(Follow)` | Reconcile signed responses to a current user-owned remote Person Follow; community follows use their existing handler. | Accept a Follow of a local community or user. |
+| `Create(Page\|Article\|Note)` | Supported community posts and replies, public root Notes from accepted remote Person follows, and replies to retained Person posts. | User-authored `Page`/`Note` content and Person `Note` replies to retained conversations. |
 | `Update`, `Delete` | Update or delete supported mapped content from its authorised owner. | Propagate supported content edits and deletions; user profile changes send `Update(Person)`. |
 | `Announce` | Community distribution of supported `Create`, `Update`, or `Delete`; NodeBB also uses `Announce` of a `Note`/`Article` or its URL. | A local Group distributes supported creates, updates, and deletes to followers. |
 
 Discord users must register before their posts or replies are federated. A
-remote community Follow belongs to the bridge Service; content belongs to its
+remote community Follow belongs to the bridge Service; a remote Person Follow
+belongs to the subscribing registered Person actor. Content belongs to its
 registered Person author. For locally hosted communities, a remote bridge's
 accepted Service may authorise its own registered Person actors; content
 updates and deletes still require the original owner.
@@ -63,8 +64,14 @@ updates and deletes still require the original owner.
   use `Note`; the bridge uses `inReplyTo` and verified Group mappings to
   associate replies with topics. Outgoing NodeBB posts and replies include
   their conversation `context`.
-- **Mastodon:** registered user profiles and selected `Note` replies to local
-  communities are supported. This is not full Mastodon compatibility.
+- **Mastodon / remote Person:** registered users have public profiles and can
+  publish Personal Feed Notes. Each local Person can Follow a remote Person
+  and route newly received public Notes into one or more Discord text channels.
+  The received remote Note's root is shown with the original handle/avatar via
+  a bot-owned Incoming webhook; comments use bot messages and native Replies.
+  Signed replies from registered Discord users use the same canonical Person
+  identity, stable `inReplyTo`, and original explicit direct-recipient actor IDs
+  in the ActivityStreams audience. This is not full Mastodon compatibility.
 
 A remote NodeBB Follow needs an explicit signed `Accept`; HTTP success for a
 Follow does not mean it was accepted. A locally queued publication likewise
@@ -78,6 +85,13 @@ The bridge stores mappings and delivery state to avoid loops and duplicate
 sends. A delivery whose network outcome is unknown is not blindly retried;
 remote delivery is not exactly once. Follow recovery requires confirmation of
 the remote state before any local subscription state is changed.
+
+Remote Person feeds do not crawl timelines or retrieve missing earlier
+comments, and do not forward non-public or followers-only content to Discord.
+Person Follow/Undo, delivery and cancellation have separate durable transport
+states: `uncertain` means the HTTP outcome cannot be proved and is not blindly
+resent. A Discord webhook root's original webhook identity is retained for
+subsequent edits/deletes; removing that webhook prevents those operations.
 
 The bridge does not implement ActivityPub client-to-server, NodeInfo, generic
 boost handling, voting, likes, polls, reactions, or historical Discord channel
