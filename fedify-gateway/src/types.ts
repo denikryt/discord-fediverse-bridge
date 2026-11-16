@@ -105,6 +105,8 @@ export interface FollowAcceptedEvent {
   community_actor_id: string;
   delivery_id: string;
   event_type: "follow.accepted" | "follow.rejected";
+  /** Authenticated local actor inbox path, not the remote activity's untrusted to. */
+  local_recipient_actor_id?: string | null;
   object: FollowLifecycleObject;
   occurred_at: string;
 }
@@ -143,6 +145,7 @@ export type InternalBridgeEvent =
   | BridgeContentEvent
   | RemoteGroupAnnounceEvent
   | RemotePersonContentEvent
+  | RemotePersonCommentEvent
   | FollowAcceptedEvent
   | LocalFollowRequestedEvent
   | LocalUnfollowRequestedEvent;

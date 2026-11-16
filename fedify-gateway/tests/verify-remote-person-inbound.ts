@@ -21,6 +21,15 @@ async function main(): Promise<void> {
   assert.equal(create?.object.ap_id, NOTE);
   assert.equal(create?.object.body_markdown, "Public post");
 
+  // Fedify's typed Note.toJsonLd() compacts Public to as:Public. The
+  // forwarded Python proof must still contain the canonical public IRI.
+  const compact = normalizeDirectRemotePersonEventFromJson(activity("Create", {
+    to: ["as:Public"], object: note({ to: ["as:Public"] }),
+  }));
+  assert.equal(compact?.event_type, "remote.person.created");
+  assert.deepEqual(compact?.source_activity_json.to, [PUBLIC]);
+  assert.deepEqual((compact?.source_activity_json.object as Record<string, unknown>).to, [PUBLIC]);
+
   const update = await normalizeUpdateActivityFromJson(activity("Update"));
   assert.equal(update?.event_type, "remote.person.updated");
   assert.equal(update?.object.ap_id, NOTE);

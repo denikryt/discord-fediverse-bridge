@@ -204,17 +204,23 @@ export function createGatewayFederation(
         if (directObject instanceof Note && directObject.replyTargetId != null) {
           const parentId = directObject.replyTargetId.href;
           const target = await getPythonBridgeClient(config).loadConversationTargetByObjectId(parentId);
-          if (target?.publicationContext === "remote_person_feed") {
+          if (target?.publicationContext === "remote_person_feed"
+              || (target == null && ctx.data.activitypubInboxOwner?.kind !== "community")) {
             const noteJson = await directObject.toJsonLd() as Record<string, unknown>;
             const event = normalizeDirectRemotePersonCommentFromJson({
               ...outerJson, object: noteJson,
             });
-            if (event == null) return;
-            await deliverNormalizedEvent(config, event, {
-              deliveryId: event.delivery_id, eventType: event.event_type,
-              objectId: event.object.ap_id,
-            });
-            return;
+            if (event != null) {
+              // A verified public child may precede its canonical parent.
+              // Python retains it without any Discord side effect until the
+              // parent resolves to an accepted remote Person root. Known
+              // Group and Personal Feed parent routes keep their old owners.
+              await deliverNormalizedEvent(config, event, {
+                deliveryId: event.delivery_id, eventType: event.event_type,
+                objectId: event.object.ap_id,
+              });
+              return;
+            }
           }
         }
         const event = await normalizeCreateActivity(activity, {
@@ -417,7 +423,7 @@ export function createGatewayFederation(
     .on(Reject, async (ctx, activity) => {
       // A remote Person's Reject(Follow) is authenticated by Fedify before
       // the exact outgoing Follow generation is resolved by Python.
-      const event = buildFollowRejectedEvent(activity);
+      const event = buildFollowRejectedEvent(activity, ctx.data);
       if (event == null) return;
       await deliverNormalizedEvent(config, event, {
         deliveryId: event.delivery_id,
@@ -777,7 +783,7 @@ function logDebug(isDebug: boolean, message: string): void {
 /** Build Accept only from the verified actor and original Follow object ID. */
 export function buildFollowAcceptedEvent(
   activity: Accept,
-  _data: GatewayContextData,
+  data: GatewayContextData,
   _fallbackDeliveryId: string | null,
 ): FollowAcceptedEvent | null {
   // Raw request-local JSON and the ID-only cache were captured before the
@@ -786,30 +792,47 @@ export function buildFollowAcceptedEvent(
   const followActivityId = activity.objectId?.href;
   const acceptId = activity.id?.href;
   if (actorId == null || followActivityId == null || acceptId == null) return null;
+  // An actor-specific inbox is a server-verified recipient boundary. A signed
+  // remote Accept for Carol's Follow cannot be routed via Alice's inbox.
+  if (!followResponseMatchesInbox(data, followActivityId)) return null;
   return {
     actor_id: actorId,
     community_actor_id: actorId,
     delivery_id: acceptId,
     event_type: "follow.accepted",
+    local_recipient_actor_id: data.activitypubInboxPath === "actor"
+      ? data.activitypubInboxOwner?.actorUrl ?? null : null,
     object: { follow_activity_id: followActivityId },
     occurred_at: new Date().toISOString(),
   };
 }
 
 /** Build a signed Reject(Follow) lifecycle event using the verified activity. */
-export function buildFollowRejectedEvent(activity: Reject): FollowAcceptedEvent | null {
+export function buildFollowRejectedEvent(
+  activity: Reject, data?: GatewayContextData,
+): FollowAcceptedEvent | null {
   const actorId = activity.actorId?.href;
   const followActivityId = activity.objectId?.href;
   const id = activity.id?.href;
   if (actorId == null || followActivityId == null || id == null) return null;
+  if (data != null && !followResponseMatchesInbox(data, followActivityId)) return null;
   return {
     actor_id: actorId,
     community_actor_id: actorId,
     delivery_id: id,
     event_type: "follow.rejected",
+    local_recipient_actor_id: data?.activitypubInboxPath === "actor"
+      ? data.activitypubInboxOwner?.actorUrl ?? null : null,
     object: { follow_activity_id: followActivityId },
     occurred_at: new Date().toISOString(),
   };
+}
+
+/** Accept signed Follow responses only for the owner of an actor-specific inbox. */
+function followResponseMatchesInbox(data: GatewayContextData, followId: string): boolean {
+  if (data.activitypubInboxPath !== "actor") return true;
+  const owner = data.activitypubInboxOwner;
+  return owner != null && followId.startsWith(`${owner.actorUrl}/activities/follow/`);
 }
 
 export async function buildLocalFollowRequestedEvent(

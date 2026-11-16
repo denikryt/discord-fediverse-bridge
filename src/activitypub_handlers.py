@@ -92,7 +92,9 @@ async def dispatch_activitypub_event(
             worker = getattr(runtime, 'remote_person_root_delivery_worker', None)
             if worker is not None:
                 worker.wake()
-        accepted = result.status in {'reserved', 'updated', 'deleted'}
+        # Deferred children and pre-Create tombstones have durable canonical
+        # evidence but intentionally no Discord side effect yet.
+        accepted = result.status in {'reserved', 'updated', 'deleted', 'pending_parent', 'deleted_before_create'}
         return HandlerResult(
             status='processed' if accepted else 'skipped',
             outcome=InboundActivityOutcome.APPLIED if accepted else
@@ -389,7 +391,8 @@ async def handle_follow_lifecycle(event: FollowLifecycleEvent, runtime: Runtime)
     if original is not None:
         decision = 'accepted' if event.event_type == 'follow.accepted' else 'rejected'
         disposition = runtime.remote_person_follow_service.apply_remote_decision(
-            event.object.follow_activity_id, event.actor_id, decision
+            event.object.follow_activity_id, event.actor_id, decision,
+            local_recipient_actor_id=event.local_recipient_actor_id,
         )
         return HandlerResult(
             status='processed' if disposition == 'applied' else 'skipped',

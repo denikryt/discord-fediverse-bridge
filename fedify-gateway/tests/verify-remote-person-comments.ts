@@ -15,6 +15,11 @@ const signed = {
 const event = normalizeDirectRemotePersonCommentFromJson(signed);
 assert.equal(event?.event_type, 'remote.person.comment.created');
 assert.equal(event?.object.parent_ap_id, 'https://remote.test/notes/bob');
+const compact = normalizeDirectRemotePersonCommentFromJson({
+  ...signed, to: ['as:Public'], object: { ...signed.object, to: ['as:Public'] },
+});
+assert.equal(compact?.event_type, 'remote.person.comment.created');
+assert.deepEqual(compact?.source_activity_json.to, [publicAudience]);
 assert.equal(normalizeDirectRemotePersonCommentFromJson({
   ...signed, object: { ...signed.object, attributedTo: 'https://example.org/users/eve' },
 }), null);

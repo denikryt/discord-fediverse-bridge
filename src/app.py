@@ -218,7 +218,8 @@ def _build_live_runtime(settings: Settings, deployment_lease: FileLock) -> Runti
             delivery_worker=None,
         )
         remote_person_follow_service = RemotePersonFollowService(
-            database, fedify_gateway, settings.normalized_fedify_origin
+            database, fedify_gateway, settings.normalized_fedify_origin,
+            bridge_policy_service,
         )
         event_router = DiscordEventRouter(
             database=database,

@@ -202,7 +202,7 @@ class RemotePersonConversationRuntime:
                 RemotePersonPostDelivery.state == 'delivered',
             )).all()
             for target in copies:
-                if (target.discord_thread_id is None or target.discord_thread_id == thread_id
+                if (target.discord_thread_id == thread_id
                         or not self.policy_service.is_discord_guild_allowed(target.discord_guild_id)
                         or not RemotePersonChannelService._active_owner_exists(
                             session, root.remote_actor_id,
@@ -216,7 +216,9 @@ class RemotePersonConversationRuntime:
                     session.add(RemotePersonCommentPlacement(
                         root_delivery_id=target.id, published_object_id=published.id,
                         destination_thread_id=target.discord_thread_id,
-                        state='pending',
+                        # Preserve the destination even when its webhook root
+                        # exists but thread creation is still being retried.
+                        state='pending' if target.discord_thread_id is not None else 'pending_thread',
                     ))
         if self.user_delivery_worker is not None:
             self.user_delivery_worker.wake()

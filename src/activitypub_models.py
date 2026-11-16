@@ -183,6 +183,7 @@ class FollowLifecycleEvent(BaseModel):
     community_actor_id: str | None = None
     target: ActivityPubTarget | None = None
     actor_id: str
+    local_recipient_actor_id: str | None = None
     object: FollowLifecycleObject
 
 

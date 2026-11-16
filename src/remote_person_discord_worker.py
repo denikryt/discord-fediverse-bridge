@@ -37,6 +37,7 @@ class RootSnapshot:
     source_activity_json: str
     object_id: str
     revision_fingerprint: str
+    last_applied_revision: str | None
     deleted_at: datetime | None
     discord_root_message_id: int | None
     discord_thread_id: int | None
@@ -54,6 +55,7 @@ def _snapshot(row: RemotePersonPostDelivery, post: RemotePersonPost) -> RootSnap
         remote_avatar_url=post.remote_avatar_url, content_markdown=post.content_markdown,
         source_activity_json=post.source_activity_json, object_id=post.object_id,
         revision_fingerprint=post.revision_fingerprint, deleted_at=post.deleted_at,
+        last_applied_revision=row.last_applied_revision,
         discord_root_message_id=row.discord_root_message_id,
         discord_thread_id=row.discord_thread_id,
         webhook_id=row.webhook_id, claim_token=row.claim_token,
@@ -193,6 +195,9 @@ class RemotePersonRootDeliveryWorker:
                 row.last_error = 'assignment removed before authorized HTTP send'
                 return False
             row.webhook_id = webhook_id
+            # Pin the revision actually submitted. A newer Update can arrive
+            # before an uncertain POST is reconciled from Discord history.
+            row.last_applied_revision = claim.revision_fingerprint
             row.state = 'sending'
             return True
 
@@ -230,6 +235,7 @@ class RemotePersonRootDeliveryWorker:
             row.claim_token = None
             row.last_applied_revision = revision
             row.last_error = None
+            row.next_attempt_at = None
 
     def _set_thread(self, delivery_id: int, thread_id: int) -> None:
         """Persist thread identity independently from successful root delivery."""
@@ -325,11 +331,27 @@ class RemotePersonRootDeliveryWorker:
             raise
         except Exception:
             logger.warning('Remote Person root reconciliation failed delivery=%s', root.delivery_id)
+            self._defer_uncertain(root.delivery_id)
             return
         if found is not None:
             self._mark_root(root.delivery_id, message_id=found,
-                            webhook_id=root.webhook_id, revision=root.revision_fingerprint)
+                            webhook_id=root.webhook_id,
+                            revision=root.last_applied_revision or '')
             await self._ensure_thread(replace(root, state='delivered', discord_root_message_id=found))
+        else:
+            # A missing history match is not evidence of a failed webhook
+            # POST. Defer this row so later uncertain targets are not starved.
+            self._defer_uncertain(root.delivery_id)
+
+    def _defer_uncertain(self, delivery_id: int) -> None:
+        """Move an unresolved row to the end of the fairness-ordered scan."""
+        with self.database.immediate_session() as session:
+            row = session.get(RemotePersonPostDelivery, delivery_id)
+            if row is not None and row.state == 'uncertain':
+                # The reconciliation read is safe to repeat; unlike POST it
+                # cannot duplicate a root. Advance the row's sort position so
+                # 21st and later channels also get inspected on the next pass.
+                row.updated_at = utcnow()
 
     def _mark_mutation(self, root: RootSnapshot, applied: str) -> None:
         """Persist revision only after original webhook confirms edit or delete."""
@@ -386,7 +408,8 @@ class RemotePersonRootDeliveryWorker:
         with self.database.session() as session:
             rows = session.scalars(select(RemotePersonPostDelivery).where(
                 RemotePersonPostDelivery.state == 'uncertain',
-            ).order_by(RemotePersonPostDelivery.id).limit(20)).all()
+            ).order_by(RemotePersonPostDelivery.updated_at,
+                       RemotePersonPostDelivery.id).limit(20)).all()
             uncertain = [_snapshot(row, session.get(RemotePersonPost, row.post_id)) for row in rows]
         for root in uncertain:
             await self._reconcile(root)

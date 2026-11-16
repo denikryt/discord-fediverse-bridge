@@ -174,7 +174,9 @@ class RemotePersonWebhookTransport:
         """Create a public text-channel thread as the bot, not as the webhook."""
         channel = await self._channel(channel_id)
         message = await channel.fetch_message(root_message_id)
-        title = str(post.content_markdown or '').splitlines()[0].strip()[:90] or 'Fediverse discussion'
+        # Media-only Notes have no first line; the fallback is a real thread title.
+        title = next((line.strip() for line in str(post.content_markdown or '').splitlines()
+                      if line.strip()), '')[:90] or 'Fediverse discussion'
         thread = await message.create_thread(name=title)
         if int(thread.id) != root_message_id:
             raise RuntimeError('Discord root thread identity differs from starter message ID')

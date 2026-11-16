@@ -195,6 +195,65 @@ class RemotePersonDiscordDeliveryScenarios(unittest.TestCase):
         self.run_drain()
         self.assertEqual({x[1] for x in self.root_rows()}, {'delivered'})
 
+    def test_reconciled_v1_root_still_applies_v2_update(self):
+        """A history match proves the old POST, not an intervening new revision."""
+        self.inbound.reserve(self.event())
+        self.edge.timeout = True
+        self.run_drain()
+        self.assertEqual({x[1] for x in self.root_rows()}, {'uncertain'})
+        old_revisions = {x[4] for x in self.root_rows()}
+        self.inbound.reserve(self.event('updated', when=self.when + timedelta(minutes=1)))
+        self.edge.timeout = False
+        self.edge.reconcile_to = {100: 100100, 101: 100101}
+        self.run_drain()
+        self.assertEqual(len(self.edge.creates), 2)
+        self.assertEqual(len(self.edge.edits), 2)
+        self.assertTrue(all('Edited text' in content for _, _, content in self.edge.edits))
+        self.assertNotEqual(old_revisions, {x[4] for x in self.root_rows()})
+
+    def test_later_uncertain_destinations_are_not_starved(self):
+        """An unresolved first batch does not monopolize all reconciliation scans."""
+        self.inbound.reserve(self.event())
+        with self.db.immediate_session() as session:
+            post = session.scalar(select(RemotePersonPost))
+            for row in session.scalars(select(RemotePersonPostDelivery)):
+                row.state = 'uncertain'
+                row.webhook_id = 1000 + row.discord_channel_id
+                row.last_applied_revision = post.revision_fingerprint
+            for channel_id in range(102, 121):
+                session.add(RemotePersonPostDelivery(
+                    post_id=post.id, discord_guild_id=1, discord_channel_id=channel_id,
+                    state='uncertain', webhook_id=1000 + channel_id,
+                    last_applied_revision=post.revision_fingerprint,
+                ))
+        self.edge.reconcile_to = {120: 100120}
+        for _ in range(3):
+            self.run_drain()
+        with self.db.session() as session:
+            last = session.scalar(select(RemotePersonPostDelivery).where(
+                RemotePersonPostDelivery.discord_channel_id == 120))
+            self.assertEqual((last.state, last.discord_root_message_id), ('delivered', 100120))
+
+    def test_empty_media_only_note_starts_thread_with_fallback_title(self):
+        """A Note without text must not index an absent first line."""
+        class Message:
+            async def create_thread(self, *, name):
+                self_name.append(name)
+                return SimpleNamespace(id=100100)
+        class Channel:
+            type = 0
+            guild = SimpleNamespace(me=object())
+            def permissions_for(self, _member):
+                from src.remote_person_feeds import REQUIRED_BOT_PERMISSIONS
+                return SimpleNamespace(**{name: True for name in REQUIRED_BOT_PERMISSIONS})
+            async def fetch_message(self, _id):
+                return Message()
+        self_name = []
+        bot = SimpleNamespace(get_channel=lambda _id: Channel())
+        transport = RemotePersonWebhookTransport(bot)
+        asyncio.run(transport.create_thread(100, 100100, SimpleNamespace(content_markdown='')))
+        self.assertEqual(self_name, ['Fediverse discussion'])
+
     def test_lost_binding_after_claim_before_send_suppresses_without_post(self):
         self.inbound.reserve(self.event())
         def revoke():

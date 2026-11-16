@@ -61,6 +61,7 @@ const STALE_ANNOUNCE_PAYLOAD = {
 async function main(): Promise<void> {
   await testCacheCannotSupplyFollowId();
   await testTypedAcceptWinsOverStaleRawPayload();
+  testActorInboxOwnerRejectsForeignFollow();
   await testDeliveryShapeMatchesPythonContract();
   console.log("Accept(Follow) -> follow.accepted path verification passed");
 }
@@ -114,6 +115,26 @@ async function testTypedAcceptWinsOverStaleRawPayload(): Promise<void> {
     COMMUNITY_ACTOR_ID,
     "actor_id must come from the current Accept.actor",
   );
+}
+
+/** A signed reply cannot accept Carol's Follow by addressing Alice's inbox. */
+function testActorInboxOwnerRejectsForeignFollow(): void {
+  const alice = "https://discord-bridge.example.com/actors/users/alice";
+  const carol = "https://discord-bridge.example.com/actors/users/carol";
+  const accept = new Accept({
+    id: new URL(ACCEPT_ACTIVITY_ID), actor: new URL(COMMUNITY_ACTOR_ID),
+    object: new URL(`${carol}/activities/follow/f-1`),
+  });
+  const context = {
+    activitypubInboxPath: "actor",
+    activitypubInboxOwner: { kind: "user", identifier: "alice", actorUrl: alice },
+  } as Parameters<typeof buildFollowAcceptedEvent>[1];
+  assert.equal(buildFollowAcceptedEvent(accept, context, ACCEPT_ACTIVITY_ID), null);
+  const correct = buildFollowAcceptedEvent(new Accept({
+    id: new URL(ACCEPT_ACTIVITY_ID), actor: new URL(COMMUNITY_ACTOR_ID),
+    object: new URL(`${alice}/activities/follow/f-1`),
+  }), context, ACCEPT_ACTIVITY_ID);
+  assert.equal(correct?.local_recipient_actor_id, alice);
 }
 
 /**

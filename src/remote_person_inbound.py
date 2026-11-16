@@ -152,6 +152,15 @@ class RemotePersonInboundService:
             for guild_id, channel_id in sorted(eligible):
                 session.add(RemotePersonPostDelivery(post_id=post.id,
                     discord_guild_id=guild_id, discord_channel_id=channel_id, state='pending'))
+            session.flush()
+            # A signed child Note may have been stored before this root.
+            # Resolve it now through the same canonical parent graph, without
+            # inventing a second AP identity or losing destination-specific IDs.
+            from .remote_person_comments import RemotePersonCommentService
+            RemotePersonCommentService.restore_deferred_descendants(
+                session, root=post, parent_object_id=post.object_id,
+                guild_allowed=guild_allowed,
+            )
             return RemotePersonReservation('reserved', post.id, len(eligible))
 
 

@@ -234,6 +234,12 @@ class RemotePersonComments(unittest.TestCase):
             database=self.db, fedify_gateway=gateway, policy_service=Policy(),
             user_ban_service=Ban(), fedify_origin='https://bridge.test',
             delivery_worker=wake, user_delivery_worker=wake)
+        with self.db.immediate_session() as session:
+            # The second webhook root exists, but its bot-created thread has
+            # not yet succeeded when Alice sends the first local reply.
+            delayed = session.scalar(select(RemotePersonPostDelivery).where(
+                RemotePersonPostDelivery.discord_channel_id == 101))
+            delayed.discord_thread_id = None
         original_thread = 80100
         message = SimpleNamespace(id=90222, guild=SimpleNamespace(id=1),
             channel=SimpleNamespace(id=original_thread, parent_id=100),
@@ -250,7 +256,12 @@ class RemotePersonComments(unittest.TestCase):
             self.assertEqual(session.scalar(select(MessageMapping.discord_message_id)), 90222)
             mirror = session.scalar(select(RemotePersonCommentPlacement))
             self.assertIsNotNone(mirror.published_object_id)
-            self.assertEqual(mirror.destination_thread_id, 80101)
+            self.assertEqual(mirror.state, 'pending_thread')
+            self.assertIsNone(mirror.destination_thread_id)
+        with self.db.immediate_session() as session:
+            delayed = session.scalar(select(RemotePersonPostDelivery).where(
+                RemotePersonPostDelivery.discord_channel_id == 101))
+            delayed.discord_thread_id = 80101
         worker, edge = self.worker()
         asyncio.run(worker.drain_once())
         self.assertEqual(len(edge.calls), 1)
@@ -338,14 +349,71 @@ class RemotePersonComments(unittest.TestCase):
             self.assertEqual(obj.conversation_root_object_id, NOTE)
 
     def test_unrelated_private_and_impersonated_are_not_saved(self):
-        """Unknown parents and improperly addressed or authenticated Notes are inert."""
+        """Unknown parents are staged; private/forged Notes never enter storage."""
         bad = self.event(parent='https://other.example/unknown')
-        self.assertEqual(self.comments.reserve(bad).status, 'unknown_parent')
+        self.assertEqual(self.comments.reserve(bad).status, 'pending_parent')
         self.assertEqual(self.comments.reserve(self.event(public=False)).status,
                          'invalid_identity_or_audience')
         spoof = self.event()
         spoof.source_activity_json['object']['attributedTo'] = BOB
         self.assertEqual(self.comments.reserve(spoof).status, 'invalid_identity_or_audience')
+        with self.db.session() as session:
+            orphans = session.scalars(select(InboundConversationObject)).all()
+            self.assertEqual([row.object_id for row in orphans], [COMMENT])
+            self.assertEqual(orphans[0].conversation_root_object_id, '')
+            self.assertEqual(session.scalars(select(RemotePersonCommentPlacement)).all(), [])
+
+    def test_signed_child_before_parent_is_restored_without_flattening(self):
+        """Delayed canonical parent restores child and its two copy-local replies."""
+        self.deliver_roots()
+        child_id = 'https://other.example/notes/3'
+        self.assertEqual(self.comments.reserve(self.event(parent=COMMENT, object_id=child_id)).status,
+                         'pending_parent')
+        self.assertEqual(self.comments.reserve(self.event()).status, 'reserved')
+        with self.db.session() as session:
+            child = session.scalar(select(InboundConversationObject).where(
+                InboundConversationObject.object_id == child_id))
+            self.assertEqual(child.conversation_root_object_id, NOTE)
+            self.assertEqual(len(session.scalars(select(RemotePersonCommentPlacement).where(
+                RemotePersonCommentPlacement.inbound_object_id == child.id)).all()), 2)
+        worker, edge = self.worker()
+        asyncio.run(worker.drain_once())
+        self.assertEqual(len(edge.calls), 4)
+        self.assertEqual({call.channel_id: call.parent_message_id for call in edge.calls[2:]},
+                         {100: 1000001, 101: 1010002})
+
+    def test_signed_delete_before_create_blocks_late_discord_comment(self):
+        """A signed tombstone survives reorder without manufacturing a message."""
+        self.deliver_roots()
+        self.assertEqual(self.comments.reserve(self.event(operation='deleted')).status,
+                         'deleted_before_create')
+        self.assertEqual(self.comments.reserve(self.event()).status, 'deleted')
+        worker, edge = self.worker()
+        asyncio.run(worker.drain_once())
+        self.assertEqual(edge.calls, [])
+        with self.db.session() as session:
+            self.assertIsNotNone(session.scalar(select(InboundConversationObject).where(
+                InboundConversationObject.object_id == COMMENT)).deleted_at)
+
+    def test_unproven_delete_cannot_claim_another_actor_object(self):
+        """An orphan Delete only suppresses a later Create by its own signer."""
+        self.assertEqual(self.comments.reserve(self.event(
+            author='https://evil.example/users/mallory', operation='deleted')).status,
+            'deleted_before_create')
+        self.assertEqual(self.comments.reserve(self.event()).status, 'reserved')
+        with self.db.session() as session:
+            canonical = session.scalar(select(InboundConversationObject).where(
+                InboundConversationObject.object_id == COMMENT))
+            self.assertEqual(canonical.actor_id, ALICE)
+            self.assertIsNone(canonical.deleted_at)
+
+    def test_unrelated_comments_do_not_accumulate_without_any_accepted_follow(self):
+        """Unresolved signed Notes have no durable admission without a subscriber."""
+        with self.db.immediate_session() as session:
+            for follow in session.scalars(select(RemotePersonFollow)):
+                follow.relationship_status = 'cancel_requested'
+        self.assertEqual(self.comments.reserve(self.event(
+            parent='https://other.example/unknown')).status, 'deferred_not_admitted')
         with self.db.session() as session:
             self.assertEqual(session.scalars(select(InboundConversationObject)).all(), [])
 

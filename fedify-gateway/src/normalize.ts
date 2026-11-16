@@ -6,7 +6,24 @@ import { Page } from "@fedify/vocab";
 import { type Object as ActivityObject } from "@fedify/vocab";
 
 import type { PythonBridgeReadClient } from "./python-bridge-client.js";
-import type { BridgeEvent, RemotePersonContentEvent } from "./types.js";
+import type { BridgeEvent, RemotePersonContentEvent, RemotePersonCommentEvent } from "./types.js";
+
+const ACTIVITYSTREAMS_PUBLIC = "https://www.w3.org/ns/activitystreams#Public";
+
+/** Fedify serializes ActivityStreams Public as as:Public in compact JSON-LD. */
+function canonicalizePublicRecipients(source: Record<string, unknown>): Record<string, unknown> {
+  const expand = (value: unknown): unknown => {
+    if (value === "as:Public" || value === "Public") return ACTIVITYSTREAMS_PUBLIC;
+    if (Array.isArray(value)) return value.map(expand);
+    return value;
+  };
+  const object = asRecord(source.object);
+  return {
+    ...source,
+    to: expand(source.to), cc: expand(source.cc),
+    object: object == null ? source.object : { ...object, to: expand(object.to), cc: expand(object.cc) },
+  };
+}
 
 export interface NormalizeOptions {
   /** Internal bridge lookup boundary used for local parent/object resolution. */
@@ -43,6 +60,7 @@ export async function normalizeCreateActivity(
 export function normalizeDirectRemotePersonEventFromJson(
   activity: Record<string, unknown>,
 ): RemotePersonContentEvent | null {
+  activity = canonicalizePublicRecipients(activity);
   const type = activity.type;
   if (type !== "Create" && type !== "Update" && type !== "Delete") return null;
   const actor = asCanonicalActorId(activity.actor);
@@ -85,6 +103,7 @@ export function normalizeDirectRemotePersonEventFromJson(
 export function normalizeDirectRemotePersonCommentFromJson(
   activity: Record<string, unknown>,
 ): RemotePersonCommentEvent | null {
+  activity = canonicalizePublicRecipients(activity);
   const type = activity.type;
   if (type !== "Create" && type !== "Update" && type !== "Delete") return null;
   const actor = asCanonicalActorId(activity.actor);

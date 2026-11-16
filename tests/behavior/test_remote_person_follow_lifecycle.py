@@ -63,7 +63,9 @@ class FollowLifecycleScenarios(unittest.TestCase):
                     actor_url=actor, inbox_url=f'{actor}/inbox', outbox_url=f'{actor}/outbox',
                     followers_url=f'{actor}/followers', public_key_pem='public', private_key_pem='private'))
         self.gateway = FakeRemoteGateway()
-        self.service = RemotePersonFollowService(self.db, self.gateway, 'https://bridge.test')
+        self.service = RemotePersonFollowService(self.db, self.gateway, 'https://bridge.test',
+            SimpleNamespace(is_discord_guild_allowed=lambda _guild: True,
+                federation_decision=lambda _url: SimpleNamespace(allowed=True)))
         self.channels = RemotePersonChannelService(self.db)
         self.flags = SimpleNamespace(**{name: True for name in REQUIRED_BOT_PERMISSIONS})
 
@@ -117,6 +119,19 @@ class FollowLifecycleScenarios(unittest.TestCase):
         self.assertEqual(asyncio.run(self.service.dispatch_prepared()), 1)
         self.assertEqual(self.status(pending.follow_id), ('accepted', 'sent', 'not_requested'))
         self.assertEqual(self.service.apply_remote_decision(pending.follow_activity_id, ACTOR, 'accepted'), 'duplicate')
+
+    def test_follow_response_to_other_users_inbox_does_not_accept(self):
+        """A signed remote response cannot take effect through a foreign local inbox."""
+        alice = self.subscribe()
+        asyncio.run(self.service.dispatch_prepared())
+        wrong_inbox = 'https://bridge.test/actors/users/charlie'
+        self.assertEqual(self.service.apply_remote_decision(
+            alice.follow_activity_id, ACTOR, 'accepted',
+            local_recipient_actor_id=wrong_inbox), 'unmatched')
+        self.assertEqual(self.status(alice.follow_id)[0], 'pending')
+        self.assertEqual(self.service.apply_remote_decision(
+            alice.follow_activity_id, ACTOR, 'accepted',
+            local_recipient_actor_id='https://bridge.test/actors/users/alice'), 'applied')
 
     def test_fast_reject_and_wrong_sender_are_isolated(self):
         """Only signed sender matching the committed original Follow can decide."""

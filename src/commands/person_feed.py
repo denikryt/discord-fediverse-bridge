@@ -115,6 +115,8 @@ def register(
             'already_assigned': 'You already assigned this Person to that channel.',
             'missing_bot_permissions': 'The bot lacks channel permissions: ' + ', '.join(result.missing_permissions),
             'invalid_actor': 'Remote Person or inbox is invalid.',
+            'federation_denied': 'Federation policy does not permit this Person or their inbox.',
+            'guild_denied': 'This server is not permitted by bridge policy.',
             'channel_conflict': 'Channel belongs to another bridge mode.',
         }.get(result.status, f'Follow was not created: {result.status}.')
         await interaction.edit_original_response(content=status)

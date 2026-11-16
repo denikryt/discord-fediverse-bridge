@@ -33,11 +33,18 @@ class RemotePersonFollowResult:
 class RemotePersonFollowService:
     """Reserve per-user Follow identity and permit only durable queued delivery."""
 
-    def __init__(self, database: Database, gateway: object, origin: str) -> None:
+    def __init__(self, database: Database, gateway: object, origin: str,
+                 policy_service: object) -> None:
         """Bind the durable SQLite writer to an authenticated gateway client."""
         self.database = database
         self.gateway = gateway
         self.origin = origin
+        self.policy_service = policy_service
+
+    def _federation_allowed(self, actor_id: str, inbox_url: str | None = None) -> bool:
+        """Require current policy for both signed identity and delivery endpoint."""
+        return (self.policy_service.federation_decision(actor_id).allowed
+                and (inbox_url is None or self.policy_service.federation_decision(inbox_url).allowed))
 
     async def follow(
         self, *, discord_user_id: str, actor: str, discord_guild_id: int,
@@ -50,6 +57,13 @@ class RemotePersonFollowService:
         if (discord_guild_id <= 0 or discord_channel_id <= 0
                 or discord_guild_id != target_channel_guild_id or channel_type != 'text'):
             return RemotePersonFollowResult('invalid_target')
+        if not self.policy_service.is_discord_guild_allowed(discord_guild_id):
+            return RemotePersonFollowResult('guild_denied')
+        # Reject blocked handles before WebFinger: resolving an expressly
+        # denied host must not initiate federation network traffic.
+        actor_host = actor.rsplit('@', 1)[-1] if '@' in actor and '://' not in actor else actor
+        if not self.policy_service.federation_decision(actor_host).allowed:
+            return RemotePersonFollowResult('federation_denied')
         missing = tuple(name for name in REQUIRED_BOT_PERMISSIONS
                         if not bool(getattr(bot_permissions, name, False)))
         if missing:
@@ -69,7 +83,12 @@ class RemotePersonFollowService:
             return RemotePersonFollowResult('invalid_actor')
         if not _is_safe_remote_url(resolved.inbox_url, self.origin):
             return RemotePersonFollowResult('invalid_actor')
+        if not self._federation_allowed(resolved.actor_id, resolved.inbox_url):
+            return RemotePersonFollowResult('federation_denied')
         with self.database.immediate_session() as session:
+            if (not self.policy_service.is_discord_guild_allowed(discord_guild_id)
+                    or not self._federation_allowed(resolved.actor_id, resolved.inbox_url)):
+                return RemotePersonFollowResult('federation_denied')
             user = session.scalar(select(User).where(User.discord_user_id == str(discord_user_id)))
             if user is None:
                 return RemotePersonFollowResult('not_registered')
@@ -153,6 +172,7 @@ class RemotePersonFollowService:
 
     def apply_remote_decision(
         self, follow_activity_id: str, remote_actor_id: str, decision: str,
+        *, local_recipient_actor_id: str | None = None,
     ) -> str:
         """Linearize signed Accept/Reject by current generation and exact sender.
 
@@ -170,6 +190,10 @@ class RemotePersonFollowService:
                 return 'unmatched'
             owner = session.get(User, row.user_id)
             if owner is None or not follow_activity_id.startswith(f'{owner.actor_url}/activities/follow/'):
+                return 'unmatched'
+            if local_recipient_actor_id is not None and owner.actor_url != local_recipient_actor_id:
+                # Inbox ownership is verified by the HTTP route, never by the
+                # remote activity's self-declared `to` recipient.
                 return 'unmatched'
             if row.relationship_status == decision:
                 return 'duplicate'
@@ -248,6 +272,12 @@ class RemotePersonFollowService:
                 user = session.get(User, row.user_id)
                 if user is None:
                     raise ValueError('persisted Follow has no local Person owner')
+                if not self._federation_allowed(row.remote_actor_id, row.remote_inbox_url):
+                    # Policy denial happens before transport. Keep the same
+                    # prepared identity for a future explicitly authorized
+                    # attempt; it is not a network-ambiguous outcome.
+                    row.last_error = 'federation policy denied outbound Follow'
+                    break
                 row.follow_dispatch_state = 'sending'
                 row.follow_claim_token = token
                 prepared = PreparedPersonFollow(

@@ -7,14 +7,16 @@ rows carry per-target send states; unrelated public comments are not retained.
 from __future__ import annotations
 
 import json
+from datetime import timedelta
 from dataclasses import dataclass
 
-from sqlalchemy import select
+from sqlalchemy import delete, func, select
 
 from .activitypub_models import RemotePersonCommentEvent, activity_actor_id
 from .models import (
     InboundConversationObject, PublishedActivityObject, RemotePersonPost,
-    RemotePersonPostDelivery, RemotePersonCommentPlacement, utcnow,
+    RemotePersonPostDelivery, RemotePersonCommentPlacement,
+    RemotePersonFollow, RemotePersonChannelAssignment, utcnow,
 )
 from .remote_person_feeds import RemotePersonChannelService
 from .remote_person_inbound import PUBLIC, _fingerprint, _utc
@@ -31,6 +33,30 @@ class RemoteCommentReservation:
 
 class RemotePersonCommentService:
     """Map public signed Note ancestry to only known subscribed root copies."""
+
+    MAX_DEFERRED_OBJECTS = 1000
+    DEFERRED_RETENTION = timedelta(days=7)
+
+    @classmethod
+    def _can_stage_unresolved(cls, session: object, guild_allowed: object) -> bool:
+        """Bound unaffiliated signed events without admitting Discord fanout."""
+        # Only a bridge with currently accepted destinations can retain an
+        # unknown ancestry candidate. Staged rows are never channel claims.
+        subscribers = session.execute(select(RemotePersonChannelAssignment.discord_guild_id)
+            .join(RemotePersonFollow, RemotePersonFollow.id == RemotePersonChannelAssignment.follow_id)
+            .where(RemotePersonFollow.relationship_status == 'accepted')).scalars().all()
+        if not any(guild_allowed(guild) for guild in subscribers):
+            return False
+        session.execute(delete(InboundConversationObject).where(
+            InboundConversationObject.publication_context == 'remote_person_feed',
+            InboundConversationObject.conversation_root_object_id == '',
+            InboundConversationObject.created_at < utcnow() - cls.DEFERRED_RETENTION,
+        ))
+        count = session.scalar(select(func.count(InboundConversationObject.id)).where(
+            InboundConversationObject.publication_context == 'remote_person_feed',
+            InboundConversationObject.conversation_root_object_id == '',
+        )) or 0
+        return count < cls.MAX_DEFERRED_OBJECTS
 
     def __init__(self, database: object) -> None:
         """Use the application's existing serialized SQLite write boundary."""
@@ -108,6 +134,60 @@ class RemotePersonCommentService:
             return ('remote_person_feed', root.object_id,
                     inbound.actor_id if inbound is not None else None)
 
+    @staticmethod
+    def _reserve_placements(session: object, comment: InboundConversationObject,
+                            root: RemotePersonPost, guild_allowed: object) -> int:
+        """Create a destination placement once, even while its thread is pending."""
+        copies = session.scalars(select(RemotePersonPostDelivery).where(
+            RemotePersonPostDelivery.post_id == root.id,
+            RemotePersonPostDelivery.state.in_(('pending', 'claimed', 'sending', 'uncertain', 'delivered')),
+        )).all()
+        count = 0
+        for copy in copies:
+            if (not guild_allowed(copy.discord_guild_id)
+                    or not RemotePersonChannelService._active_owner_exists(
+                        session, root.remote_actor_id, copy.discord_guild_id, copy.discord_channel_id)):
+                continue
+            existing = session.scalar(select(RemotePersonCommentPlacement.id).where(
+                RemotePersonCommentPlacement.root_delivery_id == copy.id,
+                RemotePersonCommentPlacement.inbound_object_id == comment.id,
+            ))
+            if existing is None:
+                session.add(RemotePersonCommentPlacement(
+                    root_delivery_id=copy.id, inbound_object_id=comment.id,
+                    destination_thread_id=copy.discord_thread_id,
+                    state='pending' if copy.discord_thread_id is not None else 'pending_thread',
+                ))
+                count += 1
+        return count
+
+    @classmethod
+    def restore_deferred_descendants(cls, session: object, *, root: RemotePersonPost,
+                                     parent_object_id: str, guild_allowed: object) -> int:
+        """Resolve signed children stored before their canonical parent was known.
+
+        Each object is visited once and retains its originally signed parent;
+        the resulting Discord placements remain scoped to this root's copies.
+        """
+        pending = [parent_object_id]
+        visited = {parent_object_id}
+        total = 0
+        while pending:
+            parent = pending.pop(0)
+            descendants = session.scalars(select(InboundConversationObject).where(
+                InboundConversationObject.publication_context == 'remote_person_feed',
+                InboundConversationObject.parent_object_id == parent,
+            )).all()
+            for child in descendants:
+                if child.object_id in visited:
+                    continue
+                visited.add(child.object_id)
+                child.conversation_root_object_id = root.object_id
+                if child.deleted_at is None:
+                    total += cls._reserve_placements(session, child, root, guild_allowed)
+                pending.append(child.object_id)
+        return total
+
     def reserve(self, event: RemotePersonCommentEvent, *, guild_allowed=lambda _guild: True) -> RemoteCommentReservation:
         """Persist one canonical reply and DISTINCT eligible per-root comment jobs."""
         source = self._canonical_source(event)
@@ -120,9 +200,20 @@ class RemotePersonCommentService:
             ))
             if existing is not None:
                 if existing.publication_context != 'remote_person_feed' or existing.actor_id != event.actor_id:
-                    return RemoteCommentReservation('wrong_owner', existing.id)
+                    # An unknown Delete cannot prove ownership of a Note that
+                    # has never been created; a later signed real Create wins.
+                    if (operation == 'created' and existing.publication_context == 'remote_person_feed'
+                            and existing.deleted_at is not None and existing.parent_object_id is None):
+                        session.delete(existing)
+                        session.flush()
+                        existing = None
+                    else:
+                        return RemoteCommentReservation('wrong_owner', existing.id)
+            if existing is not None:
                 if operation == 'created':
-                    return RemoteCommentReservation('duplicate', existing.id)
+                    return RemoteCommentReservation(
+                        'deleted' if existing.deleted_at is not None else 'duplicate', existing.id,
+                    )
                 if operation == 'deleted':
                     if existing.deleted_at is not None:
                         return RemoteCommentReservation('duplicate', existing.id)
@@ -147,24 +238,56 @@ class RemotePersonCommentService:
                 existing.revision_fingerprint = _fingerprint(source)
                 existing.updated_at_remote = event.occurred_at
                 return RemoteCommentReservation('updated', existing.id)
+            if operation == 'deleted':
+                # Signed deletion may precede the signed Create. Persist only a
+                # bounded author-scoped tombstone; it grants no Discord fanout
+                # and cannot defeat a future Create signed by a different actor.
+                if not self._can_stage_unresolved(session, guild_allowed):
+                    return RemoteCommentReservation('deferred_not_admitted')
+                tombstone = InboundConversationObject(
+                    object_id=event.object.ap_id, publication_context='remote_person_feed',
+                    activity_id=event.source_activity_id or event.delivery_id,
+                    conversation_root_object_id='', parent_object_id=None,
+                    actor_id=event.actor_id, actor_name=event.object.author_name,
+                    content_markdown='', source_activity_json=json.dumps(source, sort_keys=True),
+                    updated_at_remote=event.occurred_at, deleted_at=utcnow(),
+                    revision_fingerprint=_fingerprint(source),
+                )
+                session.add(tombstone)
+                session.flush()
+                return RemoteCommentReservation('deleted_before_create', tombstone.id)
             if operation != 'created':
-                # Unknown Update/Delete cannot invent a canonical author/root.
                 return RemoteCommentReservation('unknown_object')
             parent_id = event.object.parent_ap_id
             resolved = self._resolve_parent(session, parent_id)
             if resolved is None:
-                return RemoteCommentReservation('unknown_parent')
+                # The parent may be a signed Note that arrives later. Store the
+                # verified child without a root or Discord placement; no
+                # unverified ancestry is guessed at this point.
+                if not self._can_stage_unresolved(session, guild_allowed):
+                    return RemoteCommentReservation('deferred_not_admitted')
+                child = InboundConversationObject(
+                    object_id=event.object.ap_id, publication_context='remote_person_feed',
+                    activity_id=event.source_activity_id or event.delivery_id,
+                    conversation_root_object_id='', parent_object_id=parent_id,
+                    actor_id=event.actor_id, actor_name=event.object.author_name,
+                    content_markdown=event.object.body_markdown or '',
+                    source_activity_json=json.dumps(source, sort_keys=True),
+                    published_at=event.object.published_at, updated_at_remote=event.occurred_at,
+                    revision_fingerprint=_fingerprint(source),
+                )
+                session.add(child)
+                session.flush()
+                return RemoteCommentReservation('pending_parent', child.id)
             root, root_id = resolved
             if root.deleted_at is not None:
                 return RemoteCommentReservation('root_deleted')
-            copies = session.scalars(select(RemotePersonPostDelivery).where(
-                RemotePersonPostDelivery.post_id == root.id,
-                RemotePersonPostDelivery.state.in_(('pending', 'claimed', 'sending', 'uncertain', 'delivered')),
-            )).all()
-            eligible = [copy for copy in copies if guild_allowed(copy.discord_guild_id)
-                and RemotePersonChannelService._active_owner_exists(session, root.remote_actor_id,
-                    copy.discord_guild_id, copy.discord_channel_id)]
-            if not eligible:
+            # A canonical parent alone does not grant a new destination.
+            if not any(guild_allowed(copy.discord_guild_id)
+                       and RemotePersonChannelService._active_owner_exists(
+                           session, root.remote_actor_id, copy.discord_guild_id, copy.discord_channel_id)
+                       for copy in session.scalars(select(RemotePersonPostDelivery).where(
+                           RemotePersonPostDelivery.post_id == root.id))):
                 return RemoteCommentReservation('no_accepted_assignment')
             comment = InboundConversationObject(
                 object_id=event.object.ap_id,
@@ -182,10 +305,8 @@ class RemotePersonCommentService:
             )
             session.add(comment)
             session.flush()
-            for copy in eligible:
-                session.add(RemotePersonCommentPlacement(
-                    root_delivery_id=copy.id, inbound_object_id=comment.id,
-                    destination_thread_id=copy.discord_thread_id,
-                    state='pending' if copy.discord_thread_id is not None else 'pending_thread',
-                ))
-            return RemoteCommentReservation('reserved', comment.id, len(eligible))
+            targets = self._reserve_placements(session, comment, root, guild_allowed)
+            targets += self.restore_deferred_descendants(
+                session, root=root, parent_object_id=comment.object_id, guild_allowed=guild_allowed,
+            )
+            return RemoteCommentReservation('reserved', comment.id, targets)

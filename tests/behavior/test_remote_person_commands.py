@@ -44,7 +44,9 @@ class PersonCommandOwnershipScenarios(unittest.TestCase):
                 session.add(User(discord_user_id=username, activitypub_username=username,
                     actor_url=actor, inbox_url=f'{actor}/inbox', outbox_url=f'{actor}/outbox',
                     followers_url=f'{actor}/followers', public_key_pem='pub', private_key_pem='priv'))
-        self.follow = RemotePersonFollowService(self.db, _Gateway(), 'https://bridge.test')
+        self.follow = RemotePersonFollowService(self.db, _Gateway(), 'https://bridge.test',
+            SimpleNamespace(is_discord_guild_allowed=lambda _guild: True,
+                federation_decision=lambda _url: SimpleNamespace(allowed=True)))
         self.channel = RemotePersonChannelService(self.db)
         self.flags = SimpleNamespace(**{name: True for name in REQUIRED_BOT_PERMISSIONS})
 

@@ -57,7 +57,9 @@ class UserFollowScenarios(unittest.TestCase):
                     actor_url=actor, inbox_url=f'{actor}/inbox', outbox_url=f'{actor}/outbox',
                     followers_url=f'{actor}/followers', public_key_pem='public', private_key_pem='private'))
         self.gateway = GatewayFake()
-        self.service = RemotePersonFollowService(self.db, self.gateway, 'https://bridge.test')
+        self.service = RemotePersonFollowService(self.db, self.gateway, 'https://bridge.test',
+            SimpleNamespace(is_discord_guild_allowed=lambda _guild: True,
+                federation_decision=lambda _url: SimpleNamespace(allowed=True)))
         self.flags = SimpleNamespace(**{name: True for name in REQUIRED_BOT_PERMISSIONS})
 
     async def start(self, user=101, actor='@bob@fediverse.example', channel=10, **params):
@@ -66,6 +68,32 @@ class UserFollowScenarios(unittest.TestCase):
             discord_guild_id=1, discord_channel_id=channel, target_channel_guild_id=1,
             channel_type='text', caller_can_manage_guild=params.get('manager', True),
             bot_permissions=params.get('permissions', self.flags))
+
+    def test_federation_blocklist_rejects_before_lookup_and_follow(self):
+        """Denied remote actors cannot reserve or dispatch a user-owned Follow."""
+        self.service.policy_service.federation_decision = lambda _url: SimpleNamespace(allowed=False)
+        result = asyncio.run(self.start())
+        self.assertEqual(result.status, 'federation_denied')
+        self.assertEqual(self.gateway.lookups, [])
+        self.assertEqual(asyncio.run(self.service.dispatch_prepared()), 0)
+        self.assertEqual(self.gateway.sends, [])
+        with self.db.session() as session:
+            self.assertIsNone(session.scalar(select(RemotePersonFollow.id)))
+
+    def test_policy_revocation_blocks_queued_follow_but_retains_its_identity(self):
+        """A queued Follow cannot bypass a later blocklist at the send gate."""
+        prepared = asyncio.run(self.start())
+        self.assertEqual(prepared.status, 'prepared')
+        self.service.policy_service.federation_decision = lambda _url: SimpleNamespace(allowed=False)
+        self.assertEqual(asyncio.run(self.service.dispatch_prepared()), 0)
+        self.assertEqual(self.gateway.sends, [])
+        with self.db.session() as session:
+            row = session.get(RemotePersonFollow, prepared.follow_id)
+            self.assertEqual(row.follow_dispatch_state, 'prepared')
+            self.assertEqual(row.follow_activity_id, prepared.follow_activity_id)
+        self.service.policy_service.federation_decision = lambda _url: SimpleNamespace(allowed=True)
+        self.assertEqual(asyncio.run(self.service.dispatch_prepared()), 1)
+        self.assertEqual(len(self.gateway.sends), 1)
 
     def test_two_local_actors_get_distinct_immutable_follow_ids(self):
         """Follow identity belongs to the registered sender, not the shared service."""
