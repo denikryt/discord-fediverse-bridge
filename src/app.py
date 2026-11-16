@@ -213,6 +213,17 @@ def _build_live_runtime(
     closeables: list[object] = [runtime_lifetime_lease, deployment_lease]
     runtime: Runtime | None = None
     try:
+        # Refuse incompatible persisted ownership while holding both locks,
+        # before SQLite migration's released-v0 transaction can commit.
+        from .db.repositories.platform_surfaces import preflight_instance_mode
+        trusted_for_preflight = (
+            settings.fluxer_connectors[0] if settings.bridge_platform == "fluxer" else None
+        )
+        preflight_instance_mode(
+            settings.database_url, platform=settings.bridge_platform,
+            connector_key=trusted_for_preflight.connector_key if trusted_for_preflight else None,
+            instance_origin=trusted_for_preflight.origin if trusted_for_preflight else None,
+        )
         database = Database(settings.database_url)
         closeables.append(database)
         media_store = ProfileMediaStore(
@@ -230,7 +241,9 @@ def _build_live_runtime(
         )
         # Operator-approved Fluxer identity must be committed before SDK
         # composition; a conflicting saved row never authorizes a rebind.
-        trusted_fluxer = settings.fluxer_connectors[0] if settings.fluxer_connectors else None
+        trusted_fluxer = (
+            settings.fluxer_connectors[0] if settings.bridge_platform == "fluxer" else None
+        )
         with database.session() as session:
             database.platform_surfaces.admit_single_trusted_fluxer(
                 session,

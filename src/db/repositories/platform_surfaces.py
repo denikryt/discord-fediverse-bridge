@@ -1,6 +1,8 @@
 """Connector-scoped channel identity and transactional typed-claim persistence."""
 
 from dataclasses import dataclass
+from pathlib import Path
+import sqlite3
 import ipaddress
 import re
 from typing import TYPE_CHECKING
@@ -9,7 +11,8 @@ if TYPE_CHECKING:
     from ...content_sync.surface_resolution import ResolvedForumSource
 from urllib.parse import urlsplit, urlunsplit
 
-from sqlalchemy import select, update, String
+from sqlalchemy import select, update, String, create_engine
+from sqlalchemy.engine import make_url
 from sqlalchemy.orm import Session
 
 from ...platform_types import ConnectorRef, ChannelRef
@@ -29,6 +32,111 @@ OWNER_MODELS = {
     "remote_subscription_id": ChannelCommunitySubscription,
     "personal_feed_binding_id": PersonalFeedBinding,
 }
+
+
+def preflight_instance_mode(
+    database_url: str, *, platform: str,
+    connector_key: str | None = None, instance_origin: str | None = None,
+) -> None:
+    """Read pre-existing SQLite ownership without migrating or adopting AP keys.
+
+    Call only while the runtime and deployment leases exclude competing writers.
+    The existing migration runner still owns schema validation and transactional
+    connector admission; this boundary prevents an unsafe *prior* commit.
+    """
+    if platform not in {"discord", "fluxer"}:
+        raise ValueError("Invalid exclusive platform mode")
+    database_name = make_url(database_url).database
+    if not database_name:
+        raise ValueError("Mode preflight requires a file-backed SQLite database")
+    path = Path(database_name).resolve(strict=False)
+    if not path.exists():
+        return
+    if not path.is_file():
+        raise RuntimeError("Unsupported existing database path for platform preflight")
+    if path.stat().st_size == 0:
+        return
+
+    # SQLite URI mode=ro prevents an existing Discord v0 database being
+    # modified before Fluxer identity ownership is established. No connection
+    # constructed here may open a writer or create a missing database.
+    uri = path.as_uri() + "?mode=ro"
+    engine = create_engine("sqlite://", creator=lambda: sqlite3.connect(uri, uri=True))
+    try:
+        from ..migrations import (
+            _validate_current_v1_schema, validate_released_v0,
+        )
+        with engine.connect() as connection:
+            connection.exec_driver_sql("BEGIN")
+            version = connection.exec_driver_sql("PRAGMA user_version").scalar_one()
+            names = set(connection.exec_driver_sql(
+                "SELECT name FROM sqlite_master WHERE type='table' AND name NOT GLOB 'sqlite_*'"
+            ).scalars())
+            other_objects = connection.exec_driver_sql(
+                "SELECT name FROM sqlite_master WHERE type='view'"
+            ).first()
+            if not names and version == 0 and other_objects is None:
+                return
+            if version == 0:
+                # A released v0 database belongs to Discord even when all of
+                # its tables happen to be empty. Fluxer must never upgrade it.
+                validate_released_v0(connection)
+                if platform == "fluxer":
+                    raise RuntimeError("Fluxer mode refuses a released Discord v0 database")
+                return
+            if version != 1:
+                raise RuntimeError("Unknown database schema/version for platform mode")
+            _validate_current_v1_schema(connection)
+            rows = connection.exec_driver_sql(
+                "SELECT connector_key,platform,instance_origin FROM platform_connectors"
+            ).all()
+            fluxer = [row for row in rows if row[1] == "fluxer"]
+            if platform == "discord":
+                if fluxer:
+                    raise RuntimeError("Discord mode refuses a Fluxer-bound database")
+                return
+            if any(row[0] != "discord-primary" and row[1] != "fluxer" for row in rows):
+                raise RuntimeError("Fluxer mode refuses unknown connector ownership")
+            if len(fluxer) > 1:
+                raise RuntimeError("Fluxer mode refuses multiple persisted bindings")
+            if fluxer and (connector_key is None or instance_origin is None or
+                           fluxer[0][0] != connector_key or fluxer[0][2] != instance_origin):
+                raise RuntimeError("Fluxer connector identity differs from persisted binding")
+            has_key = connection.exec_driver_sql(
+                "SELECT 1 FROM bridge_actor_keys LIMIT 1"
+            ).first() is not None
+            if has_key and not fluxer:
+                # Even a Discord instance with no messages has publicly owned
+                # the bridge's actor URL and signing key since first startup.
+                raise RuntimeError("Fluxer mode refuses an unbound service actor key")
+            if not fluxer:
+                # A first Fluxer admission may inherit only the inert v1
+                # discord-primary bootstrap metadata row, no domain history.
+                for table in sorted(names - {"platform_connectors", "bridge_actor_keys"}):
+                    if connection.exec_driver_sql(f'SELECT 1 FROM "{table}" LIMIT 1').first():
+                        raise RuntimeError("Fluxer mode refuses pre-existing domain state")
+            # An already-bound Fluxer DB may own its own physical copies, but
+            # never current Discord-specific author, registration or channel data.
+            if fluxer:
+                discord_tables = (
+                    "users", "registration_sessions", "personal_feed_bindings",
+                    "discord_guild_snapshots", "discord_channel_snapshots",
+                    "inbound_discord_deliveries", "local_communities",
+                    "local_subscribers", "channel_community_subscriptions",
+                )
+                for table in discord_tables:
+                    if connection.exec_driver_sql(f'SELECT 1 FROM "{table}" LIMIT 1').first():
+                        raise RuntimeError("Fluxer mode refuses Discord-owned domain rows")
+                if connection.exec_driver_sql(
+                    "SELECT 1 FROM platform_channel_surfaces AS s "
+                    "JOIN platform_connectors AS c ON c.id=s.connector_id "
+                    "WHERE c.connector_key='discord-primary' LIMIT 1"
+                ).first():
+                    raise RuntimeError("Fluxer mode refuses Discord-owned channel surfaces")
+    except sqlite3.DatabaseError as error:
+        raise RuntimeError("Invalid database file for platform preflight") from error
+    finally:
+        engine.dispose()
 
 
 @dataclass(frozen=True)
