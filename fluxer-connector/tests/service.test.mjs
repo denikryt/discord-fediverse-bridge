@@ -36,7 +36,7 @@ function setup(receiverPort,{wrongApi=false,loginError=false,rpcPort}={}) {
     createVettedClient:async()=>client,
     execute:async(operation,args)=>{calls.push([operation,args]);return {id:args.id};},
   });
-  return {service,emitter,calls};
+  return {service,emitter,calls,client};
 }
 const request=(port,operation,token='private-secret')=>fetch(`http://127.0.0.1:${port}/rpc`,{
   method:'POST',headers:{authorization:`Bearer ${token}`,'content-type':'application/json'},
@@ -73,6 +73,50 @@ test('SDK disconnect disables physical RPC without losing health diagnostics',as
     await service.close();
   } finally {await python.stop();}
 });
+test('a latched Gateway replay gap denies every write without calling any SDK executor',async()=>{
+  const python=await receiver();const {service,emitter,calls}=setup(python.port);
+  try {
+    const port=await service.start();
+    assert.equal((await request(port,'create_forum_thread')).status,200);
+    emitter.emit('shardDisconnect',0,1006);
+    emitter.emit('shardReady',0);
+    const health=(await (await request(port,'health')).json()).result;
+    assert.equal(health.state,'ready');
+    assert.equal(health.gateway_gap,true);
+    const before=calls.length;
+    for(const op of ['create_forum_thread','create_reply_thread','send_message',
+                     'edit_message','delete_message']) {
+      assert.equal((await request(port,op)).status,503,op);
+    }
+    assert.equal(calls.length,before,'gap must deny writes at the Node SDK boundary');
+    assert.equal((await request(port,'fetch_channel')).status,200);
+  }finally{await service.close();await python.stop();}
+});
+
+test('live SDK identity drift degrades health and denies all writes until it matches login proof',async()=>{
+  const python=await receiver();const {service,client,calls}=setup(python.port);
+  try {
+    const port=await service.start();
+    assert.equal((await request(port,'send_message')).status,200);
+    const original=client.user;
+    for(const unexpected of [{id:'bot-B',bot:true},{id:'bot-1',bot:false},
+                             {id:'',bot:true},undefined]) {
+      client.user=unexpected;
+      assert.equal((await (await request(port,'health')).json()).result.state,'degraded');
+      const before=calls.length;
+      for(const op of ['create_forum_thread','create_reply_thread','send_message',
+                       'edit_message','delete_message']) {
+        assert.equal((await request(port,op)).status,503,op);
+      }
+      assert.equal(calls.length,before,'no executor call under identity drift');
+      assert.equal((await request(port,'fetch_channel')).status,200);
+    }
+    client.user=original;
+    assert.equal((await (await request(port,'health')).json()).result.state,'ready');
+    assert.equal((await request(port,'edit_message')).status,200);
+  }finally{await service.close();await python.stop();}
+});
+
 test('endpoint mismatch prevents login, RPC and Gateway while ensuring client teardown',async()=>{
   const python=await receiver();const {service,calls}=setup(python.port,{wrongApi:true});
   try {

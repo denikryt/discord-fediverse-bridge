@@ -7,7 +7,7 @@
 import {SdkSession, type SdkClient, type SdkSessionConfig} from './sdk_session.ts';
 import {FluxerSdkGatewayHandler} from './gateway.ts';
 import {GatewayEventForwarder, type EventDeliveryConfig} from './event_delivery.ts';
-import {PrivateRpcService, PrivateRpcError, type RpcHandler, type RpcOperation} from './transport.ts';
+import {PrivateRpcService, PrivateRpcError, RPC_WRITES, type RpcHandler, type RpcOperation} from './transport.ts';
 
 export type ServiceConfig = Omit<SdkSessionConfig, 'createClient'> &
   Omit<EventDeliveryConfig, 'connectorKey'> & {
@@ -57,14 +57,25 @@ export class FluxerNodeService {
         return client;
       }});
     const dispatch: RpcHandler = async (operation: RpcOperation, args) => {
+      const status = this.session.health();
+      const identityMatches = this.liveIdentityMatches(status.bot_id);
       if (operation === 'health') {
-        const status = this.session.health();
-        return {...status, instance_origin: this.instanceOrigin,
+        // A cached successful login is not proof that the SDK still represents
+        // that bot. Health consumers must not admit a drifted identity as READY.
+        return {...status,
+          state: status.state === 'ready' && !identityMatches ? 'degraded' : status.state,
+          instance_origin: this.instanceOrigin,
           gateway_gap: status.gateway_gap || this.gatewayFault,
           gateway_context_unverified: this.gatewayContextUnverified};
       }
-      // Never advertise writable bot operations until gateway and SDK are ready.
-      if (this.shutdownRequested || this.session.health().state !== 'ready' || this.gatewayFault) {
+      if (this.shutdownRequested || status.state !== 'ready' || this.gatewayFault) {
+        throw new PrivateRpcError('unavailable', 503);
+      }
+      // Enforce readiness at the SDK-owning admission boundary, not just at
+      // Python's earlier health check. There is no await between proof and the
+      // executor call, so a reconnect or SDK user swap cannot race in this turn.
+      if (RPC_WRITES.includes(operation as (typeof RPC_WRITES)[number]) &&
+          (status.gateway_gap || !identityMatches)) {
         throw new PrivateRpcError('unavailable', 503);
       }
       return config.execute(operation, args);
@@ -72,6 +83,13 @@ export class FluxerNodeService {
     this.rpc = new PrivateRpcService({connectorKey: config.connectorKey,
       transportSecret: config.transportSecret, port: config.rpcPort ?? 0,
       handler: dispatch});
+  }
+
+  /** Compare the current SDK user with the bot identity verified at login. */
+  private liveIdentityMatches(attestedBotId: string | undefined): boolean {
+    const user = this.currentClient?.user;
+    return typeof attestedBotId === 'string' && attestedBotId.length > 0 &&
+      user?.bot === true && user.id === attestedBotId;
   }
 
   /** Start SDK first; only an authenticated READY session exposes private RPC. */
