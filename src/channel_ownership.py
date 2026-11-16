@@ -12,6 +12,7 @@ from .models import (
     LocalCommunity,
     LocalSubscriber,
     PersonalFeedBinding,
+    RemotePersonChannelAssignment,
 )
 
 
@@ -59,4 +60,11 @@ def resolve_channel_owner(session: Session, channel_id: int) -> ChannelOwner | N
             return ChannelOwner(
                 kind, row.id, channel_id, getattr(row, guild_column.key)
             )
+    # A remote Person feed may have many owners of the *same* channel;
+    # returning its presence prevents only exclusive binds into that channel.
+    remote = session.scalar(select(RemotePersonChannelAssignment).where(
+        RemotePersonChannelAssignment.discord_channel_id == channel_id
+    ).order_by(RemotePersonChannelAssignment.id).limit(1))
+    if remote is not None:
+        return ChannelOwner("remote_person_feed", remote.id, channel_id, remote.discord_guild_id)
     return None
