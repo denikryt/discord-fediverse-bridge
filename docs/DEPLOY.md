@@ -15,6 +15,7 @@ Open `.env` and set at least:
 ```env
 COMPOSE_PROJECT_NAME=discord-bridge-prod
 COMPOSE_ENV_FILE=.env
+BRIDGE_PLATFORM=discord
 
 BRIDGE_VERSION=0.1.0
 BRIDGE_IMAGE=ghcr.io/YOUR_GITHUB_OWNER/discord-fediverse-bridge
@@ -81,7 +82,13 @@ The public service should now be available at the URL configured in `PUBLIC_BASE
 
 ## Fluxer trusted-instance opt-in (not yet approved for production writes)
 
-The `fluxer-sidecar` service is disabled by default (`profiles: ["fluxer"]`).
+The default Compose project is Discord-only (`BRIDGE_PLATFORM=discord` and no
+profiles). To run Discord and Fluxer side by side, use **two distinct Compose
+projects** with separate domains/ActivityPub keys, SQLite data volumes,
+published ports, bot tokens, backup directories and environment files.
+Do not switch an already initialized Discord database to Fluxer: startup
+preflight rejects identity inheritance. The `fluxer-sidecar` service is disabled
+by default (`profiles: ["fluxer"]`).
 It shares the `bridge` container's network namespace with
 `network_mode: "service:bridge"`: its private authenticated RPC listens on
 `127.0.0.1:8769`, not a published host port, and forwards authenticated
@@ -90,11 +97,29 @@ The Python HTTP listener still binds `0.0.0.0`; the internal ingress path is
 protected by its bearer and **must not be routed publicly**. Namespace sharing
 alone does not isolate a path on the Python listener.
 
-For an **isolated test deployment only**, configure exactly one trusted origin
-and exactly matching connector key/IPC bearer on both services. Set the
-following nonsecret values in the bridge's `.env`:
+For an **isolated test deployment only**, use an independent environment
+file (for example `.env.fluxer`), not the running Discord service's `.env`.
+`BRIDGE_PLATFORM=fluxer` disables all Discord SDK/OAuth owners and requires
+exactly one trusted Fluxer connector. A sidecar selected with `--profile fluxer`
+while `BRIDGE_PLATFORM=discord` fails its startup mode check; it cannot
+silently enable a second connector inside the Discord bridge. Supply a
+connector key/IPC bearer that match **both** Python and Node. Set the
+following nonsecret values in `.env.fluxer`:
 
 ```env
+COMPOSE_PROJECT_NAME=fluxer-bridge-test
+COMPOSE_ENV_FILE=.env.fluxer
+BRIDGE_PLATFORM=fluxer
+PUBLIC_BASE_URL=https://fluxer-bridge.example.com
+BRIDGE_DATA_VOLUME=fluxer-bridge-test-data
+BRIDGE_PUBLISHED_PORT=8082
+GATEWAY_PUBLISHED_PORT=3002
+BACKUP_HOST_DIR=./backups-fluxer
+DISCORD_TOKEN=
+DISCORD_OAUTH_CLIENT_ID=
+DISCORD_OAUTH_CLIENT_SECRET=
+BRIDGE_SUPER_ADMIN_USER_IDS=
+FEDIFY_ACTOR_NAME=Fluxer ActivityPub Bridge Gateway
 FLUXER_CONNECTORS_JSON=[{"connector_key":"fluxer-primary","origin":"https://trusted.example","rpc_url":"http://127.0.0.1:8769","transport_secret":"same-internal-bearer"}]
 FLUXER_IMAGE=ghcr.io/YOUR_GITHUB_OWNER/discord-fediverse-bridge-fluxer
 FLUXER_CONNECTOR_KEY=fluxer-primary
@@ -120,15 +145,15 @@ The pinned SDK lockfile is checked in and validated by CI on Node 22. Once
 the image and an actual test instance are available:
 
 ```bash
-docker compose --env-file .env --profile fluxer -f compose.yaml -f compose.build.yaml config
-docker compose --env-file .env --profile fluxer up -d
+docker compose --env-file .env.fluxer --profile fluxer -f compose.yaml -f compose.build.yaml config
+docker compose --env-file .env.fluxer --profile fluxer up -d
 # Observe Node SDK auth, health/readiness and authenticated Python ingress.
-docker compose --env-file .env --profile fluxer ps
-docker compose --env-file .env --profile fluxer logs --tail=100 bridge fluxer-sidecar
+docker compose --env-file .env.fluxer --profile fluxer ps
+docker compose --env-file .env.fluxer --profile fluxer logs --tail=100 bridge fluxer-sidecar
 ```
 
 Stop in reverse ownership order through Compose (`fluxer-sidecar` depends on
-`bridge`). Sidecar restart never restarts the Python Discord client. Recreating
+`bridge`). Sidecar restart must not restart the Fluxer-only Python HTTP/SQLite runtime. Recreating
 `bridge` must also recreate/rejoin the sidecar's shared network namespace;
 `depends_on.restart` requests this for Compose-managed restarts, but host-level
 container runtime behavior requires a real two-container test. A port collision
@@ -140,9 +165,10 @@ B20/B21, and no pinned real Fluxer build/credentials were provided. The SDK
 lockfile now supports `npm ci`, and ordinary `npm run check` verifies the actual
 SDK write-factory contracts on Node 22. Release validation fails on a missing
 or inconsistent lock; it never silently skips the declared Fluxer image. The `fluxer-connector/Dockerfile` intentionally requires the
-lockfile and fails to build without it. Production `main.ts` currently refuses
-all Create/Send/Edit/Delete operations; these must not be enabled before live
-REST/starter/permission/Gateway contract verification. The Compose layout is
+lockfile and fails to build without it. Production `main.ts` now routes Create/Send/Edit/Delete through the pinned
+SDK executors. This candidate has passed SDK-edge and cross-process tests
+but requires real-instance REST/starter/permission/Gateway readback before
+release acceptance. The Compose layout is
 implemented and statically checked but **must not be interpreted as a passed
 production deployment or complete issue #12 acceptance**.
 

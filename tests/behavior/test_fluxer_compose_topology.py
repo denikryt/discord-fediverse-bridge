@@ -34,6 +34,31 @@ class FluxerComposeTopologyContracts(unittest.TestCase):
                          'http://127.0.0.1:8080/internal/fluxer/events')
         self.assertIn('healthcheck', node)
 
+    def test_selected_platform_is_explicit_and_wrong_profile_mode_exits(self) -> None:
+        """Opt-in sidecar refuses a Discord-mode Python without mounting a bot there."""
+        services = self.compose['services']
+        expected = '${BRIDGE_PLATFORM:-discord}'
+        self.assertEqual(services['bridge']['environment']['BRIDGE_PLATFORM'], expected)
+        node = services['fluxer-sidecar']
+        self.assertEqual(node['environment']['BRIDGE_PLATFORM'], expected)
+        script = ' '.join(node['command'])
+        self.assertIn('$$BRIDGE_PLATFORM', script)
+        self.assertIn('!= "fluxer"', script)
+        self.assertIn('exit 1', script)
+        self.assertIn('exec node --experimental-strip-types src/main.ts', script)
+        # An explicit deployment-mode mismatch is a hard startup error, not
+        # automatic in-process platform switching or a second Discord client.
+        self.assertNotIn('profiles', services['bridge'])
+
+    def test_healthcheck_requires_expected_instance_origin_and_sdk_identity(self) -> None:
+        """Listening or a cached bot ID alone cannot make the sidecar healthy."""
+        node = self.compose['services']['fluxer-sidecar']
+        probe = ' '.join(str(x) for x in node['healthcheck']['test'])
+        self.assertIn('instance_origin', probe)
+        self.assertIn('FLUXER_ORIGIN', probe)
+        self.assertIn('bot_id', probe)
+        self.assertIn('gateway_gap', probe)
+
     def test_bot_secret_mount_exists_only_in_node(self) -> None:
         """The Python env/mount topology never acquires the real Node token."""
         services = self.compose['services']

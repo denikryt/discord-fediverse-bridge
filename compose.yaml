@@ -7,6 +7,8 @@ services:
     env_file:
       - ${COMPOSE_ENV_FILE:-.env}
     environment:
+      # Compose mode is resolved from the same --env-file used for interpolation.
+      BRIDGE_PLATFORM: ${BRIDGE_PLATFORM:-discord}
       DATABASE_URL: sqlite:////data/bridge.db
       BRIDGE_BIND_HOST: 0.0.0.0
       BRIDGE_BIND_PORT: 8080
@@ -41,7 +43,18 @@ services:
       bridge:
         condition: service_healthy
         restart: true
+    # Profiles cannot themselves override environment loaded by env_file.
+    # Refuse a mistakenly enabled sidecar against a Discord-mode bridge.
+    command:
+      - sh
+      - -ec
+      - >-
+        if [ "$$BRIDGE_PLATFORM" != "fluxer" ]; then
+          echo "Fluxer sidecar requires BRIDGE_PLATFORM=fluxer" >&2; exit 1;
+        fi;
+        exec node --experimental-strip-types src/main.ts
     environment:
+      BRIDGE_PLATFORM: ${BRIDGE_PLATFORM:-discord}
       FLUXER_CONNECTOR_KEY: ${FLUXER_CONNECTOR_KEY:-}
       FLUXER_ORIGIN: ${FLUXER_ORIGIN:-}
       FLUXER_APPROVED_API_HOST: ${FLUXER_APPROVED_API_HOST:-}
@@ -69,6 +82,7 @@ services:
           .then(async r=>{const body=await r.json();
           if(!r.ok||!body.ok||body.result?.state!=='ready'||
           body.result?.connector_key!==process.env.FLUXER_CONNECTOR_KEY||
+          body.result?.instance_origin!==process.env.FLUXER_ORIGIN||
           !body.result?.bot_id||body.result?.gateway_gap)process.exit(1)})
           .catch(()=>process.exit(1))
       interval: 10s
