@@ -15,7 +15,7 @@ old raw dispatch-shape fixtures are not a production event path.
 
 `FluxerNodeService` in `src/service.ts` owns the SDK session, event
 forwarder, listeners, and private RPC listener. `src/main.ts` now provides
-its one-instance **read-only** production bootstrap: tokenless pinned-DNS
+its one-instance **SDK-backed** production bootstrap: tokenless pinned-DNS
 discovery, explicit operator-approved `api_public` and Gateway hosts, a
 Node-only token file, the official SDK `Client` constructor, and an SDK
 WebSocket constructor hook that rejects an unexpected Gateway host before
@@ -29,15 +29,14 @@ forums, it reads the exact current channel through SDK `channels.fetch` and
 then via SDK REST `get(Routes.channel(id))`; this second read avoids accepting
 cached tags or `flags=0` synthesized when the server omitted these fields.
 The response reports observed `requires_tag` (source constant `1 << 4`),
-`available_tags` and each tag's `moderated` property, but **all physical
-write capabilities stay false** until the actual operator-pinned server build
-has been measured. `tag_requirements_verified` only asserts the presence and
-consistency of the current REST metadata; it is not a supported-create claim.
-Malformed, missing or mismatched tag metadata cannot be used for POST.
-The SDK's public `PermissionFlags` do not expose the server's separate
-`SEND_MESSAGES_IN_THREADS` bit: thread sends remain `unknown` even with
-ordinary SendMessages. A definitely absent prerequisite View/Send flag can
-still produce `denied` for forum post admission.
+`available_tags` and each tag's `moderated` property. Bot-only forum Create
+is advertised only with independently observed complete tag policy; thread
+reply and message mutation methods require a live unarchived/unlocked thread
+with a verified parent, or a supported text/announcement container. Every
+actual write still requires a fresh bot ACL check and SDK owner/scope proof.
+`create_reply_thread`, webhook identity and attachments are unsupported.
+`SEND_MESSAGES_IN_THREADS` uses server bit 38, independently from ordinary
+`SendMessages`. The current SDK-boundary tests are not live-instance proof.
 
 `src/message_send.ts` additionally implements an **isolated SDK-backed message
 sender** for exact text-channel messages and thread replies. It uses the
@@ -53,14 +52,12 @@ An explicit conflicting message guild is rejected, while SDK `guildId: null`
 is accepted for the full REST response. Any mismatched receipt leaves the
 existing CreateAttempt `unknown_delivery`.
 The unversioned server source names `SEND_MESSAGES_IN_THREADS` as bit 38;
-this isolated executor checks it, but does not promote it to a production
-capability without the approved build's observed contract. Node IPC and
-Python adapter scenarios cover correct nested delivery and lost responses.
-
-**Production `main.ts` still has no write dispatcher for either forum Create
-or replies.** Exact live server/SDK capability, message-reply ACL and starter
-contracts remain open hard acceptance gates. Passing SDK-edge fakes is not a
-permission to enable real Fluxer bot writes.
+the executor and permissions RPC both check it. Production `main.ts` now
+routes physical forum Create, nested replies, and bot-owned Edit/Delete via
+the existing SDK executors, using one authenticated SDK client. A lost or
+unverifiable write receipt is `unknown_delivery`, never an automatic retry.
+Real Fluxer build/SDK permission and receipt verification is still required
+before treating this as accepted for production.
 
 A separate `src/forum_create.ts` now implements the **narrow confirmed SDK
 REST forum-create wire contract** for testing: the SDK v3.3.0
@@ -76,19 +73,13 @@ lost/malformed post responses. No second POST, guessed starter, custom HTTP
 transport or webhook fallback is permitted. A two-process Python adapter →
 authenticated Node RPC → stateful SDK REST fake tests this path.
 
-**The production `main.ts` intentionally does not register the forum-create
-handler yet.** Independent VM verification on `fluxer-release@2026.1106.212644`
-observed real forum/message writes but exposed incompatible receipt checks.
-The fixes below require a live rerun and complete runtime/deployment acceptance.
-`capabilities.forum_posts` stays false and production RPC returns `unsupported`.
-Passing local contract regressions does not authorize production bot writes.
-
-The entrypoint exposes only confirmed SDK-backed physical reads and partial
-ACL checks. Create, Send, Edit, Delete and reconciliation
-are **not enabled** in the production handler and refuse RPC rather than
-inventing server-specific REST methods. Do not enable production physical
-writes or claim complete issue #12 transport at this checkpoint. The
-remaining live runtime/deployment gates have not passed.
+**Release acceptance remains open.** The handlers are wired in the production
+composition and covered by authenticated Node RPC / Python cross-process
+SDK-edge tests. The earlier live REST trial on
+`fluxer-release@2026.1106.212644` discovered incompatible receipt checks;
+the corrected build has not been retested on a real Fluxer instance. Do not
+interpret these tests as proof of a deployment-ready provider contract or
+claim issue #12 is complete before that acceptance.
 
 The Gateway `MessageCreate` event identifies its immediate container, not
 necessarily its enclosing forum. `gateway.ts` now reuses the verified

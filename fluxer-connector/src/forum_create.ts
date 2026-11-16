@@ -8,8 +8,7 @@
  *
  * No second REST client, physical retry, metadata-based adoption or durable
  * claim system is introduced here. The Python coordinator remains the only
- * physical CreateAttempt owner. Production capability remains false until the
- * operator's exact live server build is measured, as required by the plan.
+ * physical CreateAttempt owner. Live provider acceptance is separately gated.
  */
 import {PrivateRpcError, type RpcHandler} from './transport.ts';
 import {createSdkCapabilityHandler, type SdkCapabilityClient} from './capabilities.ts';

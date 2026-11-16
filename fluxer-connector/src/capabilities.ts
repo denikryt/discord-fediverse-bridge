@@ -4,7 +4,7 @@
  * zero. A raw channel GET via the SDK REST client therefore confirms that
  * tags and flags really occurred in the current response. The supplied
  * Fluxer server source defines REQUIRE_TAG at bit 4, but its build is not
- * verified as the operator's live server; write capabilities remain false.
+ * verified as the operator's live server; live writes require separate acceptance.
  */
 import {PrivateRpcError, type RpcHandler} from './transport.ts';
 
@@ -19,6 +19,9 @@ type SdkCapabilityChannel = {
   isThread(): boolean;
   isText(): boolean;
   isAnnouncement(): boolean;
+  archived?: boolean;
+  locked?: boolean;
+  parentId?: string | null;
 };
 export type SdkCapabilityClient = {
   channels: {fetch(id: string, options: {force: true}): Promise<SdkCapabilityChannel>};
@@ -61,7 +64,7 @@ function forumTags(rawChannel: Record<string, unknown>): {
     availableTags: tags};
 }
 
-/** Expose only fresh SDK metadata and conservatively false write capabilities. */
+/** Advertise only implemented bot-only methods for their verified channel kinds. */
 export function createSdkCapabilityHandler(
   client: SdkCapabilityClient, channelRoute: (id: string) => string,
 ): RpcHandler {
@@ -98,11 +101,20 @@ export function createSdkCapabilityHandler(
       }
       observed = forumTags(raw);
     }
-    // No operator-pinned live server build has proven the end-to-end physical
-    // write contracts. SDK method existence is not permission to POST.
+    // Method support is distinct from authorization: each write executor still
+    // checks fresh guild permissions, bot identity, tags and exact message owner.
+    // Unknown forum policy must not become permission to create a forum post.
+    const forumPosts = channel.isForum() && observed.verified;
+    // An absent thread lifecycle/parent field is not an open, writable thread.
+    const writableThread = channel.isThread() && channel.archived === false &&
+      channel.locked === false && typeof channel.parentId === 'string' &&
+      ID.test(channel.parentId);
+    const writableMessage = writableThread || channel.isText() ||
+      channel.isAnnouncement();
     return {channel_id: channelId, guild_id: guildId,
-      forum_posts: false, message_threads: false, thread_replies: false,
-      attachments: false, message_edit_delete: false,
+      forum_posts: forumPosts, message_threads: false,
+      thread_replies: writableThread,
+      attachments: false, message_edit_delete: writableMessage,
       webhook_send: false, webhook_edit_delete: false,
       tag_requirements_verified: observed.verified,
       requires_tag: observed.requiresTag, available_tags: observed.availableTags};

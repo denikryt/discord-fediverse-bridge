@@ -4,9 +4,7 @@
 import {EventEmitter} from 'node:events';
 import {appendFileSync} from 'node:fs';
 import {FluxerNodeService} from '../src/service.ts';
-import {createSdkForumCreateHandler} from '../src/forum_create.ts';
-import {createSdkMessageSendHandler} from '../src/message_send.ts';
-import {createSdkReadHandler} from '../src/rest_reads.ts';
+import {createProductionRpcHandler} from '../src/main.ts';
 import {PrivateRpcError} from '../src/transport.ts';
 
 const logPath=process.argv[2];
@@ -81,29 +79,17 @@ const client={on:emitter.on.bind(emitter),off:emitter.off.bind(emitter),
   async login(){this.user={id:'bot-1',bot:true};emitter.emit('ready');},
   async destroy(){},
 };
-const reads=createSdkReadHandler(client);
-const create=createSdkForumCreateHandler(client,id=>`/channels/${id}`,
-  id=>`/channels/${id}/threads`);
-const send=createSdkMessageSendHandler(client);
+// Exercise the same dispatcher the production sidecar actually composes.
+const execute=createProductionRpcHandler(client, {
+  channel:id=>`/channels/${id}`,
+  channelThreads:id=>`/channels/${id}/threads`,
+});
 const service=new FluxerNodeService({connectorKey:'fx-forum',origin:'https://fx.test',
   apiPublic:'https://api.fx.test/',botToken:'node-only-secret',
   transportSecret:'shared-ipc-secret',
   pythonIngressUrl:'http://127.0.0.1:43299/internal/fluxer/events',
   createVettedClient:async()=>client,
-  execute:async(operation,args)=>{
-    if(operation==='fetch_channel'||operation==='fetch_thread'||operation==='fetch_message'){
-      return reads(operation,args);
-    }
-    if(operation==='capabilities')return {channel_id:args.channel_id,guild_id:'guild-1',
-      forum_posts:true,thread_replies:true,tag_requirements_verified:true,requires_tag:true,
-      available_tags:[{id:'tag-a',moderated:false}]};
-    if(operation==='check_permissions')return {bot_id:client.user.id,
-      channel_id:args.channel_id,guild_id:'guild-1',
-      ...Object.fromEntries(args.actions.map(action=>[action,'allowed']))};
-    if(operation==='create_forum_thread')return create(operation,args);
-    if(operation==='send_message')return send(operation,args);
-    throw new PrivateRpcError('unsupported');
-  },
+  execute,
 });
 const port=await service.start();
 process.stdout.write(`${port}\n`);

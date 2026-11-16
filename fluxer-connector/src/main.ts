@@ -2,7 +2,8 @@
  *
  * The operator supplies a vetted instance and a Node-only bot secret file.
  * The Python process receives only the independently configured IPC bearer;
- * writes remain unsupported until their real Fluxer REST contracts are proven.
+ * physical write handlers use the same SDK session; live server acceptance
+ * remains a deployment gate, not an alternative unauthenticated transport.
  */
 import {pathToFileURL} from 'node:url';
 import {discoverInstance} from './discovery.ts';
@@ -12,6 +13,10 @@ import {FluxerNodeService} from './service.ts';
 import {createSdkReadHandler} from './rest_reads.ts';
 import {createSdkPermissionHandler} from './permissions.ts';
 import {createSdkCapabilityHandler} from './capabilities.ts';
+import {createSdkForumCreateHandler} from './forum_create.ts';
+import {createSdkMessageSendHandler} from './message_send.ts';
+import {createSdkMessageMutationHandler} from './message_mutations.ts';
+import type {Client} from '@fluxerjs/core';
 import {PrivateRpcError, type RpcHandler} from './transport.ts';
 
 /** Read mandatory deployment values without echoing secret names or contents. */
@@ -54,6 +59,36 @@ function readConfig(): {
       process.env.FLUXER_ALLOW_INSECURE_LOCAL_DEVELOPMENT === 'true'};
 }
 
+/** Route only supported SDK operations through one authenticated client.
+ *
+ * The underlying executor performs fresh target/ACL/author verification;
+ * there is no direct REST sender in Python and no SDK write fallback.
+ */
+export function createProductionRpcHandler(
+  client: Client,
+  routes: {channel(id: string): string; channelThreads(id: string): string},
+): RpcHandler {
+  const reads = createSdkReadHandler(client);
+  const permissions = createSdkPermissionHandler(client);
+  const capabilities = createSdkCapabilityHandler(client, routes.channel);
+  const forum = createSdkForumCreateHandler(client, routes.channel, routes.channelThreads);
+  const send = createSdkMessageSendHandler(client);
+  const mutate = createSdkMessageMutationHandler(client);
+  return (operation, args) => {
+    if (operation === 'fetch_channel' || operation === 'fetch_thread' ||
+        operation === 'fetch_message') return reads(operation, args);
+    if (operation === 'check_permissions') return permissions(operation, args);
+    if (operation === 'capabilities') return capabilities(operation, args);
+    if (operation === 'create_forum_thread') return forum(operation, args);
+    if (operation === 'send_message') return send(operation, args);
+    if (operation === 'edit_message' || operation === 'delete_message') {
+      return mutate(operation, args);
+    }
+    // The text-message-root thread operation is explicitly outside #12.
+    throw new PrivateRpcError('unsupported');
+  };
+}
+
 /** Start one SDK session and join its owned RPC/Gateway work on shutdown. */
 export async function runFluxerNodeService(): Promise<void> {
   const config = readConfig();
@@ -84,18 +119,7 @@ export async function runFluxerNodeService(): Promise<void> {
       const {Client, Routes} = await import('@fluxerjs/core');
       const client = createTrustedSdkClient(discovery, Client,
         config.allowInsecureLocalDevelopment);
-      const reads = createSdkReadHandler(client);
-      const permissions = createSdkPermissionHandler(client);
-      const capabilities = createSdkCapabilityHandler(client, Routes.channel);
-      handler = (operation, args) => {
-        if (operation === 'fetch_channel' || operation === 'fetch_thread' ||
-            operation === 'fetch_message') return reads(operation, args);
-        if (operation === 'check_permissions') return permissions(operation, args);
-        if (operation === 'capabilities') return capabilities(operation, args);
-        // No unconfirmed forum REST write is advertised by
-        // production composition. There is no bot-mode silent fallback.
-        throw new PrivateRpcError('unsupported');
-      };
+      handler = createProductionRpcHandler(client, Routes);
       return client;
     },
     execute: (operation, args) => {
