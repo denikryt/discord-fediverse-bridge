@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+from dataclasses import asdict
 import json
 
 import httpx
@@ -17,8 +18,9 @@ from src.db import Database
 from src.db.repositories.platform_surfaces import PlatformSurfaceRepository
 from src.fluxer_ingress import FluxerInboundHandler
 from src.models import (
-    ChannelSurface, LocalCommunity, LocalCommunityThread,
-    LocalCommunityThreadSurface, PlatformConnector,
+    ChannelSurface, LocalCommunity, LocalCommunityThread, LocalCommunityMessage,
+    LocalCommunityThreadSurface, LocalCommunityMessageSurface,
+    PublishedActivityObject, PlatformConnector,
 )
 from src.platform_types import (
     AuthorRef, ChannelRef, ContentDocument, MessageCreated,
@@ -96,6 +98,47 @@ class FluxerForumObservationScenarios(unittest.IsolatedAsyncioTestCase):
         with self.database.session() as session:
             # Only the explicitly seeded preexisting canonical row is present.
             self.assertEqual(session.query(LocalCommunityThread).count(), 1)
+
+    async def test_all_gateway_kinds_cross_private_http_without_canonical_effects(self) -> None:
+        """Six accepted event kinds, duplicates and echoes cannot bypass the #13 gate."""
+        from datetime import datetime
+
+        app = FastAPI()
+        app.include_router(create_internal_fluxer_router({"fx-one": (self.handler, "test-secret")}))
+        headers = {"Authorization": "Bearer test-secret", "X-Fluxer-Connector": "fx-one"}
+        human = self.person
+        mirror = AuthorRef("fx-one", "bot-one", "bot", "Mirror", is_bridge_owned=True)
+        events = (
+            ThreadCreated("fx-one", self.thread, "post", human,
+                          MessageRef("fx-one", "thread-1", "starter-1"), True),
+            ThreadUpdated("fx-one", self.thread, "updated"),
+            ThreadDeleted("fx-one", self.thread),
+            MessageCreated("fx-one", MessageRef("fx-one", "thread-1", "reply-2"),
+                           human, ContentDocument("comment"), parent_channel=self.forum),
+            MessageUpdated("fx-one", MessageRef("fx-one", "thread-1", "starter-1")),
+            MessageDeleted("fx-one", MessageRef("fx-one", "thread-1", "starter-1")),
+            MessageCreated("fx-one", MessageRef("fx-one", "thread-1", "echo"),
+                           mirror, ContentDocument("echo"), parent_channel=self.forum),
+            ThreadCreated("fx-one", self.thread, "old", human, None, False),
+        )
+        async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app),
+                                     base_url="http://test") as client:
+            for event in (*events, *events):
+                # Hydrate the production DTO schema, not a synthetic handler call.
+                payload = {"type": type(event).__name__, **asdict(event)}
+                body = json.dumps(payload, default=lambda value: (
+                    value.isoformat() if isinstance(value, datetime) else str(value)))
+                response = await client.post("/internal/fluxer/events", headers=headers,
+                                             content=body)
+                self.assertEqual(response.status_code, 200, response.text)
+                self.assertEqual(response.json(), {"accepted": True})
+        with self.database.session() as session:
+            # The existing claim is *not* a Fluxer Person authorization.
+            self.assertEqual(session.query(LocalCommunityThread).count(), 1)
+            self.assertEqual(session.query(LocalCommunityThreadSurface).count(), 1)
+            self.assertEqual(session.query(LocalCommunityMessage).count(), 0)
+            self.assertEqual(session.query(LocalCommunityMessageSurface).count(), 0)
+            self.assertEqual(session.query(PublishedActivityObject).count(), 0)
 
     async def test_id_only_unknown_copy_and_foreign_connector_fail_closed(self) -> None:
         """No parent forum is required to parse an ID-only edit/delete."""
