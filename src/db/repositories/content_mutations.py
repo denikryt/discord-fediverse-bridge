@@ -155,6 +155,7 @@ class ContentMutationRepository(BaseRepository):
             UserActorOutboundSource.source_kind == "content_create",
         ))
         direct_recipients = None
+        direct_person_recipients = None
         if create_source is not None:
             try:
                 create_snapshot = json.loads(create_source.snapshot_json)
@@ -162,6 +163,25 @@ class ContentMutationRepository(BaseRepository):
                 raise ValueError("original Create snapshot is unreadable") from exc
             if not isinstance(create_snapshot, dict):
                 raise ValueError("original Create snapshot is not an object")
+            if "directPersonRecipients" in create_snapshot:
+                direct_person_recipients = create_snapshot["directPersonRecipients"]
+                if not isinstance(direct_person_recipients, list):
+                    raise ValueError("original direct Person proof is not a recipient list")
+                if target_inbox_urls is not None:
+                    raise ValueError("direct Person mutation cannot replace original recipients")
+                for recipient in direct_person_recipients:
+                    if (not isinstance(recipient, dict)
+                        or set(recipient) != {"actorId", "inboxUrl"}
+                        or not isinstance(recipient["actorId"], str)
+                        or not isinstance(recipient["inboxUrl"], str)
+                        or session.scalar(select(UserActorOutboundDelivery).where(
+                            UserActorOutboundDelivery.source_id == create_source.id,
+                            UserActorOutboundDelivery.target_endpoint_url == recipient["inboxUrl"],
+                        )) is None):
+                        raise ValueError("original direct Person Create target is unproven")
+                original_activity = json.loads(create_source.activity_json)
+                if original_activity.get("cc") != [published.actor_url, f"{published.actor_url}/followers", *[r["actorId"] for r in direct_person_recipients]]:
+                    raise ValueError("direct Person snapshot conflicts with canonical Create audience")
             if "directGroupRecipients" in create_snapshot:
                 direct_recipients = create_snapshot["directGroupRecipients"]
                 if (not isinstance(direct_recipients, list)
@@ -210,6 +230,7 @@ class ContentMutationRepository(BaseRepository):
             "bodyMarkdown": published.desired_body_markdown,
             "inReplyToObjectId": published.in_reply_to_object_id,
             "targetInboxUrls": target_inbox_urls,
+            **({"directPersonRecipients": direct_person_recipients} if direct_person_recipients is not None else {}),
             **({"directGroupRecipients": direct_recipients,
                 "softwareProfile": direct_recipients[0]["softwareProfile"]}
                if direct_recipients is not None else {}),
@@ -425,6 +446,20 @@ class ContentMutationRepository(BaseRepository):
                 # overtake an unconfirmed remote Create (including unknown).
                 request = json.loads(mutation.request_json)
                 recipients = request.get("directGroupRecipients")
+                person_recipients = request.get("directPersonRecipients")
+                if person_recipients:
+                    create_source = session.scalar(select(UserActorOutboundSource).where(
+                        UserActorOutboundSource.published_object_id == mutation.published_object_id,
+                        UserActorOutboundSource.source_kind == "content_create",
+                    ))
+                    if create_source is None or json.loads(create_source.snapshot_json).get("directPersonRecipients") != person_recipients:
+                        continue
+                    if any(session.scalar(select(UserActorOutboundDelivery).where(
+                        UserActorOutboundDelivery.source_id == create_source.id,
+                        UserActorOutboundDelivery.target_endpoint_url == r["inboxUrl"],
+                        UserActorOutboundDelivery.status == "delivered",
+                    )) is None for r in person_recipients):
+                        continue
                 if recipients is not None:
                     create_source = session.scalar(select(UserActorOutboundSource).where(
                         UserActorOutboundSource.published_object_id == mutation.published_object_id,
@@ -618,6 +653,14 @@ class ContentMutationRepository(BaseRepository):
             # The source snapshot is authoritative after restart, and must
             # not be replaced by whatever Follow happens to be current now.
             direct_recipients = request.get("directGroupRecipients")
+            direct_person_recipients = request.get("directPersonRecipients")
+            if direct_person_recipients is not None:
+                original = session.scalar(select(UserActorOutboundSource).where(
+                    UserActorOutboundSource.published_object_id == published.id,
+                    UserActorOutboundSource.source_kind == "content_create",
+                ))
+                if original is None or json.loads(original.snapshot_json).get("directPersonRecipients") != direct_person_recipients:
+                    raise ValueError("mutation Person recipients differ from original Create")
             if direct_recipients is not None:
                 original = session.scalar(select(UserActorOutboundSource).where(
                     UserActorOutboundSource.published_object_id == published.id,
@@ -642,9 +685,11 @@ class ContentMutationRepository(BaseRepository):
                     else "Update",
                     "contentRevision": mutation.next_revision,
                     **({"directGroupRecipients": direct_recipients} if direct_recipients is not None else {}),
+                    **({"directPersonRecipients": direct_person_recipients} if direct_person_recipients is not None else {}),
                 },
                 followers=followers,
                 direct_group_recipients=direct_recipients,
+                direct_target_inbox_urls=[r["inboxUrl"] for r in (direct_person_recipients or [])],
             )
             mutation.state = "committed"
             mutation.claim_token = None

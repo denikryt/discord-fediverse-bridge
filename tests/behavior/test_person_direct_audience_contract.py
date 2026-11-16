@@ -102,6 +102,17 @@ class PersonCreateAudienceTests(unittest.TestCase):
         with self.assertRaisesRegex(PublicationConflictError, "incompatible direct Person"):
             self.persist(recipients=[{"actorId": BOB, "inboxUrl": "https://remote.example/another-inbox"}])
 
+    def test_nonfollower_direct_person_source_can_be_claimed(self) -> None:
+        """An accepted remote parent need not Follow the locally replying author."""
+        result = self.persist()
+        claims = self.database.user_actor_deliveries.claim_due(
+            limit=10, per_user_limit=5, stale_after_seconds=60
+        )
+        self.assertEqual(len(claims), 1)
+        self.assertEqual(claims[0].source_id, result.source_id)
+        self.assertEqual(claims[0].target_endpoint_url, INBOX)
+        self.assertEqual(claims[0].direct_person_routes, ((BOB, INBOX),))
+
     def test_malformed_evidence_is_not_admitted(self) -> None:
         """Direct evidence must be canonical, sorted, and have exact fields."""
         for row in ([{"actorId": BOB}], [{"actorId": BOB, "inboxUrl": "http://remote.example/inbox"}],

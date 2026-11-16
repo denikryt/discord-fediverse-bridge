@@ -124,14 +124,6 @@ class ResolvedRemotePerson:
     inbox_url: str
 
 
-@dataclass(frozen=True, slots=True)
-class ResolvedRemotePerson:
-    """Verified canonical Person actor and inbox from Fedify actor dereference."""
-
-    actor_id: str
-    inbox_url: str
-
-
 @dataclass(slots=True)
 class RenderPersonalFeedRequest:
     """Carry one deterministic render-only personal-feed publication request."""
@@ -191,6 +183,7 @@ class UpdateContentRequest:
     render_only: bool = False
     software_profile: str | None = None
     conversation_root_object_id: str | None = None
+    direct_person_actor_ids: list[str] = field(default_factory=list)
 
 
 @dataclass(slots=True)
@@ -209,6 +202,7 @@ class DeleteContentRequest:
     render_only: bool = False
     software_profile: str | None = None
     conversation_root_object_id: str | None = None
+    direct_person_actor_ids: list[str] = field(default_factory=list)
 
 
 @dataclass(slots=True)
@@ -563,6 +557,7 @@ class FedifyGatewayClient:
                 "renderOnly": request.render_only,
                 "softwareProfile": request.software_profile,
                 "conversationRootObjectId": request.conversation_root_object_id,
+                "directPersonActorIds": request.direct_person_actor_ids,
             },
         )
         response.raise_for_status()
@@ -594,6 +589,7 @@ class FedifyGatewayClient:
                 "renderOnly": request.render_only,
                 "softwareProfile": request.software_profile,
                 "conversationRootObjectId": request.conversation_root_object_id,
+                "directPersonActorIds": request.direct_person_actor_ids,
             },
         )
         response.raise_for_status()

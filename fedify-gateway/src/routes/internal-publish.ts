@@ -244,6 +244,9 @@ export function registerInternalPublishRoutes(
         nextRevision: typeof payload.nextRevision === "number" ? payload.nextRevision : null,
         renderOnly: payload.renderOnly === true,
         softwareProfile: payload.softwareProfile === "nodebb" || payload.softwareProfile === "bridge" || payload.softwareProfile === "threadiverse" ? payload.softwareProfile : null,
+        directPersonActorIds: Array.isArray(payload.directPersonActorIds)
+          ? payload.directPersonActorIds.filter((id): id is string => typeof id === "string")
+          : [],
       });
       return context.json(result);
     } catch (error) {
@@ -291,6 +294,9 @@ export function registerInternalPublishRoutes(
         nextRevision: typeof payload.nextRevision === "number" ? payload.nextRevision : null,
         renderOnly: payload.renderOnly === true,
         softwareProfile: payload.softwareProfile === "nodebb" || payload.softwareProfile === "bridge" || payload.softwareProfile === "threadiverse" ? payload.softwareProfile : null,
+        directPersonActorIds: Array.isArray(payload.directPersonActorIds)
+          ? payload.directPersonActorIds.filter((id): id is string => typeof id === "string")
+          : [],
       });
       return context.json(result);
     } catch (error) {

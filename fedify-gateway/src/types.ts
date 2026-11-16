@@ -226,6 +226,7 @@ export interface UpdateContentRequest {
   // Only immutable, Python-verified remote Group mutations use render-only.
   renderOnly?: boolean;
   softwareProfile?: "nodebb" | "threadiverse" | "bridge" | null;
+  directPersonActorIds?: string[];
 }
 
 export interface DeleteContentRequest {
@@ -244,6 +245,7 @@ export interface DeleteContentRequest {
   // Only immutable, Python-verified remote Group mutations use render-only.
   renderOnly?: boolean;
   softwareProfile?: "nodebb" | "threadiverse" | "bridge" | null;
+  directPersonActorIds?: string[];
 }
 
 export interface AcceptLocalCommunityFollowRequest {
