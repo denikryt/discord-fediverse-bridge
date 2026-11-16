@@ -214,6 +214,9 @@ def _build_live_runtime(settings: Settings, deployment_lease: FileLock) -> Runti
             fedify_origin=settings.normalized_fedify_origin,
             delivery_worker=None,
         )
+        remote_person_follow_service = RemotePersonFollowService(
+            database, fedify_gateway, settings.normalized_fedify_origin
+        )
         event_router = DiscordEventRouter(
             database=database,
             community_runtime=community_runtime,
@@ -234,6 +237,7 @@ def _build_live_runtime(settings: Settings, deployment_lease: FileLock) -> Runti
             personal_feed_service=personal_feed_service,
             user_ban_service=user_ban_service,
         )
+        bot.remote_person_follow_service = remote_person_follow_service
         personal_feed_discord_delivery_worker = PersonalFeedDiscordDeliveryWorker(
             database=database, bot=bot, personal_feed_service=personal_feed_service
         )
@@ -267,9 +271,6 @@ def _build_live_runtime(settings: Settings, deployment_lease: FileLock) -> Runti
             database=database, fedify_gateway=fedify_gateway, bot=bot
         )
         user_actor_delivery_service.bind_discord_message_reader(bot)
-        remote_person_follow_service = RemotePersonFollowService(
-            database, fedify_gateway, settings.normalized_fedify_origin
-        )
         runtime = Runtime(
             settings=settings,
             database=database,

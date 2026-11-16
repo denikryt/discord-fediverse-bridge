@@ -115,6 +115,42 @@ class RemotePersonFollowService:
                 current.follow_activity_id, current.id,
             )
 
+    def cancel_follow(self, *, discord_user_id: str, remote_actor_id: str) -> str:
+        """Remove every destination of one owner and request their exact Undo.
+
+        The last-link suppression shares a BEGIN IMMEDIATE writer with removal;
+        subscriptions of unrelated owners cannot be revoked by this operation.
+        """
+        from .remote_person_feeds import RemotePersonChannelService
+        with self.database.immediate_session() as session:
+            user = session.scalar(select(User).where(User.discord_user_id == discord_user_id))
+            if user is None:
+                return 'not_following'
+            row = session.scalar(select(RemotePersonFollow).where(
+                RemotePersonFollow.user_id == user.id,
+                RemotePersonFollow.remote_actor_id == remote_actor_id,
+                RemotePersonFollow.relationship_status.in_(('pending', 'accepted')),
+            ))
+            if row is None:
+                return 'not_following'
+            targets = session.scalars(select(RemotePersonChannelAssignment).where(
+                RemotePersonChannelAssignment.follow_id == row.id,
+            )).all()
+            coordinates = {(item.discord_guild_id, item.discord_channel_id) for item in targets}
+            for item in targets:
+                session.delete(item)
+            session.flush()
+            row.relationship_status = 'cancel_requested'
+            if row.undo_dispatch_state == 'not_requested':
+                row.undo_dispatch_state = 'prepared'
+            session.flush()
+            # Preserve pending posts in channels still owned by another accepted
+            # subscriber, while suppressing old work in newly empty channels.
+            for guild_id, channel_id in coordinates:
+                if not RemotePersonChannelService._active_owner_exists(session, remote_actor_id, guild_id, channel_id):
+                    RemotePersonChannelService._suppress_pending_creates(session, remote_actor_id, guild_id, channel_id)
+            return 'cancel_requested'
+
     def apply_remote_decision(
         self, follow_activity_id: str, remote_actor_id: str, decision: str,
     ) -> str:

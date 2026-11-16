@@ -59,6 +59,7 @@ class BridgeBot(discord.Client):
         # Keep the current runtime reachable for edit/delete paths that still
         # belong only to the remote-subscription mode today.
         self.community_runtime = event_router.community_runtime
+        self.remote_person_follow_service = None  # bound by the composition root before setup_hook
         self.user_ban_service = user_ban_service or UserBanService(
             database=database, settings=settings
         )
@@ -81,6 +82,7 @@ class BridgeBot(discord.Client):
         # register slash commands and sync the tree with Discord.
         from .commands import (
             account_settings,
+            person_feed,
             ban_user,
             bridge_policy,
             create_community,
@@ -148,6 +150,10 @@ class BridgeBot(discord.Client):
                 self.user_profile_service,
                 self.personal_feed_service,
             )
+        person_feed.register(
+            self.tree, self.database, self.settings, self.bridge_policy_service,
+            self.remote_person_follow_service,
+        )
         await self.tree.sync()
 
     async def on_ready(self) -> None:
