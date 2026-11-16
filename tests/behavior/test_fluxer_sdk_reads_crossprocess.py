@@ -61,8 +61,8 @@ class FluxerSdkReadCrossProcessScenarios(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(message.content.body, 'hello from SDK')
         self.assertEqual(message.author.external_actor_id, 'user-1')
 
-    async def test_permissions_are_checked_on_current_bot_without_forum_assumptions(self) -> None:
-        """Python receives attested ACL for reads but not invented forum rights."""
+    async def test_permissions_are_checked_on_current_bot_with_forum_rights(self) -> None:
+        """Fresh guild permissions authorize forum create but never a foreign bot."""
         bot = AuthorRef('fluxer-contract', 'bot-id', 'bot', 'Bridge')
         grants = await self.adapter.check_permissions(bot, self.forum, frozenset({
             'view_channel', 'read_history', 'send_message', 'create_forum_post',
@@ -70,14 +70,14 @@ class FluxerSdkReadCrossProcessScenarios(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(grants['view_channel'], 'allowed')
         self.assertEqual(grants['read_history'], 'allowed')
         self.assertEqual(grants['send_message'], 'allowed')
-        self.assertEqual(grants['create_forum_post'], 'unknown')
+        self.assertEqual(grants['create_forum_post'], 'allowed')
         foreign = AuthorRef('fluxer-contract', 'another-bot', 'bot', 'Other')
         denied = await self.adapter.check_permissions(
             foreign, self.forum, frozenset({'view_channel'}))
         self.assertEqual(denied['view_channel'], 'unknown')
 
-    async def test_live_forum_metadata_is_observed_but_writes_stay_disabled(self) -> None:
-        """SDK forum tag policy crosses Node RPC; no unproven write capability escapes."""
+    async def test_verified_forum_capability_still_refuses_missing_required_tag(self) -> None:
+        """Verified forum support does not bypass the required-tag admission guard."""
         response = await self.rpc.call('capabilities', {'channel_id': 'forum-1'},
                                        connector_key='fluxer-contract')
         self.assertEqual(response['guild_id'], 'guild-1')
@@ -88,9 +88,11 @@ class FluxerSdkReadCrossProcessScenarios(unittest.IsolatedAsyncioTestCase):
             {'id': 'tag-mod', 'moderated': True},
         ])
         caps = await self.adapter.capabilities(self.forum)
-        self.assertFalse(caps.forum_posts)
+        self.assertTrue(caps.forum_posts)
         self.assertFalse(caps.message_edit_delete)
         self.assertFalse(caps.webhook_send)
+        # Server tag policy demands an explicit configured unmoderated tag;
+        # advertising a method does not authorize an untagged physical POST.
         with self.assertRaises(PlatformOperationError) as denied:
             await self.adapter.create_forum_thread(
                 self.forum, ContentDocument('hello'), title='Title',
