@@ -19,6 +19,7 @@ import {
 import type { AcceptLocalCommunityFollowRequest, AcceptUserActorFollowRequest } from "../types.js";
 import { hasValidInternalAuthorization } from "./internal-auth.js";
 import { FollowSenderUnavailableError } from "../outbound/community-follow.js";
+import { sendPreparedUserPersonFollow, UserFollowSigningUnavailableError, type PreparedUserPersonFollow } from "../outbound/user-person-follow.js";
 
 export interface InternalFollowRouteDependencies {
   config: GatewayConfig;
@@ -31,6 +32,31 @@ export function registerInternalFollowRoutes(
   dependencies: InternalFollowRouteDependencies,
 ): void {
   const { config, fedify } = dependencies;
+
+  app.post("/send-prepared-person-follow", async (context) => {
+    // The original local Person owner and all recipient fields were committed
+    // by Python; gateway checks canonical ownership before signing.
+    if (!hasValidInternalAuthorization(config, context.req.header("Authorization") ?? null)) {
+      return context.json({ error: "invalid authorization" }, { status: 401 });
+    }
+    const payload = await context.req.json() as Partial<PreparedUserPersonFollow>;
+    if (["actorUsername", "actorUrl", "remoteActorId", "remoteInboxUrl", "followActivityId"].some(
+      (key) => typeof payload[key as keyof PreparedUserPersonFollow] !== "string" || !payload[key as keyof PreparedUserPersonFollow],
+    )) {
+      return context.json({ error: "invalid prepared user Follow tuple" }, { status: 400 });
+    }
+    try {
+      await sendPreparedUserPersonFollow(fedify, config, payload as PreparedUserPersonFollow);
+      return context.json({ ok: true });
+    } catch (error) {
+      if (error instanceof UserFollowSigningUnavailableError) {
+        return context.json({ error: error.message, code: "follow_sender_unavailable", dispatched: false }, { status: 422 });
+      }
+      // Other errors cannot prove no network request was started. Python must
+      // retain the committed generation as uncertain and avoid blind replay.
+      return context.json({ error: error instanceof Error ? error.message : String(error) }, { status: 500 });
+    }
+  });
 
   app.post("/prepare-community-follow", async (context) => {
     // Discovery is allowed here, but this endpoint must never send an AP Follow.

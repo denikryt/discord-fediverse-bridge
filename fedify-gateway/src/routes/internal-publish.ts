@@ -5,8 +5,7 @@
  * existing wire payloads and delegate to gateway outbound use cases unchanged.
  */
 import type { Hono } from "hono";
-import { Person } from "@fedify/vocab";
-import { admitRemoteDeliveryEndpoint } from "../remote-delivery-endpoints.js";
+import { resolveRemotePersonForFollow } from "../outbound/user-person-follow.js";
 
 import type { GatewayConfig } from "../config.js";
 import type { createGatewayFederation } from "../federation.js";
@@ -51,13 +50,7 @@ export function registerInternalPublishRoutes(
       return context.json({ error: "actorId required" }, { status: 400 });
     }
     try {
-      const actorId = admitRemoteDeliveryEndpoint(payload.actorId, { localOrigin: config.fedifyOrigin });
-      const federationContext = fedify.createContext(new URL(config.fedifyOrigin), config);
-      const actor = await federationContext.lookupObject(actorId);
-      if (!(actor instanceof Person) || actor.id?.href !== actorId || !actor.inboxId) {
-        throw new Error("remote object is not the requested Person actor with an inbox");
-      }
-      const inboxUrl = admitRemoteDeliveryEndpoint(actor.inboxId.href, { localOrigin: config.fedifyOrigin });
+      const { actorId, inboxUrl } = await resolveRemotePersonForFollow(fedify, config, payload.actorId);
       return context.json({ actorId, inboxUrl });
     } catch (error) {
       return context.json({ error: error instanceof Error ? error.message : String(error) }, { status: 400 });

@@ -269,6 +269,20 @@ def build_user_delete_comment_activity_id(
     return f"{_user_root(origin, username)}/activities/delete/comments/{_segment(activity_id)}"
 
 
+def build_user_follow_activity_id(origin: str, username: str, activity_id: str) -> str:
+    """Build one local user's signed Follow ID, never a bridge Service ID."""
+    return f"{_user_root(origin, username)}/activities/follow/{_segment(activity_id)}"
+
+
+def derive_user_undo_follow_activity_id(follow_activity_id: str) -> str | None:
+    """Derive a stable per-user Undo identity only for a typed user Follow."""
+    match = re.fullmatch(r"(https://[^/]+/actors/users/[a-z0-9_-]+)/activities/follow/[^/?#]+", follow_activity_id)
+    if match is None:
+        return None
+    digest = hashlib.sha256(follow_activity_id.encode("utf-8")).hexdigest()
+    return f"{match.group(1)}/activities/undo/follows/{digest}"
+
+
 def build_user_accept_follow_activity_id(
     *, origin: str, username: str, activity_id: str
 ) -> str:

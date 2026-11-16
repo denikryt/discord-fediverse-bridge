@@ -219,6 +219,20 @@ export function buildUserDeleteCommentActivityId(origin: string | URL, username:
   return childUrl(userRoot(origin, username), `/activities/delete/comments/${segment(activityId)}`);
 }
 
+/** Build an immutable Follow ID owned by an individual local user Person. */
+export function buildUserFollowActivityId(origin: string | URL, username: string, activityId: string): URL {
+  return childUrl(userRoot(origin, username), `/activities/follow/${segment(activityId)}`);
+}
+
+/** Derive an idempotent Undo ID from a previously reserved user Follow ID. */
+export function buildUserUndoFollowActivityId(origin: string | URL, username: string, followId: string): URL {
+  const prefix = `${userRoot(origin, username).href}/activities/follow/`;
+  if (!followId.startsWith(prefix) || !followId.slice(prefix.length) || followId.includes('?', prefix.length) || followId.includes('#', prefix.length)) {
+    throw new Error('Undo must refer to an original Follow owned by this user');
+  }
+  return childUrl(userRoot(origin, username), `/activities/undo/follows/${segment(followId.slice(prefix.length))}`);
+}
+
 /** Build a typed local user Accept(Follow) activity id. */
 export function buildUserAcceptFollowActivityId(origin: string | URL, username: string, activityId: string): URL {
   return childUrl(userRoot(origin, username), `/activities/accept/follows/${segment(activityId)}`);
