@@ -312,5 +312,99 @@ class FluxerProcessLifetimeContracts(unittest.IsolatedAsyncioTestCase):
                         pass
 
 
+class FluxerHttpAndFederationBoundaryContracts(unittest.IsolatedAsyncioTestCase):
+    """Unsupported Discord registration/user federation must fail before mutation."""
+
+    async def asyncSetUp(self) -> None:
+        self.directory = tempfile.TemporaryDirectory()
+        self.addCleanup(self.directory.cleanup)
+        from src.app import build_runtime
+        self.runtime = build_runtime(config(Path(self.directory.name)))
+        self.addAsyncCleanup(self.runtime.close)
+
+    async def test_registration_and_oauth_cannot_create_discord_state(self) -> None:
+        import httpx
+        from sqlalchemy import select, func
+        from src.http_api import create_http_app
+        from src.models import RegistrationSession
+
+        app = create_http_app(self.runtime)
+        routes = {getattr(route, 'path', None) for route in app.routes}
+        self.assertNotIn('/auth/discord/start', routes)
+        self.assertNotIn('/auth/discord/callback', routes)
+        async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app),
+                                     base_url='http://local-test') as client:
+            for path, method in (('/register', 'GET'),
+                                 ('/register/complete', 'POST'),
+                                 ('/register/success', 'GET')):
+                with self.subTest(path=path):
+                    response = await client.request(method, path, data={'username':'alice'})
+                    self.assertEqual(response.status_code, 503)
+                    self.assertEqual(response.json()['detail'], 'registration_unavailable')
+                    self.assertNotIn('set-cookie', response.headers)
+            for path in ('/auth/discord/start',
+                         '/auth/discord/callback?code=abc&state=xyz'):
+                with self.subTest(path=path):
+                    self.assertEqual((await client.get(path)).status_code, 404)
+            self.assertEqual((await client.get('/healthz')).status_code, 200)
+            self.assertEqual((await client.get('/')).status_code, 200)
+            dashboard = await client.get('/dashboard/data')
+            self.assertEqual(dashboard.status_code, 200, dashboard.text)
+        with self.runtime.database.session() as session:
+            self.assertEqual(session.scalar(select(func.count()).select_from(RegistrationSession)), 0)
+
+    async def test_user_follow_undo_and_personal_feed_do_not_touch_discord_owners(self) -> None:
+        from datetime import datetime, timezone
+        from sqlalchemy import select, func
+        from src.activitypub_models import LocalFollowRequestEvent, LocalUnfollowRequestEvent
+        from src.activitypub_handlers import dispatch_activitypub_event
+        from src.inbound_activity_outcomes import InboundActivityOutcome
+        from src.models import UserActorFollower
+
+        now = datetime.now(timezone.utc)
+        actor = 'https://remote.example/users/alice'
+        target = 'https://bridge.test/actors/users/unknown'
+        follow = LocalFollowRequestEvent(
+            event_type='local.follow_requested', delivery_id='follow-one', occurred_at=now,
+            target_actor_kind='user', target_actor_id=target, actor_id=actor,
+            object={'follow_activity_id': 'https://remote.example/follows/1',
+                    'remote_inbox_url':'https://remote.example/users/alice/inbox'},
+        )
+        undo = LocalUnfollowRequestEvent(
+            event_type='local.unfollow_requested', delivery_id='undo-one', occurred_at=now,
+            target_actor_kind='user', target_actor_id=target, actor_id=actor,
+            object={'follow_activity_id': 'https://remote.example/follows/1'},
+        )
+        with mock.patch.object(self.runtime.user_actor_follow_service, 'handle_follow',
+                               side_effect=AssertionError('unverified Fluxer user Follow invoked')) as accept, \
+             mock.patch.object(self.runtime.user_actor_follow_service, 'handle_unfollow',
+                               side_effect=AssertionError('unverified Fluxer user Undo invoked')) as revoke:
+            for event in (follow, undo):
+                with self.subTest(event=event.event_type):
+                    result = await dispatch_activitypub_event(event, self.runtime)
+                    self.assertEqual(result.status, 'skipped')
+                    self.assertEqual(result.outcome, InboundActivityOutcome.IGNORED_UNKNOWN_FOLLOW)
+            accept.assert_not_called()
+            revoke.assert_not_called()
+        # A signed but mismapped personal-feed comment must not dereference
+        # the absent Discord-only conversation runtime.
+        from src.activitypub_models import ActivityPubEvent
+        personal = ActivityPubEvent(
+            event_type='comment.created', delivery_id='personal-one', occurred_at=now,
+            actor_id=actor, target={'kind': 'personal_feed',
+                                    'root_object_id': 'https://bridge.test/notes/old-root'},
+            object={
+                'ap_id': 'https://remote.example/notes/reply', 'kind': 'comment',
+                'published_at': now, 'author_name': 'alice', 'parent_ap_id': 'https://bridge.test/notes/old-root',
+                'attributed_to_actor_id': actor,
+            },
+        )
+        skipped = await dispatch_activitypub_event(personal, self.runtime)
+        self.assertEqual(skipped.outcome, InboundActivityOutcome.IGNORED_UNMAPPED_CONTEXT)
+        self.assertEqual(skipped.status, 'skipped')
+        with self.runtime.database.session() as session:
+            self.assertEqual(session.scalar(select(func.count()).select_from(UserActorFollower)), 0)
+
+
 if __name__ == "__main__":
     unittest.main()

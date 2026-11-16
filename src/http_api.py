@@ -92,6 +92,9 @@ def create_http_app(runtime: Runtime) -> FastAPI:
     @app.get("/register")
     async def register_page(request: Request) -> Response:
         """Render the current registration step for the browser session."""
+        # FLUXER_ONLY_REGISTRATION_PENDING_ISSUE14: Fluxer registration is unavailable until verified Fluxer account ownership and Person actor mapping are implemented; reject registration without a Discord OAuth fallback.
+        if runtime.settings.bridge_platform == 'fluxer':
+            raise HTTPException(status_code=503, detail='registration_unavailable')
         session = _load_or_create_registration_session(runtime, request)
         existing_user = _existing_registration_for_session(runtime, session)
 
@@ -138,7 +141,6 @@ def create_http_app(runtime: Runtime) -> FastAPI:
         _apply_session_cookie(runtime, response, session.session_token)
         return response
 
-    @app.get("/auth/discord/start")
     async def start_discord_auth(request: Request) -> RedirectResponse:
         """Start the Discord OAuth redirect flow for one browser session."""
         session = _load_or_create_registration_session(runtime, request)
@@ -157,7 +159,6 @@ def create_http_app(runtime: Runtime) -> FastAPI:
         _apply_session_cookie(runtime, redirect, session.session_token)
         return redirect
 
-    @app.get("/auth/discord/callback")
     async def discord_auth_callback(
         request: Request,
         code: str,
@@ -189,9 +190,17 @@ def create_http_app(runtime: Runtime) -> FastAPI:
         _apply_session_cookie(runtime, redirect, session.session_token)
         return redirect
 
+    # Do not mount Discord OAuth endpoints when Discord credentials and owners
+    # do not exist in this exclusive runtime.
+    if runtime.settings.bridge_platform == 'discord':
+        app.add_api_route('/auth/discord/start', start_discord_auth, methods=['GET'])
+        app.add_api_route('/auth/discord/callback', discord_auth_callback, methods=['GET'])
+
     @app.post("/register/complete")
     async def complete_registration(request: Request) -> Response:
         """Validate the chosen username and create the shared user record."""
+        if runtime.settings.bridge_platform == 'fluxer':
+            raise HTTPException(status_code=503, detail='registration_unavailable')
         session = _require_registration_session(runtime, request)
         if session.discord_user_id is None:
             raise HTTPException(
@@ -240,6 +249,8 @@ def create_http_app(runtime: Runtime) -> FastAPI:
     @app.get("/register/success")
     async def registration_success(request: Request) -> Response:
         """Render the final success page for a completed registration session."""
+        if runtime.settings.bridge_platform == 'fluxer':
+            raise HTTPException(status_code=503, detail='registration_unavailable')
         session = _require_registration_session(runtime, request)
         if session.activitypub_username is None:
             raise HTTPException(
