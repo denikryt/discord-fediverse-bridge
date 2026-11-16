@@ -200,9 +200,11 @@ export function registerInternalPublishRoutes(
       typeof payload.actorUsername !== "string" ||
       (payload.publicationContext !== undefined &&
         payload.publicationContext !== "community" &&
-        payload.publicationContext !== "personal_feed") ||
-      (payload.publicationContext !== "personal_feed" && typeof payload.communityActorUrl !== "string") ||
-      (payload.publicationContext === "personal_feed" && payload.communityActorUrl != null) ||
+        payload.publicationContext !== "personal_feed" &&
+        payload.publicationContext !== "remote_person_feed") ||
+      (payload.publicationContext === "community" || payload.publicationContext === undefined
+        ? typeof payload.communityActorUrl !== "string"
+        : payload.communityActorUrl != null) ||
       typeof payload.apObjectId !== "string" ||
       (payload.kind !== "post" && payload.kind !== "comment") ||
       typeof payload.bodyMarkdown !== "string"
@@ -259,9 +261,11 @@ export function registerInternalPublishRoutes(
       typeof payload.actorUsername !== "string" ||
       (payload.publicationContext !== undefined &&
         payload.publicationContext !== "community" &&
-        payload.publicationContext !== "personal_feed") ||
-      (payload.publicationContext !== "personal_feed" && typeof payload.communityActorUrl !== "string") ||
-      (payload.publicationContext === "personal_feed" && payload.communityActorUrl != null) ||
+        payload.publicationContext !== "personal_feed" &&
+        payload.publicationContext !== "remote_person_feed") ||
+      (payload.publicationContext === "community" || payload.publicationContext === undefined
+        ? typeof payload.communityActorUrl !== "string"
+        : payload.communityActorUrl != null) ||
       typeof payload.apObjectId !== "string"
     ) {
       return context.json(

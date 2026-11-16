@@ -15,7 +15,7 @@ export function buildPublishedActivityObjectJson(
   const attributedTo = canonicalActorUrlForRecord(record);
   const published = normalizePublishedTimestamp(record.publishedAt);
   const htmlContent = markdownToHtml(record.bodyMarkdown);
-  if (record.publicationContext === "personal_feed") {
+  if (record.publicationContext === "personal_feed" || record.publicationContext === "remote_person_feed") {
     return {
       "@context": "https://www.w3.org/ns/activitystreams",
       type: "Note",
@@ -57,7 +57,7 @@ export function buildPublishedCreateActivityJson(
   record: PublishedActivityObjectRow,
 ): Record<string, unknown> {
   const actor = canonicalActorUrlForRecord(record);
-  if (record.publicationContext === "personal_feed") {
+  if (record.publicationContext === "personal_feed" || record.publicationContext === "remote_person_feed") {
     return {
       "@context": "https://www.w3.org/ns/activitystreams", id: record.activityId,
       type: "Create", actor, to: [ACTIVITYSTREAMS_PUBLIC],

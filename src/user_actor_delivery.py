@@ -410,6 +410,7 @@ class UserActorDeliveryService:
                 raise ValueError("rendered Delete targets wrong Person Note")
         elif (not isinstance(obj, dict) or obj.get("id") != request["apObjectId"]
               or obj.get("attributedTo") != claim.actor_url
+              or obj.get("type") != "Note"
               or obj.get("cc") != [f"{claim.actor_url}/followers", *actors]
               or obj.get("inReplyTo") != request.get("inReplyToObjectId")):
             raise ValueError("rendered Update changed Person Note owner/parent/audience")
@@ -421,14 +422,14 @@ class UserActorDeliveryService:
         if request.get("apObjectId") is None or request.get("actorUsername") is None:
             raise ValueError("mutation reservation is missing object ownership data")
         context = request.get("publicationContext", "community")
-        if context not in {"community", "personal_feed"}:
+        if context not in {"community", "personal_feed", "remote_person_feed"}:
             raise ValueError(
                 "mutation reservation has an unsupported publication context"
             )
         if context == "community" and not request.get("communityActorUrl"):
             raise ValueError("community mutation is missing community ownership")
-        if context == "personal_feed" and request.get("communityActorUrl") is not None:
-            raise ValueError("personal-feed mutation cannot carry community ownership")
+        if context in {"personal_feed", "remote_person_feed"} and request.get("communityActorUrl") is not None:
+            raise ValueError("Person mutation cannot carry community ownership")
         if claim.kind == "content_update" and request.get("kind") not in {
             "post",
             "comment",

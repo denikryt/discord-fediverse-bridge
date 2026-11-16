@@ -225,7 +225,7 @@ export interface UpdateContentRequest {
   // actorUsername must match the original attributedTo — Lemmy enforces this
   // ownership check and rejects Updates from any other actor.
   actorUsername: string;
-  publicationContext?: "community" | "personal_feed";
+  publicationContext?: "community" | "personal_feed" | "remote_person_feed";
   communityActorUrl: string | null;
   conversationRootObjectId?: string | null;
   apObjectId: string;
@@ -251,7 +251,7 @@ export interface UpdateContentRequest {
 export interface DeleteContentRequest {
   // actorUsername must match the original attributedTo — same ownership rule as Update.
   actorUsername: string;
-  publicationContext?: "community" | "personal_feed";
+  publicationContext?: "community" | "personal_feed" | "remote_person_feed";
   communityActorUrl: string | null;
   conversationRootObjectId?: string | null;
   apObjectId: string;

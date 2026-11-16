@@ -222,7 +222,7 @@ def create_internal_fedify_router(runtime: Runtime) -> APIRouter:
             original_object_context=original_context,
             direct_person_actor_ids=(
                 runtime.database.activitypub_objects.get_original_direct_person_actor_ids(row)
-                if row.publication_context == "personal_feed" else []
+                if row.publication_context in {"personal_feed", "remote_person_feed"} else []
             ),
             actor_username=row.actor_username,
             actor_url=row.actor_url,
