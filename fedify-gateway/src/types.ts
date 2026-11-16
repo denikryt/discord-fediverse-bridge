@@ -68,7 +68,7 @@ export interface FollowAcceptedEvent {
   actor_id: string;
   community_actor_id: string;
   delivery_id: string;
-  event_type: "follow.accepted";
+  event_type: "follow.accepted" | "follow.rejected";
   object: FollowLifecycleObject;
   occurred_at: string;
 }

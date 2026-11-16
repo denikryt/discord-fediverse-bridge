@@ -5,12 +5,12 @@
  * the gateway may sign. This boundary never changes the recipient or retries
  * an ambiguous network outcome with a newly invented activity identity.
  */
-import { Follow, Person } from "@fedify/vocab";
+import { Follow, Person, Undo } from "@fedify/vocab";
 import type { Federation } from "@fedify/fedify";
 
 import type { GatewayConfig } from "../config.js";
 import { loadActorKeyPair } from "../actor-store.js";
-import { buildActorAddress, buildUserFollowActivityId } from "../activitypub-identity-urls.js";
+import { buildActorAddress, buildUserFollowActivityId, buildUserUndoFollowActivityId } from "../activitypub-identity-urls.js";
 import { admitRemoteDeliveryEndpoint } from "../remote-delivery-endpoints.js";
 
 /** Gateway-side typed identity and endpoint data for one committed Follow. */
@@ -97,6 +97,37 @@ export async function sendPreparedUserPersonFollow(
     { identifier: verified.senderTail },
     { id: verified.recipient, inboxId: verified.inbox },
     activity,
+    { immediate: true },
+  );
+}
+
+/** Send a signed user-owned Undo with the original embedded Follow identity. */
+export async function sendPreparedUserPersonUndo(
+  federation: Federation<GatewayConfig>, config: GatewayConfig, prepared: PreparedUserPersonFollow,
+): Promise<void> {
+  const verified = validatePreparedUserPersonFollow(config, prepared);
+  // The same per-user key signs Follow and Undo; impersonating the Service
+  // actor would revoke a different principal's relationship.
+  try {
+    if (await loadActorKeyPair(config, verified.senderTail) == null) {
+      throw new UserFollowSigningUnavailableError();
+    }
+  } catch {
+    throw new UserFollowSigningUnavailableError();
+  }
+  const originalFollow = new Follow({
+    id: verified.followId, actor: verified.sender, object: verified.recipient,
+  });
+  const undo = new Undo({
+    id: buildUserUndoFollowActivityId(config.fedifyOrigin, prepared.actorUsername, verified.followId.href),
+    actor: verified.sender,
+    object: originalFollow,
+  });
+  const context = federation.createContext(new URL(config.fedifyOrigin), config);
+  await context.sendActivity(
+    { identifier: verified.senderTail },
+    { id: verified.recipient, inboxId: verified.inbox },
+    undo,
     { immediate: true },
   );
 }

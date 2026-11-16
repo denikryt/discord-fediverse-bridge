@@ -3,7 +3,7 @@ import {
   InProcessMessageQueue,
   MemoryKvStore,
 } from "@fedify/fedify";
-import { Accept, Announce, Create, Delete, Follow, Undo, Update } from "@fedify/vocab";
+import { Accept, Announce, Create, Delete, Follow, Reject, Undo, Update } from "@fedify/vocab";
 
 import {
   buildBridgeServiceActor,
@@ -335,6 +335,17 @@ export function createGatewayFederation(
         followActivityId: event.object.follow_activity_id,
       });
     })
+    .on(Reject, async (ctx, activity) => {
+      // A remote Person's Reject(Follow) is authenticated by Fedify before
+      // the exact outgoing Follow generation is resolved by Python.
+      const event = buildFollowRejectedEvent(activity);
+      if (event == null) return;
+      await deliverNormalizedEvent(config, event, {
+        deliveryId: event.delivery_id,
+        eventType: event.event_type,
+        followActivityId: event.object.follow_activity_id,
+      });
+    })
     .on(Accept, async (ctx, activity) => {
       // Accept.objectId comes from the verified Fedify activity, including
       // when the original signed envelope embedded a Follow object.
@@ -656,6 +667,22 @@ export function buildFollowAcceptedEvent(
     community_actor_id: actorId,
     delivery_id: acceptId,
     event_type: "follow.accepted",
+    object: { follow_activity_id: followActivityId },
+    occurred_at: new Date().toISOString(),
+  };
+}
+
+/** Build a signed Reject(Follow) lifecycle event using the verified activity. */
+export function buildFollowRejectedEvent(activity: Reject): FollowAcceptedEvent | null {
+  const actorId = activity.actorId?.href;
+  const followActivityId = activity.objectId?.href;
+  const id = activity.id?.href;
+  if (actorId == null || followActivityId == null || id == null) return null;
+  return {
+    actor_id: actorId,
+    community_actor_id: actorId,
+    delivery_id: id,
+    event_type: "follow.rejected",
     object: { follow_activity_id: followActivityId },
     occurred_at: new Date().toISOString(),
   };

@@ -19,7 +19,7 @@ import {
 import type { AcceptLocalCommunityFollowRequest, AcceptUserActorFollowRequest } from "../types.js";
 import { hasValidInternalAuthorization } from "./internal-auth.js";
 import { FollowSenderUnavailableError } from "../outbound/community-follow.js";
-import { sendPreparedUserPersonFollow, UserFollowSigningUnavailableError, type PreparedUserPersonFollow } from "../outbound/user-person-follow.js";
+import { sendPreparedUserPersonFollow, sendPreparedUserPersonUndo, UserFollowSigningUnavailableError, type PreparedUserPersonFollow } from "../outbound/user-person-follow.js";
 
 export interface InternalFollowRouteDependencies {
   config: GatewayConfig;
@@ -32,6 +32,27 @@ export function registerInternalFollowRoutes(
   dependencies: InternalFollowRouteDependencies,
 ): void {
   const { config, fedify } = dependencies;
+
+  app.post("/send-prepared-person-undo", async (context) => {
+    if (!hasValidInternalAuthorization(config, context.req.header("Authorization") ?? null)) {
+      return context.json({ error: "invalid authorization" }, { status: 401 });
+    }
+    const payload = await context.req.json() as Partial<PreparedUserPersonFollow>;
+    if (["actorUsername", "actorUrl", "remoteActorId", "remoteInboxUrl", "followActivityId"].some(
+      (key) => typeof payload[key as keyof PreparedUserPersonFollow] !== "string" || !payload[key as keyof PreparedUserPersonFollow],
+    )) {
+      return context.json({ error: "invalid prepared user Undo tuple" }, { status: 400 });
+    }
+    try {
+      await sendPreparedUserPersonUndo(fedify, config, payload as PreparedUserPersonFollow);
+      return context.json({ ok: true });
+    } catch (error) {
+      if (error instanceof UserFollowSigningUnavailableError) {
+        return context.json({ error: error.message, code: "follow_sender_unavailable", dispatched: false }, { status: 422 });
+      }
+      return context.json({ error: error instanceof Error ? error.message : String(error) }, { status: 500 });
+    }
+  });
 
   app.post("/send-prepared-person-follow", async (context) => {
     // The original local Person owner and all recipient fields were committed

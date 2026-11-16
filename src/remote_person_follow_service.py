@@ -115,6 +115,88 @@ class RemotePersonFollowService:
                 current.follow_activity_id, current.id,
             )
 
+    def apply_remote_decision(
+        self, follow_activity_id: str, remote_actor_id: str, decision: str,
+    ) -> str:
+        """Linearize signed Accept/Reject by current generation and exact sender.
+
+        The gateway verifies the signed remote actor. Its completion is a
+        relationship transition, independent from Follow HTTP transport state.
+        """
+        if decision not in ('accepted', 'rejected'):
+            raise ValueError('unsupported remote Follow decision')
+        with self.database.immediate_session() as session:
+            row = session.scalar(select(RemotePersonFollow).where(
+                RemotePersonFollow.follow_activity_id == follow_activity_id,
+                RemotePersonFollow.remote_actor_id == remote_actor_id,
+            ))
+            if row is None:
+                return 'unmatched'
+            owner = session.get(User, row.user_id)
+            if owner is None or not follow_activity_id.startswith(f'{owner.actor_url}/activities/follow/'):
+                return 'unmatched'
+            if row.relationship_status == decision:
+                return 'duplicate'
+            if row.relationship_status != 'pending' or row.follow_dispatch_state not in ('sending', 'sent', 'uncertain'):
+                # Unsent, cancelled, rejected, or an older Follow generation
+                # cannot authorize an incoming relationship or a new channel.
+                return 'unmatched'
+            row.relationship_status = decision
+            return 'applied'
+
+    async def dispatch_cancellations(self, limit: int = 20) -> int:
+        """Undo only the signed Follow of a departing user, preserving its ID."""
+        completed = 0
+        for _ in range(limit):
+            token = uuid4().hex
+            with self.database.immediate_session() as session:
+                row = session.scalar(select(RemotePersonFollow).where(
+                    RemotePersonFollow.relationship_status == 'cancel_requested',
+                    RemotePersonFollow.undo_dispatch_state == 'prepared',
+                    RemotePersonFollow.follow_dispatch_state != 'sending',
+                ).order_by(RemotePersonFollow.id).limit(1))
+                if row is None:
+                    break
+                # A Follow that never left Python does not require network Undo.
+                if row.follow_dispatch_state == 'prepared':
+                    row.relationship_status = 'cancelled'
+                    row.undo_dispatch_state = 'not_requested'
+                    continue
+                user = session.get(User, row.user_id)
+                if user is None:
+                    raise ValueError('persisted Follow cancellation has no user owner')
+                row.undo_dispatch_state = 'sending'
+                row.undo_claim_token = token
+                prepared = PreparedPersonFollow(
+                    actor_username=user.activitypub_username,
+                    actor_url=user.actor_url,
+                    remote_actor_id=row.remote_actor_id,
+                    remote_inbox_url=row.remote_inbox_url,
+                    follow_activity_id=row.follow_activity_id,
+                )
+                row_id = row.id
+            try:
+                await self.gateway.send_prepared_person_undo(prepared)
+                next_status, last_error = 'sent', None
+                completed += 1
+            except FollowNotDispatchedError as error:
+                next_status, last_error = 'prepared', str(error)
+            except Exception as error:
+                # Ambiguous Undo must not be blindly duplicated or silently
+                # counted as confirmed cancellation.
+                next_status, last_error = 'uncertain', str(error)
+            with self.database.immediate_session() as session:
+                row = session.get(RemotePersonFollow, row_id)
+                if row is not None and row.undo_claim_token == token and row.undo_dispatch_state == 'sending':
+                    row.undo_dispatch_state = next_status
+                    row.undo_claim_token = None
+                    row.last_error = last_error
+                    if next_status == 'sent':
+                        row.relationship_status = 'cancelled'
+            if next_status == 'prepared':
+                break
+        return completed
+
     async def dispatch_prepared(self, limit: int = 20) -> int:
         """Claim one prepared generation at a time and persist exact send outcomes."""
         completed = 0

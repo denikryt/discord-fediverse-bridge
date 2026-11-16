@@ -39,6 +39,7 @@ from .user_profiles import UserProfileService
 from .user_actor_followers import UserActorFollowService
 from .user_actor_delivery import UserActorDeliveryService
 from .user_actor_delivery_worker import UserActorDeliveryWorker
+from .remote_person_follow_service import RemotePersonFollowService
 from .personal_feeds import PersonalFeedService
 from .personal_feed_publisher import PersonalFeedPublisher
 from .personal_feed_conversations import PersonalFeedConversationRuntime
@@ -220,6 +221,7 @@ def _build_live_runtime(settings: Settings, deployment_lease: FileLock) -> Runti
             bridge_policy_service=bridge_policy_service,
             personal_feed_service=personal_feed_service,
             personal_feed_publisher=personal_feed_publisher,
+            remote_person_follow_service=remote_person_follow_service,
             personal_feed_conversation_runtime=personal_feed_conversation_runtime,
         )
         bot = BridgeBot(
@@ -265,6 +267,9 @@ def _build_live_runtime(settings: Settings, deployment_lease: FileLock) -> Runti
             database=database, fedify_gateway=fedify_gateway, bot=bot
         )
         user_actor_delivery_service.bind_discord_message_reader(bot)
+        remote_person_follow_service = RemotePersonFollowService(
+            database, fedify_gateway, settings.normalized_fedify_origin
+        )
         runtime = Runtime(
             settings=settings,
             database=database,
@@ -281,6 +286,7 @@ def _build_live_runtime(settings: Settings, deployment_lease: FileLock) -> Runti
             user_actor_follow_service=user_actor_follow_service,
             user_actor_delivery_service=user_actor_delivery_service,
             user_actor_delivery_worker=user_actor_delivery_worker,
+            remote_person_follow_service=remote_person_follow_service,
             personal_feed_conversation_runtime=personal_feed_conversation_runtime,
             personal_feed_discord_delivery_worker=personal_feed_discord_delivery_worker,
             deployment_state_lease=deployment_lease,

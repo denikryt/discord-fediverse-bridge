@@ -19,6 +19,7 @@ from .user_profiles import UserProfileService
 from .user_actor_followers import UserActorFollowService
 from .user_actor_delivery import UserActorDeliveryService
 from .user_actor_delivery_worker import UserActorDeliveryWorker
+from .remote_person_follow_service import RemotePersonFollowService
 from .personal_feed_conversations import PersonalFeedConversationRuntime
 from .personal_feed_discord_delivery_worker import PersonalFeedDiscordDeliveryWorker
 
@@ -48,6 +49,7 @@ class Runtime:
     user_actor_follow_service: UserActorFollowService
     user_actor_delivery_service: UserActorDeliveryService
     user_actor_delivery_worker: UserActorDeliveryWorker
+    remote_person_follow_service: RemotePersonFollowService
     personal_feed_conversation_runtime: PersonalFeedConversationRuntime
     personal_feed_discord_delivery_worker: PersonalFeedDiscordDeliveryWorker
     deployment_state_lease: FileLock

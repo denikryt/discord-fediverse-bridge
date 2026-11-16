@@ -140,8 +140,8 @@ async def dispatch_activitypub_event(
         return await runtime.community_runtime.handle_inbound_comment_delete(
             event, runtime
         )
-    if event.event_type == "follow.accepted":
-        return await handle_follow_accepted(event, runtime)
+    if event.event_type in ("follow.accepted", "follow.rejected"):
+        return await handle_follow_lifecycle(event, runtime)
     if event.event_type == "local.follow_requested":
         if event.target_actor_kind == "user":
             return await runtime.user_actor_follow_service.handle_follow(
@@ -331,6 +331,37 @@ async def handle_comment_created(
             detail="no subscriptions for this community",
         )
     return await runtime.community_runtime.handle_inbound_comment(event, runtime)
+
+
+async def handle_follow_lifecycle(event: FollowLifecycleEvent, runtime: Runtime) -> HandlerResult:
+    """Match a user-owned signed Follow response before existing Group handling.
+
+    Each user owns an immutable activity ID and independent transport state;
+    acceptance never follows only from the remote actor's hostname.
+    """
+    original = runtime.database.remote_person_follows.get_follow_by_activity_id(
+        event.object.follow_activity_id
+    )
+    if original is not None:
+        decision = 'accepted' if event.event_type == 'follow.accepted' else 'rejected'
+        disposition = runtime.remote_person_follow_service.apply_remote_decision(
+            event.object.follow_activity_id, event.actor_id, decision
+        )
+        return HandlerResult(
+            status='processed' if disposition == 'applied' else 'skipped',
+            outcome=(InboundActivityOutcome.APPLIED if disposition == 'applied' else
+                     InboundActivityOutcome.IGNORED_ALREADY_APPLIED if disposition == 'duplicate'
+                     else InboundActivityOutcome.IGNORED_UNKNOWN_FOLLOW),
+            detail=f'user Person {decision}: {disposition}',
+        )
+    if event.event_type == 'follow.rejected':
+        # Bridge community lifecycle currently handles only Accept. A Reject
+        # with no matching user Follow must not change community state.
+        return HandlerResult(
+            status='skipped', outcome=InboundActivityOutcome.IGNORED_UNKNOWN_FOLLOW,
+            detail='unknown Person Follow rejection',
+        )
+    return await handle_follow_accepted(event, runtime)
 
 
 async def handle_follow_accepted(

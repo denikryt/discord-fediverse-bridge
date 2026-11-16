@@ -373,6 +373,28 @@ class FedifyGatewayClient:
             follow_activity_id=payload["followActivityId"],
         )
 
+    async def send_prepared_person_undo(self, prepared: PreparedPersonFollow) -> None:
+        """Cancel exactly one committed user Follow via the original typed key."""
+        response = await self._client.post(
+            "/send-prepared-person-undo",
+            headers={"Authorization": f"Bearer {self._shared_secret}"},
+            json={
+                "actorUsername": prepared.actor_username,
+                "actorUrl": prepared.actor_url,
+                "remoteActorId": prepared.remote_actor_id,
+                "remoteInboxUrl": prepared.remote_inbox_url,
+                "followActivityId": prepared.follow_activity_id,
+            },
+        )
+        if response.status_code == 422:
+            try:
+                failure = response.json()
+            except ValueError:
+                failure = None
+            if isinstance(failure, dict) and failure.get("code") == "follow_sender_unavailable" and failure.get("dispatched") is False:
+                raise FollowNotDispatchedError("User Person Undo signer unavailable")
+        response.raise_for_status()
+
     async def send_prepared_person_follow(self, prepared: PreparedPersonFollow) -> None:
         """Dispatch a single saved Follow with the sender's typed Person key."""
         response = await self._client.post(

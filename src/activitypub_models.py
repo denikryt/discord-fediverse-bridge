@@ -177,7 +177,7 @@ class FollowLifecycleEvent(BaseModel):
     # content fanout, so it gets its own typed shape and validation rules.
     model_config = ConfigDict(extra="forbid")
 
-    event_type: Literal["follow.accepted"]
+    event_type: Literal["follow.accepted", "follow.rejected"]
     delivery_id: str
     occurred_at: datetime
     community_actor_id: str | None = None
