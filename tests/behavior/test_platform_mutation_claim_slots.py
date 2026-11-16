@@ -7,6 +7,7 @@ import unittest
 from datetime import datetime, timedelta, timezone
 
 from src.models import LocalCommunityThread, LocalCommunityThreadSurface
+from src.content_sync.platform_delivery_scheduler import PlatformPhysicalDeliveryScheduler
 from src.platform_types import AuthorRef, ContentDocument, MessageView
 from bridge_test_support import physical_mutation_recovery as mutation_fixture
 
@@ -19,6 +20,65 @@ class MutationClaimSlotScenarios(unittest.TestCase):
     _add_older_settled_copies_and_new_lagging_copy = (
         mutation_fixture.PhysicalMutationScenario._add_older_settled_copies_and_new_lagging_copy
     )
+
+    def test_lost_mutation_ack_persists_unresolved_across_coordinator_restart(self) -> None:
+        """A direct SDK lost ACK cannot be retried by a new SQLite coordinator."""
+        first, calls = self._worker(fail=True)
+        # One attempted edit can have succeeded remotely, even on connection loss.
+        asyncio.run(first.drain(limit=1))
+        self.assertEqual(len(calls), 1)
+        self.assertEqual(calls[0][0], 'edit')
+        with self.db.session() as session:
+            copy = session.get(LocalCommunityThreadSurface, self.copy_id)
+            self.assertEqual(copy.mutation_state, 'unresolved')
+            self.assertIsNone(copy.applied_revision)
+            self.assertIsNone(copy.mutation_claim_token)
+        restarted, new_writes = self._worker()
+        self.assertEqual(asyncio.run(restarted.drain(limit=1)), 0)
+        self.assertEqual(new_writes, [])
+
+    def test_scheduler_without_mutation_owner_preserves_existing_sqlite_candidate(self) -> None:
+        """Fluxer-style `mutations=None` keeps Create recovery but never edits a copy."""
+        progressed = asyncio.Event()
+        creates = []
+
+        class Registry:
+            """Only the fixture's already persisted connector is admitted."""
+            def get(self, key):
+                """Report readiness without touching mutation state."""
+                if key != 'discord-primary':
+                    raise LookupError(key)
+                return type('Ready', (), {'dispatch_ready': lambda self: True})()
+
+        class Fanout:
+            """Count real scheduler recovery calls independently of mutations."""
+            registry = Registry()
+
+            async def recover_pending(self, *, connector_key):
+                """Wake once without submitting an SDK edit."""
+                creates.append(connector_key)
+                progressed.set()
+                return []
+
+        async def run():
+            """Run the same mutation-less scheduler branch used by Fluxer-only."""
+            scheduler = PlatformPhysicalDeliveryScheduler(
+                connector_keys=('discord-primary',), fanout=Fanout(),
+                mutations=None, poll_seconds=30,
+            )
+            scheduler.start()
+            try:
+                await asyncio.wait_for(progressed.wait(), 5)
+            finally:
+                await scheduler.stop()
+
+        asyncio.run(run())
+        self.assertEqual(creates, ['discord-primary'])
+        with self.db.session() as session:
+            copy = session.get(LocalCommunityThreadSurface, self.copy_id)
+            self.assertEqual(copy.mutation_state, 'idle')
+            self.assertIsNone(copy.applied_revision)
+            self.assertIsNone(copy.mutation_claim_token)
 
     def test_crash_after_one_claim_does_not_strand_unclaimed_sibling(self) -> None:
         """One physical slot authorizes one CAS token, not a private batch."""
