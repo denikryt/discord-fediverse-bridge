@@ -81,6 +81,43 @@ export function normalizeDirectRemotePersonEventFromJson(
   };
 }
 
+/** Normalize an authenticated direct Note reply only after known-root lookup. */
+export function normalizeDirectRemotePersonCommentFromJson(
+  activity: Record<string, unknown>,
+): RemotePersonCommentEvent | null {
+  const type = activity.type;
+  if (type !== "Create" && type !== "Update" && type !== "Delete") return null;
+  const actor = asCanonicalActorId(activity.actor);
+  const id = asString(activity.id);
+  const object = asRecord(activity.object);
+  const apId = object == null ? asString(activity.object) : asString(object.id);
+  if (actor == null || id == null || apId == null) return null;
+  if (type !== "Delete") {
+    if (object?.type !== "Note" || asCanonicalActorId(object.attributedTo) !== actor
+      || asString(object.inReplyTo) == null || tryResolveCommunityActorIdFromJson(object) != null
+      || ![...normalizeStringArray(object.to), ...normalizeStringArray(object.cc)].includes("https://www.w3.org/ns/activitystreams#Public")
+      || ![...normalizeStringArray(activity.to), ...normalizeStringArray(activity.cc)].includes("https://www.w3.org/ns/activitystreams#Public")) return null;
+  }
+  return {
+    event_type: type === "Create" ? "remote.person.comment.created"
+      : type === "Update" ? "remote.person.comment.updated" : "remote.person.comment.deleted",
+    delivery_id: id,
+    occurred_at: asString(object?.updated) ?? asString(object?.published)
+      ?? asString(activity.published) ?? new Date().toISOString(),
+    actor_id: actor,
+    verified_sender_actor_id: actor,
+    source_activity_id: id,
+    source_activity_json: activity,
+    object: {
+      ap_id: apId,
+      parent_ap_id: asString(object?.inReplyTo),
+      author_name: asString(object?.name) ?? lastPathSegment(actor),
+      body_markdown: object == null ? null : resolveMarkdownBodyFromJson(object),
+      published_at: asString(object?.published),
+    },
+  };
+}
+
 export async function normalizeCreateActivityFromJson(
   activity: unknown,
   options: NormalizeOptions = {},

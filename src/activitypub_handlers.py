@@ -17,6 +17,7 @@ from .inbound_activity_outcomes import InboundActivityOutcome
 from .activitypub_models import (
     ActivityPubEvent,
     RemotePersonContentEvent,
+    RemotePersonCommentEvent,
     BridgeGatewayEvent,
     FollowLifecycleEvent,
     LocalFollowRequestEvent,
@@ -79,6 +80,26 @@ async def dispatch_activitypub_event(
         community_ban = find_local_community_actor_ban_for_event(event, runtime)
         if community_ban is not None:
             return _banned_actor_result(event, community_ban, scope="community")
+
+    # A signed public reply is routed only when its parent is a retained
+    # Remote Person object. The Group Announce path remains separate.
+    if isinstance(event, RemotePersonCommentEvent):
+        from .remote_person_comments import RemotePersonCommentService
+        result = RemotePersonCommentService(runtime.database).reserve(
+            event, guild_allowed=runtime.bridge_policy_service.snapshot().is_discord_guild_allowed,
+        )
+        if result.status in {'reserved', 'updated', 'deleted'}:
+            worker = getattr(runtime, 'remote_person_root_delivery_worker', None)
+            if worker is not None:
+                worker.wake()
+        accepted = result.status in {'reserved', 'updated', 'deleted'}
+        return HandlerResult(
+            status='processed' if accepted else 'skipped',
+            outcome=InboundActivityOutcome.APPLIED if accepted else
+                InboundActivityOutcome.IGNORED_ALREADY_APPLIED if result.status in {'duplicate', 'stale'}
+                else InboundActivityOutcome.IGNORED_UNMAPPED_CONTEXT,
+            detail=result.status,
+        )
 
     # Signed remote Person roots have no Lemmy community identity. Their
     # canonical object is reserved before any Discord side effects are allowed.
@@ -643,7 +664,7 @@ def _is_local_community_target(event: ActivityPubEvent, runtime: Runtime) -> boo
 
 def _allowlist_subject(event: BridgeGatewayEvent, runtime: Runtime) -> str:
     """Return the remote URL whose instance should be checked against the allowlist."""
-    if (isinstance(event, RemotePersonContentEvent)
+    if (isinstance(event, (RemotePersonContentEvent, RemotePersonCommentEvent))
             or hasattr(event, "target_actor_kind") or _is_personal_feed_event(event)):
         # A directly signed remote Person Note has no community actor. Check
         # federation allow/deny policy against the authenticated author.

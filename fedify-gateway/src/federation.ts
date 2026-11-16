@@ -24,6 +24,7 @@ import type { GatewayContextData } from "./config.js";
 import {
   normalizeCreateActivity,
   normalizeDirectRemotePersonEventFromJson,
+  normalizeDirectRemotePersonCommentFromJson,
   normalizeCreateActivityFromJson,
   normalizeUpdateActivityFromJson,
   normalizeDeleteActivityFromJson,
@@ -43,6 +44,7 @@ import type {
   LocalUnfollowRequestedEvent,
   RemoteGroupAnnounceEvent,
   RemotePersonContentEvent,
+  RemotePersonCommentEvent,
 } from "./types.js";
 
 /** Keep remote Person direct content out of Group distribution paths. */
@@ -195,6 +197,22 @@ export function createGatewayFederation(
             await deliverNormalizedEvent(config, personEvent, {
               deliveryId: personEvent.delivery_id,
               eventType: personEvent.event_type, objectId: personEvent.object.ap_id,
+            });
+            return;
+          }
+        }
+        if (directObject instanceof Note && directObject.replyTargetId != null) {
+          const parentId = directObject.replyTargetId.href;
+          const target = await getPythonBridgeClient(config).loadConversationTargetByObjectId(parentId);
+          if (target?.publicationContext === "remote_person_feed") {
+            const noteJson = await directObject.toJsonLd() as Record<string, unknown>;
+            const event = normalizeDirectRemotePersonCommentFromJson({
+              ...outerJson, object: noteJson,
+            });
+            if (event == null) return;
+            await deliverNormalizedEvent(config, event, {
+              deliveryId: event.delivery_id, eventType: event.event_type,
+              objectId: event.object.ap_id,
             });
             return;
           }
@@ -488,7 +506,7 @@ async function deliverVerifiedLocalContentEvent(
 
 async function deliverNormalizedEvent(
   config: GatewayContextData,
-  event: BridgeContentEvent | RemotePersonContentEvent | RemoteGroupAnnounceEvent | FollowAcceptedEvent | LocalFollowRequestedEvent | LocalUnfollowRequestedEvent,
+  event: BridgeContentEvent | RemotePersonContentEvent | RemotePersonCommentEvent | RemoteGroupAnnounceEvent | FollowAcceptedEvent | LocalFollowRequestedEvent | LocalUnfollowRequestedEvent,
   logContext: Record<string, unknown>,
 ): Promise<void> {
   // All successful normalization funnels through one delivery path so logging
@@ -507,6 +525,23 @@ export async function deliverDirectUpdateActivity(
 ): Promise<void> {
   /** Normalize one direct Update and deliver it to the Python bridge. */
   const sourceActivityJson = await activity.toJsonLd() as Record<string, unknown>;
+  const updated = sourceActivityJson.object;
+  if (updated != null && typeof updated === "object") {
+    const note = updated as Record<string, unknown>;
+    const id = typeof note.id === "string" ? note.id : null;
+    if (note.type === "Note" && id != null) {
+      const target = await getPythonBridgeClient(config).loadConversationTargetByObjectId(id);
+      if (target?.publicationContext === "remote_person_feed" && id !== target.rootObjectId) {
+        const event = normalizeDirectRemotePersonCommentFromJson(sourceActivityJson);
+        if (event != null) {
+          await deliverNormalizedEvent(config, event, {
+            deliveryId: event.delivery_id, eventType: event.event_type, objectId: id,
+          });
+        }
+        return;
+      }
+    }
+  }
   const event = await normalizeUpdateActivityFromJson(sourceActivityJson, {
     pythonBridgeClient: getPythonBridgeClient(config),
   });
@@ -538,6 +573,22 @@ export async function deliverDirectDeleteActivity(
 ): Promise<void> {
   /** Normalize one direct Delete and deliver it to the Python bridge. */
   const sourceActivityJson = await activity.toJsonLd() as Record<string, unknown>;
+  const deleted = sourceActivityJson.object;
+  const deletedId = typeof deleted === "string" ? deleted
+    : deleted != null && typeof deleted === "object" && typeof (deleted as Record<string, unknown>).id === "string"
+      ? (deleted as Record<string, unknown>).id as string : null;
+  if (deletedId != null) {
+    const target = await getPythonBridgeClient(config).loadConversationTargetByObjectId(deletedId);
+    if (target?.publicationContext === "remote_person_feed" && deletedId !== target.rootObjectId) {
+      const event = normalizeDirectRemotePersonCommentFromJson(sourceActivityJson);
+      if (event != null) {
+        await deliverNormalizedEvent(config, event, {
+          deliveryId: event.delivery_id, eventType: event.event_type, objectId: deletedId,
+        });
+      }
+      return;
+    }
+  }
   const event = await normalizeDeleteActivityFromJson(sourceActivityJson, { pythonBridgeClient: getPythonBridgeClient(config) });
   if (event == null) {
     logDebug(isDebug, "normalizeDeleteActivityFromJson returned null for direct Delete");

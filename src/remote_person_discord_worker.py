@@ -77,6 +77,11 @@ class RemotePersonRootDeliveryWorker:
         self._task: asyncio.Task[None] | None = None
         self._wake = asyncio.Event()
         self._stopping = False
+        self.comment_worker: object | None = None
+
+    def bind_comment_worker(self, worker: object) -> None:
+        """Run comment copies after root/thread work under the same scheduler."""
+        self.comment_worker = worker
 
     def start(self) -> None:
         """Recover interrupted attempts and start one ready-gated scheduler."""
@@ -92,6 +97,8 @@ class RemotePersonRootDeliveryWorker:
                 row.claim_token = None
                 row.last_error = 'recovered interrupted root dispatch'
         self._stopping = False
+        if self.comment_worker is not None:
+            self.comment_worker.recover()
         self._task = asyncio.create_task(self._run(), name='remote-person-root-delivery')
 
     def wake(self) -> None:
@@ -375,3 +382,5 @@ class RemotePersonRootDeliveryWorker:
             await self._ensure_thread(root)
         for root in self._retained(kind='mutation'):
             await self._mutate(root)
+        if self.comment_worker is not None:
+            await self.comment_worker.drain_once()

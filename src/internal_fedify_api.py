@@ -556,6 +556,11 @@ def create_internal_fedify_router(runtime: Runtime) -> APIRouter:
             )
         )
         if resolved is None:
+            from .remote_person_comments import RemotePersonCommentService
+            resolved = RemotePersonCommentService(runtime.database).resolve_conversation_target(
+                request.object_id
+            )
+        if resolved is None:
             raise HTTPException(status_code=404, detail="Conversation object not found")
         context, root_object_id, actor_id = resolved
         return ConversationTargetResponse(

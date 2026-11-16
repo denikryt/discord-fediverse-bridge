@@ -41,6 +41,7 @@ from .user_actor_delivery import UserActorDeliveryService
 from .user_actor_delivery_worker import UserActorDeliveryWorker
 from .remote_person_follow_service import RemotePersonFollowService
 from .remote_person_discord_worker import RemotePersonRootDeliveryWorker
+from .remote_person_comment_delivery import RemotePersonCommentDeliveryWorker
 from .personal_feeds import PersonalFeedService
 from .personal_feed_publisher import PersonalFeedPublisher
 from .personal_feed_conversations import PersonalFeedConversationRuntime
@@ -249,6 +250,11 @@ def _build_live_runtime(settings: Settings, deployment_lease: FileLock) -> Runti
         bot.bind_personal_feed_delivery_worker(personal_feed_discord_delivery_worker)
         remote_person_root_delivery_worker = RemotePersonRootDeliveryWorker(
             database=database, bot=bot, policy_service=bridge_policy_service,
+        )
+        remote_person_root_delivery_worker.bind_comment_worker(
+            RemotePersonCommentDeliveryWorker(
+                database=database, bot=bot, policy_service=bridge_policy_service,
+            )
         )
         bot.bind_remote_person_root_worker(remote_person_root_delivery_worker)
         mutation_context = DiscordMutationContext(

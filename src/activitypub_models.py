@@ -266,10 +266,50 @@ class RemotePersonContentEvent(BaseModel):
         return self
 
 
+class RemotePersonCommentObject(BaseModel):
+    """One canonical public reply attributed to a separately verified Person."""
+
+    model_config = ConfigDict(extra="forbid")
+    ap_id: str
+    parent_ap_id: str | None = None
+    author_name: str | None = None
+    body_markdown: str | None = None
+    published_at: datetime | None = None
+
+
+class RemotePersonCommentEvent(BaseModel):
+    """A signed Note reply to a known, user-subscribed remote conversation."""
+
+    model_config = ConfigDict(extra="forbid")
+    event_type: Literal[
+        "remote.person.comment.created", "remote.person.comment.updated",
+        "remote.person.comment.deleted",
+    ]
+    delivery_id: str
+    occurred_at: datetime
+    actor_id: str
+    verified_sender_actor_id: str
+    source_activity_id: str | None = None
+    source_activity_json: dict[str, Any]
+    object: RemotePersonCommentObject
+
+    @model_validator(mode="after")
+    def check_signed_identity(self) -> "RemotePersonCommentEvent":
+        """Prevent anonymous activity or creation without a specific parent."""
+        if not self.actor_id or self.actor_id != self.verified_sender_actor_id:
+            raise ValueError("remote Person comment actor must match signed sender")
+        if not self.object.ap_id:
+            raise ValueError("remote Person comment object ID is required")
+        if not self.event_type.endswith(".deleted") and not self.object.parent_ap_id:
+            raise ValueError("remote Person comment requires inReplyTo")
+        return self
+
+
 BridgeGatewayEvent = Annotated[
     ActivityPubEvent
     | RemoteGroupAnnounceEvent
     | RemotePersonContentEvent
+    | RemotePersonCommentEvent
     | FollowLifecycleEvent
     | LocalFollowRequestEvent
     | LocalUnfollowRequestEvent,

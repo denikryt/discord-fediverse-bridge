@@ -59,6 +59,24 @@ export interface RemotePersonContentEvent {
   };
 }
 
+/** Signed Note reply to a known Remote Person conversation, not a Group event. */
+export interface RemotePersonCommentEvent {
+  event_type: "remote.person.comment.created" | "remote.person.comment.updated" | "remote.person.comment.deleted";
+  delivery_id: string;
+  occurred_at: string;
+  actor_id: string;
+  verified_sender_actor_id: string;
+  source_activity_id: string | null;
+  source_activity_json: Record<string, unknown>;
+  object: {
+    ap_id: string;
+    parent_ap_id: string | null;
+    author_name: string | null;
+    body_markdown: string | null;
+    published_at: string | null;
+  };
+}
+
 // BridgeEvent stays as the content-event alias so the existing normalization
 // pipeline keeps its current naming while follow lifecycle uses a separate type.
 export type BridgeEvent = BridgeContentEvent;
