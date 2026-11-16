@@ -361,6 +361,18 @@ class RemotePersonRootDeliveryWorker:
         except asyncio.CancelledError:
             raise
         except Exception as exc:
+            if getattr(exc, 'code', None) == 10008:
+                # Discord has positively identified an absent root message:
+                # deleting it is idempotent; editing it cannot succeed.
+                if root.deleted_at is not None:
+                    self._mark_mutation(root, 'deleted')
+                else:
+                    with self.database.immediate_session() as session:
+                        row = session.get(RemotePersonPostDelivery, root.delivery_id)
+                        if row is not None and row.state == 'delivered':
+                            row.state = 'failed'
+                            row.last_error = 'original Discord root was removed'
+                return
             logger.warning('Remote Person retained root mutation failed delivery=%s', root.delivery_id)
             self._mutation_error(root, exc)
 

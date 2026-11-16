@@ -263,7 +263,16 @@ class RemotePersonCommentDeliveryWorker:
             if row is None or row.claim_token != claim.claim_token or row.state != 'sending':
                 return
             detail = str(error).lower()
-            if isinstance(error, (PermissionError, LookupError)) or 'unknown message' in detail:
+            if isinstance(error, PermissionError):
+                # Effective permission checks run before the network call; an
+                # explicit denial is safe to retry later, but it is not an
+                # absent parent and must be bounded by the attempt budget.
+                row.state = 'failed' if row.attempt_count >= self.MAX_ATTEMPTS else 'pending'
+                row.next_attempt_at = utcnow() + timedelta(seconds=20 * row.attempt_count)
+            elif (isinstance(error, LookupError) or getattr(error, 'code', None) == 10008
+                  or 'unknown message' in detail):
+                # Discord 10008 is a definite missing Reply parent, never an
+                # ambiguous accepted send. Do not flatten the nested Reply.
                 row.state = 'failed' if row.attempt_count >= self.MAX_ATTEMPTS else 'pending_parent'
                 row.next_attempt_at = utcnow() + timedelta(seconds=20 * row.attempt_count)
             else:
@@ -320,7 +329,18 @@ class RemotePersonCommentDeliveryWorker:
                 with self.database.immediate_session() as session:
                     row = session.get(RemotePersonCommentPlacement, placement_id)
                     if row is not None and row.state == 'delivered':
-                        row.last_error = ('comment mutation failed: ' + str(exc))[:500]
+                        if getattr(exc, 'code', None) == 10008:
+                            # Discord proves the original bot message is gone.
+                            # Delete is already achieved; an Update cannot
+                            # restore this copy and must stop retrying.
+                            if revision == 'deleted':
+                                row.last_applied_revision = 'deleted'
+                                row.last_error = None
+                            else:
+                                row.state = 'failed'
+                                row.last_error = 'original Discord comment was removed'
+                        else:
+                            row.last_error = ('comment mutation failed: ' + str(exc))[:500]
                 continue
             with self.database.immediate_session() as session:
                 row = session.get(RemotePersonCommentPlacement, placement_id)

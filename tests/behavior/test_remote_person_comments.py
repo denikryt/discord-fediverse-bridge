@@ -367,5 +367,102 @@ class RemotePersonComments(unittest.TestCase):
                              {'suppressed'})
 
 
+    def test_preflight_permission_failure_is_bounded_not_ambiguous(self):
+        """Before-send denial is a known failure, never a blind network retry."""
+        self.deliver_roots()
+        self.assertEqual(self.comments.reserve(self.event()).targets, 2)
+        worker, edge = self.worker()
+        async def deny(_claim):
+            """Represent revoked effective permissions before the Discord POST."""
+            raise PermissionError('missing send_messages_in_threads')
+        edge.send = deny
+        asyncio.run(worker.drain_once())
+        with self.db.session() as session:
+            rows = list(session.scalars(select(RemotePersonCommentPlacement)))
+            self.assertEqual({row.state for row in rows}, {'pending'})
+            self.assertEqual({row.attempt_count for row in rows}, {1})
+            self.assertTrue(all(row.next_attempt_at is not None for row in rows))
+        # Make due and exhaust bounded failures without any ambiguous send.
+        for _ in range(2):
+            with self.db.immediate_session() as session:
+                for row in session.scalars(select(RemotePersonCommentPlacement)):
+                    row.next_attempt_at = None
+            asyncio.run(worker.drain_once())
+        with self.db.session() as session:
+            self.assertEqual({row.state for row in session.scalars(
+                select(RemotePersonCommentPlacement))}, {'failed'})
+
+    def test_missing_native_reply_parent_stays_failed_closed(self):
+        """An API 10008 at the send boundary must not flatten a known Reply."""
+        self.deliver_roots()
+        self.comments.reserve(self.event())
+        worker, edge = self.worker()
+        asyncio.run(worker.drain_once())
+        child = self.event(parent=COMMENT, object_id='https://other.example/notes/child')
+        self.assertEqual(self.comments.reserve(child).targets, 2)
+        class UnknownMessage(Exception):
+            """Discord's native Reply failure after a parent disappears."""
+            code = 10008
+        async def deny_reference(_claim):
+            """Reject a missing parent; never return a flattened message ID."""
+            raise UnknownMessage('Unknown Message')
+        edge.send = deny_reference
+        asyncio.run(worker.drain_once())
+        with self.db.session() as session:
+            children = list(session.scalars(select(RemotePersonCommentPlacement).join(
+                InboundConversationObject,
+                RemotePersonCommentPlacement.inbound_object_id == InboundConversationObject.id,
+            ).where(InboundConversationObject.object_id == child.object.ap_id)))
+            self.assertTrue(all(row.state == 'pending_parent' and row.discord_message_id is None
+                                for row in children))
+
+    def test_removed_bot_copy_delete_is_confirmed_once(self):
+        """Deleting a Discord bot copy already absent is an idempotent mutation."""
+        self.deliver_roots()
+        self.comments.reserve(self.event())
+        worker, edge = self.worker()
+        asyncio.run(worker.drain_once())
+        self.comments.reserve(self.event(operation='deleted'))
+        class UnknownMessage(Exception):
+            """A definite Discord Unknown Message is not a transient timeout."""
+            code = 10008
+        async def absent(thread_id, message_id):
+            """Simulate an already-deleted copy in the retained thread."""
+            edge.deletes.append((thread_id, message_id))
+            raise UnknownMessage('Unknown Message')
+        edge.delete = absent
+        asyncio.run(worker.drain_once())
+        asyncio.run(worker.drain_once())
+        self.assertEqual(len(edge.deletes), 2)
+        with self.db.session() as session:
+            self.assertEqual({row.last_applied_revision for row in session.scalars(
+                select(RemotePersonCommentPlacement))}, {'deleted'})
+
+
+    def test_missing_bot_copy_edit_does_not_retry_forever(self):
+        """An externally removed bot copy records a terminal error on Update."""
+        self.deliver_roots()
+        self.comments.reserve(self.event())
+        worker, edge = self.worker()
+        asyncio.run(worker.drain_once())
+        updated = self.event(operation='updated', when=self.when + timedelta(minutes=1))
+        updated.source_activity_json['object']['content'] = 'Updated'
+        self.comments.reserve(updated)
+        class UnknownMessage(Exception):
+            """Discord 10008 identifies the removed original bot comment."""
+            code = 10008
+        async def absent(thread_id, message_id, content):
+            """Return a known absence instead of a transient transport failure."""
+            edge.edits.append((thread_id, message_id, content))
+            raise UnknownMessage('Unknown Message')
+        edge.edit = absent
+        asyncio.run(worker.drain_once())
+        asyncio.run(worker.drain_once())
+        self.assertEqual(len(edge.edits), 2)
+        with self.db.session() as session:
+            self.assertEqual({row.state for row in session.scalars(
+                select(RemotePersonCommentPlacement))}, {'failed'})
+
+
 if __name__ == '__main__':
     unittest.main()

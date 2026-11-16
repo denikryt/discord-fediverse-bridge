@@ -18,6 +18,7 @@ from src.models import (RemotePersonChannelAssignment, RemotePersonFollow,
 from src.remote_person_discord_worker import RemotePersonRootDeliveryWorker
 from src.remote_person_inbound import RemotePersonInboundService, PUBLIC
 from src.remote_person_webhooks import RemotePersonWebhookTransport, PreparedRemoteWebhook, remote_root_content
+from src.remote_person_feeds import RemotePersonChannelService
 
 ACTOR = 'https://remote.example/users/bob'
 OBJECT = 'https://remote.example/users/bob/statuses/7'
@@ -305,6 +306,108 @@ class RemotePersonDiscordDeliveryScenarios(unittest.TestCase):
         self.assertTrue(text.endswith(OBJECT))
         self.assertIn('Hello from Bob', text)
         self.assertLessEqual(len(text), 2000)
+
+
+    def test_last_owner_removal_suppresses_old_pending_even_after_new_owner_accepted(self):
+        """A zero-subscriber interval terminates queued work before B can authorize it."""
+        with self.db.immediate_session() as session:
+            other = session.scalar(select(RemotePersonFollow).where(RemotePersonFollow.user_id == 2))
+            other.relationship_status = 'pending'
+        self.assertEqual(self.inbound.reserve(self.event()).target_count, 2)
+        result = RemotePersonChannelService(self.db).remove_channel(
+            discord_user_id='1', remote_actor_id=ACTOR,
+            discord_guild_id=1, discord_channel_id=100)
+        self.assertEqual(result.status, 'removed')
+        with self.db.session() as session:
+            original = session.scalar(select(RemotePersonPostDelivery).where(
+                RemotePersonPostDelivery.discord_channel_id == 100))
+            self.assertEqual(original.state, 'suppressed')
+        with self.db.immediate_session() as session:
+            other = session.scalar(select(RemotePersonFollow).where(RemotePersonFollow.user_id == 2))
+            other.relationship_status = 'accepted'
+        self.run_drain()
+        self.assertEqual([x[0] for x in self.edge.creates], [101])
+        # The fake edge's default ID only varies by channel. Distinct notes
+        # must receive different Discord snowflakes within that channel.
+        async def next_message(prepared, post):
+            """Simulate the second root with a new Discord message identity."""
+            self.edge.creates.append((post.channel_id, post.object_id, prepared.webhook_id))
+            return 200000 + post.channel_id
+        self.edge.create = next_message
+        next_event = self.event(when=self.when + timedelta(minutes=1))
+        next_event.source_activity_json['object']['id'] = 'https://remote.example/users/bob/statuses/8'
+        next_event.object.ap_id = 'https://remote.example/users/bob/statuses/8'
+        self.assertEqual(self.inbound.reserve(next_event).target_count, 2)
+        self.run_drain()
+        self.assertEqual({x[0] for x in self.edge.creates}, {100, 101})
+        self.assertEqual(sum(x[0] == 100 for x in self.edge.creates), 1)
+
+    def test_missing_webhook_delete_message_is_idempotent_and_does_not_retry(self):
+        """Discord Unknown Message means the remote deletion's effect already holds."""
+        self.inbound.reserve(self.event())
+        self.run_drain()
+        self.inbound.reserve(self.event('deleted', when=self.when + timedelta(minutes=2)))
+        class UnknownMessage(Exception):
+            """Discord's known 10008 result, not a generic HTTP or permission error."""
+            code = 10008
+        async def absent(_prepared, message_id):
+            """Simulate a message removed by a Discord moderator before Delete."""
+            self.edge.deletes.append(message_id)
+            raise UnknownMessage('Unknown Message')
+        self.edge.delete = absent
+        self.run_drain()
+        self.run_drain()
+        self.assertEqual(len(self.edge.deletes), 2)
+        self.assertTrue(all(x[4] == 'deleted' for x in self.root_rows()))
+
+    def test_missing_webhook_credentials_preserve_other_channel_mutation(self):
+        """One revoked original hook does not block mutations in other channels."""
+        self.inbound.reserve(self.event())
+        self.run_drain()
+        self.inbound.reserve(self.event('updated', when=self.when + timedelta(minutes=2)))
+        self.edge.fail_channel = 100
+        self.run_drain()
+        self.assertEqual({x[1] for x in self.edge.edits}, {100101})
+        rows = {x[0]: x for x in self.root_rows()}
+        self.assertIn('failed', rows[100][5])
+        self.assertNotIn('failed', rows[101][5] or '')
+
+
+    def test_missing_webhook_edit_message_has_terminal_diagnostic(self):
+        """A deleted root cannot be edited, so a definite 10008 must stop retries."""
+        self.inbound.reserve(self.event())
+        self.run_drain()
+        self.inbound.reserve(self.event('updated', when=self.when + timedelta(minutes=2)))
+        class UnknownMessage(Exception):
+            """Discord 10008 reports the exact original message is absent."""
+            code = 10008
+        async def absent(_prepared, message_id, _post):
+            """Simulate an administrator removing the original root."""
+            self.edge.edits.append(message_id)
+            raise UnknownMessage('Unknown Message')
+        self.edge.edit = absent
+        self.run_drain()
+        self.run_drain()
+        self.assertEqual(len(self.edge.edits), 2)
+        self.assertTrue(all(x[1] == 'failed' and 'removed' in x[5]
+                            for x in self.root_rows()))
+
+    def test_unrelated_webhook_404_is_not_treated_as_successful_delete(self):
+        """Only Discord Unknown Message (10008) proves a deletion is complete."""
+        self.inbound.reserve(self.event())
+        self.run_drain()
+        self.inbound.reserve(self.event('deleted', when=self.when + timedelta(minutes=2)))
+        class UnknownChannel(Exception):
+            """Discord 10003 is not proof that the specific root was deleted."""
+            code = 10003
+        async def missing_channel(_prepared, message_id):
+            """Simulate an unavailable original destination."""
+            self.edge.deletes.append(message_id)
+            raise UnknownChannel('Unknown Channel')
+        self.edge.delete = missing_channel
+        self.run_drain()
+        self.assertTrue(all(x[4] != 'deleted' and 'failed' in x[5]
+                            for x in self.root_rows()))
 
 
 if __name__ == '__main__':
