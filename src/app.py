@@ -105,7 +105,7 @@ async def main() -> None:
     """Supervise HTTP/Discord lifetimes and retain signal ownership through close."""
     settings = Settings()
     configure_logging(settings.log_level)
-    logger.info("Starting Discord/Fediverse bridge version=%s", APP_VERSION)
+    logger.info("Starting %s/Fediverse bridge version=%s", settings.bridge_platform, APP_VERSION)
     runtime = build_runtime(settings)
     original_handlers = {}
     failure: BaseException | None = None
@@ -130,7 +130,11 @@ async def main() -> None:
             original_handlers[signum] = signal.signal(signum, request_shutdown)
 
         async def run_bot() -> None:
-            """A finished Gateway lifetime terminates the sibling HTTP service."""
+            """A finished Discord Gateway lifetime terminates sibling HTTP."""
+            # Settings validation already proved the exclusive Discord token;
+            # Fluxer never starts this task or initializes the Discord SDK.
+            if settings.discord_token is None:
+                raise RuntimeError('Discord runtime has no Gateway credentials')
             await _run_bot_lifetime(runtime, settings.discord_token)
             raise _RuntimeServiceStopped()
 
@@ -155,7 +159,10 @@ async def main() -> None:
         runtime.physical_delivery_scheduler.start()
         try:
             async with asyncio.TaskGroup() as task_group:
-                task_group.create_task(run_bot(), name="discord-bot")
+                # Fluxer Gateway is owned by the external Node sidecar. Python
+                # still owns HTTP, workers, SQLite, and the same cleanup fence.
+                if settings.bridge_platform == 'discord':
+                    task_group.create_task(run_bot(), name="discord-bot")
                 task_group.create_task(run_http_server(), name="internal-http-server")
         except* _RuntimeServiceStopped:
             pass

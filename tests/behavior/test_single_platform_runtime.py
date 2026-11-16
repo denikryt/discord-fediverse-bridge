@@ -9,9 +9,12 @@ from __future__ import annotations
 import asyncio
 import hashlib
 import json
+import signal
+import socket
 import shutil
 import tempfile
 import unittest
+from unittest import mock
 from pathlib import Path
 
 from src.config import Settings
@@ -229,6 +232,84 @@ class ExclusiveSchedulerContracts(unittest.IsolatedAsyncioTestCase):
             self.assertIn("mutation", events)
         finally:
             await scheduler.stop()
+
+
+class FluxerProcessLifetimeContracts(unittest.IsolatedAsyncioTestCase):
+    """Exercise the real Python HTTP process without a Discord bot or Node SDK."""
+
+    async def test_failed_http_service_releases_active_runtime_leases(self) -> None:
+        """A failed HTTP task must close RPC/workers/DB and permit exact restart."""
+        from src.app import build_runtime, main
+
+        directory = tempfile.TemporaryDirectory()
+        self.addCleanup(directory.cleanup)
+        settings = config(Path(directory.name))
+
+        class FailingHttpServer:
+            """Fail at the outer server boundary before accepting callbacks."""
+            started = False
+            should_exit = False
+
+            def __init__(self, *_args, **_kwargs) -> None:
+                """Mirror only the lifecycle fields inspected by the app owner."""
+
+            async def serve(self) -> None:
+                """Model a listening failure with no unresolved ingress tasks."""
+                raise RuntimeError('synthetic HTTP failure')
+
+        with mock.patch('src.app.Settings', return_value=settings), mock.patch(
+            'src.app._RuntimeHttpServer', FailingHttpServer
+        ):
+            with self.assertRaises(BaseExceptionGroup):
+                await main()
+        # A leaked runtime-lifetime or deployment lease would fail this build.
+        runtime = build_runtime(settings)
+        await runtime.close()
+
+    async def test_fluxer_http_stays_healthy_offline_and_handles_sigterm(self) -> None:
+        """Gateway absence cannot stop HTTP; signal must release SQLite leases."""
+        import httpx
+        from src.app import main, build_runtime
+
+        directory = tempfile.TemporaryDirectory()
+        self.addCleanup(directory.cleanup)
+        root = Path(directory.name)
+        with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as listener:
+            listener.bind(('127.0.0.1', 0))
+            port = listener.getsockname()[1]
+        settings = config(root).model_copy(update={
+            "internal_http_host": "127.0.0.1", "internal_http_port": port,
+            "log_level": "ERROR",
+        })
+        with mock.patch('src.app.Settings', return_value=settings):
+            process = asyncio.create_task(main())
+            try:
+                async with httpx.AsyncClient(timeout=0.5) as client:
+                    for attempt in range(100):
+                        try:
+                            response = await client.get(f'http://127.0.0.1:{port}/healthz')
+                        except (httpx.ConnectError, httpx.ReadTimeout):
+                            await asyncio.sleep(0.025)
+                            continue
+                        self.assertEqual(response.status_code, 200)
+                        self.assertEqual(response.json()['status'], 'ok')
+                        break
+                    else:
+                        self.fail('Fluxer-only HTTP did not become healthy without Node')
+                # main() owns SIGTERM only while both the listener and leases
+                # are active. Its handler shuts admission before asynchronous drain.
+                signal.raise_signal(signal.SIGTERM)
+                await asyncio.wait_for(process, timeout=15)
+                # No dangling SQLite owner may prevent a second exact boot.
+                restarted = build_runtime(settings)
+                await restarted.close()
+            finally:
+                if not process.done():
+                    process.cancel()
+                    try:
+                        await process
+                    except asyncio.CancelledError:
+                        pass
 
 
 if __name__ == "__main__":
