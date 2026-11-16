@@ -397,6 +397,22 @@ class PersonalFeedConversationRepository:
         now = utcnow()
         claims: list[DueDiscordDelivery] = []
         with self.immediate_session() as session:
+            # An unknown or never-delivered parent cannot keep an inbound child
+            # in a nonterminal queue forever. The canonical child is retained
+            # for diagnosis, but its Discord placement fails after seven days.
+            expired_before = now - timedelta(days=7)
+            expired = list(
+                session.scalars(
+                    select(InboundDiscordDelivery).where(
+                        InboundDiscordDelivery.state == "pending_parent",
+                        InboundDiscordDelivery.created_at <= expired_before,
+                    )
+                )
+            )
+            for delivery in expired:
+                delivery.state = "failed"
+                delivery.next_attempt_at = None
+                delivery.last_error = "conversation parent unavailable after 7 days"
             rows = list(
                 session.execute(
                     select(
