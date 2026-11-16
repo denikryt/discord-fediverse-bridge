@@ -169,6 +169,29 @@ export function createGatewayFederation(
             ...outerJson, object: noteJson,
           });
           if (personEvent != null) {
+            // The Note's display name is not its author's canonical handle.
+            // Resolve the actual signed actor identity before presenting a
+            // webhook avatar or preferred username; failure only loses media.
+            try {
+              const remoteActor = await activity.getActor({ suppressError: true });
+              if (remoteActor?.id?.href === personEvent.actor_id) {
+                const profile = await remoteActor.toJsonLd() as Record<string, unknown>;
+                if (typeof profile.preferredUsername === "string") {
+                  personEvent.object.author_name = profile.preferredUsername;
+                }
+                const icon = profile.icon;
+                if (icon != null && typeof icon === "object") {
+                  const iconJson = icon as Record<string, unknown>;
+                  const candidate = iconJson.url;
+                  personEvent.object.avatar_url = typeof candidate === "string" ? candidate
+                    : candidate != null && typeof candidate === "object"
+                      ? (candidate as Record<string, unknown>).href as string | undefined ?? null
+                      : null;
+                }
+              }
+            } catch (error) {
+              logDebug(isDebug, "Remote Person profile unavailable for webhook presentation");
+            }
             await deliverNormalizedEvent(config, personEvent, {
               deliveryId: personEvent.delivery_id,
               eventType: personEvent.event_type, objectId: personEvent.object.ap_id,

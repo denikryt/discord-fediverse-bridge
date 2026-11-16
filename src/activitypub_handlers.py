@@ -87,6 +87,12 @@ async def dispatch_activitypub_event(
         result = RemotePersonInboundService(runtime.database).reserve(
             event, guild_allowed=runtime.bridge_policy_service.snapshot().is_discord_guild_allowed,
         )
+        # Wake the durable sender only after the canonical activity transaction
+        # commits; duplicates and rejected events have no new side effects.
+        if result.status in {'reserved', 'updated', 'deleted'}:
+            worker = getattr(runtime, 'remote_person_root_delivery_worker', None)
+            if worker is not None:
+                worker.wake()
         return HandlerResult(
             status='processed' if result.status in {'reserved', 'updated', 'deleted'} else 'skipped',
             outcome=InboundActivityOutcome.APPLIED if result.status in {'reserved', 'updated', 'deleted'}

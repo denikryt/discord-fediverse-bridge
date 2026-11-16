@@ -40,6 +40,7 @@ from .user_actor_followers import UserActorFollowService
 from .user_actor_delivery import UserActorDeliveryService
 from .user_actor_delivery_worker import UserActorDeliveryWorker
 from .remote_person_follow_service import RemotePersonFollowService
+from .remote_person_discord_worker import RemotePersonRootDeliveryWorker
 from .personal_feeds import PersonalFeedService
 from .personal_feed_publisher import PersonalFeedPublisher
 from .personal_feed_conversations import PersonalFeedConversationRuntime
@@ -225,6 +226,7 @@ def _build_live_runtime(settings: Settings, deployment_lease: FileLock) -> Runti
             personal_feed_service=personal_feed_service,
             personal_feed_publisher=personal_feed_publisher,
             remote_person_follow_service=remote_person_follow_service,
+            remote_person_root_delivery_worker=remote_person_root_delivery_worker,
             personal_feed_conversation_runtime=personal_feed_conversation_runtime,
         )
         bot = BridgeBot(
@@ -245,6 +247,10 @@ def _build_live_runtime(settings: Settings, deployment_lease: FileLock) -> Runti
             personal_feed_discord_delivery_worker
         )
         bot.bind_personal_feed_delivery_worker(personal_feed_discord_delivery_worker)
+        remote_person_root_delivery_worker = RemotePersonRootDeliveryWorker(
+            database=database, bot=bot, policy_service=bridge_policy_service,
+        )
+        bot.bind_remote_person_root_worker(remote_person_root_delivery_worker)
         mutation_context = DiscordMutationContext(
             bridge_policy_service=bridge_policy_service,
             user_actor_delivery_service=user_actor_delivery_service,
@@ -288,6 +294,7 @@ def _build_live_runtime(settings: Settings, deployment_lease: FileLock) -> Runti
             user_actor_delivery_service=user_actor_delivery_service,
             user_actor_delivery_worker=user_actor_delivery_worker,
             remote_person_follow_service=remote_person_follow_service,
+            remote_person_root_delivery_worker=remote_person_root_delivery_worker,
             personal_feed_conversation_runtime=personal_feed_conversation_runtime,
             personal_feed_discord_delivery_worker=personal_feed_discord_delivery_worker,
             deployment_state_lease=deployment_lease,
@@ -312,6 +319,7 @@ def _validate_runtime_graph(runtime: Runtime) -> None:
     # were completed by named bind methods rather than raw app-level mutation.
     runtime.bot._require_message_mutation_handler()
     runtime.bot._require_personal_feed_delivery_worker()
+    runtime.bot._require_remote_person_root_worker()
     if runtime.community_runtime.discord_fanout is None:
         raise RuntimeError("CommunityRuntime Discord fanout is not configured")
     if runtime.community_runtime.bot is None:

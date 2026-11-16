@@ -76,6 +76,7 @@ class BridgeBot(discord.Client):
         # binds instead of raw attribute writes from the composition root.
         self._message_mutation_handler: DiscordMessageMutationHandler | None = None
         self._personal_feed_delivery_worker: object | None = None
+        self._remote_person_root_worker: object | None = None
 
     async def setup_hook(self) -> None:
         # setup_hook runs before the bot connects, making it the right place to
@@ -164,6 +165,7 @@ class BridgeBot(discord.Client):
         # fetch channels. Starting earlier would consume retry attempts during
         # normal connection establishment rather than actual delivery failures.
         self._require_personal_feed_delivery_worker().start()
+        self._require_remote_person_root_worker().start()
         # Refresh last-known Discord labels at startup so old rows and renamed
         # guilds/forums converge without live lookups during dashboard requests.
         refresh_discord_directory_from_bot(self.database, self)
@@ -328,6 +330,18 @@ class BridgeBot(discord.Client):
         if worker is None:
             raise RuntimeError("Personal-feed Discord delivery worker is not configured")
         return worker
+
+    def bind_remote_person_root_worker(self, worker: object) -> None:
+        """Configure the one ready-gated webhook root sender at composition time."""
+        if self._remote_person_root_worker is not None:
+            raise RuntimeError("Remote Person root worker is already bound")
+        self._remote_person_root_worker = worker
+
+    def _require_remote_person_root_worker(self) -> object:
+        """Fail early if incoming Person roots have no Discord delivery owner."""
+        if self._remote_person_root_worker is None:
+            raise RuntimeError("Remote Person root worker is not configured")
+        return self._remote_person_root_worker
 
     async def fetch_message_state(
         self, channel_id: int, message_id: int
