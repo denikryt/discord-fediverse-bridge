@@ -324,6 +324,7 @@ def test_cutover_actor_api_emits_typed_identity_and_original_key(legacy):
     _released_urls(legacy)
     legacy.migrate(identity=_config())
     settings = SimpleNamespace(
+        bridge_platform="discord",
         fedify_shared_secret="secret",
         normalized_fedify_origin="https://bridge.test",
         normalized_public_bridge_base_url="https://bridge.test",

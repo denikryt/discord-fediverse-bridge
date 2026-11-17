@@ -17,6 +17,7 @@ def _runtime(tmp_path: Path) -> tuple[SimpleNamespace, Database]:
     database = Database(f"sqlite:///{tmp_path / 'internal-fedify.db'}")
     database.migrate()
     settings = SimpleNamespace(
+        bridge_platform="discord",
         fedify_shared_secret="internal-secret",
         normalized_fedify_origin="https://bridge.example",
         normalized_public_bridge_base_url="https://bridge.example",

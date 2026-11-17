@@ -66,6 +66,7 @@ def _database(tmp_path: Path) -> Database:
 def _registration_runtime(database: Database) -> SimpleNamespace:
     """Build the FastAPI runtime used by cross-workflow registration steps."""
     settings = SimpleNamespace(
+        bridge_platform="discord",
         fedify_shared_secret="secret",
         normalized_public_bridge_base_url=f"https://{BRIDGE_HOST_DOMAIN}",
         registration_session_cookie_name="bridge_registration_session",

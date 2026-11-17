@@ -820,6 +820,7 @@ def test_migrated_actor_read_contract_retains_keys_and_urls(legacy):
     _seed(legacy)
     legacy.migrate()
     settings = SimpleNamespace(
+        bridge_platform="discord",
         fedify_shared_secret="secret",
         normalized_fedify_origin="https://bridge.test",
         normalized_public_bridge_base_url="https://bridge.test",

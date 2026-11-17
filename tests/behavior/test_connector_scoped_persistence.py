@@ -436,6 +436,7 @@ def test_dashboard_mixed_owners_preserves_discord_cards_and_global_follow(tmp_pa
         status="accepted",
     )
     settings = SimpleNamespace(
+        bridge_platform="discord",
         fedify_origin="https://bridge.example",
         normalized_fedify_origin="https://bridge.example",
         fedify_actor_identifier="bridge",

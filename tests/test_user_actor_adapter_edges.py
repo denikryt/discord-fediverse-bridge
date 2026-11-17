@@ -206,6 +206,7 @@ async def test_accepted_follow_notification_remains_at_most_once_when_dm_reply_l
     service = UserActorFollowService(database=db, fedify_gateway=Gateway(),
                                      discord_notices=notice)
     runtime = SimpleNamespace(database=db, user_actor_follow_service=service,
+        settings=SimpleNamespace(bridge_platform="discord"),
         bridge_policy_service=SimpleNamespace(
             federation_decision=lambda _: SimpleNamespace(allowed=True)))
     for follow_id in ('https://remote.example/follow/1', 'https://remote.example/follow/2'):
