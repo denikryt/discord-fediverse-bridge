@@ -671,3 +671,12 @@ Current checkout has verified Node ACL behavior for forum vs thread bit 38 and b
 - **Plan 145 CP12 — exclusive Compose profile gate:** bridge service and Node sidecar share the explicit `BRIDGE_PLATFORM` selected by Compose interpolation; the opt-in Node service immediately fails startup if Discord mode was selected, rather than running a second platform. Health checks exact origin, connector, SDK bot identity and no Gateway gap. Deployment docs now describe isolated Discord/Fluxer projects with separate origin/SQLite volume/published ports/secret file. Static YAML regressions passed; actual Compose engine/config has not run in this environment (Docker CLI absent).
 
 - **Plan 145 CP13 — locally verified, live release acceptance pending:** production candidate includes exclusive runtime, read-only SQLite/AP identity admission, Node RPC gap/current-bot guard, physical Fluxer create/send/own edit/delete dispatcher, observation-only Gateway and exclusive Compose profile. Replaced two obsolete cross-process assertions that still expected all forum writes disabled; the updated module passes 4/4. Full Fluxer Node run: 115 pass, 2 SDK-import files cannot load; Fedify security subset: 6 pass, 1 missing-package import; TypeScript checks and pytest collection blocked by missing offline dependencies; real Docker/Fluxer not run. S19 is NOT PASS and issue #12 cannot be closed. See `docs/development/fluxer_145_final_verification.md`.
+
+## RR07 — Pydantic Settings source-hook compatibility (resolved locally, 2026-11-17)
+
+The RR06 one-pass dotenv loader uses private `_settings_init_sources()` from
+`pydantic-settings 2.14.1`, absent in the old declared floor 2.8.0. The
+Python dependency is now pinned exactly to 2.14.1 in `pyproject.toml`, with
+`uv.lock` metadata aligned; Docker's `pip install .` uses that requirement.
+Any dependency upgrade must repeat FIFO, precedence and multi-file-empty
+tests. Actual Docker build and S19 Fluxer acceptance remain external checks.

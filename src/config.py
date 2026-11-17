@@ -63,7 +63,12 @@ class Settings(BaseSettings):
 
     @classmethod
     def _settings_init_sources(cls, *args, **kwargs):
-        """Replace only the dotenv loader, never opening the same file twice."""
+        """Replace the dotenv loader exactly once on pinned Pydantic Settings 2.14.1.
+
+        The hook is private and absent in the formerly declared 2.8.0 floor.
+        Keep pyproject.toml/uv.lock at the verified version and retest before
+        changing it; Docker installs from pyproject rather than uv.lock.
+        """
         selected_file = kwargs.get('_env_file', ENV_FILE_SENTINEL)
         if selected_file == ENV_FILE_SENTINEL:
             selected_file = cls.model_config.get('env_file')

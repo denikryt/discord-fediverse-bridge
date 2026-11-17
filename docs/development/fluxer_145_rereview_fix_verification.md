@@ -53,3 +53,25 @@ an immediate validation failure, and terminate the child on timeout.
 
 This corrects the local RR04 behavior; it does not establish S19 live
 REST/Gateway or actual Docker acceptance. No Node or database schema changed.
+
+## RR07 — Pydantic Settings deployment version contract (2026-11-17)
+
+The next review confirmed that the RR06 one-pass `.env` source relies on
+`BaseSettings._settings_init_sources()`, which is not present in the previously
+advertised minimum `pydantic-settings 2.8.0`. At that version a later empty
+non-platform value in a sequence of `.env` files can overwrite a preceding
+nonempty value; a container built by `pip install .` could therefore behave
+differently from the uv-locked development environment.
+
+The Python project now requires **exactly `pydantic-settings==2.14.1`** in
+`pyproject.toml`, matching the already locked version in `uv.lock`. The Docker
+runtime resolves this exact requirement through `pip install .`; it does not
+use `uv.lock` as an installation source. This intentionally pins the private
+source-hook ABI until a public, single-pass alternative is implemented.
+Changing the pin requires repeating the settings source-order, case folding,
+FIFO, and multi-file-empty regression tests as well as the image build.
+
+The new dependency-contract test checks the Python package requirement,
+locked version and Docker install path. Existing positive/negative runtime
+settings tests continue to exercise selector validation and a one-shot FIFO.
+This change does **not** provide live Fluxer or Docker S19 acceptance.
