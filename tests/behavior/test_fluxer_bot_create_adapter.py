@@ -135,6 +135,18 @@ class FluxerBotCreateScenarios(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(len(self.provider.remote_threads), 1)
         self.assertEqual(self.provider.remote_threads[0]['content']['body'], 'safe text')
 
+    async def test_forum_create_uses_one_capability_snapshot(self):
+        """A physical forum create uses one coherent capability/tag snapshot per preflight."""
+        receipt = await self.create()
+        self.assertEqual(receipt.thread.external_thread_id, 'thread-9')
+        # A second capabilities read could report changed tags after the first
+        # flag check. The SDK boundary still revalidates just before its POST.
+        requests = [request for request in self.provider.requests
+                    if request['operation'] == 'capabilities'
+                    and request['args']['channel_id'] == 'forum-1']
+        self.assertEqual(len(requests), 1)
+        self.assertEqual(len(self.provider.remote_threads), 1)
+
     async def test_reserved_create_requires_valid_one_use_permit(self):
         """No bare fanout key or stolen permit authorizes another remote POST."""
         attempt = self.forum_attempt('fanout:v1:local:post:20:fluxer-test:7')

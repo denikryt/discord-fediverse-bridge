@@ -335,14 +335,17 @@ class FluxerAdapter:
             raise PlatformOperationError('unsupported', 'destination is not a verified Fluxer forum')
         if verified.external_guild_id is None:
             raise PlatformOperationError('forbidden', 'Fluxer channel guild not verified')
-        flags = await self.capabilities(verified)
         applied_tags: tuple[str, ...] = ()
         if is_forum:
-            if not flags.forum_posts:
+            # One fresh provider snapshot supplies both the forum-write flag and
+            # tag inventory. Node checks them again at SDK write admission.
+            tags = await self._call('capabilities', {'channel_id': verified.external_channel_id})
+            if (tags.get('channel_id') != verified.external_channel_id
+                or tags.get('guild_id') != verified.external_guild_id
+                or tags.get('forum_posts') is not True):
                 raise PlatformOperationError('unsupported', 'forum posts not verified on Fluxer build')
             # Required tags must be measured on this instance. A boolean forum
             # capability alone does not prove an untagged create will succeed.
-            tags = await self._call('capabilities', {'channel_id': verified.external_channel_id})
             if (tags.get('channel_id') != verified.external_channel_id
                 or tags.get('guild_id') != verified.external_guild_id
                 or tags.get('tag_requirements_verified') is not True
@@ -365,6 +368,10 @@ class FluxerAdapter:
                 # Moderated tags need independent moderator proof; no such grant
                 # can be inferred from ordinary SendMessages permissions.
                 raise PlatformOperationError('unsupported', 'Fluxer applied tag missing or restricted')
+        if not is_forum:
+            # Keep capability lookup for the ordinary channel-send boundary;
+            # the forum path already obtained its single checked snapshot.
+            await self.capabilities(verified)
         if not is_forum and action == 'send_message' and verified.kind not in ('forum', 'text', 'announcement'):
             raise PlatformOperationError('unsupported', 'message destination kind not verified')
         principal = AuthorRef(self._connector.key, self._bot_id, 'bot', 'Fluxer bridge')
