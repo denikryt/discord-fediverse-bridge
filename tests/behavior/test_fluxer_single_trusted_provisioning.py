@@ -272,6 +272,18 @@ class FluxerPreMigrationOwnership(unittest.TestCase):
         with self.assertRaisesRegex(RuntimeError, 'Discord-owned'):
             self._preflight()
         self.assertEqual(self.path.read_bytes(), before)
+        # The actual composition root must refuse this mode before opening a
+        # migrator or creating a new signing identity, not only at unit preflight.
+        from src.app import build_runtime
+        settings = self.config.model_copy(update={
+            'database_url': self.url,
+            'profile_media_root': str(self.root / 'media'),
+            'profile_media_lock_path': str(self.root / 'media.lock'),
+            'deployment_state_lock_path': str(self.root / 'deployment.lock'),
+        })
+        with self.assertRaisesRegex(RuntimeError, 'Discord-owned'):
+            build_runtime(settings)
+        self.assertEqual(self.path.read_bytes(), before)
 
     def test_bound_fluxer_refuses_legacy_discord_thread_group_ids(self) -> None:
         """Legacy starter ID without source connector blocks Fluxer admission."""
