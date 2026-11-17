@@ -260,15 +260,22 @@ class RemotePersonFollowService:
     async def dispatch_prepared(self, limit: int = 20) -> int:
         """Claim one prepared generation at a time and persist exact send outcomes."""
         completed = 0
-        for _ in range(limit):
+        attempted = 0
+        last_scanned_id = 0
+        while attempted < limit:
             token = uuid4().hex
             with self.database.immediate_session() as session:
+                # Advance across prepared rows without reselecting a blocked
+                # or proven-unsent Follow in the same pass. Only actual send
+                # attempts count against the dispatch budget.
                 row = session.scalar(select(RemotePersonFollow).where(
                     RemotePersonFollow.relationship_status == 'pending',
                     RemotePersonFollow.follow_dispatch_state == 'prepared',
+                    RemotePersonFollow.id > last_scanned_id,
                 ).order_by(RemotePersonFollow.id).limit(1))
                 if row is None:
                     break
+                last_scanned_id = row.id
                 user = session.get(User, row.user_id)
                 if user is None:
                     raise ValueError('persisted Follow has no local Person owner')
@@ -277,7 +284,7 @@ class RemotePersonFollowService:
                     # prepared identity for a future explicitly authorized
                     # attempt; it is not a network-ambiguous outcome.
                     row.last_error = 'federation policy denied outbound Follow'
-                    break
+                    continue
                 row.follow_dispatch_state = 'sending'
                 row.follow_claim_token = token
                 prepared = PreparedPersonFollow(
@@ -288,6 +295,7 @@ class RemotePersonFollowService:
                     follow_activity_id=row.follow_activity_id,
                 )
                 row_id = row.id
+            attempted += 1
             try:
                 await self.gateway.send_prepared_person_follow(prepared)
                 next_status, last_error = 'sent', None
@@ -306,8 +314,8 @@ class RemotePersonFollowService:
                     row.follow_dispatch_state = next_status
                     row.follow_claim_token = None
                     row.last_error = last_error
-            if next_status == 'prepared':
-                break
+            # A proved pre-network failure stays prepared under its original
+            # ID, but must not starve younger independent Follow generations.
         return completed
 
 

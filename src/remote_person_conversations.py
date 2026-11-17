@@ -199,7 +199,11 @@ class RemotePersonConversationRuntime:
             # original message is the placement in that destination.
             copies = session.scalars(select(RemotePersonPostDelivery).where(
                 RemotePersonPostDelivery.post_id == root.id,
-                RemotePersonPostDelivery.state == 'delivered',
+                # Reserve a mirror before the destination webhook root exists.
+                # The comment worker waits for that root and its Discord thread.
+                RemotePersonPostDelivery.state.in_((
+                    'pending', 'claimed', 'sending', 'uncertain', 'delivered',
+                )),
             )).all()
             for target in copies:
                 if (target.discord_thread_id == thread_id

@@ -30,6 +30,7 @@ from src.remote_person_comment_delivery import RemotePersonCommentDeliveryWorker
 from src.remote_person_conversations import RemotePersonConversationRuntime
 from src.fedify_gateway_client import ResolvedRemotePerson, RenderPersonalFeedResult
 from src.remote_person_inbound import PUBLIC, RemotePersonInboundService
+from src.remote_person_feeds import RemotePersonChannelService
 
 BOB = 'https://remote.example/users/bob'
 NOTE = 'https://remote.example/notes/1'
@@ -186,6 +187,19 @@ class RemotePersonComments(unittest.TestCase):
 
     def test_local_reply_uses_one_canonical_person_create_and_copy_specific_mirror(self):
         """A-origin User Actor Note is mirrored as bot in B, never republished."""
+        self._assert_local_reply_mirroring()
+
+    def test_local_mirror_waits_for_an_undelivered_webhook_root(self):
+        """A pending root in B retains A's reply until B is sent and threaded."""
+        self._assert_local_reply_mirroring(pending_root=True)
+
+    def test_unbinding_pending_root_suppresses_its_reserved_local_mirror(self):
+        """Last-link removal cancels old pending root and mirror in one transaction."""
+        self._assert_local_reply_mirroring(pending_root=True, unbind_before_delivery=True)
+
+    def _assert_local_reply_mirroring(self, *, pending_root=False,
+                                     unbind_before_delivery=False):
+        """Run canonical publish and native parent resolution across two copies."""
         self.deliver_roots()
         with self.db.immediate_session() as session:
             user = session.scalar(select(User))
@@ -240,6 +254,10 @@ class RemotePersonComments(unittest.TestCase):
             delayed = session.scalar(select(RemotePersonPostDelivery).where(
                 RemotePersonPostDelivery.discord_channel_id == 101))
             delayed.discord_thread_id = None
+            if pending_root:
+                # B's webhook POST is not yet sent at reply-reservation time.
+                delayed.state = 'pending'
+                delayed.discord_root_message_id = None
         original_thread = 80100
         message = SimpleNamespace(id=90222, guild=SimpleNamespace(id=1),
             channel=SimpleNamespace(id=original_thread, parent_id=100),
@@ -258,13 +276,61 @@ class RemotePersonComments(unittest.TestCase):
             self.assertIsNotNone(mirror.published_object_id)
             self.assertEqual(mirror.state, 'pending_thread')
             self.assertIsNone(mirror.destination_thread_id)
-        with self.db.immediate_session() as session:
-            delayed = session.scalar(select(RemotePersonPostDelivery).where(
-                RemotePersonPostDelivery.discord_channel_id == 101))
-            delayed.discord_thread_id = 80101
+        if unbind_before_delivery:
+            removal = RemotePersonChannelService(self.db).remove_channel(
+                discord_user_id='42', remote_actor_id=BOB,
+                discord_guild_id=1, discord_channel_id=101)
+            self.assertEqual(removal.status, 'removed')
+            with self.db.session() as session:
+                pending_copy = session.scalar(select(RemotePersonPostDelivery).where(
+                    RemotePersonPostDelivery.discord_channel_id == 101))
+                mirror = session.scalar(select(RemotePersonCommentPlacement).where(
+                    RemotePersonCommentPlacement.root_delivery_id == pending_copy.id))
+                self.assertEqual((pending_copy.state, mirror.state),
+                                 ('suppressed', 'suppressed'))
+            worker, edge = self.worker()
+            asyncio.run(worker.drain_once())
+            self.assertEqual(edge.calls, [])
+            return
+        if pending_root:
+            from src.remote_person_discord_worker import RemotePersonRootDeliveryWorker
+
+            class WebhookTransport:
+                """Create exactly one webhook root and public thread in B."""
+                def __init__(self):
+                    self.created = []
+                    self.threads = []
+                async def prepare(self, channel_id, *, original_webhook_id=None):
+                    """Return the incoming webhook installed in the target channel."""
+                    return SimpleNamespace(webhook_id=987)
+                async def create(self, prepared, root):
+                    """Return Discord's confirmed root message ID."""
+                    self.created.append(root.channel_id)
+                    return 80101
+                async def create_thread(self, channel_id, message_id, root):
+                    """Create a thread attached to the delivered webhook root."""
+                    self.threads.append((channel_id, message_id))
+                    return message_id
+                async def edit(self, prepared, message_id, root):
+                    """Permit existing delivered fixture roots to reconcile."""
+                    return None
+
+            webhook = WebhookTransport()
+            root_worker = RemotePersonRootDeliveryWorker(
+                database=self.db, bot=None, policy_service=Policy(), transport=webhook)
+            asyncio.run(root_worker.drain_once())
+            self.assertEqual(webhook.created, [101])
+            self.assertEqual(webhook.threads, [(101, 80101)])
+        else:
+            with self.db.immediate_session() as session:
+                delayed = session.scalar(select(RemotePersonPostDelivery).where(
+                    RemotePersonPostDelivery.discord_channel_id == 101))
+                delayed.discord_thread_id = 80101
         worker, edge = self.worker()
         asyncio.run(worker.drain_once())
         self.assertEqual(len(edge.calls), 1)
+        asyncio.run(worker.drain_once())
+        self.assertEqual(len(edge.calls), 1)  # no duplicate after the next drain
         self.assertEqual(edge.calls[0].channel_id, 101)
         self.assertIsNone(edge.calls[0].parent_message_id)
         # A remote reply to Alice's canonical Note references her original

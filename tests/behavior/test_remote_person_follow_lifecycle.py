@@ -111,6 +111,73 @@ class FollowLifecycleScenarios(unittest.TestCase):
         forged = event.model_copy(update={'actor_id': 'https://attacker.example/user'})
         self.assertEqual(asyncio.run(handle_follow_lifecycle(forged, runtime)).status, 'skipped')
 
+    def test_blocked_old_follow_does_not_starve_new_authorized_follow(self):
+        """A denied prepared Follow must not stop an unrelated queued sender."""
+        blocked = self.subscribe()
+        other_actor = 'https://other.example/actors/carol'
+        other_inbox = 'https://other.example/actors/carol/inbox'
+
+        async def resolve(identifier):
+            """Resolve a second actual remote Person for this guild."""
+            if identifier == '@carol@other.example':
+                return ResolvedRemotePerson(other_actor, other_inbox)
+            return ResolvedRemotePerson(ACTOR, INBOX)
+
+        self.gateway.resolve_remote_person = resolve
+        other = asyncio.run(self.service.follow(
+            discord_user_id='charlie', actor='@carol@other.example',
+            discord_guild_id=1, discord_channel_id=101,
+            target_channel_guild_id=1, channel_type='text',
+            caller_can_manage_guild=True, bot_permissions=self.flags,
+        ))
+        self.assertEqual(other.status, 'prepared')
+        deny_old = True
+
+        def decide(url):
+            """Apply a domain prohibition after both identities are reserved."""
+            return SimpleNamespace(allowed=not (deny_old and url in (ACTOR, INBOX)))
+
+        self.service.policy_service = SimpleNamespace(
+            is_discord_guild_allowed=lambda _guild: True,
+            federation_decision=decide,
+        )
+        # Even a one-send budget must progress past a denied, older row.
+        self.assertEqual(asyncio.run(self.service.dispatch_prepared(limit=1)), 1)
+        self.assertEqual([item.follow_activity_id for item in self.gateway.sends],
+                         [other.follow_activity_id])
+        self.assertEqual(self.status(blocked.follow_id)[1], 'prepared')
+        with self.db.session() as session:
+            original = session.get(RemotePersonFollow, blocked.follow_id)
+            self.assertEqual(original.follow_activity_id, blocked.follow_activity_id)
+            self.assertIn('policy denied', original.last_error)
+        self.assertEqual(asyncio.run(self.service.dispatch_prepared()), 0)
+        deny_old = False
+        self.assertEqual(asyncio.run(self.service.dispatch_prepared()), 1)
+        self.assertEqual([item.follow_activity_id for item in self.gateway.sends],
+                         [other.follow_activity_id, blocked.follow_activity_id])
+        self.assertEqual(self.status(blocked.follow_id)[1], 'sent')
+        self.assertEqual(asyncio.run(self.service.dispatch_prepared()), 0)
+
+    def test_proved_unsent_follow_does_not_block_another_sender(self):
+        """A gateway preflight failure remains retryable without starving peers."""
+        first = self.subscribe()
+        second = self.subscribe('charlie', 101)
+
+        def before_send(request):
+            """Fail only the first Person before gateway network submission."""
+            if request.follow_activity_id == first.follow_activity_id:
+                raise FollowNotDispatchedError('gateway rejected before sending')
+
+        self.gateway.on_send = before_send
+        self.assertEqual(asyncio.run(self.service.dispatch_prepared(limit=2)), 1)
+        self.assertEqual(self.status(first.follow_id)[1], 'prepared')
+        self.assertEqual(self.status(second.follow_id)[1], 'sent')
+        self.assertEqual([x.follow_activity_id for x in self.gateway.sends],
+                         [first.follow_activity_id, second.follow_activity_id])
+        self.gateway.on_send = None
+        self.assertEqual(asyncio.run(self.service.dispatch_prepared(limit=1)), 1)
+        self.assertEqual(self.gateway.sends[-1].follow_activity_id, first.follow_activity_id)
+
     def test_fast_accept_during_sending_survives_sender_completion(self):
         """A legitimate Accept wins over the subsequent HTTP completion write."""
         pending = self.subscribe()
