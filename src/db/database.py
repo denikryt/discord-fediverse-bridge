@@ -35,7 +35,6 @@ from .repositories import (
     RemoteSubscriberRepository,
     RemoteSubscriptionRepository,
     RemotePersonFollowRepository,
-    RemotePersonFeedRepository,
     UserRepository,
     UserProfileRepository,
     UserActorFollowerRepository,
@@ -79,7 +78,6 @@ class Database:
         self.local_community_relay = LocalCommunityRelayRepository(self.session, self.immediate_session)
         self.remote_subscriptions = RemoteSubscriptionRepository(self.session)
         self.remote_person_follows = RemotePersonFollowRepository(self.session)
-        self.remote_person_feeds = RemotePersonFeedRepository(self.session)
         self.bridge_actor_follows = BridgeActorFollowRepository(self.session)
         self.bridge_policy_entries = BridgePolicyEntryRepository(self.session)
         self.event_receipts = EventReceiptRepository(self.session)

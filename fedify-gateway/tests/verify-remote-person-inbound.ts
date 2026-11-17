@@ -42,6 +42,18 @@ async function main(): Promise<void> {
     object: note({ to: [`${ACTOR}/followers`] }),
   })), null);
 
+  // Roots require Public in the explicit `to` of BOTH Note and Create;
+  // public-only `cc` is accepted for replies, not root broadcasts.
+  assert.equal(normalizeDirectRemotePersonEventFromJson(activity("Create", {
+    to: [], cc: [PUBLIC], object: note({ to: [], cc: [PUBLIC] }),
+  })), null);
+  // Delete can reference the original object by IRI without a nested Note.
+  const deletion = normalizeDirectRemotePersonEventFromJson({
+    type: "Delete", id: `${ACTOR}/activities/delete/7`, actor: ACTOR, object: NOTE,
+  });
+  assert.equal(deletion?.event_type, "remote.person.deleted");
+  assert.equal(deletion?.object.ap_id, NOTE);
+
   // Group targeting remains the NodeBB/Lemmy path; wrapping does not prove
   // that the inner Person independently signed the Create.
   const group = "https://nodebb.example/category/17";

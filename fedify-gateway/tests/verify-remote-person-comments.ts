@@ -29,3 +29,21 @@ assert.equal(normalizeDirectRemotePersonCommentFromJson({
 assert.equal(normalizeDirectRemotePersonCommentFromJson({
   ...signed, object: { ...signed.object, inReplyTo: null },
 }), null);
+
+// A public reply may address recipients through cc, unlike a root Note.
+const ccOnly = normalizeDirectRemotePersonCommentFromJson({
+  ...signed, to: [], cc: ['as:Public'],
+  object: { ...signed.object, to: [], cc: ['as:Public'] },
+});
+assert.equal(ccOnly?.event_type, 'remote.person.comment.created');
+assert.deepEqual(ccOnly?.source_activity_json.cc, [publicAudience]);
+const deleted = normalizeDirectRemotePersonCommentFromJson({
+  type: 'Delete', id: 'https://example.org/delete/1',
+  actor: signed.actor, object: signed.object.id,
+});
+assert.equal(deleted?.event_type, 'remote.person.comment.deleted');
+assert.equal(deleted?.object.ap_id, signed.object.id);
+assert.equal(deleted?.object.parent_ap_id, null);
+assert.equal(normalizeDirectRemotePersonCommentFromJson({
+  ...signed, object: { ...signed.object, audience: 'https://example.org/category/17' },
+}), null);

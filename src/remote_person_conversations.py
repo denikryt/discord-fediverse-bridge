@@ -19,7 +19,10 @@ from .content_sync.persistence import inspect_publish_artifacts, persist_publish
 from .fedify_gateway_client import RenderPersonalFeedRequest
 from .models import (InboundConversationObject, MessageMapping, PublishedActivityObject,
                      RemotePersonCommentPlacement, RemotePersonPost, RemotePersonPostDelivery)
-from .remote_person_feeds import RemotePersonChannelService
+from .remote_person_feeds import (
+    RemotePersonChannelService, DISPATCHABLE_REMOTE_ROOT_STATES,
+    eligible_remote_person_copies,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -197,20 +200,15 @@ class RemotePersonConversationRuntime:
                 raise RuntimeError('canonical remote-Person reply persistence incomplete')
             # A mirror is never created in its original thread; the user's
             # original message is the placement in that destination.
-            copies = session.scalars(select(RemotePersonPostDelivery).where(
-                RemotePersonPostDelivery.post_id == root.id,
-                # Reserve a mirror before the destination webhook root exists.
-                # The comment worker waits for that root and its Discord thread.
-                RemotePersonPostDelivery.state.in_((
-                    'pending', 'claimed', 'sending', 'uncertain', 'delivered',
-                )),
-            )).all()
+            copies = eligible_remote_person_copies(
+                session, root=root,
+                guild_allowed=self.policy_service.is_discord_guild_allowed,
+            )
             for target in copies:
+                # The source user's own Discord message is already the A copy.
+                # A B copy must remain reservable while its webhook root is pending.
                 if (target.discord_thread_id == thread_id
-                        or not self.policy_service.is_discord_guild_allowed(target.discord_guild_id)
-                        or not RemotePersonChannelService._active_owner_exists(
-                            session, root.remote_actor_id,
-                            target.discord_guild_id, target.discord_channel_id)):
+                        or target.state not in DISPATCHABLE_REMOTE_ROOT_STATES):
                     continue
                 duplicate = session.scalar(select(RemotePersonCommentPlacement.id).where(
                     RemotePersonCommentPlacement.root_delivery_id == target.id,

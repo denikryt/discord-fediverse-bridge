@@ -8,6 +8,7 @@ channel, and bot permission facts to the serialized database boundary.
 from __future__ import annotations
 
 from dataclasses import dataclass
+from collections.abc import Callable
 
 from sqlalchemy import select
 from sqlalchemy.exc import IntegrityError
@@ -36,6 +37,45 @@ class RemotePersonChannelResult:
     assignment_id: int | None = None
     conflict_kind: str | None = None
     missing_permissions: tuple[str, ...] = ()
+
+
+# A canonical reply can be retained when an accepted assignment exists, even
+# if the root's Discord placement is not currently eligible for a new send.
+DISPATCHABLE_REMOTE_ROOT_STATES = frozenset({
+    'pending', 'claimed', 'sending', 'uncertain', 'delivered',
+})
+
+
+def eligible_remote_person_copies(
+    session: Session, *, root: RemotePersonPost,
+    guild_allowed: Callable[[int], bool],
+) -> list[RemotePersonPostDelivery]:
+    """Read accepted root destinations once in the caller's writer transaction.
+
+    Retain every copy with an accepted user-owned channel assignment and
+    allowed guild, regardless of its Discord delivery state. Callers filter
+    dispatchable root states separately; workers must recheck permission and
+    assignment at the final network-send boundary.
+    """
+    assignments = set(session.execute(select(
+        RemotePersonChannelAssignment.discord_guild_id,
+        RemotePersonChannelAssignment.discord_channel_id,
+    ).join(
+        RemotePersonFollow,
+        RemotePersonFollow.id == RemotePersonChannelAssignment.follow_id,
+    ).where(
+        RemotePersonFollow.remote_actor_id == root.remote_actor_id,
+        RemotePersonFollow.relationship_status == 'accepted',
+    )).all())
+    permitted_guilds = {guild for guild in {g for g, _ in assignments}
+                        if guild_allowed(guild)}
+    copies = session.scalars(select(RemotePersonPostDelivery).where(
+        RemotePersonPostDelivery.post_id == root.id,
+    )).all()
+    return [copy for copy in copies if (
+        copy.discord_guild_id in permitted_guilds
+        and (copy.discord_guild_id, copy.discord_channel_id) in assignments
+    )]
 
 
 class RemotePersonChannelService:

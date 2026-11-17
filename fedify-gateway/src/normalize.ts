@@ -56,42 +56,68 @@ export async function normalizeCreateActivity(
   return null;
 }
 
+/** Shared syntactic proof for a direct Person Note or object-ID Delete.
+ *
+ * A caller still decides whether the verified payload is a root or a reply;
+ * these routes have intentionally different public-addressing contracts.
+ */
+interface DirectPersonEnvelope {
+  source: Record<string, unknown>;
+  type: "Create" | "Update" | "Delete";
+  actorId: string;
+  activityId: string;
+  object: Record<string, unknown> | null;
+  objectId: string;
+  occurredAt: string;
+}
+
+function parseDirectPersonEnvelope(source: Record<string, unknown>): DirectPersonEnvelope | null {
+  /** Canonicalize public IDs before the serialized source is sent to Python. */
+  const activity = canonicalizePublicRecipients(source);
+  const type = activity.type;
+  if (type !== "Create" && type !== "Update" && type !== "Delete") return null;
+  const actorId = asCanonicalActorId(activity.actor);
+  const activityId = asString(activity.id);
+  const object = asRecord(activity.object);
+  const objectId = object == null ? asString(activity.object) : asString(object.id);
+  if (actorId == null || activityId == null || objectId == null) return null;
+  if (type !== "Delete" && (
+    object?.type !== "Note"
+    || asCanonicalActorId(object.attributedTo) !== actorId
+    || tryResolveCommunityActorIdFromJson(object) != null
+  )) return null;
+  return {
+    source: activity, type, actorId, activityId, object, objectId,
+    occurredAt: asString(object?.updated) ?? asString(object?.published)
+      ?? asString(activity.published) ?? new Date().toISOString(),
+  };
+}
+
 /** Normalize only a verified direct Person root, never a Group Announce. */
 export function normalizeDirectRemotePersonEventFromJson(
   activity: Record<string, unknown>,
 ): RemotePersonContentEvent | null {
-  activity = canonicalizePublicRecipients(activity);
-  const type = activity.type;
-  if (type !== "Create" && type !== "Update" && type !== "Delete") return null;
-  const actor = asCanonicalActorId(activity.actor);
-  const id = asString(activity.id);
-  if (actor == null || id == null) return null;
-  const object = asRecord(activity.object);
-  const apId = object == null ? asString(activity.object) : asString(object.id);
-  if (apId == null) return null;
-  // Delete has no embedded Note and requires canonical Python ownership proof.
-  // Existing Group/personal Delete paths are checked before this fallback.
-  if (type !== "Delete") {
-    if (object?.type !== "Note" || asCanonicalActorId(object.attributedTo) !== actor
-        || asString(object.inReplyTo) != null
-        || tryResolveCommunityActorIdFromJson(object) != null
-        || !normalizeStringArray(object.to).includes("https://www.w3.org/ns/activitystreams#Public")
-        || !normalizeStringArray(activity.to).includes("https://www.w3.org/ns/activitystreams#Public")) return null;
-  }
-  const occurred = asString(object?.updated) ?? asString(object?.published)
-    ?? asString(activity.published) ?? new Date().toISOString();
+  const parsed = parseDirectPersonEnvelope(activity);
+  if (parsed == null) return null;
+  const { source, type, actorId, activityId, object, objectId, occurredAt } = parsed;
+  // Roots must be public in `to` on both levels, and cannot reply to a parent.
+  if (type !== "Delete" && (
+    asString(object?.inReplyTo) != null
+    || !normalizeStringArray(object?.to).includes(ACTIVITYSTREAMS_PUBLIC)
+    || !normalizeStringArray(source.to).includes(ACTIVITYSTREAMS_PUBLIC)
+  )) return null;
   return {
     event_type: type === "Create" ? "remote.person.created"
       : type === "Update" ? "remote.person.updated" : "remote.person.deleted",
-    delivery_id: id,
-    occurred_at: occurred,
-    actor_id: actor,
-    verified_sender_actor_id: actor,
-    source_activity_id: id,
-    source_activity_json: activity,
+    delivery_id: activityId,
+    occurred_at: occurredAt,
+    actor_id: actorId,
+    verified_sender_actor_id: actorId,
+    source_activity_id: activityId,
+    source_activity_json: source,
     object: {
-      ap_id: apId,
-      author_name: asString(object?.name) ?? lastPathSegment(actor),
+      ap_id: objectId,
+      author_name: asString(object?.name) ?? lastPathSegment(actorId),
       avatar_url: null,
       body_markdown: object == null ? null : resolveMarkdownBodyFromJson(object),
       published_at: asString(object?.published),
@@ -103,34 +129,29 @@ export function normalizeDirectRemotePersonEventFromJson(
 export function normalizeDirectRemotePersonCommentFromJson(
   activity: Record<string, unknown>,
 ): RemotePersonCommentEvent | null {
-  activity = canonicalizePublicRecipients(activity);
-  const type = activity.type;
-  if (type !== "Create" && type !== "Update" && type !== "Delete") return null;
-  const actor = asCanonicalActorId(activity.actor);
-  const id = asString(activity.id);
-  const object = asRecord(activity.object);
-  const apId = object == null ? asString(activity.object) : asString(object.id);
-  if (actor == null || id == null || apId == null) return null;
-  if (type !== "Delete") {
-    if (object?.type !== "Note" || asCanonicalActorId(object.attributedTo) !== actor
-      || asString(object.inReplyTo) == null || tryResolveCommunityActorIdFromJson(object) != null
-      || ![...normalizeStringArray(object.to), ...normalizeStringArray(object.cc)].includes("https://www.w3.org/ns/activitystreams#Public")
-      || ![...normalizeStringArray(activity.to), ...normalizeStringArray(activity.cc)].includes("https://www.w3.org/ns/activitystreams#Public")) return null;
-  }
+  const parsed = parseDirectPersonEnvelope(activity);
+  if (parsed == null) return null;
+  const { source, type, actorId, activityId, object, objectId, occurredAt } = parsed;
+  // Replies need an immediate AP parent, but Public may be in either to or cc.
+  // A Delete may contain only the object IRI; ownership is checked in Python.
+  if (type !== "Delete" && (
+    asString(object?.inReplyTo) == null
+    || ![...normalizeStringArray(object?.to), ...normalizeStringArray(object?.cc)].includes(ACTIVITYSTREAMS_PUBLIC)
+    || ![...normalizeStringArray(source.to), ...normalizeStringArray(source.cc)].includes(ACTIVITYSTREAMS_PUBLIC)
+  )) return null;
   return {
     event_type: type === "Create" ? "remote.person.comment.created"
       : type === "Update" ? "remote.person.comment.updated" : "remote.person.comment.deleted",
-    delivery_id: id,
-    occurred_at: asString(object?.updated) ?? asString(object?.published)
-      ?? asString(activity.published) ?? new Date().toISOString(),
-    actor_id: actor,
-    verified_sender_actor_id: actor,
-    source_activity_id: id,
-    source_activity_json: activity,
+    delivery_id: activityId,
+    occurred_at: occurredAt,
+    actor_id: actorId,
+    verified_sender_actor_id: actorId,
+    source_activity_id: activityId,
+    source_activity_json: source,
     object: {
-      ap_id: apId,
+      ap_id: objectId,
       parent_ap_id: asString(object?.inReplyTo),
-      author_name: asString(object?.name) ?? lastPathSegment(actor),
+      author_name: asString(object?.name) ?? lastPathSegment(actorId),
       body_markdown: object == null ? null : resolveMarkdownBodyFromJson(object),
       published_at: asString(object?.published),
     },

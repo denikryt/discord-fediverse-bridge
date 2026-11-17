@@ -492,6 +492,45 @@ class RemotePersonComments(unittest.TestCase):
             self.assertEqual(len(session.scalars(select(InboundConversationObject)).all()), 1)
             self.assertEqual(len(session.scalars(select(RemotePersonCommentPlacement)).all()), 2)
 
+    def test_canonical_reply_survives_unavailable_copy_without_new_placement(self):
+        """Accepted destinations retain AP ancestry even when no root can dispatch."""
+        with self.db.immediate_session() as session:
+            for copy in session.scalars(select(RemotePersonPostDelivery)):
+                copy.state = 'failed'
+        first = self.comments.reserve(self.event())
+        self.assertEqual((first.status, first.targets), ('reserved', 0))
+        with self.db.session() as session:
+            self.assertEqual(len(session.scalars(select(InboundConversationObject)).all()), 1)
+            self.assertEqual(len(session.scalars(select(RemotePersonCommentPlacement)).all()), 0)
+
+        # A new reply may be queued for an accepted channel once its root can
+        # be dispatched, without replaying older work in a failed destination.
+        with self.db.immediate_session() as session:
+            copy = session.scalar(select(RemotePersonPostDelivery).where(
+                RemotePersonPostDelivery.discord_channel_id == 101))
+            copy.state = 'pending'
+        next_reply = self.comments.reserve(self.event(
+            parent=COMMENT, object_id='https://other.example/notes/later'))
+        self.assertEqual((next_reply.status, next_reply.targets), ('reserved', 1))
+        with self.db.session() as session:
+            placements = session.scalars(select(RemotePersonCommentPlacement)).all()
+            self.assertEqual(len(placements), 1)
+            self.assertEqual(session.get(RemotePersonPostDelivery, placements[0].root_delivery_id).discord_channel_id, 101)
+            self.assertEqual(placements[0].state, 'pending_thread')
+
+    def test_denied_destination_keeps_other_accepted_copy(self):
+        """Guild policy rejects only the forbidden target of a signed reply."""
+        result = self.comments.reserve(self.event(), guild_allowed=lambda guild: guild == 1)
+        self.assertEqual(result.targets, 2)
+        # A denied guild for this transaction must not reserve even an AP row.
+        another = self.comments.reserve(self.event(
+            object_id='https://other.example/notes/denied'),
+            guild_allowed=lambda guild: False)
+        self.assertEqual(another.status, 'no_accepted_assignment')
+        with self.db.session() as session:
+            ids = {row.object_id for row in session.scalars(select(InboundConversationObject))}
+            self.assertNotIn('https://other.example/notes/denied', ids)
+
     def test_child_of_inbound_parent_keeps_root_identity(self):
         """Nested remote replies reuse retained AP ancestry and root copies."""
         self.comments.reserve(self.event())

@@ -18,7 +18,9 @@ from .models import (
     RemotePersonPostDelivery, RemotePersonCommentPlacement,
     RemotePersonFollow, RemotePersonChannelAssignment, utcnow,
 )
-from .remote_person_feeds import RemotePersonChannelService
+from .remote_person_feeds import (
+    DISPATCHABLE_REMOTE_ROOT_STATES, eligible_remote_person_copies,
+)
 from .remote_person_inbound import PUBLIC, _fingerprint, _utc
 
 
@@ -136,17 +138,11 @@ class RemotePersonCommentService:
 
     @staticmethod
     def _reserve_placements(session: object, comment: InboundConversationObject,
-                            root: RemotePersonPost, guild_allowed: object) -> int:
-        """Create a destination placement once, even while its thread is pending."""
-        copies = session.scalars(select(RemotePersonPostDelivery).where(
-            RemotePersonPostDelivery.post_id == root.id,
-            RemotePersonPostDelivery.state.in_(('pending', 'claimed', 'sending', 'uncertain', 'delivered')),
-        )).all()
+                            eligible_copies: list[RemotePersonPostDelivery]) -> int:
+        """Reserve only dispatchable copies from the transaction's admission snapshot."""
         count = 0
-        for copy in copies:
-            if (not guild_allowed(copy.discord_guild_id)
-                    or not RemotePersonChannelService._active_owner_exists(
-                        session, root.remote_actor_id, copy.discord_guild_id, copy.discord_channel_id)):
+        for copy in eligible_copies:
+            if copy.state not in DISPATCHABLE_REMOTE_ROOT_STATES:
                 continue
             existing = session.scalar(select(RemotePersonCommentPlacement.id).where(
                 RemotePersonCommentPlacement.root_delivery_id == copy.id,
@@ -163,12 +159,19 @@ class RemotePersonCommentService:
 
     @classmethod
     def restore_deferred_descendants(cls, session: object, *, root: RemotePersonPost,
-                                     parent_object_id: str, guild_allowed: object) -> int:
+                                     parent_object_id: str, guild_allowed: object,
+                                     eligible_copies: list[RemotePersonPostDelivery] | None = None) -> int:
         """Resolve signed children stored before their canonical parent was known.
 
         Each object is visited once and retains its originally signed parent;
         the resulting Discord placements remain scoped to this root's copies.
         """
+        # Reuse the same accepted-destination view for every descendant in this
+        # transaction; child order must not change eligibility mid-recovery.
+        if eligible_copies is None:
+            eligible_copies = eligible_remote_person_copies(
+                session, root=root, guild_allowed=guild_allowed,
+            )
         pending = [parent_object_id]
         visited = {parent_object_id}
         total = 0
@@ -184,7 +187,7 @@ class RemotePersonCommentService:
                 visited.add(child.object_id)
                 child.conversation_root_object_id = root.object_id
                 if child.deleted_at is None:
-                    total += cls._reserve_placements(session, child, root, guild_allowed)
+                    total += cls._reserve_placements(session, child, eligible_copies)
                 pending.append(child.object_id)
         return total
 
@@ -282,12 +285,12 @@ class RemotePersonCommentService:
             root, root_id = resolved
             if root.deleted_at is not None:
                 return RemoteCommentReservation('root_deleted')
-            # A canonical parent alone does not grant a new destination.
-            if not any(guild_allowed(copy.discord_guild_id)
-                       and RemotePersonChannelService._active_owner_exists(
-                           session, root.remote_actor_id, copy.discord_guild_id, copy.discord_channel_id)
-                       for copy in session.scalars(select(RemotePersonPostDelivery).where(
-                           RemotePersonPostDelivery.post_id == root.id))):
+            # Admission may retain AP ancestry even when the root's Discord
+            # copies are failed; only dispatchable states receive new jobs.
+            eligible_copies = eligible_remote_person_copies(
+                session, root=root, guild_allowed=guild_allowed,
+            )
+            if not eligible_copies:
                 return RemoteCommentReservation('no_accepted_assignment')
             comment = InboundConversationObject(
                 object_id=event.object.ap_id,
@@ -305,8 +308,9 @@ class RemotePersonCommentService:
             )
             session.add(comment)
             session.flush()
-            targets = self._reserve_placements(session, comment, root, guild_allowed)
+            targets = self._reserve_placements(session, comment, eligible_copies)
             targets += self.restore_deferred_descendants(
-                session, root=root, parent_object_id=comment.object_id, guild_allowed=guild_allowed,
+                session, root=root, parent_object_id=comment.object_id,
+                guild_allowed=guild_allowed, eligible_copies=eligible_copies,
             )
             return RemoteCommentReservation('reserved', comment.id, targets)
