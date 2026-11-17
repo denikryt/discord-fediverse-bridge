@@ -410,6 +410,60 @@ class FluxerPreMigrationOwnership(unittest.TestCase):
             self._preflight()
         self.assertEqual(self.path.read_bytes(), before)
 
+    def test_bound_fluxer_refuses_legacy_discord_guild_projections(self) -> None:
+        """The shared discord_*_id classifier rejects AP rows with Discord provenance."""
+        from sqlalchemy import text
+
+        db = self._new_v1()
+        try:
+            with db.session() as session:
+                PlatformSurfaceRepository.admit_single_trusted_fluxer(
+                    session, connector_key='fx-one', instance_origin='https://one.test',
+                )
+        finally:
+            db.close()
+        for table in ('message_mappings', 'published_activity_objects'):
+            with self.subTest(table=table):
+                db = Database(self.url)
+                try:
+                    with db.session() as session:
+                        if table == 'message_mappings':
+                            session.execute(text(
+                                "INSERT INTO message_mappings "
+                                "(source_platform,source_id,activity_id,object_id,actor_url,"
+                                "publication_context,community_actor_url,discord_guild_id,created_at) "
+                                "VALUES ('fluxer','src-1','https://ap.test/a/1',"
+                                "'https://ap.test/o/1','https://ap.test/actors/1','community',"
+                                "'https://ap.test/groups/1',41,CURRENT_TIMESTAMP)"
+                            ))
+                        else:
+                            session.execute(text(
+                                "INSERT INTO published_activity_objects "
+                                "(actor_username,actor_url,publication_context,community_actor_url,"
+                                "activity_id,object_id,kind,body_markdown,discord_guild_id,"
+                                "content_revision,desired_kind,discord_reconciliation_needed,"
+                                "discord_reconciliation_attempt_count,published_at,created_at) "
+                                "VALUES ('alice','https://ap.test/actors/alice','community',"
+                                "'https://ap.test/groups/1','https://ap.test/a/1',"
+                                "'https://ap.test/o/1','Note','body',41,1,'none',0,0,"
+                                "CURRENT_TIMESTAMP,CURRENT_TIMESTAMP)"
+                            ))
+                    with db.engine.connect() as connection:
+                        self.assertEqual(connection.exec_driver_sql('PRAGMA foreign_key_check').all(), [])
+                finally:
+                    db.close()
+                before = self.path.read_bytes()
+                with self.assertRaisesRegex(RuntimeError, 'Discord-owned'):
+                    self._preflight()
+                self.assertEqual(self.path.read_bytes(), before)
+                db = Database(self.url)
+                try:
+                    with db.session() as session:
+                        session.execute(text(f'DELETE FROM "{table}"'))
+                finally:
+                    db.close()
+        self._preflight()  # The prior refusal must not poison valid Fluxer startup.
+
     def test_bound_fluxer_refuses_discord_authored_object_without_surface(self) -> None:
         """An authored object's direct source FK proves ownership without a surface."""
         db = self._new_v1()

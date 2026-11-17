@@ -132,14 +132,8 @@ def preflight_instance_mode(
                 for table in discord_tables:
                     if connection.exec_driver_sql(f'SELECT 1 FROM "{table}" LIMIT 1').first():
                         raise RuntimeError("Fluxer mode refuses Discord-owned domain rows")
-                if connection.exec_driver_sql(
-                    "SELECT 1 FROM platform_channel_surfaces AS s "
-                    "JOIN platform_connectors AS c ON c.id=s.connector_id "
-                    "WHERE c.connector_key='discord-primary' LIMIT 1"
-                ).first():
-                    raise RuntimeError("Fluxer mode refuses Discord-owned channel surfaces")
-                # A surface is optional on older source rows. Inspect every
-                # direct connector FK (source and physical copy) rather than
+                # Inspect every direct connector FK (including channel surfaces,
+                # source and physical copies) rather than
                 # assuming a non-NULL surface proves the origin. The v1 schema
                 # has already been validated; NULL legacy FKs are not evidence
                 # of Discord ownership and must remain allowed for AP data.
@@ -161,12 +155,16 @@ def preflight_instance_mode(
                             (connector_key,),
                         ).first()
                         if foreign_source:
+                            # Keep the established surface-specific diagnostic
+                            # while checking its FK through this single path.
+                            if table == "platform_channel_surfaces":
+                                raise RuntimeError("Fluxer mode refuses Discord-owned channel surfaces")
                             raise RuntimeError(
                                 f"Fluxer mode refuses Discord-owned {table} connector rows"
                             )
-                # Temporary Discord integer projections must remain NULL in
-                # Fluxer-owned physical copies. A populated Discord ID is
-                # independent evidence even when the direct FK says Fluxer.
+                # The same projection pass covers every discord_*_id column,
+                # including guild provenance on canonical message/activity rows.
+                # A populated legacy Discord ID is evidence even with Fluxer FKs.
                 for table in sorted(names):
                     columns = connection.exec_driver_sql(
                         f'PRAGMA table_info("{table}")'
@@ -208,14 +206,6 @@ def preflight_instance_mode(
                     "SELECT 1 FROM message_mappings WHERE source_platform='discord' LIMIT 1"
                 ).first():
                     raise RuntimeError("Fluxer mode refuses Discord-owned message sources")
-                # These legacy fields can carry direct Discord authorship even
-                # without a connector FK. Ignore NULL projections on Fluxer
-                # copies; a populated Discord guild ID is affirmative provenance.
-                for table in ("message_mappings", "published_activity_objects"):
-                    if connection.exec_driver_sql(
-                        f'SELECT 1 FROM "{table}" WHERE discord_guild_id IS NOT NULL LIMIT 1'
-                    ).first():
-                        raise RuntimeError(f"Fluxer mode refuses Discord-owned {table} authorship")
                 if connection.exec_driver_sql(
                     "SELECT 1 FROM guild_invite_publications LIMIT 1"
                 ).first():

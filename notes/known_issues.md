@@ -1,3 +1,12 @@
+## Fluxer-only simplicity review (2026-11-17)
+
+- Forum Create uses one fresh Python capability/tag snapshot per preflight;
+  Node continues its independent SDK-side authorization and metadata checks.
+- SQLite Fluxer admission uses existing connector-FK and Discord-projection
+  scans instead of duplicate surface/guild queries. Both canonical AP tables
+  remain guarded against Discord guild provenance. Local targeted suite: 61 PASS.
+- S19 live Fluxer and Compose acceptance remains open.
+
 ## Fluxer-only transport follow-up (2026-11-17)
 
 - Forum Create and text/announcement channel sends now carry the live channel
