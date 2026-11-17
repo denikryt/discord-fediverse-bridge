@@ -1,3 +1,15 @@
+## Fluxer-only edge re-review (2026-11-17)
+
+- Thread reply sends now carry the fresh verified guild identity to the Node RPC,
+  including when the caller's `ThreadRef` has no guild hint. An explicitly
+  conflicting guild is refused; cross-process nested replies are verified.
+- Python/Node Fluxer instance origins now require ASCII hostnames; valid IDNs
+  must be supplied as their A-labels. Unicode input is refused before SDK/DB.
+- Private RPC bearers require at least eight visible, non-space ASCII bytes
+  at Python settings/RPC and Node startup/RPC boundaries. No raw token is logged.
+- S19 remains open: real Fluxer REST/Gateway and Docker deployments still need
+  operator-provided acceptance and full dependency-backed suites.
+
 ## Full re-verification D1–D4 (2026-11-17)
 
 - D1 fixed locally: `ThreadRef` send authorization is tied to the physical

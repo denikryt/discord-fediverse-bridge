@@ -143,6 +143,12 @@ container mount/environment variable. Do not put the bot token in `.env`,
 legacy JSON connector configuration is rejected. Set restrictive host
 permissions on the token file and do not add it to version control. The IPC
 bearer is separate from the bot credential; assign a long random bearer.
+Both `FLUXER_ORIGIN` and its JSON counterpart must use an ASCII DNS name;
+write internationalized hostnames as explicit **punycode A-labels** (for
+example `https://xn--fa-hia.test`), not Unicode or a trailing DNS root dot.
+Both private bearer values must match exactly and contain at least eight
+printable ASCII characters (no spaces, controls or Unicode), suitable for an
+HTTP Authorization header. Invalid values fail configuration before startup.
 Set optional exact forum tag selections in the connector's
 `"forum_applied_tags"` map only when confirmed on the actual server.
 

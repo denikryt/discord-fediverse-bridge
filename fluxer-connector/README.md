@@ -166,6 +166,12 @@ inside a real Docker Compose runtime. The Node process requires
 identity and private shared-namespace loopback RPC/ingress endpoints. HTTP/WS
 is restricted to explicitly opted-in loopback-only development. The shared
 private HTTP bearer is a separate credential, not the SDK bot token.
+The trusted instance origin must be supplied as an ASCII hostname, with an
+explicit A-label for an IDN (`xn--...`), rather than a Unicode hostname;
+Python's IDNA codec and Node's WHATWG URL algorithm can otherwise disagree.
+Both sides reject a trailing DNS dot and an HTTP bearer shorter than eight
+printable non-space ASCII characters. Direct RPC owners enforce the same
+header constraint even if a caller bypasses the normal entrypoint.
 
 ## Fluxer bot message edits/deletes (local SDK-edge verification only)
 
