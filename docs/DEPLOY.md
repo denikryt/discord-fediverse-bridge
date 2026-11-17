@@ -83,7 +83,10 @@ The public service should now be available at the URL configured in `PUBLIC_BASE
 ## Fluxer trusted-instance opt-in (not yet approved for production writes)
 
 The default Compose project is Discord-only (`BRIDGE_PLATFORM=discord` and no
-profiles). To run Discord and Fluxer side by side, use **two distinct Compose
+profiles). An unset `BRIDGE_PLATFORM` selects Discord for compatibility; an
+explicitly empty value is invalid and prevents startup. Process environment
+values override `.env`, and an explicit Settings constructor value overrides
+both. To run Discord and Fluxer side by side, use **two distinct Compose
 projects** with separate domains/ActivityPub keys, SQLite data volumes,
 published ports, bot tokens, backup directories and environment files.
 Do not switch an already initialized Discord database to Fluxer: startup

@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import asyncio
 import hashlib
+import os
 import json
 import signal
 import socket
@@ -82,6 +83,63 @@ class ExclusiveConfigurationContracts(unittest.TestCase):
             with self.subTest(values=list(values)):
                 with self.assertRaises(ValueError):
                     Settings.model_validate({**common, **values})
+
+
+class SettingsPlatformSourceContracts(unittest.TestCase):
+    """Verify platform selection uses the same precedence as other Settings fields."""
+
+    def _env(self, **extra: str) -> dict[str, str]:
+        """Return an isolated Discord deployment with caller-controlled names."""
+        return {
+            'PUBLIC_BASE_URL': 'https://bridge.test',
+            'FEDIFY_SHARED_SECRET': 'secret',
+            'DISCORD_TOKEN': 'discord-test',
+            'BRIDGE_SUPER_ADMIN_USER_IDS': '42',
+            **extra,
+        }
+
+    def test_absent_defaults_but_case_insensitive_empty_env_is_invalid(self) -> None:
+        """Empty env selectors cannot fall back to Discord or a lower source."""
+        for env_name in ('BRIDGE_PLATFORM', 'bridge_platform', 'BrIdGe_PlAtFoRm'):
+            with self.subTest(env_name=env_name), mock.patch.dict(
+                os.environ, self._env(**{env_name: ''}), clear=True,
+            ):
+                with self.assertRaises(ValueError):
+                    Settings(_env_file=None)
+        with mock.patch.dict(os.environ, self._env(), clear=True):
+            self.assertEqual(Settings(_env_file=None).bridge_platform, 'discord')
+        with mock.patch.dict(os.environ, self._env(BrIdGe_PlAtFoRm='discord'), clear=True):
+            self.assertEqual(Settings(_env_file=None).bridge_platform, 'discord')
+
+    def test_process_env_overrides_dotenv_and_init_overrides_both(self) -> None:
+        """Use Pydantic Settings' normal init > env > .env ordering."""
+        with tempfile.TemporaryDirectory() as directory:
+            env_file = Path(directory) / '.env'
+            env_file.write_text('BRIDGE_PLATFORM=discord\n', encoding='utf-8')
+            with mock.patch.dict(os.environ, self._env(bridge_platform='INVALID'), clear=True):
+                with self.assertRaises(ValueError):
+                    Settings(_env_file=env_file)
+                self.assertEqual(Settings(_env_file=env_file, BRIDGE_PLATFORM='discord').bridge_platform,
+                                 'discord')
+            with mock.patch.dict(os.environ, self._env(BRIDGE_PLATFORM=''), clear=True):
+                with self.assertRaises(ValueError):
+                    Settings(_env_file=env_file)
+                self.assertEqual(Settings(_env_file=env_file, BRIDGE_PLATFORM='discord').bridge_platform,
+                                 'discord')
+
+    def test_last_dotenv_file_wins_even_if_its_selector_is_empty(self) -> None:
+        """An empty final .env value cannot reveal an earlier valid default."""
+        with tempfile.TemporaryDirectory() as directory:
+            first = Path(directory) / 'first.env'
+            last = Path(directory) / 'last.env'
+            first.write_text('BRIDGE_PLATFORM=discord\n', encoding='utf-8')
+            last.write_text('bridge_platform=\n', encoding='utf-8')
+            with mock.patch.dict(os.environ, self._env(), clear=True):
+                with self.assertRaises(ValueError):
+                    Settings(_env_file=(first, last))
+                self.assertEqual(Settings(_env_file=(last, first)).bridge_platform, 'discord')
+                with self.assertRaises(ValueError):
+                    Settings(_env_file=last)
 
 
 class ExclusiveRuntimeContracts(unittest.TestCase):

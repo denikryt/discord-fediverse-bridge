@@ -4,11 +4,11 @@ import os
 from pathlib import Path
 from urllib.parse import urlsplit
 
-from dotenv import dotenv_values
 from typing import Literal
 
 from pydantic import Field, HttpUrl, field_validator, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
+from pydantic_settings.sources.utils import parse_env_vars
 
 
 class Settings(BaseSettings):
@@ -23,29 +23,58 @@ class Settings(BaseSettings):
         env_ignore_empty=True,
     )
 
-    def __init__(self, **values: object) -> None:
-        """Preserve an explicitly empty platform selector while ignoring other empty env values.
+    @classmethod
+    def settings_customise_sources(
+        cls, settings_cls, init_settings, env_settings, dotenv_settings,
+        file_secret_settings,
+    ):
+        """Keep an empty platform selector visible at its original settings priority.
 
-        Pydantic's existing env_ignore_empty is intentional for optional legacy
-        credentials. BRIDGE_PLATFORM is stricter: an explicitly supplied empty
-        value must fail validation, not silently select Discord.
+        Legacy optional credentials still use ``env_ignore_empty=True``. Only
+        BRIDGE_PLATFORM is strict: an explicit empty env/.env value must reach
+        Literal validation, without replacing Pydantic's normal source order.
         """
-        if "BRIDGE_PLATFORM" not in values and "bridge_platform" not in values:
-            raw = os.environ.get("BRIDGE_PLATFORM")
-            if raw is None:
-                env_files = values.get("_env_file", self.model_config.get("env_file"))
-                if isinstance(env_files, (str, Path)):
-                    env_files = (env_files,)
-                if env_files is not None:
-                    for env_file in env_files:
-                        # Match pydantic-settings' ordered .env precedence:
-                        # later files override earlier, even with empty text.
-                        parsed = dotenv_values(env_file)
-                        if parsed.get("BRIDGE_PLATFORM") is not None:
-                            raw = parsed["BRIDGE_PLATFORM"]
-            if raw is not None:
-                values["BRIDGE_PLATFORM"] = raw
-        super().__init__(**values)
+        selector = settings_cls.model_fields['bridge_platform']
+        names = [name for _, name, _ in env_settings._extract_field_info(
+            selector, 'bridge_platform',
+        )]
+
+        def empty_selector(source_vars: dict) -> dict[str, str]:
+            """Return only an explicitly blank selector, never another setting."""
+            if any(source_vars.get(name) == '' for name in names):
+                return {'BRIDGE_PLATFORM': ''}
+            return {}
+
+        def empty_process_env() -> dict[str, str]:
+            """Use Pydantic's case normalization without dropping this one empty key."""
+            return empty_selector(parse_env_vars(
+                os.environ, env_settings.case_sensitive, ignore_empty=False,
+                parse_none_str=env_settings.env_parse_none_str,
+            ))
+
+        def empty_dotenv() -> dict[str, str]:
+            """Follow the configured .env files and their last-file-wins order."""
+            paths = dotenv_settings.env_file
+            if paths is None:
+                return {}
+            if isinstance(paths, (str, os.PathLike)):
+                paths = [paths]
+            merged = {}
+            for path in paths:
+                file_path = Path(path).expanduser()
+                if file_path.is_file() or file_path.is_fifo():
+                    merged.update(dotenv_settings._static_read_env_file(
+                        file_path, encoding=dotenv_settings.env_file_encoding,
+                        case_sensitive=dotenv_settings.case_sensitive,
+                        ignore_empty=False,
+                        parse_none_str=dotenv_settings.env_parse_none_str,
+                    ))
+            return empty_selector(merged)
+
+        # Empty env outranks .env, while a caller's explicit init value wins
+        # over both. Regular env/.env sources still own every nonempty value.
+        return (init_settings, env_settings, empty_process_env,
+                empty_dotenv, dotenv_settings, file_secret_settings)
 
     # A service owns exactly one platform; the default remains old Discord.
     bridge_platform: Literal["discord", "fluxer"] = Field(
