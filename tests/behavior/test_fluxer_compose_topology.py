@@ -37,7 +37,7 @@ class FluxerComposeTopologyContracts(unittest.TestCase):
     def test_selected_platform_is_explicit_and_wrong_profile_mode_exits(self) -> None:
         """Opt-in sidecar refuses a Discord-mode Python without mounting a bot there."""
         services = self.compose['services']
-        expected = '${BRIDGE_PLATFORM:-discord}'
+        expected = '${BRIDGE_PLATFORM-discord}'
         self.assertEqual(services['bridge']['environment']['BRIDGE_PLATFORM'], expected)
         node = services['fluxer-sidecar']
         self.assertEqual(node['environment']['BRIDGE_PLATFORM'], expected)
@@ -58,6 +58,43 @@ class FluxerComposeTopologyContracts(unittest.TestCase):
         self.assertIn('FLUXER_ORIGIN', probe)
         self.assertIn('bot_id', probe)
         self.assertIn('gateway_gap', probe)
+
+    def test_healthcheck_canonicalizes_origin_but_rejects_foreign_ready(self) -> None:
+        """Evaluate the production JS probe against local READY/negative RPC responses."""
+        import json
+        import os
+        import shutil
+        import subprocess
+
+        if shutil.which('node') is None:
+            self.skipTest('Node runtime unavailable')
+        node = self.compose['services']['fluxer-sidecar']
+        command = node['healthcheck']['test']
+        script = command[command.index('-e') + 1]
+        baseline = {
+            'ok': True, 'result': {'state': 'ready', 'connector_key': 'fx-one',
+                                   'instance_origin': 'https://fluxer.test',
+                                   'bot_id': 'bot-1', 'gateway_gap': False},
+        }
+
+        def probe(origin: str, body: dict) -> int:
+            """Run the real shell-free healthcheck with only SDK HTTP mocked."""
+            fake = ('globalThis.fetch=async()=>({ok:true, json:async()=>('
+                    + json.dumps(body) + ')});\n')
+            env = {**os.environ, 'FLUXER_ORIGIN': origin,
+                   'FLUXER_CONNECTOR_KEY': 'fx-one', 'FLUXER_INTERNAL_BEARER': 'secret'}
+            return subprocess.run(['node', '-e', fake + script], env=env,
+                                  capture_output=True, timeout=8).returncode
+
+        for origin in ('https://fluxer.test', 'https://FLUXER.test',
+                       'https://fluxer.test:443'):
+            self.assertEqual(probe(origin, baseline), 0, origin)
+        for key, value in [('instance_origin', 'https://foreign.test'),
+                           ('connector_key', 'foreign'), ('bot_id', ''),
+                           ('state', 'degraded'), ('gateway_gap', True)]:
+            body = {'ok': True, 'result': {**baseline['result'], key: value}}
+            self.assertNotEqual(probe('https://fluxer.test', body), 0, key)
+        self.assertNotEqual(probe('invalid-origin', baseline), 0)
 
     def test_bot_secret_mount_exists_only_in_node(self) -> None:
         """The Python env/mount topology never acquires the real Node token."""

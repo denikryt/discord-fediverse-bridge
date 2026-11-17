@@ -40,6 +40,33 @@ class FluxerConfigTests(unittest.TestCase):
             **({"FLUXER_CONNECTORS_JSON": raw} if selected else {}),
         })
 
+    def test_platform_env_absent_vs_empty_in_environment_and_dotenv(self) -> None:
+        """Empty explicit selector refuses startup even above a valid .env value."""
+        import os
+        import tempfile
+        from pathlib import Path
+        from unittest.mock import patch
+
+        base = {'DISCORD_TOKEN': 'discord-test', 'BRIDGE_SUPER_ADMIN_USER_IDS': '123',
+                'PUBLIC_BASE_URL': 'https://bridge.example',
+                'FEDIFY_SHARED_SECRET': 'gateway-secret'}
+        with tempfile.TemporaryDirectory() as root:
+            path = Path(root) / '.env'
+            path.write_text('BRIDGE_PLATFORM=discord\n')
+            for value in ('', '   ', 'invalid'):
+                with patch.dict(os.environ, {'BRIDGE_PLATFORM': value}, clear=True):
+                    with self.subTest(value=value), self.assertRaises(ValidationError):
+                        Settings(_env_file=path, **base)
+            with patch.dict(os.environ, {}, clear=True):
+                self.assertEqual(Settings(_env_file=path, **base).bridge_platform, 'discord')
+                path.write_text('BRIDGE_PLATFORM=\n')
+                with self.assertRaises(ValidationError):
+                    Settings(_env_file=path, **base)
+                path.write_text('BRIDGE_PLATFORM=fluxer\n')
+                with self.assertRaises(ValidationError):
+                    Settings(_env_file=path, **base)
+                self.assertEqual(Settings(_env_file=None, **base).bridge_platform, 'discord')
+
     def test_disconnected_default_has_no_connector_config(self) -> None:
         """No env opt-in means no Fluxer client, socket, or DB provisioning."""
         settings = self._settings(None)

@@ -1,3 +1,11 @@
+## Fluxer-only implementation review (#12, 2026-11-17)
+
+- F1 fixed locally: pre-migration mode check now covers surface-less connector FKs, source provenance and populated Discord integer projections; SQLite regression tests pass.
+- F2 fixed locally: production write capability requires current bot ACL and an explicit operator-verified write-contract gate; writes default disabled pending real-server evidence.
+- F3 fixed locally: prior Discord test graphs explicitly select Discord; full Python suite still depends on unavailable packages.
+- F4/F5 fixed locally: empty explicit `BRIDGE_PLATFORM` fails; Compose health compares canonical origins. Focused tests pass.
+- S19 OPEN: real Fluxer REST/Gateway, Docker and full dependency-backed suites remain external acceptance gates.
+
 # Platform API (physical surface mapping contract)
 
 This document owns the SDK-independent transport boundary between Bridge Core and physical platforms. physical surface mapping **defines** the contract and stateful test fakes; it does **not** activate a Discord adapter, a Fluxer connector, a second Gateway receiver, a new database migration or a new delivery queue. The deployed path still uses `BridgeBot`, `DiscordEventRouter` and existing fanout/Personal Feed workers directly; the exact temporary boundaries are marked `MULTIPLATFORM_LEGACY_DISCORD_PORT_TEMP` in `src/runtime_ports.py`, `src/discord_bot.py` and `src/app.py`.

@@ -1,6 +1,10 @@
 """Environment-backed settings for the Python bridge process."""
 
+import os
+from pathlib import Path
 from urllib.parse import urlsplit
+
+from dotenv import dotenv_values
 from typing import Literal
 
 from pydantic import Field, HttpUrl, field_validator, model_validator
@@ -8,6 +12,8 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
 class Settings(BaseSettings):
+    """Validate one active platform and the bridge's shared deployment settings."""
+
     # Settings centralize the bridge contract with its environment so both the
     # bot runtime and the internal HTTP API read the same values.
     model_config = SettingsConfigDict(
@@ -16,6 +22,30 @@ class Settings(BaseSettings):
         extra="ignore",
         env_ignore_empty=True,
     )
+
+    def __init__(self, **values: object) -> None:
+        """Preserve an explicitly empty platform selector while ignoring other empty env values.
+
+        Pydantic's existing env_ignore_empty is intentional for optional legacy
+        credentials. BRIDGE_PLATFORM is stricter: an explicitly supplied empty
+        value must fail validation, not silently select Discord.
+        """
+        if "BRIDGE_PLATFORM" not in values and "bridge_platform" not in values:
+            raw = os.environ.get("BRIDGE_PLATFORM")
+            if raw is None:
+                env_files = values.get("_env_file", self.model_config.get("env_file"))
+                if isinstance(env_files, (str, Path)):
+                    env_files = (env_files,)
+                if env_files is not None:
+                    for env_file in env_files:
+                        # Match pydantic-settings' ordered .env precedence:
+                        # later files override earlier, even with empty text.
+                        parsed = dotenv_values(env_file)
+                        if parsed.get("BRIDGE_PLATFORM") is not None:
+                            raw = parsed["BRIDGE_PLATFORM"]
+            if raw is not None:
+                values["BRIDGE_PLATFORM"] = raw
+        super().__init__(**values)
 
     # A service owns exactly one platform; the default remains old Discord.
     bridge_platform: Literal["discord", "fluxer"] = Field(

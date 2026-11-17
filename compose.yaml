@@ -8,7 +8,7 @@ services:
       - ${COMPOSE_ENV_FILE:-.env}
     environment:
       # Compose mode is resolved from the same --env-file used for interpolation.
-      BRIDGE_PLATFORM: ${BRIDGE_PLATFORM:-discord}
+      BRIDGE_PLATFORM: ${BRIDGE_PLATFORM-discord}
       DATABASE_URL: sqlite:////data/bridge.db
       BRIDGE_BIND_HOST: 0.0.0.0
       BRIDGE_BIND_PORT: 8080
@@ -54,12 +54,14 @@ services:
         fi;
         exec node --experimental-strip-types src/main.ts
     environment:
-      BRIDGE_PLATFORM: ${BRIDGE_PLATFORM:-discord}
+      BRIDGE_PLATFORM: ${BRIDGE_PLATFORM-discord}
       FLUXER_CONNECTOR_KEY: ${FLUXER_CONNECTOR_KEY:-}
       FLUXER_ORIGIN: ${FLUXER_ORIGIN:-}
       FLUXER_APPROVED_API_HOST: ${FLUXER_APPROVED_API_HOST:-}
       FLUXER_APPROVED_GATEWAY_HOST: ${FLUXER_APPROVED_GATEWAY_HOST:-}
       FLUXER_INTERNAL_BEARER: ${FLUXER_INTERNAL_BEARER:-}
+      # Fail closed until the actual pinned Fluxer server passes REST write acceptance.
+      FLUXER_VERIFIED_WRITE_CONTRACT: ${FLUXER_VERIFIED_WRITE_CONTRACT:-false}
       FLUXER_RPC_PORT: "8769"
       FLUXER_PYTHON_INGRESS_URL: http://127.0.0.1:8080/internal/fluxer/events
       FLUXER_BOT_TOKEN_FILE: /run/secrets/fluxer-bot-token
@@ -82,7 +84,7 @@ services:
           .then(async r=>{const body=await r.json();
           if(!r.ok||!body.ok||body.result?.state!=='ready'||
           body.result?.connector_key!==process.env.FLUXER_CONNECTOR_KEY||
-          body.result?.instance_origin!==process.env.FLUXER_ORIGIN||
+          body.result?.instance_origin!==new URL(process.env.FLUXER_ORIGIN).origin||
           !body.result?.bot_id||body.result?.gateway_gap)process.exit(1)})
           .catch(()=>process.exit(1))
       interval: 10s
