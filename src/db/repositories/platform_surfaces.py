@@ -178,6 +178,25 @@ def preflight_instance_mode(
                             raise RuntimeError(
                                 f"Fluxer mode refuses Discord-owned {table} projection"
                             )
+                # Pre-adapter canonical groups also persist unscoped integer
+                # Discord IDs as source_*_id (not discord_*_id). These fields
+                # are independent proof of Discord ownership even when the
+                # connector/surface columns are NULL. Scoped Fluxer IDs and
+                # remote AP groups keep all of these projections NULL.
+                legacy_group_projections = {
+                    "community_thread_groups": (
+                        "source_channel_id", "source_thread_id", "source_starter_message_id",
+                    ),
+                    "community_message_groups": (
+                        "source_channel_id", "source_thread_id", "source_message_id",
+                    ),
+                }
+                for table, columns in legacy_group_projections.items():
+                    populated = " OR ".join(f'"{column}" IS NOT NULL' for column in columns)
+                    if connection.exec_driver_sql(
+                        f'SELECT 1 FROM "{table}" WHERE {populated} LIMIT 1'
+                    ).first():
+                        raise RuntimeError(f"Fluxer mode refuses Discord-owned {table} source IDs")
                 # Connector provenance is redundant with source_platform for
                 # modern data, but can disagree in a valid migrated v1 row.
                 if connection.exec_driver_sql(

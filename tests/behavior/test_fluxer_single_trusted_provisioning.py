@@ -243,6 +243,78 @@ class FluxerPreMigrationOwnership(unittest.TestCase):
             self._preflight()
         self.assertEqual(self.path.read_bytes(), before)
 
+    def _assert_legacy_group_refused(self, table: str, legacy_ids: str) -> None:
+        """Check a single canonical source row independently of other group types."""
+        from sqlalchemy import text
+
+        db = self._new_v1()
+        try:
+            with db.session() as session:
+                PlatformSurfaceRepository.admit_single_trusted_fluxer(
+                    session, connector_key='fx-one', instance_origin='https://one.test',
+                )
+                # Unscoped legacy fields need no channel surface or connector.
+                # This valid current-schema shape must still be refused.
+                fields = 'thread_group_id,' if table == 'community_message_groups' else ''
+                values = '1,' if fields else ''
+                session.execute(text(
+                    f"INSERT INTO {table} "
+                    f"(community_actor_id,{fields}source_channel_id,source_thread_id,"
+                    f"{legacy_ids},created_at) "
+                    f"VALUES ('https://ap.test/groups/1',{values}11,22,33,CURRENT_TIMESTAMP)"
+                ))
+            BridgeActorKeyBootstrap(database=db, settings=self.config).ensure()
+            with db.engine.connect() as connection:
+                self.assertEqual(connection.exec_driver_sql('PRAGMA foreign_key_check').all(), [])
+        finally:
+            db.close()
+        before = self.path.read_bytes()
+        with self.assertRaisesRegex(RuntimeError, 'Discord-owned'):
+            self._preflight()
+        self.assertEqual(self.path.read_bytes(), before)
+
+    def test_bound_fluxer_refuses_legacy_discord_thread_group_ids(self) -> None:
+        """Legacy starter ID without source connector blocks Fluxer admission."""
+        self._assert_legacy_group_refused(
+            'community_thread_groups', 'source_starter_message_id',
+        )
+
+    def test_bound_fluxer_refuses_legacy_discord_message_group_ids(self) -> None:
+        """Legacy message ID without source connector blocks Fluxer admission."""
+        self._assert_legacy_group_refused('community_message_groups', 'source_message_id')
+
+    def test_bound_fluxer_allows_null_legacy_projections_and_scoped_source(self) -> None:
+        """Fluxer and remote AP canonical groups are not mistaken for Discord."""
+        from sqlalchemy import text
+
+        db = self._new_v1()
+        try:
+            with db.session() as session:
+                PlatformSurfaceRepository.admit_single_trusted_fluxer(
+                    session, connector_key='fx-one', instance_origin='https://one.test',
+                )
+                session.execute(text(
+                    "INSERT INTO community_thread_groups "
+                    "(community_actor_id,source_connector_id,source_external_thread_id,created_at) "
+                    "VALUES ('https://ap.test/groups/1',"
+                    "(SELECT id FROM platform_connectors WHERE connector_key='fx-one'),"
+                    "'thread-fx',CURRENT_TIMESTAMP)"
+                ))
+                session.execute(text(
+                    "INSERT INTO community_message_groups "
+                    "(community_actor_id,thread_group_id,source_connector_id,"
+                    "source_external_container_id,source_external_message_id,created_at) "
+                    "VALUES ('https://ap.test/groups/1',1,"
+                    "(SELECT id FROM platform_connectors WHERE connector_key='fx-one'),"
+                    "'thread-fx','message-fx',CURRENT_TIMESTAMP)"
+                ))
+            BridgeActorKeyBootstrap(database=db, settings=self.config).ensure()
+        finally:
+            db.close()
+        before = self.path.read_bytes()
+        self._preflight()
+        self.assertEqual(self.path.read_bytes(), before)
+
     def test_bound_fluxer_copy_requires_no_discord_integer_projection(self) -> None:
         """A valid Fluxer physical target is allowed until it claims a Discord ID."""
         from sqlalchemy import text
