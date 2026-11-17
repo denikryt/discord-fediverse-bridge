@@ -29,6 +29,15 @@ class FluxerRpcContractScenarios(unittest.IsolatedAsyncioTestCase):
         transport = httpx.MockTransport(handler)
         return FluxerRpcClient(self._config(), transport=transport)
 
+    async def test_direct_rpc_rejects_unsafe_bearer_before_http_header(self) -> None:
+        """Even programmatic configs cannot bypass the authenticated header contract."""
+        for secret in ('1234567é', 'abc\rdefgh', 'abc defgh'):
+            with self.subTest(secret=repr(secret)), self.assertRaises(ValueError):
+                FluxerRpcClient(FluxerConnectorConfig(
+                    'fluxer-test', 'https://fluxer.example',
+                    'http://127.0.0.1:8721', secret,
+                ), transport=httpx.MockTransport(lambda req: httpx.Response(200)))
+
     async def test_authenticated_scoped_read_at_exact_private_path(self) -> None:
         """The sidecar sees one authorized connector-scoped payload, no bot token."""
         calls = []

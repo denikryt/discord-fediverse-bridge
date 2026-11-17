@@ -37,6 +37,22 @@ test('reserved Discord connector key refuses Node startup before discovery', asy
   });
 });
 
+test('private bearer rejects unsafe HTTP header values before discovery or SDK', async()=>{
+  const basic = {
+    FLUXER_CONNECTOR_KEY:'fx', FLUXER_ORIGIN:'https://fx.test',
+    FLUXER_BOT_TOKEN_FILE:'/no-token', FLUXER_APPROVED_API_HOST:'api.fx.test',
+    FLUXER_APPROVED_GATEWAY_HOST:'gateway.fx.test', FLUXER_RPC_PORT:'8769',
+    FLUXER_PYTHON_INGRESS_URL:'http://127.0.0.1:8080/internal/fluxer/events',
+  };
+  for (const bearer of ['1234567', '1234567é', 'секретсекрет', 'abc\rdefgh',
+    'abc\ndefgh', 'abc\tdefgh', 'abc defgh', 'abcdefgh\x7f']) {
+    await withEnv({...basic, FLUXER_INTERNAL_BEARER:bearer}, async()=>{
+      await assert.rejects(runFluxerNodeService(),
+        /invalid Fluxer Node deployment configuration/);
+    });
+  }
+});
+
 test('tokenless discovery precedes secret read; missing Node mount refuses SDK startup',async()=>{
   const seen=[];
   const server=createServer((req,res)=>{

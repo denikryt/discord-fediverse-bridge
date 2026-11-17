@@ -154,6 +154,27 @@ class FluxerConfigTests(unittest.TestCase):
             origin='https://FLUXER.example:443',
         )])).fluxer_connectors[0].origin, 'https://fluxer.example')
 
+    def test_unicode_origin_requires_ascii_alabel_and_matches_node(self) -> None:
+        """A Unicode IDN must not persist Python IDNA-2003 instead of Node WHATWG identity."""
+        for raw in ('https://faß.test', 'https://bücher.test'):
+            with self.subTest(raw=raw), self.assertRaises(ValidationError):
+                self._settings(json.dumps([self._instance(origin=raw)]))
+        self.assertEqual(self._settings(json.dumps([self._instance(
+            origin='https://XN--FA-HIA.test:443',
+        )])).fluxer_connectors[0].origin, 'https://xn--fa-hia.test')
+
+    def test_bearer_must_be_http_header_safe_ascii(self) -> None:
+        """Reject non-ASCII and control characters before RPC or SQLite startup."""
+        for value in ('1234567', '1234567é', 'секретсекрет', 'abc\rdefgh',
+                      'abc\ndefgh', 'abc\tdefgh', 'abc defgh', 'abcdefgh\x7f'):
+            with self.subTest(secret=repr(value)), self.assertRaises(ValidationError):
+                self._settings(json.dumps([self._instance(transport_secret=value)]))
+        for value in ('12345678', 'aB1-._~+/='):
+            with self.subTest(secret=value):
+                self.assertEqual(self._settings(json.dumps([
+                    self._instance(transport_secret=value),
+                ])).fluxer_connectors[0].transport_secret, value)
+
     def test_private_rpc_cannot_cross_network_namespace(self) -> None:
         """A sidecar DNS name or alternate loopback spelling cannot receive bearer."""
         for rpc_url in (

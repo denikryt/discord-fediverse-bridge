@@ -14,6 +14,17 @@ function post(port, data, token = 'test-only-secret') {
 }
 const valid = {connector_key: 'fluxer-test', operation: 'fetch_channel', args: {id: 'opaque'}};
 
+test('RPC refuses unsafe bearer even when instantiated without main.ts', () => {
+  for (const secret of ['1234567', '1234567é', 'секретсекрет',
+    'abc\rdefgh', 'abc\ndefgh', 'abc\tdefgh', 'abc defgh', 'abcdefgh\x7f']) {
+    assert.throws(() => new PrivateRpcService({connectorKey: 'fluxer-test',
+      transportSecret: secret, handler: async () => ({})}),
+      /invalid Fluxer private RPC configuration/);
+  }
+  assert.doesNotThrow(() => new PrivateRpcService({connectorKey: 'fluxer-test',
+    transportSecret: 'aB1-._~+/=', handler: async () => ({})}));
+});
+
 test('authenticated read routes exact operation and returns scoped success', async () => {
   const observed = [];
   const server = fixture(async (op, args) => {observed.push([op, args]); return {id: args.id};});

@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import os
 from pathlib import Path
 from tempfile import TemporaryDirectory
 import unittest
@@ -33,6 +34,9 @@ class FluxerForumCreateCrossProcess(unittest.IsolatedAsyncioTestCase):
         self.effects = Path(self.tmp.name) / 'effects.jsonl'
         self.acl_state = Path(self.tmp.name) / 'acl.json'
         self.acl_state.write_text(json.dumps({'forum_send': True, 'thread_send': True}))
+        self.instance_origin = ('https://xn--fa-hia.test' if self._testMethodName ==
+                                'test_ascii_alabel_matches_authenticated_node_origin'
+                                else 'https://fx.test')
         root = Path(__file__).resolve().parents[2]
         self.node = await asyncio.create_subprocess_exec(
             'node', '--experimental-strip-types',
@@ -42,17 +46,18 @@ class FluxerForumCreateCrossProcess(unittest.IsolatedAsyncioTestCase):
             self.server_contract, str(self.acl_state),
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.PIPE,
+            env={**os.environ, 'FLUXER_TEST_ORIGIN': self.instance_origin},
         )
         assert self.node.stdout is not None
         line = await asyncio.wait_for(self.node.stdout.readline(), timeout=10)
         if not line.strip().isdigit():
             self.fail('Node SDK forum fixture did not start')
         self.rpc = FluxerRpcClient(FluxerConnectorConfig(
-            'fx-forum', 'https://fx.test', f'http://127.0.0.1:{int(line)}',
+            'fx-forum', self.instance_origin, f'http://127.0.0.1:{int(line)}',
             'shared-ipc-secret',
         ))
         self.adapter = FluxerAdapter(
-            connector_key='fx-forum', instance_origin='https://fx.test',
+            connector_key='fx-forum', instance_origin=self.instance_origin,
             rpc=self.rpc, forum_applied_tags=(('forum-1', ('tag-a',)),),
         )
         self.forum = ChannelRef('fx-forum', 'forum-1', 'forum', 'guild-1')
@@ -214,6 +219,32 @@ class FluxerForumCreateCrossProcess(unittest.IsolatedAsyncioTestCase):
                     self.assertEqual(await adapter.refresh_readiness(), ready)
                 finally:
                     await rpc.close()
+
+    async def test_ascii_alabel_matches_authenticated_node_origin(self) -> None:
+        """An explicit IDN A-label must attest the same Python/Node identity."""
+        from src.fluxer_connector_config import parse_fluxer_connectors
+
+        base = {'connector_key': 'fx-forum', 'rpc_url': self.rpc._config.rpc_url,
+                'transport_secret': 'shared-ipc-secret'}
+        cfg, = parse_fluxer_connectors(json.dumps([
+            {**base, 'origin': 'https://XN--FA-HIA.test:443'},
+        ]))
+        self.assertEqual(cfg.origin, 'https://xn--fa-hia.test')
+        self.assertTrue(await self.adapter.refresh_readiness())
+        # Unicode spelling must not get normalized to Python IDNA-2003's
+        # different hostname, and that hostname must not attest Node READY.
+        with self.assertRaises(ValueError):
+            parse_fluxer_connectors(json.dumps([{**base, 'origin': 'https://faß.test'}]))
+        wrong_cfg, = parse_fluxer_connectors(json.dumps([
+            {**base, 'origin': 'https://fass.test'},
+        ]))
+        wrong_rpc = FluxerRpcClient(wrong_cfg)
+        try:
+            wrong_adapter = FluxerAdapter(connector_key='fx-forum',
+                                          instance_origin=wrong_cfg.origin, rpc=wrong_rpc)
+            self.assertFalse(await wrong_adapter.refresh_readiness())
+        finally:
+            await wrong_rpc.close()
 
     async def test_verified_thread_guild_fills_missing_hint_and_rejects_wrong_hint(self) -> None:
         """An omitted caller guild hint must not discard the live verified guild on write."""

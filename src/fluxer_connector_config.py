@@ -22,6 +22,11 @@ class FluxerConnectorConfig:
     forum_applied_tags: tuple[tuple[str, tuple[str, ...]], ...] = ()
 
 
+def valid_transport_bearer(secret: object) -> bool:
+    """Accept only HTTP-header-safe visible ASCII with at least eight bytes."""
+    return isinstance(secret, str) and re.fullmatch(r"[\x21-\x7e]{8,}", secret) is not None
+
+
 def parse_fluxer_connectors(raw: str | None) -> tuple[FluxerConnectorConfig, ...]:
     """Parse an exact JSON array, rejecting bad deployments before SDK startup.
 
@@ -55,12 +60,18 @@ def parse_fluxer_connectors(raw: str | None) -> tuple[FluxerConnectorConfig, ...
         # file: accepting it would migrate before transactional admission fails.
         if key == "discord-primary":
             raise ValueError("Fluxer connector key is reserved for Discord")
-        # Node rejects shorter private bearers before SDK startup. Refuse at
-        # Python settings admission instead, before opening SQLite or AP keys.
-        if len(transport_secret) < 8:
-            raise ValueError("Fluxer transport bearer is too short")
+        # The private bearer becomes an HTTP Authorization header. Refuse
+        # Unicode and control/space characters before SQLite or SDK startup;
+        # length alone is not a safe cross-language HTTP field contract.
+        if not valid_transport_bearer(transport_secret):
+            raise ValueError("Fluxer transport bearer requires printable ASCII without spaces")
         # WHATWG URL preserves a final DNS dot, while SQLite canonical_origin
         # strips it. Disallow that spelling on both sides before persistence.
+        # Python's IDNA-2003 codec and Node's WHATWG IDNA may disagree on
+        # Unicode DNS labels (for example, faß -> fass vs xn--fa-hia).
+        # Require the operator's already-canonical ASCII A-label spelling.
+        if not requested_origin.isascii():
+            raise ValueError("Fluxer origin must use ASCII DNS A-labels")
         if (urlsplit(requested_origin).hostname or "").endswith("."):
             raise ValueError("Fluxer origin cannot end with a DNS root dot")
         if not isinstance(entry.get("allow_insecure_local_development", False), bool):

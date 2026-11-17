@@ -19,6 +19,12 @@ export type RpcOperation = (typeof RPC_READS)[number] | (typeof RPC_WRITES)[numb
 const OPERATIONS = new Set<string>([...RPC_READS, ...RPC_WRITES]);
 const MAX_BYTES = 256 * 1024;
 
+/** Validate the HTTP Authorization bearer identically for main and direct RPC owners. */
+export function validPrivateBearer(secret: unknown): secret is string {
+  // Whitespace, non-ASCII and control bytes are unsafe in a header value.
+  return typeof secret === 'string' && /^[\x21-\x7e]{8,}$/.test(secret);
+}
+
 export class PrivateRpcError extends Error {
   /** Only transport-neutral, deliberate refusal reasons cross the process boundary. */
   readonly reason: 'forbidden' | 'not_found' | 'unsupported' | 'invalid_request' |
@@ -69,7 +75,7 @@ export class PrivateRpcService {
   private readonly port: number;
 
   constructor(config: RpcServiceConfig) {
-    if (!config.connectorKey || !config.transportSecret || config.transportSecret.length < 8 ||
+    if (!config.connectorKey || !validPrivateBearer(config.transportSecret) ||
         !Number.isInteger(config.port ?? 0) || (config.port ?? 0) < 0 ||
         (config.port ?? 0) > 65535 || !Number.isInteger(config.maxInFlight ?? 8) ||
         (config.maxInFlight ?? 8) < 1 || (config.maxInFlight ?? 8) > 8) {

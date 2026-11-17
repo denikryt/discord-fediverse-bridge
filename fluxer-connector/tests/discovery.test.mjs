@@ -17,6 +17,16 @@ test('dotted DNS origins cannot be trusted as a different authenticated identity
   assert.equal(validateOrigin('https://other.test').origin, 'https://other.test');
 });
 
+test('Unicode IDN requires explicit ASCII A-label on every self-hosted identity', () => {
+  for (const origin of ['https://faß.test', 'https://bücher.test']) {
+    assert.throws(() => validateOrigin(origin));
+  }
+  assert.equal(validateOrigin('https://XN--FA-HIA.test:443').origin,
+    'https://xn--fa-hia.test');
+  assert.notEqual(validateOrigin('https://xn--fa-hia.test').origin,
+    validateOrigin('https://fass.test').origin);
+});
+
 test('bot REST needs api_public and an approved self-hosted API host', () => {
   assert.throws(() => validateDiscoveryDocument('https://example.test',
     {endpoints: {api: 'https://example.test'}}));

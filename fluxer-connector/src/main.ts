@@ -17,7 +17,7 @@ import {createSdkForumCreateHandler} from './forum_create.ts';
 import {createSdkMessageSendHandler} from './message_send.ts';
 import {createSdkMessageMutationHandler} from './message_mutations.ts';
 import type {Client} from '@fluxerjs/core';
-import {PrivateRpcError, type RpcHandler} from './transport.ts';
+import {PrivateRpcError, validPrivateBearer, type RpcHandler} from './transport.ts';
 
 /** Read mandatory deployment values without echoing secret names or contents. */
 function required(key: string): string {
@@ -45,7 +45,9 @@ function readConfig(): {
   const rpcPort = Number(requestedPort);
   if (!Number.isInteger(rpcPort) || rpcPort < 1 || rpcPort > 65535 ||
       connectorKey.length > 255 || connectorKey === 'discord-primary' ||
-      bearer.length < 8 ||
+      // Refuse invalid headers before discovery; transport checks again when
+      // an RPC owner is directly constructed without the production main.
+      !validPrivateBearer(bearer) ||
       !/^[a-z0-9.-]+$/i.test(apiHost) || !/^[a-z0-9.-]+$/i.test(gatewayHost)) {
     throw new Error('invalid Fluxer Node deployment configuration');
   }

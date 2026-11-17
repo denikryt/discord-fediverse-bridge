@@ -44,8 +44,12 @@ function permittedAddress(address: string, development: boolean): boolean {
 
 /** Parse an exact origin, refusing userinfo, paths, fragments and ambiguity. */
 export function validateOrigin(raw: string, policy: DiscoveryPolicy = {}): URL {
-  if (typeof raw !== 'string' || !/^https?:\/\/[^/?#]+$/i.test(raw) ||
-      raw !== raw.trim()) throw new Error('invalid Fluxer discovery origin');
+  // WHATWG URL maps Unicode IDNs differently from Python's persisted IDNA;
+  // operators must supply the same explicit ASCII A-label on both sides.
+  if (typeof raw !== 'string' || !/^[\x00-\x7f]*$/.test(raw) ||
+      !/^https?:\/\/[^/?#]+$/i.test(raw) || raw !== raw.trim()) {
+    throw new Error('invalid Fluxer discovery origin');
+  }
   let url: URL;
   try { url = new URL(raw); }
   catch { throw new Error('invalid Fluxer discovery origin'); }

@@ -92,7 +92,8 @@ const execute=createProductionRpcHandler(client, {
   channel:id=>`/channels/${id}`,
   channelThreads:id=>`/channels/${id}/threads`,
 }, {writeContractVerified:true});
-const service=new FluxerNodeService({connectorKey:'fx-forum',origin:'https://fx.test',
+const service=new FluxerNodeService({connectorKey:'fx-forum',
+  origin:process.env.FLUXER_TEST_ORIGIN ?? 'https://fx.test',
   apiPublic:'https://api.fx.test/',botToken:'node-only-secret',
   transportSecret:'shared-ipc-secret',
   pythonIngressUrl:'http://127.0.0.1:43299/internal/fluxer/events',

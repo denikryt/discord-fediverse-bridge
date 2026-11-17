@@ -12,7 +12,7 @@ from typing import Any
 
 import httpx
 
-from .fluxer_connector_config import FluxerConnectorConfig
+from .fluxer_connector_config import FluxerConnectorConfig, valid_transport_bearer
 from .platform_types import PlatformOperationError
 
 
@@ -37,6 +37,10 @@ class FluxerRpcClient:
     def __init__(self, config: FluxerConnectorConfig, *,
                  transport: httpx.AsyncBaseTransport | None = None) -> None:
         """Bind a single connector to one private endpoint and token."""
+        # Direct tests and future programmatic callers may construct a config
+        # without the settings parser; refuse invalid headers before HTTP.
+        if not valid_transport_bearer(config.transport_secret):
+            raise ValueError('Invalid Fluxer private RPC bearer')
         self._config = config
         self._http = httpx.AsyncClient(
             base_url=config.rpc_url, transport=transport, follow_redirects=False,
